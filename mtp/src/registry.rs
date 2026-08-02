@@ -113,6 +113,46 @@ pub fn registration_challenge(network: &str, github: &str, address: &str, nonce_
     registration_challenge_for(network, github, address, nonce_hex, issued_at_ms, LedgerAttribution::Github)
 }
 
+/// The canonical ledger id for an on-chain address, with NO registration anywhere in the path.
+///
+/// **2026-08-02 policy change (testnet-22).** Points now accrue to the testnet ADDRESS that did the
+/// work, automatically: create an address, use it, and the operator's aggregation credits it. The
+/// GitHub-handle path and the whole registration handshake are gone from the points path.
+///
+/// What that removes is the failure mode registration actually produced in practice — someone earns
+/// on-chain, never registers, and their facts are silently dropped by the fail-closed membership
+/// test. The chain already knows who did the work; requiring them to also tell an off-chain service
+/// about it only created a way to lose their points.
+///
+/// What it costs is deliberate and worth stating plainly: an address is not a person. Two addresses
+/// are two participants here even if one human holds both, and nothing links an address to a GitHub
+/// identity any more. Anti-sybil is therefore a question for the ALLOCATION rules and the operator's
+/// aggregation, not for this function — it must not be smuggled back in as a hidden registration
+/// check, which is exactly what made the old path lossy.
+///
+/// The `addr:` prefix is kept so ids stay self-describing and so ledgers written before this change
+/// (which used the same spelling for address-attributed registrations) remain comparable.
+pub fn ledger_id_for_address(address: &str) -> Option<String> {
+    let address = address.trim();
+    // The only gate is "is this a well-formed address for one of our networks". Anything else would
+    // be a registration check by another name.
+    if address.is_empty() || !address.contains(':') || address.len() > MAX_LEDGER_ADDRESS_LEN {
+        return None;
+    }
+    let (prefix, payload) = address.split_once(':').expect("checked above");
+    if !matches!(prefix, "misaka" | "misakatest" | "misakasim" | "misakadev") || payload.is_empty() {
+        return None;
+    }
+    if !payload.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(format!("addr:{address}"))
+}
+
+/// Bech32 addresses on these networks are well under this; the bound exists so a malformed fact
+/// cannot push an unbounded string into the ledger as an id.
+pub const MAX_LEDGER_ADDRESS_LEN: usize = 256;
+
 /// The registration challenge including the participant's [`LedgerAttribution`] choice.
 ///
 /// `Github` reproduces the **v1** bytes EXACTLY — byte-identical to what [`registration_challenge`]
@@ -165,6 +205,41 @@ pub fn verify_registration(
 /// [`MTP_CLAIM_CONTEXT`]. Returns true iff the signature is valid.
 pub fn verify_claim(pubkey: &[u8], claim: &[u8], signature: &[u8]) -> bool {
     matches!(verify_mldsa87_with_context(pubkey, claim, signature, MTP_CLAIM_CONTEXT), Ok(true))
+}
+
+#[cfg(test)]
+mod address_attribution_tests {
+    use super::*;
+
+    /// 2026-08-02 — using a testnet address IS the enrolment. No registration, no handshake, no
+    /// signature: the chain already proved who did the work.
+    #[test]
+    fn any_well_formed_address_is_its_own_ledger_id() {
+        for addr in ["misakatest:qabc123", "misaka:qxyz", "misakadev:q1", "misakasim:q9"] {
+            assert_eq!(ledger_id_for_address(addr).as_deref(), Some(format!("addr:{addr}").as_str()));
+        }
+        // Surrounding whitespace from a hand-edited fact file must not mint a second id.
+        assert_eq!(ledger_id_for_address("  misakatest:qabc  ").as_deref(), Some("addr:misakatest:qabc"));
+    }
+
+    /// The ONLY gate is well-formedness. Anything stricter would be a registration check wearing a
+    /// different name, and re-introduce the silent point loss this change removes.
+    #[test]
+    fn malformed_input_cannot_invent_an_id() {
+        for bad in ["", "   ", "no-colon", "misakatest:", ":qabc", "bitcoin:qabc", "misakatest:has space", "misakatest:has-dash"] {
+            assert_eq!(ledger_id_for_address(bad), None, "{bad:?} must not resolve");
+        }
+        let too_long = format!("misakatest:{}", "q".repeat(MAX_LEDGER_ADDRESS_LEN));
+        assert_eq!(ledger_id_for_address(&too_long), None, "an unbounded id must not reach the ledger");
+    }
+
+    /// Distinct addresses are distinct participants. Stated as a test because it is the trade the
+    /// address policy makes: one human with two addresses is two ids, and re-linking them is an
+    /// allocation-time decision, never a hidden lookup here.
+    #[test]
+    fn distinct_addresses_are_distinct_ids() {
+        assert_ne!(ledger_id_for_address("misakatest:qalice"), ledger_id_for_address("misakatest:qbob"));
+    }
 }
 
 #[cfg(test)]

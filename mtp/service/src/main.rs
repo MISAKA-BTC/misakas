@@ -962,15 +962,19 @@ mod palw_ingest_tests {
             registered_at_ms: 0,
             attribution: Default::default(),
         }]);
-        assert_eq!(attr.ledger_id_for_address("misakatest:alice").as_deref(), Some("gh:alice"));
+        // 2026-08-02 — on-chain slots are credited to the bond owner's ADDRESS, registration or not.
+        assert_eq!(attr.ledger_id_for_address("misakatest:alice").as_deref(), Some("addr:misakatest:alice"));
         let report = PalwReplicaCollector { leaves, finality_daa_score: finality, resolver: attr }.normalize();
-        assert_eq!(report.rows.len(), 1, "alice's slot is credited");
-        assert_eq!(report.rows[0].owner_id, "gh:alice");
-        assert_eq!(report.rows[0].evidence, "c1#batch-1:7", "the row cites the accepting block the line named");
+        // BOTH slots are credited now. The "stranger" was only a stranger to the registration
+        // service; the chain knew exactly who they were, and dropping their slot was the bug.
+        assert_eq!(report.rows.len(), 2, "every bonded owner is credited, registered or not");
+        let alice = report.rows.iter().find(|r| r.owner_id == "addr:misakatest:alice").expect("alice's row");
+        assert_eq!(alice.evidence, "c1#batch-1:7", "the row cites the accepting block the line named");
         assert!(
-            matches!(report.rejected.as_slice(), [Rejected::UnregisteredOwner { owner_address, .. }] if owner_address == "misakatest:stranger"),
-            "the stranger is reported, not silently skipped: {:?}",
-            report.rejected
+            report.rows.iter().any(|r| r.owner_id == "addr:misakatest:stranger"),
+            "the previously-unregistered owner is credited: {:?}",
+            report.rows
         );
+        assert!(report.rejected.is_empty(), "nothing is rejected for want of a registration: {:?}", report.rejected);
     }
 }

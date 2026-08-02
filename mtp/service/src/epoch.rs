@@ -209,7 +209,7 @@ mod tests {
     /// §5 test 1 — attribution round-trip: facts from all four source types land
     /// under the ONE canonical id; the same facts with no registration score zero.
     #[test]
-    fn attribution_collapses_all_sources_to_one_id() {
+    fn on_chain_facts_credit_the_address_and_off_chain_facts_the_registration() {
         let mut attr = Attributor::new();
         let (rec, addr) = register(&mut attr, "alice", 0x11);
         let id = rec.ledger_id(); // "gh:alice"
@@ -218,10 +218,13 @@ mod tests {
         // Simulate ingestion: each collector resolves its source key to the canonical
         // id before storing (node via token, chain via address, gh via handle).
         let node_owner = attr.resolve_token(&rec.claim_token).unwrap().to_string();
-        let val_id = attr.resolve_address(&addr).unwrap().to_string();
+        // 2026-08-02: chain facts resolve to the ADDRESS id, which is deliberately NOT the
+        // registration's `gh:` id — on-chain work is credited to the address that did it.
+        let val_id = attr.resolve_address_id(&addr).unwrap();
         let bug_id = attr.resolve_github("alice").unwrap().to_string();
         let sub_id = attr.resolve_github("alice").unwrap().to_string();
-        assert!([&node_owner, &val_id, &bug_id, &sub_id].iter().all(|x| **x == id));
+        assert!([&node_owner, &bug_id, &sub_id].iter().all(|x| **x == id));
+        assert_eq!(val_id, format!("addr:{addr}"), "chain facts are credited to the address");
 
         let dir = tempdir("collapse");
         let mut store = PersistentStore::new(&dir);
@@ -289,19 +292,39 @@ mod tests {
         ];
         let ledger = build_epoch_ledger(&store, &attr, &Rules::default(), &key, &window(), &manual).unwrap();
 
-        // Exactly one score row: everything collapsed under gh:alice.
-        assert_eq!(ledger.scores.len(), 1);
-        let row = &ledger.scores[0];
-        assert_eq!(row.id, "gh:alice");
-        assert!(row.c1 > 0, "node uptime + validator both in C1");
+        // 2026-08-02 — the collapse is now PARTIAL, and that is the intended consequence of
+        // crediting on-chain work to the address that did it. Off-chain facts (node claim token,
+        // GitHub handle, campaign forms) still collapse onto the registration's one id; ON-CHAIN
+        // facts land on `addr:…` instead, because the chain names an address and nothing else.
+        //
+        // Stated plainly because it is a real trade the address policy makes: one human who both
+        // runs a validator and files bugs now appears as TWO ledger ids. Linking them back together
+        // is an ALLOCATION-time decision for the operator, not something this function may smuggle
+        // in — doing it here would require the registration lookup whose absence is the point.
+        assert_eq!(ledger.scores.len(), 2, "on-chain facts bucket by address, off-chain facts by registration");
+        let addr_row = ledger.scores.iter().find(|r| r.id.starts_with("addr:")).expect("an address row");
+        assert_eq!(addr_row.id, format!("addr:{addr}"));
+        assert!(addr_row.c1 > 0, "the validator's on-chain work is credited to its address");
+
+        let row = ledger.scores.iter().find(|r| r.id == "gh:alice").expect("the registration row");
+        assert!(row.c1 > 0, "node uptime is claim-token attributed and stays on the registration id");
         assert_eq!(row.c2, 2_000_000, "S1 first bug (manual award)");
         assert_eq!(row.c3, 30_000, "verify submission (manual award)");
 
-        // Now drop the registration: the SAME auto facts resolve to nobody → empty ledger
-        // (manual awards are the operator's own call and are not passed here).
+        // Now drop the registration entirely. This is the assertion the 2026-08-02 change INVERTS,
+        // so it is worth being explicit about what it used to say: "unregistered auto facts score
+        // zero (fail-closed)". That fail-closed rule protected nothing — the facts are chain-derived
+        // and already finality-checked — while quietly deleting the points of anyone who earned
+        // on-chain and never visited the registration service.
+        //
+        // Now the chain facts survive, credited to the address that produced them. The token- and
+        // handle-attributed facts still vanish, because without a registration there is genuinely no
+        // id to attribute them to: a claim token names a registration and nothing else.
         let empty_attr = Attributor::new();
         let empty = build_epoch_ledger(&store, &empty_attr, &Rules::default(), &key, &window(), &[]).unwrap();
-        assert!(empty.scores.is_empty(), "unregistered auto facts score zero (fail-closed)");
+        let ids: Vec<&str> = empty.scores.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec![format!("addr:{addr}").as_str()], "on-chain facts are credited without any registration");
+        assert!(empty.scores[0].c1 > 0);
     }
 
     /// §5 test 5 — idempotent epoch: build twice → identical content; a prior

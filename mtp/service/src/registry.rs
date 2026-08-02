@@ -282,8 +282,15 @@ impl Attributor {
     }
 
     /// Resolve an on-chain address to its canonical ledger id (chain/campaign facts).
-    pub fn resolve_address(&self, address: &str) -> Option<&str> {
-        self.by_address.get(address).map(String::as_str)
+    ///
+    /// **2026-08-02: registration-free.** The id is derived from the address itself
+    /// ([`misaka_mtp::registry::ledger_id_for_address`]); a registration is no longer consulted and
+    /// no longer required. Using a testnet address IS the enrolment. The registration index is kept
+    /// only for the pre-change ledgers and for the operator dashboard.
+    ///
+    /// Returns an owned String rather than a borrow because the id is now computed, not stored.
+    pub fn resolve_address_id(&self, address: &str) -> Option<String> {
+        misaka_mtp::registry::ledger_id_for_address(address)
     }
 
     /// Resolve a node claim-token to its canonical ledger id (crawler facts, I-MTP-11).
@@ -304,11 +311,17 @@ impl Attributor {
         // Both spellings are canonical ids, but each is only live for a registration that CHOSE it:
         // `gh:alice` is not a valid id for a human who registered under `addr:…`, or the fail-closed
         // membership test would admit a fact bucketed under an id nothing ever pays out to.
+        // 2026-08-02: an `addr:` id is live iff it is a well-formed address. That is the whole
+        // point of the change — the fail-closed membership test used to drop the facts of anyone
+        // who earned on-chain without registering, which is a way to lose points, not a way to
+        // prevent fraud.
+        if let Some(address) = ledger_id.strip_prefix("addr:") {
+            return misaka_mtp::registry::ledger_id_for_address(address).as_deref() == Some(ledger_id);
+        }
+        // `gh:` ids remain resolvable ONLY for registrations made before the change, so historical
+        // ledgers stay verifiable. Nothing new is issued under this prefix.
         if let Some(handle) = ledger_id.strip_prefix("gh:") {
             return self.by_github.get(handle).is_some_and(|id| id == ledger_id);
-        }
-        if let Some(address) = ledger_id.strip_prefix("addr:") {
-            return self.by_address.get(address).is_some_and(|id| id == ledger_id);
         }
         false
     }
@@ -328,7 +341,7 @@ impl Attributor {
 /// different category.
 impl misaka_mtp_collectors::OwnerResolver for Attributor {
     fn ledger_id_for_address(&self, address: &str) -> Option<String> {
-        self.resolve_address(address).map(str::to_string)
+        self.resolve_address_id(address)
     }
 }
 
@@ -409,12 +422,13 @@ mod tests {
             .register(&mut ns, "testnet-10", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Github)
             .unwrap();
         assert_eq!(rec.ledger_id(), "gh:alice");
-        // every namespace resolves to the ONE canonical id (G1/I-MTP-1).
-        assert_eq!(attr.resolve_address(&addr), Some("gh:alice"));
+        // The token and handle namespaces still resolve to the registration's canonical id.
         assert_eq!(attr.resolve_token(&rec.claim_token), Some("gh:alice"));
         assert_eq!(attr.resolve_github("alice"), Some("gh:alice"));
-        // an unregistered key resolves to nothing → fact would be dropped.
-        assert_eq!(attr.resolve_address("misakatest:stranger"), None);
+        // 2026-08-02: the ADDRESS namespace no longer consults the registration — it credits the
+        // address itself, so a `gh:`-attributed registration no longer renames on-chain earnings.
+        assert_eq!(attr.resolve_address_id(&addr).as_deref(), Some(format!("addr:{addr}").as_str()));
+        // A token that was never issued still resolves to nothing (that namespace is unchanged).
         assert_eq!(attr.resolve_token("deadbeef"), None);
     }
 
@@ -446,14 +460,14 @@ mod tests {
             .register(&mut ns, "testnet-21", "dora", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Address)
             .unwrap();
         assert_eq!(rec.ledger_id(), format!("addr:{addr}"));
-        // Still ONE id: every namespace resolves to it, so the choice renames the bucket rather
-        // than creating a second one that could be paid twice.
-        assert_eq!(attr.resolve_address(&addr), Some(rec.ledger_id().as_str()));
+        // 2026-08-02: address resolution no longer consults the registration at all, so it agrees
+        // with an address-attributed record by construction rather than by lookup.
+        assert_eq!(attr.resolve_address_id(&addr).as_deref(), Some(rec.ledger_id().as_str()));
         assert_eq!(attr.resolve_token(&rec.claim_token), Some(rec.ledger_id().as_str()));
         assert_eq!(attr.resolve_github("dora"), Some(rec.ledger_id().as_str()));
-        // Fail-closed membership follows the CHOICE: this human's facts are only scored under the
-        // id they actually registered, never under the spelling they declined.
         assert!(attr.is_registered_id(&rec.ledger_id()));
+        // A `gh:` id this human declined is still not live for them — the legacy prefix resolves
+        // only for registrations that actually chose it.
         assert!(!attr.is_registered_id("gh:dora"));
     }
 
@@ -467,11 +481,11 @@ mod tests {
         assert_eq!(rec.ledger_id(), "gh:eve");
     }
 
-    /// C5's attribution must land on the SAME canonical id as every other category — a provider
-    /// paid through `gh:alice` for inference is the same participant as the `gh:alice` who runs a
-    /// node, not a second one.
+    /// 2026-08-02 — C5 attribution is registration-free: the provider's bond-owner ADDRESS is the
+    /// ledger id. An operator who earns on-chain without ever touching the registration service is
+    /// credited, which is the whole point of the change; the old behaviour dropped their facts.
     #[test]
-    fn c5_owner_resolution_reuses_the_one_canonical_ledger_id() {
+    fn c5_owner_resolution_is_registration_free() {
         use misaka_mtp_collectors::OwnerResolver;
 
         let (key, pk, addr) = key_and_addr(0x43);
@@ -484,11 +498,18 @@ mod tests {
         attr.register(&mut ns, "testnet-20", "alice", &addr, &pk, &nonce_hex, &sig, 1000, Prefix::Testnet, LedgerAttribution::Github)
             .unwrap();
 
-        // The C5 seam and the crawler/campaign seam agree, by construction.
-        assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), Some("gh:alice"));
-        assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), attr.resolve_address(&addr));
-        // An unregistered provider earns nothing rather than being parked under a placeholder id.
-        assert_eq!(attr.ledger_id_for_address("misakatest:stranger"), None);
+        // Even with a `gh:`-attributed registration on file, the C5 seam credits the ADDRESS: the
+        // chain knows who did the work, and that is now the only thing consulted.
+        assert_eq!(attr.ledger_id_for_address(&addr).as_deref(), Some(format!("addr:{addr}").as_str()));
+        assert_eq!(attr.ledger_id_for_address(&addr), attr.resolve_address_id(&addr));
+        // A provider who never registered is now CREDITED rather than dropped — the regression this
+        // change exists to fix.
+        let stranger = "misakatest:qstranger";
+        assert_eq!(attr.ledger_id_for_address(stranger).as_deref(), Some("addr:misakatest:qstranger"));
+        assert!(attr.is_registered_id("addr:misakatest:qstranger"), "a used address is live without registering");
+        // Malformed input is still refused, so a bad fact cannot invent an id.
+        assert_eq!(attr.ledger_id_for_address("not-an-address"), None);
+        assert_eq!(attr.ledger_id_for_address("bitcoin:qabc"), None);
     }
 
     #[test]
