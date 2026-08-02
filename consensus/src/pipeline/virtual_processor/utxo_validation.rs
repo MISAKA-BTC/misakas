@@ -313,8 +313,13 @@ pub(super) fn palw_v4_leaf_chunk_matches_canonical_span(
     // The width is the same consensus admission parameter which fixed `manifest.chunk_count`.
     // Require both the inherited lifecycle shape and this payload to agree with it before touching
     // DA capacity, accepted-chunk state, or the later lifecycle/content staging path.
+    // ADR-0045 D3-b: the payload version this predicate admits MUST be the one context-free
+    // validation admits. D3-b moved the chunk to v3 (witnesses, without which clauses 11/12 have
+    // nothing to check) and rejects v2 outright — while this predicate was left pinned at v2. The
+    // two conditions are mutually exclusive, so every leaf chunk was refused here before the PCPB
+    // arm ever ran, and the batch aged out of Registering with chunks 0/N and no error anywhere.
     let chunk_width = u32::from(max_leaf_chunk_leaves);
-    if chunk.version != kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V2
+    if chunk.version != kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V3
         || chunk.chunk_index >= lifecycle.chunk_count
         || chunk.proofs.len() != chunk.leaves.len()
         || chunk_width == 0
@@ -2871,7 +2876,7 @@ mod tests {
         use crate::model::stores::palw::{DbPalwStore, PalwStore};
         use kaspa_consensus_core::{
             palw::{
-                PALW_LEAF_CHUNK_VERSION_V2, PALW_MAX_LEAVES_PER_CHUNK, PalwBatchLifecycleV1, PalwBatchStatus, PalwLeafChunkV1,
+                PALW_LEAF_CHUNK_VERSION_V3, PALW_MAX_LEAVES_PER_CHUNK, PalwBatchLifecycleV1, PalwBatchStatus, PalwLeafChunkV1,
                 PalwProofType, PalwPublicLeafV1, palw_leaf_merkle_proof, palw_leaf_merkle_root,
             },
             subnets::SUBNETWORK_ID_PALW_LEAF_CHUNK,
@@ -2934,7 +2939,7 @@ mod tests {
             let leaf_root = palw_leaf_merkle_root(&hashes);
             let proof = palw_leaf_merkle_proof(&hashes, 0).unwrap();
             let chunk = PalwLeafChunkV1 {
-                version: PALW_LEAF_CHUNK_VERSION_V2,
+                version: PALW_LEAF_CHUNK_VERSION_V3,
                 batch_id,
                 chunk_index: 0,
                 leaves: vec![leaf],
@@ -2958,6 +2963,30 @@ mod tests {
                 revoked_from_daa: None,
             };
             (chunk, lifecycle)
+        }
+
+        /// ADR-0045 D3-b — the two leaf-chunk gates must admit the SAME payload version.
+        ///
+        /// D3-b moved the chunk to v3 and made context-free validation reject anything else, but
+        /// `palw_v4_leaf_chunk_matches_canonical_span` stayed pinned at v2. Mutually exclusive
+        /// conditions on the same payload brick the lane in the quietest possible way: the carrier
+        /// is refused before the PCPB arm runs, nothing logs, and the batch simply ages out of
+        /// Registering with chunks 0/N. Pin the agreement rather than the constant, so a later
+        /// version bump has to move both or fail here.
+        #[test]
+        fn leaf_chunk_span_predicate_admits_exactly_the_context_free_version() {
+            let (mut chunk, lifecycle) = chunk_and_lifecycle(0x11);
+            assert!(
+                palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16),
+                "the span predicate must admit the version context-free validation requires"
+            );
+            for stale in [kaspa_consensus_core::palw::PALW_LEAF_CHUNK_VERSION_V2, PALW_LEAF_CHUNK_VERSION_V3 + 1] {
+                chunk.version = stale;
+                assert!(
+                    !palw_v4_leaf_chunk_matches_canonical_span(&chunk, &lifecycle, PALW_MAX_LEAVES_PER_CHUNK as u16),
+                    "version {stale} is not the context-free version and must be refused"
+                );
+            }
         }
 
         fn gate<'a>(
@@ -3035,7 +3064,7 @@ mod tests {
                 .collect_vec();
             let leaf_root = palw_leaf_merkle_root(&projected_hashes);
             let make_chunk = |chunk_index: u16, start: usize, end: usize| PalwLeafChunkV1 {
-                version: PALW_LEAF_CHUNK_VERSION_V2,
+                version: PALW_LEAF_CHUNK_VERSION_V3,
                 batch_id,
                 chunk_index,
                 leaves: leaves[start..end].to_vec(),
