@@ -1256,6 +1256,14 @@ pub struct PalwResolvedBinding {
     /// presence/equality re-check. Read-only projection; the authoritative verification of these
     /// values happened at acceptance (clauses 11/12).
     pub pcpb: PalwResolvedPcpb,
+    /// Static-audit finding C-03 — the leaf's OWN Compute Set, projected so clause 14 can require
+    /// the header to name the same one.
+    ///
+    /// This had zero production readers before, which is exactly the shape the `ticket_authority_pk_hash`
+    /// field above was added to fix: a consensus-visible leaf field that nothing compared against
+    /// meant the honest template builder's copy (`palw_mint.rs`) was the only thing holding
+    /// header and leaf together, and a template builder is not a validator.
+    pub receipt_v3_compute_set_id: Hash64,
 }
 
 /// The clause-13 projection of a resolved leaf's PCPB fields.
@@ -1359,6 +1367,7 @@ pub fn resolve_palw_binding(
             provider_snapshot_root: leaf.provider_snapshot_root,
             assignment_proof_root: leaf.assignment_proof_root,
         },
+        receipt_v3_compute_set_id: leaf.receipt_v3_compute_set_id,
     })
 }
 
@@ -3758,6 +3767,55 @@ mod tests {
         store.set(sp, PalwLaneBitsV1 { hash_bits: 0x1c00aaaa, replica_bits: 0x1b00bbbb }).unwrap();
         assert_eq!(resolve_palw_lane_hold_bits(&store, sp, WorkLane::HashFloor, &params).unwrap(), 0x1c00aaaa);
         assert_eq!(resolve_palw_lane_hold_bits(&store, sp, WorkLane::ReplicaPalw, &params).unwrap(), 0x1b00bbbb);
+    }
+
+    /// Static-audit finding C-03 (T-P0-01) — the resolver must carry the leaf's OWN Compute Set out,
+    /// so clause 14 in `check_palw_ticket` has something to compare the header against.
+    ///
+    /// The attack this closes: produce a legitimate leaf under a cheap Compute Set A, then mine a
+    /// Header-v5 naming an expensive Set B to collect B's per-set difficulty allocation, B's
+    /// governing policy/plan and B's compute-work weight factor. Every downstream consumer
+    /// (pre-PoW descriptor resolution, UTXO-stage governing check, GHOSTDAG credit) reads the
+    /// HEADER's id, and the whole-header authorization does not help because the leaf authority
+    /// performing the substitution is the party signing it.
+    ///
+    /// This test pins the projection, which is the half that can silently regress — a field that
+    /// nothing reads is how C-03 existed in the first place. The equality itself is asserted at its
+    /// enforcement point in the body validator.
+    #[test]
+    fn resolved_binding_carries_the_leafs_own_compute_set() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwStore::new(db, CachePolicy::Count(64));
+
+        let set_a = h(0xA5);
+        let mut produced = leaf(0);
+        produced.receipt_v3_compute_set_id = set_a;
+        store.insert_leaf(h(1), 0, Arc::new(produced)).unwrap();
+        let cert = PalwBatchCertificateV2 {
+            version: PALW_BATCH_CERTIFICATE_VERSION_V2,
+            batch_id: h(1),
+            manifest_hash: h(2),
+            leaf_root: h(3),
+            audit_beacon_epoch: 5,
+            audit_sample_root: h(4),
+            passed_leaf_count: 2,
+            rejected_leaf_bitmap_root: h(5),
+            certificate_epoch: 6,
+            activation_epoch: 6,
+            expiry_epoch: 20,
+            auditor_set_commitment: h(7),
+            approving_stake: 0,
+            votes: vec![],
+        };
+        let cert_hash = cert.hash();
+        store.insert_certificate(cert_hash, Arc::new(cert)).unwrap();
+
+        let resolved = resolve_palw_binding(h(1), 0, cert_hash, 7, &store).expect("leaf + cert are present");
+        assert_eq!(
+            resolved.receipt_v3_compute_set_id, set_a,
+            "the resolver must project the LEAF's compute set — a header naming another set is what clause 14 rejects"
+        );
+        assert_ne!(resolved.receipt_v3_compute_set_id, Hash64::default(), "a v2 leaf's set id is non-zero, so the compare is total");
     }
 
     /// §18.1: `resolve_palw_binding` reads the leaf + certificate a header names and packs them into the

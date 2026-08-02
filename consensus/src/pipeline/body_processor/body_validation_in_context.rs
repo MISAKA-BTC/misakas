@@ -244,6 +244,43 @@ impl BlockBodyProcessor {
             &*self.palw_store,
         )
         .map_err(|e| reject(format!("{e:?}")))?;
+
+        // Static-audit finding C-03 — the header must name the SAME Compute Set the leaf was
+        // produced under.
+        //
+        // Everything downstream of the header trusts `header.palw_compute_set_id` on its own word:
+        // pre-PoW resolves the per-set descriptor and difficulty from it, UTXO acceptance checks
+        // that the header's policy/plan fork-locally govern IT, and GHOSTDAG credits compute work
+        // through ITS weight factor. Nothing compared it to the leaf, so a producer could compute
+        // under a cheap set A, declare an expensive set B in the header, and collect B's
+        // difficulty allocation and weight — with a valid whole-header authorization, because the
+        // leaf authority signing the header is the same party doing the substitution. The honest
+        // template builder copies the leaf's value across (`palw_mint.rs`), which is precisely why
+        // this was invisible: a template builder is not a validator.
+        //
+        // SCOPED to Header-v5, and that scope is the rule, not a convenience. Below
+        // `PALW_COMPUTE_SET_HEADER_VERSION` the three registry references are consensus-FORCED to
+        // zero (`pre_ghostdag_validation`, NonZeroPalwHeaderFieldsBeforeActivation) while an
+        // Object-V2 leaf's set id is required NON-zero — so a blanket equality would reject every
+        // honest pre-registry algo-4 block, which is precisely what it did when first written. It
+        // is also unnecessary there: with the header's id pinned to zero there is no per-set
+        // difficulty to borrow, no policy/plan to name and no weight factor to inflate, because
+        // every consumer of the field is inert below the fence.
+        //
+        // Enforced HERE rather than in the resolver so the error names the mismatch. On v5 the
+        // compare is total: a v2 leaf's set id is non-zero by `validate_public_leaf`, and a v5
+        // header only reaches this point after pre-PoW resolved a registered descriptor for its own
+        // id (so its id is non-zero too).
+        if header.version >= kaspa_consensus_core::constants::PALW_COMPUTE_SET_HEADER_VERSION
+            && header.palw_compute_set_id != resolved.receipt_v3_compute_set_id
+        {
+            return Err(reject(format!(
+                "clause 14: header names compute set {} but leaf {}:{} was produced under {} — a leaf may not be \
+                 mined under another set's difficulty allocation, policy or compute-work weight",
+                header.palw_compute_set_id, header.palw_batch_id, header.palw_leaf_index, resolved.receipt_v3_compute_set_id
+            )));
+        }
+
         let cert_active = resolved.cert_activation_epoch <= epoch && epoch < resolved.cert_expiry_epoch;
 
         // ADR-0040 **P1-7 (TGT-01) — REFUTED. The interval is already consensus-derived.**
