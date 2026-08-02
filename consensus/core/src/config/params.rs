@@ -2608,6 +2608,22 @@ mod palw_network_tests {
             "cf97dfca568840c922072899a8f8253bc0d332453ed5940a081c43f0d8c5ee8500e8c23bc44654642ccd5cc4c64a5d8ae93075fa375713aba86f428e78ac44dd",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
+        // testnet-22 is pinned BEFORE it is live, which is the cheap moment to do it. The clause
+        // (a)/(b)/(c) discipline above governs a net whose history must keep replaying; this net has
+        // no history yet, so the pin exists for the narrower job of making a params drift between now
+        // and the cutover LOUD rather than something an operator discovers by comparing startup logs
+        // across two hosts. Verified against a real `kaspad --testnet --netsuffix=22` startup line,
+        // not just recomputed here — the value an operator can actually read back is the value pinned.
+        //
+        // Until the cutover this is a tripwire, not a commitment: a deliberate pre-launch parameter
+        // change re-pins freely, because there is no mined history for it to invalidate. The moment
+        // testnet-22 carries blocks, the clauses above apply to it exactly as they do to testnet-21.
+        assert_eq!(
+            EVM_GENESIS_PALW_PARAMS.consensus_identity_hash().to_string(),
+            "f88c33dcc9a38b9584664fa6f97952190491301f2d00c238706ae1629b437b3e3dc7520255cad9ddfd7d44d45598de2c4dba954bcab5e4e58675a40f57dd84cb",
+            "testnet-22's consensus params moved before it went live — re-pin deliberately, and check \
+             every host's startup identity line matches before the cutover"
+        );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
         for other in [
             MAINNET_PARAMS,
