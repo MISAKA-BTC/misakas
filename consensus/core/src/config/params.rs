@@ -437,6 +437,27 @@ pub struct Params {
     /// Fenced for the same reason every other rule here is: it changes which manifests take a view
     /// slot, and nodes that disagree about the view build different overlay commitments.
     pub palw_manifest_sponsorship_daa_score: u64,
+    /// Proposal ③ FOLLOW-UP, second coordinate (2026-08-02) — the DAA score past which
+    /// `palw_dns_confirmation` confirms the newest ATTESTED epoch instead of demanding that the
+    /// newest READY epoch already be attested.
+    ///
+    /// `1d11021d` fixed exactly this race, but only at the `update_dns_state` (virtual-tip
+    /// singleton) coordinate. The beacon coordinate kept the original form, in direct violation of
+    /// its own comment that "the two coordinates must never diverge on what confirmed means". The
+    /// consequence is not subtle: an epoch becomes attestable only once it is READY, so the shard
+    /// for epoch E is signed, mined and accepted strictly after E became ready — by which time the
+    /// ready epoch is E+1. Requiring `latest_ready` itself to be attested is therefore a race the
+    /// chain almost always wins, `dns_anchor` never latches, `dns_healthy && is_confirmed()` stays
+    /// false, and NO epoch is ever Healthy: the seed never advances and the algo-4 lane is closed
+    /// network-wide. Measured on testnet-22: 103 consecutive degraded epochs from genesis, broken
+    /// only when a 3-DAA jump at one boundary happened to make the ready epoch one older — 1 of 108
+    /// boundaries.
+    ///
+    /// Fenced because it changes `R_E`. Two nodes disagreeing about which anchor is confirmed derive
+    /// different beacon seeds, which is a split with no transaction-level cause — the same class the
+    /// 2026-08-02 partition was. A rolling deploy is therefore not available; this is a flag day or
+    /// a re-genesis, exactly like every other rule in this block.
+    pub palw_dns_confirm_walkdown_daa_score: u64,
     /// ADR-0040 P1-13 archival-operation requirement. Presets without a supported pruning snapshot
     /// path set this flag so startup rejects pruned operation.
     pub palw_requires_archival: bool,
@@ -623,6 +644,7 @@ impl Params {
             palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score,
             palw_manifest_sponsorship_daa_score,
+            palw_dns_confirm_walkdown_daa_score,
             palw_requires_archival,
             palw_requires_peer_allowlist,
             palw_compute_work_scale,
@@ -689,6 +711,7 @@ impl Params {
         field!(palw_leaf_chunk_v3_admission_daa_score);
         field!(palw_suture_disqualified_selected_parent_daa_score);
         field!(palw_manifest_sponsorship_daa_score);
+        field!(palw_dns_confirm_walkdown_daa_score);
         field!(palw_requires_archival);
         field!(palw_requires_peer_allowlist);
         field!(palw_compute_work_scale);
@@ -932,6 +955,7 @@ impl Params {
             palw_leaf_chunk_v3_admission_daa_score: self.palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score: self.palw_suture_disqualified_selected_parent_daa_score,
             palw_manifest_sponsorship_daa_score: self.palw_manifest_sponsorship_daa_score,
+            palw_dns_confirm_walkdown_daa_score: self.palw_dns_confirm_walkdown_daa_score,
             palw_requires_archival: self.palw_requires_archival,
             palw_requires_peer_allowlist: self.palw_requires_peer_allowlist,
             palw_compute_work_scale: self.palw_compute_work_scale,
@@ -1511,6 +1535,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1627,6 +1652,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1703,6 +1729,7 @@ pub const TESTNET_PALW_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_requires_archival: true,
     palw_requires_peer_allowlist: true,
     palw_lane_difficulty: TESTNET_PALW_LANE_DIFFICULTY,
@@ -1760,6 +1787,7 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     // Devnet permits normal pruning; archival nodes opt in when full history is required.
     palw_requires_archival: false,
     palw_requires_peer_allowlist: true,
@@ -1845,6 +1873,7 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_compute_work_scale: 0,
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
     skip_proof_of_work: false,
@@ -1886,6 +1915,7 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
 };
@@ -1952,6 +1982,7 @@ pub const PCPB_PALW_PARAMS: Params = Params {
     // Static-audit finding H-01 — shares the same flag day as the other two. One score, one upgrade
     // window, one number for an operator to check.
     palw_manifest_sponsorship_daa_score: TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
 
@@ -2011,8 +2042,22 @@ pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    // Proposal ③ follow-up at the BEACON coordinate — a flag day, not genesis-active, because this
+    // network is already live and mining. Below the fence `palw_dns_confirmation` keeps its exact
+    // current form, so every block already mined replays byte-identically; from the fence on it
+    // confirms the newest ATTESTED epoch, the same walk-down `1d11021d` gave the singleton.
+    //
+    // Set 2026-08-02 at tip ≈ 12,000 and ~2.2 DAA/s, so the fence is ~2.5 days out — room for every
+    // operator to take the release before the rule moves. Until then the lane depends on the same
+    // ~1-in-108 boundary lottery that took 103 epochs to hit on this chain's first run; it HAS hit
+    // (the anchor latched at epoch 127 and the latch is persistent), so the lane is open and stable
+    // in the meantime rather than waiting on the fence.
+    palw_dns_confirm_walkdown_daa_score: TESTNET_22_DNS_CONFIRM_WALKDOWN_DAA_SCORE,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
+
+/// The testnet-22 flag day for the proposal-③ walk-down at the beacon coordinate.
+pub const TESTNET_22_DNS_CONFIRM_WALKDOWN_DAA_SCORE: u64 = 500_000;
 
 /// testnet-22 seeders. Reuses the testnet-21 hosts: they are the operator's own seeders and serve
 /// whichever net the node behind them runs.
@@ -2107,6 +2152,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -2152,6 +2198,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
     palw_manifest_sponsorship_daa_score: 0,
+    palw_dns_confirm_walkdown_daa_score: u64::MAX,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -2605,24 +2652,28 @@ mod palw_network_tests {
             // zero), and before that (2026-08-01, genesis day) proposal ③
             // (`require_anchor_attestation: true`), legal for the different reason that the ledger
             // then held zero attestations and zero confirmed anchors.
-            "cf97dfca568840c922072899a8f8253bc0d332453ed5940a081c43f0d8c5ee8500e8c23bc44654642ccd5cc4c64a5d8ae93075fa375713aba86f428e78ac44dd",
+            "11d3afa3fca84d4ae2f48d2de00414c9558ac3d0e77759440cde180d870dba1c9c132e5f4de66ec624e90f68c937f9833c62f4da3e4027a6a37a1151e8af9cab",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
-        // testnet-22 is pinned BEFORE it is live, which is the cheap moment to do it. The clause
-        // (a)/(b)/(c) discipline above governs a net whose history must keep replaying; this net has
-        // no history yet, so the pin exists for the narrower job of making a params drift between now
-        // and the cutover LOUD rather than something an operator discovers by comparing startup logs
-        // across two hosts. Verified against a real `kaspad --testnet --netsuffix=22` startup line,
-        // not just recomputed here — the value an operator can actually read back is the value pinned.
+        // testnet-22 IS the live public net as of the 2026-08-02 cutover; testnet-21 above is
+        // retired (nodes stopped, datadirs deleted) and its pin is kept only so a stale binary
+        // pointed at that suffix still trips rather than silently mining a dead lineage. The
+        // clause (a)/(b)/(c) discipline applies to THIS pin now.
         //
-        // Until the cutover this is a tripwire, not a commitment: a deliberate pre-launch parameter
-        // change re-pins freely, because there is no mined history for it to invalidate. The moment
-        // testnet-22 carries blocks, the clauses above apply to it exactly as they do to testnet-21.
+        // Re-pinned 2026-08-02 under **clause (a)** for the proposal-③ follow-up at the beacon
+        // coordinate (`palw_dns_confirm_walkdown_daa_score = 500_000`). The fence sits ~2.5 days
+        // above the tip at the time it was set, so every block already mined is evaluated by the
+        // unchanged rule and replays byte-identically — only the digest moves. Operators must take
+        // the release before the fence; after it, an un-upgraded node derives a different `R_E` and
+        // splits.
+        //
+        // Verified against a real `kaspad --testnet --netsuffix=22` startup line rather than only
+        // recomputed here, so the value an operator reads back is the value pinned.
         assert_eq!(
             EVM_GENESIS_PALW_PARAMS.consensus_identity_hash().to_string(),
-            "f88c33dcc9a38b9584664fa6f97952190491301f2d00c238706ae1629b437b3e3dc7520255cad9ddfd7d44d45598de2c4dba954bcab5e4e58675a40f57dd84cb",
-            "testnet-22's consensus params moved before it went live — re-pin deliberately, and check \
-             every host's startup identity line matches before the cutover"
+            "4ab1c1880595ea0dd3cba2b2a64e904439b47a2674d2f299d26dc09f2da7f5fbf9165b2f8ac20f647ca53692212bae3f7131d6aa457a682e366939673b7d7829",
+            "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis \
+             onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
         for other in [

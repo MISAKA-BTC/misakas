@@ -1056,6 +1056,35 @@ pub fn ready_epoch_from_tip_blue_score(tip_blue_score: u64, epoch_len_blue_score
     if completed == 0 { None } else { Some(completed - 1) }
 }
 
+/// Proposal ③ follow-up — WHICH epoch's canonical anchor may be DNS-confirmed.
+///
+/// One authority for both coordinates that ask the question: the virtual-tip singleton
+/// (`update_dns_state`, the reorg gate) and the per-block beacon (`palw_dns_confirmation`, which
+/// feeds `palw_beacon_seed` provenance). They must never disagree about what "confirmed" means —
+/// and they did, which is the whole reason this function exists rather than two inline copies.
+///
+/// When anchor attestation is required, the answer is the newest ATTESTED epoch at or below
+/// `latest_ready`, **not** `latest_ready` itself. An epoch only becomes attestable once it is ready,
+/// so the shard for epoch `E` is signed, mined and accepted strictly AFTER `E` became ready — by
+/// which time the ready epoch is `E+1`. Demanding that `latest_ready` be already attested is a race
+/// the chain wins essentially always: on testnet-22 it held for 103 consecutive epochs from genesis,
+/// froze the beacon seed at zero and closed the algo-4 lane network-wide, and the one boundary that
+/// broke it did so only because a 3-DAA jump left the ready epoch one older than usual.
+///
+/// The walk-down preserves ③'s meaning exactly. A dead branch carries no attestation for ANY epoch
+/// of its own — its window score rides the shared pre-fork segment — so it still cannot confirm.
+/// Only the impossible timing demand is dropped.
+pub fn dns_confirmable_epoch(
+    latest_ready: u64,
+    attested_epochs: impl IntoIterator<Item = u64>,
+    require_anchor_attestation: bool,
+) -> Option<u64> {
+    if !require_anchor_attestation {
+        return Some(latest_ready);
+    }
+    attested_epochs.into_iter().filter(|epoch| *epoch <= latest_ready).max()
+}
+
 /// Pure core of canonical-anchor selection (testable without a store). `ancestors` is the tip's
 /// selected-parent chain, tip-first, each `(hash, blue_score, daa_score)` with blue_score
 /// strictly decreasing; it must reach down to at least `anchor_cutoff(E-1)`. Returns the
@@ -6260,6 +6289,39 @@ mod tests {
     }
 
     // ---- DNS v3: Canonical Lagged Anchor (blue_score-coordinated) ----
+
+    /// Proposal ③ follow-up — the race that closed the algo-4 lane on testnet-22 for 103 epochs.
+    ///
+    /// The attestation for epoch `E` cannot exist until `E` is ready, and by the time it is mined
+    /// the ready epoch has moved on. So the attested set trails `latest_ready` by at least one, and
+    /// the pre-fix rule ("`latest_ready` itself must be attested") is unsatisfiable in the steady
+    /// state — not rarely, but structurally.
+    #[test]
+    fn confirmable_epoch_walks_down_to_the_newest_attested() {
+        // The steady state: shards for epochs 0..=E-1 are on chain while E is the ready one.
+        let attested: Vec<u64> = (0..=124).collect();
+        assert_eq!(
+            dns_confirmable_epoch(125, attested.iter().copied(), true),
+            Some(124),
+            "must confirm the newest ATTESTED epoch, not the ready one whose shard cannot exist yet"
+        );
+        // The pre-fix condition, stated directly, to show it is unsatisfiable here.
+        assert!(!attested.contains(&125), "the ready epoch is never in its own attested set");
+
+        // The rare boundary that broke the deadlock on testnet-22: a DAA jump left the ready epoch
+        // one older, so its shard WAS already on chain. The walk-down agrees with the old rule there.
+        assert_eq!(dns_confirmable_epoch(124, attested.iter().copied(), true), Some(124));
+
+        // ③'s teeth are intact: a branch that attested nothing at or below the ready epoch cannot
+        // confirm. This is the dead-branch case the proposal exists to close.
+        assert_eq!(dns_confirmable_epoch(125, [200u64, 300].into_iter(), true), None);
+        assert_eq!(dns_confirmable_epoch(125, std::iter::empty(), true), None);
+
+        // With attestation not required the ready epoch is taken verbatim — unchanged behaviour for
+        // every preset that leaves `require_anchor_attestation` false.
+        assert_eq!(dns_confirmable_epoch(125, std::iter::empty(), false), Some(125));
+        assert_eq!(dns_confirmable_epoch(125, [3u64].into_iter(), false), Some(125));
+    }
 
     #[test]
     fn ready_epoch_from_tip_blue_score_off_by_one() {

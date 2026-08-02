@@ -984,6 +984,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_suture_disqualified_selected_parent_daa_score: u64,
     /// Static-audit finding H-01 — manifest sponsorship flag day (params.rs doc has the incident).
     pub(super) palw_manifest_sponsorship_daa_score: u64,
+    /// Proposal ③ follow-up at the beacon coordinate — see `Params::palw_dns_confirm_walkdown_daa_score`.
+    pub(super) palw_dns_confirm_walkdown_daa_score: u64,
     pub(super) palw_store: Arc<DbPalwStore>,
     pub(super) palw_beacon_store: Arc<DbPalwBeaconStore>,
     pub(super) palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
@@ -1223,6 +1225,7 @@ impl VirtualStateProcessor {
             palw_leaf_chunk_v3_admission_daa_score: params.palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score: params.palw_suture_disqualified_selected_parent_daa_score,
             palw_manifest_sponsorship_daa_score: params.palw_manifest_sponsorship_daa_score,
+            palw_dns_confirm_walkdown_daa_score: params.palw_dns_confirm_walkdown_daa_score,
             palw_store: storage.palw_store.clone(),
             palw_beacon_store: storage.palw_beacon_store.clone(),
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
@@ -4466,6 +4469,51 @@ impl VirtualStateProcessor {
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         let stake_depth = compute_stake_score(&per_epoch, params.stake_event_quality_floor_bps);
+        // Proposal ③ (2026-08-01 bystander wedge): the SAME anchor-epoch-attested condition the
+        // reorg-gate coordinate applies (`update_dns_state`), applied at the beacon/clause-6
+        // coordinate — the confirmed anchor classified here feeds the v4/v5 `palw_beacon_seed`
+        // provenance, so the two coordinates must never diverge on what "confirmed" means.
+        //
+        // Proposal ③ FOLLOW-UP, second coordinate (2026-08-02). That sentence was aspirational: the
+        // follow-up landed in `1d11021d` at the singleton coordinate ONLY, and this one kept the
+        // original race. An epoch becomes attestable only once it is READY, so the shard for epoch E
+        // is signed, mined and accepted strictly AFTER E became ready — by which time `latest_ready`
+        // is E+1 and `candidate.epoch` can never be attested. Measured on testnet-22: 103
+        // consecutive degraded epochs from genesis, the seed frozen at zero, algo-4 closed
+        // network-wide; the one boundary that broke it (epoch 127 of 108 sampled) did so only
+        // because a 3-DAA jump made the ready epoch one older, so its shard was already on chain.
+        //
+        // Past the fence, walk DOWN to the newest attested epoch at or below the candidate's and
+        // confirm THAT epoch's anchor — byte-identical to what the singleton does. ③'s meaning is
+        // preserved exactly: a dead branch carries no attestation for ANY epoch of its own, so it
+        // still cannot confirm; only the impossible timing demand is dropped.
+        //
+        // Below the fence nothing moves, so this network's mined history replays unchanged.
+        let walkdown_open = sp_daa >= self.palw_dns_confirm_walkdown_daa_score;
+        let (candidate, dns_anchor) = if walkdown_open && params.require_anchor_attestation {
+            match kaspa_consensus_core::dns_finality::dns_confirmable_epoch(
+                candidate.epoch,
+                contributions.iter().map(|c| c.epoch),
+                true,
+            )
+            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, selected_parent, params))
+            {
+                // No attested epoch at or below the candidate: keep the original candidate so the
+                // check below refuses it, exactly as it would have before the fence. Falling back to
+                // an UNATTESTED anchor here would be the bystander wedge ③ exists to close.
+                None => (candidate, dns_anchor),
+                Some(attested) => {
+                    let anchor = attested.anchor_hash;
+                    (attested, anchor)
+                }
+            }
+        } else {
+            (candidate, dns_anchor)
+        };
+        // Work depth is measured against the anchor that is actually being classified, so it is
+        // computed AFTER the walk-down — measuring the old candidate's depth and then confirming a
+        // different anchor would be its own divergence.
+        //
         // Both hashes are reachable selected-chain blocks. Missing/corrupt work is a consensus DB
         // failure, never zero: defaulting the anchor to zero would inflate work depth and let one
         // node alone classify an unconfirmed candidate as DNS-confirmed inside the v3 commitment.
@@ -4478,10 +4526,6 @@ impl VirtualStateProcessor {
             .get_blue_work(dns_anchor)
             .unwrap_or_else(|err| panic!("failed reading blue work for PALW DNS anchor {dns_anchor}: {err}"));
         let work_depth = selected_parent_work.saturating_sub(anchor_work);
-        // Proposal ③ (2026-08-01 bystander wedge): the SAME anchor-epoch-attested condition the
-        // reorg-gate coordinate applies (`update_dns_state`), applied at the beacon/clause-6
-        // coordinate — the confirmed anchor classified here feeds the v4/v5 `palw_beacon_seed`
-        // provenance, so the two coordinates must never diverge on what "confirmed" means.
         let anchor_epoch_attested = contributions.iter().any(|c| c.epoch == candidate.epoch);
         let confirmed = is_dns_confirmed(work_depth, stake_depth, params.required_work_depth, params.required_stake_depth)
             && (!params.require_anchor_attestation || anchor_epoch_attested);
@@ -5899,15 +5943,20 @@ impl VirtualStateProcessor {
         // carries no attestation for ANY epoch of its own (its window score rides the shared
         // pre-fork segment, the measured 96% case), so it still can never confirm — while making
         // the condition satisfiable on a live branch whose stake really is attesting.
+        //
+        // The selection itself now lives in ONE place (`dns_confirmable_epoch`) that both this
+        // coordinate and the beacon's `palw_dns_confirmation` call. It was two inline copies, and
+        // this follow-up was applied to only one of them — which is exactly how the beacon kept the
+        // original race for a further day and closed testnet-22's algo-4 lane for 103 epochs.
+        // `contributions` is already gated to creditable epochs by the v3 canonical-anchor rule, so
+        // every epoch offered here is anchor-resolvable on this chain.
         let confirmable = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
             .and_then(|latest_ready| {
-                if dns_params.require_anchor_attestation {
-                    // `contributions` is already gated to creditable epochs by the v3 canonical-anchor
-                    // rule, so every epoch here is anchor-resolvable on this chain.
-                    contributions.iter().map(|c| c.epoch).filter(|e| *e <= latest_ready).max()
-                } else {
-                    Some(latest_ready)
-                }
+                kaspa_consensus_core::dns_finality::dns_confirmable_epoch(
+                    latest_ready,
+                    contributions.iter().map(|c| c.epoch),
+                    dns_params.require_anchor_attestation,
+                )
             })
             .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params).map(|a| (epoch, a)));
         // Proposal ② (2026-08-01 bystander wedge, defense-in-depth): while this node's OWN view is
