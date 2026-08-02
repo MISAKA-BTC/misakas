@@ -3832,6 +3832,14 @@ impl VirtualStateProcessor {
                             self.palw_freshness_window_epochs,
                             self.palw_snapshot_lag_epochs,
                         ) as usize,
+                        // Static-audit C-02 — the accepting block's own epoch, and how deep an
+                        // A-commit anchor must already be buried for the anchor-keyed registry to be
+                        // a settled fact rather than a per-fork one.
+                        block_epoch: self.headers_store.get_daa_score(current).unwrap_or(0) / self.palw_epoch_length_daa.max(1),
+                        acommit_burial_epochs: kaspa_consensus_core::palw::palw_acommit_burial_epochs(
+                            self.dns_params.as_ref().map(|p| p.max_reorg_horizon_blocks).unwrap_or(u64::MAX),
+                            self.palw_epoch_length_daa,
+                        ),
                     };
                     let apply_result = crate::processes::palw::apply_palw_overlay_effect(
                         effect.clone(),

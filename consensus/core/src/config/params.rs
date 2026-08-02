@@ -2757,6 +2757,27 @@ mod palw_network_tests {
                     p.palw_freshness_window_epochs >= p.palw_post_commit_delta_epochs,
                     "{name} activates PALW with w < Δ — the freshness window is empty and every honest leaf dies"
                 );
+                // Static-audit C-02 — the self-serial arm must be MINTABLE, not merely safe.
+                //
+                // A leaf may only name an A-commit anchor already buried beyond the deepest legal
+                // reorg (that burial is what makes the anchor-keyed registry safe to read from a
+                // shared key at all), and clause 11 caps how late it may be registered at `issued+w`.
+                // The usable window is therefore `[anchor+burial, anchor+w]`, and it is EMPTY when
+                // burial > w — in which case every self-serial leaf fails closed forever while every
+                // other rule reads as satisfied. That is the same silent-deadness shape C-02 itself
+                // was: a dispatch kind that looks enforced and can never be exercised.
+                if let Some(dns) = p.dns_params.as_ref() {
+                    let burial = crate::palw::palw_acommit_burial_epochs(dns.max_reorg_horizon_blocks, p.palw_epoch_length_daa);
+                    assert!(
+                        burial <= p.palw_freshness_window_epochs,
+                        "{name}: the A-commit burial depth ({burial} epochs, from max_reorg_horizon \
+                         {} over epochs of {} DAA) exceeds w ({}) — the self-serial mint window \
+                         [anchor+burial, anchor+w] is EMPTY and that dispatch kind is silently dead",
+                        dns.max_reorg_horizon_blocks,
+                        p.palw_epoch_length_daa,
+                        p.palw_freshness_window_epochs
+                    );
+                }
             }
         }
         // Five presets activate PALW: the two rehearsal nets, the staging re-genesis (ADR-0048), and

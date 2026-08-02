@@ -424,6 +424,17 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         kaspa_consensus_core::palw_compute_set::parse_palw_compute_registry(kind, &tx.payload)
             .map(|_| ())
             .map_err(TxRuleError::InvalidComputeRegistryPayload)
+    } else if tx.subnetwork_id.is_palw_pcpb() {
+        // Static-audit finding C-02 — the PCPB band (`0x45`, ADR-0045 D3-b) had a recognizer, a
+        // payload type, a validator, a registry writer and two consensus clauses reading it, but NO
+        // arm here. Every `PalwACommitV1` was therefore refused as `SubnetworksDisabled`, so the
+        // registry could never hold a row, so clause 12's self arm rejected every self-serial leaf on
+        // an unresolvable anchor. The whole dispatch kind was dead while reading as enforced — the
+        // producer side (`mil/bridge`'s self flow) builds those leaves and would never have minted.
+        //
+        // Context-free SHAPE only, exactly like the bands above: the anchor's meaning is the epoch of
+        // the block that ACCEPTS it, which no isolation check can see.
+        kaspa_consensus_core::palw::validate_palw_acommit_tx(&tx.payload).map_err(TxRuleError::InvalidPalwOverlayPayload)
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
     }
@@ -712,10 +723,76 @@ mod tests {
             )))
         );
 
-        // 0x45 sits above the band: still the blanket SubnetworksDisabled, fail-closed.
+        // 0x46 sits above every allocated band: still the blanket SubnetworksDisabled, fail-closed.
         let mut alien = base.clone();
-        alien.subnetwork_id = SubnetworkId::from_byte(0x45);
+        alien.subnetwork_id = SubnetworkId::from_byte(0x46);
         assert_match!(tv.validate_tx_in_isolation(&alien), Err(TxRuleError::SubnetworksDisabled(_)));
+    }
+
+    /// Static-audit finding C-02 — the PCPB band (`0x45`) is ROUTED, not blanket-refused.
+    ///
+    /// Until this landed the band had a recognizer, a payload type, a strict validator, a registry
+    /// writer and two consensus clauses reading that registry — and no arm in
+    /// `check_transaction_subnetwork`. Every `PalwACommitV1` was therefore rejected as
+    /// `SubnetworksDisabled`, the registry could never hold a row, and clause 12's self arm refused
+    /// every self-serial leaf on an unresolvable anchor. The dispatch kind read as enforced from every
+    /// angle except the one that mattered, and the producer side builds those leaves today.
+    ///
+    /// This asserts the wiring only; the payload rules are covered in `kaspa_consensus_core::palw`.
+    #[test]
+    fn validate_palw_pcpb_acommit_subnetwork_tx() {
+        use kaspa_consensus_core::palw::{PalwACommitV1, PalwTxError};
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_ACOMMIT;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+        let mut base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_PALW_ACOMMIT,
+            0,
+            vec![],
+        );
+
+        // A well-formed anchor is ACCEPTED at this coordinate — shape only; the anchor's meaning is
+        // the epoch of the block that accepts it, which isolation cannot see.
+        base.payload = borsh::to_vec(&PalwACommitV1 { version: 1, a_commit: kaspa_hashes::Hash64::from_bytes([0xa7; 64]) }).unwrap();
+        tv.validate_tx_in_isolation(&base).expect("a well-formed A-commit anchor must be routed, not blanket-refused");
+
+        // ...and a malformed one is refused as a PALW payload error, never as SubnetworksDisabled —
+        // the distinction is the whole point: one says "this band does not exist", the other says
+        // "this band exists and your transaction is wrong".
+        let mut zero = base.clone();
+        zero.payload = borsh::to_vec(&PalwACommitV1 { version: 1, a_commit: kaspa_hashes::Hash64::from_bytes([0u8; 64]) }).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&zero),
+            Err(TxRuleError::InvalidPalwOverlayPayload(PalwTxError::InvalidField("acommit.a_commit")))
+        );
+
+        let mut padded = base.clone();
+        padded.payload.push(0);
+        assert_match!(tv.validate_tx_in_isolation(&padded), Err(TxRuleError::InvalidPalwOverlayPayload(PalwTxError::Decode)));
+
+        let mut wrong_version = base.clone();
+        wrong_version.payload =
+            borsh::to_vec(&PalwACommitV1 { version: 9, a_commit: kaspa_hashes::Hash64::from_bytes([0xa7; 64]) }).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&wrong_version), Err(TxRuleError::InvalidPalwOverlayPayload(_)));
     }
 
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality

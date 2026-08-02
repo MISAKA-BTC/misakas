@@ -107,7 +107,12 @@ impl BlockBodyProcessor {
         if block.header.daa_score >= self.palw_activation_daa_score {
             return Ok(());
         }
-        if let Some(tx) = block.transactions.iter().find(|tx| tx.subnetwork_id.palw_tx_kind().is_some()) {
+        // Static-audit C-02: the PCPB band (0x45) shares this fence, as its own recognizer's doc
+        // always said. It is checked here rather than in isolation for the same reason the rest of
+        // the band is — isolation is reusable across mempool/relay and knows no block DAA score.
+        if let Some(tx) =
+            block.transactions.iter().find(|tx| tx.subnetwork_id.palw_tx_kind().is_some() || tx.subnetwork_id.is_palw_pcpb())
+        {
             return Err(RuleError::TxInContextFailed(tx.id(), TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone())));
         }
         Ok(())
@@ -467,6 +472,20 @@ impl BlockBodyProcessor {
                 return Err(reject(format!("clause 13: no retained post-commit beacon seed for epoch {draw_epoch} (fail-closed)")));
             }
             if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
+                // Static-audit C-02, mint side: the same burial precondition acceptance enforces. The
+                // registry is anchor-keyed, so it has no per-candidate chain to walk; a buried epoch
+                // is identical on every honest node, and that is the whole basis for reading it here.
+                let burial = kaspa_consensus_core::palw::palw_acommit_burial_epochs(
+                    dns_params.max_reorg_horizon_blocks,
+                    self.palw_epoch_length_daa,
+                );
+                if !kaspa_consensus_core::palw::palw_acommit_anchor_is_buried(epoch, leaf.a_commit_epoch, burial) {
+                    return Err(reject(format!(
+                        "clause 13: the leaf's A-commit anchor epoch {} is not yet buried {burial} epochs under this block's \
+                         epoch {epoch} — the anchor registry is still reorg-mutable there",
+                        leaf.a_commit_epoch
+                    )));
+                }
                 let registered = self
                     .palw_pcpb_store
                     .acommit_epoch(&leaf.a_commit)

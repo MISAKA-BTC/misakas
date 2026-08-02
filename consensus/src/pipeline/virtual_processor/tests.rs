@@ -7266,38 +7266,43 @@ async fn palw_pcpb_ticket_binding_enforced() {
     tc.validate_and_insert_block(mb.to_immutable()).block_task.await.expect("the untampered ticket must mint");
     tc.shutdown(handles);
 
-    // ---- self branch: the A-commit registry equality (`row ≤ declared`), on real blocks ----
-    // The leaf is sealed as SELF-SERIAL with a declared anchor epoch; the registry row is the only
-    // thing varied. Row ABSENT → reject; row LATER than declared → reject; row AT the declared
-    // epoch → mint. (The `row < declared` accept leg and the full clause-11/12 acceptance-time
-    // battery live in `processes::palw::tests::pcpb_clause_negatives` — this test pins the MINT
-    // coordinate's enforcement.)
-    let self_commit = kaspa_hashes::Hash64::from_bytes([0xAC; 64]);
+    // ---- self branch: the BURIAL precondition, on real blocks (static-audit C-02) ----
+    //
+    // The A-commit registry is keyed by anchor, so unlike the beacon seed and the provider snapshot
+    // it has no per-candidate chain to walk — "which epoch did the chain first accept this anchor
+    // in" is a per-fork answer near the tip, and clause 13 is a BODY rule whose verdict is written
+    // permanently. What makes reading a shared key sound is that a leaf may only name anchors whose
+    // acceptance epoch is already beyond every legal reorg, and that is checked BEFORE the registry
+    // is consulted at all.
+    //
+    // This harness runs at epoch 0 (`palw_epoch_length_daa = 100` over a 9-block chain), so an anchor
+    // declared at `PALW_TEST_LEAF_ANCHOR_EPOCH` sits in the validating block's own FUTURE — nonsense
+    // the old rule silently accepted and this one refuses on its own terms. That is exactly the
+    // fixture's reach: the registry-equality legs (`row` absent / later / earlier than declared) need
+    // a chain old enough to bury an anchor and are pinned at the ACCEPTANCE coordinate instead, by
+    // `processes::palw::tests::pcpb_clause_negatives::pcpb_clause12_acceptance_selfserial_registry_and_seats`,
+    // whose context can place the accepting block at any epoch.
     let self_leaf_edit = |l: &mut kaspa_consensus_core::palw::PalwPublicLeafV1| {
         l.dispatch_kind = kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL;
         l.a_commit = kaspa_hashes::Hash64::from_bytes([0xAC; 64]);
         l.a_commit_epoch = PALW_TEST_LEAF_ANCHOR_EPOCH;
     };
-    palw_algo4_expect_ticket_reject_full(|_, _| {}, Some(&self_leaf_edit), "A-commit anchor is not registered").await;
+    palw_algo4_expect_ticket_reject_full(|_, _| {}, Some(&self_leaf_edit), "is not yet buried").await;
 
+    // Registering the anchor does NOT rescue it: burial is a precondition on the leaf's own claim,
+    // not a fact the registry can supply. A reader that consulted the row first would have minted
+    // this block on a fact its own fork might not share.
+    let self_commit = kaspa_hashes::Hash64::from_bytes([0xAC; 64]);
     let (tc, handles, f) = palw_algo4_env_full(1, None, None, Some(&self_leaf_edit), None).await;
-    // Row registered LATER than the leaf declares: the commitment cannot have predated the draw
-    // beacon it names — the borrow-a-known-beacon direction, refused.
     let mut batch = rocksdb::WriteBatch::default();
-    tc.storage.palw_pcpb_store.set_acommit_batch(&mut batch, &self_commit, PALW_TEST_LEAF_ANCHOR_EPOCH + 1).unwrap();
+    tc.storage.palw_pcpb_store.set_acommit_batch(&mut batch, &self_commit, PALW_TEST_LEAF_ANCHOR_EPOCH).unwrap();
     tc.consensus_clone().db().write(batch).unwrap();
     let mb = mint_algo4(&tc, &f, 0xd4, 0, |_| {});
     let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
     assert!(
-        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("A-commit anchor is not registered")),
-        "a registry row later than the declared epoch must not mint, got {res:?}"
+        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("is not yet buried")),
+        "an honest registry row must not substitute for burial, got {res:?}"
     );
-    // Row at the declared epoch: the ordering fact holds and the ticket mints.
-    let mut batch = rocksdb::WriteBatch::default();
-    tc.storage.palw_pcpb_store.set_acommit_batch(&mut batch, &self_commit, PALW_TEST_LEAF_ANCHOR_EPOCH).unwrap();
-    tc.consensus_clone().db().write(batch).unwrap();
-    let mb = mint_algo4(&tc, &f, 0xd5, 0, |_| {});
-    tc.validate_and_insert_block(mb.to_immutable()).block_task.await.expect("a registered self-serial anchor must mint");
     tc.shutdown(handles);
 }
 

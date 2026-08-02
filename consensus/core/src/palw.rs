@@ -1744,6 +1744,38 @@ pub fn validate_palw_acommit_tx(payload: &[u8]) -> Result<(), PalwTxError> {
     Ok(())
 }
 
+/// Static-audit finding C-02 — how many PALW epochs an A-commit anchor's on-chain acceptance must be
+/// BURIED under before a leaf may name it.
+///
+/// This is what makes the anchor-keyed registry safe to READ from a shared key, and it is the reason
+/// the self-serial arm needs no fork-relative walk of its own. The registry answers "which epoch did
+/// the selected chain first accept this anchor in", which is a per-fork fact exactly like the beacon
+/// seed and the provider snapshot were — two forks can disagree about an anchor accepted near the
+/// tip. But a fact older than the deepest legal reorg is not a per-fork fact at all: every honest
+/// node's selected chain contains it identically, and no reorg can move it. So instead of a second
+/// walk (which for anchors would have to visit every accepting block, not just epoch closers, and is
+/// unbounded in a way the closer chains are not), the leaf is required to reference only anchors that
+/// are already final.
+///
+/// `+1` epoch of slack because `max_reorg_horizon_blocks` is block-denominated while epochs are DAA
+/// -denominated: at ~1 DAA per block they track, and the extra epoch absorbs the mismatch rather than
+/// leaving the bound exactly on the boundary.
+///
+/// It also settles the writer/reader ordering for free. The registry is reconciled at virtual commit
+/// while clause 12 reads it one stage earlier, per chain block — the same skew that made the
+/// provider-snapshot row wrong when it was written at the projection. An anchor this far back was
+/// committed many advances ago, so the read can never race its own writer.
+pub fn palw_acommit_burial_epochs(max_reorg_horizon_blocks: u64, epoch_length_daa: u64) -> u64 {
+    max_reorg_horizon_blocks.div_ceil(epoch_length_daa.max(1)).saturating_add(1)
+}
+
+/// Static-audit C-02 — `true` iff an anchor declared at `a_commit_epoch` is buried far enough below
+/// the validating block's own epoch to be beyond reorg. Fail-closed on underflow: an anchor at or
+/// above the validating epoch is never buried.
+pub fn palw_acommit_anchor_is_buried(validating_epoch: u64, a_commit_epoch: u64, burial_epochs: u64) -> bool {
+    validating_epoch.checked_sub(a_commit_epoch).is_some_and(|age| age >= burial_epochs)
+}
+
 /// ADR-0040 P1-11 (AO-02) — the width of `PalwBatchLifecycleV1::chunks_present` in bits. A batch's
 /// `chunk_count` must not exceed it, or `apply_leaf_chunk` would index outside the fixed `[u64; 4]`.
 pub const PALW_CHUNK_BITMAP_BITS: usize = 256;
