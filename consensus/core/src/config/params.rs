@@ -2483,18 +2483,31 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            // Re-pinned 2026-08-02 under **clause (a)**: ADR-0020's EVM lane was given a FUTURE
-            // activation fence (`TESTNET_21_EVM_ACTIVATION_DAA_SCORE` = 6,500,000, ~7 days beyond
-            // the DAA ≈ 258,000 tip at the time). Every block already mined sits below the fence,
-            // where `is_evm_active` is false, the two EVM header commitments are consensus-forced
-            // to zero, and the preimage is the one they were mined under — so pre-fence replay is
-            // byte-identical and only the digest moves. NOT a clause (b) situation: nothing about
-            // already-mined history changes meaning.
+            // Re-pinned 2026-08-02 (second time that day) under **clause (a)**, for the two bug
+            // report #6 fences, both set to `TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE` =
+            // 650,000 — ~13 h beyond the ≈ 387,000 tip when they landed:
+            //   * `palw_leaf_chunk_v3_admission_daa_score` — below it EVERY leaf chunk is skipped
+            //     at acceptance, which is byte-identical to the binaries that mined this history
+            //     (their span predicate was pinned at v2 while context-free validation required
+            //     v3, so nothing was ever admissible);
+            //   * `palw_suture_disqualified_selected_parent_daa_score` — below it `suture_relaxed`
+            //     is false and the provenance gate refuses a disqualified selected parent exactly
+            //     as before.
+            // Pre-fence replay is therefore byte-identical for both and only the digest moves.
             //
-            // Previously (2026-08-01, same day as genesis) this pinned proposal ③
-            // (`require_anchor_attestation: true`), which was legal for the different reason that
-            // the ledger then held zero attestations and zero confirmed anchors.
-            "77e4b552896f22da2580efcb93c724e62e7984b8393bcaff31d801df0ddc33ac24e60ca719be9d71052183bdcb37300c0a021b95555f2c4015b04dc12b3b977b",
+            // This assert FIRED on 6dacb38 and stayed red through 3f44602, because those commits
+            // were verified with `cargo test -p kaspa-consensus` — the crate being edited — while
+            // the tripwire lives in `kaspa-consensus-core`. A release was published off that red
+            // commit. The tripwire did its job; the verification around it did not. Any commit
+            // touching `Params` must run `-p kaspa-consensus-core` too.
+            //
+            // Earlier that day this pinned ADR-0020's EVM fence (also clause (a):
+            // `TESTNET_21_EVM_ACTIVATION_DAA_SCORE` = 6,500,000, every mined block below it where
+            // `is_evm_active` is false and the two EVM header commitments are consensus-forced to
+            // zero), and before that (2026-08-01, genesis day) proposal ③
+            // (`require_anchor_attestation: true`), legal for the different reason that the ledger
+            // then held zero attestations and zero confirmed anchors.
+            "2b36a181ed1f3a8b28ec714f876bb4f010cbc3414799b742f041da48d4d04773f11cad2f0495fab9418aa192225892257feb10a777b92acd753328e33cd03839",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
@@ -2599,7 +2612,13 @@ mod palw_network_tests {
     /// All shipped presets must pass, while an activated preset with `max_view_batches = 0` must fail.
     #[test]
     fn palw_activated_presets_bound_the_view() {
-        let presets: [(&str, Params); 7] = [
+        // Static-audit finding M-03 (2026-08-02): this list was hand-written and had silently
+        // fallen two presets behind — `compute-registry-palw` (testnet-20) and `pcpb-palw`
+        // (testnet-21, the CURRENT public network) both activate PALW and neither reached a single
+        // assertion below. A safety preflight that a new public network can be added without
+        // passing is not a preflight. The list is canonical now: every shipped preset appears, and
+        // the `activated` pin at the bottom is what forces a future addition through this test.
+        let presets: [(&str, Params); 9] = [
             ("mainnet", MAINNET_PARAMS),
             ("testnet-10", TESTNET_PARAMS),
             ("testnet-palw-110", TESTNET_PALW_PARAMS),
@@ -2607,6 +2626,8 @@ mod palw_network_tests {
             ("simnet", SIMNET_PARAMS),
             ("devnet", DEVNET_PARAMS),
             ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
+            ("compute-registry-palw", COMPUTE_REGISTRY_PALW_PARAMS),
+            ("pcpb-palw", PCPB_PALW_PARAMS),
         ];
         for (name, p) in presets.iter() {
             // Acceptance is no longer withheld everywhere — ADR-0040 P0-3 is released on the PALW
@@ -2648,11 +2669,39 @@ mod palw_network_tests {
                 );
             }
         }
-        // Exactly three presets activate PALW (ADR-0048 added the staging re-genesis); the other four
-        // stay inert. Pins the activation surface so a new activated preset cannot appear without
-        // passing through this test.
+        // Five presets activate PALW: the two rehearsal nets, the staging re-genesis (ADR-0048), and
+        // the two compute-registry nets (ADR-MA testnet-20, ADR-0045 D3-b testnet-21). Pins the
+        // activation surface so a new activated preset cannot appear without passing through this
+        // test — which is exactly what testnet-20 and testnet-21 did before M-03 caught it.
         let activated: Vec<&str> = presets.iter().filter(|(_, p)| p.palw_activation_daa_score != u64::MAX).map(|(n, _)| *n).collect();
-        assert_eq!(activated, vec!["testnet-palw-110", "devnet-palw-111", "staging-mainnet-palw"]);
+        assert_eq!(
+            activated,
+            vec!["testnet-palw-110", "devnet-palw-111", "staging-mainnet-palw", "compute-registry-palw", "pcpb-palw"]
+        );
+
+        // Static-audit finding M-03, second half: the two bug report #6 fences are consensus
+        // switches on a LIVE network, so they need the same discipline as every other activated-
+        // preset invariant. A fence at 0 means "already open"; a fence at u64::MAX means "never".
+        // Both are legitimate for a fresh preset — what must never happen silently is a LIVE net
+        // being handed an open fence for a rule its mined history was not produced under. The pin
+        // below states the intent for each shipped preset so a params edit has to restate it.
+        for (name, p) in presets.iter() {
+            // The suture relaxation and the v3 admission share testnet-21's flag day by design;
+            // anywhere else they must agree with each other too, or an operator reading one number
+            // would draw the wrong conclusion about the other.
+            assert_eq!(
+                p.palw_leaf_chunk_v3_admission_daa_score, p.palw_suture_disqualified_selected_parent_daa_score,
+                "{name}: the two bug report #6 fences must share a flag day"
+            );
+        }
+        let fenced: Vec<&str> =
+            presets.iter().filter(|(_, p)| p.palw_leaf_chunk_v3_admission_daa_score != 0).map(|(n, _)| *n).collect();
+        assert_eq!(
+            fenced,
+            vec!["pcpb-palw"],
+            "only testnet-21 carries a FUTURE bug report #6 flag day; every other preset opens the rules from genesis \
+             because none of them has mined history produced under the pre-fix binaries"
+        );
 
         // REJECT: an activated preset whose cap has been zeroed by a params edit must fail the
         // preflight. This is what makes the `max_view_batches` doc claim true rather than paper.
