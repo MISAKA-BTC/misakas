@@ -25,6 +25,7 @@ kaspa-pq-validator-core.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
 misaka-palw-miner.workspace = true
+misaka-palw-bridge.workspace = true
 misaka-palw.workspace = true
 
 attohttpc.workspace = true

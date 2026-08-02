@@ -5071,6 +5071,7 @@ dependencies = [
  "log",
  "misaka-endpoints",
  "misaka-palw",
+ "misaka-palw-bridge",
  "misaka-palw-miner",
  "rand 0.8.6",
  "serde",

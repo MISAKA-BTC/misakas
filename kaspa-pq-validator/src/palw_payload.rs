@@ -7,6 +7,7 @@
 mod compute;
 mod da;
 mod lifecycle;
+mod pcpb;
 mod registry;
 mod search;
 
@@ -26,6 +27,7 @@ use self::da::{DaChallengePayloadArgs, DaInspectArgs, DaObjectBuildArgs, DaRespo
 use self::lifecycle::{
     AuditCertificatePayloadArgs, AuditFactsPayloadArgs, AuditVotePayloadArgs, BatchManifestPayloadArgs, LeafChunkPayloadArgs,
 };
+use self::pcpb::PcpbWitnessArgs;
 use self::registry::{
     RegistryCertAssembleArgs, RegistryCertVoteArgs, RegistryDescriptorTemplateArgs, RegistryGovAssembleArgs, RegistryGovVoteArgs,
     RegistryHaltArgs, RegistryPlanArgs, RegistryPolicyArgs, RegistryProposalArgs, RegistryValidatorSetArgs,
@@ -49,6 +51,9 @@ enum PalwPayloadCommand {
     BatchManifest(BatchManifestPayloadArgs),
     /// Build one canonical leaf chunk, including manifest membership proofs.
     LeafChunk(LeafChunkPayloadArgs),
+    /// ADR-0045 D3-b: derive a leaf's PCPB evidence from a synced node — the Borsh witness set
+    /// `leaf-chunk --pcpb-witness-file` consumes, plus the leaf fields it must be paired with.
+    PcpbWitness(PcpbWitnessArgs),
     /// Sign one selected auditor vote against a sink-pinned audit-facts snapshot.
     AuditVote(AuditVotePayloadArgs),
     /// Export complete, sink-pinned audit facts from a synced node.
@@ -196,6 +201,7 @@ pub async fn palw_payload(args: PalwPayloadArgs) -> Result<(), String> {
         PalwPayloadCommand::ProviderBond(args) => provider_bond_payload(args),
         PalwPayloadCommand::BatchManifest(args) => lifecycle::batch_manifest_payload(args),
         PalwPayloadCommand::LeafChunk(args) => lifecycle::leaf_chunk_payload(args),
+        PalwPayloadCommand::PcpbWitness(args) => pcpb::pcpb_witness(args).await,
         PalwPayloadCommand::AuditVote(args) => lifecycle::audit_vote_payload(args).await,
         PalwPayloadCommand::AuditFacts(args) => lifecycle::audit_facts_payload(args).await,
         PalwPayloadCommand::Certificate(args) => lifecycle::audit_certificate_payload(args).await,

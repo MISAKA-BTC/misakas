@@ -359,6 +359,11 @@ pub(super) fn registry_gov_assemble(args: RegistryGovAssembleArgs) -> Result<(),
     let expected_action_hash = envelope.action.action_hash().to_string();
     let expected_commitment = commitment.to_string();
     let mut votes: Vec<PalwGovernanceVoteV1> = Vec::with_capacity(args.votes.len());
+    // The signing digest binds `network_id`, but this command has no independent source for it —
+    // so the check that IS available is that every vote agrees. One validator signing under another
+    // network is otherwise indistinguishable from a bad key at the chain, which reports only
+    // "vote signature invalid".
+    let mut agreed_network_id: Option<(u32, String)> = None;
     for path in &args.votes {
         votes.push(read_json(path, "signed vote")?);
         let audit: GovVoteAudit = read_json(path, "signed vote").unwrap_or_default();
@@ -384,6 +389,16 @@ pub(super) fn registry_gov_assemble(args: RegistryGovAssembleArgs) -> Result<(),
             }
             Some(_) => {}
             None => eprintln!("warning: {where_} predates vote metadata; its action hash cannot be cross-checked"),
+        }
+        match (audit.signed_network_id, &agreed_network_id) {
+            (Some(net), Some((seen, first))) if net != *seen => {
+                return Err(format!(
+                    "{where_} signed network_id {net}, but {first} signed {seen} — these votes cover DIFFERENT networks \
+                     and no envelope can satisfy both; re-sign the odd one out with the right --network-id"
+                ));
+            }
+            (Some(net), None) => agreed_network_id = Some((net, where_.to_string())),
+            _ => {}
         }
         if let (Some(id), Some(op)) = (audit.signer_validator_id.as_deref(), votes.last().map(|v| v.bond_outpoint)) {
             // The signer key is never checked against the bond by `registry-gov-vote`, and consensus
