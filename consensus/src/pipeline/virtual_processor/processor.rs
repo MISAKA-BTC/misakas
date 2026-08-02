@@ -982,6 +982,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_leaf_chunk_v3_admission_daa_score: u64,
     /// Bug report #6 layer 2 — disqualified-selected-parent body admission score.
     pub(super) palw_suture_disqualified_selected_parent_daa_score: u64,
+    /// Static-audit finding H-01 — manifest sponsorship flag day (params.rs doc has the incident).
+    pub(super) palw_manifest_sponsorship_daa_score: u64,
     pub(super) palw_store: Arc<DbPalwStore>,
     pub(super) palw_beacon_store: Arc<DbPalwBeaconStore>,
     pub(super) palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
@@ -1220,6 +1222,7 @@ impl VirtualStateProcessor {
             palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
             palw_leaf_chunk_v3_admission_daa_score: params.palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score: params.palw_suture_disqualified_selected_parent_daa_score,
+            palw_manifest_sponsorship_daa_score: params.palw_manifest_sponsorship_daa_score,
             palw_store: storage.palw_store.clone(),
             palw_beacon_store: storage.palw_beacon_store.clone(),
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
@@ -3007,7 +3010,10 @@ impl VirtualStateProcessor {
             // at virtual commit. The immutable rows above stay L1-hash-keyed, so
             // detached side branches remain queryable by hash.
         }
-        self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
+        // H-01: the fold needs this diff's `remove` side to resolve manifest sponsors, so build the
+        // Arc first and hand the fold a reference instead of moving it into the store.
+        let mergeset_diff = Arc::new(mergeset_diff);
+        self.utxo_diffs_store.insert_batch(&mut batch, current, mergeset_diff.clone()).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
         // ADR-0039 §9.3/§9.5: advance the PALW batch state machine from this chain block's accepted
         // overlay txs, keyed to acceptance (a selected-chain property) exactly like the DNS overlays
@@ -3023,6 +3029,7 @@ impl VirtualStateProcessor {
                     selected_parent_provider_bond_view,
                     staged.certificate_state.as_ref(),
                     &mut staged.state,
+                    &mergeset_diff,
                 );
             }
             if !staged.state.validate_structure() {
@@ -3498,6 +3505,11 @@ impl VirtualStateProcessor {
         selected_parent_provider_bond_view: &ProviderBondView,
         certificate_da_state: &PalwDaStateV1,
         da_state: &mut PalwDaStateV1,
+        // Static-audit finding H-01 — this chain block's own mergeset diff. Its `remove` side holds
+        // every output the accepted transactions consumed, WITH its script, and that is the only
+        // place on the commit path where a carrier's spent scripts still exist: `AcceptedTxEntry`
+        // carries an id and an index, and `block_transactions_store` returns the raw transaction.
+        mergeset_diff: &kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
     ) {
         if self.palw_activation_daa_score == u64::MAX {
             return; // inert fast path — no header read, no acceptance-data walk.
@@ -3667,17 +3679,50 @@ impl VirtualStateProcessor {
                     let mut transitioned_view = accepted_view.clone();
                     if let Some(view) = transitioned_view.as_mut() {
                         let lifecycle_allowed = match &effect {
-                            crate::processes::palw::PalwOverlayEffect::Manifest(manifest) => view.apply_manifest(
-                                manifest,
-                                carrier_epoch,
-                                self.palw_batch_admission.max_batch_leaves,
-                                self.palw_batch_admission.max_leaf_chunk_leaves,
-                                self.palw_batch_admission.registration_lead_epochs,
-                                self.palw_batch_admission.active_window_epochs,
-                                self.palw_batch_admission.audit_window_epochs,
-                                self.palw_batch_admission.min_leaf_bond_sompi,
-                                self.palw_batch_admission.max_view_batches,
-                            ),
+                            crate::processes::palw::PalwOverlayEffect::Manifest(manifest) => {
+                                // Static-audit finding H-01 — resolve the sponsor from the scripts this
+                                // carrier actually spent. Looked up in THIS chain block's mergeset diff,
+                                // which is the only commit-path source that still holds them.
+                                //
+                                // An input funded by a transaction in this same mergeset nets out of the
+                                // diff and is therefore unresolvable here. That is fail-closed (the
+                                // manifest simply takes no slot) and it is a documented operator
+                                // constraint: fund a manifest carrier from an earlier mergeset. The same
+                                // shape as the carrier-gap rules the leaf-chunk and DA arms already have.
+                                //
+                                // Bond status is read at `cur_daa` — the POV block's own consensus DAA —
+                                // from the SELECTED-PARENT bond view, never from a node-global store, so
+                                // two nodes at the same block reach the same answer (the property audit
+                                // finding C-01 is about).
+                                let sponsorship = if cur_daa >= self.palw_manifest_sponsorship_daa_score {
+                                    let spent: Vec<_> = tx
+                                        .inputs
+                                        .iter()
+                                        .filter_map(|input| {
+                                            mergeset_diff.remove.get(&input.previous_outpoint).map(|e| &e.script_public_key)
+                                        })
+                                        .collect();
+                                    kaspa_consensus_core::palw::PalwManifestSponsorshipV1 {
+                                        tag: selected_parent_provider_bond_view.resolve_manifest_sponsor(spent, cur_daa),
+                                        max_view_batches_per_sponsor: self.palw_batch_admission.max_view_batches_per_sponsor,
+                                        required: true,
+                                    }
+                                } else {
+                                    kaspa_consensus_core::palw::PalwManifestSponsorshipV1::INERT
+                                };
+                                view.apply_manifest(
+                                    manifest,
+                                    carrier_epoch,
+                                    self.palw_batch_admission.max_batch_leaves,
+                                    self.palw_batch_admission.max_leaf_chunk_leaves,
+                                    self.palw_batch_admission.registration_lead_epochs,
+                                    self.palw_batch_admission.active_window_epochs,
+                                    self.palw_batch_admission.audit_window_epochs,
+                                    self.palw_batch_admission.min_leaf_bond_sompi,
+                                    self.palw_batch_admission.max_view_batches,
+                                    sponsorship,
+                                )
+                            }
                             crate::processes::palw::PalwOverlayEffect::LeafChunk(chunk) => {
                                 parent_accepted_view.as_ref().is_some_and(|parent| {
                                     palw_v4_parent_allows_leaf(parent, &chunk.batch_id)
@@ -11261,7 +11306,18 @@ mod palw_overlay_commit_tests {
         assert!(!palw_v4_parent_allows_leaf(&empty_parent, &manifest.batch_id), "same-set manifest must not unlock a leaf");
 
         let mut registering_parent = PalwBatchViewV1::new();
-        assert!(registering_parent.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(registering_parent.apply_manifest(
+            &manifest,
+            5,
+            256,
+            64,
+            2,
+            6,
+            6,
+            0,
+            1_024,
+            kaspa_consensus_core::palw::PalwManifestSponsorshipV1::INERT
+        ));
         assert!(palw_v4_parent_allows_leaf(&registering_parent, &manifest.batch_id));
         assert!(registering_parent.apply_leaf_chunk(&manifest.batch_id, 0));
         // This clone represents the next block's selected-parent snapshot. A certificate in the same
@@ -11269,7 +11325,18 @@ mod palw_overlay_commit_tests {
         assert!(palw_v4_parent_allows_certificate(&registering_parent, &manifest.batch_id));
 
         let mut pre_chunk_parent = PalwBatchViewV1::new();
-        assert!(pre_chunk_parent.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(pre_chunk_parent.apply_manifest(
+            &manifest,
+            5,
+            256,
+            64,
+            2,
+            6,
+            6,
+            0,
+            1_024,
+            kaspa_consensus_core::palw::PalwManifestSponsorshipV1::INERT
+        ));
         assert!(!palw_v4_parent_allows_certificate(&pre_chunk_parent, &manifest.batch_id));
     }
 

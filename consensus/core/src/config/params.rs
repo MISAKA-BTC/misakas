@@ -419,6 +419,24 @@ pub struct Params {
     /// become body tips, body tips are the sink candidates, and nodes that disagree about the sink
     /// build on different virtual state.
     pub palw_suture_disqualified_selected_parent_daa_score: u64,
+    /// Static-audit finding H-01 (2026-08-02) — the DAA score from which a batch manifest must be
+    /// SPONSORED by an active provider bond to take a view slot.
+    ///
+    /// Registering a batch was free: `total_leaf_bond_sompi` is a self-declared u64 whose only
+    /// production reader compares it against `min_leaf_bond_sompi`, and it is bound to no UTXO — so
+    /// raising that floor achieves nothing, the attacker writes a bigger number. With
+    /// `max_view_batches = 1_024`, no eviction and no fair queue, anyone able to get transactions
+    /// mined could hold every slot and censor honest batches until they expired.
+    ///
+    /// Past this score a manifest carrier must SPEND an output at `provider_bond_lock_spk` of an
+    /// eligible active bond. That proof costs nothing to verify: the script engine has already
+    /// checked an ML-DSA-87 signature whose sighash preimage covers `subnetwork_id` and the whole
+    /// `payload`, so the spend IS the bond owner's authorization of that exact manifest. Combined
+    /// with `max_view_batches_per_sponsor`, filling the view now costs locked collateral.
+    ///
+    /// Fenced for the same reason every other rule here is: it changes which manifests take a view
+    /// slot, and nodes that disagree about the view build different overlay commitments.
+    pub palw_manifest_sponsorship_daa_score: u64,
     /// ADR-0040 P1-13 archival-operation requirement. Presets without a supported pruning snapshot
     /// path set this flag so startup rejects pruned operation.
     pub palw_requires_archival: bool,
@@ -604,6 +622,7 @@ impl Params {
             palw_compute_registry_activation_daa_score,
             palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score,
+            palw_manifest_sponsorship_daa_score,
             palw_requires_archival,
             palw_requires_peer_allowlist,
             palw_compute_work_scale,
@@ -669,6 +688,7 @@ impl Params {
         field!(palw_compute_registry_activation_daa_score);
         field!(palw_leaf_chunk_v3_admission_daa_score);
         field!(palw_suture_disqualified_selected_parent_daa_score);
+        field!(palw_manifest_sponsorship_daa_score);
         field!(palw_requires_archival);
         field!(palw_requires_peer_allowlist);
         field!(palw_compute_work_scale);
@@ -911,6 +931,7 @@ impl Params {
             palw_compute_registry_activation_daa_score: self.palw_compute_registry_activation_daa_score,
             palw_leaf_chunk_v3_admission_daa_score: self.palw_leaf_chunk_v3_admission_daa_score,
             palw_suture_disqualified_selected_parent_daa_score: self.palw_suture_disqualified_selected_parent_daa_score,
+            palw_manifest_sponsorship_daa_score: self.palw_manifest_sponsorship_daa_score,
             palw_requires_archival: self.palw_requires_archival,
             palw_requires_peer_allowlist: self.palw_requires_peer_allowlist,
             palw_compute_work_scale: self.palw_compute_work_scale,
@@ -1488,6 +1509,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1603,6 +1625,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -1678,6 +1701,7 @@ pub const TESTNET_PALW_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_requires_archival: true,
     palw_requires_peer_allowlist: true,
     palw_lane_difficulty: TESTNET_PALW_LANE_DIFFICULTY,
@@ -1734,6 +1758,7 @@ pub const DEVNET_PALW_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     // Devnet permits normal pruning; archival nodes opt in when full history is required.
     palw_requires_archival: false,
     palw_requires_peer_allowlist: true,
@@ -1818,6 +1843,7 @@ pub const STAGING_MAINNET_PALW_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_compute_work_scale: 0,
     palw_spam: crate::palw_antispam::PalwSpamParams::PUBLIC_REGENESIS_CANDIDATE,
     skip_proof_of_work: false,
@@ -1858,6 +1884,7 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: 0,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     dns_params: Some(COMPUTE_REGISTRY_DNS_PARAMS),
     ..STAGING_MAINNET_PALW_PARAMS
 };
@@ -1921,6 +1948,9 @@ pub const PCPB_PALW_PARAMS: Params = Params {
     // node accepts, and giving them one score means one upgrade window and one thing for an
     // operator to check, instead of two staggered rule shifts on a net that just healed from one.
     palw_suture_disqualified_selected_parent_daa_score: TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
+    // Static-audit finding H-01 — shares the same flag day as the other two. One score, one upgrade
+    // window, one number for an operator to check.
+    palw_manifest_sponsorship_daa_score: TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
     ..COMPUTE_REGISTRY_PALW_PARAMS
 };
 
@@ -2028,6 +2058,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -2072,6 +2103,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_compute_registry_activation_daa_score: u64::MAX,
     palw_leaf_chunk_v3_admission_daa_score: 0,
     palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
     palw_requires_archival: false,
     palw_requires_peer_allowlist: false,
     palw_compute_work_scale: 0,
@@ -2496,8 +2528,10 @@ mod palw_network_tests {
         // getInfo, and kaspad logs it at startup.
         assert_eq!(
             p.consensus_identity_hash().to_string(),
-            // Re-pinned 2026-08-02 (third time that day) under **clause (a)**, for the two bug
-            // report #6 fences, both set to `TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE` =
+            // Re-pinned 2026-08-02 (fourth time that day) under **clause (a)**. The bug report #6
+            // fences are now joined by static-audit finding H-01's manifest-sponsorship fence and its
+            // `max_view_batches_per_sponsor` quota, on the SAME score. All of them are set to
+            // `TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE` =
             // 2,000,000 — ~3 days beyond the ≈ 420,000 tip, moved out from 650,000 once a
             // third-party audit found that the PCPB clauses the flag day switches on still have an
             // open Critical (C-01, fork-relative view). Moving a fence OUT is always clause (a):
@@ -2523,7 +2557,7 @@ mod palw_network_tests {
             // zero), and before that (2026-08-01, genesis day) proposal ③
             // (`require_anchor_attestation: true`), legal for the different reason that the ledger
             // then held zero attestations and zero confirmed anchors.
-            "0e527d35770bd2530c89191e5b2f9e8762590b318fd1275ef5175eb6556d2362f062fda976eca3b90c7329c7e528c9383b51ad7a489793bb05538c101b264881",
+            "cf97dfca568840c922072899a8f8253bc0d332453ed5940a081c43f0d8c5ee8500e8c23bc44654642ccd5cc4c64a5d8ae93075fa375713aba86f428e78ac44dd",
             "the LIVE public net's consensus params changed — DAA-gate it and re-pin, or re-genesis onto a new suffix"
         );
         // Every preset OUTSIDE the compute-registry lineage keeps the fence closed.
@@ -2709,6 +2743,21 @@ mod palw_network_tests {
                 p.palw_leaf_chunk_v3_admission_daa_score, p.palw_suture_disqualified_selected_parent_daa_score,
                 "{name}: the two bug report #6 fences must share a flag day"
             );
+            // Static-audit finding H-01 rides the same flag day, for the same reason: one score is
+            // one upgrade window and one number an operator has to check.
+            assert_eq!(
+                p.palw_manifest_sponsorship_daa_score, p.palw_leaf_chunk_v3_admission_daa_score,
+                "{name}: the H-01 sponsorship fence must share the bug report #6 flag day"
+            );
+            // A sponsorship rule with no quota does not close H-01 — one bond would fill the whole
+            // view as cheaply as one slot. On an ACTIVATED preset the two must be armed together.
+            if p.palw_activation_daa_score != u64::MAX {
+                assert_ne!(
+                    p.palw_batch_admission.max_view_batches_per_sponsor, 0,
+                    "{name} activates PALW with an UNBOUNDED per-sponsor batch quota — sponsorship without a quota \
+                     leaves the view floodable by a single bond"
+                );
+            }
         }
         let fenced: Vec<&str> =
             presets.iter().filter(|(_, p)| p.palw_leaf_chunk_v3_admission_daa_score != 0).map(|(n, _)| *n).collect();

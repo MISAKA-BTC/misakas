@@ -5554,8 +5554,8 @@ async fn palw_algo4_env_full(
             // as 0 so the fixture matches what a real fold produces — if a future change reintroduced a
             // read of these fields, the accepted-path tests would fail rather than silently pass on a
             // window no producer actually writes.
-            cert_activation_epoch: 0,
-            cert_expiry_epoch: 0,
+            sponsor_tag_hi: 0,
+            sponsor_tag_lo: 0,
             cert_approving_stake: 0,
             first_cert_daa: None,
             revoked_from_daa: None,

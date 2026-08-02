@@ -787,9 +787,22 @@ else
         die "only ${HEADROOM} DAA left in registration epoch $REG_EPOCH (< required ${MIN_HEADROOM}); the carrier could roll into epoch $(( REG_EPOCH + 1 )) during inclusion. Re-run ./create-lifecycle.sh (it re-freezes a fresh epoch), then ./submit-lifecycle.sh immediately."
     fi
     log "epoch gate ok: current epoch $CUR_EPOCH == registered $REG_EPOCH, headroom ${HEADROOM} DAA (>= ${MIN_HEADROOM})"
-    log "submitting batch-manifest carrier (funded by carrier key; excluding every known bond) ..."
-    _palw_submit batch-manifest "$MANIFEST_FILE" \
-        || die "'palw-submit --kind batch-manifest' failed — a miner must be running for inclusion, and the carrier must land within epoch $REG_EPOCH. Inspect node A ($(node_log a)) and $PALW_DATA_ROOT/logs/miner-supporting.log."
+    # Static-audit finding H-01: past `palw_manifest_sponsorship_daa_score` a manifest takes a view
+    # slot only if its carrier SPENDS an output at an ACTIVE provider bond's owner script. Funding
+    # the carrier from that owner key IS the proof — the ML-DSA sighash covers the subnetwork id and
+    # the whole payload, so the spend authorizes this exact manifest and nothing else. Sign+fund as
+    # the sponsor rather than the generic carrier key, exactly as the bonded DA carriers do.
+    #
+    # The sponsor must have a SPENDABLE utxo at that address from an EARLIER mergeset: an input
+    # created in the same mergeset nets out of the diff the fold reads, so it resolves to no sponsor
+    # and the manifest silently takes no slot (fail-closed, by design).
+    MANIFEST_SPONSOR_KEY="${MANIFEST_SPONSOR_KEY:-$(state_get PALW_SEAT_A_KEY)}"
+    [ -s "$MANIFEST_SPONSOR_KEY" ] || MANIFEST_SPONSOR_KEY="${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
+    [ -s "$MANIFEST_SPONSOR_KEY" ] \
+        || die "no manifest sponsor key: H-01 requires the batch-manifest carrier to be funded by an ACTIVE provider bond's owner key. Set MANIFEST_SPONSOR_KEY to that seed FILE (register-providers.sh creates them)."
+    log "submitting batch-manifest carrier (sponsored + funded by $MANIFEST_SPONSOR_KEY; excluding every known bond) ..."
+    _palw_submit_as "$MANIFEST_SPONSOR_KEY" batch-manifest "$MANIFEST_FILE" \
+        || die "'palw-submit --kind batch-manifest' failed — a miner must be running for inclusion, the carrier must land within epoch $REG_EPOCH, and (past the H-01 fence) it must be funded by an ACTIVE provider bond's owner key with a spendable utxo from an earlier mergeset. Inspect node A ($(node_log a)) and $PALW_DATA_ROOT/logs/miner-supporting.log."
     wait_inclusion a 1 || die "no selected child advanced after the batch-manifest carrier — the supporting miner must be running (invariant 3)."
 fi
 # Advance >=1 child (done above when submitted) + verify on BOTH nodes.

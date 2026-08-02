@@ -2429,6 +2429,46 @@ impl ProviderBondView {
         self.bonds.get(outpoint)
     }
 
+    /// Static-audit finding H-01 — resolve which sponsor, if any, a manifest carrier proved.
+    ///
+    /// `spent_scripts` is the script of every output the carrier consumed. If one of them is the
+    /// `provider_bond_lock_spk` of a bond that is ACTIVE at `pov_daa_score`, that bond's owner is the
+    /// sponsor. Nothing else is checked because nothing else is needed: spending that script already
+    /// required an ML-DSA-87 signature whose sighash preimage covers the transaction's
+    /// `subnetwork_id` and its entire `payload`, so the spend IS the owner authorizing THIS manifest.
+    /// Consensus reads a result the script engine produced; it does not re-verify a signature.
+    ///
+    /// Ties are resolved by taking the FIRST match in the caller's iteration order, which must be
+    /// input order — a carrier spending two sponsors' scripts must attribute deterministically.
+    ///
+    /// Returns [`PALW_SPONSOR_UNATTRIBUTED`] when nothing matches, and the caller decides whether
+    /// that is fatal (past the fence it is).
+    pub fn resolve_manifest_sponsor<'a>(
+        &self,
+        spent_scripts: impl IntoIterator<Item = &'a ScriptPublicKey>,
+        pov_daa_score: u64,
+    ) -> (u64, u64) {
+        // Built once per call from the ACTIVE bonds only. `bonds` is bounded by the registry, and a
+        // manifest carrier is rare, so the linear build is cheaper than caching something that would
+        // have to be invalidated per point of view.
+        let index: std::collections::HashMap<ScriptPublicKey, (u64, u64)> = self
+            .bonds
+            .values()
+            .filter(|record| is_provider_bond_active_at(record, pov_daa_score))
+            .map(|record| (provider_bond_lock_spk(&record.owner_public_key), palw_manifest_sponsor_tag(&record.owner_public_key)))
+            .collect();
+        for script in spent_scripts {
+            if let Some(tag) = index.get(script) {
+                // A real key cannot hash to the sentinel; refusing it keeps "unattributed" a single
+                // unambiguous value rather than something an astronomically lucky key could forge.
+                if *tag != PALW_SPONSOR_UNATTRIBUTED {
+                    return *tag;
+                }
+            }
+        }
+        PALW_SPONSOR_UNATTRIBUTED
+    }
+
     pub fn records(&self) -> Vec<PalwProviderBondRecord> {
         self.bonds.values().cloned().collect()
     }
@@ -3332,6 +3372,52 @@ fn validate_provider_bond(payload: &[u8]) -> Result<(), PalwTxError> {
 /// permanently. Consequences: the borsh layout of `PalwProviderBondPayloadV1` does NOT move (its layout
 /// pin stays green), and there is no key↔script binding check to forget, because a mismatch is
 /// unrepresentable.
+/// Static-audit finding H-01 — the sponsor identity a batch-manifest view slot is charged to.
+///
+/// Keyed on the OWNER KEY, deliberately, not on the bond outpoint: splitting one operator's stake
+/// across many bonds collapses to ONE tag and buys zero extra slots. Splitting across many KEYS does
+/// buy slots, but each key then needs its own bonded collateral, which is exactly the cost the quota
+/// is there to impose.
+///
+/// The value is the leading 128 bits of the same `blake2b_512_address_payload` that
+/// [`provider_bond_lock_spk`] hashes into the P2PKH script, so the tag is derivable from either side
+/// of the sponsorship proof (the bond record's key, or the script the carrier spent) without a
+/// second derivation rule to keep in sync. 128 bits is a collision margin no adversary can work
+/// against — a collision would let two operators share one quota, which helps neither.
+pub fn palw_manifest_sponsor_tag(owner_public_key: &[u8]) -> (u64, u64) {
+    let payload = blake2b_512_address_payload(owner_public_key);
+    let bytes = payload.as_bytes();
+    (
+        u64::from_be_bytes(bytes[0..8].try_into().expect("address payload is 64 bytes")),
+        u64::from_be_bytes(bytes[8..16].try_into().expect("address payload is 64 bytes")),
+    )
+}
+
+/// The sponsor tag meaning "no sponsor recorded" — every pre-fence lifecycle row decodes to this.
+pub const PALW_SPONSOR_UNATTRIBUTED: (u64, u64) = (0, 0);
+
+/// Static-audit finding H-01 — the sponsorship facts `apply_manifest` needs, resolved by the caller
+/// from the chain block's own coordinate.
+///
+/// Passed as one struct rather than three scalars so a caller cannot supply a tag while forgetting
+/// to say whether sponsorship is required — the combination `{tag: UNATTRIBUTED, required: true}` is
+/// the fail-closed case and must stay expressible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PalwManifestSponsorshipV1 {
+    /// The sponsor resolved for THIS manifest carrier, or [`PALW_SPONSOR_UNATTRIBUTED`].
+    pub tag: (u64, u64),
+    /// Concurrent view slots one sponsor may hold. `0` disables the quota.
+    pub max_view_batches_per_sponsor: u32,
+    /// Whether an unsponsored manifest must be refused (i.e. the POV block is at or past the fence).
+    pub required: bool,
+}
+
+impl PalwManifestSponsorshipV1 {
+    /// The pre-fence value: nothing resolved, nothing required, no quota. Writing this produces a
+    /// lifecycle row byte-identical to what every pre-fence block wrote.
+    pub const INERT: Self = Self { tag: PALW_SPONSOR_UNATTRIBUTED, max_view_batches_per_sponsor: 0, required: false };
+}
+
 pub fn provider_bond_lock_spk(owner_public_key: &[u8]) -> ScriptPublicKey {
     p2pkh_mldsa87_spk(&blake2b_512_address_payload(owner_public_key).as_bytes())
 }
@@ -4481,6 +4567,16 @@ pub struct PalwBatchAdmissionParams {
     /// forgery-EV inequality: a forger's gain is `R + c_saved`, and `q·slash ≈ R` only offsets the
     /// reward, so `leaf_bond + credential_loss` must cover `c_saved`. Inert placeholder `0`.
     pub min_leaf_bond_sompi: u64,
+    /// Static-audit finding H-01 — concurrent view slots one SPONSOR may hold. `0` = no quota.
+    ///
+    /// This is the parameter that turns bond sponsorship into an actual cost. Sponsorship alone does
+    /// not close H-01: one bond can sponsor all `max_view_batches` slots as cheaply as one. With a
+    /// quota of `q`, filling the view costs `ceil(max_view_batches / q)` distinct bonded owner keys,
+    /// i.e. that many times the provider-bond floor in locked collateral.
+    ///
+    /// Sized against `max_view_batches`, not in isolation: raising this cheapens the flood, lowering
+    /// it prices out an operator running several honest batches at once. Both move together.
+    pub max_view_batches_per_sponsor: u32,
     /// kaspa-pq **ADR-0040 CERT-TRUST — INERT (dead parameter).**
     ///
     /// Formerly the §12′ / CERT-UNIQ minimum supersession window. Supersession itself is REMOVED from
@@ -4657,6 +4753,12 @@ impl PalwBatchAdmissionParams {
         active_window_epochs: 6,
         audit_window_epochs: 6,
         min_leaf_bond_sompi: 0,
+        // Static-audit finding H-01 — the per-sponsor quota. `4` against `max_view_batches = 1_024`
+        // means filling the view needs 256 distinct bonded owner keys = 2,560 MSK locked at the
+        // 10-MSK provider floor, versus the transaction fees it cost before. An honest operator can
+        // still hold four concurrent batches, which is more than the shipped harness ever registers.
+        // Re-price this WITH `max_view_batches` and `min_provider_bond_sompi`, never alone.
+        max_view_batches_per_sponsor: 4,
         supersession_window_daa: 0,
         max_view_batches: 1_024,
         // ADR-0040 ECON-03 — the anti-split floor. NON-ZERO is the enforced property
@@ -4699,13 +4801,32 @@ pub struct PalwBatchLifecycleV1 {
     /// the AUTHORITATIVE certificate a block uses is the attested blob its header names, resolved from
     /// `palw_store`, not this field.
     pub cert_hash: Option<Hash64>,
-    /// kaspa-pq **ADR-0040 CERT-TRUST — INERT.** Never written by the body-coordinate fold and never
-    /// read by [`PalwBatchLifecycleV1::is_block_eligible_at`]. The certificate window is derived from
-    /// the ATTESTED certificate blob at ticket-validation time. Retained (rather than removed) purely
-    /// to keep the borsh encoding of the block-keyed overlay view store stable; treat as always `0`.
-    pub cert_activation_epoch: u64,
-    /// kaspa-pq **ADR-0040 CERT-TRUST — INERT.** See [`Self::cert_activation_epoch`].
-    pub cert_expiry_epoch: u64,
+    /// Static-audit finding H-01 — the high half of this batch's SPONSOR tag: the first 128 bits of
+    /// the address payload of the provider-bond owner key whose script the manifest carrier spent.
+    /// [`PALW_SPONSOR_UNATTRIBUTED`] (`0`) means "no sponsor recorded".
+    ///
+    /// **This field was `cert_activation_epoch`**, one of the CERT-TRUST inert pair: never written by
+    /// the fold, never read by `is_block_eligible_at`, retained only so the block-keyed overlay
+    /// view's borsh encoding stayed stable. Reusing it — same type, same position — is what lets the
+    /// sponsor quota ship WITHOUT a `LATEST_DB_VERSION` bump (a forced re-sync of every node) and
+    /// without touching the four hand-maintained legacy mirrors of this struct, whose divergence
+    /// failure mode is a total chain break rather than a partition.
+    ///
+    /// The safety argument is that below `palw_manifest_sponsorship_daa_score` both halves are
+    /// PROVABLY always zero: the fold wrote `0` unconditionally for the entire life of the inert
+    /// pair, and `apply_manifest` still writes `PALW_SPONSOR_UNATTRIBUTED` below the fence. So every
+    /// row already on disk decodes to "unattributed" under the new meaning, which is exactly what it
+    /// meant before.
+    ///
+    /// The serde alias keeps `PalwAuditRoundFacts` JSON (this struct is embedded in it and shipped
+    /// over `getPalwAuditFacts` as `facts_json`) readable for artifacts produced before the rename —
+    /// serde JSON is field-NAME keyed, unlike borsh and bincode which are positional.
+    #[serde(alias = "cert_activation_epoch")]
+    pub sponsor_tag_hi: u64,
+    /// Static-audit finding H-01 — the low half of the sponsor tag. See [`Self::sponsor_tag_hi`];
+    /// this field was `cert_expiry_epoch`.
+    #[serde(alias = "cert_expiry_epoch")]
+    pub sponsor_tag_lo: u64,
     /// kaspa-pq **ADR-0040 CERT-TRUST — INERT.** Formerly the §12′ supersession comparator. It ranked
     /// certificates by a SELF-DECLARED integer at a coordinate with no bond view, so `u128::MAX` won
     /// every comparison and permanently evicted honest certificates. The comparator is removed; this
@@ -4720,6 +4841,12 @@ pub struct PalwBatchLifecycleV1 {
 }
 
 impl PalwBatchLifecycleV1 {
+    /// Static-audit finding H-01 — this batch's sponsor, or [`PALW_SPONSOR_UNATTRIBUTED`].
+    #[inline]
+    pub fn sponsor_tag(&self) -> (u64, u64) {
+        (self.sponsor_tag_hi, self.sponsor_tag_lo)
+    }
+
     /// Whether an algo-4 header targeting `epoch` may resolve against this batch (present, Active, not
     /// revoked, certified at all, and inside the batch's own declared window). The per-leaf facts
     /// (nullifier / proof-type / leaf window) come from the content-verified leaf blob; this is the
@@ -4834,6 +4961,18 @@ impl PalwBatchViewV1 {
     /// content-addressed `batch_id`); idempotent on the content id (a re-registration of the exact same
     /// batch is a no-op — the first mergeset occurrence wins).
     #[allow(clippy::too_many_arguments)]
+    /// Static-audit finding H-01 — concurrent view slots currently held by one sponsor.
+    ///
+    /// Derived, never cached. See the call site in [`Self::apply_manifest`] for why that is the
+    /// reorg-safety property rather than a performance compromise.
+    pub fn sponsor_slots(&self, tag: (u64, u64)) -> u32 {
+        if tag == PALW_SPONSOR_UNATTRIBUTED {
+            return 0;
+        }
+        self.batches.values().filter(|entry| entry.sponsor_tag() == tag).count() as u32
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_manifest(
         &mut self,
         m: &PalwBatchManifestV1,
@@ -4845,12 +4984,20 @@ impl PalwBatchViewV1 {
         audit_window_epochs: u64,
         min_leaf_bond_sompi: u64,
         max_view_batches: u32,
+        sponsorship: PalwManifestSponsorshipV1,
     ) -> bool {
         // ADR-0040 P1-11 (DOS-03): the view is cloned and re-persisted per block, so an unbounded batch
         // count is per-block amplified state rate-limited only by fees. Refuse admission at the cap
         // rather than evicting an existing batch — eviction would let a flood displace honest batches,
         // turning a resource bound into a censorship tool.
         if max_view_batches != 0 && self.batches.len() >= max_view_batches as usize {
+            return false;
+        }
+        // Static-audit finding H-01, FAIL-CLOSED half. Past the fence a manifest with no resolved
+        // sponsor is refused here, before `admission_valid`. Checking it at the top means a caller
+        // that forgets to resolve the sponsor gets refusals, not free slots — the failure direction
+        // that costs an operator a retry instead of costing the network its censorship resistance.
+        if sponsorship.required && sponsorship.tag == PALW_SPONSOR_UNATTRIBUTED {
             return false;
         }
         if !m.admission_valid(
@@ -4867,6 +5014,20 @@ impl PalwBatchViewV1 {
         if self.batches.contains_key(&m.batch_id) {
             return false; // already registered on this fork (idempotent; content-addressed ⇒ same batch)
         }
+        // Static-audit finding H-01, QUOTA half. Checked AFTER the idempotence return so a re-broadcast
+        // of an already-registered manifest cannot burn a sponsor's slot.
+        //
+        // The count is DERIVED by scanning the view, never stored in a counter. That is the whole
+        // reorg-safety argument: `PalwBatchViewV1` is cloned from the selected parent and persisted
+        // per chain block, so the count is a pure function of the view it is taken from and cannot
+        // desynchronise across attach/detach the way a maintained counter would. The scan is over at
+        // most `max_view_batches` (1024) entries, on a path that already clones the whole map.
+        if sponsorship.tag != PALW_SPONSOR_UNATTRIBUTED
+            && sponsorship.max_view_batches_per_sponsor != 0
+            && self.sponsor_slots(sponsorship.tag) >= sponsorship.max_view_batches_per_sponsor
+        {
+            return false;
+        }
         self.batches.insert(
             m.batch_id,
             PalwBatchLifecycleV1 {
@@ -4879,8 +5040,8 @@ impl PalwBatchViewV1 {
                 chunks_present: [0u64; 4],
                 leaf_root: m.leaf_root,
                 cert_hash: None,
-                cert_activation_epoch: 0,
-                cert_expiry_epoch: 0,
+                sponsor_tag_hi: sponsorship.tag.0,
+                sponsor_tag_lo: sponsorship.tag.1,
                 cert_approving_stake: 0,
                 first_cert_daa: None,
                 revoked_from_daa: None,
@@ -8323,8 +8484,8 @@ mod tests {
                     chunks_present: [1, 0, 0, 0],
                     leaf_root: h(0),
                     cert_hash: Some(h(1)),
-                    cert_activation_epoch: 0,
-                    cert_expiry_epoch: 100,
+                    sponsor_tag_hi: 0,
+                    sponsor_tag_lo: 100,
                     cert_approving_stake: 0,
                     first_cert_daa: None,
                     revoked_from_daa: None,
@@ -8654,8 +8815,8 @@ mod tests {
             chunks_present: [0b11, 0, 0, 0],
             leaf_root: m.leaf_root,
             cert_hash: Some(h(9)),
-            cert_activation_epoch: 13,
-            cert_expiry_epoch: 19,
+            sponsor_tag_hi: 13,
+            sponsor_tag_lo: 19,
             cert_approving_stake: 0,
             first_cert_daa: None,
             revoked_from_daa: revoked,
@@ -8707,7 +8868,7 @@ mod tests {
         // Replays the body-processor's mergeset fold arm for one manifest + its leaf chunks.
         let fold = |chunks: &[PalwLeafChunkV1]| {
             let mut v = PalwBatchViewV1::new();
-            v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024);
+            v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT);
             for c in chunks {
                 v.apply_leaf_chunk(&c.batch_id, c.chunk_index);
             }
@@ -8763,6 +8924,99 @@ mod tests {
     /// §9.5 B-way delta application: manifest → Registering (admission-gated, idempotent), chunks →
     /// Committed on completeness, audit-beacon epoch → Auditing, certificate → Certified, activation
     /// epoch → Active; revocation + expiry.
+    /// Static-audit finding H-01 — the sponsorship gate and its quota, both sides of the flag day.
+    ///
+    /// H-01: registering a batch was free. `total_leaf_bond_sompi` is a self-declared u64 bound to no
+    /// UTXO, so raising `min_leaf_bond_sompi` only made attackers write a bigger number; with 1,024
+    /// slots, no eviction and no fair queue, anyone who could get transactions mined could hold the
+    /// whole view and censor honest batches until they expired.
+    #[test]
+    fn manifest_sponsorship_gate_and_quota() {
+        let mk = |tag: u8| {
+            let mut m = PalwBatchManifestV1 {
+                version: 1,
+                batch_id: Hash64::default(),
+                registration_epoch: 5,
+                model_profile_id: h(1),
+                runtime_class_id: h(2),
+                leaf_count: 1,
+                chunk_count: 1,
+                leaf_root: h(tag),
+                descriptor_root: h(4),
+                total_leaf_bond_sompi: 0,
+                audit_policy_id: h(5),
+                activation_not_before_epoch: 13,
+                expiry_epoch: 19,
+            };
+            m.batch_id = m.content_id();
+            m
+        };
+        let sponsored =
+            |tag: (u64, u64), quota: u32| PalwManifestSponsorshipV1 { tag, max_view_batches_per_sponsor: quota, required: true };
+        let alice = (0x1111u64, 0x2222u64);
+        let bob = (0x3333u64, 0x4444u64);
+
+        // BELOW the flag day nothing changes: an unsponsored manifest is admitted exactly as before,
+        // and the row it writes is the "unattributed" one every pre-fence row on disk already is.
+        let mut pre = PalwBatchViewV1::new();
+        assert!(pre.apply_manifest(&mk(0x10), 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
+        assert_eq!(pre.entry(&mk(0x10).batch_id).unwrap().sponsor_tag(), PALW_SPONSOR_UNATTRIBUTED);
+
+        // PAST the flag day an unsponsored manifest takes no slot. This is THE H-01 fix: the flood
+        // that cost transaction fees now costs bonded collateral, or it buys nothing.
+        let mut post = PalwBatchViewV1::new();
+        assert!(
+            !post.apply_manifest(&mk(0x11), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(PALW_SPONSOR_UNATTRIBUTED, 4)),
+            "past the fence an unsponsored manifest must not take a view slot"
+        );
+        assert_eq!(post.entry(&mk(0x11).batch_id), None);
+
+        // A sponsored manifest is admitted and records who paid for the slot.
+        assert!(post.apply_manifest(&mk(0x12), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 4)));
+        assert_eq!(post.entry(&mk(0x12).batch_id).unwrap().sponsor_tag(), alice);
+        assert_eq!(post.sponsor_slots(alice), 1);
+
+        // The QUOTA is what makes sponsorship cost anything: without it one bond fills all 1,024
+        // slots as cheaply as one. Alice's second slot lands, her third is refused at quota 2.
+        let mut q = PalwBatchViewV1::new();
+        assert!(q.apply_manifest(&mk(0x20), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 2)));
+        assert!(q.apply_manifest(&mk(0x21), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 2)));
+        assert_eq!(q.sponsor_slots(alice), 2);
+        assert!(
+            !q.apply_manifest(&mk(0x22), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 2)),
+            "a sponsor at quota takes no further slots"
+        );
+        // ...and one sponsor's exhausted quota must not censor another's — the failure mode that
+        // would turn this fix into the very problem it closes.
+        assert!(q.apply_manifest(&mk(0x23), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(bob, 2)), "quota is per sponsor");
+        assert_eq!(q.sponsor_slots(bob), 1);
+
+        // A re-broadcast of an already-registered manifest must not burn a slot: the quota check sits
+        // AFTER the idempotence return, so a duplicate is free rather than self-censoring.
+        assert!(!q.apply_manifest(&mk(0x20), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 2)), "duplicate is idempotent");
+        assert_eq!(q.sponsor_slots(alice), 2, "a duplicate must not consume quota");
+
+        // Quota 0 disables the per-sponsor bound while sponsorship itself stays required.
+        let mut unbounded = PalwBatchViewV1::new();
+        assert!(unbounded.apply_manifest(&mk(0x30), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 0)));
+        assert!(unbounded.apply_manifest(&mk(0x31), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(alice, 0)));
+        assert!(
+            !unbounded.apply_manifest(&mk(0x32), 5, 256, 64, 2, 6, 6, 0, 1_024, sponsored(PALW_SPONSOR_UNATTRIBUTED, 0)),
+            "quota 0 disables the count, not the sponsorship requirement"
+        );
+    }
+
+    /// The sponsor tag is a function of the OWNER KEY, so splitting one operator's stake across many
+    /// bonds collapses to one tag and buys zero extra slots. That is the property the quota rests on.
+    #[test]
+    fn sponsor_tag_is_keyed_on_the_owner_not_the_bond() {
+        let key_a = vec![0xAA; 32];
+        let key_b = vec![0xBB; 32];
+        assert_eq!(palw_manifest_sponsor_tag(&key_a), palw_manifest_sponsor_tag(&key_a), "deterministic");
+        assert_ne!(palw_manifest_sponsor_tag(&key_a), palw_manifest_sponsor_tag(&key_b), "distinct keys, distinct quota");
+        assert_ne!(palw_manifest_sponsor_tag(&key_a), PALW_SPONSOR_UNATTRIBUTED, "a real key is never the sentinel");
+    }
+
     #[test]
     fn c4_view_delta_state_machine() {
         let mut m = PalwBatchManifestV1 {
@@ -8784,12 +9038,15 @@ mod tests {
         let mut v = PalwBatchViewV1::new();
 
         // manifest ⇒ Registering; a forged/duplicate is a no-op.
-        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         assert_eq!(v.entry(&m.batch_id).unwrap().status, PalwBatchStatus::Registering);
-        assert!(!v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024), "idempotent");
+        assert!(!v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT), "idempotent");
         let mut forged = m.clone();
         forged.batch_id = h(0xff);
-        assert!(!v.apply_manifest(&forged, 5, 256, 64, 2, 6, 6, 0, 1_024), "forged batch_id rejected");
+        assert!(
+            !v.apply_manifest(&forged, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT),
+            "forged batch_id rejected"
+        );
 
         // 2 distinct chunks ⇒ Committed on the last; a duplicate index is a no-op.
         assert!(v.apply_leaf_chunk(&m.batch_id, 0));
@@ -8825,7 +9082,7 @@ mod tests {
         let mut m2 = PalwBatchManifestV1 { registration_epoch: 5, activation_not_before_epoch: 13, expiry_epoch: 19, ..m.clone() };
         m2.model_profile_id = h(0x55); // change content ⇒ distinct batch id
         m2.batch_id = m2.content_id();
-        assert!(v.apply_manifest(&m2, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m2, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         v.advance_epoch(14, 2, 6); // 14 > deadline 13 while still Registering
         assert_eq!(v.entry(&m2.batch_id).unwrap().status, PalwBatchStatus::Expired);
     }
@@ -8853,7 +9110,7 @@ mod tests {
         manifest.batch_id = manifest.content_id();
         let committed = || {
             let mut view = PalwBatchViewV1::new();
-            assert!(view.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024));
+            assert!(view.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
             assert!(view.apply_leaf_chunk(&manifest.batch_id, 0));
             view
         };
@@ -8902,7 +9159,7 @@ mod tests {
         };
         manifest.batch_id = manifest.content_id();
         let mut view = PalwBatchViewV1::new();
-        assert!(view.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(view.apply_manifest(&manifest, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         assert!(view.apply_leaf_chunk(&manifest.batch_id, 0));
         assert!(view.apply_verified_certificate(&manifest.batch_id, h(0xf0), 75, 1));
         assert!(view.apply_verified_certificate(&manifest.batch_id, h(0x10), 75, 2));
@@ -8936,7 +9193,7 @@ mod tests {
         };
         // Drive to Auditing, then certify with the honest certificate.
         let mut v = PalwBatchViewV1::new();
-        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         v.apply_leaf_chunk(&m.batch_id, 0);
         v.apply_leaf_chunk(&m.batch_id, 1);
         v.advance_epoch(13, 2, 6);
@@ -8971,8 +9228,11 @@ mod tests {
         // read an unverified value back out of them.
         let e = v.entry(&m.batch_id).unwrap();
         assert_eq!(e.cert_approving_stake, 0, "cert_approving_stake is inert (CERT-TRUST)");
-        assert_eq!(e.cert_activation_epoch, 0, "cert_activation_epoch is inert (CERT-TRUST)");
-        assert_eq!(e.cert_expiry_epoch, 0, "cert_expiry_epoch is inert (CERT-TRUST)");
+        // Static-audit finding H-01 — this assertion used to say "the CERT-TRUST pair is inert". It
+        // now says the thing that made reusing those two u64s safe: below the sponsorship fence the
+        // fold writes PALW_SPONSOR_UNATTRIBUTED, so every row already on disk decodes to
+        // "unattributed" under the new meaning — exactly what it meant under the old one.
+        assert_eq!(e.sponsor_tag(), PALW_SPONSOR_UNATTRIBUTED, "an unsponsored manifest records no sponsor");
     }
 
     /// kaspa-pq **ADR-0040 — `d₀` (first certification DAA) is RE-DERIVED per fork, never inherited.**
@@ -9002,7 +9262,7 @@ mod tests {
         };
         let build = |cert_daa: u64| {
             let mut v = PalwBatchViewV1::new();
-            assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+            assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
             v.apply_leaf_chunk(&m.batch_id, 0);
             v.apply_leaf_chunk(&m.batch_id, 1);
             v.advance_epoch(13, 2, 6);
@@ -9084,7 +9344,7 @@ mod tests {
             m
         };
         let mut v = PalwBatchViewV1::new();
-        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
 
         // Registered — but not resolvable at its own registration epoch, nor anywhere before the lead +
         // audit window it declared. The lead is what a same-block register-and-spend would erase.
@@ -9116,8 +9376,8 @@ mod tests {
             chunks_present: [u64::MAX, u64::MAX, u64::MAX, u64::MAX],
             leaf_root: h(0x11),
             cert_hash: Some(h(0x12)),
-            cert_activation_epoch: 0,
-            cert_expiry_epoch: 0,
+            sponsor_tag_hi: 0,
+            sponsor_tag_lo: 0,
             cert_approving_stake: 0,
             first_cert_daa: Some(1_234),
             revoked_from_daa: None,
@@ -9176,7 +9436,7 @@ mod tests {
             m
         };
         let mut v = PalwBatchViewV1::new();
-        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         v.apply_leaf_chunk(&m.batch_id, 0);
         v.apply_leaf_chunk(&m.batch_id, 1);
         v.advance_epoch(13, 2, 6);
@@ -9252,7 +9512,7 @@ mod tests {
 
         // A certificate for a Registering (incomplete) batch is a no-op too — the chunk-completeness gate
         // is not bypassable by certifying early.
-        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024));
+        assert!(v.apply_manifest(&m, 5, 256, 64, 2, 6, 6, 0, 1_024, PalwManifestSponsorshipV1::INERT));
         assert_eq!(v.entry(&m.batch_id).unwrap().status, PalwBatchStatus::Registering);
         assert!(!v.apply_certificate(&m.batch_id, h(0xc0), 5_000), "Registering is not a certifiable state");
         assert_eq!(v.entry(&m.batch_id).unwrap().cert_hash, None);
@@ -9531,8 +9791,8 @@ mod tests {
             chunks_present: [0; 4],
             leaf_root: h(0x11),
             cert_hash: Some(h(0x99)),
-            cert_activation_epoch: 0,
-            cert_expiry_epoch: 100,
+            sponsor_tag_hi: 0,
+            sponsor_tag_lo: 100,
             cert_approving_stake: 0,
             first_cert_daa: Some(0),
             revoked_from_daa: None,
@@ -11147,8 +11407,8 @@ mod tests {
             chunks_present: [0x3, 0, 0, 0],
             leaf_root: h(0x11),
             cert_hash: Some(h(0x12)),
-            cert_activation_epoch: 0,
-            cert_expiry_epoch: 0,
+            sponsor_tag_hi: 0,
+            sponsor_tag_lo: 0,
             cert_approving_stake: 0,
             first_cert_daa: Some(1_234),
             revoked_from_daa: None,

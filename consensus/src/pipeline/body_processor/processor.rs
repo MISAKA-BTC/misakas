@@ -554,6 +554,12 @@ impl BlockBodyProcessor {
                             a.audit_window_epochs,
                             a.min_leaf_bond_sompi,
                             a.max_view_batches,
+                            // Static-audit finding H-01 — INERT here, deliberately. This legacy raw
+                            // fold returns above for every Header-v4+ block, so it only ever runs on
+                            // pre-v4 presets, where sponsorship is not fenced on and where the whole
+                            // point of retaining this path is byte-identical replay. Passing INERT
+                            // writes exactly the lifecycle row it has always written.
+                            kaspa_consensus_core::palw::PalwManifestSponsorshipV1::INERT,
                         );
                     }
                     Ok(PalwOverlayEffect::LeafChunk(c)) => {

@@ -322,8 +322,8 @@ impl Consensus {
                 // ADR-0040 CERT-TRUST: inert. The body-stage fold never writes these and
                 // `is_block_eligible_at` never reads them; the certificate window comes from the
                 // attested blob. Seeded as 0 so this stays a FAITHFUL producer model.
-                cert_activation_epoch: 0,
-                cert_expiry_epoch: 0,
+                sponsor_tag_hi: 0,
+                sponsor_tag_lo: 0,
                 cert_approving_stake: 0,
                 first_cert_daa: None,
                 revoked_from_daa: None,
