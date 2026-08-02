@@ -597,38 +597,85 @@ _da_wait_obligation() {
 }
 
 # Open a 0x3a challenge on a Pending obligation; sets CH_ID to the winning id.
+# Eligible challenger (bond, seed) pairs for one obligation: every active bond
+# whose seed this host holds, minus the challenged provider itself. Distinct
+# challengers are what make the multi-candidate recipe below safe — each
+# candidate funds from its own address, so simultaneous injections cannot race
+# each other for the same UTXO.
+_da_challenger_pool() {
+    local challenged="${1:?}" bond seed f base
+    for pair in "$(state_get AUD_C_BOND)|$AUDITOR_KEY" \
+                "$(state_get PROV_A_BOND)|${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}" \
+                "$(state_get PROV_B_BOND)|${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"; do
+        bond="${pair%%|*}"; seed="${pair#*|}"
+        [ -n "$bond" ] && [ "$bond" != "$challenged" ] && [ -s "$seed" ] && printf '%s|%s\n' "$bond" "$seed"
+    done
+    if [ -n "${PALW_EXTRA_PROVIDER_KEYDIR:-}" ] && [ -d "$PALW_EXTRA_PROVIDER_KEYDIR" ]; then
+        for f in "$PALW_EXTRA_PROVIDER_KEYDIR"/*.bond.outpoint; do
+            [ -s "$f" ] || continue
+            bond="$(cat "$f")"; base="${f%.bond.outpoint}"
+            [ "$bond" != "$challenged" ] && [ -s "$base" ] && printf '%s|%s\n' "$bond" "$base"
+        done
+    fi
+}
+
 _da_challenge_obligation() {
-    local oblig_id="${1:?}" provider_bond="${2:?}" attempt maxA="${DA_CH_MAX_ATTEMPTS:-5}"
-    local D opened epoch nonce out chid pf
+    # $3 = object_root, $4 = chunk — used to read the winning challenge id back.
+    local oblig_id="${1:?}" provider_bond="${2:?}" attempt maxA="${DA_CH_MAX_ATTEMPTS:-8}"
+    local D opened epoch nonce out chid pf offset pool bond seed n
+    pool="$(_da_challenger_pool "$provider_bond")"
+    [ -n "$pool" ] || die "no eligible challenger (active bond != $provider_bond with a local seed) for obligation $oblig_id."
     for attempt in $(seq 1 "$maxA"); do
         D="$(_da_wait_sink_stable)" || die "DA step: sink DAA not stable before challenge (rogue producer?)."
-        opened=$(( D + 2 )); epoch=$(( opened / 100 )); nonce="$(rand_hex 64)"
-        # `palw-payload --out` REFUSES to overwrite, so give every obligation and
-        # every retry attempt its own staging path (also keeps each attempt's exact
-        # bytes around for post-mortem).
-        pf="$_SL_STAGING/da-challenge-${oblig_id%"${oblig_id#????????}"}-$attempt.bin"
-        rm -f "$pf"
-        out="$("$VAL" palw-payload da-challenge \
-            --network-id "$NETSUFFIX" --obligation-id "$oblig_id" \
-            --challenge-epoch "$epoch" --opened-daa-score "$opened" --response-window-daa 200 \
-            --challenger-bond "$AUD_C_BOND" --owner-key "$AUDITOR_KEY" \
-            --challenge-nonce "$nonce" --out "$pf" 2>&1)" \
-            || { printf '%s\n' "$out" >&2; die "'palw-payload da-challenge' build failed for obligation $oblig_id (see above)."; }
-        chid="$(printf '%s\n' "$out" | _kv challenge_id)"
-        _is_hex128 "$chid" || { printf '%s\n' "$out" >&2; die "da-challenge did not print a 128-hex challenge_id (see above)."; }
-        log "DA challenge attempt $attempt: obligation=$oblig_id opened_daa=$opened (epoch=$epoch) challenger=$AUD_C_BOND -> inject(--no-wait)+mine 2"
-        _palw_submit_as "$AUDITOR_KEY" da-challenge "$pf" --no-wait \
-            || die "'palw-submit --kind da-challenge --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
-        sleep "${DA_INJECT_SETTLE_SECS:-2}"   # let the carrier settle into node A's mempool before the first block templates
-        _da_mine 2
+        # apply_challenge demands opened_daa == the ACCEPTING block's exact daa,
+        # and that daa is not fully ours to pick: a validator tip parked in the
+        # sink's anticone at freeze time makes the next block's daa jump by the
+        # mergeset size, so a single D+2 candidate can miss forever. A mistimed
+        # challenge is INERT by design (never rejected, rate-limit untouched), so
+        # inject one candidate per plausible acceptance daa — D+2, D+3, D+4 —
+        # each from a DIFFERENT challenger so their funding UTXOs cannot collide,
+        # then mine and see which one the chain agreed with.
+        n=0
+        while IFS="|" read -r bond seed; do
+            [ "$n" -ge 3 ] && break
+            offset=$(( n + 2 ))
+            opened=$(( D + offset )); epoch=$(( opened / 100 )); nonce="$(rand_hex 64)"
+            pf="$_SL_STAGING/da-challenge-${oblig_id%"${oblig_id#????????}"}-$attempt-$offset.bin"
+            rm -f "$pf"
+            out="$("$VAL" palw-payload da-challenge \
+                --network-id "$NETSUFFIX" --obligation-id "$oblig_id" \
+                --challenge-epoch "$epoch" --opened-daa-score "$opened" --response-window-daa 200 \
+                --challenger-bond "$bond" --owner-key "$seed" \
+                --challenge-nonce "$nonce" --out "$pf" 2>&1)" \
+                || { printf '%s\n' "$out" >&2; die "'palw-payload da-challenge' build failed for obligation $oblig_id (see above)."; }
+            chid="$(printf '%s\n' "$out" | _kv challenge_id)"
+            _is_hex128 "$chid" || { printf '%s\n' "$out" >&2; die "da-challenge did not print a 128-hex challenge_id (see above)."; }
+            log "DA challenge attempt $attempt: obligation=$oblig_id candidate opened_daa=$opened (epoch=$epoch) challenger=$bond"
+            _palw_submit_as "$seed" da-challenge "$pf" --no-wait \
+                || die "'palw-submit --kind da-challenge --no-wait' failed for obligation $oblig_id. Inspect node A ($(node_log a))."
+            n=$(( n + 1 ))
+        done <<EOF
+$pool
+EOF
+        sleep "${DA_INJECT_SETTLE_SECS:-2}"   # let the carriers settle into node A's mempool before the first block templates
+        _da_mine 4
         if _da_wait_obligation "$oblig_id" challenged; then
+            # The winner is whichever candidate's opened_daa the chain agreed
+            # with — read its id back from the node's open-challenge list
+            # (matched on object_root+chunk, the same join the recovery path
+            # uses) rather than guessing which offset won.
+            chid="$(palw_provider_status a "$provider_bond" 2>/dev/null | awk -v r="$3" -v c="$4" '
+                /^da_challenge:/ { id=""; root=""; ch="";
+                    for (i=1;i<=NF;i++){ if($i~/^id=/)id=substr($i,4); else if($i~/^object_root=/)root=substr($i,13); else if($i~/^chunk=/)ch=substr($i,7) }
+                    if (root==r && ch==c) { print id; exit } }')"
+            _is_hex128 "$chid" || die "obligation $oblig_id is 'challenged' but no matching open challenge (object_root=$3 chunk=$4) could be read back from node A."
             CH_ID="$chid"
             log "DA challenge OK: obligation $oblig_id is 'challenged' (challenge_id=$chid)."
             return 0
         fi
-        warn "DA challenge attempt $attempt went INERT (opened_daa=$opened did not match the accepting block's daa) — retrying with a fresh frozen D."
+        warn "DA challenge attempt $attempt went INERT (no candidate matched the accepting daa) — retrying with a fresh frozen D."
     done
-    die "obligation $oblig_id never reached 'challenged' after $maxA attempts — the frozen-D + 2-block recipe should be exact; check for a rogue block producer breaking the width-1 chain, or that AUD_C_BOND is active and != the obligation's provider_bond."
+    die "obligation $oblig_id never reached 'challenged' after $maxA attempts of D+2/D+3/D+4 candidates — check for a rogue block producer, or that the challenger bonds are active and distinct from the obligation's provider_bond."
 }
 
 # Answer an OPEN challenge with a 0x3b chunk proof from the object bytes.
@@ -687,7 +734,7 @@ run_da_challenge_response() {
         rseed="$(_responder_seed "$provider_bond")"
         CH_ID=""
         if [ "$status" = "pending" ]; then
-            _da_challenge_obligation "$oblig_id" "$provider_bond"
+            _da_challenge_obligation "$oblig_id" "$provider_bond" "$object_root" "$chunk"
         else
             # Already challenged on a prior partial run: recover the open challenge_id.
             CH_ID="$(palw_provider_status a "$provider_bond" 2>/dev/null | awk -v r="$object_root" -v c="$chunk" '
