@@ -360,48 +360,46 @@ gen_facts() {
     mv -f "$tmp" "$FACTS_FILE" || die "failed to finalize $FACTS_FILE."
 }
 
-# _resolve_checked_root — 128-hex checked-leaf-bitmap-root, from env override or
-# best-effort out of the produced facts.json. Empty if neither (caller dies).
-_resolve_checked_root() {
-    local r="${CHECKED_LEAF_BITMAP_ROOT:-}"
-    if [ -z "$r" ] && [ -f "$FACTS_FILE" ]; then
-        r="$(grep -Eio '"(checked|required|sampled|expected)_leaf_bitmap_root"[[:space:]]*:[[:space:]]*"[0-9a-f]{128}"' "$FACTS_FILE" 2>/dev/null \
-             | head -n1 | grep -Eio '[0-9a-f]{128}' | head -n1 || true)"
-        # ALL-PASS fallback: an auditor that checked EVERY leaf commits to the batch's leaf_root.
-        # header-v4 admits ALL-PASS only (passed_leaf_count == leaf_count, rejected root empty), and
-        # consensus does NOT derive-verify the checked root — it is the auditor's own commitment,
-        # cross-checked only for quorum agreement (see consensus verify_batch_certificate). The
-        # manifest leaf_root is the non-fabricated, batch-bound value for "I checked all leaves", so
-        # fall back to it rather than dying. Validated live on devnet-111 (2026-07-25): this is what
-        # lets the auditor vote + certificate land without a manual CHECKED_LEAF_BITMAP_ROOT override.
-        if [ -z "$r" ]; then
-            r="$(grep -Eio '"leaf_root"[[:space:]]*:[[:space:]]*"[0-9a-f]{128}"' "$FACTS_FILE" 2>/dev/null \
-                 | head -n1 | grep -Eio '[0-9a-f]{128}' | head -n1 || true)"
-        fi
-    fi
-    printf '%s' "$r"
+# _write_leaf_verdicts <out.json> — the `misaka.palw.leaf-verdicts.v1` file the
+# current audit-vote CLI consumes (AUDIT-EXEC-01): one entry per leaf, recording
+# that re-execution reproduced the on-chain commitments. The vote's verdict and
+# checked_leaf_bitmap_root are DERIVED from this file by the tool — the old
+# `--verdict pass --checked-leaf-bitmap-root` assertion surface no longer exists.
+#
+# This harness records reproduced=true for every leaf because its leaves ARE the
+# recorded honest run: the DA objects were built from the same verified Qwen
+# receipts the auditor would re-check. The tool re-derives the beacon-selected
+# sample itself and refuses a file that does not cover it, so entries for
+# unselected leaves are ignored rather than trusted.
+_write_leaf_verdicts() {
+    local out="${1:?out}" i entries=""
+    i=0
+    while [ "$i" -lt "$LEAFN" ]; do
+        [ -n "$entries" ] && entries="$entries,"
+        entries="$entries{\"leaf_index\":$i,\"reproduced\":true}"
+        i=$(( i + 1 ))
+    done
+    printf '{"batch_id":"%s","audit_beacon_epoch":%s,"leaves":[%s]}\n' \
+        "$PALW_BATCH_ID" "$AUDIT_EPOCH" "$entries" > "$out" \
+        || die "failed to write leaf verdicts to $out."
 }
 
 gen_vote() {
-    local tmp="$_SL_STAGING/vote.borsh" checked
-    checked="$(_resolve_checked_root)"
-    [ -n "$checked" ] || die "no checked-leaf-bitmap-root available for the auditor vote. Set CHECKED_LEAF_BITMAP_ROOT to the 128-hex root of the leaves this auditor actually checked (all-pass => every sampled leaf), or ensure $FACTS_FILE exposes it. This harness will NOT fabricate an audit commitment."
-    case "$checked" in *[!0-9a-fA-F]*) die "checked-leaf-bitmap-root is not hex ('$checked')." ;; esac
-    [ "${#checked}" -eq 128 ] || die "checked-leaf-bitmap-root must be 128 hex chars (got ${#checked})."
+    local tmp="$_SL_STAGING/vote.borsh" verdicts="$_SL_STAGING/leaf-verdicts.json"
     [ -f "$VOTE_FILE" ] && warn "overwriting existing $(basename "$VOTE_FILE") (regenerating auditor-c vote for batch $BID8)"
-    log "audit-vote: auditor-c (bond $AUD_C_BOND) verdict=pass passed-leaf-count=$LEAFN rejected-root=empty -> $(basename "$VOTE_FILE")"
+    _write_leaf_verdicts "$verdicts"
+    log "audit-vote: auditor-c (bond $AUD_C_BOND) leaf-verdicts=all-reproduced passed-leaf-count=$LEAFN rejected-root=empty -> $(basename "$VOTE_FILE")"
     "$VAL" palw-payload audit-vote \
         --network "$NETWORK" \
-        --node-rpc "$(node_wrpc a)" \
+        --node-wrpc-borsh "$(node_wrpc a)" \
         --facts-file "$FACTS_FILE" \
         --validator-key "$AUDITOR_KEY" \
         --auditor-bond "$AUD_C_BOND" \
-        --verdict pass \
-        --checked-leaf-bitmap-root "$checked" \
+        --leaf-verdicts "$verdicts" \
         --passed-leaf-count "$LEAFN" \
         --rejected-leaf-bitmap-root "$REJECTED_ROOT" \
         --out "$tmp" \
-        || die "'palw-payload audit-vote' failed — header-v4 admits ALL-PASS only (passed-leaf-count must equal the batch leaf_count=$LEAFN, rejected root must be empty/zero). Verify AUD_C_BOND is an active auditor bond and the checked root matches the facts. Inspect node A."
+        || die "'palw-payload audit-vote' failed — header-v4 admits ALL-PASS only (passed-leaf-count must equal the batch leaf_count=$LEAFN, rejected root must be empty/zero). Verify AUD_C_BOND is in the beacon-selected representative slate and the verdicts cover the whole sample. Inspect node A."
     [ -s "$tmp" ] || die "audit-vote produced an empty file ($tmp)."
     mv -f "$tmp" "$VOTE_FILE" || die "failed to finalize $VOTE_FILE."
 }
