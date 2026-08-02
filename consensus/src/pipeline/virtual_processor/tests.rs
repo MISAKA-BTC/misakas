@@ -6957,6 +6957,134 @@ async fn palw_algo4_invalid_ticket_rejected_e2e() {
 /// snapshot, or whose self-serial A-commit is not registered at-or-before its declared epoch does
 /// not mint. Fail-closed in every arm; the untampered construction minting at the end is what makes
 /// each rejection attributable to the mutation, not to the harness.
+/// Static-audit C-01 — the multi-block advance, exhibited directly.
+///
+/// This is the case the coverage test below explicitly does NOT reach, and the one the first attempt
+/// at this fix got wrong. Writing the PCPB chain row at virtual commit put it one pipeline stage
+/// AFTER the clause that reads it: `commit_utxo_state` runs per chain candidate and flushes its own
+/// batch, while `stage_palw_provider_bond_mutations` runs once over the whole chain path. Every block
+/// but the first in a multi-block advance therefore validated against a selected parent with no row,
+/// read that as the pruning boundary, and fell back to the shared epoch key — so the fix bit only on
+/// single-block advances, and never on IBD, catch-up or reorg, which is exactly where forks live.
+///
+/// A reorg is the cleanest way to force that shape: branch B is never a chain block until it wins,
+/// at which point ONE `resolve_virtual` attaches its whole segment, and `reorg_segment` asserts the
+/// segment really was multi-block rather than the fixture quietly degenerating to single steps.
+///
+/// What it pins, precisely — the two placements leave IDENTICAL store contents once the advance
+/// finishes, so no post-hoc read can tell them apart, and this test does not claim to:
+///   * the selected-chain projection now REQUIRES each attached block's row to already exist and
+///     fail-stops otherwise, and a genuine multi-block advance runs through that requirement (verified
+///     by deleting the per-block writer: this fixture aborts on the fail-stop);
+///   * every block of a reorged-in segment carries a row, and the pointer chain from the new sink is
+///     connected — no hop lands on a missing row, which the resolver reads as "pruned".
+/// The remaining step — that clause 12's read at block N of the advance sees block N−1's row — is
+/// structural: the row is written in the same function, same batch, as the beacon state the same
+/// clause pair reads. Exhibiting it directly needs a leaf chunk ACCEPTED mid-segment against a
+/// poisoned epoch key; `palw_lifecycle_e2e` builds that acceptance organically but advances one
+/// chain block at a time.
+#[tokio::test]
+async fn palw_pcpb_chain_rows_survive_a_multi_block_reorg_advance() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::config::params::{ForkActivation, SIMNET_PARAMS};
+    use kaspa_consensus_core::palw::LaneDifficultyParams;
+
+    const EPOCH_LEN: u64 = 3;
+    let config = ConfigBuilder::new(SIMNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_activation_daa_score = 0;
+            p.palw_algo4_accept = true;
+            p.palw_epoch_length_daa = EPOCH_LEN; // small ⇒ a short branch closes several epochs
+            p.pow_blake2b_sha3_activation = ForkActivation::always();
+            p.palw_lane_difficulty = LaneDifficultyParams {
+                genesis_hash_bits: 0x207fffff,
+                genesis_replica_bits: 0x207fffff,
+                min_samples: 100_000,
+                ..LaneDifficultyParams::INERT
+            };
+            p.min_difficulty_window_size = p.difficulty_window_size;
+            let d = p.dns_params.as_mut().unwrap();
+            d.dns_activation_daa_score = 0;
+            d.attestation_epoch_length_blue_score = 4;
+            d.attestation_lag_blue_score = 2;
+            d.attestation_anchor_backoff_blue_score = 1;
+        })
+        .build();
+    let tc = TestConsensus::new(&config);
+    let handles = tc.init();
+    let miner = MinerData::new(p2pkh_mldsa87_spk(&[0x07; 64]), vec![]);
+    let genesis = config.params.genesis.hash;
+
+    // Branch A: the chain the node settles on first.
+    let mut parent = genesis;
+    for i in 1u64..=8 {
+        let blk = tc.build_utxo_valid_block_with_parents(i.into(), vec![parent], miner.clone(), vec![]);
+        parent = blk.header.hash;
+        assert_eq!(tc.validate_and_insert_block(blk.to_immutable()).virtual_state_task.await.unwrap(), BlockStatus::StatusUTXOValid);
+    }
+    let branch_a_tip = parent;
+    assert_eq!(tc.consensus_clone().get_sink(), branch_a_tip, "branch A is the sink before the reorg");
+
+    // Branch B off genesis, longer. Its blocks are NOT chain blocks while A outweighs them, so the
+    // moment B's cumulative blue work passes A's, one virtual resolution attaches the whole segment.
+    // Built and delivered one at a time (the template builder needs each parent's GHOSTDAG data),
+    // but that does NOT make the advance single-block: while A is heavier every B block is a mere
+    // side block, so the sink only moves once B's work passes A's — and then in one segment.
+    let mut parent = genesis;
+    let mut sink_before_reorg = branch_a_tip;
+    let mut reorg_segment = 0usize;
+    for i in 1u64..=12 {
+        let blk = tc.build_utxo_valid_block_with_parents((100 + i).into(), vec![parent], miner.clone(), vec![]);
+        parent = blk.header.hash;
+        tc.validate_and_insert_block(blk.to_immutable()).virtual_state_task.await.unwrap();
+        let sink = tc.consensus_clone().get_sink();
+        if sink != sink_before_reorg && sink_before_reorg == branch_a_tip {
+            // The crossover: count how much of B this single advance attached.
+            let mut walk = sink;
+            while walk != genesis {
+                reorg_segment += 1;
+                walk = tc.storage.ghostdag_store.get_selected_parent(walk).unwrap();
+            }
+        }
+        sink_before_reorg = sink;
+    }
+    let branch_b_tip = parent;
+    assert_eq!(tc.consensus_clone().get_sink(), branch_b_tip, "the node reorged onto the longer branch B");
+    assert!(reorg_segment >= 2, "the reorg must attach a MULTI-block segment in one advance, got {reorg_segment}");
+
+    // Every block of the segment that was attached in one advance carries its row, and the pointer
+    // chain from the new sink is connected — no hop lands on a missing row, which the resolver would
+    // read as "pruned, consult the buried history".
+    let store = &tc.storage.palw_pcpb_store;
+    let mut block = branch_b_tip;
+    let mut depth = 0;
+    while block != genesis {
+        assert!(store.chain_state(block).unwrap().is_some(), "reorged-in chain block {block} has no PCPB chain row");
+        block = tc.storage.ghostdag_store.get_selected_parent(block).unwrap();
+        depth += 1;
+    }
+    assert!(depth >= 2, "the fixture must attach a multi-block segment, got depth {depth}");
+
+    let mut cursor = store.chain_state(branch_b_tip).unwrap().unwrap().prev_closer;
+    let mut closers = 0;
+    while let Some(block) = cursor {
+        let row = store
+            .chain_state(block)
+            .unwrap()
+            .unwrap_or_else(|| panic!("prev_closer points at {block}, which has no row — the walk would read this as pruned"));
+        assert!(!row.closed_snapshots.is_empty(), "prev_closer must point at a CLOSER");
+        cursor = row.prev_closer;
+        closers += 1;
+    }
+    assert!(closers >= 2, "an {EPOCH_LEN}-DAA epoch over a 12-block branch must close several epochs, got {closers}");
+
+    // Branch A left the selected chain but its rows are untouched and still self-consistent: block
+    // keys are what make a reorg free here, and a walk from A's tip still answers A's own history.
+    assert!(store.chain_state(branch_a_tip).unwrap().is_some(), "a reorged-out branch keeps its own rows");
+    tc.shutdown(handles);
+}
+
 /// Static-audit C-01 — the two properties clause 13's fork-relative read depends on, pinned where
 /// they are actually produced.
 ///
