@@ -80,6 +80,7 @@ impl BlockBodyProcessor {
             .send(crate::pipeline::deps_manager::VirtualStateProcessingMessage::EnsurePalwParents {
                 parents: block.header.direct_parents().to_vec(),
                 selected_parent,
+                daa_score: block.header.daa_score,
                 result: result_tx,
             })
             .map_err(|_| unavailable("virtual worker stopped before Header-v4 parent completion".to_string()))?;
@@ -190,7 +191,22 @@ impl BlockBodyProcessor {
             .map_err(|e| reject(format!("overlay view read failed: {e:?}")))?
             .map(|v| (*v).clone())
             .ok_or_else(|| {
-                reject("no PALW overlay view at selected parent (batch not resolvable in this block's past)".to_string())
+                // Bug report #6 layer 2: above the suture fence an algo-4 block can now REACH this
+                // check with a disqualified selected parent, which has no accepted-view row. That
+                // is a point-of-view condition, so it must not poison the block — report it as
+                // provenance-unavailable (rejected now, never marked invalid, re-requested later)
+                // and let the algo-3 backbone re-validate the selected parent first. Below the
+                // fence the provenance gate still refuses such a block earlier, so this arm keeps
+                // its original meaning and its original error.
+                if header.daa_score >= self.palw_suture_disqualified_selected_parent_daa_score {
+                    RuleError::PalwParentProvenanceUnavailable(format!(
+                        "selected parent {sp} has no accepted PALW overlay view yet (its own UTXO \
+                         classification is unresolved from this node's virtual state); the algo-4 \
+                         ticket cannot be checked until it resolves"
+                    ))
+                } else {
+                    reject("no PALW overlay view at selected parent (batch not resolvable in this block's past)".to_string())
+                }
             })?;
         // K5 (§11.3): the Certified→Active flip is gated on the SAME lagged signal the view builder
         // (`commit_palw_overlay_view`) gates on — both compute it from this block's selected parent, so

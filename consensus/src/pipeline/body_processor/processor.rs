@@ -111,6 +111,10 @@ pub struct BlockBodyProcessor {
     pub(super) palw_post_commit_delta_epochs: u64,
     pub(super) ghostdag_store: Arc<DbGhostdagStore>,
     pub(super) palw_activation_daa_score: u64,
+    /// Bug report #6 layer 2 — above this score a disqualified selected parent no longer makes a
+    /// body unacceptable, so the algo-4 ticket check must report a missing overlay view as
+    /// provenance-unavailable instead of poisoning the block (params.rs has the incident).
+    pub(super) palw_suture_disqualified_selected_parent_daa_score: u64,
     /// ADR-MA §17.1: the Compute Set registry band's own activation fence (`u64::MAX` on every
     /// shipped preset — registry txs are block-invalid everywhere today).
     pub(super) palw_compute_registry_activation_daa_score: u64,
@@ -191,6 +195,7 @@ impl BlockBodyProcessor {
             palw_post_commit_delta_epochs: params.palw_post_commit_delta_epochs,
             ghostdag_store: storage.ghostdag_store.clone(),
             palw_activation_daa_score: params.palw_activation_daa_score,
+            palw_suture_disqualified_selected_parent_daa_score: params.palw_suture_disqualified_selected_parent_daa_score,
             palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
             palw_epoch_length_daa: params.palw_epoch_length_daa,
             palw_beacon_grace_epochs: params.palw_beacon_grace_epochs,

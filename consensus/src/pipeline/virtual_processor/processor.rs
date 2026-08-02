@@ -262,11 +262,26 @@ fn palw_search_boundary_matches(embedded: &PalwSearchPruningSnapshotV1, standalo
 /// disqualified by UTXO/DNS rules; they contribute no accepted lifecycle delta and must not make an
 /// otherwise valid DAG child body-invalid. The GHOSTDAG selected parent is different: body ticket and
 /// accepted-view construction both read its exact lifecycle row.
-fn palw_parent_terminal_status(status: BlockStatus, selected: bool, has_accepted_view: bool) -> Result<bool, &'static str> {
+///
+/// Bug report #6 layer 2: `suture_relaxed` (the requesting block's own DAA has reached
+/// `palw_suture_disqualified_selected_parent_daa_score`) admits the body even when the SELECTED
+/// parent is disqualified. That classification is this node's current point of view, and treating
+/// it as a body-reject closed the only cycle by which a competing chain could ever be
+/// re-validated — bodies need provenance, provenance needs a non-disqualified selected parent,
+/// that needs a reorg, and the reorg needs bodies (relay and IBD both drop the peer meanwhile).
+/// Admitting the body is safe because the chain-candidate walk propagates a disqualified selected
+/// parent by inheritance before the accepted-view fold is entered, so nothing reaches virtual
+/// commit without its selected parent's lifecycle row.
+fn palw_parent_terminal_status(
+    status: BlockStatus,
+    selected: bool,
+    has_accepted_view: bool,
+    suture_relaxed: bool,
+) -> Result<bool, &'static str> {
     match status {
         BlockStatus::StatusUTXOValid if !selected || has_accepted_view => Ok(true),
         BlockStatus::StatusUTXOValid => Err("selected parent has no accepted lifecycle provenance"),
-        BlockStatus::StatusDisqualifiedFromChain if !selected => Ok(true),
+        BlockStatus::StatusDisqualifiedFromChain if !selected || suture_relaxed => Ok(true),
         BlockStatus::StatusDisqualifiedFromChain => Err("selected parent is disqualified"),
         BlockStatus::StatusUTXOPendingVerification => Ok(false),
         BlockStatus::StatusHeaderOnly => Err("parent body is missing"),
@@ -965,6 +980,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_compute_registry_activation_daa_score: u64,
     /// Bug report #6 flag day — v3 leaf-chunk admission score (params.rs doc has the incident).
     pub(super) palw_leaf_chunk_v3_admission_daa_score: u64,
+    /// Bug report #6 layer 2 — disqualified-selected-parent body admission score.
+    pub(super) palw_suture_disqualified_selected_parent_daa_score: u64,
     pub(super) palw_store: Arc<DbPalwStore>,
     pub(super) palw_beacon_store: Arc<DbPalwBeaconStore>,
     pub(super) palw_lane_bits_store: Arc<DbPalwLaneBitsStore>,
@@ -1202,6 +1219,7 @@ impl VirtualStateProcessor {
             palw_activation_daa_score: params.palw_activation_daa_score,
             palw_compute_registry_activation_daa_score: params.palw_compute_registry_activation_daa_score,
             palw_leaf_chunk_v3_admission_daa_score: params.palw_leaf_chunk_v3_admission_daa_score,
+            palw_suture_disqualified_selected_parent_daa_score: params.palw_suture_disqualified_selected_parent_daa_score,
             palw_store: storage.palw_store.clone(),
             palw_beacon_store: storage.palw_beacon_store.clone(),
             palw_lane_bits_store: storage.palw_lane_bits_store.clone(),
@@ -1318,8 +1336,8 @@ impl VirtualStateProcessor {
             // messages which made those parents visible; their result senders below then observe the
             // terminal status written by this pass.
             for msg in &messages {
-                if let VirtualStateProcessingMessage::EnsurePalwParents { parents, selected_parent, result } = msg {
-                    let _ = result.send(self.ensure_palw_parent_provenance(parents, *selected_parent));
+                if let VirtualStateProcessingMessage::EnsurePalwParents { parents, selected_parent, daa_score, result } = msg {
+                    let _ = result.send(self.ensure_palw_parent_provenance(parents, *selected_parent, *daa_score));
                 }
             }
             let statuses_read = self.statuses_store.read();
@@ -1342,7 +1360,10 @@ impl VirtualStateProcessor {
     /// Finish UTXO classification and accepted-lifecycle persistence for each Header-v4 parent from
     /// the current virtual point of view. This runs only on the single virtual worker, so concurrent
     /// body requests serialize here; the second request observes the first one's committed row.
-    fn ensure_palw_parent_provenance(&self, parents: &[BlockHash], selected_parent: BlockHash) -> Result<(), String> {
+    fn ensure_palw_parent_provenance(&self, parents: &[BlockHash], selected_parent: BlockHash, daa_score: u64) -> Result<(), String> {
+        // Bug report #6 layer 2: derived from the REQUESTING BLOCK's own header, so two nodes
+        // reach the same verdict for the same block regardless of when they see it.
+        let suture_relaxed = daa_score >= self.palw_suture_disqualified_selected_parent_daa_score;
         if !parents.contains(&selected_parent) {
             return Err(format!("selected parent {selected_parent} is absent from the direct-parent set"));
         }
@@ -1362,7 +1383,7 @@ impl VirtualStateProcessor {
             } else {
                 false
             };
-            match palw_parent_terminal_status(status, parent == selected_parent, has_view) {
+            match palw_parent_terminal_status(status, parent == selected_parent, has_view, suture_relaxed) {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(reason) => return Err(format!("parent {parent} cannot provide accepted lifecycle provenance: {reason}")),
@@ -1404,7 +1425,7 @@ impl VirtualStateProcessor {
             } else {
                 false
             };
-            match palw_parent_terminal_status(status, parent == selected_parent, has_view) {
+            match palw_parent_terminal_status(status, parent == selected_parent, has_view, suture_relaxed) {
                 Ok(true) => {
                     if status == StatusDisqualifiedFromChain {
                         debug!(
@@ -11129,13 +11150,61 @@ mod palw_overlay_commit_tests {
 
     #[test]
     fn v4_parent_barrier_preserves_normal_disqualified_side_parent_dags() {
-        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, true), Ok(true));
-        assert!(palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, false).is_err());
-        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, false, false), Ok(true));
-        assert!(palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, true, false).is_err());
-        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusUTXOPendingVerification, false, false), Ok(false));
-        assert!(palw_parent_terminal_status(BlockStatus::StatusHeaderOnly, false, false).is_err());
-        assert!(palw_parent_terminal_status(BlockStatus::StatusInvalid, false, false).is_err());
+        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, true, false), Ok(true));
+        assert!(palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, false, false).is_err());
+        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, false, false, false), Ok(true));
+        assert!(palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, true, false, false).is_err());
+        assert_eq!(palw_parent_terminal_status(BlockStatus::StatusUTXOPendingVerification, false, false, false), Ok(false));
+        assert!(palw_parent_terminal_status(BlockStatus::StatusHeaderOnly, false, false, false).is_err());
+        assert!(palw_parent_terminal_status(BlockStatus::StatusInvalid, false, false, false).is_err());
+    }
+
+    /// Bug report #6 layer 2 — the suturing flag day, pinned on BOTH sides.
+    ///
+    /// Below the fence a disqualified selected parent still refuses the body: that is the exact
+    /// pre-fix behavior, and matching it is what lets old and new binaries share a chain during
+    /// the upgrade window instead of forking at each operator's restart. Above it the body is
+    /// admitted so the competing chain can accumulate bodies, become a sink candidate, and be
+    /// re-validated — the cycle the 2026-08-02 partition could never escape.
+    ///
+    /// Everything that is NOT the disqualified-selected-parent case must be unmoved by the flag
+    /// day; a relaxation that also swallowed a missing body or an invalid parent would be a
+    /// different (and much worse) change.
+    #[test]
+    fn suture_flag_day_only_moves_the_disqualified_selected_parent_case() {
+        let sp_disqualified = |relaxed| palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, true, false, relaxed);
+        assert!(sp_disqualified(false).is_err(), "below the flag day the pre-fix body-reject must stand");
+        assert_eq!(sp_disqualified(true), Ok(true), "above it the body is admitted so the fork can be re-validated");
+
+        for relaxed in [false, true] {
+            assert_eq!(
+                palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, true, relaxed),
+                Ok(true),
+                "a healthy selected parent is unaffected by the flag day"
+            );
+            assert!(
+                palw_parent_terminal_status(BlockStatus::StatusUTXOValid, true, false, relaxed).is_err(),
+                "a selected parent with no accepted view is still unusable — the fold reads that row"
+            );
+            assert_eq!(
+                palw_parent_terminal_status(BlockStatus::StatusDisqualifiedFromChain, false, false, relaxed),
+                Ok(true),
+                "side parents were always allowed to be disqualified"
+            );
+            assert_eq!(
+                palw_parent_terminal_status(BlockStatus::StatusUTXOPendingVerification, false, false, relaxed),
+                Ok(false),
+                "pending still means 'complete it', not 'admit it'"
+            );
+            assert!(
+                palw_parent_terminal_status(BlockStatus::StatusHeaderOnly, false, false, relaxed).is_err(),
+                "a missing parent body is not a point-of-view condition"
+            );
+            assert!(
+                palw_parent_terminal_status(BlockStatus::StatusInvalid, false, false, relaxed).is_err(),
+                "an invalid parent stays invalid on both sides of the flag day"
+            );
+        }
     }
 
     #[test]
@@ -11146,12 +11215,14 @@ mod palw_overlay_commit_tests {
             VirtualStateProcessingMessage::EnsurePalwParents {
                 parents: vec![BlockHash::from(1u64)],
                 selected_parent: BlockHash::from(1u64),
+                daa_score: 0,
                 result: first_tx,
             },
             VirtualStateProcessingMessage::Exit,
             VirtualStateProcessingMessage::EnsurePalwParents {
                 parents: vec![BlockHash::from(2u64)],
                 selected_parent: BlockHash::from(2u64),
+                daa_score: 0,
                 result: second_tx,
             },
         ];

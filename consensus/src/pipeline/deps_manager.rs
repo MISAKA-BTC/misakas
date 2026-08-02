@@ -36,6 +36,10 @@ pub enum VirtualStateProcessingMessage {
     EnsurePalwParents {
         parents: Vec<BlockHash>,
         selected_parent: BlockHash,
+        /// The requesting block's OWN consensus DAA score. Bug report #6 layer 2 gates the
+        /// disqualified-selected-parent relaxation on it, so the verdict is a function of the
+        /// block's header rather than of when the node happened to see it.
+        daa_score: u64,
         result: PalwParentCompletionSender,
     },
 }
