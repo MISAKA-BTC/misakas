@@ -260,6 +260,31 @@ fn log_evm_storage_profile(args: &Args) {
     }
 }
 
+/// What a build lacking the `evm` cargo feature should do about this network's EVM fence
+/// (ADR-0020). See the call site in `create_core_with_runtime` for the reasoning; the three-way
+/// split is the load-bearing part, so it lives in a pure function the tests can pin.
+#[derive(Debug, PartialEq, Eq)]
+enum EvmBuildGate {
+    /// The lane never activates here (`u64::MAX`), or this build can execute it.
+    Ok,
+    /// EVM-active from genesis: the first chain block already fails, loudly and at once. Booting
+    /// is still useful (RPC, tooling, tests that never execute a block), so warn, do not refuse.
+    Warn,
+    /// A future flag day: the node would look healthy for days and then strand its datadir at the
+    /// fence. Refuse now, while the operator can still act on it.
+    Refuse,
+}
+
+fn non_evm_build_gate(evm_activation_daa_score: u64, has_evm_feature: bool) -> EvmBuildGate {
+    if has_evm_feature || evm_activation_daa_score == u64::MAX {
+        EvmBuildGate::Ok
+    } else if evm_activation_daa_score == 0 {
+        EvmBuildGate::Warn
+    } else {
+        EvmBuildGate::Refuse
+    }
+}
+
 /// `app_dir` is what the free-space check measures (it is the mount the operator named);
 /// `db_dir` is what decides which remediation to print. They must stay separate: by the time this
 /// runs the logger has already created `<app_dir>/<network>/logs`, so "is `app_dir` non-empty" is
@@ -656,24 +681,39 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // checked — but it is a terrible OPERATIONAL one: the failure lands days after the mistake, on
     // a node that looked healthy the whole time, and it takes the operator's synced datadir with it.
     //
-    // Checked against `evm_activation_daa_score` rather than the current DAA score on purpose. A
-    // finite fence means this build is guaranteed to fail eventually, and "eventually" is not a
-    // state worth booting into: the answer is the same before and after the flag day, so give it
-    // immediately, while the operator is still at the keyboard.
+    // The refusal is scoped to a fence that is finite AND non-zero, because that is exactly the
+    // shape of the hazard — a DELAYED failure. Below such a fence the node is fully functional, so
+    // nothing tells the operator anything is wrong until the flag day arrives.
     //
-    // testnet-21 is the first net this fires on (fence 6,500,000). Every other preset keeps
-    // `u64::MAX`, so the default secp-free build runs them exactly as before — which is precisely
-    // the invariant `pcpb_palw_network_selection` and its sibling preset tests pin.
-    if !cfg!(feature = "evm") && config.params.evm_activation_daa_score != u64::MAX {
-        println!(
-            "Refusing to start: {} activates the ADR-0020 EVM lane at DAA score {}, but this kaspad was built \
-             WITHOUT the `evm` cargo feature — it cannot execute the lane, and at the fence it would refuse to \
-             follow the chain (taking this node's synced datadir out of service). Fix: download the release \
-             binary (the published archives are EVM-capable), or rebuild from source with \
-             `cargo build --release --bin kaspad --features evm`.",
-            config.params.net, config.params.evm_activation_daa_score
-        );
-        exit(1);
+    // A fence of ZERO (devnet, testnet-10 — EVM-active since genesis) is a different situation and
+    // must NOT be refused. There is no flag day to miss and no synced datadir to lose: the very
+    // first chain block the node executes is already past the fence, so the existing panic fires
+    // immediately and unmistakably. Refusing at startup there would also break every tool that
+    // legitimately boots a default-build node on those nets WITHOUT ever executing a chain block —
+    // the in-process daemons the RPC / stratum-bridge integration tests spin up do exactly that,
+    // and they are how this over-broad first cut was caught.
+    //
+    // testnet-21 (fence 6,500,000) is the only net this fires on today.
+    let evm_fence = config.params.evm_activation_daa_score;
+    match non_evm_build_gate(evm_fence, cfg!(feature = "evm")) {
+        EvmBuildGate::Ok => {}
+        EvmBuildGate::Refuse => {
+            println!(
+                "Refusing to start: {} activates the ADR-0020 EVM lane at DAA score {}, but this kaspad was built \
+                 WITHOUT the `evm` cargo feature — it cannot execute the lane. This node would sync normally until \
+                 the fence and then refuse to follow the chain, taking its synced datadir out of service. Fix: \
+                 download the release binary (the published archives are EVM-capable), or rebuild from source with \
+                 `cargo build --release --bin kaspad --features evm`.",
+                config.params.net, evm_fence
+            );
+            exit(1);
+        }
+        EvmBuildGate::Warn => warn!(
+            "{} has the ADR-0020 EVM lane active from genesis but this kaspad was built WITHOUT the `evm` cargo \
+             feature. RPC and startup work; executing ANY chain block will fail. Rebuild with --features evm to \
+             mine or follow this network.",
+            config.params.net
+        ),
     }
 
     // kaspa-pq **ADR-0042** — the permissionless (chain-derived) pruning-snapshot auth lever,
@@ -1787,5 +1827,27 @@ mod tests {
         // combination in which it is allowed to run).
         let args = parse(&["--evm-storage-profile=compact", "--evm-prune-legacy-206"]);
         assert!(validate_args(&args).is_ok());
+    }
+
+    /// ADR-0020: the three-way EVM build gate. The middle case is the one that matters — a
+    /// genesis-active fence (devnet / testnet-10) must WARN, never refuse. The first cut refused
+    /// on any finite fence and took out every in-process daemon the integration tests boot on
+    /// those nets; the failure there is immediate and obvious, so refusing buys nothing and
+    /// costs the tooling.
+    #[test]
+    fn non_evm_build_gate_refuses_only_a_future_flag_day() {
+        use kaspa_consensus_core::config::params::TESTNET_21_EVM_ACTIVATION_DAA_SCORE;
+
+        // Inert everywhere the lane never opens — mainnet, simnet, the other PALW presets.
+        assert_eq!(non_evm_build_gate(u64::MAX, false), EvmBuildGate::Ok);
+        // An evm build runs anything.
+        assert_eq!(non_evm_build_gate(u64::MAX, true), EvmBuildGate::Ok);
+        assert_eq!(non_evm_build_gate(0, true), EvmBuildGate::Ok);
+        assert_eq!(non_evm_build_gate(TESTNET_21_EVM_ACTIVATION_DAA_SCORE, true), EvmBuildGate::Ok);
+        // Genesis-active (devnet, testnet-10): boot and warn. Refusing here regressed CI.
+        assert_eq!(non_evm_build_gate(0, false), EvmBuildGate::Warn);
+        // A future flag day (testnet-21): refuse while the operator can still act.
+        assert_eq!(non_evm_build_gate(TESTNET_21_EVM_ACTIVATION_DAA_SCORE, false), EvmBuildGate::Refuse);
+        assert_eq!(non_evm_build_gate(1, false), EvmBuildGate::Refuse);
     }
 }

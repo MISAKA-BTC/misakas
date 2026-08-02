@@ -1827,8 +1827,9 @@ pub const COMPUTE_REGISTRY_PALW_PARAMS: Params = Params {
 /// outranks `EVM_HEADER_VERSION` in `check_header_version`), so — unlike the testnet-10 activation
 /// ADR-0020 describes, where v1→v2 fenced old nodes out at header validation — a node built
 /// WITHOUT `--features evm` cannot be kept off this chain by the version check. It must be
-/// upgraded. `kaspad` refuses to start such a build on an EVM-active net for exactly this reason
-/// (`kaspad/src/daemon.rs`); the release binaries ship with the feature on.
+/// upgraded. `kaspad` refuses to start such a build on a net whose fence is finite and still in
+/// the future, for exactly this reason (`non_evm_build_gate`, `kaspad/src/daemon.rs`); the release
+/// binaries ship with the feature on.
 pub const TESTNET_21_EVM_ACTIVATION_DAA_SCORE: u64 = 6_500_000;
 
 /// ADR-0045 D3-b — the **PCPB dispatch** rehearsal network (`pcpb-palw`, NetworkId `testnet-21`,

@@ -24,8 +24,11 @@ do **not** carry over from the testnet-10 precedent:
 - **No version isolation.** testnet-21 is already Header-v5 (PALW/ADR-MA), which outranks v2 in
   `check_header_version`, so the version check cannot fence a non-EVM node off this chain the way
   v1→v2 did on testnet-10. `kaspad` therefore refuses to *start* a build without `--features evm`
-  on any net with a finite fence (`kaspad/src/daemon.rs`), converting a mid-IBD panic days later
-  into an actionable startup error. `deploy.yaml` builds the released `kaspad` with the feature,
+  on a net whose fence is finite and **in the future** (`non_evm_build_gate`, `kaspad/src/daemon.rs`),
+  converting a mid-IBD panic days later into an actionable startup error. A genesis-active fence
+  (devnet, testnet-10) only warns: there the first executed chain block already fails, so the
+  failure is immediate rather than delayed, and refusing would break tooling that legitimately
+  boots a default-build node without ever executing one. `deploy.yaml` builds the released `kaspad` with the feature,
   and CI now compiles and tests the lane (it never did before — `evm` is non-default, so
   `--workspace` walked past it).
 - **The released binary is no longer secp-free.** It links k256 for EVM `ecrecover`. This is the
