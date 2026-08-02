@@ -3107,6 +3107,11 @@ impl VirtualStateProcessor {
         // return fires on mainnet / testnet-10 / simnet / devnet only; on testnet-palw-110 /
         // devnet-palw-111 (fence = 0) beacon state + accumulator rows ARE written per chain block.
         self.commit_palw_beacon_state(&mut batch, current, &acceptance_data, selected_parent_bond_view);
+        // Static-audit C-01 — the PCPB twin of the line above: this block's row in the fork-relative
+        // provider-snapshot history, in the SAME batch and at the SAME coordinate clause 12 reads
+        // from. Both are derived from a selected-parent-relative view, so a candidate always walks
+        // its own past and never a store reconciled at a different pipeline stage.
+        self.commit_palw_pcpb_chain_state(&mut batch, current, selected_parent_provider_bond_view);
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
         if !rewarded_keys.is_empty() {
             self.rewarded_epochs_store.insert_batch(&mut batch, current, Arc::new(rewarded_keys)).unwrap();
@@ -4137,6 +4142,80 @@ impl VirtualStateProcessor {
         Some((state, closed_epochs))
     }
 
+    /// Static-audit finding C-01 — write `current`'s row in the FORK-RELATIVE provider-snapshot
+    /// history (prefix 71), the chain clause 12 walks.
+    ///
+    /// Runs here, per chain candidate, and NOT in `stage_palw_provider_bond_mutations` where the
+    /// epoch-keyed history is reconciled. That placement was the first thing tried and it is subtly
+    /// wrong: clause 12 executes inside THIS function's commit, one chain block at a time, while the
+    /// reconciliation runs once per virtual commit over the whole chain path. Every block after the
+    /// first in a multi-block advance would therefore validate against a selected parent whose row
+    /// did not exist yet, read that as the pruning boundary, and fall back to the shared epoch key —
+    /// i.e. the finding, restored for exactly the case (IBD, catch-up, reorg) where forks are most
+    /// likely. The row must be born at the same coordinate that reads it.
+    ///
+    /// The derivation is identical to the reconciliation's and provably at the same point of view:
+    /// `selected_parent_provider_bond_view` is the registry as-of `current`'s selected parent (the
+    /// walk advances only AFTER this commit), which is precisely "the registry as the closing epoch
+    /// left it". Deriving from the fork-local view rather than from a globally reconciled store also
+    /// removes the original hazard at its root instead of by careful placement: there is no longer a
+    /// shared registry whose batching could differ between nodes.
+    fn commit_palw_pcpb_chain_state(
+        &self,
+        batch: &mut WriteBatch,
+        current: BlockHash,
+        selected_parent_provider_bond_view: &ProviderBondView,
+    ) {
+        if self.palw_activation_daa_score == u64::MAX || current == self.genesis.hash {
+            return; // inert fast path / no selected parent
+        }
+        let cur_daa = self.headers_store.get_daa_score(current).unwrap();
+        if cur_daa < self.palw_activation_daa_score {
+            return;
+        }
+        let epoch_len = self.palw_epoch_length_daa.max(1);
+        let selected_parent = self.ghostdag_store.get_selected_parent(current).unwrap();
+        let raw_sp_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or(0);
+        let sp_epoch = raw_sp_daa.max(self.palw_activation_daa_score) / epoch_len;
+        let block_epoch = cur_daa / epoch_len;
+
+        // The epochs THIS block closed. Several when its mergeset crosses more than one boundary:
+        // those epochs get no block of their own and no registry mutation sat between them, so the
+        // same commitment answers for each — the case that makes this a Vec.
+        let mut closed_snapshots = Vec::new();
+        if sp_epoch < block_epoch {
+            let (commitment, _entries) = self.derive_palw_provider_snapshot(selected_parent_provider_bond_view.iter_bonds(), cur_daa);
+            for epoch in sp_epoch..block_epoch {
+                closed_snapshots.push((epoch, commitment));
+            }
+        }
+        // The pointer, derived exactly as the beacon writer derives its own: point at the selected
+        // parent when the parent closed something, else inherit whatever the parent pointed at, so a
+        // run of non-closing blocks costs ONE hop rather than one per block.
+        //
+        // The third arm is what makes a pruned node's walk correct. A parent with no row is either
+        // the true ORIGIN of this history (genesis / below the activation fence), where the chain
+        // really does end and a walk must refuse — or a boundary the pruning pass truncated, where
+        // the walk must be able to tell and fall through to the buried epoch-keyed history. Pointing
+        // AT the rowless parent carries that distinction; `None` would claim the epoch was never
+        // closed and reject leaves every peer accepts.
+        let prev_closer = match self.palw_pcpb_store.chain_state(selected_parent).unwrap_or_default() {
+            Some(parent) if parent.closed_snapshots.is_empty() => parent.prev_closer,
+            Some(_) => Some(selected_parent),
+            None if selected_parent == self.genesis.hash || raw_sp_daa < self.palw_activation_daa_score => None,
+            None => Some(selected_parent),
+        };
+        self.palw_pcpb_store
+            .set_chain_state_batch(
+                batch,
+                current,
+                kaspa_consensus_core::palw::PalwPcpbChainStateV1 { version: 1, closed_snapshots, prev_closer },
+            )
+            .unwrap_or_else(|store_error| {
+                palw_overlay_commit_fail_stop(format!("PALW PCPB chain row could not stage {current}: {store_error}"))
+            });
+    }
+
     fn commit_palw_beacon_state(
         &self,
         batch: &mut WriteBatch,
@@ -4867,11 +4946,6 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw::PalwSnapshotCommitment,
             Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry>,
         )> = Vec::new();
-        // Static-audit finding C-01 — the same rows, stitched into the block-keyed FORK-RELATIVE
-        // chain clause 12 walks. Held in memory across the pass because point reads below see
-        // COMMITTED state only: this reconciliation applies a whole chain path in one batch, so a
-        // block's selected parent is frequently a row staged earlier in THIS loop.
-        let mut chain_rows: HashMap<BlockHash, kaspa_consensus_core::palw::PalwPcpbChainStateV1> = HashMap::new();
         for (block, mutations) in &added {
             let block_daa = self.headers_store.get_daa_score(*block).unwrap_or_else(|store_error| {
                 palw_overlay_commit_fail_stop(format!("PALW PCPB writer could not resolve attached {block}: {store_error}"))
@@ -4881,40 +4955,41 @@ impl VirtualStateProcessor {
                 let sp = self.ghostdag_store.get_selected_parent(*block).unwrap_or_else(|store_error| {
                     palw_overlay_commit_fail_stop(format!("PALW PCPB writer: no selected parent for {block}: {store_error}"))
                 });
-                let raw_sp_daa = self.headers_store.get_daa_score(sp).unwrap_or(0);
-                let sp_daa = raw_sp_daa.max(self.palw_activation_daa_score);
+                let sp_daa = self.headers_store.get_daa_score(sp).unwrap_or(0).max(self.palw_activation_daa_score);
                 let sp_epoch = sp_daa / epoch_len;
-                let mut closed_snapshots = Vec::new();
                 if sp_epoch < block_epoch {
-                    let (commitment, entries) = self.derive_palw_provider_snapshot(&working, block_daa);
-                    for epoch in sp_epoch..block_epoch {
-                        snapshot_rows.push((epoch, commitment, entries.clone()));
-                        closed_snapshots.push((epoch, commitment));
+                    let (commitment, entries) = self.derive_palw_provider_snapshot(working.iter(), block_daa);
+                    // Static-audit C-01 — the COMMITMENT this block published is the one its own
+                    // block-keyed row already carries (written per chain candidate at
+                    // `commit_palw_pcpb_chain_state`, from the selected-parent-relative provider
+                    // view). That row is the value clause 12 validates against, so the buried
+                    // epoch-keyed history must republish it verbatim rather than re-derive a second
+                    // authority. The two derivations are the same function over the same registry
+                    // state, and if they ever disagree the buried history would quietly answer
+                    // pruned-epoch leaves with a value no live block was ever validated against —
+                    // so the disagreement stops the node instead of being resolved silently.
+                    let published = self
+                        .palw_pcpb_store
+                        .chain_state(*block)
+                        .unwrap_or_else(|store_error| {
+                            palw_overlay_commit_fail_stop(format!("PALW PCPB chain read failed for {block}: {store_error}"))
+                        })
+                        .unwrap_or_else(|| {
+                            palw_overlay_commit_fail_stop(format!(
+                                "PALW PCPB chain row missing for attached chain block {block}; the per-chain-block writer \
+                                 must run before the selected-chain projection"
+                            ))
+                        });
+                    for (epoch, row_commitment) in &published.closed_snapshots {
+                        if *row_commitment != commitment {
+                            palw_overlay_commit_fail_stop(format!(
+                                "PALW provider snapshot for epoch {epoch} disagrees between the fork-relative row of {block} \
+                                 and the selected-chain reconciliation"
+                            ));
+                        }
+                        snapshot_rows.push((*epoch, *row_commitment, entries.clone()));
                     }
                 }
-                // Static-audit C-01 — the pointer, derived exactly as the beacon writer derives its
-                // own: point at the selected parent when the parent closed something, else inherit
-                // whatever the parent pointed at, so a run of non-closing blocks costs ONE hop.
-                //
-                // The third arm is what makes a pruned node's walk correct. A parent with no row is
-                // either the true ORIGIN of this history (genesis / below the activation fence), in
-                // which case the chain really does end and the walk must refuse — or a boundary the
-                // pruning pass truncated, in which case the walk must be able to tell and fall
-                // through to the buried epoch-keyed history. Pointing AT the rowless parent in the
-                // second case is what carries that distinction; `None` would claim the epoch was
-                // never closed and reject leaves every peer accepts.
-                let prev_closer = match chain_rows.get(&sp).cloned().or_else(|| {
-                    self.palw_pcpb_store.chain_state(sp).unwrap_or_else(|store_error| {
-                        palw_overlay_commit_fail_stop(format!("PALW PCPB chain read failed for {sp}: {store_error}"))
-                    })
-                }) {
-                    Some(parent) if parent.closed_snapshots.is_empty() => parent.prev_closer,
-                    Some(_) => Some(sp),
-                    None if sp == self.genesis.hash || raw_sp_daa < self.palw_activation_daa_score => None,
-                    None => Some(sp),
-                };
-                chain_rows
-                    .insert(*block, kaspa_consensus_core::palw::PalwPcpbChainStateV1 { version: 1, closed_snapshots, prev_closer });
                 for anchor in kaspa_consensus_core::palw::palw_acommit_anchors_from_accepted_txs(
                     &self.accepted_txs_of_chain_block_for_registry(*block, "PALW A-commit"),
                 ) {
@@ -4947,14 +5022,6 @@ impl VirtualStateProcessor {
             // a node never serves entries that disagree with the root it committed.
             self.palw_pcpb_store.set_snapshot_entries_batch(batch, *epoch, entries.clone()).unwrap_or_else(|store_error| {
                 palw_overlay_commit_fail_stop(format!("PALW snapshot entries could not stage epoch {epoch}: {store_error}"))
-            });
-        }
-        // Static-audit C-01 — the fork-relative chain, same batch as the epoch-keyed rows it makes
-        // reorg-proof. Written for EVERY attached active block, not only closers: the pointer
-        // inheritance that keeps the walk O(closers) needs a row on the non-closing blocks too.
-        for (block, state) in &chain_rows {
-            self.palw_pcpb_store.set_chain_state_batch(batch, *block, state.clone()).unwrap_or_else(|store_error| {
-                palw_overlay_commit_fail_stop(format!("PALW PCPB chain row could not stage {block}: {store_error}"))
             });
         }
         if let Some((tip, _)) = added.last() {
@@ -5142,13 +5209,17 @@ impl VirtualStateProcessor {
     /// bond OUTPOINT, `ml_dsa_pk_hash` from the owner credential, the bond's live collateral, and
     /// the bond-committed reward-key root. Canonicalization (id sort, zero-bond exclusion, the
     /// cumulative partition) is the builder's — producer and verifier share one derivation.
-    fn derive_palw_provider_snapshot(
+    /// Static-audit C-01: takes an ITERATOR rather than the reconciled map, because the same
+    /// derivation now runs from two sources that must agree — the selected-parent-relative
+    /// [`ProviderBondView`] at `commit_utxo_state` (the fork-relative chain row, authoritative) and
+    /// the reconciled working map at virtual commit (the buried epoch-keyed history + the producer
+    /// entry set). One function, so the canonical form cannot drift between them.
+    fn derive_palw_provider_snapshot<'a>(
         &self,
-        working: &HashMap<TransactionOutpoint, PalwProviderBondRecord>,
+        records: impl Iterator<Item = (&'a TransactionOutpoint, &'a PalwProviderBondRecord)>,
         pov_daa_score: u64,
     ) -> (kaspa_consensus_core::palw::PalwSnapshotCommitment, Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry>) {
-        let entries: Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry> = working
-            .iter()
+        let entries: Vec<kaspa_consensus_core::palw::PalwProviderSnapshotEntry> = records
             .filter(|(_, record)| kaspa_consensus_core::palw::is_provider_bond_active_at(record, pov_daa_score))
             .map(|(outpoint, record)| kaspa_consensus_core::palw::PalwProviderSnapshotEntry {
                 provider_id: kaspa_consensus_core::palw::palw_provider_id(outpoint),

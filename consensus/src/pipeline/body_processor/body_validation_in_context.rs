@@ -395,16 +395,26 @@ impl BlockBodyProcessor {
         // ticket whose anchor epoch has aged out of the retained window stops minting (fail-closed)
         // rather than resolving against a substituted live value.
         //
-        // STILL EPOCH-KEYED, on purpose, and this is the honest statement of what static-audit C-01
-        // does NOT yet cover. Clauses 11/12 now walk the candidate's own chain, but they run at the
-        // ACCEPTANCE coordinate, where the candidate is a chain block and its selected parent always
-        // carries the rows the walk needs. This clause runs in body-in-context, for EVERY block: a
-        // side block's selected parent may never have been a chain block at all, so walking from it
-        // would fail closed on honest side blocks and make them unmergeable — strictly worse than
-        // the divergence being closed. Giving clause 13 a fork-relative reader needs a coordinate
-        // that exists for non-chain blocks (a header-walk-resolvable commitment is the candidate),
-        // which is its own change and is tracked as the remaining half of C-01.
+        // FORK-RELATIVE, on the same coordinate this function already stands on (static-audit C-01).
+        //
+        // The reads below resolve by walking back from `sp`, not by looking up a shared epoch key.
+        // That matters more here than at acceptance, not less: this is a BODY rule with full teeth,
+        // so a verdict that depended on which fork last wrote an epoch row would mark a block
+        // permanently invalid on one node and mergeable on another — a split no later reorg can heal,
+        // because `StatusInvalid` is never re-evaluated.
+        //
+        // `sp` is a safe start precisely because this function already REQUIRES it: the accepted
+        // overlay view above is read from `sp` and its absence is reported as
+        // `PalwParentProvenanceUnavailable` — rejected now, never marked invalid, re-requested once
+        // the selected parent resolves. The PCPB chain row and the beacon state row are written in
+        // that same `commit_utxo_state` batch, so wherever the view exists these do too, and the
+        // point-of-view case is already handled by machinery that predates this clause.
+        //
+        // Running off the retained rows stays a fall-through to the epoch-keyed history: below the
+        // pruning point the value is final and the pruning snapshot carries it, which is exactly
+        // what lets a pruned joiner mint against epochs it never downloaded.
         {
+            use kaspa_consensus_core::palw::PalwForkRelativeOutcome::{Buried, Refused, Resolved};
             let leaf = &resolved.pcpb;
             let anchor = if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
                 leaf.a_commit_epoch
@@ -414,10 +424,25 @@ impl BlockBodyProcessor {
             let snapshot_epoch = anchor
                 .checked_sub(self.palw_snapshot_lag_epochs)
                 .ok_or_else(|| reject("clause 13: leaf anchor epoch predates the snapshot lag".to_string()))?;
-            let commitment = self
-                .palw_pcpb_store
-                .snapshot_at(snapshot_epoch)
-                .map_err(|e| reject(format!("clause 13: provider snapshot read failed: {e:?}")))?
+            let hops = kaspa_consensus_core::palw::palw_provider_snapshot_history_window_epochs(
+                &self.palw_batch_admission,
+                self.palw_epoch_length_daa,
+                self.palw_freshness_window_epochs,
+                self.palw_snapshot_lag_epochs,
+            ) as usize;
+            let commitment =
+                match kaspa_consensus_core::palw::palw_resolve_closed_epoch_fork_relative(sp, snapshot_epoch, hops, |block| {
+                    self.palw_pcpb_store.chain_state(block)
+                })
+                .map_err(|e| reject(format!("clause 13: provider snapshot walk failed: {e:?}")))?
+                {
+                    Resolved(commitment) => Some(commitment),
+                    Buried => self
+                        .palw_pcpb_store
+                        .snapshot_at(snapshot_epoch)
+                        .map_err(|e| reject(format!("clause 13: provider snapshot read failed: {e:?}")))?,
+                    Refused => None,
+                }
                 .ok_or_else(|| reject(format!("clause 13: no retained provider snapshot for epoch {snapshot_epoch} (fail-closed)")))?;
             if commitment.snapshot_root != leaf.provider_snapshot_root || commitment.assignment_root != leaf.assignment_proof_root {
                 return Err(reject("clause 13: leaf-committed PCPB roots disagree with the on-chain snapshot".to_string()));
@@ -425,12 +450,20 @@ impl BlockBodyProcessor {
             let draw_epoch = anchor
                 .checked_add(self.palw_post_commit_delta_epochs)
                 .ok_or_else(|| reject("clause 13: leaf anchor epoch + Δ overflows".to_string()))?;
-            if self
-                .palw_beacon_store_for_pcpb
-                .beacon_seed_at(draw_epoch)
-                .map_err(|e| reject(format!("clause 13: beacon seed read failed: {e:?}")))?
-                .is_none()
-            {
+            let draw_resolved =
+                match kaspa_consensus_core::palw::palw_resolve_closed_epoch_fork_relative(sp, draw_epoch, hops, |block| {
+                    self.palw_beacon_store_for_pcpb.beacon_state(block).map(|state| state.map(|s| (*s).clone()))
+                })
+                .map_err(|e| reject(format!("clause 13: beacon seed walk failed: {e:?}")))?
+                {
+                    Resolved(seed) => Some(seed),
+                    Buried => self
+                        .palw_beacon_store_for_pcpb
+                        .beacon_seed_at(draw_epoch)
+                        .map_err(|e| reject(format!("clause 13: beacon seed read failed: {e:?}")))?,
+                    Refused => None,
+                };
+            if draw_resolved.is_none() {
                 return Err(reject(format!("clause 13: no retained post-commit beacon seed for epoch {draw_epoch} (fail-closed)")));
             }
             if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {

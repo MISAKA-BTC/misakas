@@ -109,6 +109,9 @@ pub struct BlockBodyProcessor {
     pub(super) palw_beacon_store_for_pcpb: Arc<crate::model::stores::palw_beacon::DbPalwBeaconStore>,
     pub(super) palw_snapshot_lag_epochs: u64,
     pub(super) palw_post_commit_delta_epochs: u64,
+    /// Static-audit C-01: clause 13's fork-relative walk is bounded by the same retention window
+    /// clause 12's is — the deeper of the two, since the snapshot sits a full lag below the seed.
+    pub(super) palw_freshness_window_epochs: u64,
     pub(super) ghostdag_store: Arc<DbGhostdagStore>,
     pub(super) palw_activation_daa_score: u64,
     /// Bug report #6 layer 2 — above this score a disqualified selected parent no longer makes a
@@ -193,6 +196,7 @@ impl BlockBodyProcessor {
             palw_beacon_store_for_pcpb: storage.palw_beacon_store.clone(),
             palw_snapshot_lag_epochs: params.palw_snapshot_lag_epochs,
             palw_post_commit_delta_epochs: params.palw_post_commit_delta_epochs,
+            palw_freshness_window_epochs: params.palw_freshness_window_epochs,
             ghostdag_store: storage.ghostdag_store.clone(),
             palw_activation_daa_score: params.palw_activation_daa_score,
             palw_suture_disqualified_selected_parent_daa_score: params.palw_suture_disqualified_selected_parent_daa_score,
