@@ -2429,6 +2429,16 @@ impl ProviderBondView {
         self.bonds.get(outpoint)
     }
 
+    /// Every `(outpoint, record)` in the view, in unspecified order.
+    ///
+    /// Static-audit C-01 — this is what lets the provider-snapshot commitment be derived at the SAME
+    /// coordinate as the beacon seed: from the selected-parent-relative view, per chain candidate,
+    /// rather than from a globally reconciled store at virtual commit. Order does not matter because
+    /// [`palw_build_snapshot_witnesses`] canonicalizes (provider-id sort) before committing.
+    pub fn iter_bonds(&self) -> impl Iterator<Item = (&TransactionOutpoint, &PalwProviderBondRecord)> {
+        self.bonds.iter()
+    }
+
     /// Static-audit finding H-01 — resolve which sponsor, if any, a manifest carrier proved.
     ///
     /// `spent_scripts` is the script of every output the carrier consumed. If one of them is the

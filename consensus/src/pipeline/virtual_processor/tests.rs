@@ -4863,29 +4863,59 @@ pub(crate) const PALW_TEST_ASSIGNMENT_ROOT: kaspa_hashes::Hash64 = kaspa_hashes:
 /// carried by a chunk transaction. The virtual processor's own writer only ever writes the epochs a
 /// chain block CLOSES, so it cannot clobber a row staged below the tip.
 pub(crate) fn stage_palw_pcpb_context(tc: &TestConsensus) {
+    stage_palw_pcpb_snapshot(
+        tc,
+        kaspa_consensus_core::palw::PalwSnapshotCommitment {
+            snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
+            assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
+            total_bond: 1_000,
+            provider_count: 2,
+        },
+    );
+}
+
+/// Stage `commitment` as the on-chain provider snapshot of the test leaf's anchor epoch, plus the
+/// post-commit draw seed — in BOTH forms clause 13 can resolve them from.
+///
+/// Static-audit C-01: clause 13 walks the candidate's own chain now, so an epoch-keyed row alone is
+/// no longer resolvable context — the harness stages epochs this short test chain never actually
+/// closed, and the walk correctly refuses them. The synthetic rows go on the CURRENT SINK, which is
+/// the selected parent of every algo-4 block these tests then mint, so the walk answers at its first
+/// hop exactly as it would on a chain that really had closed the epoch. The epoch-keyed rows are
+/// still written because they are the buried half a pruned node falls through to.
+pub(crate) fn stage_palw_pcpb_snapshot(tc: &TestConsensus, commitment: kaspa_consensus_core::palw::PalwSnapshotCommitment) {
     let params = tc.params();
     let anchor = PALW_TEST_LEAF_ANCHOR_EPOCH;
     let snapshot_epoch = anchor - params.palw_snapshot_lag_epochs;
     let draw_epoch = anchor + params.palw_post_commit_delta_epochs;
+    let sink = tc.consensus_clone().get_sink();
     let mut batch = rocksdb::WriteBatch::default();
+    tc.storage.palw_pcpb_store.set_snapshot_batch(&mut batch, snapshot_epoch, commitment).unwrap();
     tc.storage
         .palw_pcpb_store
-        .set_snapshot_batch(
+        .set_chain_state_batch(
             &mut batch,
-            snapshot_epoch,
-            kaspa_consensus_core::palw::PalwSnapshotCommitment {
-                snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
-                assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
-                total_bond: 1_000,
-                provider_count: 2,
+            sink,
+            kaspa_consensus_core::palw::PalwPcpbChainStateV1 {
+                version: 1,
+                closed_snapshots: vec![(snapshot_epoch, commitment)],
+                prev_closer: None,
             },
         )
         .unwrap();
+    let draw_seed = kaspa_hashes::Hash64::from_bytes([0x7e; 64]);
     if tc.storage.palw_beacon_store.beacon_seed_at(draw_epoch).unwrap().is_none() {
-        tc.storage
-            .palw_beacon_store
-            .set_beacon_seed_batch(&mut batch, draw_epoch, kaspa_hashes::Hash64::from_bytes([0x7e; 64]))
-            .unwrap();
+        tc.storage.palw_beacon_store.set_beacon_seed_batch(&mut batch, draw_epoch, draw_seed).unwrap();
+    }
+    // The seed's fork-relative twin. Written onto the sink's EXISTING row so the recurrence fields
+    // (`seed`, `epoch`, the roots) are untouched: they feed the header overlay commitment, which the
+    // template builder and the validator both read from this same row.
+    if let Some(state) = tc.storage.palw_beacon_store.beacon_state(sink).unwrap() {
+        let mut state = (*state).clone();
+        if !state.closed_seeds.iter().any(|(e, _)| *e == draw_epoch) {
+            state.closed_seeds.push((draw_epoch, draw_seed));
+            tc.storage.palw_beacon_store.set_state_batch(&mut batch, sink, std::sync::Arc::new(state)).unwrap();
+        }
     }
     tc.consensus_clone().db().write(batch).unwrap();
 }
@@ -6927,6 +6957,131 @@ async fn palw_algo4_invalid_ticket_rejected_e2e() {
 /// snapshot, or whose self-serial A-commit is not registered at-or-before its declared epoch does
 /// not mint. Fail-closed in every arm; the untampered construction minting at the end is what makes
 /// each rejection attributable to the mutation, not to the harness.
+/// Static-audit C-01 — the two properties clause 13's fork-relative read depends on, pinned where
+/// they are actually produced.
+///
+/// 1. EVERY active chain block carries a PCPB chain row. The row is written in `commit_utxo_state`,
+///    the same per-chain-block batch as the beacon state row and the accepted overlay view, because
+///    that is the coordinate clause 12 validates at. Writing it at virtual commit instead — over the
+///    whole chain path, once — left every block after the first in a multi-block advance walking
+///    from a selected parent with no row, reading that as the pruning boundary, and falling back to
+///    the shared epoch key. A gap anywhere on this walk is that bug.
+/// 2. The pointer chain from the sink is CONNECTED: following `prev_closer` reaches the origin
+///    without ever landing on a block whose row is missing. A missing row mid-walk is what the
+///    resolver reads as "pruned, consult the buried history", so on a live unpruned chain it must
+///    never happen.
+///
+/// What this does NOT reproduce, stated so nobody reads more into a green run than is there: this
+/// fixture advances one chain block per virtual commit, so both placements satisfy it. The specific
+/// multi-block-advance gap (a reorg or catch-up committing several chain blocks under one
+/// `commit_virtual_state`) is argued structurally — the row must be born where it is read — and
+/// would need a depth-≥2 reorg fixture to exhibit directly.
+#[tokio::test]
+async fn palw_pcpb_chain_rows_cover_every_chain_block_and_connect() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    let (tc, handles, _f) = palw_algo4_env(1).await;
+    let store = &tc.storage.palw_pcpb_store;
+    let genesis = tc.params().genesis.hash;
+
+    let mut block = tc.consensus_clone().get_sink();
+    let mut chain = Vec::new();
+    while block != genesis {
+        assert!(
+            store.chain_state(block).unwrap().is_some(),
+            "chain block {block} has no PCPB chain row — clause 12/13 would read this as the pruning \
+             boundary and fall back to the shared epoch key"
+        );
+        chain.push(block);
+        block = tc.storage.ghostdag_store.get_selected_parent(block).unwrap();
+    }
+    assert!(chain.len() > 1, "the fixture must build a real chain for this to mean anything");
+
+    // Follow the pointer chain from the sink. Every hop must land on a row that exists (an absent
+    // one is the pruning signal) until the chain legitimately ends at its origin.
+    let mut cursor = store.chain_state(chain[0]).unwrap().unwrap().prev_closer;
+    let mut hops = 0;
+    while let Some(block) = cursor {
+        let row = store
+            .chain_state(block)
+            .unwrap()
+            .unwrap_or_else(|| panic!("prev_closer points at {block}, which has no row: the walk would read this as pruned"));
+        assert!(!row.closed_snapshots.is_empty(), "prev_closer must point at a CLOSER, else the walk pays a hop for nothing");
+        cursor = row.prev_closer;
+        hops += 1;
+        assert!(hops <= chain.len(), "the pointer chain must terminate");
+    }
+    tc.shutdown(handles);
+}
+
+/// Static-audit C-01 — clause 13 reads the minting block's OWN chain, not the shared epoch key.
+///
+/// This matters more here than at acceptance, not less. Clause 13 is a BODY rule: its verdict marks
+/// a block `StatusInvalid`, permanently and without re-evaluation. A verdict that depended on which
+/// fork last wrote an epoch row could therefore poison a block on one node and leave it mergeable on
+/// another, with no reorg able to heal it.
+///
+/// The two stores are set to DISAGREE and the block follows the chain row. Then the chain row alone
+/// is cleared, and the same block is refused even though the epoch key still holds the value it
+/// wants — a fall-through to the shared row would have minted it.
+#[tokio::test]
+async fn palw_clause13_reads_the_minting_blocks_own_chain_not_the_epoch_key() {
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_consensus_core::palw::{PalwPcpbChainStateV1, PalwSnapshotCommitment};
+
+    let (tc, handles, f) = palw_algo4_env(1).await;
+    let snapshot_epoch = PALW_TEST_LEAF_ANCHOR_EPOCH - tc.params().palw_snapshot_lag_epochs;
+    let honest = PalwSnapshotCommitment {
+        snapshot_root: PALW_TEST_SNAPSHOT_ROOT,
+        assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
+        total_bond: 1_000,
+        provider_count: 2,
+    };
+
+    // The epoch key holds a SIBLING fork's commitment; this block's own chain holds the honest one.
+    // Pre-fix the epoch key answered and the block was refused on roots it never committed to.
+    stage_palw_pcpb_context(&tc);
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage
+        .palw_pcpb_store
+        .set_snapshot_batch(
+            &mut batch,
+            snapshot_epoch,
+            PalwSnapshotCommitment {
+                snapshot_root: kaspa_hashes::Hash64::from_bytes([0x5a; 64]),
+                assignment_root: kaspa_hashes::Hash64::from_bytes([0x5b; 64]),
+                total_bond: 9_999,
+                provider_count: 7,
+            },
+        )
+        .unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xe1, 0, |_| {});
+    let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
+    assert!(res.is_ok(), "the block's own chain closed this epoch with the roots its leaf committed to, got {res:?}");
+
+    // Now clear only the CHAIN row, leaving the epoch key holding the honest commitment. The walk
+    // reaches this history's origin — `Refused`, not `Buried` — so no fall-through is permitted and
+    // the block is refused. If the epoch key were still consulted here, this would mint.
+    let mut batch = rocksdb::WriteBatch::default();
+    tc.storage.palw_pcpb_store.set_snapshot_batch(&mut batch, snapshot_epoch, honest).unwrap();
+    tc.storage
+        .palw_pcpb_store
+        .set_chain_state_batch(
+            &mut batch,
+            tc.consensus_clone().get_sink(),
+            PalwPcpbChainStateV1 { version: 1, closed_snapshots: Vec::new(), prev_closer: None },
+        )
+        .unwrap();
+    tc.consensus_clone().db().write(batch).unwrap();
+    let mb = mint_algo4(&tc, &f, 0xe2, 0, |_| {});
+    let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
+    assert!(
+        matches!(&res, Err(RuleError::PalwTicketInvalid(m)) if m.contains("clause 13") && m.contains("no retained provider snapshot")),
+        "an epoch this block's own chain never closed must refuse, not resolve from the shared key, got {res:?}"
+    );
+    tc.shutdown(handles);
+}
+
 #[tokio::test]
 async fn palw_pcpb_ticket_binding_enforced() {
     use kaspa_consensus_core::errors::block::RuleError;
@@ -6937,21 +7092,16 @@ async fn palw_pcpb_ticket_binding_enforced() {
     let snapshot_epoch = PALW_TEST_LEAF_ANCHOR_EPOCH - tc.params().palw_snapshot_lag_epochs;
 
     // (a) The on-chain snapshot carries DIFFERENT roots than the leaf committed: equality fails.
-    let mut batch = rocksdb::WriteBatch::default();
-    tc.storage
-        .palw_pcpb_store
-        .set_snapshot_batch(
-            &mut batch,
-            snapshot_epoch,
-            PalwSnapshotCommitment {
-                snapshot_root: kaspa_hashes::Hash64::from_bytes([0x13; 64]),
-                assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
-                total_bond: 1_000,
-                provider_count: 2,
-            },
-        )
-        .unwrap();
-    tc.consensus_clone().db().write(batch).unwrap();
+    // Staged on the fork-relative chain as well as the epoch key, since that is what clause 13 reads.
+    stage_palw_pcpb_snapshot(
+        &tc,
+        PalwSnapshotCommitment {
+            snapshot_root: kaspa_hashes::Hash64::from_bytes([0x13; 64]),
+            assignment_root: PALW_TEST_ASSIGNMENT_ROOT,
+            total_bond: 1_000,
+            provider_count: 2,
+        },
+    );
     let mb = mint_algo4(&tc, &f, 0xd1, 0, |_| {});
     let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;
     assert!(
@@ -6960,9 +7110,19 @@ async fn palw_pcpb_ticket_binding_enforced() {
     );
 
     // (b) No retained snapshot at anchor − k at all: fail-closed, never resolved against a
-    // substituted live value.
+    // substituted live value. BOTH halves have to go — the epoch-keyed row a pruned node would fall
+    // through to, and the fork-relative row (a) left on the sink. Clearing only one would leave the
+    // other answering, which is precisely the property the split exists to give.
     let mut batch = rocksdb::WriteBatch::default();
     tc.storage.palw_pcpb_store.delete_snapshot_batch(&mut batch, snapshot_epoch).unwrap();
+    tc.storage
+        .palw_pcpb_store
+        .set_chain_state_batch(
+            &mut batch,
+            tc.consensus_clone().get_sink(),
+            kaspa_consensus_core::palw::PalwPcpbChainStateV1 { version: 1, closed_snapshots: Vec::new(), prev_closer: None },
+        )
+        .unwrap();
     tc.consensus_clone().db().write(batch).unwrap();
     let mb = mint_algo4(&tc, &f, 0xd2, 0, |_| {});
     let res = tc.validate_and_insert_block(mb.to_immutable()).block_task.await;

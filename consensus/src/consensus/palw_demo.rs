@@ -257,25 +257,55 @@ impl Consensus {
         // silent `NotReady`, not a loud error.
         {
             let mut batch = rocksdb::WriteBatch::default();
+            let snapshot_epoch = PALW_DEMO_LEAF_ANCHOR_EPOCH - self.config.params.palw_snapshot_lag_epochs;
+            let commitment = kaspa_consensus_core::palw::PalwSnapshotCommitment {
+                snapshot_root: PALW_DEMO_SNAPSHOT_ROOT,
+                assignment_root: PALW_DEMO_ASSIGNMENT_ROOT,
+                total_bond: 1_000,
+                provider_count: 2,
+            };
             self.storage
                 .palw_pcpb_store
-                .set_snapshot_batch(
+                .set_snapshot_batch(&mut batch, snapshot_epoch, commitment)
+                .map_err(|e| format!("demo snapshot seed: {e:?}"))?;
+            // Static-audit C-01 — clause 13 resolves the snapshot by walking the minting block's own
+            // chain, so the demo's fabricated anchor epoch has to sit on that chain too. The row goes
+            // on the SINK, which is the minted block's selected parent, so the walk answers at its
+            // first hop. Seeding only the epoch key would leave the walk refusing an epoch this short
+            // devnet chain never closed — a silent `NotReady`, exactly what this block guards against.
+            let sink = self.get_sink();
+            self.storage
+                .palw_pcpb_store
+                .set_chain_state_batch(
                     &mut batch,
-                    PALW_DEMO_LEAF_ANCHOR_EPOCH - self.config.params.palw_snapshot_lag_epochs,
-                    kaspa_consensus_core::palw::PalwSnapshotCommitment {
-                        snapshot_root: PALW_DEMO_SNAPSHOT_ROOT,
-                        assignment_root: PALW_DEMO_ASSIGNMENT_ROOT,
-                        total_bond: 1_000,
-                        provider_count: 2,
+                    sink,
+                    kaspa_consensus_core::palw::PalwPcpbChainStateV1 {
+                        version: 1,
+                        closed_snapshots: vec![(snapshot_epoch, commitment)],
+                        prev_closer: None,
                     },
                 )
-                .map_err(|e| format!("demo snapshot seed: {e:?}"))?;
+                .map_err(|e| format!("demo pcpb chain seed: {e:?}"))?;
             let draw_epoch = PALW_DEMO_LEAF_ANCHOR_EPOCH + self.config.params.palw_post_commit_delta_epochs;
+            let draw_seed = Hash64::from_bytes([0x7e; 64]);
             if self.storage.palw_beacon_store.beacon_seed_at(draw_epoch).map_err(|e| format!("demo seed read: {e:?}"))?.is_none() {
                 self.storage
                     .palw_beacon_store
-                    .set_beacon_seed_batch(&mut batch, draw_epoch, Hash64::from_bytes([0x7e; 64]))
+                    .set_beacon_seed_batch(&mut batch, draw_epoch, draw_seed)
                     .map_err(|e| format!("demo beacon seed: {e:?}"))?;
+            }
+            // The seed's fork-relative twin, appended to the sink's EXISTING row: the recurrence
+            // fields feed the header overlay commitment, which the template builder and the validator
+            // both read from this same row, so only `closed_seeds` may move.
+            if let Some(state) = self.storage.palw_beacon_store.beacon_state(sink).map_err(|e| format!("demo state read: {e:?}"))? {
+                let mut state = (*state).clone();
+                if !state.closed_seeds.iter().any(|(e, _)| *e == draw_epoch) {
+                    state.closed_seeds.push((draw_epoch, draw_seed));
+                    self.storage
+                        .palw_beacon_store
+                        .set_state_batch(&mut batch, sink, Arc::new(state))
+                        .map_err(|e| format!("demo beacon chain seed: {e:?}"))?;
+                }
             }
             self.db.write(batch).map_err(|e| format!("demo pcpb seed write: {e:?}"))?;
         }
