@@ -998,6 +998,7 @@ impl From<NetworkId> for Params {
                 Some(20) => COMPUTE_REGISTRY_PALW_PARAMS,
                 // ADR-0045 D3-b: the PCPB dispatch rehearsal net (`pcpb-palw`) — the public PALW testnet.
                 Some(21) => PCPB_PALW_PARAMS,
+                Some(22) => EVM_GENESIS_PALW_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -1970,6 +1971,49 @@ pub const PCPB_PALW_PARAMS: Params = Params {
 /// for longer, and inert is byte-identical to the history already mined. Moving it IN would not be.
 pub const TESTNET_21_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 2_000_000;
 
+/// **testnet-22 (`evm-genesis-palw`) — the 2026-08-02 re-genesis.**
+///
+/// Same shape as testnet-21 with two deliberate differences, both only possible on a fresh ledger:
+///
+///   * `evm_activation_daa_score = 0` — ADR-0020's lane is GENESIS-ACTIVE. testnet-21 fenced it at
+///     6,500,000 because it had mined history that predates the two EVM header commitments; block 0
+///     here already carries them, so there is no flag day and no "pre-fence replay" clause to argue.
+///   * every 2026-08-02 consensus fix is genesis-active (`palw_suture_disqualified_selected_parent`
+///     and `palw_manifest_sponsorship` at 0), because there is no history mined under the pre-fix
+///     rules for them to re-interpret.
+///
+/// The ONE exception is deliberate and is the reason this preset does not simply zero everything:
+/// `palw_leaf_chunk_v3_admission_daa_score` stays in the FUTURE. The 2026-08-02 static audit's
+/// finding C-01 — the PCPB snapshot / A-commit / beacon-seed rows are read from node-global stores
+/// rather than from a view anchored at the candidate block's selected parent, so leaf acceptance can
+/// depend on fork receive order — is still OPEN, and that fence is exactly what keeps it unreachable:
+/// below it no leaf chunk is admitted, so no leaf reaches the PCPB clauses at all. Opening the algo-4
+/// lane at genesis would arm a known consensus-divergence defect on day one. Move this to 0 (or to a
+/// near score) in the same change that lands the fork-relative PCPB view, not before.
+pub const EVM_GENESIS_PALW_PARAMS: Params = Params {
+    net: NetworkId::with_suffix(NetworkType::Testnet, 22),
+    genesis: crate::config::genesis::EVM_GENESIS_PALW_GENESIS,
+    dns_seeders: TESTNET_22_DNS_SEEDERS,
+    dns_params: Some(PCPB_PALW_DNS_PARAMS),
+    // ADR-0020 genesis-active: the whole point of this re-genesis.
+    evm_activation_daa_score: 0,
+    // Static-audit C-01 is open — see the preset doc. This is the only rule not genesis-active.
+    palw_leaf_chunk_v3_admission_daa_score: TESTNET_22_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE,
+    palw_suture_disqualified_selected_parent_daa_score: 0,
+    palw_manifest_sponsorship_daa_score: 0,
+    ..COMPUTE_REGISTRY_PALW_PARAMS
+};
+
+/// testnet-22 seeders. Reuses the testnet-21 hosts: they are the operator's own seeders and serve
+/// whichever net the node behind them runs.
+pub const TESTNET_22_DNS_SEEDERS: &[&str] = &["seeder1.misakascan.com", "seeder3.misakascan.com"];
+
+/// The testnet-22 algo-4 flag day — see [`EVM_GENESIS_PALW_PARAMS`] for why it is not 0.
+///
+/// ~500,000 is roughly a day at the rate testnet-21 sustained. It is a placeholder for "long enough
+/// to land the C-01 fork-relative PCPB view", not a measured value, and moving it OUT is always safe.
+pub const TESTNET_22_LEAF_CHUNK_V3_ADMISSION_DAA_SCORE: u64 = 500_000;
+
 /// testnet-21 DNS params: the compute-registry shape plus **proposal ③** — anchor confirmation
 /// additionally requires the anchor's own epoch to be attested (dead-branch confirm eradication;
 /// the 2026-08-01 bystander-wedge report's root fix). Genesis-effective on this net: the flag
@@ -2668,7 +2712,7 @@ mod palw_network_tests {
         // assertion below. A safety preflight that a new public network can be added without
         // passing is not a preflight. The list is canonical now: every shipped preset appears, and
         // the `activated` pin at the bottom is what forces a future addition through this test.
-        let presets: [(&str, Params); 9] = [
+        let presets: [(&str, Params); 10] = [
             ("mainnet", MAINNET_PARAMS),
             ("testnet-10", TESTNET_PARAMS),
             ("testnet-palw-110", TESTNET_PALW_PARAMS),
@@ -2678,6 +2722,7 @@ mod palw_network_tests {
             ("staging-mainnet-palw", STAGING_MAINNET_PALW_PARAMS),
             ("compute-registry-palw", COMPUTE_REGISTRY_PALW_PARAMS),
             ("pcpb-palw", PCPB_PALW_PARAMS),
+            ("evm-genesis-palw", EVM_GENESIS_PALW_PARAMS),
         ];
         for (name, p) in presets.iter() {
             // Acceptance is no longer withheld everywhere — ADR-0040 P0-3 is released on the PALW
@@ -2726,7 +2771,14 @@ mod palw_network_tests {
         let activated: Vec<&str> = presets.iter().filter(|(_, p)| p.palw_activation_daa_score != u64::MAX).map(|(n, _)| *n).collect();
         assert_eq!(
             activated,
-            vec!["testnet-palw-110", "devnet-palw-111", "staging-mainnet-palw", "compute-registry-palw", "pcpb-palw"]
+            vec![
+                "testnet-palw-110",
+                "devnet-palw-111",
+                "staging-mainnet-palw",
+                "compute-registry-palw",
+                "pcpb-palw",
+                "evm-genesis-palw"
+            ]
         );
 
         // Static-audit finding M-03, second half: the two bug report #6 fences are consensus
@@ -2739,15 +2791,22 @@ mod palw_network_tests {
             // The suture relaxation and the v3 admission share testnet-21's flag day by design;
             // anywhere else they must agree with each other too, or an operator reading one number
             // would draw the wrong conclusion about the other.
+            // The suture relaxation and the H-01 sponsorship rule are the two whose pre-fence
+            // behaviour is byte-identical to the binaries that mined a net's history, so on any net
+            // with such history they must move together. (On a fresh preset both are 0 and this holds
+            // trivially.)
             assert_eq!(
-                p.palw_leaf_chunk_v3_admission_daa_score, p.palw_suture_disqualified_selected_parent_daa_score,
-                "{name}: the two bug report #6 fences must share a flag day"
+                p.palw_suture_disqualified_selected_parent_daa_score, p.palw_manifest_sponsorship_daa_score,
+                "{name}: the suture and sponsorship fences must share a flag day"
             );
-            // Static-audit finding H-01 rides the same flag day, for the same reason: one score is
-            // one upgrade window and one number an operator has to check.
-            assert_eq!(
-                p.palw_manifest_sponsorship_daa_score, p.palw_leaf_chunk_v3_admission_daa_score,
-                "{name}: the H-01 sponsorship fence must share the bug report #6 flag day"
+            // The leaf-chunk fence is NOT required to match them: on testnet-22 it is deliberately
+            // held in the future while everything else is genesis-active, because static-audit
+            // finding C-01 is open and this fence is what keeps the PCPB clauses unreachable. It may
+            // only be EQUAL to or LATER than the others — never earlier, which would open the algo-4
+            // lane before the rules that guard it.
+            assert!(
+                p.palw_leaf_chunk_v3_admission_daa_score >= p.palw_manifest_sponsorship_daa_score,
+                "{name}: algo-4 leaf chunks must not be admitted before the sponsorship rule is armed"
             );
             // A sponsorship rule with no quota does not close H-01 — one bond would fill the whole
             // view as cheaply as one slot. On an ACTIVATED preset the two must be armed together.
@@ -2763,9 +2822,10 @@ mod palw_network_tests {
             presets.iter().filter(|(_, p)| p.palw_leaf_chunk_v3_admission_daa_score != 0).map(|(n, _)| *n).collect();
         assert_eq!(
             fenced,
-            vec!["pcpb-palw"],
-            "only testnet-21 carries a FUTURE bug report #6 flag day; every other preset opens the rules from genesis \
-             because none of them has mined history produced under the pre-fix binaries"
+            vec!["pcpb-palw", "evm-genesis-palw"],
+            "testnet-21 fences the algo-4 lane because it has pre-fix mined history; testnet-22 fences it because \
+             static-audit C-01 is still open. Every other preset opens it from genesis. If this list shrinks, say \
+             WHICH of those two reasons stopped applying."
         );
 
         // REJECT: an activated preset whose cap has been zeroed by a params edit must fail the

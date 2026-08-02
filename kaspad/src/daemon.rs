@@ -693,7 +693,9 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // the in-process daemons the RPC / stratum-bridge integration tests spin up do exactly that,
     // and they are how this over-broad first cut was caught.
     //
-    // testnet-21 (fence 6,500,000) is the only net this fires on today.
+    // testnet-21 (fence 6,500,000) is the only net the REFUSE arm fires on today. testnet-22 is
+    // genesis-active (fence 0), so a default build there takes the WARN arm and dies on its first
+    // chain block — immediate and unmistakable, which is the whole distinction above.
     let evm_fence = config.params.evm_activation_daa_score;
     match non_evm_build_gate(evm_fence, cfg!(feature = "evm")) {
         EvmBuildGate::Ok => {}

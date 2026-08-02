@@ -782,9 +782,11 @@ fn validate_lifecycle(manifest: &PalwBatchManifestV1, lifecycle: &PalwBatchLifec
             return Err("facts lifecycle chunk bitmap is not exactly complete for the manifest".into());
         }
     }
+    // The sponsor tag is NOT part of this check: static-audit finding H-01 repurposed the two inert
+    // CERT-TRUST u64s to carry it, so past the sponsorship fence a perfectly fresh auditable round
+    // legitimately has a non-zero tag. What must still be absent is real certificate/revocation
+    // state, which is what the remaining fields say.
     if lifecycle.cert_hash.is_some()
-        || lifecycle.cert_activation_epoch != 0
-        || lifecycle.cert_expiry_epoch != 0
         || lifecycle.cert_approving_stake != 0
         || lifecycle.first_cert_daa.is_some()
         || lifecycle.revoked_from_daa.is_some()
@@ -1228,8 +1230,8 @@ mod tests {
             chunks_present,
             leaf_root: manifest.leaf_root,
             cert_hash: None,
-            cert_activation_epoch: 0,
-            cert_expiry_epoch: 0,
+            sponsor_tag_hi: 0,
+            sponsor_tag_lo: 0,
             cert_approving_stake: 0,
             first_cert_daa: None,
             revoked_from_daa: None,

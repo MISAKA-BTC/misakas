@@ -126,12 +126,20 @@ enum PalwArtifactNetwork {
     /// re-genesis); kept so an operator holding its ledger can still build artifacts.
     #[value(name = "testnet-20")]
     Testnet20,
-    /// ADR-0045 D3-b `pcpb-palw` — the CURRENT public PALW testnet (`PCPB_PALW_PARAMS`, testnet
+    /// ADR-0045 D3-b `pcpb-palw` — testnet suffix 21. DEPRECATED 2026-08-02: superseded as the
+    /// public net by `testnet-22` (EVM genesis-active re-genesis); kept so an operator holding its
+    /// ledger can still build artifacts. Originally documented as (`PCPB_PALW_PARAMS`, testnet
     /// suffix 21): the compute-registry shape with LeafV2 + PCPB clauses live from a v5 genesis.
     /// Omitting it is not cosmetic — without this variant an operator cannot build a provider
     /// bond for the only network that is publicly running.
     #[value(name = "testnet-21")]
     Testnet21,
+    /// **testnet-22 (`evm-genesis-palw`) — the CURRENT public PALW testnet** after the 2026-08-02
+    /// re-genesis: the testnet-21 shape with ADR-0020's EVM lane active from GENESIS and every
+    /// 2026-08-02 consensus fix genesis-active. Omitting it would leave an operator unable to build
+    /// artifacts for the only network being seeded.
+    #[value(name = "testnet-22")]
+    Testnet22,
 }
 
 impl PalwArtifactNetwork {
@@ -142,6 +150,7 @@ impl PalwArtifactNetwork {
             Self::Testnet200 => NetworkId::with_suffix(NetworkType::Testnet, 200),
             Self::Testnet20 => NetworkId::with_suffix(NetworkType::Testnet, 20),
             Self::Testnet21 => NetworkId::with_suffix(NetworkType::Testnet, 21),
+            Self::Testnet22 => NetworkId::with_suffix(NetworkType::Testnet, 22),
         }
     }
 }
@@ -390,7 +399,8 @@ mod tests {
     #[test]
     fn artifact_networks_resolve_to_their_own_shipped_presets() {
         use kaspa_consensus_core::config::params::{
-            COMPUTE_REGISTRY_PALW_PARAMS, DEVNET_PALW_PARAMS, PCPB_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS, TESTNET_PALW_PARAMS,
+            COMPUTE_REGISTRY_PALW_PARAMS, DEVNET_PALW_PARAMS, EVM_GENESIS_PALW_PARAMS, PCPB_PALW_PARAMS, STAGING_MAINNET_PALW_PARAMS,
+            TESTNET_PALW_PARAMS,
         };
 
         assert_eq!(PalwArtifactNetwork::Testnet110.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 110));
@@ -398,6 +408,7 @@ mod tests {
         assert_eq!(PalwArtifactNetwork::Testnet200.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 200));
         assert_eq!(PalwArtifactNetwork::Testnet20.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 20));
         assert_eq!(PalwArtifactNetwork::Testnet21.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 21));
+        assert_eq!(PalwArtifactNetwork::Testnet22.network_id(), NetworkId::with_suffix(NetworkType::Testnet, 22));
 
         for (network, preset, name) in [
             (PalwArtifactNetwork::Testnet110, TESTNET_PALW_PARAMS, "testnet-110"),
@@ -405,6 +416,7 @@ mod tests {
             (PalwArtifactNetwork::Testnet200, STAGING_MAINNET_PALW_PARAMS, "testnet-200"),
             (PalwArtifactNetwork::Testnet20, COMPUTE_REGISTRY_PALW_PARAMS, "testnet-20"),
             (PalwArtifactNetwork::Testnet21, PCPB_PALW_PARAMS, "testnet-21"),
+            (PalwArtifactNetwork::Testnet22, EVM_GENESIS_PALW_PARAMS, "testnet-22"),
         ] {
             assert_eq!(network.network_id().to_string(), name, "the clap value name must be the network id operators type");
             let resolved = Params::from(network.network_id());

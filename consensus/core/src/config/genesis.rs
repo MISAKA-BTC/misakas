@@ -445,6 +445,55 @@ pub const PCPB_PALW_GENESIS: GenesisBlock = GenesisBlock {
     ..TESTNET_GENESIS
 };
 
+/// **testnet-22 (`evm-genesis-palw`) — the 2026-08-02 re-genesis.**
+///
+/// Same Header-v5 compute-registry shape as testnet-21, re-cut for two reasons that could not be
+/// applied to a live ledger:
+///
+///   * **EVM is genesis-active here.** testnet-21 activates ADR-0020's lane mid-chain at DAA
+///     6,500,000, which is the harder configuration and was the right call for a ledger that already
+///     had history. A fresh net does not need the fence: `evm_activation_daa_score = 0` means every
+///     block from block 0 carries the two EVM header commitments and the lane is exercised from the
+///     first transaction, which is what a testnet is for.
+///   * **Every 2026-08-02 consensus fix is genesis-active**, so nothing on this net is "the old rule
+///     until DAA N". testnet-21 had to fence the bug report #6 and static-audit fixes because it had
+///     mined history produced under the pre-fix binaries; testnet-22 has none.
+///
+/// Distinct coinbase payload ("misaka-t22-evm-palw") ⇒ distinct genesis hash from every other net, so
+/// a stale datadir cannot be mistaken for this one. hash/hash_merkle_root computed by
+/// `gen_kaspa_pq_genesis_hashes`.
+pub const EVM_GENESIS_PALW_GENESIS: GenesisBlock = GenesisBlock {
+    hash: Hash64::from_bytes([
+        0x60, 0x5f, 0x9d, 0xe9, 0xc7, 0xc8, 0x32, 0x6d, 0xf0, 0x34, 0x37, 0x20, 0x1f, 0xed, 0xdb, 0x6f, 0x8e, 0x1b, 0xed, 0x31, 0x42,
+        0xe7, 0x90, 0x78, 0xe5, 0x06, 0xb2, 0x07, 0xa0, 0x51, 0xd2, 0x7b, 0x66, 0x4a, 0xfd, 0x30, 0x4e, 0x7c, 0x2f, 0x37, 0xe6, 0x5a,
+        0x7d, 0x5a, 0xbd, 0x4f, 0x90, 0xf5, 0x3f, 0x5f, 0xe8, 0xcd, 0xef, 0x99, 0x9a, 0xc5, 0xb1, 0xd3, 0xca, 0xf0, 0x39, 0x9e, 0x62,
+        0xdb,
+    ]),
+    hash_merkle_root: Hash64::from_bytes([
+        0xfe, 0xaf, 0x8b, 0xcd, 0xc4, 0x9c, 0x5b, 0x1b, 0x07, 0x8d, 0x9c, 0x30, 0xb9, 0x65, 0x86, 0x32, 0x70, 0x22, 0xf8, 0x51, 0x4d,
+        0x27, 0xbf, 0xf3, 0x99, 0x9d, 0xdc, 0x38, 0x10, 0x66, 0xa2, 0x86, 0x7b, 0xb1, 0x9e, 0xd0, 0x8d, 0xb7, 0x60, 0xb0, 0xcc, 0x05,
+        0x10, 0xcd, 0xca, 0x30, 0xcc, 0x91, 0x6c, 0x66, 0x6d, 0x6f, 0xad, 0xed, 0x9d, 0xd0, 0x04, 0xb1, 0xce, 0x56, 0xe7, 0xf2, 0xe9,
+        0x45,
+    ]),
+    version: crate::constants::PALW_COMPUTE_SET_HEADER_VERSION,
+    // 2026-08-02 00:00:00 UTC. Must be in the PAST at launch — a future genesis makes the network
+    // unminable until it passes (the staging lesson, learned the expensive way).
+    timestamp: 1785628800000,
+    #[rustfmt::skip]
+    coinbase_payload: &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Blue score
+        0x00, 0xE1, 0xF5, 0x05, 0x00, 0x00, 0x00, 0x00, // Subsidy
+        0x00, 0x00, // Script version
+        0x01,       // Varint
+        0x00,       // OP-FALSE
+        // "misaka-t22-evm-palw"
+        0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x74, 0x32, 0x32, 0x2d, 0x65, 0x76, 0x6d, 0x2d, 0x70, 0x61, 0x6c, 0x77,
+    ],
+    // Max-easy real-PoW fast start; the DAA ramps to the live rate.
+    bits: 0x207fffff,
+    ..TESTNET_GENESIS
+};
+
 /// ADR-0039 P0 — genesis for the single-node PALW-active devnet (`devnet-palw`, `--devnet --netsuffix=111`).
 /// Carries `bits == DEVNET_PALW_GENESIS_BITS` (0x207fffff, max-easy) so §16.3's
 /// `is_consistent_for_activation` holds and Layer-0 PoW grinds instantly. Distinct coinbase payload
@@ -576,6 +625,7 @@ mod tests {
             STAGING_PALW_GENESIS,
             COMPUTE_REGISTRY_PALW_GENESIS,
             PCPB_PALW_GENESIS,
+            EVM_GENESIS_PALW_GENESIS,
             SIMNET_GENESIS,
             DEVNET_GENESIS,
         ]
@@ -623,6 +673,7 @@ mod tests {
             ("STAGING_PALW_GENESIS", &STAGING_PALW_GENESIS),
             ("COMPUTE_REGISTRY_PALW_GENESIS", &COMPUTE_REGISTRY_PALW_GENESIS),
             ("PCPB_PALW_GENESIS", &PCPB_PALW_GENESIS),
+            ("EVM_GENESIS_PALW_GENESIS", &EVM_GENESIS_PALW_GENESIS),
             ("SIMNET_GENESIS", &SIMNET_GENESIS),
             ("DEVNET_GENESIS", &DEVNET_GENESIS),
             ("DEVNET_PALW_GENESIS", &DEVNET_PALW_GENESIS),
