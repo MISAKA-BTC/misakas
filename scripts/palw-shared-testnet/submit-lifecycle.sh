@@ -384,37 +384,82 @@ _write_leaf_verdicts() {
         || die "failed to write leaf verdicts to $out."
 }
 
+# _audit_seed_for <outpoint> — the owner seed of a committee representative, or
+# empty. Same key sources as create-lifecycle's bond table: the configured
+# identities plus the capacity-provider key dir.
+_audit_seed_for() {
+    local want="$1" f base
+    [ "$want" = "$(state_get PROV_A_BOND)" ] && { printf '%s' "${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"; return 0; }
+    [ "$want" = "$(state_get PROV_B_BOND)" ] && { printf '%s' "${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"; return 0; }
+    [ "$want" = "$(state_get AUD_C_BOND)" ] && { printf '%s' "$AUDITOR_KEY"; return 0; }
+    if [ -n "${PALW_EXTRA_PROVIDER_KEYDIR:-}" ] && [ -d "$PALW_EXTRA_PROVIDER_KEYDIR" ]; then
+        for f in "$PALW_EXTRA_PROVIDER_KEYDIR"/*.bond.outpoint; do
+            [ -s "$f" ] || continue
+            if [ "$(cat "$f")" = "$want" ]; then
+                base="${f%.bond.outpoint}"
+                [ -s "$base" ] && { printf '%s' "$base"; return 0; }
+            fi
+        done
+    fi
+    return 1
+}
+
+# The audit certificate needs a 2/3 STAKE quorum over the beacon-selected
+# committee, and the committee is drawn from EVERY bonded provider — one
+# configured auditor cannot carry it. Sign one vote per committee member whose
+# owner seed this harness holds; each vote runs the same leaf-verdicts round.
 gen_vote() {
-    local tmp="$_SL_STAGING/vote.borsh" verdicts="$_SL_STAGING/leaf-verdicts.json"
-    [ -f "$VOTE_FILE" ] && warn "overwriting existing $(basename "$VOTE_FILE") (regenerating auditor-c vote for batch $BID8)"
+    local verdicts="$_SL_STAGING/leaf-verdicts.json" slate member seed tmp n=0
     _write_leaf_verdicts "$verdicts"
-    log "audit-vote: auditor-c (bond $AUD_C_BOND) leaf-verdicts=all-reproduced passed-leaf-count=$LEAFN rejected-root=empty -> $(basename "$VOTE_FILE")"
-    "$VAL" palw-payload audit-vote \
-        --network "$NETWORK" \
-        --node-wrpc-borsh "$(node_wrpc a)" \
-        --facts-file "$FACTS_FILE" \
-        --validator-key "$AUDITOR_KEY" \
-        --auditor-bond "$AUD_C_BOND" \
-        --leaf-verdicts "$verdicts" \
-        --passed-leaf-count "$LEAFN" \
-        --rejected-leaf-bitmap-root "$REJECTED_ROOT" \
-        --out "$tmp" \
-        || die "'palw-payload audit-vote' failed — header-v4 admits ALL-PASS only (passed-leaf-count must equal the batch leaf_count=$LEAFN, rejected root must be empty/zero). Verify AUD_C_BOND is in the beacon-selected representative slate and the verdicts cover the whole sample. Inspect node A."
-    [ -s "$tmp" ] || die "audit-vote produced an empty file ($tmp)."
-    mv -f "$tmp" "$VOTE_FILE" || die "failed to finalize $VOTE_FILE."
+    slate="$(python3 -c "
+import json,sys
+f=json.load(open(sys.argv[1]))
+for m in f['facts']['selection']['selected_credential_stakes']:
+    r=m['representative']
+    print('%s:%s' % (r['transactionId'], r['index']))
+" "$FACTS_FILE")" || die "cannot read the representative slate from $FACTS_FILE."
+    [ -n "$slate" ] || die "the audit facts name an empty representative slate."
+    rm -f "$LIFECYCLE_DIR"/vote-*.borsh
+    VOTE_FILES=""
+    for member in $slate; do
+        if ! seed="$(_audit_seed_for "$member")"; then
+            warn "committee member $member has no local owner seed — skipping its vote (quorum needs 2/3 of committee stake)."
+            continue
+        fi
+        tmp="$_SL_STAGING/vote-$n.borsh"
+        log "audit-vote $n: representative $member leaf-verdicts=all-reproduced passed-leaf-count=$LEAFN"
+        "$VAL" palw-payload audit-vote \
+            --network "$NETWORK" \
+            --node-wrpc-borsh "$(node_wrpc a)" \
+            --facts-file "$FACTS_FILE" \
+            --validator-key "$seed" \
+            --auditor-bond "$member" \
+            --leaf-verdicts "$verdicts" \
+            --passed-leaf-count "$LEAFN" \
+            --rejected-leaf-bitmap-root "$REJECTED_ROOT" \
+            --out "$tmp" \
+            || die "'palw-payload audit-vote' failed for representative $member (see above)."
+        [ -s "$tmp" ] || die "audit-vote produced an empty file for $member."
+        mv -f "$tmp" "$LIFECYCLE_DIR/vote-$n.borsh" || die "failed to finalize vote-$n.borsh."
+        VOTE_FILES="$VOTE_FILES $LIFECYCLE_DIR/vote-$n.borsh"
+        n=$(( n + 1 ))
+    done
+    [ "$n" -ge 1 ] || die "no committee member's owner seed is held locally — cannot form any audit vote."
+    log "signed $n/$(printf '%s\n' "$slate" | wc -l | tr -d ' ') committee votes."
 }
 
 gen_cert() {
-    local tmp="$_SL_STAGING/cert.borsh"
+    local tmp="$_SL_STAGING/cert.borsh" vf args=""
     [ -f "$CERT_FILE" ] && warn "overwriting existing $(basename "$CERT_FILE") (regenerating certificate for batch $BID8)"
-    log "certificate: aggregating facts + auditor-c vote -> $(basename "$CERT_FILE")"
+    for vf in $VOTE_FILES; do args="$args --vote-file $vf"; done
+    log "certificate: aggregating facts + committee votes -> $(basename "$CERT_FILE")"
     "$VAL" palw-payload certificate \
         --network "$NETWORK" \
         --node-rpc "$(node_wrpc a)" \
         --facts-file "$FACTS_FILE" \
-        --vote-file "$VOTE_FILE" \
+        $args \
         --out "$tmp" \
-        || die "'palw-payload certificate' failed — verify $FACTS_FILE and $VOTE_FILE are consistent (same batch, all-pass quorum). Inspect node A."
+        || die "'palw-payload certificate' failed — verify $FACTS_FILE and the votes are consistent (same batch, 2/3 stake quorum of the committee). Inspect node A."
     [ -s "$tmp" ] || die "certificate produced an empty file ($tmp)."
     mv -f "$tmp" "$CERT_FILE" || die "failed to finalize $CERT_FILE."
 }
