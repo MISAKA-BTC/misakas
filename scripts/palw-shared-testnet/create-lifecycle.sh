@@ -755,6 +755,14 @@ do_create() {
     case "$RSPK_A" in 0000*) : ;; *) die "could not derive a reward SPK for seat A from $PROV_A_KEY_F." ;; esac
     case "$RSPK_B" in 0000*) : ;; *) die "could not derive a reward SPK for seat B from $PROV_B_KEY_F." ;; esac
     [ "$RSPK_A" != "$RSPK_B" ] || die "both seats derived the same reward script — consensus pays provider_bond_lock_spk of each bond's own owner, so this would misroute the payout."
+    # Batch-scoped seat record. submit-lifecycle signs each da-response with the
+    # CHALLENGED provider's owner key, and the challenged provider is whichever
+    # bond the draw seated — not the configured PROV_A/PROV_B identities, which
+    # stay untouched for the other stages that key off them.
+    state_set PALW_SEAT_A_BOND "$PROV_A_BOND"
+    state_set PALW_SEAT_A_KEY  "$PROV_A_KEY_F"
+    state_set PALW_SEAT_B_BOND "$PROV_B_BOND"
+    state_set PALW_SEAT_B_KEY  "$PROV_B_KEY_F"
     log "seat A: bond=$PROV_A_BOND reward_spk=$RSPK_A"
     log "seat B: bond=$PROV_B_BOND reward_spk=$RSPK_B"
 

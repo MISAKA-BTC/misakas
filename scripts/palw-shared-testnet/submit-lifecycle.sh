@@ -221,6 +221,10 @@ _add_exclude "$(state_get DNS_BOND)"
 _add_exclude "$(state_get PROV_A_BOND)"
 _add_exclude "$(state_get PROV_B_BOND)"
 _add_exclude "$(state_get AUD_C_BOND)"
+# D3-b drawn seats: whichever bonds the beacon seated for THIS batch are locked
+# provider bonds too (ECON-03 leg 4 skips any carrier spending one at acceptance).
+_add_exclude "$(state_get PALW_SEAT_A_BOND)"
+_add_exclude "$(state_get PALW_SEAT_B_BOND)"
 # RETIRED bonds are NOT in state.env but are still permanently unspendable: a
 # slashed (or lapsed) provider bond's locked output-0 is plain P2PKH at the SAME
 # funding address, so `balance` counts it and funding selection will pick it —
@@ -467,11 +471,25 @@ _da_object_file() {
 }
 
 # The da-response is signed by the CHALLENGED provider's OWNER key (FILE, never a value).
+#
+# ADR-0045 D3-b: the leaf's providers are the seats the beacon DREW, recorded by
+# create-lifecycle as PALW_SEAT_{A,B}_{BOND,KEY}. The configured PROV_A/PROV_B
+# arms stay as a fallback for pre-D3-b bundles whose state has no seat record.
 _responder_seed() {
-    local bond="${1:?provider_bond}"
-    if   [ "$bond" = "$PROV_A_BOND" ]; then printf '%s\n' "${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
+    local bond="${1:?provider_bond}" seat_a_bond seat_b_bond seat_key
+    seat_a_bond="$(state_get PALW_SEAT_A_BOND)"
+    seat_b_bond="$(state_get PALW_SEAT_B_BOND)"
+    if [ -n "$seat_a_bond" ] && [ "$bond" = "$seat_a_bond" ]; then
+        seat_key="$(state_get PALW_SEAT_A_KEY)"
+        [ -s "$seat_key" ] || die "seat A owner seed recorded as '$seat_key' is missing — re-run create-lifecycle."
+        printf '%s\n' "$seat_key"
+    elif [ -n "$seat_b_bond" ] && [ "$bond" = "$seat_b_bond" ]; then
+        seat_key="$(state_get PALW_SEAT_B_KEY)"
+        [ -s "$seat_key" ] || die "seat B owner seed recorded as '$seat_key' is missing — re-run create-lifecycle."
+        printf '%s\n' "$seat_key"
+    elif [ "$bond" = "$PROV_A_BOND" ]; then printf '%s\n' "${PROV_A_KEY:-$PALW_DATA_ROOT/keys/provider-a.seed}"
     elif [ "$bond" = "$PROV_B_BOND" ]; then printf '%s\n' "${PROV_B_KEY:-$PALW_DATA_ROOT/keys/provider-b.seed}"
-    else die "obligation names provider_bond=$bond, neither PROV_A_BOND nor PROV_B_BOND — cannot pick the challenged provider owner seed to sign the da-response."
+    else die "obligation names provider_bond=$bond, none of PALW_SEAT_A_BOND/PALW_SEAT_B_BOND/PROV_A_BOND/PROV_B_BOND — cannot pick the challenged provider owner seed to sign the da-response."
     fi
 }
 
