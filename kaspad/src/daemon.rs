@@ -981,7 +981,15 @@ do you confirm? (answer y/n or pass --yes to the Kaspad command line to confirm 
         // and the A-commit registry that clauses 12/13 resolve against, and the pruning payload
         // gains both carries. A v15 history has neither the wider leaf rows nor the PCPB context,
         // so every algo-4 leaf would fail closed. Hard reset per ADR-0001.
-        if version <= 15 {
+        //
+        // Static-audit C-01 raises 16 -> 18 and this reset bound 15 -> 17, in two steps that must be
+        // covered as one range because a datadir may sit at either. v17: `PalwBeaconStateV1` gains
+        // `closed_seeds` + `prev_closer`, a positional Borsh break on a row every active chain block
+        // carries. v18: prefix 71 adds the block-keyed provider-snapshot chain that clause 12 walks —
+        // and unlike a decode break, a v17 history would decode FINE and simply have no chain rows,
+        // so every walk would conclude "buried" and fall back to the shared epoch key. That is the
+        // pre-fix behaviour restored silently, which is exactly what a hard reset exists to prevent.
+        if version <= 17 {
             is_db_reset_needed = request_database_deletion_approval(args.yes);
             continue 'db_upgrade;
         }

@@ -101,6 +101,16 @@ pub enum DatabaseStorePrefixes {
     /// pruning snapshot: a pruned joiner must still VERIFY pruned-epoch leaves (it has prefix 68
     /// for that) but is under no obligation to help PRODUCE for epochs it never saw.
     PalwProviderSnapshotEntries = 70,
+    /// Keyed by `BlockHash`: the chain block's `PalwPcpbChainStateV1` — the epochs THAT BLOCK closed
+    /// a provider snapshot for, plus the pointer to the nearest ancestor that closed one.
+    ///
+    /// Static-audit finding C-01. Prefix 68 is keyed by epoch and idempotent-by-VALUE, so two forks
+    /// that both close epoch `e` write different commitments under one key and whichever committed
+    /// last answers for every reader — including clause 12 validating a block on the other fork.
+    /// Clause 12 walks THIS chain from the candidate's selected parent instead, and reaches prefix 68
+    /// only once the walk runs off the retained rows, i.e. below the pruning point where the value is
+    /// final. Deleted per block by the pruning pass, exactly like the beacon state rows (prefix 243).
+    PalwPcpbChainState = 71,
 
     // ---- Metadata ----
     MultiConsensusMetadata = 124,

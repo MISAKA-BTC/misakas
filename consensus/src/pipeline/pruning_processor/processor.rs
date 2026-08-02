@@ -936,6 +936,11 @@ impl PruningProcessor {
                 // the immediate selected parent, so pruning deep blocks never breaks it.
                 self.palw_beacon_store.delete_state_batch(&mut batch, current).unwrap();
                 self.palw_beacon_store.delete_accum_view_batch(&mut batch, current).unwrap();
+                // Static-audit C-01 — the PCPB fork-relative snapshot chain mirrors the beacon state
+                // rows exactly, including their lifetime. Deleting it here is what MAKES the buried
+                // fallback correct: a walk that reaches a deleted row concludes "below the pruning
+                // point" and consults the epoch-keyed history, which for that territory is final.
+                self.palw_pcpb_store.delete_chain_state_batch(&mut batch, current).unwrap();
                 // kaspa-pq ADR-0039 PALW (§16.3): prune the per-block carried lane-difficulty bits.
                 // Block-keyed, depth-1 recurrence (only the immediate selected parent's bits are read
                 // as the HOLD source), so pruning deep blocks never breaks it. No-op while inert.

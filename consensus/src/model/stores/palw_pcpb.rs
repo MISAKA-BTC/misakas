@@ -16,16 +16,32 @@
 //! that equality, which is why the row's epoch is the ACCEPTING block's consensus-derived epoch and
 //! never a declared field.
 //!
-//! Both stores are bounded: swept by the pruning/writer pass at the snapshot-history window
-//! (`palw_provider_snapshot_history_window_epochs` — the beacon window + the snapshot lag `k`).
-//! Reads outside the retained window return `None` and every PCPB caller treats `None` as REJECT
-//! (fail-closed) — substituting a live value for an unresolvable epoch is precisely the grindable
-//! state D3-b forbids.
+//! **Fork-relative snapshot chain** (`block → PalwPcpbChainStateV1`, prefix 71): static-audit
+//! finding C-01. The epoch-keyed history above is idempotent-by-VALUE — its own contract says the
+//! value is "a function of the chain that first closed this epoch" — so two forks that both close
+//! epoch `e` write DIFFERENT commitments under one key and whichever committed last answers for
+//! every reader, including clause 12 validating a block on the other fork. That made leaf acceptance
+//! depend on fork receive order. Clause 12 now walks this block-keyed chain back from the CANDIDATE's
+//! selected parent, so the answer is a function of the candidate's own past.
+//!
+//! The epoch-keyed history keeps its job as the BURIED half: the walk falls through to it only after
+//! running off the retained block rows (pruning deleted them), i.e. for epochs below the pruning
+//! point, where the value is final on every honest node and no fork can differ. That is also what
+//! keeps the pruning-snapshot carry meaningful — a joiner answers pruned-epoch leaves from the
+//! carried rows, and everything above its boundary from the chain it built itself.
+//!
+//! All three epoch/anchor-keyed stores are bounded: swept by the pruning/writer pass at the
+//! snapshot-history window (`palw_provider_snapshot_history_window_epochs` — the beacon window + the
+//! snapshot lag `k`); the block-keyed chain is deleted per block by the pruning pass, like the beacon
+//! state rows it mirrors. Reads outside the retained window return `None` and every PCPB caller
+//! treats `None` as REJECT (fail-closed) — substituting a live value for an unresolvable epoch is
+//! precisely the grindable state D3-b forbids.
 
 use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_consensus_core::palw::{PalwProviderSnapshotEntry, PalwSnapshotCommitment};
+use kaspa_consensus_core::palw::{PalwPcpbChainStateV1, PalwProviderSnapshotEntry, PalwSnapshotCommitment};
+use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, StoreError};
@@ -63,7 +79,8 @@ impl From<Hash64> for PalwACommitKey {
     }
 }
 
-/// The two PCPB context column families. Direct (non-block-keyed) rows, selected-chain reconciled.
+/// The PCPB context column families: three selected-chain-reconciled rows keyed by epoch/anchor,
+/// plus the block-keyed fork-relative snapshot chain (prefix 71).
 #[derive(Clone)]
 pub struct DbPalwPcpbStore {
     snapshot_history: CachedDbAccess<U64Key, Arc<PalwSnapshotCommitment>>,
@@ -72,6 +89,8 @@ pub struct DbPalwPcpbStore {
     /// epoch, never verification.
     snapshot_entries: CachedDbAccess<U64Key, Arc<PalwProviderSnapshotEntries>>,
     acommit: CachedDbAccess<PalwACommitKey, Arc<u64>>,
+    /// Static-audit finding C-01 — the fork-relative snapshot history, keyed by chain block.
+    chain: CachedDbAccess<BlockHash, Arc<PalwPcpbChainStateV1>, BlockHasher>,
 }
 
 /// Newtype so the entry vector can carry the `MemSizeEstimator` the cached store requires.
@@ -85,16 +104,44 @@ impl DbPalwPcpbStore {
         Self {
             snapshot_history: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotHistory.into()),
             snapshot_entries: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwProviderSnapshotEntries.into()),
-            acommit: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwACommitRegistry.into()),
+            acommit: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::PalwACommitRegistry.into()),
+            chain: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::PalwPcpbChainState.into()),
         }
     }
 
-    // ---- per-epoch provider snapshot history ----
+    // ---- fork-relative snapshot chain (static-audit C-01) ----
+
+    /// `block`'s row in the fork-relative provider-snapshot history, or `None` when the block has
+    /// none — which the walk reads as "this history is truncated here by pruning", never as "the
+    /// epoch was never closed". See [`kaspa_consensus_core::palw::PalwForkRelativeOutcome`].
+    pub fn chain_state(&self, block: BlockHash) -> Result<Option<PalwPcpbChainStateV1>, StoreError> {
+        Ok(self.chain.read(block).optional()?.map(|state| (*state).clone()))
+    }
+
+    pub fn set_chain_state_batch(
+        &self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state: PalwPcpbChainStateV1,
+    ) -> Result<(), StoreError> {
+        self.chain.write(BatchDbWriter::new(batch), block, Arc::new(state))
+    }
+
+    pub fn delete_chain_state_batch(&self, batch: &mut WriteBatch, block: BlockHash) -> Result<(), StoreError> {
+        self.chain.delete(BatchDbWriter::new(batch), block)
+    }
+
+    // ---- per-epoch provider snapshot history (the BURIED half) ----
 
     /// The bond-weighted provider snapshot commitment of `epoch`, or `None` when the epoch is
     /// outside the retained window (or predates activation). **`None` is fail-closed by contract**:
     /// a clause-12/13 check that cannot resolve the epoch its leaf anchored to must refuse the
     /// leaf, never substitute a current snapshot.
+    ///
+    /// Static-audit C-01: clause 12 consults this only after its fork-relative walk ran off the
+    /// retained block rows, i.e. for epochs buried under the pruning point, where every honest node
+    /// holds the same final value. Above the pruning point the walk always answers first, so a live
+    /// fork can no longer read a sibling's commitment out of this shared key.
     pub fn snapshot_at(&self, epoch: u64) -> Result<Option<PalwSnapshotCommitment>, StoreError> {
         Ok(self.snapshot_history.read(epoch.into()).optional()?.map(|c| *c))
     }
@@ -244,5 +291,41 @@ mod tests {
         assert_eq!(store.snapshot_at(5).unwrap(), None, "swept epochs fall closed, not stale");
         assert_eq!(store.snapshot_history().unwrap(), vec![(6, commitment(0x66, 150)), (7, commitment(0x7E, 120))]);
         assert_eq!(store.acommit_rows().unwrap(), vec![(h(0xAA), 6)]);
+    }
+
+    /// Static-audit C-01 — the block-keyed chain: absent → `None` (which the walk reads as the
+    /// pruning boundary, never as an answer), set → read back, deleted by the pruning pass.
+    ///
+    /// The contrast with the test above is the whole point of the pair. Two forks closing epoch 7
+    /// share ONE epoch-keyed row and the second write erases the first; here they hold two rows and
+    /// neither can be reached from the other's history.
+    #[test]
+    fn pcpb_chain_rows_are_block_keyed_and_sibling_disjoint() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwPcpbStore::new(db.clone(), CachePolicy::Empty);
+        let (left, right) = (h(0x11), h(0x12));
+
+        assert_eq!(store.chain_state(left).unwrap(), None, "a rowless block is the boundary signal");
+
+        let row = |closed: Vec<(u64, PalwSnapshotCommitment)>, prev: Option<Hash64>| PalwPcpbChainStateV1 {
+            version: 1,
+            closed_snapshots: closed,
+            prev_closer: prev,
+        };
+        let mut batch = WriteBatch::default();
+        store.set_chain_state_batch(&mut batch, left, row(vec![(7, commitment(0xAA, 100))], Some(h(0x10)))).unwrap();
+        store.set_chain_state_batch(&mut batch, right, row(vec![(7, commitment(0xBB, 400))], Some(h(0x10)))).unwrap();
+        db.write(batch).unwrap();
+
+        assert_eq!(store.chain_state(left).unwrap().unwrap().closed_snapshots, vec![(7, commitment(0xAA, 100))]);
+        assert_eq!(store.chain_state(right).unwrap().unwrap().closed_snapshots, vec![(7, commitment(0xBB, 400))]);
+        assert_eq!(store.chain_state(left).unwrap().unwrap().prev_closer, Some(h(0x10)));
+
+        // Pruning removes the row per block, which is what turns a deep walk into `Buried`.
+        let mut batch = WriteBatch::default();
+        store.delete_chain_state_batch(&mut batch, left).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.chain_state(left).unwrap(), None);
+        assert!(store.chain_state(right).unwrap().is_some(), "pruning one block leaves its sibling alone");
     }
 }

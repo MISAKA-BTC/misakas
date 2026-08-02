@@ -2813,8 +2813,10 @@ pub struct PalwBeaconStateV1 {
     /// have no block of their own, so a back-pointer chain alone could never answer for them. That
     /// is the case a naive "walk to the previous boundary" design silently gets wrong.
     pub closed_seeds: Vec<(u64, Hash64)>,
-    /// The nearest ancestor chain block whose `closed_seeds` is non-empty, or `None` when this
-    /// block's history contains no earlier epoch close.
+    /// The nearest ancestor chain block whose `closed_seeds` is non-empty; `None` ONLY at the true
+    /// origin of this history (genesis / the activation fence). When the selected parent has no row
+    /// at all — the pruned-joiner boundary — this points AT the parent, so the walk terminates in
+    /// [`PalwForkRelativeOutcome::Buried`] rather than claiming the epoch was never closed.
     ///
     /// This is what makes `R_E` a FORK-RELATIVE read. The epoch-keyed history store is
     /// idempotent-by-VALUE, not write-once — its own doc says the value is "a function of the chain
@@ -2825,49 +2827,128 @@ pub struct PalwBeaconStateV1 {
     pub prev_closer: Option<crate::BlockHash>,
 }
 
-/// Static-audit finding C-01 — resolve `R_E` FORK-RELATIVELY by walking the closed-epoch chain
-/// backwards from a starting block's beacon state.
+/// Static-audit finding C-01 — the per-chain-block row of the PCPB context that the provider-bond
+/// reconciliation derives: the epochs THIS block closed a provider snapshot for, plus the pointer
+/// that makes the history walkable.
 ///
-/// `read` returns a block's [`PalwBeaconStateV1`]; the walk starts at `from` (always the CANDIDATE
-/// block's selected parent, never the node's virtual tip) and follows [`PalwBeaconStateV1::prev_closer`].
+/// Deliberately a SEPARATE row from [`PalwBeaconStateV1`] rather than two more fields on it. The
+/// beacon state is header-committed (`palw_overlay_commitment_root_v1` borsh-serializes it) and is
+/// written by `commit_palw_beacon_state`, which runs BEFORE the provider-bond registry reconciles
+/// the same chain path — the snapshot commitment simply does not exist yet at that coordinate.
+/// Folding it in would make a header commitment depend on a later pipeline stage.
 ///
-/// Why a walk and not an epoch-keyed lookup: the epoch-keyed seed history is idempotent-by-VALUE.
-/// Its own contract says the stored value is "a function of the chain that first closed this epoch",
-/// so two forks that both close epoch `E` legitimately write DIFFERENT seeds under the same key, and
-/// whichever committed last wins for EVERY reader — including a PCPB clause validating a block on
-/// the other fork. That made leaf acceptance depend on fork receive order, sink-search order and
-/// reorg path, which is a consensus split with no tx-level cause: the 2026-08-02 partition was
+/// The two fields carry the identical contract as their beacon twins, for the identical reason;
+/// see [`PalwBeaconStateV1::closed_seeds`] / [`PalwBeaconStateV1::prev_closer`].
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwPcpbChainStateV1 {
+    pub version: u16,
+    /// The epochs THIS block closed, with the provider snapshot commitment each closed with. A Vec
+    /// for the same reason `closed_seeds` is: one mergeset can cross several epoch boundaries, and
+    /// the epochs in between never get a block of their own.
+    pub closed_snapshots: Vec<(u64, PalwSnapshotCommitment)>,
+    /// The nearest ancestor chain block with a non-empty `closed_snapshots`, `None` only at the
+    /// true origin of this history (genesis / the activation fence). A block whose selected parent
+    /// has NO row at all points AT the parent instead — see [`PalwForkRelativeOutcome::Buried`].
+    pub prev_closer: Option<crate::BlockHash>,
+}
+
+/// One block's row in a fork-relative closed-epoch history. Implemented by [`PalwBeaconStateV1`]
+/// (seeds) and [`PalwPcpbChainStateV1`] (provider snapshots) so both walk through one resolver —
+/// the termination rules below are subtle enough that a second copy would drift from the first.
+pub trait PalwClosedEpochChain {
+    type Value: Copy;
+    fn closed_epochs(&self) -> &[(u64, Self::Value)];
+    fn prev_closer(&self) -> Option<crate::BlockHash>;
+}
+
+impl PalwClosedEpochChain for PalwBeaconStateV1 {
+    type Value = Hash64;
+    fn closed_epochs(&self) -> &[(u64, Hash64)] {
+        &self.closed_seeds
+    }
+    fn prev_closer(&self) -> Option<crate::BlockHash> {
+        self.prev_closer
+    }
+}
+
+impl PalwClosedEpochChain for PalwPcpbChainStateV1 {
+    type Value = PalwSnapshotCommitment;
+    fn closed_epochs(&self) -> &[(u64, PalwSnapshotCommitment)] {
+        &self.closed_snapshots
+    }
+    fn prev_closer(&self) -> Option<crate::BlockHash> {
+        self.prev_closer
+    }
+}
+
+/// What a fork-relative walk concluded. Three outcomes, not two, because "this history does not
+/// answer" and "this history is TRUNCATED here" are different facts with different safe handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwForkRelativeOutcome<V> {
+    /// The candidate's own history closed the epoch with this value. Authoritative.
+    Resolved(V),
+    /// The walk ran off the end of the RETAINED chain: it reached a block whose row is gone, which
+    /// happens only where the pruning pass deleted it (or, for a pruned joiner, below the boundary
+    /// it imported). The target epoch is therefore buried under the pruning point — final, identical
+    /// on every honest node, and beyond reorg — so the caller may fall back to the epoch-keyed
+    /// buried history, which is exactly what the pruning-snapshot carry exists to populate.
+    ///
+    /// This is NOT a licence to read the shared store in general: a live fork's epochs are always
+    /// answered above, by a retained row, before the walk can ever descend this far.
+    Buried,
+    /// This candidate's own past never closed the epoch (or the hop budget ran out). REFUSE — a
+    /// live value substituted for an unresolvable epoch is the grindable state D3-b forbids.
+    Refused,
+}
+
+/// Static-audit finding C-01 — resolve an epoch's value FORK-RELATIVELY by walking the closed-epoch
+/// chain backwards from a starting block's row.
+///
+/// `read` returns a block's row; the walk starts at `from` (always the CANDIDATE block's selected
+/// parent, never the node's virtual tip) and follows [`PalwClosedEpochChain::prev_closer`].
+///
+/// Why a walk and not an epoch-keyed lookup: the epoch-keyed histories are idempotent-by-VALUE.
+/// Their own contract says the stored value is "a function of the chain that first closed this
+/// epoch", so two forks that both close epoch `E` legitimately write DIFFERENT values under the same
+/// key, and whichever committed last wins for EVERY reader — including a PCPB clause validating a
+/// block on the other fork. That made leaf acceptance depend on fork receive order, sink-search order
+/// and reorg path, which is a consensus split with no tx-level cause: the 2026-08-02 partition was
 /// triggered by exactly this class of divergence (there, from a rule skew rather than a store read).
 ///
-/// `max_hops` bounds the walk at the retention window. Running out of hops returns `None`, and every
-/// PCPB caller treats `None` as REJECT — fail-closed, never a live-value substitution.
-pub fn palw_resolve_seed_fork_relative<E>(
+/// `max_hops` bounds the walk at the retention window; exhausting it is [`PalwForkRelativeOutcome::Refused`],
+/// never a shorter answer.
+pub fn palw_resolve_closed_epoch_fork_relative<S: PalwClosedEpochChain, E>(
     from: Hash64,
     epoch: u64,
     max_hops: usize,
-    mut read: impl FnMut(Hash64) -> Result<Option<PalwBeaconStateV1>, E>,
-) -> Result<Option<Hash64>, E> {
+    mut read: impl FnMut(Hash64) -> Result<Option<S>, E>,
+) -> Result<PalwForkRelativeOutcome<S::Value>, E> {
     let mut cursor = Some(from);
     for _ in 0..max_hops {
-        let Some(block) = cursor else { return Ok(None) };
-        let Some(state) = read(block)? else { return Ok(None) };
+        // A `None` pointer is the ORIGIN of this history (genesis / the activation fence): the epoch
+        // was never closed here at all. A MISSING ROW is the opposite claim — the writer points at a
+        // rowless parent on purpose — and means the history is truncated by pruning.
+        let Some(block) = cursor else { return Ok(PalwForkRelativeOutcome::Refused) };
+        let Some(state) = read(block)? else { return Ok(PalwForkRelativeOutcome::Buried) };
         // A block records the epochs IT closed. `epoch` is answered by whichever ancestor closed it —
         // including the multi-epoch case, where one block closes several and no block sits between.
-        if let Some((_, seed)) = state.closed_seeds.iter().find(|(closed, _)| *closed == epoch) {
-            return Ok(Some(*seed));
+        if let Some((_, value)) = state.closed_epochs().iter().find(|(closed, _)| *closed == epoch) {
+            return Ok(PalwForkRelativeOutcome::Resolved(*value));
         }
-        // Walked strictly past the target: this block closed an OLDER epoch, so the target was never
-        // closed in this history. Refuse rather than keep walking into the retention floor.
-        if state.closed_seeds.iter().any(|(closed, _)| *closed < epoch) {
-            return Ok(None);
+        // Walked strictly past the target: this block closed an OLDER epoch. Every chain closes
+        // EVERY epoch it spans (a multi-epoch mergeset records each one), so an older closer proves
+        // the target was never closed in this history — refuse instead of descending to the floor
+        // and mistaking the pruning boundary for an answer.
+        if state.closed_epochs().iter().any(|(closed, _)| *closed < epoch) {
+            return Ok(PalwForkRelativeOutcome::Refused);
         }
-        cursor = state.prev_closer;
+        cursor = state.prev_closer();
     }
-    Ok(None)
+    Ok(PalwForkRelativeOutcome::Refused)
 }
 
 #[cfg(test)]
-mod fork_relative_seed_tests {
+mod fork_relative_history_tests {
     use super::*;
     use std::collections::HashMap;
 
@@ -2893,8 +2974,11 @@ mod fork_relative_seed_tests {
     fn h(b: u8) -> Hash64 {
         Hash64::from_bytes([b; 64])
     }
-    fn walk(chain: &HashMap<Hash64, PalwBeaconStateV1>, from: Hash64, epoch: u64) -> Option<Hash64> {
-        palw_resolve_seed_fork_relative::<()>(from, epoch, 64, |b| Ok(chain.get(&b).cloned())).unwrap()
+    fn walk(chain: &HashMap<Hash64, PalwBeaconStateV1>, from: Hash64, epoch: u64) -> PalwForkRelativeOutcome<Hash64> {
+        palw_resolve_closed_epoch_fork_relative::<PalwBeaconStateV1, ()>(from, epoch, 64, |b| Ok(chain.get(&b).cloned())).unwrap()
+    }
+    fn resolved(seed: Hash64) -> PalwForkRelativeOutcome<Hash64> {
+        PalwForkRelativeOutcome::Resolved(seed)
     }
 
     /// THE finding. Two forks both close epoch 7 with different seeds. An epoch-keyed store answers
@@ -2910,8 +2994,8 @@ mod fork_relative_seed_tests {
         chain.insert(h(2), state(7, vec![(7, seed_a)], Some(h(1))));
         chain.insert(h(3), state(7, vec![(7, seed_b)], Some(h(1))));
 
-        assert_eq!(walk(&chain, h(2), 7), Some(seed_a));
-        assert_eq!(walk(&chain, h(3), 7), Some(seed_b));
+        assert_eq!(walk(&chain, h(2), 7), resolved(seed_a));
+        assert_eq!(walk(&chain, h(3), 7), resolved(seed_b));
         // Their shared past still resolves identically on both — divergence is confined to the
         // epochs the forks actually disagree about.
         assert_eq!(walk(&chain, h(2), 6), walk(&chain, h(3), 6));
@@ -2927,7 +3011,7 @@ mod fork_relative_seed_tests {
         chain.insert(h(1), state(3, vec![(3, h(0x30))], None));
         chain.insert(h(2), state(6, vec![(4, h(0x40)), (5, h(0x50)), (6, h(0x60))], Some(h(1))));
         for (epoch, seed) in [(4u64, h(0x40)), (5, h(0x50)), (6, h(0x60)), (3, h(0x30))] {
-            assert_eq!(walk(&chain, h(2), epoch), Some(seed), "epoch {epoch} must resolve");
+            assert_eq!(walk(&chain, h(2), epoch), resolved(seed), "epoch {epoch} must resolve");
         }
     }
 
@@ -2944,26 +3028,85 @@ mod fork_relative_seed_tests {
         }
         let prev = h(39);
         // 38 non-closing blocks, resolved with a hop budget of 2.
-        assert_eq!(palw_resolve_seed_fork_relative::<()>(prev, 5, 2, |b| Ok(chain.get(&b).cloned())).unwrap(), Some(h(0x50)));
+        assert_eq!(
+            palw_resolve_closed_epoch_fork_relative::<PalwBeaconStateV1, ()>(prev, 5, 2, |b| Ok(chain.get(&b).cloned())).unwrap(),
+            resolved(h(0x50))
+        );
     }
 
-    /// Fail-closed in every direction: an epoch this history never closed, an epoch in the future,
-    /// an exhausted hop budget and a missing row all REFUSE. A live-value substitution here is the
-    /// grindable state D3-b forbids.
+    /// Fail-closed in every direction: an epoch this history never closed, an epoch in the future
+    /// and an exhausted hop budget all REFUSE. A live-value substitution here is the grindable
+    /// state D3-b forbids.
     #[test]
     fn unresolvable_epochs_fail_closed() {
         let mut chain = HashMap::new();
         chain.insert(h(1), state(4, vec![(4, h(0x40))], None));
         chain.insert(h(2), state(9, vec![(9, h(0x90))], Some(h(1))));
 
-        assert_eq!(walk(&chain, h(2), 7), None, "an epoch this chain never closed must refuse");
-        assert_eq!(walk(&chain, h(2), 12), None, "a future epoch must refuse");
-        assert_eq!(walk(&chain, h(0xEE), 9), None, "an unknown starting block must refuse");
+        assert_eq!(walk(&chain, h(2), 7), PalwForkRelativeOutcome::Refused, "an epoch this chain never closed must refuse");
+        assert_eq!(walk(&chain, h(2), 12), PalwForkRelativeOutcome::Refused, "a future epoch must refuse");
         assert_eq!(
-            palw_resolve_seed_fork_relative::<()>(h(2), 4, 1, |b| Ok(chain.get(&b).cloned())).unwrap(),
-            None,
+            palw_resolve_closed_epoch_fork_relative::<PalwBeaconStateV1, ()>(h(2), 4, 1, |b| Ok(chain.get(&b).cloned())).unwrap(),
+            PalwForkRelativeOutcome::Refused,
             "an exhausted hop budget must refuse rather than answer from a shorter walk"
         );
+    }
+
+    /// The distinction that keeps a pruned node from fork-relativity's one real cost: reaching a
+    /// block whose row is GONE is `Buried`, not `Refused`. Rows disappear only where the pruning
+    /// pass deleted them, so the target epoch is below the pruning point — final, past every reorg
+    /// horizon, and answerable from the epoch-keyed history the pruning snapshot carries.
+    ///
+    /// A `None` pointer is the opposite claim and stays `Refused`: that is the ORIGIN of the
+    /// history (genesis / the activation fence), where a fallback would read a live shared row and
+    /// hand a young fork its sibling's value — the very finding this walk closes.
+    #[test]
+    fn a_truncated_history_is_buried_and_an_origin_is_refused() {
+        let mut chain = HashMap::new();
+        // h(9) is retained; its pointer names h(8), whose row the pruning pass deleted.
+        chain.insert(h(9), state(20, vec![(20, h(0xC0))], Some(h(8))));
+        assert_eq!(walk(&chain, h(9), 20), resolved(h(0xC0)), "retained epochs never reach the boundary");
+        assert_eq!(walk(&chain, h(9), 11), PalwForkRelativeOutcome::Buried, "a pruned ancestor means buried, not absent");
+        // The pruned joiner's shape: the candidate's own selected parent is the imported boundary,
+        // which has no row in THIS history yet. Same conclusion — consult the carried history.
+        assert_eq!(walk(&chain, h(0xEE), 9), PalwForkRelativeOutcome::Buried, "a rowless start block is the boundary");
+
+        // Same walk, same target epoch, but the history ends at its origin instead of at a pruning
+        // boundary. No fallback is permitted here.
+        let mut young = HashMap::new();
+        young.insert(h(9), state(20, vec![(20, h(0xC0))], None));
+        assert_eq!(walk(&young, h(9), 11), PalwForkRelativeOutcome::Refused, "an origin must refuse, never fall back");
+    }
+
+    /// One resolver, two row types. The provider-snapshot chain has the same shape and the same
+    /// finding — two forks that both close epoch 7 write different commitments under one epoch key —
+    /// so it walks through the identical code rather than a second copy that could drift.
+    #[test]
+    fn the_provider_snapshot_chain_walks_through_the_same_resolver() {
+        let commitment = |b: u8| PalwSnapshotCommitment {
+            snapshot_root: h(b),
+            assignment_root: h(b.wrapping_add(1)),
+            total_bond: b as u128,
+            provider_count: 2,
+        };
+        let row = |closed: Vec<(u64, PalwSnapshotCommitment)>, prev: Option<Hash64>| PalwPcpbChainStateV1 {
+            version: 1,
+            closed_snapshots: closed,
+            prev_closer: prev,
+        };
+        let mut chain = HashMap::new();
+        chain.insert(h(1), row(vec![(6, commitment(0x60))], None));
+        chain.insert(h(2), row(vec![(7, commitment(0xAA))], Some(h(1))));
+        chain.insert(h(3), row(vec![(7, commitment(0xBB))], Some(h(1))));
+        let walk_snap = |from: Hash64, epoch: u64| {
+            palw_resolve_closed_epoch_fork_relative::<PalwPcpbChainStateV1, ()>(from, epoch, 64, |b| Ok(chain.get(&b).cloned()))
+                .unwrap()
+        };
+
+        assert_eq!(walk_snap(h(2), 7), PalwForkRelativeOutcome::Resolved(commitment(0xAA)));
+        assert_eq!(walk_snap(h(3), 7), PalwForkRelativeOutcome::Resolved(commitment(0xBB)));
+        assert_eq!(walk_snap(h(2), 6), walk_snap(h(3), 6), "the shared past still agrees");
+        assert_eq!(walk_snap(h(2), 5), PalwForkRelativeOutcome::Refused, "an epoch below this origin refuses");
     }
 }
 
@@ -6771,6 +6914,7 @@ impl kaspa_utils::mem_size::MemSizeEstimator for PalwBatchStatus {}
 // stored commitments are `Hash64`; the raw reveal is never persisted). Empty estimators — `Count`-cached
 // like the batch overlay values.
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBeaconStateV1 {}
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwPcpbChainStateV1 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwBeaconEpochAccumV1 {}
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwLaneBitsV1 {}
 

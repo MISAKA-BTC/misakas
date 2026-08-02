@@ -270,6 +270,12 @@ impl Consensus {
         // ADR-0045 D3-b — the PCPB production context. Read under the same guard as everything else
         // so a producer sees ONE point of view: a snapshot from epoch e and an A-commit epoch from a
         // later virtual commit would let it build a leaf that never validated anywhere.
+        //
+        // Deliberately still the epoch-keyed histories, not the fork-relative walk clauses 11/12 use
+        // (static-audit C-01). This is a PRODUCER telling a scheduler "what my sink chain currently
+        // holds", and on the sink chain the two agree by construction — the writer overwrites the
+        // epoch rows as it reconciles that same chain. The walk exists because a VERIFIER must
+        // answer for a candidate that is not on its sink chain; a producer has no such candidate.
         let pcpb = pcpb_request
             .map(|(anchor_epoch, a_commit)| -> Result<PalwPcpbContextProbe, PalwStateProbeError> {
                 let k = self.config.params.palw_snapshot_lag_epochs;

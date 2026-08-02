@@ -835,9 +835,34 @@ pub struct PalwPcpbAcceptanceCtx<'a> {
     /// the candidate's own past rather than of whichever fork last wrote a shared epoch row. Without
     /// it, leaf acceptance depended on fork receive order, sink-search order and reorg path.
     pub selected_parent: kaspa_consensus_core::BlockHash,
-    /// The bound on that walk: the beacon seed retention window in epochs. Exhausting it returns
-    /// `None`, which every clause treats as REJECT.
-    pub seed_walk_max_hops: usize,
+    /// The bound on that walk: the retention window in epochs. Exhausting it REFUSES — never a
+    /// shorter answer, and never a fall-through to a shared epoch row.
+    pub context_walk_max_hops: usize,
+}
+
+/// Static-audit C-01 — the one place a PCPB clause turns a fork-relative walk into a value.
+///
+/// Three outcomes, three handlings, written once so no clause can quietly grow a fourth:
+/// `Resolved` is the candidate's own history and authoritative; `Buried` means the walk ran off the
+/// retained rows into territory the pruning point has finalized, so the epoch-keyed history is
+/// consulted (that is what the pruning-snapshot carry exists for, and no live fork can differ
+/// there); `Refused` is a hard fail-closed rejection.
+fn palw_resolve_pcpb_context<V: Copy>(
+    ctx: &PalwPcpbAcceptanceCtx<'_>,
+    epoch: u64,
+    walk: impl FnOnce(
+        kaspa_consensus_core::BlockHash,
+        u64,
+        usize,
+    ) -> Result<kaspa_consensus_core::palw::PalwForkRelativeOutcome<V>, PalwOverlayError>,
+    buried: impl FnOnce(u64) -> Result<Option<V>, PalwOverlayError>,
+) -> Result<Option<V>, PalwOverlayError> {
+    use kaspa_consensus_core::palw::PalwForkRelativeOutcome::*;
+    match walk(ctx.selected_parent, epoch, ctx.context_walk_max_hops)? {
+        Resolved(value) => Ok(Some(value)),
+        Buried => buried(epoch),
+        Refused => Ok(None),
+    }
 }
 
 /// The production [`kaspa_consensus_core::palw::PalwMlDsaVerifier`] binding — the same
@@ -1081,13 +1106,17 @@ pub fn apply_palw_overlay_effect(
                 // Static-audit C-01: resolved by walking this CANDIDATE's own closed-epoch chain
                 // from its selected parent — never from the epoch-keyed history, whose value is a
                 // function of whichever fork closed the epoch last.
-                let issued_seed = kaspa_consensus_core::palw::palw_resolve_seed_fork_relative(
-                    ctx.selected_parent,
+                let issued_seed = palw_resolve_pcpb_context(
+                    ctx,
                     issued,
-                    ctx.seed_walk_max_hops,
-                    |block| beacon.beacon_state(block).map(|state| state.map(|s| (*s).clone())),
-                )
-                .map_err(|_| PalwOverlayError::StoreError)?
+                    |from, epoch, hops| {
+                        kaspa_consensus_core::palw::palw_resolve_closed_epoch_fork_relative(from, epoch, hops, |block| {
+                            beacon.beacon_state(block).map(|state| state.map(|s| (*s).clone()))
+                        })
+                        .map_err(|_| PalwOverlayError::StoreError)
+                    },
+                    |epoch| beacon.beacon_seed_at(epoch).map_err(|_| PalwOverlayError::StoreError),
+                )?
                 .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
                     leaf_index: leaf.leaf_index,
                     epoch: issued,
@@ -1114,26 +1143,54 @@ pub fn apply_palw_overlay_effect(
                         epoch: anchor,
                         what: "anchor predates the snapshot lag",
                     })?;
-                let resolved = ctx.pcpb_store.snapshot_at(snapshot_epoch).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
-                    PalwOverlayError::LeafPcpbContextUnresolvable {
-                        leaf_index: leaf.leaf_index,
-                        epoch: snapshot_epoch,
-                        what: "provider snapshot",
+                // Static-audit C-01, second half: the provider snapshot is resolved on the candidate's
+                // own chain for exactly the reason the seed is. Two forks that both close epoch
+                // `anchor − k` reconcile DIFFERENT provider registries and therefore commit different
+                // snapshot roots under one epoch key — and clause 12 checks the leaf's committed roots
+                // against whatever that key currently holds, so a leaf could be valid or invalid
+                // depending on which fork wrote last.
+                let resolved = palw_resolve_pcpb_context(
+                    ctx,
+                    snapshot_epoch,
+                    |from, epoch, hops| {
+                        kaspa_consensus_core::palw::palw_resolve_closed_epoch_fork_relative(from, epoch, hops, |block| {
+                            ctx.pcpb_store.chain_state(block)
+                        })
+                        .map_err(|_| PalwOverlayError::StoreError)
                     },
-                )?;
+                    |epoch| ctx.pcpb_store.snapshot_at(epoch).map_err(|_| PalwOverlayError::StoreError),
+                )?
+                .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: leaf.leaf_index,
+                    epoch: snapshot_epoch,
+                    what: "provider snapshot (fork-relative walk)",
+                })?;
                 let draw_epoch =
                     anchor.checked_add(ctx.post_commit_delta_epochs).ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
                         leaf_index: leaf.leaf_index,
                         epoch: anchor,
                         what: "anchor+Δ overflows",
                     })?;
-                let post_commit_beacon = beacon.beacon_seed_at(draw_epoch).map_err(|_| PalwOverlayError::StoreError)?.ok_or(
-                    PalwOverlayError::LeafPcpbContextUnresolvable {
-                        leaf_index: leaf.leaf_index,
-                        epoch: draw_epoch,
-                        what: "post-commit beacon seed",
+                // The draw beacon is the SAME seed history clause 11 reads, one epoch coordinate
+                // further out — so it takes the same fork-relative walk. Leaving it epoch-keyed
+                // would have left the assignment draw itself (which seat each provider gets)
+                // resolvable to a sibling fork's randomness while the challenge above was not.
+                let post_commit_beacon = palw_resolve_pcpb_context(
+                    ctx,
+                    draw_epoch,
+                    |from, epoch, hops| {
+                        kaspa_consensus_core::palw::palw_resolve_closed_epoch_fork_relative(from, epoch, hops, |block| {
+                            beacon.beacon_state(block).map(|state| state.map(|s| (*s).clone()))
+                        })
+                        .map_err(|_| PalwOverlayError::StoreError)
                     },
-                )?;
+                    |epoch| beacon.beacon_seed_at(epoch).map_err(|_| PalwOverlayError::StoreError),
+                )?
+                .ok_or(PalwOverlayError::LeafPcpbContextUnresolvable {
+                    leaf_index: leaf.leaf_index,
+                    epoch: draw_epoch,
+                    what: "post-commit beacon seed (fork-relative walk)",
+                })?;
                 if leaf.dispatch_kind == kaspa_consensus_core::palw::PALW_DISPATCH_KIND_SELF_SERIAL {
                     let registry_epoch = ctx.pcpb_store.acommit_epoch(&leaf.a_commit).map_err(|_| PalwOverlayError::StoreError)?;
                     // `row ≤ declared`: the anchor was on-chain at-or-before the epoch whose `+Δ`
@@ -4816,7 +4873,7 @@ mod tests {
                 Err(PalwOverlayError::LeafPcpbContextUnresolvable {
                     leaf_index: 0,
                     epoch: fixture.snapshot_epoch,
-                    what: "provider snapshot"
+                    what: "provider snapshot (fork-relative walk)"
                 })
             );
 
@@ -4829,7 +4886,7 @@ mod tests {
                 Err(PalwOverlayError::LeafPcpbContextUnresolvable {
                     leaf_index: 0,
                     epoch: fixture.draw_epoch,
-                    what: "post-commit beacon seed"
+                    what: "post-commit beacon seed (fork-relative walk)"
                 })
             );
 
@@ -4872,6 +4929,83 @@ mod tests {
                     what: "anchor predates the snapshot lag"
                 })
             );
+        }
+
+        /// Static-audit finding C-01, snapshot half — clause 12 resolves the provider snapshot from
+        /// the CANDIDATE's own chain, not from whichever fork last wrote the epoch key.
+        ///
+        /// The setup is the finding itself. Two forks both close epoch `anchor − k`. They reconciled
+        /// different provider registries (a bond accepted on one and not the other is enough), so
+        /// they commit different snapshot roots — legitimately, both honest. The epoch-keyed history
+        /// holds ONE row under that key, so before this fix the leaf's committed roots were checked
+        /// against whichever fork had committed most recently: the same leaf was valid on both forks
+        /// or invalid on both, decided by receive order rather than by either chain's own history.
+        ///
+        /// Here the store is IDENTICAL across the three cases below — only the candidate's selected
+        /// parent moves — and the verdict follows the candidate's own past.
+        #[test]
+        fn pcpb_clause12_resolves_the_provider_snapshot_on_the_candidates_own_chain() {
+            const FORK_A: Hash64 = Hash64::from_bytes([0xA1; 64]);
+            const FORK_B: Hash64 = Hash64::from_bytes([0xB2; 64]);
+            let fixture = pcpb_fixture();
+            // The sibling's snapshot: same epoch, a different (equally well-formed) commitment.
+            let sibling = kaspa_consensus_core::palw::PalwSnapshotCommitment {
+                snapshot_root: h(0x5A),
+                assignment_root: h(0x5B),
+                total_bond: fixture.witnesses.commitment.total_bond + 250,
+                provider_count: fixture.witnesses.commitment.provider_count + 1,
+            };
+
+            // Every case gets its own datadir: acceptance WRITES leaves, and a shared store would
+            // let an earlier accept mask a later verdict behind the write-once preflight.
+            let env = || {
+                let (lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+                let store = DbPalwStore::new(db.clone(), CachePolicy::Count(64));
+                let beacon = DbPalwBeaconStore::new(db.clone(), CachePolicy::Count(64));
+                let pcpb_store = fixture.staged_store(&db, &beacon);
+                // Both forks close the seed epochs identically — the divergence under test is the
+                // snapshot alone, so clause 11 and the draw must resolve the same way on each.
+                let seeds = vec![(fixture.issued_epoch, fixture.issued_seed), (fixture.draw_epoch, fixture.draw_seed)];
+                for fork in [FORK_A, FORK_B] {
+                    pcpb_test_support::stage_fork_relative_seeds_at(&db, &beacon, fork, seeds.clone());
+                }
+                pcpb_test_support::stage_fork_relative_snapshots(
+                    &db,
+                    &pcpb_store,
+                    FORK_A,
+                    vec![(fixture.snapshot_epoch, fixture.witnesses.commitment)],
+                );
+                pcpb_test_support::stage_fork_relative_snapshots(&db, &pcpb_store, FORK_B, vec![(fixture.snapshot_epoch, sibling)]);
+                (lt, db, store, beacon, pcpb_store)
+            };
+
+            // On fork A — the chain whose registry produced the roots this leaf committed to — the
+            // leaf is valid.
+            let (_lt, _db, store, beacon, pcpb_store) = env();
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            admit(&store, &beacon, &pcpb_test_support::ctx_from(&pcpb_store, FORK_A), m, chunk)
+                .expect("the candidate's own chain closed this epoch with the leaf's snapshot");
+
+            // Same store, same leaf, same epoch key — a candidate on fork B resolves ITS OWN
+            // snapshot and the dispatch evidence no longer re-derives. Before the fix both
+            // candidates read one shared row and this pair could not disagree.
+            let (_lt, _db, store, beacon, pcpb_store) = env();
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            assert_eq!(
+                admit(&store, &beacon, &pcpb_test_support::ctx_from(&pcpb_store, FORK_B), m, chunk),
+                Err(PalwOverlayError::LeafDispatchEvidenceInvalid { leaf_index: 0 }),
+                "a fork must not validate a leaf against its sibling's provider snapshot"
+            );
+
+            // The pruned-joiner shape: the candidate's selected parent has no snapshot row at all,
+            // because the boundary it imported sits below every row it holds. That is `Buried`, not
+            // "never closed", so the walk falls through to the epoch-keyed history the pruning
+            // snapshot carries — and the leaf is admitted, exactly as its peers admit it. A joiner
+            // that fails closed here would reject blocks the network accepts.
+            let (_lt, _db, store, beacon, pcpb_store) = env();
+            let (m, chunk) = adversarial_batch(vec![leaf_raw(0)], vec![fixture.witness(0)]);
+            admit(&store, &beacon, &pcpb_test_support::ctx(&pcpb_store), m, chunk)
+                .expect("below the pruning point the epoch-keyed history is the final, unforkable answer");
         }
 
         /// §8 "provider 束縛" (external) — the leaf's DECLARED seats are bound to the drawn
@@ -5146,11 +5280,20 @@ pub(crate) mod pcpb_test_support {
         beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
         closed: Vec<(u64, Hash64)>,
     ) {
+        stage_fork_relative_seeds_at(db, beacon, PCPB_TEST_SELECTED_PARENT, closed);
+    }
+
+    /// The same, under an explicit selected parent — for tests that need two SIBLING histories.
+    pub(crate) fn stage_fork_relative_seeds_at(
+        db: &std::sync::Arc<kaspa_database::prelude::DB>,
+        beacon: &crate::model::stores::palw_beacon::DbPalwBeaconStore,
+        block: Hash64,
+        closed: Vec<(u64, Hash64)>,
+    ) {
         let mut batch = rocksdb::WriteBatch::default();
-        let top = closed.iter().map(|(e, _)| *e).max().unwrap_or(0);
-        let mut state = kaspa_consensus_core::palw::PalwBeaconStateV1 {
+        let state = kaspa_consensus_core::palw::PalwBeaconStateV1 {
             version: 1,
-            epoch: top,
+            epoch: closed.iter().map(|(e, _)| *e).max().unwrap_or(0),
             seed: closed.last().map(|(_, s)| *s).unwrap_or_default(),
             closed_seeds: closed,
             prev_closer: None,
@@ -5165,10 +5308,30 @@ pub(crate) mod pcpb_test_support {
             valid_reveal_count: 0,
             missing_commit_count: 0,
         };
-        state.version = 1;
-        beacon.set_state_batch(&mut batch, PCPB_TEST_SELECTED_PARENT, std::sync::Arc::new(state)).unwrap();
+        beacon.set_state_batch(&mut batch, block, std::sync::Arc::new(state)).unwrap();
         db.write(batch).unwrap();
     }
+
+    /// Static-audit C-01, snapshot half — the block-keyed provider-snapshot row a fixture's clause-12
+    /// walk resolves against. Staging NOTHING is also a valid state and is what most fixtures do: a
+    /// rowless start block reads as the pruning boundary, so the walk falls through to the
+    /// epoch-keyed history exactly as a pruned joiner does.
+    pub(crate) fn stage_fork_relative_snapshots(
+        db: &std::sync::Arc<kaspa_database::prelude::DB>,
+        pcpb: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+        block: Hash64,
+        closed: Vec<(u64, kaspa_consensus_core::palw::PalwSnapshotCommitment)>,
+    ) {
+        let mut batch = rocksdb::WriteBatch::default();
+        pcpb.set_chain_state_batch(
+            &mut batch,
+            block,
+            kaspa_consensus_core::palw::PalwPcpbChainStateV1 { version: 1, closed_snapshots: closed, prev_closer: None },
+        )
+        .unwrap();
+        db.write(batch).unwrap();
+    }
+
     use kaspa_consensus_core::palw::{
         BeaconAssignedProof, PALW_DISPATCH_KIND_BEACON_ASSIGNED, PalwDispatchEvidence, PalwLeafPcpbWitnessV1,
         PalwProviderSnapshotEntry, PalwPublicLeafV1, PalwSnapshotWitnessSet, palw_assignment_draw_seed, palw_build_snapshot_witnesses,
@@ -5205,14 +5368,23 @@ pub(crate) mod pcpb_test_support {
 
     /// The acceptance context a staged store implies, with this module's window constants.
     pub(crate) fn ctx(store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore) -> super::PalwPcpbAcceptanceCtx<'_> {
+        ctx_from(store, PCPB_TEST_SELECTED_PARENT)
+    }
+
+    /// The same context anchored on a chosen selected parent — the knob that makes a fork-relativity
+    /// test possible at all: same store, same leaf, two candidates, two answers.
+    pub(crate) fn ctx_from(
+        store: &crate::model::stores::palw_pcpb::DbPalwPcpbStore,
+        selected_parent: Hash64,
+    ) -> super::PalwPcpbAcceptanceCtx<'_> {
         super::PalwPcpbAcceptanceCtx {
             pcpb_store: store,
             network_id: NETWORK_ID,
             freshness_window_epochs: W,
             snapshot_lag_epochs: K,
             post_commit_delta_epochs: DELTA,
-            selected_parent: PCPB_TEST_SELECTED_PARENT,
-            seed_walk_max_hops: 64,
+            selected_parent,
+            context_walk_max_hops: 64,
         }
     }
 
@@ -5336,7 +5508,6 @@ pub(crate) mod pcpb_test_support {
         }
 
         /// Stage the beacon seeds + provider snapshot this fixture's leaves resolve against.
-
         pub(crate) fn stage(
             &self,
             db: &std::sync::Arc<kaspa_database::prelude::DB>,

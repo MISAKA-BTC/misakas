@@ -126,7 +126,13 @@ pub struct MultiConsensusMetadata {
 // Borsh break on a block-keyed row every active chain block carries, so a v16 datadir cannot be
 // read. It is a re-sync, and it is the cheapest moment to take one: testnet-22 has no datadirs yet,
 // and testnet-21's nodes are being replaced by it.
-pub const LATEST_DB_VERSION: u32 = 17;
+// v18 (2026-08-02, static-audit finding C-01, snapshot half): the provider-snapshot history joins
+// the seed history on the fork-relative chain. Every active chain block gains a `PalwPcpbChainState`
+// row (prefix 71), and clause 12 REQUIRES it: on a v17 datadir every block would be rowless, so
+// every walk would conclude "buried" and silently fall back to the epoch-keyed store — i.e. the
+// exact pre-fix behaviour, restored without a single visible error. A read-your-own-past rule cannot
+// be allowed to degrade quietly, so the version moves and the datadir is rebuilt.
+pub const LATEST_DB_VERSION: u32 = 18;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {
@@ -530,7 +536,7 @@ mod tests {
     #[test]
     fn latest_db_version_is_pinned() {
         assert_eq!(
-            LATEST_DB_VERSION, 16,
+            LATEST_DB_VERSION, 18,
             "LATEST_DB_VERSION changed. If a persisted layout changed, this is correct - update this pin \
              AND extend the `version <= N` hard-reset arm in kaspad/src/daemon.rs to cover the version \
              you just left behind. Never bump one without the other."
