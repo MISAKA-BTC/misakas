@@ -5,6 +5,9 @@ pub mod services;
 pub mod storage;
 pub mod test_consensus;
 
+#[cfg(test)]
+mod sim_harness;
+
 pub(crate) mod palw_audit;
 pub(crate) mod palw_da;
 /// kaspa-pq ADR-0040 — the SEEDED algo-4 mint, now **test-only**.
