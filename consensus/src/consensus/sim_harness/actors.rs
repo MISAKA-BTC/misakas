@@ -2,7 +2,7 @@
 //! reads the wall clock, and no actor polls on a timeout it does not need, because the simulation
 //! ends when the event queue drains.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use kaspa_consensus_core::BlockHashSet;
 use kaspa_consensus_core::api::ConsensusApi;
@@ -13,7 +13,7 @@ use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutpoint
 use kaspa_utils::sim::{Environment, Process, Resumption, Suspension};
 
 use super::node::SimNode;
-use super::{BLOCK_INTERVAL_MS, BOND_BURIAL_BLOCKS, COINBASE_MATURITY, FUNDING_BLOCKS, NUM_BLOCKS, SimMsg};
+use super::{BOND_BURIAL_BLOCKS, COINBASE_MATURITY, SimMsg};
 use crate::config::Config;
 use crate::model::stores::headers::HeaderStoreReader;
 use crate::pipeline::virtual_processor::tests::dns_harness;
@@ -58,31 +58,79 @@ pub(super) fn validator_spk(seed: [u8; 32]) -> ScriptPublicKey {
     p2pkh_mldsa87_spk(&payload)
 }
 
-/// The sole block producer. Mines on a fixed virtual-time cadence, broadcasts every block (hearing
-/// its own instantly through the topology) and folds any tx it was sent into the next template.
+/// Who a miner's coinbases pay.
+#[derive(Clone, Copy)]
+pub(super) enum Payout {
+    /// The first `n` blocks pay the harness validator, the rest a throwaway key.
+    ValidatorFirstN(u64),
+    /// Every block pays the harness validator — the validator needs a fresh coinbase per
+    /// attestation shard, so a long-running validator must be paid continuously.
+    ValidatorAlways,
+    /// Never pays the validator (a miner on a branch with no validator on it).
+    Never,
+}
+
+/// Everything that distinguishes one miner from another. Kept as data so a scenario is a
+/// declarative timeline rather than a family of actor types.
+pub(super) struct MinerCfg {
+    /// Simulator process id — the `sender` of this miner's broadcasts, i.e. what the topology
+    /// routes (and partitions) on. Getting this wrong silently disables the partition cut.
+    pub(super) id: u64,
+    /// Virtual ms from simulation start until the first mining attempt.
+    pub(super) start_delay_ms: u64,
+    /// Virtual ms between mining attempts.
+    pub(super) interval_ms: u64,
+    /// ABSOLUTE virtual time at which mining stops (the simulation clock starts at the genesis
+    /// timestamp, so this is `genesis_ts + offset`, not an offset). `u64::MAX` means "no bound".
+    pub(super) mine_end: u64,
+    /// Cap on produced blocks. `u64::MAX` means "no bound" (`mine_end` is then the bound).
+    pub(super) max_blocks: u64,
+    pub(super) payout: Payout,
+    /// If set, the first mining attempt asserts this node already has a confirmed DNS anchor — the
+    /// deterministic guard for scenarios that must fork a chain only AFTER an anchor confirmed on
+    /// the shared prefix. It fails loudly at the cause instead of silently at the outcome.
+    pub(super) assert_confirmed_on_start: bool,
+}
+
+/// A block producer. Mines on a fixed virtual-time cadence, broadcasts every block (hearing its own
+/// instantly through the topology) and folds any tx it was sent into the next template.
 ///
 /// It never returns `Suspension::Halt`: halting tears the simulation down with events still queued,
 /// which would leave the other nodes short of blocks. Instead it goes `Idle` after its quota, and
 /// the run ends when the queue drains naturally.
 pub(super) struct MinerActor {
     node: Arc<SimNode>,
-    /// Coinbases of the first `FUNDING_BLOCKS` blocks pay the validator.
+    cfg: MinerCfg,
+    /// The script this miner's coinbases pay when `payout` says so.
     validator_spk: ScriptPublicKey,
     produced: u64,
+    started: bool,
     pending: Vec<Transaction>,
     seen: BlockHashSet,
 }
 
 impl MinerActor {
-    pub(super) fn new(node: Arc<SimNode>, validator_seed: [u8; 32]) -> Self {
-        Self { node, validator_spk: validator_spk(validator_seed), produced: 0, pending: Vec::new(), seen: BlockHashSet::default() }
+    pub(super) fn new(node: Arc<SimNode>, validator_seed: [u8; 32], cfg: MinerCfg) -> Self {
+        Self {
+            node,
+            cfg,
+            validator_spk: validator_spk(validator_seed),
+            produced: 0,
+            started: false,
+            pending: Vec::new(),
+            seen: BlockHashSet::default(),
+        }
     }
 
     fn miner_data(&self) -> MinerData {
         // A block's coinbase pays the miners of the blocks it MERGES, so paying the validator for
-        // the first `FUNDING_BLOCKS` blocks yields validator-owned coinbase outputs in blocks
-        // 2..=FUNDING_BLOCKS+1. Later blocks pay a throwaway key.
-        if self.produced < FUNDING_BLOCKS {
+        // the first `n` blocks yields validator-owned coinbase outputs in blocks 2..=n+1.
+        let pays_validator = match self.cfg.payout {
+            Payout::ValidatorFirstN(n) => self.produced < n,
+            Payout::ValidatorAlways => true,
+            Payout::Never => false,
+        };
+        if pays_validator {
             MinerData::new(self.validator_spk.clone(), vec![])
         } else {
             MinerData::new(p2pkh_mldsa87_spk(&[0x07; 64]), vec![])
@@ -123,15 +171,24 @@ impl MinerActor {
 impl Process<SimMsg> for MinerActor {
     fn resume(&mut self, resumption: Resumption<SimMsg>, env: &mut Environment<SimMsg>) -> Suspension {
         match resumption {
-            Resumption::Initial => Suspension::Timeout(BLOCK_INTERVAL_MS),
+            Resumption::Initial => Suspension::Timeout(self.cfg.start_delay_ms),
             Resumption::Scheduled => {
-                if self.produced >= NUM_BLOCKS {
+                if !std::mem::replace(&mut self.started, true) && self.cfg.assert_confirmed_on_start {
+                    assert_ne!(
+                        self.node.dns_state().last_dns_confirmed_anchor,
+                        kaspa_consensus_core::BlockHash::default(),
+                        "miner {} must start on a prefix that already carries a confirmed DNS anchor (virtual time {})",
+                        self.cfg.id,
+                        env.now()
+                    );
+                }
+                if env.now() >= self.cfg.mine_end || self.produced >= self.cfg.max_blocks {
                     return Suspension::Idle;
                 }
                 let block = self.build_block(env.now());
                 self.produced += 1;
-                env.broadcast(super::MINER_ID, SimMsg::Block(block));
-                Suspension::Timeout(BLOCK_INTERVAL_MS)
+                env.broadcast(self.cfg.id, SimMsg::Block(block));
+                Suspension::Timeout(self.cfg.interval_ms)
             }
             Resumption::Message(SimMsg::Block(block)) => {
                 self.node.insert_if_new(block, &mut self.seen);
@@ -167,6 +224,35 @@ impl Process<SimMsg> for ObserverActor {
     }
 }
 
+/// A read-only probe: at one scheduled virtual instant it samples a node's DNS-confirmed anchor DAA
+/// score into a shared cell. It sends nothing, so it cannot perturb the run — it exists so an assert
+/// can compare a mid-run observation (e.g. "at heal time") against the end-of-run state.
+pub(super) struct AnchorProbeActor {
+    node: Arc<SimNode>,
+    /// Virtual ms from simulation start until the sample is taken.
+    at_delay_ms: u64,
+    sample: Arc<Mutex<Option<u64>>>,
+}
+
+impl AnchorProbeActor {
+    pub(super) fn new(node: Arc<SimNode>, at_delay_ms: u64, sample: Arc<Mutex<Option<u64>>>) -> Self {
+        Self { node, at_delay_ms, sample }
+    }
+}
+
+impl Process<SimMsg> for AnchorProbeActor {
+    fn resume(&mut self, resumption: Resumption<SimMsg>, _env: &mut Environment<SimMsg>) -> Suspension {
+        match resumption {
+            Resumption::Initial => Suspension::Timeout(self.at_delay_ms),
+            Resumption::Scheduled => {
+                *self.sample.lock().unwrap() = Some(self.node.dns_state().last_dns_confirmed_anchor_daa_score);
+                Suspension::Idle
+            }
+            Resumption::Message(_) => Suspension::Idle,
+        }
+    }
+}
+
 /// A coinbase output the validator owns: `(outpoint, value, the DAA score of the paying block)`.
 type Funding = (TransactionOutpoint, u64, u64);
 
@@ -181,8 +267,11 @@ enum ValidatorPhase {
     BondSent { bond_outpoint: TransactionOutpoint },
     /// Bond accepted at `accepted_daa`; letting blue-score epochs bury it before attesting.
     BondBurying { bond_outpoint: TransactionOutpoint, remaining: u64 },
-    /// Attestation shard sent — nothing left to do.
-    Done,
+    /// The first attestation shard was sent. From here the validator keeps attesting: every time
+    /// its own sink makes a NEW blue-score epoch ready it signs that epoch's canonical anchor once
+    /// (and only once — a repeat attestation for an already-attested epoch would burn a funding
+    /// output and trip the reward-uniqueness rule).
+    Attesting { bond_outpoint: TransactionOutpoint, last_attested_epoch: u64 },
 }
 
 impl ValidatorPhase {
@@ -193,32 +282,51 @@ impl ValidatorPhase {
             ValidatorPhase::Funding => "Funding",
             ValidatorPhase::BondSent { .. } => "BondSent",
             ValidatorPhase::BondBurying { .. } => "BondBurying",
-            ValidatorPhase::Done => "Done",
+            ValidatorPhase::Attesting { .. } => "Attesting",
         }
     }
 }
 
-/// The DNS validator: it validates every block it hears and, on top of that, drives one full
-/// overlay lifecycle — bond the stake, wait for it to bury, then attest the canonical anchor of a
-/// ready blue-score epoch. Both txs are unicast to the miner, which is the only block producer.
+/// Wiring of a validator into a scenario.
+pub(super) struct ValidatorCfg {
+    /// Simulator process id — the `sender` the topology routes this validator's txs on.
+    pub(super) id: u64,
+    /// The miner this validator unicasts its bond and shard txs to (its own branch's producer).
+    pub(super) miner_id: u64,
+    /// How many owned coinbase outputs to harvest over the whole run. The smoke scenario caps this
+    /// at 2 (bond + one shard) so it keeps performing exactly one attestation; a long-running
+    /// validator passes `usize::MAX` and consumes funding FIFO, one output per attestation.
+    pub(super) harvest_cap: usize,
+}
+
+/// The DNS validator: it validates every block it hears and, on top of that, drives the overlay
+/// lifecycle — bond the stake, wait for it to bury, then attest the canonical anchor of every ready
+/// blue-score epoch. All txs are unicast to `cfg.miner_id`.
 pub(super) struct ValidatorActor {
     node: Arc<SimNode>,
     config: Arc<Config>,
+    cfg: ValidatorCfg,
     seed: [u8; 32],
     spk: ScriptPublicKey,
+    /// Owned coinbase outputs, oldest first — consumed FIFO (bond, then one per attestation).
     funding: Vec<Funding>,
+    /// How many outputs were harvested over the whole run (NOT `funding.len()`, which shrinks as
+    /// outputs are spent) — this is what `harvest_cap` bounds.
+    harvested: usize,
     phase: ValidatorPhase,
     seen: BlockHashSet,
 }
 
 impl ValidatorActor {
-    pub(super) fn new(node: Arc<SimNode>, config: Arc<Config>, seed: [u8; 32]) -> Self {
+    pub(super) fn new(node: Arc<SimNode>, config: Arc<Config>, seed: [u8; 32], cfg: ValidatorCfg) -> Self {
         Self {
             node,
             config,
+            cfg,
             seed,
             spk: validator_spk(seed),
             funding: Vec::new(),
+            harvested: 0,
             phase: ValidatorPhase::Funding,
             seen: BlockHashSet::default(),
         }
@@ -226,12 +334,13 @@ impl ValidatorActor {
 
     /// Harvests the block's coinbase for an output paying this validator.
     fn harvest(&mut self, block: &Block) {
-        if self.funding.len() >= 2 {
+        if self.harvested >= self.cfg.harvest_cap {
             return;
         }
         let Some(coinbase) = block.transactions.first() else { return };
         if let Some((index, output)) = coinbase.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == self.spk) {
             self.funding.push((TransactionOutpoint::new(coinbase.id(), index as u32), output.value, block.header.daa_score));
+            self.harvested += 1;
         }
     }
 
@@ -240,9 +349,21 @@ impl ValidatorActor {
         self.node.consensus.storage.headers_store.get_daa_score(sink).expect("the sink has a header")
     }
 
+    /// Whether the oldest unspent funding output is spendable: a tx may only spend a MATURED
+    /// coinbase, and +2 of slack keeps the tx valid for the block the miner actually builds after
+    /// the round trip. A premature spend would make every later template fail to build.
+    fn has_mature_funding(&self) -> bool {
+        self.funding.first().is_some_and(|(_, _, daa)| self.sink_daa() >= daa + COINBASE_MATURITY + 2)
+    }
+
+    /// Pops the oldest funding output (the caller must have checked [`Self::has_mature_funding`]).
+    fn take_funding(&mut self) -> Funding {
+        self.funding.remove(0)
+    }
+
     /// Builds the funded, ML-DSA-87-signed stake bond and hands it to the miner.
     fn send_bond(&mut self, env: &mut Environment<SimMsg>) -> ValidatorPhase {
-        let (outpoint, value, daa) = self.funding[0];
+        let (outpoint, value, daa) = self.take_funding();
         let (bond_tx, _validator_id, _reward_payload) = dns_harness::funded_signed_bond_tx(
             self.seed,
             outpoint,
@@ -253,25 +374,30 @@ impl ValidatorActor {
             self.config.params.storage_mass_parameter,
         );
         let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
-        env.unicast(super::VALIDATOR_ID, super::MINER_ID, SimMsg::Tx(bond_tx));
+        env.unicast(self.cfg.id, self.cfg.miner_id, SimMsg::Tx(bond_tx));
         ValidatorPhase::BondSent { bond_outpoint }
     }
 
-    /// Signs the canonical anchor of the latest ready epoch and hands the carrying shard tx to the
-    /// miner. Reads the anchor from this node's OWN consensus — the point of the multi-node setup is
-    /// that the validator sees the same canonical anchor the miner will validate against.
-    fn send_attestation(&mut self, bond_outpoint: TransactionOutpoint, env: &mut Environment<SimMsg>) -> ValidatorPhase {
-        use kaspa_consensus_core::Hash64;
+    /// The latest blue-score epoch this node's OWN sink makes ready, if any.
+    fn ready_epoch(&self) -> Option<u64> {
         use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+        let dns = self.config.params.dns_params.as_ref().expect("the harness params carry DNS params");
+        let sink_blue = self.node.consensus.storage.headers_store.get_blue_score(self.node.sink()).expect("the sink has a header");
+        ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+    }
+
+    /// Signs the canonical anchor of `ready` and hands the carrying shard tx to the miner. Reads the
+    /// anchor from this node's OWN consensus — the point of the multi-node setup is that the
+    /// validator sees the same canonical anchor the miner will validate against. Returns the
+    /// attested epoch on success, or `None` if this node cannot resolve a canonical anchor for the
+    /// epoch yet (the caller then retries on a later block; no funding is consumed).
+    fn send_attestation(&mut self, bond_outpoint: TransactionOutpoint, ready: u64, env: &mut Environment<SimMsg>) -> Option<u64> {
+        use kaspa_consensus_core::Hash64;
 
         let dns = self.config.params.dns_params.clone().expect("the harness params carry DNS params");
         let sink = self.node.sink();
         let vp = &self.node.consensus.virtual_processor;
-        let sink_blue = self.node.consensus.storage.headers_store.get_blue_score(sink).expect("the sink has a header");
-        let ready =
-            ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
-                .expect("a DNS attestation epoch is ready by now");
-        let anchor = vp.canonical_anchor_by_blue_score(ready, sink, &dns).expect("canonical anchor for the ready epoch");
+        let anchor = vp.canonical_anchor_by_blue_score(ready, sink, &dns)?;
 
         let validator = dns_harness::harness_validator(self.seed);
         let attestation = dns_harness::build_signed_attestation(
@@ -283,7 +409,10 @@ impl ValidatorActor {
             anchor.anchor_daa_score,
             Hash64::default(),
         );
-        let (outpoint, value, daa) = self.funding[1];
+        // A fresh COINBASE output per shard: `funded_signed_shard_tx` signs against a UTXO entry it
+        // marks `is_coinbase = true`, so a non-coinbase output (e.g. a previous shard's change)
+        // would not validate.
+        let (outpoint, value, daa) = self.take_funding();
         let shard_tx = dns_harness::funded_signed_shard_tx(
             self.seed,
             outpoint,
@@ -292,22 +421,42 @@ impl ValidatorActor {
             attestation,
             self.config.params.storage_mass_parameter,
         );
-        env.unicast(super::VALIDATOR_ID, super::MINER_ID, SimMsg::Tx(shard_tx));
-        ValidatorPhase::Done
+        env.unicast(self.cfg.id, self.cfg.miner_id, SimMsg::Tx(shard_tx));
+        Some(anchor.epoch)
+    }
+
+    /// Attests the latest ready epoch, if this node's sink made a NEW one ready (strictly past
+    /// `already_attested`) and a matured funding output is available. Returns the attested epoch.
+    ///
+    /// The "strictly newer epoch" guard is what keeps the validator from re-attesting an epoch it
+    /// already signed: a duplicate would burn a funding output on a tx the reward-uniqueness rule
+    /// rejects, and a rejected tx sticks in the miner's pending set.
+    fn attest_if_new_epoch(
+        &mut self,
+        bond_outpoint: TransactionOutpoint,
+        already_attested: Option<u64>,
+        env: &mut Environment<SimMsg>,
+    ) -> Option<u64> {
+        let ready = self.ready_epoch()?;
+        if already_attested.is_some_and(|last| ready <= last) {
+            return None;
+        }
+        if !self.has_mature_funding() {
+            return None;
+        }
+        let attested = self.send_attestation(bond_outpoint, ready, env)?;
+        kaspa_core::trace!("[sim-harness] validator {} attested epoch {} (virtual time {})", self.cfg.id, attested, env.now());
+        Some(attested)
     }
 
     /// Advances the lifecycle by at most one step, after the block has been validated.
     fn step(&mut self, block: &Block, env: &mut Environment<SimMsg>) {
         let before = self.phase.name();
-        self.phase = match std::mem::replace(&mut self.phase, ValidatorPhase::Done) {
+        self.phase = match std::mem::replace(&mut self.phase, ValidatorPhase::Funding) {
             ValidatorPhase::Funding => {
-                // The bond may only spend a MATURED coinbase; +2 of slack keeps the tx valid for the
-                // block the miner actually builds after the round trip.
-                if self.funding.len() >= 2 && self.sink_daa() >= self.funding[0].2 + COINBASE_MATURITY + 2 {
-                    self.send_bond(env)
-                } else {
-                    ValidatorPhase::Funding
-                }
+                // Two owned outputs: one funds the bond, the next one funds the first shard. The
+                // bond may only spend a MATURED coinbase (see `has_mature_funding`).
+                if self.funding.len() >= 2 && self.has_mature_funding() { self.send_bond(env) } else { ValidatorPhase::Funding }
             }
             ValidatorPhase::BondSent { bond_outpoint } => {
                 if block.transactions.iter().any(|tx| tx.id() == bond_outpoint.transaction_id) {
@@ -320,10 +469,16 @@ impl ValidatorActor {
                 if remaining > 0 {
                     ValidatorPhase::BondBurying { bond_outpoint, remaining: remaining - 1 }
                 } else {
-                    self.send_attestation(bond_outpoint, env)
+                    match self.attest_if_new_epoch(bond_outpoint, None, env) {
+                        Some(epoch) => ValidatorPhase::Attesting { bond_outpoint, last_attested_epoch: epoch },
+                        None => ValidatorPhase::BondBurying { bond_outpoint, remaining: 0 },
+                    }
                 }
             }
-            ValidatorPhase::Done => ValidatorPhase::Done,
+            ValidatorPhase::Attesting { bond_outpoint, last_attested_epoch } => {
+                let attested = self.attest_if_new_epoch(bond_outpoint, Some(last_attested_epoch), env).unwrap_or(last_attested_epoch);
+                ValidatorPhase::Attesting { bond_outpoint, last_attested_epoch: attested }
+            }
         };
         if before != self.phase.name() {
             kaspa_core::trace!("[sim-harness] validator phase: {} -> {} (virtual time {})", before, self.phase.name(), env.now());
