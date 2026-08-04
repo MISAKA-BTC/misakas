@@ -488,12 +488,12 @@ impl ValidatorActor {
 
 impl Process<SimMsg> for ValidatorActor {
     fn resume(&mut self, resumption: Resumption<SimMsg>, env: &mut Environment<SimMsg>) -> Suspension {
-        if let Resumption::Message(SimMsg::Block(block)) = resumption {
-            if self.seen.insert(block.header.hash) {
-                self.node.insert(block.clone());
-                self.harvest(&block);
-                self.step(&block, env);
-            }
+        if let Resumption::Message(SimMsg::Block(block)) = resumption
+            && self.seen.insert(block.header.hash)
+        {
+            self.node.insert(block.clone());
+            self.harvest(&block);
+            self.step(&block, env);
         }
         Suspension::Idle
     }
