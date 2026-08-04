@@ -375,8 +375,7 @@ mod tests {
         sim.register(1, Box::new(Scripted { id: 1, script: vec![200, 201], interval: 10, cursor: 0 }));
         sim.register(2, recorder(&log));
         sim.run(1000);
-        let out = log.lock().unwrap().clone();
-        out
+        log.lock().unwrap().clone()
     }
 
     #[test]
