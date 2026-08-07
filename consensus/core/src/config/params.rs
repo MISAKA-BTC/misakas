@@ -693,7 +693,15 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // BlueWorkType is a type alias for Uint576 (9 little-endian u64 limbs); construct via the
     // real struct name (the alias is not a tuple-struct ctor). Low limb = 1_000_000.
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
-    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    // CALIBRATION (incident 2026-07-19 §2-4 — was `100 * STAKE_SCORE_SCALE` = 1e11). StakeScore is
+    // WINDOWED, not cumulative: its ceiling is `stake_score_window_blue_score /
+    // attestation_epoch_length_blue_score` epochs × SCALE = 15 × 1e9 = 1.5e10 here. A margin of
+    // 1e11 therefore sat ABOVE the attainable maximum, so `DominanceSatisfied` was unreachable on
+    // any network state and TwoDimensionalDominance silently degenerated into HardCheckpoint —
+    // i.e. the documented escape valve did not exist. 3 epochs of full participation keeps a real
+    // margin while leaving 12 epochs of headroom inside the window. Enforced by
+    // `presets_emergency_stake_margin_is_attainable`.
+    emergency_stake_margin: StakeScore(3 * STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     evidence_window_blocks: 300,
     unbonding_period_blocks: 700, // > max_reorg_horizon + evidence_window
@@ -780,6 +788,12 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // Local finality-dependent producer/RPC policy: pause bridge/EVM payload production when the
     // DNS-confirmed anchor is older than this DAA distance. Not used for block validation.
     bridge_finality_max_staleness_daa_score: DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE,
+    // Partition-liveness override (incident 2026-08-03 §8): release the stake veto for a candidate
+    // that out-Works canonical since the common ancestor by >4x — i.e. only for an adversary
+    // holding >80% of hashpower for the whole fork. Guarantees a partitioned minority branch
+    // rejoins the work-dominant chain instead of wedging forever, which a strictly absolute stake
+    // veto cannot do (no node can locally tell that it is the minority side of a partition).
+    emergency_work_override_multiplier: 4,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -831,7 +845,10 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
     required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
     emergency_work_margin: Uint576([1_000_000, 0, 0, 0, 0, 0, 0, 0, 0]),
-    emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+    // CALIBRATION (incident 2026-07-19 §2-4) — see GENESIS_ACTIVE_DNS_PARAMS. The old
+    // `100 * STAKE_SCORE_SCALE` exceeded the 15-epoch window ceiling (1.5e10), making the
+    // two-dimensional escape path dead code. Inherited by TESTNET_DNS_PARAMS.
+    emergency_stake_margin: StakeScore(3 * STAKE_SCORE_SCALE),
     max_reorg_horizon_blocks: 300,
     // 14 days; equivocation stays slashable for the whole exit window.
     evidence_window_blocks: FOURTEEN_DAYS_BLOCKS_10BPS,
@@ -929,6 +946,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Local finality-dependent producer/RPC policy: pause bridge/EVM payload production when the
     // DNS-confirmed anchor is older than this DAA distance. Not used for block validation.
     bridge_finality_max_staleness_daa_score: DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE,
+    // Partition-liveness override (incident 2026-08-03 §8) — see GENESIS_ACTIVE_DNS_PARAMS. Kept
+    // identical here (and therefore inherited by TESTNET_DNS_PARAMS via `..PRODUCTION_DNS_PARAMS`)
+    // because the deadlock is structural, not threshold-dependent: it is reachable on any network
+    // whose `reorg_mode` is TwoDimensionalDominance, which is every current preset.
+    emergency_work_override_multiplier: 4,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered

@@ -867,6 +867,40 @@ pub struct DnsParams {
     /// rule would be a hard-forking consensus decision; current shipped code uses it only to pause
     /// local finality-dependent production/RPC flows while the base ledger keeps advancing.
     pub bridge_finality_max_staleness_daa_score: u64,
+
+    /// **Partition-liveness override (incident 2026-08-03 §8).** Multiplier `N` such that a
+    /// candidate accumulating more than `N ×` canonical's WorkScore *since the common ancestor*
+    /// is accepted by [`check_dns_reorg_rule`] **regardless of the stake dimension**. `0` disables
+    /// the override and restores the strict (partition-prone) non-substitutability rule.
+    ///
+    /// ## Why this exists
+    ///
+    /// The 2-D gate is point-of-view biased: a node scores the *candidate* branch's stake against
+    /// its **own** bond view, so attestations that live only on the candidate branch are
+    /// structurally invisible and score 0. The gate therefore cannot distinguish "the candidate
+    /// has no stake" from "I cannot see the candidate's stake". During a network partition every
+    /// side observes itself as healthy (anchor advancing, validators attesting) and the other side
+    /// as stake-less, so **no side can locally determine that it is the minority**. With a strictly
+    /// absolute stake veto both sides reject each other forever — the deadlock observed on
+    /// testnet-22 (split at daa 114,307; work-dominant branch permanently refused by the
+    /// anchor-holding branch). A stake-dimension veto that can never be released is a safety rule
+    /// with no liveness bound, and permanent partition is the strictly worse failure.
+    ///
+    /// ## Security statement (precise — do not weaken in external material)
+    ///
+    /// The override yields **only** to an adversary sustaining more than `N/(N+1)` of total
+    /// hashpower across the *entire* fork (`N = 4` ⇒ >80%). It is deliberately **not** gated on
+    /// [`Self::emergency_work_margin`]: that margin is an absolute `BlueWorkType` and is
+    /// unreachable at a floored-difficulty testnet's work scale (on testnet-22 the margin was
+    /// 1_000_000 against a real since-ancestor work of ~2.2e5, so the work dimension could never be
+    /// satisfied at all). Being a **ratio**, this override is difficulty-denominated by
+    /// construction and behaves identically at any hashrate.
+    ///
+    /// Because the gate only engages for candidates that exit the DNS-confirmed prefix — and that
+    /// prefix is lagged and buried by construction — the comparison is always taken over a deep
+    /// fork, where canonical's since-ancestor work is substantial. Shallow forks keep the confirmed
+    /// anchor, never reach this branch, and are unaffected.
+    pub emergency_work_override_multiplier: u32,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -976,6 +1010,33 @@ impl DnsParams {
         let depth_epochs = ((self.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64).max(2);
         let needed = depth_epochs.saturating_mul(l).saturating_add(lag).saturating_add(backoff);
         l >= 1 && lag >= 1 && backoff < l && window >= needed
+    }
+
+    /// The **ceiling** on any [`StakeScore`] this configuration can produce.
+    ///
+    /// [`compute_stake_score`] sums [`epoch_stake_credit`] over the epochs inside
+    /// `stake_score_window_blue_score`, and each epoch credits at most
+    /// [`STAKE_SCORE_SCALE`] (full participation). So the attainable maximum is
+    /// `floor(window / epoch_length) × STAKE_SCORE_SCALE` — a *windowed*, non-cumulative
+    /// quantity, unlike `blue_work`.
+    ///
+    /// **Any stake threshold at or above this value is unsatisfiable by construction.** That is
+    /// not hypothetical: incident 2026-07-19 §2-4 found `emergency_stake_margin` set to
+    /// `100 × SCALE` (1e11) against a 15-epoch window whose ceiling is `1.5e10`, so the
+    /// `DominanceSatisfied` escape path could never be taken on ANY network state and
+    /// `TwoDimensionalDominance` silently degenerated into `HardCheckpoint`. Use this helper
+    /// when calibrating margins, and see the preset test that enforces headroom against it.
+    pub fn max_attainable_stake_score(&self) -> StakeScore {
+        let l = self.attestation_epoch_length_blue_score.max(1);
+        StakeScore((self.stake_score_window_blue_score / l) as u128 * STAKE_SCORE_SCALE)
+    }
+
+    /// Is [`Self::emergency_stake_margin`] actually reachable? A margin at or above
+    /// [`Self::max_attainable_stake_score`] makes the two-dimensional escape path dead code
+    /// (incident 2026-07-19 §2-4). Enforced by the preset tests rather than at runtime, so a
+    /// deliberate research configuration can still opt out.
+    pub fn emergency_stake_margin_is_attainable(&self) -> bool {
+        self.emergency_stake_margin.0 < self.max_attainable_stake_score().0
     }
 
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
@@ -3142,6 +3203,9 @@ pub struct DnsReorgInputs {
     pub canonical_stake_after: StakeScore,
     pub emergency_work_margin: BlueWorkType,
     pub emergency_stake_margin: StakeScore,
+    /// Partition-liveness override multiplier — see
+    /// [`DnsParams::emergency_work_override_multiplier`]. `0` disables the override.
+    pub emergency_work_override_multiplier: u32,
 }
 
 /// Outcome of the DNS reorg gate. The consensus pipeline maps the
@@ -3167,13 +3231,25 @@ pub enum DnsReorgOutcome {
     /// the two-dimensional dominance test (a PoW-only or stake-only
     /// attacker lands here — non-substitutability).
     DominanceViolation,
+    /// **Partition-liveness override.** The candidate exits the confirmed prefix and does NOT
+    /// satisfy the stake dimension, but out-Works canonical since the common ancestor by more
+    /// than [`DnsParams::emergency_work_override_multiplier`]`×`. Accepted so a partitioned
+    /// minority branch can rejoin the work-dominant chain instead of wedging forever. Callers
+    /// should log this loudly — it means the stake veto was deliberately released.
+    WorkDominanceOverride,
 }
 
 impl DnsReorgOutcome {
     /// `true` for the accept variants (gate dormant, anchor retained,
-    /// or dominance satisfied).
+    /// dominance satisfied, or the partition-liveness work override).
     pub fn is_accept(self) -> bool {
-        matches!(self, DnsReorgOutcome::GateInactive | DnsReorgOutcome::IncludesConfirmedAnchor | DnsReorgOutcome::DominanceSatisfied)
+        matches!(
+            self,
+            DnsReorgOutcome::GateInactive
+                | DnsReorgOutcome::IncludesConfirmedAnchor
+                | DnsReorgOutcome::DominanceSatisfied
+                | DnsReorgOutcome::WorkDominanceOverride
+        )
     }
 }
 
@@ -3197,9 +3273,33 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
     if inputs.candidate_includes_confirmed_anchor {
         return DnsReorgOutcome::IncludesConfirmedAnchor;
     }
+    // Partition-liveness override — see [`DnsParams::emergency_work_override_multiplier`].
+    //
+    // Evaluated for BOTH modes (the deadlock is a property of an unreleasable veto, not of one
+    // mode) and INDEPENDENTLY of `emergency_work_margin`: that margin is an absolute
+    // `BlueWorkType` which a floored-difficulty network never reaches (testnet-22 carried a
+    // 1_000_000 margin against a real since-ancestor work of ~2.2e5), so gating the override on
+    // it would make the override itself unreachable — exactly the bug it exists to fix. A ratio
+    // is difficulty-denominated by construction.
+    //
+    // Overflow ⇒ the bound is unreachable ⇒ no override (fail-closed, never fail-open).
+    let work_override = |i: &DnsReorgInputs| -> bool {
+        if i.emergency_work_override_multiplier == 0 {
+            return false;
+        }
+        let (bound, overflowed) = i.canonical_work_after.overflowing_mul_u64(i.emergency_work_override_multiplier as u64);
+        !overflowed && i.candidate_work_after > bound
+    };
+
     // The candidate exits the DNS-confirmed prefix.
     match inputs.mode {
-        DnsReorgMode::HardCheckpoint => DnsReorgOutcome::HardCheckpointReject,
+        DnsReorgMode::HardCheckpoint => {
+            if work_override(inputs) {
+                DnsReorgOutcome::WorkDominanceOverride
+            } else {
+                DnsReorgOutcome::HardCheckpointReject
+            }
+        }
         DnsReorgMode::TwoDimensionalDominance => {
             // `saturating_add` so an (astronomically unlikely) margin
             // overflow conservatively makes the bound un-beatable.
@@ -3207,7 +3307,13 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
             let stake_bound = inputs.canonical_stake_after.0.saturating_add(inputs.emergency_stake_margin.0);
             let work_ok = inputs.candidate_work_after > work_bound;
             let stake_ok = inputs.candidate_stake_after.0 > stake_bound;
-            if work_ok && stake_ok { DnsReorgOutcome::DominanceSatisfied } else { DnsReorgOutcome::DominanceViolation }
+            if work_ok && stake_ok {
+                DnsReorgOutcome::DominanceSatisfied
+            } else if work_override(inputs) {
+                DnsReorgOutcome::WorkDominanceOverride
+            } else {
+                DnsReorgOutcome::DominanceViolation
+            }
         }
     }
 }
@@ -3238,6 +3344,7 @@ pub fn reorg_inputs_since_common_ancestor(
     canonical_stake_after: StakeScore,
     emergency_work_margin: BlueWorkType,
     emergency_stake_margin: StakeScore,
+    emergency_work_override_multiplier: u32,
 ) -> DnsReorgInputs {
     DnsReorgInputs {
         rollout_stage,
@@ -3249,6 +3356,7 @@ pub fn reorg_inputs_since_common_ancestor(
         canonical_stake_after,
         emergency_work_margin,
         emergency_stake_margin,
+        emergency_work_override_multiplier,
     }
 }
 
@@ -4047,10 +4155,21 @@ pub fn advance_dns_confirmation(
     health: DnsHealth,
     required_work_depth: BlueWorkType,
     required_stake_depth: StakeScore,
+    anchor_epoch_has_credited_attestation: bool,
 ) -> DnsState {
     // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
-    let confirmed =
-        confirmable_anchor.is_some() && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
+    //
+    // `anchor_epoch_has_credited_attestation` (incident 2026-08-03 §8 — "dead-branch confirm"):
+    // the anchor's OWN epoch must carry at least one credited attestation. `stake_depth` is a
+    // windowed sum over several epochs, so without this guard a branch whose attestation flow has
+    // already stopped can still latch a NEW anchor purely from stake accrued in EARLIER epochs.
+    // That arms the reorg veto on a branch no validator is currently supporting and wedges the
+    // node against the rest of the network — with nothing able to release it, since the veto is
+    // evaluated against the node's own (branch-local) bond view. Live support is what makes an
+    // anchor worth defending; an anchor without it must not become a veto.
+    let confirmed = confirmable_anchor.is_some()
+        && anchor_epoch_has_credited_attestation
+        && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
     let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
         (true, Some(canonical), _) => canonical,
         (_, _, Some(p)) => (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score),
@@ -4785,6 +4904,9 @@ mod tests {
             rollout_stage: stage,
             mode,
             candidate_includes_confirmed_anchor: includes,
+            // Override disabled by default so these cases exercise the strict 2-D rule exactly as
+            // before; the override has its own dedicated tests below.
+            emergency_work_override_multiplier: 0,
             candidate_work_after: BlueWorkType::from_u64(cw),
             canonical_work_after: BlueWorkType::from_u64(kw),
             candidate_stake_after: StakeScore(cs),
@@ -4828,6 +4950,162 @@ mod tests {
         assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 100, 100, 100, 100)), DnsReorgOutcome::DominanceViolation);
     }
 
+    /// Partition-liveness override (incident 2026-08-03 §8). A stake-less candidate that
+    /// out-Works canonical since the common ancestor by MORE than the multiplier is accepted;
+    /// at or below it the strict non-substitutability rule still rejects. This is what stops a
+    /// partitioned minority branch from wedging forever against the work-dominant chain.
+    #[test]
+    fn dns_reorg_work_override_releases_stake_veto() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        let with_mult = |cw: u64, kw: u64, mult: u32| {
+            let mut i = reorg_inputs(a, m, false, cw, kw, 0, 500); // candidate stake 0, canonical 500
+            i.emergency_work_override_multiplier = mult;
+            check_dns_reorg_rule(&i)
+        };
+        // 5x > 4x → override releases the stake veto even though candidate stake is ZERO.
+        assert_eq!(with_mult(500, 100, 4), DnsReorgOutcome::WorkDominanceOverride);
+        assert!(with_mult(500, 100, 4).is_accept());
+        // Exactly 4x is NOT "more than 4x" → still rejected (strict comparison).
+        assert_eq!(with_mult(400, 100, 4), DnsReorgOutcome::DominanceViolation);
+        // 3x → rejected: an ordinary fork must not release the veto.
+        assert_eq!(with_mult(300, 100, 4), DnsReorgOutcome::DominanceViolation);
+        // multiplier 0 disables the override entirely (strict legacy behaviour).
+        assert_eq!(with_mult(10_000, 100, 0), DnsReorgOutcome::DominanceViolation);
+        // The override is independent of `emergency_work_margin` — an absolute margin far above
+        // the real work scale (the testnet-22 condition) must not disable it.
+        let mut i = reorg_inputs(a, m, false, 500, 100, 0, 500);
+        i.emergency_work_override_multiplier = 4;
+        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000); // unreachable at this scale
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
+        // Overflow in the bound computation must fail CLOSED (no override), never open.
+        let mut i = reorg_inputs(a, m, false, 1, 0, 0, 500);
+        i.canonical_work_after = BlueWorkType::MAX;
+        i.emergency_work_override_multiplier = 4;
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
+    }
+
+    /// Regression for the testnet-22 deadlock (incident 2026-08-03 §8) using the reported field
+    /// values. Branch A (community) held blueWork 429,462 and branch B (validators) 217,934, split
+    /// at daa 114,307. Branch B had confirmed a branch-B-ONLY anchor, so branch A's candidates
+    /// exited the confirmed prefix and scored stake 0 against branch B's own bond view — branch B
+    /// could never accept branch A, and the partition could not self-heal. With the override the
+    /// minority branch rejoins.
+    #[test]
+    fn testnet22_partition_deadlock_is_released() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        // Since-ancestor deltas at the split: branch A accumulated ~219k, branch B only ~8k.
+        let (branch_a_after, branch_b_after) = (219_462u64, 7_934u64);
+        // Branch B's view: candidate = branch A (invisible stake ⇒ 0), canonical = branch B.
+        let mut i = reorg_inputs(a, m, false, branch_a_after, branch_b_after, 0, 12);
+        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000); // the real testnet-10/22 value
+        i.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
+
+        // Before the fix (override disabled): permanent RejectedDominance — the observed deadlock.
+        i.emergency_work_override_multiplier = 0;
+        assert_eq!(
+            check_dns_reorg_rule(&i),
+            DnsReorgOutcome::DominanceViolation,
+            "reproduces the incident: the work-dominant branch is refused forever"
+        );
+
+        // After the fix: branch A out-works branch B by ~27x ≫ 4x → the veto releases.
+        i.emergency_work_override_multiplier = 4;
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
+        assert!(check_dns_reorg_rule(&i).is_accept(), "the partitioned minority branch can rejoin");
+    }
+
+    /// Regression for the 2026-07-19 testnet-10 virtual freeze (§2-2/§2-3/§2-4). An isolated node
+    /// kept mining its own branch at ~45 s/block while the network advanced at 10 bps; the gate
+    /// refused every block of the network's chain for 3.5 h, silently, and a restart did not clear
+    /// it (the self-referential anchor was persisted). Both layers that made it permanent are
+    /// covered: an unsatisfiable stake margin, and the absence of any work-based release.
+    #[test]
+    fn testnet10_virtual_freeze_is_released() {
+        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
+        // Over 3.5 h the network's chain accumulated ~126_000 blocks of work; the isolated
+        // self-branch ~280. Candidate = the network's chain, whose stake is invisible from the
+        // wedged node's own bond view and therefore scores 0.
+        let mut i = reorg_inputs(a, m, false, 126_000, 280, 0, STAKE_SCORE_SCALE);
+        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000);
+
+        // §2-4: the historical margin (1e11) sat ABOVE the 15-epoch window ceiling (1.5e10), so
+        // `DominanceSatisfied` was unreachable for ANY chain — the escape valve did not exist.
+        i.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
+        i.emergency_work_override_multiplier = 0;
+        assert_eq!(
+            check_dns_reorg_rule(&i),
+            DnsReorgOutcome::DominanceViolation,
+            "reproduces the freeze: the network's own chain is refused indefinitely"
+        );
+
+        // After the fix the calibrated margin and the work override both apply; the node rejoins.
+        i.emergency_stake_margin = StakeScore(3 * STAKE_SCORE_SCALE);
+        i.emergency_work_override_multiplier = 4;
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
+        assert!(check_dns_reorg_rule(&i).is_accept(), "the wedged node can follow the network again");
+    }
+
+    /// incident 2026-07-19 §2-4. `StakeScore` is WINDOWED, so it has a hard ceiling of
+    /// `floor(window / epoch_length) × SCALE`. A margin at or above that ceiling is unsatisfiable
+    /// by construction, which silently turns `TwoDimensionalDominance` into `HardCheckpoint` —
+    /// exactly the failure that shipped. This test makes that class of miscalibration impossible
+    /// to reintroduce unnoticed.
+    #[test]
+    fn presets_emergency_stake_margin_is_attainable() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in [
+            ("genesis-active/dev-sim", GENESIS_ACTIVE_DNS_PARAMS),
+            ("production/mainnet", PRODUCTION_DNS_PARAMS),
+            ("testnet", TESTNET_DNS_PARAMS),
+        ] {
+            let ceiling = p.max_attainable_stake_score();
+            assert!(ceiling.0 > 0, "{name}: the StakeScore window must admit at least one epoch");
+            assert!(
+                p.emergency_stake_margin_is_attainable(),
+                "{name}: emergency_stake_margin {} is >= the attainable StakeScore ceiling {} — the DominanceSatisfied escape path would be dead code",
+                p.emergency_stake_margin.0,
+                ceiling.0
+            );
+            // The historical value must NOT pass, or this test would not have caught the bug.
+            let mut regressed = p.clone();
+            regressed.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
+            assert!(
+                !regressed.emergency_stake_margin_is_attainable(),
+                "{name}: the shipped-and-broken 1e11 margin must be rejected by this check"
+            );
+        }
+    }
+
+    /// The override is a liveness floor for the whole gate, so it releases `HardCheckpoint` too —
+    /// that mode has the same unreleasable-veto shape and would wedge identically.
+    #[test]
+    fn dns_reorg_work_override_applies_to_hard_checkpoint() {
+        let (m, a) = (DnsReorgMode::HardCheckpoint, DnsRolloutStage::Active);
+        let mut i = reorg_inputs(a, m, false, 500, 100, 0, 0);
+        i.emergency_work_override_multiplier = 4;
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
+        i.emergency_work_override_multiplier = 0;
+        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::HardCheckpointReject);
+    }
+
+    /// Every shipped preset must carry a non-zero override, since the deadlock is reachable on any
+    /// network running `TwoDimensionalDominance` — which is all of them.
+    #[test]
+    fn all_presets_have_a_partition_liveness_override() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in [
+            ("genesis-active/dev-sim", GENESIS_ACTIVE_DNS_PARAMS),
+            ("production/mainnet", PRODUCTION_DNS_PARAMS),
+            ("testnet", TESTNET_DNS_PARAMS),
+        ] {
+            assert_ne!(
+                p.emergency_work_override_multiplier, 0,
+                "{name} must keep a partition-liveness escape hatch: a stake veto with no release makes a network split permanent"
+            );
+            assert_eq!(p.reorg_mode, DnsReorgMode::TwoDimensionalDominance, "{name} runs the 2-D gate (so it is exposed)");
+        }
+    }
+
     #[test]
     fn dns_reorg_dominance_respects_margins() {
         let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
@@ -4855,6 +5133,7 @@ mod tests {
             StakeScore(3),
             w(0),
             StakeScore(0),
+            0,
         );
         assert_eq!(i.candidate_work_after, w(500)); // 1000 − 500
         assert_eq!(i.canonical_work_after, w(400)); // 900 − 500
@@ -4875,6 +5154,7 @@ mod tests {
             StakeScore(1),
             w(0),
             StakeScore(0),
+            0,
         );
         assert_eq!(i.candidate_work_after, w(0)); // 500 − 500, floored
         assert_eq!(i.canonical_work_after, w(400));
@@ -6154,6 +6434,8 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
+            true,
         );
         assert_eq!(s1.selected_chain_anchor, sink1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
@@ -6173,6 +6455,8 @@ mod tests {
             DnsHealth::DegradedStakeQualityLow,
             cw,
             cs,
+            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
+            true,
         );
         assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
         assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
@@ -6194,6 +6478,8 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
+            true,
         );
         assert_eq!(s3.selected_chain_anchor, sink3);
         assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
@@ -6211,9 +6497,44 @@ mod tests {
             DnsHealth::Active,
             cw,
             cs,
+            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
+            true,
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
         assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
+    }
+
+    /// "Dead-branch confirm" guard (incident 2026-08-03 §8). `stake_depth` is a WINDOWED sum over
+    /// several epochs, so a branch whose validators have already gone silent still carries enough
+    /// accrued stake to clear `required_stake_depth`. Without this guard it would keep latching
+    /// NEW anchors from that stale stake, arming an unreleasable reorg veto on a branch nothing is
+    /// attesting to. An anchor must have live support in its OWN epoch to become a veto.
+    #[test]
+    fn anchor_without_live_support_is_not_confirmed() {
+        let vsc = Hash64::from_bytes([0x22; 64]);
+        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE));
+        let canon = Hash64::from_bytes([0xC0; 64]);
+        let confirm = |has_support: bool| {
+            advance_dns_confirmation(
+                None,
+                Hash64::from_bytes([0x10; 64]),
+                900,
+                Some((canon, 880)),
+                BlueWorkType::from_u64(2000),  // work clears cW
+                StakeScore(STAKE_SCORE_SCALE), // windowed stake clears cS (accrued in EARLIER epochs)
+                DnsRolloutStage::Active,
+                vsc,
+                DnsHealth::Active,
+                cw,
+                cs,
+                has_support,
+            )
+            .last_dns_confirmed_anchor
+        };
+        // Both depth dimensions clear, but the anchor's own epoch has no credited attestation.
+        assert_eq!(confirm(false), Hash64::default(), "no live support in the anchor's epoch ⇒ NOT confirmed");
+        // Same inputs with one credited attestation in the anchor's epoch ⇒ confirmed as before.
+        assert_eq!(confirm(true), canon, "live support ⇒ confirmed");
     }
 
     /// audit H-02 (true WorkDepth, Option A): with `required_work_depth > 0`, confirmation is
@@ -6240,6 +6561,7 @@ mod tests {
                 DnsHealth::Active,
                 cw,
                 cs,
+                true,
             )
             .last_dns_confirmed_anchor
         };
@@ -6334,6 +6656,7 @@ mod tests {
             required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
             emergency_work_margin: BlueWorkType::from_u64(10_000_000),
             emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
+            emergency_work_override_multiplier: 4,
             max_reorg_horizon_blocks: 100_000,
             evidence_window_blocks: 200_000,
             unbonding_period_blocks: 350_000, // > R + E

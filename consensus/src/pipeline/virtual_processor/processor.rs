@@ -70,7 +70,7 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
-        BondMutation, BondStatus, CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsRolloutStage,
+        BondMutation, BondStatus, CanonicalLaggedEpochAnchor, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OverlaySnapshot,
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_epoch_tallies,
         anchor_cutoff_blue_score, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor,
@@ -2132,9 +2132,33 @@ impl VirtualStateProcessor {
         // the POV-dependent `sink`) is what gets DNS-confirmed and protected by the reorg gate, so
         // nodes that recompute at different boundary sinks still protect the same anchor. `None`
         // until an epoch's anchor is buried and lag-ready (early chain / not yet ready).
-        let confirmable_anchor = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score)
-            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params))
-            .map(|a| (a.anchor_hash, a.anchor_daa_score));
+        // incident 2026-08-03 §8 ("dead-branch confirm"): the confirmable anchor is the most recent
+        // READY epoch that actually carries credited attestation support — NOT merely the most
+        // recent ready epoch.
+        //
+        // `stake_depth` is a WINDOWED sum over several epochs, so a branch whose validators have
+        // gone silent still clears `required_stake_depth` from stake accrued earlier. Confirming
+        // "the latest ready epoch" would let such a branch keep latching NEW anchors that nothing
+        // attests to, arming a reorg veto — evaluated against its own branch-local bond view, and
+        // therefore unreleasable — on a branch the network has moved off. Anchoring to the latest
+        // SUPPORTED epoch freezes the confirmed point where validators actually signed, and it
+        // resumes advancing the moment attestations resume.
+        //
+        // Monotonic by construction: within the stake-score window the OLDEST epochs age out
+        // first, so `max(supported epoch)` never decreases — it only becomes `None` once ALL
+        // support has aged out, and `advance_dns_confirmation` then carries the previous confirmed
+        // anchor forward unchanged. The value stays a deterministic function of the selected chain
+        // (`contributions` is derived from it), so nodes still agree.
+        let latest_ready_epoch = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score);
+        let confirmable = latest_ready_epoch
+            .and_then(|ready| contributions.iter().map(|c| c.epoch).filter(|&e| e <= ready).max())
+            .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params));
+        let confirmable_anchor = confirmable.map(|a| (a.anchor_hash, a.anchor_daa_score));
+
+        // Invariant restated for `advance_dns_confirmation` (which is pure and independently
+        // tested): the anchor it confirms carries live support in its own epoch. True by
+        // construction above; passed explicitly so the rule is enforced at the decision point.
+        let anchor_epoch_has_credited_attestation = confirmable.is_some_and(|a| contributions.iter().any(|c| c.epoch == a.epoch));
 
         // true WorkDepth (audit H-02 Option A): WorkDepth(B) is the blue work accumulated SINCE the
         // confirmable anchor B — anchor-relative (`blue_work(sink) − blue_work(anchor)`), NOT the
@@ -2166,6 +2190,7 @@ impl VirtualStateProcessor {
             health,
             dns_params.required_work_depth,
             dns_params.required_stake_depth,
+            anchor_epoch_has_credited_attestation,
         );
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
@@ -2658,19 +2683,19 @@ impl VirtualStateProcessor {
     /// and wrongly accept a confirmed-history-abandoning reorg. Both branches' acceptance
     /// data is committed by the time the gate runs (the candidate's by
     /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
-    fn dns_reorg_allows(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> bool {
+    fn dns_reorg_outcome(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> DnsReorgOutcome {
         let Some(dns_params) = self.dns_params.as_ref() else {
-            return true;
+            return DnsReorgOutcome::GateInactive;
         };
         let Ok(state) = self.dns_state_store.read().get() else {
-            return true; // no DnsState written yet
+            return DnsReorgOutcome::GateInactive; // no DnsState written yet
         };
         if state.rollout_stage != DnsRolloutStage::Active {
-            return true; // gate dormant outside the Active stage
+            return DnsReorgOutcome::GateInactive; // gate dormant outside the Active stage
         }
         let confirmed = state.last_dns_confirmed_anchor;
         if confirmed == BlockHash::default() {
-            return true; // nothing confirmed yet
+            return DnsReorgOutcome::GateInactive; // nothing confirmed yet
         }
         let includes = match self.reachability_service.try_is_chain_ancestor_of(confirmed, candidate) {
             Ok(v) => v,
@@ -2686,29 +2711,87 @@ impl VirtualStateProcessor {
         // are computed ONLY when the candidate abandons the confirmed prefix AND the
         // network runs the mainnet dominance rule. HardCheckpoint and the includes-anchor
         // case ignore Work/Stake, so they skip the walks entirely.
+        //
+        // `stake_evaluated` records whether the StakeScore walks actually ran (§5-5 skips them
+        // whenever the work dimension already settles the verdict), so the log below reports
+        // "not evaluated" instead of printing the placeholder zeros as if they were measurements.
+        let mut stake_evaluated = false;
         let inputs = if dns_params.reorg_mode == DnsReorgMode::TwoDimensionalDominance && !includes {
-            // Selected-chain common ancestor I. Beyond the reorg horizon → not gate-eligible;
-            // reject (a reorg deeper than the horizon cannot rewrite confirmed history).
+            // Selected-chain common ancestor I. Beyond the reorg horizon the DNS gate ABSTAINS
+            // (incident 2026-08-03 §8): it has no Work/Stake deltas to judge on, and the base
+            // ledger already refuses reorgs below `virtual_finality_point` in `sink_search`
+            // (see `candidate_at_or_above_finality`) plus everything under the pruning point.
+            //
+            // This used to `return false` (unconditional reject). That is what made a partition
+            // PERMANENT rather than merely long: once two branches diverged by more than
+            // `max_reorg_horizon_blocks` (300) the gate stopped evaluating anything and rejected
+            // outright, so no amount of subsequent work on the other branch could ever be
+            // considered. On testnet-22 the branches were ~120k blocks apart by the time the
+            // split was noticed — far past the horizon — so the deadlock was already sealed.
+            // Abstaining hands the decision to GHOSTDAG + the real finality guard instead of
+            // adding a second, unreleasable veto on top of them.
             let Some(ancestor) = self.selected_chain_common_ancestor(candidate, prev_sink, dns_params.max_reorg_horizon_blocks) else {
-                return false;
+                debug!(
+                    "DNS reorg gate: candidate {candidate} vs sink {prev_sink} common ancestor is beyond the reorg horizon ({} blocks); gate abstains (base-ledger finality point still applies)",
+                    dns_params.max_reorg_horizon_blocks
+                );
+                return DnsReorgOutcome::GateInactive;
             };
-            let net_id_hash = self.genesis.hash;
-            let net_id = net_id_hash.as_byte_slice();
-            // Per-branch bond sets (safety — each branch under its OWN view; see doc comment).
-            let candidate_bonds = candidate_bond_view.records();
-            let canonical_bonds: Vec<StakeBondRecord> =
-                self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+            let candidate_work = self.ghostdag_store.get_blue_work(candidate).unwrap_or_default();
+            let canonical_work = self.ghostdag_store.get_blue_work(prev_sink).unwrap_or_default();
+            let ancestor_work = self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default();
+
+            // §5-5 cost mitigation (incident 2026-07-19). The two `stake_score_since_ancestor`
+            // calls below are each an O(divergence) chain walk (`collect_stake_contributions_v2`
+            // from tip back to the ancestor), plus a full `stake_bonds_store` scan — and
+            // `sink_search` runs this gate for EVERY candidate of a heavier branch. That is the
+            // amplification the report measured as ever-lengthening resolve times.
+            //
+            // The WORK dimension alone settles the two cases that dominate a wedge, so decide it
+            // first from cheap blue_work lookups and skip the walks when they provably cannot
+            // change the outcome:
+            //   * the work override already accepts        ⇒ stake is irrelevant;
+            //   * `work_ok` is false ⇒ the rule needs BOTH ⇒ certain `DominanceViolation`.
+            // Both shortcuts are EXACT, not heuristic: neither branch of `check_dns_reorg_rule`
+            // consults the stake values in these cases, so feeding it zeros yields the identical
+            // verdict. Only the genuinely contested case (out-works canonical but not by the
+            // override ratio) still pays for the walks.
+            let candidate_after = candidate_work.saturating_sub(ancestor_work);
+            let canonical_after = canonical_work.saturating_sub(ancestor_work);
+            let work_ok = candidate_after > canonical_after.saturating_add(dns_params.emergency_work_margin);
+            let override_ok = dns_params.emergency_work_override_multiplier > 0 && {
+                let (bound, overflowed) = canonical_after.overflowing_mul_u64(dns_params.emergency_work_override_multiplier as u64);
+                !overflowed && candidate_after > bound
+            };
+            stake_evaluated = work_ok && !override_ok;
+
+            let (candidate_stake, canonical_stake) = if stake_evaluated {
+                let net_id_hash = self.genesis.hash;
+                let net_id = net_id_hash.as_byte_slice();
+                // Per-branch bond sets (safety — each branch under its OWN view; see doc comment).
+                let candidate_bonds = candidate_bond_view.records();
+                let canonical_bonds: Vec<StakeBondRecord> =
+                    self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+                (
+                    self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id),
+                    self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id),
+                )
+            } else {
+                (StakeScore(0), StakeScore(0))
+            };
+
             reorg_inputs_since_common_ancestor(
                 state.rollout_stage,
                 dns_params.reorg_mode,
                 includes,
-                self.ghostdag_store.get_blue_work(candidate).unwrap_or_default(),
-                self.ghostdag_store.get_blue_work(prev_sink).unwrap_or_default(),
-                self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default(),
-                self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id),
-                self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id),
+                candidate_work,
+                canonical_work,
+                ancestor_work,
+                candidate_stake,
+                canonical_stake,
                 dns_params.emergency_work_margin,
                 dns_params.emergency_stake_margin,
+                dns_params.emergency_work_override_multiplier,
             )
         } else {
             // HardCheckpoint, or candidate keeps the confirmed anchor: Work/Stake unused.
@@ -2723,9 +2806,28 @@ impl VirtualStateProcessor {
                 StakeScore(0),
                 dns_params.emergency_work_margin,
                 dns_params.emergency_stake_margin,
+                dns_params.emergency_work_override_multiplier,
             )
         };
-        check_dns_reorg_rule(&inputs).is_accept()
+        let outcome = check_dns_reorg_rule(&inputs);
+        if outcome == DnsReorgOutcome::WorkDominanceOverride {
+            // Loud on purpose: the stake veto was deliberately released. Either this node is the
+            // minority side of a partition and is (correctly) rejoining the work-dominant chain,
+            // or an adversary is sustaining >N/(N+1) of total hashpower across the whole fork.
+            // Both are operationally significant and must be visible in the log.
+            warn!(
+                "DNS reorg gate: partition-liveness override — candidate {candidate} out-works sink {prev_sink} by >{}x since the common ancestor (candidate_work_after={}, canonical_work_after={}); accepting despite an unsatisfied stake dimension (stake: {})",
+                dns_params.emergency_work_override_multiplier,
+                inputs.candidate_work_after,
+                inputs.canonical_work_after,
+                if stake_evaluated {
+                    format!("candidate={}, canonical={}", inputs.candidate_stake_after.0, inputs.canonical_stake_after.0)
+                } else {
+                    "not evaluated (work dimension already decisive)".to_owned()
+                },
+            );
+        }
+        outcome
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
@@ -2789,6 +2891,11 @@ impl VirtualStateProcessor {
         // The initial diff point is the previous sink
         let mut diff_point = prev_sink;
 
+        // Self-wedge diagnostics (incident 2026-07-19 §2-1): the heaviest candidate the DNS gate
+        // refused during this search, if any. The heap is blue-work ordered, so the first refusal
+        // is the heaviest. Reported once per search when virtual settles lower than it.
+        let mut gate_rejected: Option<(BlockHash, DnsReorgOutcome, BlueWorkType)> = None;
+
         // We maintain the following invariant: `heap` is an antichain.
         // It holds at step 0 since tips are an antichain, and remains through the loop
         // since we check that every pushed block is not in the past of current heap
@@ -2817,7 +2924,24 @@ impl VirtualStateProcessor {
                     // rejection is soft — we fall through to push the candidate's parents
                     // and continue, converging on a DNS-valid sink (mirrors the
                     // invalid-UTXO handling below).
-                    if self.dns_reorg_allows(candidate, prev_sink, bond_view) {
+                    let dns_outcome = self.dns_reorg_outcome(candidate, prev_sink, bond_view);
+                    if dns_outcome.is_accept() {
+                        // Self-wedge signal (incident 2026-07-19 §2-1). The 7/19 freeze ran 3.5h
+                        // with ZERO warnings: the gate refused every block of the network's chain
+                        // while the node believed it was correctly repelling a deep reorg, and the
+                        // only way to notice was comparing DAA against a peer by hand. Emitting
+                        // this at the point virtual settles — once per search, not per candidate —
+                        // keeps a healthy node quiet while making a wedged one impossible to miss.
+                        if let Some((rejected, reason, rejected_work)) = gate_rejected {
+                            warn!(
+                                "DNS reorg gate: virtual settled on sink {} (blue_work {}) after refusing the heavier candidate {} (blue_work {}, reason {:?}). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.",
+                                candidate,
+                                self.ghostdag_store.get_blue_work(candidate).unwrap_or_default(),
+                                rejected,
+                                rejected_work,
+                                reason,
+                            );
+                        }
                         // All blocks with lower blue work than filtering_root are:
                         // 1. not in its future (bcs blue work is monotonic),
                         // 2. will be removed eventually by the bounded merge check.
@@ -2829,7 +2953,14 @@ impl VirtualStateProcessor {
                             heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
                         );
                     }
-                    debug!("Block candidate {} rejected by the DNS finality reorg gate; ignored from Virtual chain.", candidate);
+                    if gate_rejected.is_none() {
+                        gate_rejected =
+                            Some((candidate, dns_outcome, self.ghostdag_store.get_blue_work(candidate).unwrap_or_default()));
+                    }
+                    debug!(
+                        "Block candidate {} rejected by the DNS finality reorg gate ({:?}); ignored from Virtual chain.",
+                        candidate, dns_outcome
+                    );
                 } else {
                     debug!("Block candidate {} has invalid UTXO state and is ignored from Virtual chain.", candidate)
                 }
