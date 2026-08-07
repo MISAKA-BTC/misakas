@@ -240,7 +240,9 @@ impl VirtualStateProcessor {
                     .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
                     .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
                     .collect();
-                let inserts: Vec<BondMutation> = bond_mutations_from_accepted_txs(&mergeset_txs, pov_daa_score, min_bond, unbonding_floor)
+                let inserts: Vec<BondMutation> = // `false`: this call keeps only `Insert` mutations (see the filter below), so the
+                // unbond-authorization fence has nothing to act on here.
+                bond_mutations_from_accepted_txs(&mergeset_txs, pov_daa_score, min_bond, unbonding_floor, false)
                     .into_iter()
                     .filter(|m| matches!(m, BondMutation::Insert(..)))
                     .collect();

@@ -795,6 +795,18 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // rejoins the work-dominant chain instead of wedging forever, which a strictly absolute stake
     // veto cannot do (no node can locally tell that it is the minority side of a partition).
     emergency_work_override_multiplier: 4,
+    // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
+    // preset, so a new network never has to pick — and remember — a per-net activation score.
+    //
+    // Residual on testnet-10 only: its chain already carries one unauthorized request (DAA
+    // 28_059_617) whose stamp is persisted in the two operator nodes' bond stores. The bond store
+    // is incremental derived state (ADR-0009 A.4), so those nodes keep the stamp while a node
+    // synced from genesis under this rule will not derive it — a one-bond (1M of 24M MSK)
+    // difference in the active-stake denominator. Both sides clear every threshold by a wide
+    // margin, and the divergence is erased for good the first time the two nodes are resynced.
+    // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
+    // historical stamp, at the cost of every future net inheriting a magic number.
+    unbond_authz_mergeset_activation_daa_score: 0,
     // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
     // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
     vlt: VltParams::INERT,
@@ -966,6 +978,18 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // because the deadlock is structural, not threshold-dependent: it is reachable on any network
     // whose `reorg_mode` is TwoDimensionalDominance, which is every current preset.
     emergency_work_override_multiplier: 4,
+    // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
+    // preset, so a new network never has to pick — and remember — a per-net activation score.
+    //
+    // Residual on testnet-10 only: its chain already carries one unauthorized request (DAA
+    // 28_059_617) whose stamp is persisted in the two operator nodes' bond stores. The bond store
+    // is incremental derived state (ADR-0009 A.4), so those nodes keep the stamp while a node
+    // synced from genesis under this rule will not derive it — a one-bond (1M of 24M MSK)
+    // difference in the active-stake denominator. Both sides clear every threshold by a wide
+    // margin, and the divergence is erased for good the first time the two nodes are resynced.
+    // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
+    // historical stamp, at the cost of every future net inheriting a magic number.
+    unbond_authz_mergeset_activation_daa_score: 0,
     // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
     // by verified useful compute as the source of voting power. Shipped DORMANT
     // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
