@@ -60,9 +60,9 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, DnsConfirmation,
-        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, StakeBondPage,
-        StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state,
+        ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
+        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, PendingComputeVerdict,
+        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state,
         epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds, ready_epoch_from_tip_blue_score,
         required_stake_for_quality_floor, stake_attestation_message,
     },
@@ -822,6 +822,13 @@ impl Consensus {
             .collect()
     }
 
+    /// Every stake-bond record in the overlay store. `flatten()`-equivalent filtering drops
+    /// unreadable entries defensively: one corrupt bond must not blank out the whole set, since
+    /// callers use it as the universe the overlay's identity and activity checks resolve against.
+    fn all_stake_bond_records(&self) -> Vec<StakeBondRecord> {
+        self.storage.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect()
+    }
+
     /// kaspa-pq DNS v3: assemble the signed `ValidatorAttestationTarget` for a canonical
     /// lagged anchor — the exact `(net_id, epoch, target_hash, target_daa_score, vsc=0,
     /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The VSC
@@ -1329,6 +1336,42 @@ impl ConsensusApi for Consensus {
         } else {
             fallback.into_iter().rev().take(limit).collect()
         }
+    }
+
+    fn get_pending_compute_verdicts(&self, validator_id: kaspa_consensus_core::Hash64, limit: usize) -> Vec<PendingComputeVerdict> {
+        let Some(dns_params) = self.config.params.dns_params.as_ref() else {
+            return Vec::new();
+        };
+        let sink = self.get_sink();
+        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
+        self.virtual_processor.pending_compute_verdicts(
+            sink,
+            &self.all_stake_bond_records(),
+            self.config.params.genesis.hash.as_byte_slice(),
+            dns_params,
+            sink_daa,
+            validator_id,
+            limit,
+        )
+    }
+
+    fn get_compute_status(
+        &self,
+        validator_id: kaspa_consensus_core::Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Option<ComputeStatusView> {
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let sink = self.get_sink();
+        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
+        Some(self.virtual_processor.compute_status(
+            sink,
+            &self.all_stake_bond_records(),
+            self.config.params.genesis.hash.as_byte_slice(),
+            dns_params,
+            sink_daa,
+            validator_id,
+            bond_outpoint,
+        ))
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

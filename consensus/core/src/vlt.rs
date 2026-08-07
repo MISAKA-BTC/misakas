@@ -101,6 +101,27 @@ pub const MAX_VERIFIER_ATTESTATIONS: usize = 8;
 /// preset params in `config::params`.
 pub const MAX_MODEL_COST_ENTRIES: usize = 16;
 
+/// Maximum size of the job input a [`ComputeCommitmentPayload`] may carry.
+///
+/// The input has to be **on chain** because [`VerificationScheme::CanonicalFullReplay`] means a
+/// verifier re-runs the job, and [`LlmJobSpec`] carries only `p_j` — a commitment to the input,
+/// not the input. A verifier that cannot obtain the prompt cannot replay, and under
+/// refutation-dominant acceptance a committee that cannot replay is a committee that never
+/// confirms. Any off-chain distribution channel would have to exist, be reachable, and be waited
+/// on before a verdict could be formed; publishing the bytes in the phase-1 commitment removes
+/// that dependency the same way standalone verdicts removed the executor→verifier round trip.
+///
+/// The commitment is the right carrier rather than the certificate: it is published *before* the
+/// sortition beacon exists, so the whole job is public before anyone knows who audits it, and
+/// re-stating the input on the certificate would only create a second place for it to disagree.
+///
+/// A stateless cap rather than a [`VltParams`] field so [`crate::dns_finality::validate_compute_commitment_payload`]
+/// can enforce it without threading per-network params into isolation validation — the same
+/// reason [`MAX_VERIFIER_ATTESTATIONS`] is a constant. 8 KiB is far above the token budget
+/// [`ModelCostEntry::max_tokens`] allows a job to consume and far below the 4627-byte ML-DSA-87
+/// signature's order of magnitude for the transaction as a whole.
+pub const MAX_JOB_INPUT_BYTES: usize = 8192;
+
 // ---------------------------------------------------------------------
 // Domain separators. Each is a distinct BLAKE2b key so a digest from one
 // role can never be replayed as a digest from another.
@@ -108,6 +129,8 @@ pub const MAX_MODEL_COST_ENTRIES: usize = 16;
 
 /// Keyed-BLAKE2b-512 domain for [`job_spec_id`] (`H(S_j)`).
 pub const JOB_SPEC_ID_KEY: &[u8] = b"misaka-vlt-jobspec-v1";
+/// Keyed-BLAKE2b-512 domain for [`job_input_commitment`] (`p_j`).
+pub const JOB_INPUT_COMMITMENT_KEY: &[u8] = b"misaka-vlt-job-input-v1";
 /// Keyed-BLAKE2b-512 domain for [`compute_receipt_hash`] (`R_j`, §3.1 eq. 2).
 pub const COMPUTE_RECEIPT_KEY: &[u8] = b"misaka-vlt-receipt-v1";
 /// Keyed-BLAKE2b-256 domain for the executor's signed certificate message.
@@ -219,6 +242,21 @@ pub struct LlmJobSpec {
     pub max_tokens: u32,
     /// `v_j` — verification relation.
     pub verification_scheme: VerificationScheme,
+}
+
+/// `p_j` — the commitment to a job's input bytes, keyed by [`JOB_INPUT_COMMITMENT_KEY`].
+///
+/// This is the value [`LlmJobSpec::input_commitment`] carries, and the link between the input
+/// published in a job's [`ComputeCommitmentPayload`] and the spec its certificate names: the
+/// credit walk requires `job_input_commitment(commitment.input) == cert.spec.input_commitment`,
+/// so an executor cannot commit to one prompt and certify a receipt for another.
+pub fn job_input_commitment(input: &[u8]) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(JOB_INPUT_COMMITMENT_KEY).to_state();
+    hasher.update(&(input.len() as u64).to_le_bytes());
+    hasher.update(input);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 /// `H(S_j)` — the canonical job identity, keyed by [`JOB_SPEC_ID_KEY`].
@@ -522,16 +560,36 @@ pub struct ComputeCommitmentPayload {
     pub job_id: Hash64,
     pub executor_id: Hash64,
     pub executor_bond_outpoint: TransactionOutpoint,
+    /// The job's input bytes — the prompt (plus any context) the spec's `p_j` commits to.
+    ///
+    /// Published here, at most [`MAX_JOB_INPUT_BYTES`], because a full-replay verifier needs the
+    /// actual input and the spec carries only its digest. It rides the commitment rather than the
+    /// certificate so the entire job is public *before* the beacon that draws its committee
+    /// exists — a verifier learns nothing at audit time that the rest of the network did not
+    /// already have.
+    pub input: Vec<u8>,
     /// ML-DSA-87 signature over [`compute_commitment_message`] under
     /// [`COMPUTE_COMMITMENT_MLDSA87_CONTEXT`].
     pub signature: Vec<u8>,
 }
 
 /// Digest an executor signs to commit to a job.
-pub fn compute_commitment_message(network_id: &[u8], job_id: Hash64, bond_outpoint: TransactionOutpoint) -> Hash {
+///
+/// `input_commitment` is bound in as well as `job_id`, even though `job_id` already covers it
+/// through [`job_spec_id`]: without it the input bytes would be the one part of the commitment no
+/// signature covers, and anyone relaying the transaction could swap them for bytes with a
+/// different digest. The resulting commitment would still verify, but no certificate could ever
+/// resolve against it — a free grief against an executor that has already paid for the job.
+pub fn compute_commitment_message(
+    network_id: &[u8],
+    job_id: Hash64,
+    input_commitment: Hash64,
+    bond_outpoint: TransactionOutpoint,
+) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(COMPUTE_COMMITMENT_MESSAGE_DOMAIN).to_state();
     hasher.update(network_id);
     hasher.update(job_id.as_byte_slice());
+    hasher.update(input_commitment.as_byte_slice());
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
     let mut out = [0u8; 32];
@@ -1476,6 +1534,24 @@ mod tests {
             replay_receipt_hash: replay,
             signature: vec![0u8; 4],
         }
+    }
+
+    /// `p_j` is what ties the input bytes a commitment publishes to the spec a certificate names,
+    /// so it has to separate inputs that a naive concatenation would not — otherwise an executor
+    /// could publish one prompt and certify a receipt for another that happens to share a digest.
+    #[test]
+    fn job_input_commitment_separates_distinct_inputs() {
+        assert_eq!(job_input_commitment(b"the capital of France is"), job_input_commitment(b"the capital of France is"));
+        assert_ne!(job_input_commitment(b"a"), job_input_commitment(b"b"));
+        // Length-prefixed: a prefix must not collide with the longer input that extends it.
+        assert_ne!(job_input_commitment(b"ab"), job_input_commitment(b"abc"));
+        assert_ne!(job_input_commitment(b""), job_input_commitment(b"\0"));
+
+        // The commitment is inside `job_id`, so two jobs over different inputs are different
+        // jobs — different identities, different sortition tickets, different receipts.
+        let a = LlmJobSpec { input_commitment: job_input_commitment(b"prompt-a"), ..spec() };
+        let b = LlmJobSpec { input_commitment: job_input_commitment(b"prompt-b"), ..spec() };
+        assert_ne!(job_spec_id(&a), job_spec_id(&b));
     }
 
     #[test]

@@ -273,7 +273,12 @@ pub trait ComputeRuntime: Send + Sync {
     /// Separate from [`Self::execute`] because PALW distinguishes the two modes (`--mode
     /// self-job` vs `--mode verify`), and because a verifier must never reuse an executor's
     /// artifacts — re-running the peer's own receipt would confirm anything.
-    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8], peer: &MatchProjection) -> Result<MatchProjection, PalwError>;
+    ///
+    /// It takes no argument describing what the peer claimed, and that is the point: a replay
+    /// audit handed the answer is not an audit. Consensus compares the two receipts afterwards.
+    /// (The caller could not supply one honestly in any case — a certificate carries a
+    /// [`ComputeReceipt`], which is this projection already folded down.)
+    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError>;
 
     /// Whether this runtime's identity is the consensus-registered one.
     ///
@@ -324,11 +329,17 @@ impl PalwWorkerRuntime {
         let mut cmd = Command::new(&self.cfg.worker_bin);
         cmd.args(args).current_dir(&self.cfg.work_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
-        if let Some(bytes) = stdin_bytes
-            && let Some(mut stdin) = child.stdin.take()
+        // Close stdin after writing: the worker reads the prompt to EOF, so leaving the pipe open
+        // would deadlock it against our own wait below.
+        if let Some(mut stdin) = child.stdin.take()
+            && let Some(bytes) = stdin_bytes
         {
             let _ = stdin.write_all(bytes);
         }
+        // Enforce the wall-clock ceiling. A worker that never returns is indistinguishable from an
+        // absent one to the rest of the network, but to *this* node it is much worse: the job slot
+        // stays occupied and the validator silently stops auditing. Kill it and report instead.
+        self.wait_with_timeout(&mut child)?;
         let out =
             child.wait_with_output().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
         if !out.status.success() {
@@ -338,6 +349,29 @@ impl PalwWorkerRuntime {
             });
         }
         Ok(serde_json::from_slice(&out.stdout)?)
+    }
+
+    /// Poll for `child` to exit within [`PalwWorkerConfig::timeout`], killing it if it does not.
+    ///
+    /// A poll loop rather than a watchdog thread because the caller is already a dedicated
+    /// blocking task: there is no other work to interleave, and a coarse poll costs nothing next
+    /// to a job measured in minutes.
+    fn wait_with_timeout(&self, child: &mut std::process::Child) -> Result<(), PalwError> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(200);
+        let deadline = std::time::Instant::now() + self.cfg.timeout;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(source) => return Err(PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source }),
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(PalwError::Timeout(self.cfg.timeout));
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
     }
 }
 
@@ -356,10 +390,10 @@ impl ComputeRuntime for PalwWorkerRuntime {
         MatchProjection::from_submission_json(&doc)
     }
 
-    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8], _peer: &MatchProjection) -> Result<MatchProjection, PalwError> {
-        // The peer's projection is deliberately NOT handed to the worker: a verifier must derive
-        // its own result independently, and feeding it the answer it is meant to check is how a
-        // replay audit turns into a rubber stamp. Consensus compares the two afterwards.
+    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
+        // Nothing about the peer's claim reaches the worker: a verifier must derive its own result
+        // independently, and feeding it the answer it is meant to check is how a replay audit
+        // turns into a rubber stamp. Consensus compares the two afterwards.
         let n_predict = spec.max_tokens.to_string();
         let doc = self.run(&["--mode", "verify", "--prompt-stdin", "--n-predict", &n_predict], Some(prompt))?;
         MatchProjection::from_submission_json(&doc)
@@ -431,7 +465,7 @@ impl ComputeRuntime for MockRuntime {
         Ok(self.project(spec, prompt))
     }
 
-    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8], _peer: &MatchProjection) -> Result<MatchProjection, PalwError> {
+    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
         Ok(self.project(spec, prompt))
     }
 }
@@ -506,14 +540,14 @@ mod tests {
         let s = spec();
         let prompt = b"the capital of France is";
         let executor = MockRuntime::default().execute(&s, prompt).unwrap();
-        let verifier = MockRuntime::default().replay(&s, prompt, &executor).unwrap();
+        let verifier = MockRuntime::default().replay(&s, prompt).unwrap();
         assert_eq!(
             compute_receipt_hash(&s, &executor.to_compute_receipt()),
             compute_receipt_hash(&s, &verifier.to_compute_receipt()),
             "two honest replicas must reproduce one receipt"
         );
 
-        let liar = MockRuntime { divergent: true, ..Default::default() }.replay(&s, prompt, &executor).unwrap();
+        let liar = MockRuntime { divergent: true, ..Default::default() }.replay(&s, prompt).unwrap();
         assert_ne!(compute_receipt_hash(&s, &executor.to_compute_receipt()), compute_receipt_hash(&s, &liar.to_compute_receipt()));
     }
 
@@ -606,4 +640,28 @@ mod tests {
         });
         assert!(matches!(rt.probe(), Err(PalwError::Spawn { .. })));
     }
+
+    /// A worker that never returns must be killed, not waited on forever. An absent verifier only
+    /// fails to confirm the job in front of it; a wedged one stops auditing every later job too,
+    /// and under refutation-dominant acceptance that silently starves honest executors of credit.
+    #[test]
+    #[cfg(unix)]
+    fn a_hung_worker_is_killed_at_the_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A script rather than `/bin/sleep`, because `probe` passes its own fixed arguments and
+        // sleep would reject them and exit at once — testing nothing.
+        let script = std::env::temp_dir().join("misaka-palw-hung-worker-test.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 300\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let rt =
+            PalwWorkerRuntime::new(PalwWorkerConfig { worker_bin: script, work_dir: std::env::temp_dir(), timeout: TEST_TIMEOUT });
+        let started = std::time::Instant::now();
+        assert!(matches!(rt.probe(), Err(PalwError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_secs(30), "the ceiling must fire long before the worker would have returned");
+    }
+
+    #[cfg(unix)]
+    const TEST_TIMEOUT: Duration = Duration::from_millis(500);
 }

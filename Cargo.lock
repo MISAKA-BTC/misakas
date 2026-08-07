@@ -5144,6 +5144,7 @@ dependencies = [
  "libcrux-ml-dsa",
  "log",
  "misaka-endpoints",
+ "misaka-palw",
  "num_cpus",
  "rand 0.8.6",
  "rayon",

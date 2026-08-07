@@ -3,15 +3,15 @@
 //! We use newtypes in order to simplify changing the underlying lock in the future
 
 use kaspa_consensus_core::{
-    BlockHash, BlockHashSet, BlueWorkType, ChainPath,
+    BlockHash, BlockHashSet, BlueWorkType, ChainPath, Hash64,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{BlockCount, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
-        ValidatorAttestationTarget,
+        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, StakeBondPage,
+        StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
     },
     errors::consensus::ConsensusResult,
     header::Header,
@@ -306,6 +306,22 @@ impl ConsensusSessionOwned {
         limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
         self.clone().spawn_blocking(move |c| c.get_validator_attestation_targets(bond_outpoint, from_epoch, limit)).await
+    }
+
+    /// MISAKA Verified LLM Token-Weighted BFT: accepted compute certificates this validator was
+    /// sortitioned to audit and has not yet judged (empty below the VLT fence).
+    pub async fn async_get_pending_compute_verdicts(&self, validator_id: Hash64, limit: usize) -> Vec<PendingComputeVerdict> {
+        self.clone().spawn_blocking(move |c| c.get_pending_compute_verdicts(validator_id, limit)).await
+    }
+
+    /// MISAKA Verified LLM Token-Weighted BFT: this validator's compute-overlay standing —
+    /// capability expiry, in-class peers, and its own uncertified commitments.
+    pub async fn async_get_compute_status(
+        &self,
+        validator_id: Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Option<ComputeStatusView> {
+        self.clone().spawn_blocking(move |c| c.get_compute_status(validator_id, bond_outpoint)).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

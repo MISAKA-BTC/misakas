@@ -176,6 +176,16 @@ pub struct Args {
     pub stake_bond: Option<String>,
     pub validator_mode: Option<String>,
 
+    // MISAKA Verified LLM Token-Weighted BFT: the compute role. Default off, and additionally
+    // inert on any network whose model cost table is empty (which is every shipped preset).
+    pub enable_compute: bool,
+    pub compute_worker: Option<String>,
+    pub compute_work_dir: Option<String>,
+    pub compute_prompt: Option<String>,
+    pub compute_max_tokens: Option<u32>,
+    pub compute_timeout_secs: Option<u64>,
+    pub compute_auto_challenge: bool,
+
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
     pub testnet_suffix: u32,
@@ -257,6 +267,13 @@ impl Default for Args {
             evm_fee_recipient: None,
             stake_bond: None,
             validator_mode: None,
+            enable_compute: false,
+            compute_worker: None,
+            compute_work_dir: None,
+            compute_prompt: None,
+            compute_max_tokens: None,
+            compute_timeout_secs: None,
+            compute_auto_challenge: false,
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -577,6 +594,63 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(String))
                 .help("kaspa-pq: validator operating mode {active, standby, observer} (default: observer)."),
         )
+        .arg(
+            arg!(--"enable-compute" "MISAKA VLT: run the compute role (execute + audit LLM jobs) alongside the validator service. \
+                 Requires --enable-validator and --compute-worker; inert on networks whose model cost table is empty. Default off.")
+                .env("KASPAD_ENABLE_COMPUTE"),
+        )
+        .arg(
+            Arg::new("compute-worker")
+                .long("compute-worker")
+                .env("KASPAD_COMPUTE_WORKER")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA VLT: path to the pinned palw-worker binary. Without it the compute role stays disabled — an \
+                     unregistered runtime mints nothing and would refute honest peers if it were drawn as a verifier.",
+                ),
+        )
+        .arg(
+            Arg::new("compute-work-dir")
+                .long("compute-work-dir")
+                .env("KASPAD_COMPUTE_WORK_DIR")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("MISAKA VLT: scratch directory the compute worker runs in (default: the system temp directory)."),
+        )
+        .arg(
+            Arg::new("compute-prompt")
+                .long("compute-prompt")
+                .env("KASPAD_COMPUTE_PROMPT")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA VLT: file holding this node's executor job input. Omit to run verifier-only, auditing peers' jobs \
+                     without originating any.",
+                ),
+        )
+        .arg(
+            Arg::new("compute-max-tokens")
+                .long("compute-max-tokens")
+                .env("KASPAD_COMPUTE_MAX_TOKENS")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32))
+                .help("MISAKA VLT: token ceiling for this node's own jobs, clamped down to the registered profile's limit."),
+        )
+        .arg(
+            Arg::new("compute-timeout-secs")
+                .long("compute-timeout-secs")
+                .env("KASPAD_COMPUTE_TIMEOUT_SECS")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help("MISAKA VLT: wall-clock ceiling for one compute job, in seconds (default: 900)."),
+        )
+        .arg(
+            arg!(--"compute-auto-challenge" "MISAKA VLT: file a ForgedReceipt fraud proof when a replay refutes a peer. Off by \
+                 default: the refuting verdict already blocks the credit, while a challenge stakes this node's own bond on a \
+                 divergence that a mis-declared determinism class would also produce.")
+                .env("KASPAD_COMPUTE_AUTO_CHALLENGE"),
+        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -801,6 +875,13 @@ impl Args {
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
             stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
+            enable_compute: arg_match_unwrap_or::<bool>(&m, "enable-compute", defaults.enable_compute),
+            compute_worker: m.get_one::<String>("compute-worker").cloned().or(defaults.compute_worker),
+            compute_work_dir: m.get_one::<String>("compute-work-dir").cloned().or(defaults.compute_work_dir),
+            compute_prompt: m.get_one::<String>("compute-prompt").cloned().or(defaults.compute_prompt),
+            compute_max_tokens: m.get_one::<u32>("compute-max-tokens").copied().or(defaults.compute_max_tokens),
+            compute_timeout_secs: m.get_one::<u64>("compute-timeout-secs").copied().or(defaults.compute_timeout_secs),
+            compute_auto_challenge: arg_match_unwrap_or::<bool>(&m, "compute-auto-challenge", defaults.compute_auto_challenge),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

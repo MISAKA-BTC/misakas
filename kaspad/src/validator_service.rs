@@ -12,14 +12,17 @@
 //! behavior is unchanged; `Observer`/`Standby` modes never submit. The DNS overlay
 //! reorg gate itself remains dormant until activated per-network.
 
+use crate::compute::{ComputeConfig, ComputeInflight, ComputeRole, capability_expiry_to_declare};
 use async_trait::async_trait;
 use kaspa_addresses::Prefix;
 use kaspa_consensus_core::dns_finality::{
-    BondStatus, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, ValidatorAttestationTarget,
-    ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint, single_attestation_shard,
+    BondStatus, DNS_PAYLOAD_VERSION_V1, OpenComputeCommitment, PendingComputeVerdict, SignedEpochCheckOutcome, SignedEpochRecord,
+    StakeAttestation, ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint,
+    single_attestation_shard,
 };
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
+use kaspa_consensus_core::vlt::{ComputeFraudKind, LlmJobSpec, VerificationVerdict, VltParams, compute_receipt_hash, job_spec_id};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -39,6 +42,7 @@ use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
 use kaspa_txscript::pay_to_address_script;
 use kaspa_utxoindex::api::UtxoIndexProxy;
+use misaka_palw::MatchProjection;
 use std::{
     collections::HashSet,
     fmt,
@@ -63,6 +67,27 @@ const ATTESTATION_CATCH_UP_LIMIT: usize = 16;
 /// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
 const FUNDING_SCAN_CHUNK_SIZE: usize = 1000;
 const MAX_FUNDING_SCAN_CHUNKS: usize = 64;
+
+/// How many pending audits to fetch per heartbeat. Only one is executed — a job is minutes of
+/// inference — but a small batch lets the cycle skip past ones whose verdict is already in flight
+/// without waiting a tick per skip.
+const COMPUTE_PENDING_VERDICT_SCAN: usize = 8;
+
+/// Payload sizes used to price compute-overlay transactions. Every compute payload is fixed-shape
+/// apart from the commitment's job input, so these are exact rather than estimates: a 4627-byte
+/// ML-DSA-87 signature plus the payload's own fields. Slight over-estimates only overpay the
+/// relay minimum, which `relay_fee_for_compute_mass` already pads.
+const MLDSA87_SIG_BYTES: usize = 4627;
+/// version + validator_id + bond outpoint + 3 digests + expiry.
+const COMPUTE_CAPABILITY_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 68 + 3 * 64 + 8 + 64;
+/// version + job_id + executor_id + bond outpoint, before the job input is added.
+const COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 68 + 64;
+/// version + epoch + executor_id + bond outpoint + commitment tx id + spec + receipt.
+const COMPUTE_CERTIFICATE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 8 + 64 + 68 + 64 + 256 + 192 + 64;
+/// version + certificate tx id + job_id + 2 receipt hashes + verifier_id + bond outpoint + verdict.
+const COMPUTE_VERDICT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 2 * 64 + 64 + 68 + 1 + 64;
+/// The challenge, sized for the `ForgedReceipt` kind (no contradiction proof attached).
+const COMPUTE_CHALLENGE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 1 + 64 + 68 + 68 + 64 + 64 + 64;
 
 /// Operating mode for the in-process validator service (ADR-0010, operational modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +136,14 @@ pub struct ValidatorConfig {
     pub state_path: Option<PathBuf>,
     /// Network address prefix, used to render the validator's funding address for logs.
     pub address_prefix: Prefix,
+    /// ADR-0009 Addendum A.3 network discriminator — the per-network genesis hash. The
+    /// attestation path never needs it (consensus hands the service a pre-bound message), but the
+    /// compute path signs its own messages, so it must bind the same discriminator consensus does.
+    pub network_id: Vec<u8>,
+    /// This network's VLT parameters, if the DNS overlay is configured for it.
+    pub vlt: Option<VltParams>,
+    /// MISAKA Verified LLM Token-Weighted BFT: the compute role's configuration.
+    pub compute: ComputeConfig,
 }
 
 /// A point-in-time snapshot of the validator's operational status, produced by
@@ -251,6 +284,15 @@ pub struct ValidatorService {
     /// Local funding chain so consecutive attestations (within a heartbeat's catch-up loop and
     /// across heartbeats) don't re-select a UTXO an in-flight tx already spent.
     funding_chain: Mutex<FundingChain>,
+    /// MISAKA Verified LLM Token-Weighted BFT: the compute role, when this node can actually run
+    /// the consensus-registered runtime. `None` leaves the attestation path exactly as it was.
+    compute: Option<ComputeRole>,
+    /// What the compute cycle has submitted and not yet seen on chain.
+    compute_inflight: Mutex<ComputeInflight>,
+    /// Mass calculator, kept for the compute path: unlike the attestation shard, a compute
+    /// transaction's payload size varies (a commitment carries the job input), so its fee cannot
+    /// be computed once at startup.
+    mass_calculator: MassCalculator,
 }
 
 impl ValidatorService {
@@ -312,6 +354,9 @@ impl ValidatorService {
         let attestation_fee_sompi = key
             .as_ref()
             .map_or(ATTESTATION_TX_FEE_FLOOR_SOMPI, |k| k.estimate_attestation_fee(&mass_calculator, config.address_prefix));
+        // The compute role resolves (and logs) at startup so a misconfigured runtime surfaces
+        // before the first job rather than at the first sortition.
+        let compute = ComputeRole::new(&config.compute, config.vlt.as_ref());
         Self {
             config,
             consensus_manager,
@@ -324,6 +369,9 @@ impl ValidatorService {
             attestation_fee_sompi,
             coinbase_maturity,
             funding_chain: Mutex::new(FundingChain::default()),
+            compute,
+            compute_inflight: Mutex::new(ComputeInflight::default()),
+            mass_calculator,
         }
     }
 
@@ -447,6 +495,11 @@ impl ValidatorService {
                             }
                             self.try_attest(target, key, outpoint).await;
                         }
+
+                        // MISAKA Verified LLM Token-Weighted BFT. After the attestations, because
+                        // DNS finality must not wait behind a multi-minute inference: attesting is
+                        // what keeps the overlay confirming, and it is cheap.
+                        self.run_compute_cycle(key, outpoint).await;
                     }
                 }
                 None => {
@@ -670,6 +723,412 @@ impl ValidatorService {
             );
         }
         candidates
+    }
+
+    // ---------------------------------------------------------------------
+    // MISAKA Verified LLM Token-Weighted BFT: the compute cycle.
+    // ---------------------------------------------------------------------
+
+    /// One pass of the compute cycle, run from the heartbeat once the attestation work is done.
+    ///
+    /// Order is deliberate — capability, then verifier, then executor:
+    ///
+    /// * **Capability** first because it is cheap and everything else depends on it: a lapsed
+    ///   declaration removes this node from committee draws entirely.
+    /// * **Verifier** before executor because acceptance is refutation-dominant. A verifier that
+    ///   goes quiet denies *other* validators their credit and can stall a job permanently; an
+    ///   executor that goes quiet costs only itself, and only until the next tick.
+    /// * **Executor** last, with whatever capacity is left.
+    ///
+    /// At most one *job* runs per pass. A job is a full LLM inference measured in minutes, so
+    /// starting a second one would just queue work the next tick would have picked up anyway —
+    /// while holding a stale view of the chain the whole time.
+    async fn run_compute_cycle(&self, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        let Some(role) = &self.compute else {
+            return;
+        };
+        let Some(vlt) = &self.config.vlt else {
+            return;
+        };
+        let session = self.consensus_manager.consensus().session().await;
+        let status = session.async_get_compute_status(key.validator_id, bond_outpoint).await;
+        drop(session);
+        let Some(status) = status.filter(|s| s.vlt_active) else {
+            trace!("[{VALIDATOR}] compute: VLT weighting is not active at the sink; nothing to do");
+            return;
+        };
+        let now_daa = status.sink_daa_score;
+
+        // (1) Keep the capability declaration live.
+        let has_live_capability = status.capability_expiry_daa_score.is_some();
+        if !self.compute_inflight.lock().unwrap().capability_recent(now_daa)
+            && let Some(expiry) =
+                capability_expiry_to_declare(status.capability_expiry_daa_score, now_daa, vlt.max_capability_validity_blocks)
+        {
+            self.submit_capability(key, bond_outpoint, role, expiry, now_daa).await;
+            if !has_live_capability {
+                // Nothing to do until the declaration is ACCEPTED: with none live this node is in
+                // no committee draw, so there is nothing to audit, and a job committed now would
+                // be one nobody in class has declared for. A *renewal* is different — the old
+                // declaration still stands — so that case falls through.
+                return;
+            }
+        }
+
+        // (2) Audit whatever we were drawn onto. One job per pass, newest first.
+        let session = self.consensus_manager.consensus().session().await;
+        let pending = session.async_get_pending_compute_verdicts(key.validator_id, COMPUTE_PENDING_VERDICT_SCAN).await;
+        drop(session);
+        let pending_count = pending.len();
+        for job in pending {
+            if self.compute_inflight.lock().unwrap().verdict_recent(job.certificate_tx_id, now_daa) {
+                continue;
+            }
+            info!(
+                "[{VALIDATOR}] compute: sortitioned to audit certificate {} (job {}); replaying — {} pending",
+                job.certificate_tx_id, job.job_id, pending_count
+            );
+            self.audit_one(key, bond_outpoint, role, &job, now_daa).await;
+            return; // one job per pass
+        }
+
+        // (3) Originate work, if this node is configured to.
+        let Some(prompt) = role.prompt.clone() else {
+            return;
+        };
+        // An executor needs enough in-class peers to reach `min_verifier_confirmations`, or its
+        // jobs cannot be verified and mint nothing however honestly they are run. Say so rather
+        // than burning GPU time and fees on uncreditable work.
+        if status.in_class_peer_count < vlt.min_verifier_confirmations as usize {
+            trace!(
+                "[{VALIDATOR}] compute: {} in-class peer(s) declared this profile but {} confirmations are required; not originating jobs",
+                status.in_class_peer_count, vlt.min_verifier_confirmations
+            );
+            return;
+        }
+
+        // An expired commitment is dead weight: no certificate naming it can be credited, and it
+        // stays visible for the whole credit window. It must not count as work in progress, or one
+        // missed certification would stop this node originating jobs for as long as the window
+        // lasts.
+        let (live, expired): (Vec<_>, Vec<_>) = status.open_commitments.iter().partition(|c| !c.expired);
+        if !expired.is_empty() {
+            trace!(
+                "[{VALIDATOR}] compute: {} commitment(s) aged past max_commitment_age_blocks and can no longer be certified",
+                expired.len()
+            );
+        }
+
+        // Certify the oldest commitment whose beacon has formed — oldest is also
+        // closest-to-expiry.
+        for open in &live {
+            if !open.beacon_ready {
+                trace!("[{VALIDATOR}] compute: commitment {} is waiting on beacon epoch {}", open.commitment_tx_id, open.beacon_epoch);
+                continue;
+            }
+            self.certify_one(key, bond_outpoint, role, open, status.epoch).await;
+            return; // one job per pass
+        }
+
+        // Nothing in progress — commit to a new job, unless one is already in flight.
+        if live.is_empty() && !self.compute_inflight.lock().unwrap().commitment_recent(now_daa) {
+            self.submit_commitment(key, bond_outpoint, role, &prompt, now_daa).await;
+        }
+    }
+
+    /// Declare (or renew) this node's `(model, runtime, determinism class)` capability.
+    async fn submit_capability(
+        &self,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        role: &ComputeRole,
+        expiry_daa_score: u64,
+        now_daa: u64,
+    ) {
+        let entry = role.entry;
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| {
+            key.build_capability_tx(
+                &self.config.network_id,
+                bond_outpoint,
+                entry.model_weights_hash,
+                entry.runtime_hash,
+                entry.runtime_class_id,
+                expiry_daa_score,
+                funding_outpoint,
+                funding,
+                fee,
+            )
+        };
+        if self.build_and_submit_overlay_tx("capability", COMPUTE_CAPABILITY_PAYLOAD_BYTES, false, build).await.is_some() {
+            self.compute_inflight.lock().unwrap().note_capability(now_daa);
+            info!("[{VALIDATOR}] compute: declared capability for the registered profile, valid to DAA {expiry_daa_score}");
+        }
+    }
+
+    /// Publish the phase-1 commitment for a new job: the job id, and the input a verifier will
+    /// replay. Both must be on chain before the beacon that draws the committee exists.
+    async fn submit_commitment(
+        &self,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        role: &ComputeRole,
+        prompt: &[u8],
+        now_daa: u64,
+    ) {
+        let job_id = job_spec_id(&role.job_spec(prompt));
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| {
+            key.build_commitment_tx(&self.config.network_id, job_id, prompt.to_vec(), bond_outpoint, funding_outpoint, funding, fee)
+        };
+        let payload_bytes = COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES + prompt.len();
+        if self.build_and_submit_overlay_tx("commitment", payload_bytes, false, build).await.is_some() {
+            self.compute_inflight.lock().unwrap().note_commitment(now_daa);
+            info!("[{VALIDATOR}] compute: committed to job {job_id} ({} byte input); awaiting the sortition beacon", prompt.len());
+        }
+    }
+
+    /// Execute a job this node committed to and publish its certificate.
+    ///
+    /// The spec is re-derived from the input the commitment published rather than remembered, so
+    /// a restart between committing and certifying loses nothing. Deriving a *different* spec
+    /// would produce a certificate whose `job_id` does not match the commitment — refused by the
+    /// credit walk — so the derivation is checked against the committed id before any work starts.
+    async fn certify_one(
+        &self,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        role: &ComputeRole,
+        open: &OpenComputeCommitment,
+        epoch: u64,
+    ) {
+        let spec = role.job_spec(&open.input);
+        if job_spec_id(&spec) != open.job_id {
+            warn!(
+                "[{VALIDATOR}] compute: commitment {} names job {} but this node's configuration now derives {}; \
+                 the job cannot be certified (has the model table or --compute-max-tokens changed?)",
+                open.commitment_tx_id,
+                open.job_id,
+                job_spec_id(&spec)
+            );
+            return;
+        }
+        let Some(projection) = self.run_job(role, &spec, open.input.clone(), false).await else {
+            return;
+        };
+        let receipt = projection.to_compute_receipt();
+        let commitment_tx_id = open.commitment_tx_id;
+        let spec_for_build = spec.clone();
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| {
+            key.build_certificate_tx(
+                &self.config.network_id,
+                epoch,
+                commitment_tx_id,
+                spec_for_build.clone(),
+                receipt,
+                bond_outpoint,
+                funding_outpoint,
+                funding,
+                fee,
+            )
+        };
+        if let Some(tx_id) = self.build_and_submit_overlay_tx("certificate", COMPUTE_CERTIFICATE_PAYLOAD_BYTES, false, build).await {
+            info!(
+                "[{VALIDATOR}] compute: certified job {} in epoch {epoch} as tx {tx_id} (R_j={}); awaiting verifier verdicts",
+                open.job_id,
+                compute_receipt_hash(&spec, &receipt)
+            );
+        }
+    }
+
+    /// Replay a peer's job and publish the verdict the comparison implies.
+    ///
+    /// The peer's own projection is never fed to the runtime — a replay audit that is handed the
+    /// answer confirms anything. `sign_verifier_verdict` likewise derives the verdict from the two
+    /// hashes rather than accepting one, so there is no path here that signs a judgement this
+    /// node's own execution does not support.
+    async fn audit_one(
+        &self,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        role: &ComputeRole,
+        job: &PendingComputeVerdict,
+        now_daa: u64,
+    ) {
+        // Guard the fee: a spec whose id is not the job id we were told to audit means the
+        // certificate and its commitment disagree, which the credit walk would have refused.
+        if job_spec_id(&job.spec) != job.job_id {
+            warn!("[{VALIDATOR}] compute: certificate {} names a spec that is not its job id; skipping", job.certificate_tx_id);
+            return;
+        }
+        let Some(projection) = self.run_job(role, &job.spec, job.input.clone(), true).await else {
+            return;
+        };
+        let replay_receipt_hash = compute_receipt_hash(&job.spec, &projection.to_compute_receipt());
+        let verdict = key.sign_verifier_verdict(
+            &self.config.network_id,
+            job.certificate_tx_id,
+            job.job_id,
+            job.executor_receipt_hash,
+            replay_receipt_hash,
+            bond_outpoint,
+        );
+        let refuted = verdict.verdict == VerificationVerdict::Refuted;
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| key.build_verdict_tx(&verdict, funding_outpoint, funding, fee);
+        if self.build_and_submit_overlay_tx("verdict", COMPUTE_VERDICT_PAYLOAD_BYTES, false, build).await.is_none() {
+            return;
+        }
+        self.compute_inflight.lock().unwrap().note_verdict(job.certificate_tx_id, now_daa);
+        if !refuted {
+            info!("[{VALIDATOR}] compute: confirmed certificate {} — our replay reproduced R_j", job.certificate_tx_id);
+            return;
+        }
+        warn!(
+            "[{VALIDATOR}] compute: REFUTED certificate {} — executor claimed R_j={} but our replay produced {}",
+            job.certificate_tx_id, job.executor_receipt_hash, replay_receipt_hash
+        );
+        // The refutation alone already denies the certificate its credit. A fraud proof adds the
+        // reporter reward and slashes the executor, but stakes our own bond on the claim, so it is
+        // opt-in — see `ComputeConfig::auto_challenge`.
+        if !role.auto_challenge {
+            info!(
+                "[{VALIDATOR}] compute: not filing a fraud proof (--compute-auto-challenge is off); the refutation already blocks the credit"
+            );
+            return;
+        }
+        let reward_payload = key.reward_spk_payload();
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| {
+            key.build_challenge_tx(
+                &self.config.network_id,
+                job.certificate_tx_id,
+                job.job_id,
+                ComputeFraudKind::ForgedReceipt,
+                replay_receipt_hash,
+                job.executor_bond_outpoint,
+                Vec::new(),
+                bond_outpoint,
+                reward_payload,
+                funding_outpoint,
+                funding,
+                fee,
+            )
+        };
+        // Output-less, like slashing evidence: consensus mints the reporter reward at (tx_id, 0).
+        if let Some(tx_id) = self.build_and_submit_overlay_tx("challenge", COMPUTE_CHALLENGE_PAYLOAD_BYTES, true, build).await {
+            warn!("[{VALIDATOR}] compute: filed a ForgedReceipt fraud proof against {} as tx {tx_id}", job.certificate_tx_id);
+        }
+    }
+
+    /// Run one job on a blocking thread, so a multi-minute inference does not stall the async
+    /// runtime the rest of the node shares.
+    ///
+    /// `as_verifier` selects the runtime's independent-replica mode. Nothing about what the peer
+    /// claimed is passed in — see [`ComputeRuntime::replay`].
+    async fn run_job(&self, role: &ComputeRole, spec: &LlmJobSpec, input: Vec<u8>, as_verifier: bool) -> Option<MatchProjection> {
+        let runtime = role.runtime();
+        let spec = spec.clone();
+        let started = std::time::Instant::now();
+        let result =
+            tokio::task::spawn_blocking(
+                move || {
+                    if as_verifier { runtime.replay(&spec, &input) } else { runtime.execute(&spec, &input) }
+                },
+            )
+            .await;
+        match result {
+            Ok(Ok(projection)) => {
+                info!("[{VALIDATOR}] compute: job finished in {:?}", started.elapsed());
+                Some(projection)
+            }
+            Ok(Err(err)) => {
+                warn!("[{VALIDATOR}] compute: the runtime failed after {:?}: {err}", started.elapsed());
+                None
+            }
+            Err(err) => {
+                warn!("[{VALIDATOR}] compute: the job task panicked or was cancelled: {err}");
+                None
+            }
+        }
+    }
+
+    /// Fund, build and submit one compute-overlay transaction, reusing the attestation path's
+    /// funding chain so a compute transaction and an attestation never select the same UTXO.
+    ///
+    /// Returns the submitted transaction's id, or `None` if funding, building or submission
+    /// failed — every one of which is a retry-next-tick condition, not an error to escalate.
+    async fn build_and_submit_overlay_tx<F>(
+        &self,
+        kind: &str,
+        payload_bytes: usize,
+        no_change: bool,
+        build: F,
+    ) -> Option<TransactionId>
+    where
+        F: FnOnce(TransactionOutpoint, &UtxoEntry, u64) -> Result<Transaction, String>,
+    {
+        let key = self.key.as_ref()?;
+        if self.config.mode != ValidatorMode::Active {
+            trace!("[{VALIDATOR}] compute: mode={} so not submitting the {kind} transaction", self.config.mode);
+            return None;
+        }
+        let fee = key.estimate_overlay_fee(&self.mass_calculator, self.config.address_prefix, payload_bytes, no_change);
+        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+        let candidates = self.find_funding_candidates(&funding_spk).await;
+        let virtual_daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+        let funding = {
+            let mut chain = self.funding_chain.lock().unwrap();
+            let node_outpoints: HashSet<TransactionOutpoint> = candidates.iter().map(|(op, _)| *op).collect();
+            chain.inflight_spent.retain(|op| node_outpoints.contains(op));
+            if let Some((head, _)) = &chain.pending_change
+                && node_outpoints.contains(head)
+            {
+                chain.pending_change = None;
+                chain.chain_head_txid = None;
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+            }
+            select_funding(&chain.pending_change, &chain.inflight_spent, candidates, fee, virtual_daa, self.coinbase_maturity).ok()
+        };
+        let Some((funding_outpoint, funding_entry)) = funding else {
+            info!("[{VALIDATOR}] compute: no funding UTXO covering the {kind} fee of {fee} sompi; retrying next heartbeat");
+            return None;
+        };
+        let tx = match build(funding_outpoint, &funding_entry, fee) {
+            Ok(tx) => tx,
+            Err(e) => {
+                warn!("[{VALIDATOR}] compute: could not build the {kind} transaction: {e}");
+                return None;
+            }
+        };
+        let tx_id = tx.id();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+            Ok(()) => {
+                let mut chain = self.funding_chain.lock().unwrap();
+                chain.inflight_spent.insert(funding_outpoint);
+                if no_change {
+                    // An output-less transaction leaves nothing to chain from; the next selection
+                    // falls back to the node's confirmed view.
+                    chain.pending_change = None;
+                    chain.chain_head_txid = None;
+                } else {
+                    let change =
+                        UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+                    chain.pending_change = Some((TransactionOutpoint::new(tx_id, 0), change));
+                    chain.chain_head_txid = Some(tx_id);
+                }
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+                Some(tx_id)
+            }
+            Err(e) => {
+                warn!("[{VALIDATOR}] compute: submit of the {kind} transaction {tx_id} failed: {e}");
+                let mut chain = self.funding_chain.lock().unwrap();
+                chain.pending_change = None;
+                chain.chain_head_txid = None;
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+                None
+            }
+        }
     }
 
     /// Equivocation-guarded build of the funded attestation shard tx (ADR-0011). Only on

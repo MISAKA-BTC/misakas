@@ -1,4 +1,5 @@
 pub mod args;
+pub mod compute;
 pub mod daemon;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;

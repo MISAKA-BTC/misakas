@@ -69,7 +69,17 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
+use crate::compute::ComputeConfig;
 use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
+
+/// Default wall-clock ceiling for one compute job. A Qwen3.6-35B-A3B replay at the registered
+/// profile's 4096-token limit is minutes, not seconds; the ceiling exists to bound a wedged
+/// worker, not to pace a healthy one.
+const DEFAULT_COMPUTE_TIMEOUT_SECS: u64 = 900;
+/// Default token ceiling this node asks for. Clamped down to the registered profile's own limit,
+/// and deliberately well under it: every accepted job is re-executed in full by each verifier, so
+/// the ceiling is an audit-cost decision the operator can raise once the mesh has capacity.
+const DEFAULT_COMPUTE_MAX_TOKENS: u32 = 512;
 
 const DEFAULT_DATA_DIR: &str = "datadir";
 const CONSENSUS_DB: &str = "consensus";
@@ -134,6 +144,9 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         if args.enable_validator {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-validator"));
         }
+        if args.enable_compute {
+            return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-compute"));
+        }
         if args.evm_rpc_listen.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--evm-rpc-listen"));
         }
@@ -143,6 +156,11 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     }
     if matches!(args.node_profile, NodeProfile::RecoverySync) && args.connect_peers.is_empty() {
         return Err(ConfigError::RecoverySyncRequiresConnect);
+    }
+    // The compute role rides the validator service — it signs with the validator's key and stakes
+    // the validator's bond — so `--enable-compute` alone would silently do nothing.
+    if args.enable_compute && !args.enable_validator {
+        return Err(ConfigError::MissingDependentArg("--enable-compute", "--enable-validator"));
     }
     Ok(())
 }
@@ -832,12 +850,30 @@ Do you confirm? (y/n)";
         // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
         // so it survives a `--reset-db` and still binds the validator to its network.
         let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
+        // MISAKA Verified LLM Token-Weighted BFT: the compute role rides the validator service, so
+        // it is only reachable behind `--enable-validator`. `ComputeRole::new` decides whether it
+        // actually starts — the runtime has to probe as the consensus-registered profile, which on
+        // a network with an empty model cost table (every shipped preset) it cannot.
+        let compute = ComputeConfig {
+            enabled: args.enable_compute,
+            worker_bin: args.compute_worker.as_ref().map(PathBuf::from),
+            work_dir: args.compute_work_dir.as_ref().map(PathBuf::from).unwrap_or_else(std::env::temp_dir),
+            timeout: Duration::from_secs(args.compute_timeout_secs.unwrap_or(DEFAULT_COMPUTE_TIMEOUT_SECS)),
+            prompt_path: args.compute_prompt.as_ref().map(PathBuf::from),
+            max_tokens: args.compute_max_tokens.unwrap_or(DEFAULT_COMPUTE_MAX_TOKENS),
+            auto_challenge: args.compute_auto_challenge,
+        };
         let validator_config = ValidatorConfig {
             mode,
             key_path: args.validator_key.clone(),
             stake_bond: args.stake_bond.clone(),
             state_path: Some(state_path),
             address_prefix: config.prefix(),
+            // ADR-0009 Addendum A.3: the network discriminator is the per-network genesis hash,
+            // the same value consensus binds into every overlay message it verifies.
+            network_id: config.params.genesis.hash.as_byte_slice().to_vec(),
+            vlt: config.params.dns_params.as_ref().map(|p| p.vlt),
+            compute,
         };
         let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
         Some(Arc::new(ValidatorService::new(
@@ -1092,6 +1128,20 @@ mod tests {
     fn bootstrap_pruned_rejects_enable_validator() {
         let args = parse(&["--node-profile=bootstrap-pruned", "--enable-validator"]);
         assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--enable-validator"))));
+    }
+
+    /// The compute role signs with the validator's key and stakes the validator's bond, so
+    /// `--enable-compute` on its own has nothing to hang off. Failing at startup beats a node that
+    /// looks configured for compute and silently never does any.
+    #[test]
+    fn enable_compute_requires_the_validator_service() {
+        let args = parse(&["--enable-compute"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::MissingDependentArg("--enable-compute", "--enable-validator"))));
+        assert!(validate_args(&parse(&["--enable-compute", "--enable-validator"])).is_ok());
+        assert!(validate_args(&parse(&[])).is_ok());
+
+        let pruned = parse(&["--node-profile=bootstrap-pruned", "--enable-compute", "--enable-validator"]);
+        assert!(matches!(validate_args(&pruned), Err(ConfigError::NodeProfileIncompatible(_, _))));
     }
 
     #[test]

@@ -29,9 +29,10 @@ use kaspa_consensus_core::tx::{
 use kaspa_consensus_core::vlt::{
     COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
     COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
-    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, VERIFIER_VERDICT_MLDSA87_CONTEXT,
-    VerificationVerdict, VerifierAttestation, compute_capability_message, compute_certificate_message, compute_challenge_message,
-    compute_commitment_message, compute_receipt_hash, job_spec_id, verifier_verdict_message,
+    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, MAX_JOB_INPUT_BYTES,
+    VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict, VerifierAttestation, compute_capability_message,
+    compute_certificate_message, compute_challenge_message, compute_commitment_message, compute_receipt_hash, job_input_commitment,
+    job_spec_id, verifier_verdict_message,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
@@ -341,22 +342,32 @@ impl ValidatorKey {
     /// canonical anchor of the epoch after the one that accepts this transaction, so an executor
     /// that grinds `sampling_seed` here is grinding against randomness that has not been drawn.
     /// Publishing the certificate without a matching accepted commitment credits nothing.
+    ///
+    /// `input` is the job's actual prompt bytes, published here because a full-replay verifier
+    /// needs them and the spec carries only their digest. It must be the input the committed
+    /// `job_id`'s spec commits to — the credit walk checks exactly that, so a mismatch produces a
+    /// commitment no certificate of this job can ever resolve against.
     pub fn build_commitment_tx(
         &self,
         network_id: &[u8],
         job_id: Hash64,
+        input: Vec<u8>,
         bond_outpoint: TransactionOutpoint,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
-        let message = compute_commitment_message(network_id, job_id, bond_outpoint);
+        if input.is_empty() || input.len() > MAX_JOB_INPUT_BYTES {
+            return Err(format!("job input is {} bytes; must be 1..={MAX_JOB_INPUT_BYTES}", input.len()));
+        }
+        let message = compute_commitment_message(network_id, job_id, job_input_commitment(&input), bond_outpoint);
         let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_COMMITMENT_MLDSA87_CONTEXT).to_vec();
         let payload = ComputeCommitmentPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             job_id,
             executor_id: self.validator_id,
             executor_bond_outpoint: bond_outpoint,
+            input,
             signature,
         };
         let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed commitment is infallible");
@@ -961,6 +972,31 @@ impl ValidatorKey {
         }
     }
 
+    /// Mass-based fee (sompi) for a compute-overlay transaction carrying `payload_len` bytes.
+    ///
+    /// All four compute transactions share one shape (1 P2PKH-ML-DSA input, change to self, a
+    /// borsh payload), so the only thing that moves their mass is the payload size — which, unlike
+    /// the attestation shard's, is *not* fixed: a commitment carries the job input. Hence a
+    /// parameterized estimate rather than one computed once at startup.
+    ///
+    /// `no_change` mirrors [`Self::build_challenge_tx`]'s output-less shape.
+    pub fn estimate_overlay_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix, payload_len: usize, no_change: bool) -> u64 {
+        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
+        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
+        match self.build_funded_overlay_tx(
+            SUBNETWORK_ID_COMPUTE_CERTIFICATE,
+            vec![0u8; payload_len],
+            outpoint,
+            &funding,
+            ATTESTATION_TX_FEE_FLOOR_SOMPI,
+            no_change,
+        ) {
+            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
+            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        }
+    }
+
     /// Mass-based fee (sompi) for this validator's `StakeBond` transaction — same approach as
     /// [`Self::estimate_attestation_fee`]. Builds a dummy bond of the real shape (a bond is always
     /// a 2592-byte-pubkey payload + locked output + change output, so the field *sizes* — not the
@@ -1221,6 +1257,8 @@ mod tests {
         (fop(0x77, 0), UtxoEntry::new(10_000_000, ScriptPublicKey::default(), 1_000, false))
     }
 
+    const COMPUTE_INPUT: &[u8] = b"the capital of France is";
+
     fn compute_spec() -> LlmJobSpec {
         let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
         LlmJobSpec {
@@ -1228,7 +1266,7 @@ mod tests {
             model_weights_hash: entry.model_weights_hash,
             runtime_hash: entry.runtime_hash,
             quantization: kaspa_consensus_core::vlt::QuantizationProfile::Int4,
-            input_commitment: Hash64::from_bytes([0x31; 64]),
+            input_commitment: job_input_commitment(COMPUTE_INPUT),
             sampling_seed: [0x42; 32],
             max_tokens: 512,
             verification_scheme: kaspa_consensus_core::vlt::VerificationScheme::CanonicalFullReplay,
@@ -1281,9 +1319,14 @@ mod tests {
 
         let spec = compute_spec();
         let job_id = job_spec_id(&spec);
-        let commit = key.build_commitment_tx(net, job_id, bond, fop, &fentry, fee).unwrap();
+        let commit = key.build_commitment_tx(net, job_id, COMPUTE_INPUT.to_vec(), bond, fop, &fentry, fee).unwrap();
         assert_eq!(dns_tx_kind(&commit.subnetwork_id), Some(DnsTxKind::ComputeCommitment));
         assert_eq!(validate_compute_commitment_payload(&commit.payload), Ok(()));
+        // The prompt a verifier will replay rides the commitment, so it is public before the
+        // beacon that draws the committee exists.
+        let committed: ComputeCommitmentPayload = borsh::from_slice(&commit.payload).unwrap();
+        assert_eq!(committed.input, COMPUTE_INPUT);
+        assert_eq!(job_input_commitment(&committed.input), spec.input_commitment);
 
         let receipt = compute_receipt();
         let receipt_hash = compute_receipt_hash(&spec, &receipt);
@@ -1362,7 +1405,22 @@ mod tests {
         let key = compute_key();
         let (fop, _) = compute_funding();
         let thin = UtxoEntry::new(100, ScriptPublicKey::default(), 1_000, false);
-        assert!(key.build_commitment_tx(b"n", Hash64::from_bytes([1; 64]), fop_bond(), fop, &thin, 250_000).is_err());
+        assert!(
+            key.build_commitment_tx(b"n", Hash64::from_bytes([1; 64]), b"prompt".to_vec(), fop_bond(), fop, &thin, 250_000).is_err()
+        );
+    }
+
+    /// The job input is the one unbounded field in the compute overlay. An oversized or absent
+    /// one is refused by the builder, not left to fail at the node — a commitment that cannot be
+    /// accepted has already spent the executor's funding UTXO.
+    #[test]
+    fn commitment_builder_rejects_an_unusable_job_input() {
+        let key = compute_key();
+        let (fop, fentry) = compute_funding();
+        let job_id = Hash64::from_bytes([1; 64]);
+        assert!(key.build_commitment_tx(b"n", job_id, Vec::new(), fop_bond(), fop, &fentry, 250_000).is_err());
+        assert!(key.build_commitment_tx(b"n", job_id, vec![0u8; MAX_JOB_INPUT_BYTES + 1], fop_bond(), fop, &fentry, 250_000).is_err());
+        assert!(key.build_commitment_tx(b"n", job_id, vec![0u8; MAX_JOB_INPUT_BYTES], fop_bond(), fop, &fentry, 250_000).is_ok());
     }
 
     #[test]

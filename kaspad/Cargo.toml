@@ -48,6 +48,7 @@ kaspa-utils.workspace = true
 kaspa-utils-tower.workspace = true
 kaspa-utxoindex.workspace = true
 kaspa-wrpc-server.workspace = true
+misaka-palw.workspace = true
 
 async-channel.workspace = true
 async-trait.workspace = true

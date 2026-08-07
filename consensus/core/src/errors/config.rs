@@ -23,6 +23,9 @@ pub enum ConfigError {
     #[error("Configuration: --node-profile=recovery-sync requires at least one --connect peer")]
     RecoverySyncRequiresConnect,
 
+    #[error("Configuration: {0} requires {1}")]
+    MissingDependentArg(&'static str, &'static str),
+
     #[error("Configuration: --min-disk-free-percent ({0}) must be in the range 0..=99")]
     MinDiskFreePercentTooHigh(u8),
 

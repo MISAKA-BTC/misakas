@@ -129,7 +129,7 @@ use crate::{
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
-        ComputeVerdictPayload, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
+        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
     },
 };
 
@@ -3802,6 +3802,9 @@ pub enum DnsTxError {
     /// A verdict contradicts its own two receipt hashes — it claims `Confirmed` over a hash it
     /// did not reproduce, or `Refuted` over one it did.
     SelfContradictoryVerdict,
+    /// A job commitment's published input is empty or exceeds [`crate::vlt::MAX_JOB_INPUT_BYTES`].
+    /// Empty is refused too: a job with no input has nothing for a verifier to replay.
+    JobInputSize(usize),
 }
 
 impl Display for DnsTxError {
@@ -3846,6 +3849,9 @@ impl Display for DnsTxError {
             }
             DnsTxError::SelfContradictoryVerdict => {
                 write!(f, "compute verdict contradicts its own executor/replay receipt hashes")
+            }
+            DnsTxError::JobInputSize(n) => {
+                write!(f, "compute commitment publishes a {n}-byte job input, which is empty or above the permitted maximum")
             }
         }
     }
@@ -5332,10 +5338,17 @@ pub fn validate_compute_challenge_payload(payload: &[u8]) -> Result<(), DnsTxErr
 }
 
 /// Stateless validation of a [`ComputeCommitmentPayload`]'s bytes.
+///
+/// The job input is size-capped here, at the isolation stage, because it is the one unbounded
+/// field in the compute overlay: every other payload is fixed-shape. An uncapped input would let
+/// a commitment carry arbitrary data at overlay-transaction prices.
 pub fn validate_compute_commitment_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     let c: ComputeCommitmentPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
     if c.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(c.version));
+    }
+    if c.input.is_empty() || c.input.len() > MAX_JOB_INPUT_BYTES {
+        return Err(DnsTxError::JobInputSize(c.input.len()));
     }
     if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
@@ -5349,6 +5362,10 @@ pub struct ComputeCommitmentRecord {
     pub job_id: Hash64,
     pub executor_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
+    /// The job's published input. Carried through so a node that was sortitioned onto this job's
+    /// committee can replay it from chain data alone, and so the walk can check the certificate's
+    /// spec commits to exactly these bytes.
+    pub input: Vec<u8>,
     /// blue_score of the chain block that accepted the commitment — this is what fixes the
     /// beacon epoch, and therefore the verifier committee.
     pub accepted_blue_score: u64,
@@ -5454,6 +5471,71 @@ pub fn capability_candidate_pool(
         }
     }
     best.into_iter().map(|(id, (_, class))| (id, class)).collect()
+}
+
+/// One accepted certificate this node was sortitioned to audit and has not yet judged.
+///
+/// Everything needed to form the verdict is here, and all of it came off the chain: the spec and
+/// the executor's claim from the certificate, the input from the phase-1 commitment. That is the
+/// point — a verifier that had to fetch anything from the executor would be auditing a job the
+/// party under audit chose what to reveal about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingComputeVerdict {
+    pub certificate_tx_id: TransactionId,
+    pub job_id: Hash64,
+    /// The job to re-execute, exactly as the executor signed it.
+    pub spec: crate::vlt::LlmJobSpec,
+    /// The job's input bytes, from the commitment. `job_input_commitment(input)` equals
+    /// `spec.input_commitment` — the walk refuses the certificate otherwise.
+    pub input: Vec<u8>,
+    pub executor_id: Hash64,
+    /// `R_j` as the executor claimed it. The verdict is the comparison of this against what this
+    /// node's own replay produces; it is never an input to that replay.
+    pub executor_receipt_hash: Hash64,
+    pub executor_bond_outpoint: TransactionOutpoint,
+    /// DAA score of the chain block that accepted the certificate. A verdict must be accepted at
+    /// or after it to count.
+    pub certificate_daa_score: u64,
+}
+
+/// This node's own standing in the compute overlay — what the validator service needs to decide
+/// whether to declare a capability, commit to a job, or certify one it already committed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComputeStatusView {
+    /// Whether VLT weighting is active at the sink. Everything else here is idle when it is not.
+    pub vlt_active: bool,
+    pub sink_daa_score: u64,
+    /// Epoch at the sink — what a certificate must declare to be creditable in the block that
+    /// accepts it.
+    pub epoch: u64,
+    /// Expiry of this validator's live capability declaration, if it has one. `None` means it is
+    /// not in any committee draw for the profile and cannot be audited into one.
+    pub capability_expiry_daa_score: Option<u64>,
+    /// In-class validators (excluding this one) that declared the same profile and are
+    /// active-bonded. A job needs `min_verifier_confirmations` of them to mint, so an executor
+    /// with fewer is doing work that cannot be credited.
+    pub in_class_peer_count: usize,
+    /// This validator's commitments that no certificate of its own has completed yet.
+    pub open_commitments: Vec<OpenComputeCommitment>,
+}
+
+/// A phase-1 commitment of this node's that is still waiting to be certified.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenComputeCommitment {
+    pub commitment_tx_id: TransactionId,
+    pub job_id: Hash64,
+    /// The input this commitment published — the executor re-derives its spec from these bytes
+    /// rather than persisting one across the commit→certify gap.
+    pub input: Vec<u8>,
+    pub accepted_daa_score: u64,
+    /// The epoch whose canonical anchor is this job's sortition beacon.
+    pub beacon_epoch: u64,
+    /// Whether that epoch's anchor exists yet. Executing before it does is not wrong, but
+    /// certifying before it does is: a certificate may not predate its own beacon.
+    pub beacon_ready: bool,
+    /// Whether the commitment has aged past `max_commitment_age_blocks` — no certificate naming
+    /// it can be credited any more, so the job has to be re-committed.
+    pub expired: bool,
 }
 
 /// ADR-0013 Addendum C.2 shape rule, applied to compute challenges: like a
@@ -6986,6 +7068,42 @@ mod tests {
         short_sig.signature = vec![0u8; 4];
         assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&short_sig).unwrap()), Err(DnsTxError::InvalidSignatureLen(4)));
         assert_eq!(validate_compute_verdict_payload(b"not borsh"), Err(DnsTxError::Decode));
+    }
+
+    /// The job input rides the commitment so a sortitioned verifier can replay from chain data
+    /// alone. It is the only unbounded field in the compute overlay, so its size is the only
+    /// thing the stateless layer can — and must — decide about it.
+    #[test]
+    fn validate_compute_commitment_bounds_the_published_job_input() {
+        let fixture = |input: Vec<u8>| ComputeCommitmentPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            job_id: Hash64::from_u64_word(501),
+            executor_id: Hash64::from_u64_word(11),
+            executor_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(111), 0),
+            input,
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+        };
+
+        let ok = fixture(b"the capital of France is".to_vec());
+        assert_eq!(validate_compute_commitment_payload(&borsh::to_vec(&ok).unwrap()), Ok(()));
+        let at_limit = fixture(vec![0u8; MAX_JOB_INPUT_BYTES]);
+        assert_eq!(validate_compute_commitment_payload(&borsh::to_vec(&at_limit).unwrap()), Ok(()));
+
+        // Nothing to replay is not a job.
+        assert_eq!(
+            validate_compute_commitment_payload(&borsh::to_vec(&fixture(Vec::new())).unwrap()),
+            Err(DnsTxError::JobInputSize(0))
+        );
+        let over = fixture(vec![0u8; MAX_JOB_INPUT_BYTES + 1]);
+        assert_eq!(
+            validate_compute_commitment_payload(&borsh::to_vec(&over).unwrap()),
+            Err(DnsTxError::JobInputSize(MAX_JOB_INPUT_BYTES + 1))
+        );
+
+        let mut short_sig = ok.clone();
+        short_sig.signature = vec![0u8; 7];
+        assert_eq!(validate_compute_commitment_payload(&borsh::to_vec(&short_sig).unwrap()), Err(DnsTxError::InvalidSignatureLen(7)));
+        assert_eq!(validate_compute_commitment_payload(b"not borsh"), Err(DnsTxError::Decode));
     }
 
     /// Verdict collection is where a certificate's audit is actually assembled, so its filtering
