@@ -799,6 +799,16 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
     vlt: VltParams::INERT,
     vlt_credit_window_blue_score: 0,
+    // Veto reach + release, devnet/simnet flavour. `0` ⇒ the gate horizon tracks
+    // `max_reorg_horizon_blocks`, which the DAG fixtures tune directly (several of them raise it so
+    // a from-genesis fork stays gate-eligible), and `u64::MAX` ⇒ no TTL. Both keep the strict
+    // 2-D rule exactly as the simulation tests assert it — notably the 51%-PoW-attack test, whose
+    // whole point is that a stake-less heavier branch is refused for as long as it is presented.
+    // The production presets below carry the calibrated values; a dev net that wants to exercise
+    // them sets them explicitly.
+    dns_gate_horizon_blocks: 0,
+    dns_veto_ttl_daa_score: u64::MAX,
+    min_anchor_attesters: 1,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -971,6 +981,42 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // epoch length, plus the 300-block challenge window and a lag/grace margin. This is the walk
     // cost VLT weighting adds per recompute; it is paid only once the fence above is moved.
     vlt_credit_window_blue_score: 10_400,
+    // ---- DNS-veto reach and its release paths (calibrated together; see the field docs) ----
+    //
+    // The 2026-08-03 §8 fix made the gate ABSTAIN past `max_reorg_horizon_blocks` instead of
+    // rejecting outright, which is what un-wedged testnet-22 — but it also pinned the veto's whole
+    // reach to that horizon, and at 10 BPS 300 blocks is THIRTY SECONDS. Every fork older than
+    // that was settled by PoW alone, so "DNS finality" protected a 30-second window. These three
+    // knobs restore a meaningful reach while keeping a bounded, layered release, so reach is no
+    // longer bought with liveness:
+    //
+    //   * reach:   the gate now judges any fork that would rewind up to 18_000 of this node's own
+    //              chain blocks (≈30 min at the nominal 10 BPS).
+    //   * release 1 (immediate): `emergency_work_override_multiplier` — >4x work since the common
+    //                 ancestor, i.e. only an adversary sustaining >80% of hashpower.
+    //   * release 2: `dns_veto_ttl_daa_score` — my own chain advanced 6_000 DAA past my confirmed
+    //                 anchor with no new confirmation ⇒ the branch I am defending has lost its
+    //                 validators (the testnet-20 dead-branch wedge shape). The healthy
+    //                 anchor-to-tip distance is `lag + epoch ≈ 200`, so 6_000 is ~30x headroom and
+    //                 never fires on a chain that is still confirming.
+    //   * release 3: divergence past the gate horizon ⇒ abstain, as today.
+    //
+    // Both numbers are denominated in blocks/DAA, NOT wall clock: the wall-clock figures above
+    // assume the nominal 10 BPS, and a net mining below it (the live testnet mesh runs ~2 BPS at
+    // floored Argon2id CPU difficulty) gets proportionally MORE history protected and a
+    // proportionally longer release — ~2.5 h of rewind protection and ~55 min to auto-release.
+    // That is the right direction for both: protection scales with the chain, and a slow net's
+    // attestation hiccups do not trip the TTL. Retune only against a measured block rate.
+    //
+    // Worst case a *both-sides-alive* partition (t22's shape, where neither TTL fires) now holds
+    // for up to the horizon instead of 30 s — bounded, and t22 itself released via layer 1 (branch
+    // A out-worked branch B by ~27x). The old failure mode — unbounded — is gone in every layer.
+    dns_gate_horizon_blocks: 18_000,
+    dns_veto_ttl_daa_score: 6_000,
+    // Mainnet floor is 3 active validators (audit H-11), so requiring 2 DISTINCT credited
+    // attesters in an anchor's own epoch keeps the veto un-armable by a single signer while
+    // tolerating one validator being down. TESTNET overrides this to 1 (single-operator mesh).
+    min_anchor_attesters: 2,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered
@@ -1012,6 +1058,16 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // The intent is fast confirmation on a low-stake experimental mesh, not to mirror PRODUCTION's
     // 10-epoch burial. NOT a genesis input (dns_params).
     required_stake_depth: StakeScore(5000),
+    // The mesh runs a SINGLE validator by design (`min_active_validators: 1` above), so PRODUCTION's
+    // 2-distinct-attester floor would mean no anchor ever confirms here — DNS finality would be
+    // silently off, not merely weaker. Keep the original "≥1 credited attestation in the anchor's
+    // own epoch" guard. Raise this in lockstep with `min_active_validators`, never before.
+    min_anchor_attesters: 1,
+    // Reach + TTL are inherited from PRODUCTION (18_000 blocks / 6_000 DAA). Deliberately NOT
+    // retuned for this net's slower real block rate: at the measured ~110 DAA/min of the live mesh
+    // they buy ~2.5 h of rewind protection and auto-release a dead-branch wedge in ~55 min, versus
+    // the 3.5 h (2026-07-19) and ~15 h (2026-08-03) that needed manual arbitration. A shorter TTL
+    // here would trip on ordinary attestation hiccups, which this mesh has plenty of.
     ..PRODUCTION_DNS_PARAMS
 };
 

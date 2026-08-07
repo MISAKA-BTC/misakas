@@ -4563,3 +4563,226 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
 
     consensus.shutdown(wait_handles);
 }
+
+/// The DNS reorg gate's common-ancestor search: the O(log horizon) index binary search must agree
+/// with the linear walk **block for block and boundary for boundary**, and the horizon both apply
+/// must be the CANONICAL-side rewind depth.
+///
+/// The metric matters as much as the answer. Bounding the *candidate* side (what the walk did
+/// before) measures how far the other branch ran, so an attacker who mines a long secret branch
+/// while canonical advances a little would be classified "deeper than the horizon" and the gate
+/// would ABSTAIN — handing a deep-reorg attacker the pass the veto exists to deny. Bounding the
+/// canonical side asks the question the horizon is named for: how many of MY blocks would this
+/// candidate rewind. Here the side branch (8 blocks) is deliberately SHORTER than the canonical
+/// rewind it would cause (15), so the two metrics give different verdicts and the test pins the
+/// right one.
+#[tokio::test]
+async fn dns_gate_common_ancestor_search_matches_walk_on_canonical_rewind_depth() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..40 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+
+    const REWIND: usize = 15; // canonical blocks the side branch would rewind
+    const SIDE_LEN: usize = 8; // side-branch length — deliberately < REWIND
+    let sink = ctx.consensus.get_sink();
+    let fork_point = {
+        let vp = ctx.consensus.virtual_processor();
+        // The iterator yields `sink` itself first, so `nth(REWIND)` is REWIND blocks back.
+        vp.reachability_service.default_backward_chain_iterator(sink).nth(REWIND).expect("the chain is longer than REWIND")
+    };
+    let side_tip = ctx.build_and_insert_disqualified_chain(vec![fork_point], SIDE_LEN).await;
+
+    let vp = ctx.consensus.virtual_processor();
+    // At or above the rewind depth both paths find the same fork point.
+    for horizon in [REWIND as u64, REWIND as u64 + 1, 40, 10_000] {
+        assert_eq!(
+            vp.chain_common_ancestor_within(side_tip, sink, horizon),
+            Some(fork_point),
+            "binary search finds the fork point at horizon {horizon}"
+        );
+        assert_eq!(vp.chain_common_ancestor_walk(side_tip, sink, horizon), Some(fork_point), "the walk agrees at horizon {horizon}");
+    }
+    // Below it both abstain — including at exactly one short of the boundary.
+    for horizon in [0, 1, REWIND as u64 - 1] {
+        assert_eq!(vp.chain_common_ancestor_within(side_tip, sink, horizon), None, "binary search abstains at {horizon}");
+        assert_eq!(vp.chain_common_ancestor_walk(side_tip, sink, horizon), None, "the walk agrees at {horizon}");
+    }
+    // The boundary is the canonical rewind (15), NOT the side-branch length (8): a horizon that
+    // covers the side branch but not the rewind must still abstain.
+    assert!(SIDE_LEN < REWIND);
+    assert_eq!(vp.chain_common_ancestor_within(side_tip, sink, SIDE_LEN as u64), None);
+    assert_eq!(vp.chain_common_ancestor_walk(side_tip, sink, SIDE_LEN as u64), None);
+    // Degenerate inputs: canonical vs itself, and canonical vs one of its own chain ancestors.
+    assert_eq!(vp.chain_common_ancestor_within(sink, sink, 10), Some(sink));
+    assert_eq!(vp.chain_common_ancestor_walk(sink, sink, 10), Some(sink));
+    assert_eq!(vp.chain_common_ancestor_within(fork_point, sink, 100), Some(fork_point));
+    assert_eq!(vp.chain_common_ancestor_walk(fork_point, sink, 100), Some(fork_point));
+}
+
+/// Confirmed-anchor TTL (`dns_veto_ttl_daa_score`) end to end on a real DAG — the release path for
+/// a node defending an anchor its own branch no longer supports.
+///
+/// Shape (the testnet-20 dead-branch wedge, and what an isolated node lands in): a validator bonds
+/// and attests once, the node confirms an anchor, then attestation stops while the node keeps
+/// mining. `advance_dns_confirmation` carries that same anchor forward forever, so before the TTL
+/// existed the veto stayed armed on a branch nothing was supporting, and only a >4x work override
+/// or a fork deeper than the horizon could ever release it.
+///
+/// Both directions are asserted from the identical block script, so the TTL is provably the cause:
+///   * TTL disabled (`u64::MAX`) → the heavier stake-less branch is REFUSED (this is also the
+///     51%-attack property `dns_v3_pow_majority_cannot_rewrite_confirmed_anchor` pins).
+///   * TTL exceeded            → the veto releases and the node follows the work-dominant chain.
+///
+/// The attacker is deliberately kept under the 4x override ratio, so in the control case the
+/// refusal comes from the stake dimension and nothing else.
+#[tokio::test]
+async fn dns_stale_anchor_ttl_releases_a_dead_branch_wedge() {
+    use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+    };
+    kaspa_core::log::try_init_logger("info");
+
+    /// Runs the same script under one TTL and reports whether the confirmed anchor survived on the
+    /// honest node's selected chain after the heavier stake-less branch arrived.
+    async fn anchor_survives_with_ttl(ttl: u64) -> bool {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.max_block_parents = 4;
+                p.mergeset_size_limit = 10;
+                p.coinbase_maturity = 2;
+                let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap(); // TwoDimensionalDominance
+                dns.dns_activation_daa_score = 0;
+                dns.pos_v2_activation_daa_score = 0;
+                dns.epoch_length_blocks = 2;
+                dns.reward_uniqueness_window_blocks = 50;
+                // A generous gate horizon so the fork stays gate-eligible: the release under test
+                // must be the TTL, never the horizon abstain.
+                dns.max_reorg_horizon_blocks = 1000;
+                dns.dns_gate_horizon_blocks = 5000;
+                dns.dns_veto_ttl_daa_score = ttl;
+                dns.attestation_epoch_length_blue_score = 3;
+                dns.attestation_lag_blue_score = 2;
+                dns.attestation_anchor_backoff_blue_score = 1;
+                dns.stake_score_window_blue_score = 10_000;
+                dns.required_work_depth = kaspa_consensus_core::BlueWorkType::ZERO;
+                dns.required_stake_depth = StakeScore(STAKE_SCORE_SCALE / 2);
+                p.dns_params = Some(dns);
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+        // ---- Honest node: bond a validator, attest once, reach a DNS-confirmed anchor. ----
+        let seed = [0x42u8; 32];
+        let v = dns_harness::harness_validator(seed);
+        let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&v.pubkey).as_bytes();
+        let k_spk = p2pkh_mldsa87_spk(&k_payload);
+        let k_miner = MinerData::new(k_spk.clone(), vec![]);
+        let _b1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h_a = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h_b = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let cb_a = &h_a.transactions[0];
+        let (ia, oa) = cb_a.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_a pays K");
+        let (coinbase_a, value_a, daa_a) = (TransactionOutpoint::new(cb_a.id(), ia as u32), oa.value, h_a.header.daa_score);
+        let cb_b = &h_b.transactions[0];
+        let (ib, ob) = cb_b.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).expect("h_b pays K");
+        let (coinbase_b, value_b, daa_b) = (TransactionOutpoint::new(cb_b.id(), ib as u32), ob.value, h_b.header.daa_score);
+        for _ in 0..5 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+        let (bond_tx, _vid, _rp) =
+            dns_harness::funded_signed_bond_tx(seed, coinbase_a, value_a, daa_a, value_a - 100_000, 0, storage_mass_parameter);
+        let bond_tx_id = bond_tx.id();
+        ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+        let bond_outpoint = TransactionOutpoint::new(bond_tx_id, 0);
+        for _ in 0..8 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let dns = ctx.consensus.params().dns_params.clone().unwrap();
+        let genesis_hash = ctx.consensus.params().genesis.hash;
+        let sink = ctx.consensus.get_sink();
+        let anchor = {
+            let vp = ctx.consensus.virtual_processor();
+            let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
+            let lr =
+                ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                    .expect("an epoch is ready");
+            vp.canonical_anchor_by_blue_score(lr, sink, &dns).expect("canonical anchor")
+        };
+        let att = dns_harness::build_signed_attestation(
+            &v,
+            genesis_hash.as_byte_slice(),
+            bond_outpoint,
+            anchor.epoch,
+            anchor.anchor_hash,
+            anchor.anchor_daa_score,
+            Hash64::default(),
+        );
+        let shard_tx = dns_harness::funded_signed_shard_tx(seed, coinbase_b, value_b, daa_b, att, storage_mass_parameter);
+        ctx.mine_block(new_miner_data(), vec![shard_tx]).await;
+        for _ in 0..15 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let confirmed_anchor = {
+            let vp = ctx.consensus.virtual_processor();
+            let st = vp.dns_state_store.read().get().expect("DnsState");
+            assert_eq!(st.rollout_stage, DnsRolloutStage::Active, "honest node is Active");
+            assert_ne!(st.last_dns_confirmed_anchor, Hash64::default(), "honest node has a confirmed anchor");
+            st.last_dns_confirmed_anchor
+        };
+
+        // ---- Attestation STOPS while the node keeps mining: the anchor freezes, the tip runs on. ----
+        for _ in 0..40 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let (honest_work, anchor_age) = {
+            let vp = ctx.consensus.virtual_processor();
+            let st = vp.dns_state_store.read().get().expect("DnsState");
+            assert_eq!(st.last_dns_confirmed_anchor, confirmed_anchor, "no new confirmation: the same anchor is carried forward");
+            let sink = ctx.consensus.get_sink();
+            let sink_daa = vp.headers_store.get_daa_score(sink).unwrap();
+            (vp.ghostdag_store.get_blue_work(sink).unwrap(), sink_daa.saturating_sub(st.last_dns_confirmed_anchor_daa_score))
+        };
+        assert!(anchor_age > 20, "the anchor must have aged measurably on the node's own chain (got {anchor_age})");
+
+        // ---- A heavier, stake-less branch arrives — heavier, but under the 4x override ratio. ----
+        let mut atk = TestContext::new(TestConsensus::new(&config));
+        let mut attacker_blocks = Vec::new();
+        for _ in 0..110 {
+            attacker_blocks.push(atk.mine_block(new_miner_data(), vec![]).await);
+        }
+        let attacker_tip = attacker_blocks.last().unwrap().header.hash;
+        let attacker_work = { atk.consensus.virtual_processor().ghostdag_store.get_blue_work(attacker_tip).unwrap() };
+        assert!(attacker_work > honest_work, "the branch is genuinely heavier ({attacker_work} vs {honest_work})");
+        let (four_x, overflowed) = honest_work.overflowing_mul_u64(4);
+        assert!(!overflowed && attacker_work < four_x, "and stays UNDER the 4x work override, so only the TTL can explain a release");
+        for b in &attacker_blocks {
+            ctx.validate_and_insert_block(b.clone()).await;
+        }
+
+        let new_sink = ctx.consensus.get_sink();
+        let vp = ctx.consensus.virtual_processor();
+        let survived = vp.reachability_service.is_chain_ancestor_of(confirmed_anchor, new_sink);
+        assert_eq!(
+            survived,
+            new_sink != attacker_tip,
+            "the two ways of asking (anchor still on the chain / sink moved to the branch) must agree"
+        );
+        survived
+    }
+
+    assert!(
+        anchor_survives_with_ttl(u64::MAX).await,
+        "control: with the TTL disabled the veto never expires, so the heavier stake-less branch is refused"
+    );
+    assert!(
+        !anchor_survives_with_ttl(20).await,
+        "with the anchor aged past the TTL the veto releases and the node follows the work-dominant chain"
+    );
+}

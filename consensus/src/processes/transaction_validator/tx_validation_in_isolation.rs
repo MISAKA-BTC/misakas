@@ -1,8 +1,9 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
-    DnsTxKind, dns_tx_kind, validate_compute_certificate_payload, validate_compute_challenge_tx, validate_slashing_evidence_tx,
-    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_unbond_payload,
+    DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
+    validate_compute_commitment_payload, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload,
+    validate_stake_bond_tx, validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -251,6 +252,14 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // and must declare no outputs (the reporter reward is minted at
             // (challenge_tx_id, 0)).
             DnsTxKind::ComputeChallenge => validate_compute_challenge_tx(&tx.payload, &tx.outputs),
+            // A validator's declaration that it runs a given (model, runtime, determinism class)
+            // profile. Signature, bond binding, model-table membership and the expiry cap are
+            // stateful and run in the credit walk when it builds a job's verifier pool.
+            DnsTxKind::ComputeCapability => validate_compute_capability_payload(&tx.payload),
+            // Phase 1 of the two-phase sortition. Its whole job is to exist on chain BEFORE the
+            // beacon epoch, so the stateless layer only checks shape; the binding to a
+            // certificate and the beacon derivation are stateful.
+            DnsTxKind::ComputeCommitment => validate_compute_commitment_payload(&tx.payload),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

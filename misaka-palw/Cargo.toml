@@ -1,0 +1,28 @@
+[package]
+name = "misaka-palw"
+description = "MISAKA Verified LLM Token-Weighted BFT compute runtime bridge: drives the pinned PALW llama.cpp worker as a subprocess and maps its MatchProjectionV1 onto the consensus ComputeReceipt, so the consensus byte-match IS the PALW k=2 replica match"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+
+blake2b_simd.workspace = true
+faster-hex.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

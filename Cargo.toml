@@ -28,6 +28,7 @@ members = [
     "kaspa-pq-signer",
     "misaka-cli",
     "misaka-endpoints",
+    "misaka-palw",
     "simpa",
     "wasm",
     "wasm/core",
@@ -158,6 +159,7 @@ kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
+misaka-palw = { version = "1.1.0", path = "misaka-palw" }
 
 # external
 aes = "0.8.3"

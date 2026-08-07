@@ -33,6 +33,7 @@ use crate::{
         utxo_diffs::DbUtxoDiffsStore,
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
+        vlt_credits::DbVltCreditStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
 };
@@ -124,6 +125,8 @@ pub struct ConsensusStorage {
     // ([`EpochTally`]) and its per-block validator quality sub-pool input. Both
     // inert (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
     pub epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
+    /// MISAKA Verified LLM Token-Weighted BFT: per-epoch finalized verified-compute credit.
+    pub vlt_credit_store: Arc<DbVltCreditStore>,
     pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
@@ -307,6 +310,10 @@ impl ConsensusStorage {
         // per-block rewarded-keys cache sizing.
         let epoch_accumulator_store =
             Arc::new(DbEpochAccumulatorStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        // Sized to comfortably hold a whole `credit_window_epochs + credit_delay_epochs` span so
+        // a full `C_i(E)` sum is served from cache. Untracked (`Count`) like the accumulator —
+        // `tracked_bytes` would call `estimate_mem_bytes` and panic.
+        let vlt_credit_store = Arc::new(DbVltCreditStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -430,6 +437,7 @@ impl ConsensusStorage {
             utxo_diffs_store,
             rewarded_epochs_store,
             epoch_accumulator_store,
+            vlt_credit_store,
             block_quality_pool_store,
             reserve_balance_store,
             utxo_multisets_store,

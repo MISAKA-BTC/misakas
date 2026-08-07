@@ -18,11 +18,20 @@ use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, c
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{
-    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
+    SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
+    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
+    SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{
-    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
-    UtxoEntry,
+    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
+    TransactionOutput, UtxoEntry,
+};
+use kaspa_consensus_core::vlt::{
+    COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
+    COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
+    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, LlmJobSpec, VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict,
+    VerifierAttestation, compute_capability_message, compute_certificate_message, compute_challenge_message,
+    compute_commitment_message, compute_receipt_hash, job_spec_id, verifier_verdict_message,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
@@ -224,6 +233,241 @@ impl ValidatorKey {
         let mut tx = mtx.tx;
         tx.inputs[0].signature_script = signature_script;
         Ok(tx)
+    }
+
+    // ---------------------------------------------------------------------
+    // MISAKA Verified LLM Token-Weighted BFT: the four compute-overlay transactions.
+    //
+    // Each mirrors `build_funded_shard_tx` exactly — one funding input, change back to this
+    // key's own P2PKH-ML-DSA script, ML-DSA-signed over the SIG_HASH_ALL v2 sighash under
+    // MLDSA87_TX_CONTEXT — and differs only in subnetwork id and payload. Factored through
+    // `build_funded_overlay_tx` so the funding/signing path cannot drift between them.
+    // ---------------------------------------------------------------------
+
+    /// Shared body of the compute-overlay transaction builders: one funding input, change to
+    /// self, payload on `subnetwork_id`, input-0 ML-DSA-signed.
+    ///
+    /// `no_change` builds an output-less transaction, which the compute-challenge rule requires
+    /// (like slashing evidence, a challenge is a pure evidence carrier whose reporter reward is
+    /// minted by consensus at `(tx_id, 0)`; a declared output would collide with that mint).
+    fn build_funded_overlay_tx(
+        &self,
+        subnetwork_id: SubnetworkId,
+        payload: Vec<u8>,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+        no_change: bool,
+    ) -> Result<Transaction, String> {
+        if funding.amount <= fee {
+            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
+        }
+        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        let outputs = if no_change {
+            // The whole input beyond the declared fee is burned to fees; consensus mints the
+            // reporter reward separately.
+            vec![]
+        } else {
+            vec![TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone())]
+        };
+        let tx = Transaction::new(TX_VERSION, vec![input], outputs, 0, subnetwork_id, 0, payload);
+
+        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
+
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8());
+        let signature_script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| format!("compute overlay funding sig push failed: {e}"))?
+            .add_data(self.keypair.verification_key.as_ref())
+            .map_err(|e| format!("compute overlay funding pubkey push failed: {e}"))?
+            .drain();
+
+        let mut tx = mtx.tx;
+        tx.inputs[0].signature_script = signature_script;
+        Ok(tx)
+    }
+
+    /// Sign and build the validator's compute-**capability** declaration — "I run this
+    /// `(model, runtime, determinism class)` profile".
+    ///
+    /// This is what puts the validator into verifier committees for that profile. Consensus caps
+    /// `expiry_daa_score` at `max_capability_validity_blocks` past the accepting block, so a
+    /// declaration has to be renewed; a validator that stops running the runtime then drops out
+    /// of committees instead of sinking every job it is sampled for.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_capability_tx(
+        &self,
+        network_id: &[u8],
+        bond_outpoint: TransactionOutpoint,
+        model_weights_hash: Hash64,
+        runtime_hash: Hash64,
+        runtime_class_id: Hash64,
+        expiry_daa_score: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let validator_id = self.validator_id;
+        let message = compute_capability_message(
+            network_id,
+            validator_id,
+            bond_outpoint,
+            model_weights_hash,
+            runtime_hash,
+            runtime_class_id,
+            expiry_daa_score,
+        );
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CAPABILITY_MLDSA87_CONTEXT).to_vec();
+        let payload = ComputeCapabilityPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id,
+            bond_outpoint,
+            model_weights_hash,
+            runtime_hash,
+            runtime_class_id,
+            expiry_daa_score,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed capability is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CAPABILITY, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign and build the **phase-1 job commitment**.
+    ///
+    /// Must be published BEFORE the job's verifier committee is drawn — the beacon is the
+    /// canonical anchor of the epoch after the one that accepts this transaction, so an executor
+    /// that grinds `sampling_seed` here is grinding against randomness that has not been drawn.
+    /// Publishing the certificate without a matching accepted commitment credits nothing.
+    pub fn build_commitment_tx(
+        &self,
+        network_id: &[u8],
+        job_id: Hash64,
+        bond_outpoint: TransactionOutpoint,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let message = compute_commitment_message(network_id, job_id, bond_outpoint);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_COMMITMENT_MLDSA87_CONTEXT).to_vec();
+        let payload = ComputeCommitmentPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            job_id,
+            executor_id: self.validator_id,
+            executor_bond_outpoint: bond_outpoint,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed commitment is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign this validator's **verifier verdict** over a peer's receipt.
+    ///
+    /// Returns the attestation for the executor to embed in its certificate; it is not a
+    /// transaction of its own. `replay_receipt_hash` MUST be what this node's own independent
+    /// re-execution produced — signing the executor's value without having reproduced it is the
+    /// §7(b) contradictory-verification offence waiting to happen, and it is provable from two
+    /// signatures alone.
+    pub fn sign_verifier_verdict(
+        &self,
+        network_id: &[u8],
+        job_id: Hash64,
+        executor_receipt_hash: Hash64,
+        replay_receipt_hash: Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> VerifierAttestation {
+        // The verdict follows from the comparison, never from intent: equal ⇒ Confirmed,
+        // different ⇒ Refuted. Deriving it here rather than taking it as a parameter removes the
+        // call site's ability to sign a verdict its own replay does not support.
+        let verdict =
+            if replay_receipt_hash == executor_receipt_hash { VerificationVerdict::Confirmed } else { VerificationVerdict::Refuted };
+        let message = verifier_verdict_message(network_id, job_id, executor_receipt_hash, verdict, replay_receipt_hash, bond_outpoint);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), VERIFIER_VERDICT_MLDSA87_CONTEXT).to_vec();
+        VerifierAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            verifier_id: self.validator_id,
+            bond_outpoint,
+            verdict,
+            replay_receipt_hash,
+            signature,
+        }
+    }
+
+    /// Sign and build the **compute certificate** — phase 2, completing the commitment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_certificate_tx(
+        &self,
+        network_id: &[u8],
+        epoch: u64,
+        commitment_tx_id: TransactionId,
+        spec: LlmJobSpec,
+        receipt: ComputeReceipt,
+        verifier_attestations: Vec<VerifierAttestation>,
+        bond_outpoint: TransactionOutpoint,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let job_id = job_spec_id(&spec);
+        let receipt_hash = compute_receipt_hash(&spec, &receipt);
+        let message = compute_certificate_message(network_id, epoch, job_id, receipt_hash, bond_outpoint);
+        let executor_signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CERT_MLDSA87_CONTEXT).to_vec();
+        let payload = ComputeCertificatePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            epoch,
+            executor_id: self.validator_id,
+            executor_bond_outpoint: bond_outpoint,
+            commitment_tx_id,
+            spec,
+            receipt,
+            executor_signature,
+            verifier_attestations,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed certificate is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CERTIFICATE, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign and build a **compute fraud proof** against an accepted certificate.
+    ///
+    /// Output-less by construction (see [`Self::build_funded_overlay_tx`]). `target_bond_outpoint`
+    /// names the bond a successful challenge slashes, and which bond that is depends on `kind`:
+    /// the executor's for a forged receipt or invalid certificate, the contradicting verifier's
+    /// for a contradictory verification, the losing claimant's for a failed challenge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_challenge_tx(
+        &self,
+        network_id: &[u8],
+        certificate_tx_id: TransactionId,
+        job_id: Hash64,
+        kind: ComputeFraudKind,
+        replay_receipt_hash: Hash64,
+        target_bond_outpoint: TransactionOutpoint,
+        contradictory_verdicts: Vec<VerifierAttestation>,
+        bond_outpoint: TransactionOutpoint,
+        reporter_reward_spk_payload: [u8; 64],
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let message = compute_challenge_message(network_id, certificate_tx_id, job_id, kind, replay_receipt_hash, bond_outpoint);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CHALLENGE_MLDSA87_CONTEXT).to_vec();
+        let payload = ComputeChallengePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            certificate_tx_id,
+            job_id,
+            kind,
+            challenger_id: self.validator_id,
+            challenger_bond_outpoint: bond_outpoint,
+            target_bond_outpoint,
+            replay_receipt_hash,
+            contradictory_verdicts,
+            signature,
+            reporter_reward_spk_payload,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed challenge is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CHALLENGE, bytes, funding_outpoint, funding, fee, true)
     }
 
     /// Build a fee-funded, signed NATIVE transfer that SPLITS one funding UTXO into
@@ -943,6 +1187,170 @@ mod tests {
     const SF_FEE: u64 = 250_000;
     const SF_MATURITY: u64 = 100;
     const SF_VDAA: u64 = 10_000;
+
+    // ---- MISAKA Verified LLM Token-Weighted BFT: compute-overlay transaction builders ----
+
+    fn compute_key() -> ValidatorKey {
+        ValidatorKey::from_seed([0x5Au8; VALIDATOR_SEED_LEN])
+    }
+
+    fn compute_funding() -> (TransactionOutpoint, UtxoEntry) {
+        (fop(0x77, 0), UtxoEntry::new(10_000_000, ScriptPublicKey::default(), 1_000, false))
+    }
+
+    fn compute_spec() -> LlmJobSpec {
+        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
+        LlmJobSpec {
+            version: DNS_PAYLOAD_VERSION_V1,
+            model_weights_hash: entry.model_weights_hash,
+            runtime_hash: entry.runtime_hash,
+            quantization: kaspa_consensus_core::vlt::QuantizationProfile::Int4,
+            input_commitment: Hash64::from_bytes([0x31; 64]),
+            sampling_seed: [0x42; 32],
+            max_tokens: 512,
+            verification_scheme: kaspa_consensus_core::vlt::VerificationScheme::CanonicalFullReplay,
+        }
+    }
+
+    fn compute_receipt() -> ComputeReceipt {
+        ComputeReceipt {
+            version: DNS_PAYLOAD_VERSION_V1,
+            output_commitment: Hash64::from_bytes([0x51; 64]),
+            prefill_tokens: 24,
+            decode_tokens: 8,
+            trace_commitment: Hash64::from_bytes([0x61; 64]),
+        }
+    }
+
+    /// Every compute-overlay transaction must land on its own subnetwork, carry a payload the
+    /// consensus stateless validator accepts, and be spendable (input-0 signed, change to self).
+    #[test]
+    fn compute_overlay_txs_are_wellformed_and_stateless_valid() {
+        use kaspa_consensus_core::dns_finality::{
+            DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload,
+            validate_compute_challenge_tx, validate_compute_commitment_payload,
+        };
+        let key = compute_key();
+        let (fop, fentry) = compute_funding();
+        let net = b"misaka-test";
+        let bond = fop_bond();
+        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
+        let fee = 250_000;
+
+        let cap = key
+            .build_capability_tx(
+                net,
+                bond,
+                entry.model_weights_hash,
+                entry.runtime_hash,
+                entry.runtime_class_id,
+                9_000,
+                fop,
+                &fentry,
+                fee,
+            )
+            .unwrap();
+        assert_eq!(dns_tx_kind(&cap.subnetwork_id), Some(DnsTxKind::ComputeCapability));
+        assert_eq!(validate_compute_capability_payload(&cap.payload), Ok(()));
+        assert_eq!(cap.outputs.len(), 1, "change returns to the validator so it can fund the next tx");
+        assert_eq!(cap.outputs[0].value, fentry.amount - fee);
+        assert!(!cap.inputs[0].signature_script.is_empty(), "input-0 must be signed");
+
+        let spec = compute_spec();
+        let job_id = job_spec_id(&spec);
+        let commit = key.build_commitment_tx(net, job_id, bond, fop, &fentry, fee).unwrap();
+        assert_eq!(dns_tx_kind(&commit.subnetwork_id), Some(DnsTxKind::ComputeCommitment));
+        assert_eq!(validate_compute_commitment_payload(&commit.payload), Ok(()));
+
+        let receipt = compute_receipt();
+        let receipt_hash = compute_receipt_hash(&spec, &receipt);
+        let verdicts = vec![
+            ValidatorKey::from_seed([0x01; VALIDATOR_SEED_LEN]).sign_verifier_verdict(
+                net,
+                job_id,
+                receipt_hash,
+                receipt_hash,
+                fop_bond2(),
+            ),
+            ValidatorKey::from_seed([0x02; VALIDATOR_SEED_LEN]).sign_verifier_verdict(
+                net,
+                job_id,
+                receipt_hash,
+                receipt_hash,
+                fop_bond3(),
+            ),
+        ];
+        let cert = key.build_certificate_tx(net, 7, commit.id(), spec.clone(), receipt, verdicts, bond, fop, &fentry, fee).unwrap();
+        assert_eq!(dns_tx_kind(&cert.subnetwork_id), Some(DnsTxKind::ComputeCertificate));
+        assert_eq!(validate_compute_certificate_payload(&cert.payload), Ok(()));
+
+        // A challenge is a pure evidence carrier: NO outputs, or it would collide with the
+        // reporter reward consensus mints at (challenge_tx_id, 0).
+        let chal = key
+            .build_challenge_tx(
+                net,
+                cert.id(),
+                job_id,
+                ComputeFraudKind::ForgedReceipt,
+                Hash64::from_bytes([0x99; 64]),
+                bond,
+                vec![],
+                fop_bond2(),
+                [0u8; 64],
+                fop,
+                &fentry,
+                fee,
+            )
+            .unwrap();
+        assert_eq!(dns_tx_kind(&chal.subnetwork_id), Some(DnsTxKind::ComputeChallenge));
+        assert!(chal.outputs.is_empty(), "a challenge must declare no outputs");
+        assert_eq!(validate_compute_challenge_tx(&chal.payload, &chal.outputs), Ok(()));
+    }
+
+    fn fop_bond() -> TransactionOutpoint {
+        fop(0xB0, 0)
+    }
+    fn fop_bond2() -> TransactionOutpoint {
+        fop(0xB1, 0)
+    }
+    fn fop_bond3() -> TransactionOutpoint {
+        fop(0xB2, 0)
+    }
+
+    /// A verifier's verdict follows from its own replay, never from intent. Signing `Confirmed`
+    /// over a hash it did not reproduce is the §7(b) contradictory-verification offence, so the
+    /// builder derives the verdict from the comparison instead of accepting it as a parameter.
+    #[test]
+    fn verifier_verdict_is_derived_from_the_replay_not_chosen() {
+        let key = ValidatorKey::from_seed([0x0Fu8; VALIDATOR_SEED_LEN]);
+        let net = b"misaka-test";
+        let job = Hash64::from_bytes([0x21; 64]);
+        let executor = Hash64::from_bytes([0x31; 64]);
+        let bond = fop_bond();
+
+        let agreed = key.sign_verifier_verdict(net, job, executor, executor, bond);
+        assert_eq!(agreed.verdict, VerificationVerdict::Confirmed);
+        assert_eq!(agreed.replay_receipt_hash, executor);
+
+        let diverged = key.sign_verifier_verdict(net, job, executor, Hash64::from_bytes([0x32; 64]), bond);
+        assert_eq!(diverged.verdict, VerificationVerdict::Refuted, "a replay that differs must refute");
+
+        // Both are signed by this validator's own key over the matching message, and the two
+        // verdicts are distinct messages — which is what makes a contradiction provable from the
+        // signatures alone.
+        assert_eq!(agreed.verifier_id, key.validator_id);
+        assert_ne!(agreed.signature, diverged.signature);
+        assert_eq!(agreed.signature.len(), kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN);
+    }
+
+    /// Underfunded builders must fail loudly rather than emit an unminable transaction.
+    #[test]
+    fn compute_builders_reject_funding_that_cannot_cover_the_fee() {
+        let key = compute_key();
+        let (fop, _) = compute_funding();
+        let thin = UtxoEntry::new(100, ScriptPublicKey::default(), 1_000, false);
+        assert!(key.build_commitment_tx(b"n", Hash64::from_bytes([1; 64]), fop_bond(), fop, &thin, 250_000).is_err());
+    }
 
     #[test]
     fn is_spendable_respects_coinbase_maturity() {

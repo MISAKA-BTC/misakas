@@ -589,8 +589,16 @@ impl VirtualStateProcessor {
             let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view);
             let expected_overlay = snap.commitment_root();
             if expected_overlay != header.overlay_commitment_root {
+                // Per-component digests (ADR-0022 divergence triage): the root alone only says
+                // "something differs". `bonds_root` vs `window_root` localizes it to the bond-view
+                // walk or to the per-block overlay rows before anyone re-derives state by hand —
+                // and the bond detail below makes a bond-side divergence readable directly (the
+                // 2026-08-03 report's 941 `[overlay-diag]` lines could not be attributed because
+                // the bond set was never printed). Both nodes log the same fields, so comparing two
+                // lines for the same block hash is the whole diagnosis.
+                let (bonds_root, window_root) = snap.component_digests();
                 kaspa_core::warn!(
-                    "[overlay-diag] block {} sp={} sp_daa={} bonds={} reserve={} window={} empty_root={} header_root={} computed_root={} window_detail={:?}",
+                    "[overlay-diag] block {} sp={} sp_daa={} bonds={} reserve={} window={} empty_root={} header_root={} computed_root={} bonds_root={} window_root={} bond_detail={:?} window_detail={:?}",
                     header.hash,
                     ctx.selected_parent(),
                     self.headers_store.get_daa_score(ctx.selected_parent()).unwrap_or(u64::MAX),
@@ -600,6 +608,23 @@ impl VirtualStateProcessor {
                     OverlaySnapshot::default().commitment_root(),
                     header.overlay_commitment_root,
                     expected_overlay,
+                    bonds_root,
+                    window_root,
+                    snap.bonds
+                        .iter()
+                        .map(|b| {
+                            (
+                                b.bond_outpoint.transaction_id,
+                                b.bond_outpoint.index,
+                                b.amount,
+                                b.activation_daa_score,
+                                b.created_daa_score,
+                                b.slashed_at_daa_score,
+                                b.unbond_request_daa_score,
+                                b.status,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
                     snap.window
                         .iter()
                         .map(|c| (c.block_hash, c.block_daa_score, c.rewarded_keys.len(), c.quality_subpool))

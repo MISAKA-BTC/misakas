@@ -83,6 +83,8 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_STAKE_UNBOND
             || *self == SUBNETWORK_ID_COMPUTE_CERTIFICATE
             || *self == SUBNETWORK_ID_COMPUTE_CHALLENGE
+            || *self == SUBNETWORK_ID_COMPUTE_CAPABILITY
+            || *self == SUBNETWORK_ID_COMPUTE_COMMITMENT
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
@@ -178,6 +180,13 @@ pub const SUBNETWORK_ID_COMPUTE_CERTIFICATE: SubnetworkId = SubnetworkId::from_b
 /// A fraud proof against an accepted compute certificate —
 /// [`crate::vlt::ComputeChallengePayload`].
 pub const SUBNETWORK_ID_COMPUTE_CHALLENGE: SubnetworkId = SubnetworkId::from_byte(0x15);
+/// A validator's declaration that it runs a given `(model, runtime, determinism class)` profile
+/// — [`crate::vlt::ComputeCapabilityPayload`]. This is what gives verifier sortition a
+/// class-matched candidate pool to draw from.
+pub const SUBNETWORK_ID_COMPUTE_CAPABILITY: SubnetworkId = SubnetworkId::from_byte(0x16);
+/// Phase 1 of the two-phase sortition: an executor's commitment to a job, published before the
+/// beacon that picks its auditors exists — [`crate::vlt::ComputeCommitmentPayload`].
+pub const SUBNETWORK_ID_COMPUTE_COMMITMENT: SubnetworkId = SubnetworkId::from_byte(0x17);
 
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte
 // values 0x20/0x21/0x22 sit above the DNS overlay band (0x10-0x13) and the

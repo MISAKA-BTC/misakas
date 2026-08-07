@@ -116,6 +116,10 @@ pub const COMPUTE_CERT_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-cert";
 pub const VERIFIER_VERDICT_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/verifier-verdict";
 /// Keyed-BLAKE2b-256 domain for a challenger's signed fraud-proof message.
 pub const COMPUTE_CHALLENGE_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-challenge";
+/// Keyed-BLAKE2b-256 domain for a validator's signed compute-capability declaration.
+pub const COMPUTE_CAPABILITY_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-capability";
+/// Keyed-BLAKE2b-256 domain for an executor's phase-1 job commitment.
+pub const COMPUTE_COMMITMENT_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-commitment";
 /// Keyed-BLAKE2b-512 domain for the §6 post-commit verifier sortition.
 pub const VERIFIER_SORTITION_KEY: &[u8] = b"misaka-vlt-verifier-sortition-v1";
 
@@ -125,6 +129,10 @@ pub const COMPUTE_CERT_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/cert/mldsa87";
 pub const VERIFIER_VERDICT_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/verdict/mldsa87";
 /// ML-DSA-87 signing context for a challenger's fraud-proof signature.
 pub const COMPUTE_CHALLENGE_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/challenge/mldsa87";
+/// ML-DSA-87 signing context for a compute-capability declaration.
+pub const COMPUTE_CAPABILITY_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/capability/mldsa87";
+/// ML-DSA-87 signing context for an executor's phase-1 job commitment.
+pub const COMPUTE_COMMITMENT_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/commitment/mldsa87";
 
 // ---------------------------------------------------------------------
 // Job specification (§3.1).
@@ -333,6 +341,10 @@ pub struct ComputeCertificatePayload {
     /// The executor's bond — the collateral `λ·B_i` caps this credit against, and
     /// the stake slashed if the certificate is later refuted.
     pub executor_bond_outpoint: TransactionOutpoint,
+    /// The phase-1 [`ComputeCommitmentPayload`] transaction this certificate completes. Consensus
+    /// derives the sortition beacon from the epoch AFTER the one that accepted it, which is what
+    /// makes the committee unguessable at commitment time.
+    pub commitment_tx_id: TransactionId,
     pub spec: LlmJobSpec,
     pub receipt: ComputeReceipt,
     /// ML-DSA-87 signature over [`compute_certificate_message`] under
@@ -467,6 +479,114 @@ pub fn verifier_verdict_message(
     Hash::from_bytes(out)
 }
 
+/// **Phase 1 of the two-phase sortition** (§6): an executor's on-chain commitment to run a
+/// specific job, published *before* the randomness that picks its auditors exists.
+///
+/// # Why the certificate alone is not enough
+///
+/// §6 requires verifiers be drawn "after the executor has committed, using randomness from the
+/// finalized chain". A single-transaction certificate cannot satisfy that: whatever chain value
+/// is used as the beacon is already on chain when the executor decides what to submit, so the
+/// executor can vary `sampling_seed` — and therefore `job_id`, and therefore its committee —
+/// until it draws auditors it likes. Grinding a hash is cheap; running the job is not, but the
+/// executor only has to grind before doing the work once.
+///
+/// Splitting the flow removes the freedom rather than pricing it:
+///
+/// 1. The executor publishes this commitment, pinning `(job_id, executor_id)`.
+/// 2. The beacon becomes the canonical lagged anchor of the epoch **after** the one that
+///    accepted the commitment — a block that did not exist when the commitment was made.
+/// 3. Only then does the certificate name its verifiers.
+///
+/// At step 1 the executor has already fixed the spec (hence the seed, hence `job_id`), and the
+/// beacon at step 2 is determined by blocks it does not control. Grinding at step 1 is grinding
+/// against randomness that has not been drawn.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ComputeCommitmentPayload {
+    pub version: u16,
+    /// `H(S_j)` of the job being committed to. Binds the entire spec — model, runtime,
+    /// quantization, input, seed and token limit — so none of it can change afterwards.
+    pub job_id: Hash64,
+    pub executor_id: Hash64,
+    pub executor_bond_outpoint: TransactionOutpoint,
+    /// ML-DSA-87 signature over [`compute_commitment_message`] under
+    /// [`COMPUTE_COMMITMENT_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+/// Digest an executor signs to commit to a job.
+pub fn compute_commitment_message(network_id: &[u8], job_id: Hash64, bond_outpoint: TransactionOutpoint) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(COMPUTE_COMMITMENT_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
+    hasher.update(job_id.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// A validator's on-chain declaration that it can execute — and therefore audit — a specific
+/// `(model, runtime, determinism class)` profile.
+///
+/// This exists because verifier sortition must draw *within* a determinism class
+/// ([`select_verifiers`]), and consensus has to learn each validator's class from somewhere.
+/// Deriving it from a validator's past certificates cannot bootstrap: the very first
+/// certificate on a network would have no in-class candidates to audit it. A signed
+/// declaration breaks that circularity without touching [`crate::dns_finality::StakeBondPayload`],
+/// so existing bonds stay valid.
+///
+/// Declarations **expire**. A validator that stops running the runtime stops being drawn into
+/// committees instead of silently sinking every job it is sampled for — under
+/// refutation-dominant acceptance, an absent verifier is the difference between a job that
+/// mints and one that does not.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ComputeCapabilityPayload {
+    pub version: u16,
+    /// `validator_id` of the declaring validator; must equal its bond's `validator_pubkey_hash`.
+    pub validator_id: Hash64,
+    /// The bond that makes this declaration slashable — a validator that declares a class it
+    /// cannot actually run has staked collateral behind the claim.
+    pub bond_outpoint: TransactionOutpoint,
+    /// `(h_M, h_R)` of the profile, and the determinism class they belong to. All three are
+    /// checked against the network's [`ModelCostTable`], so a validator cannot declare a class
+    /// for an unregistered profile or mis-state a registered one's class.
+    pub model_weights_hash: Hash64,
+    pub runtime_hash: Hash64,
+    pub runtime_class_id: Hash64,
+    /// DAA score at which the declaration lapses. Consensus caps this at
+    /// [`VltParams::max_capability_validity_blocks`] past acceptance, so a one-off declaration
+    /// cannot keep a long-departed operator in committees forever.
+    pub expiry_daa_score: u64,
+    /// ML-DSA-87 signature over [`compute_capability_message`] under
+    /// [`COMPUTE_CAPABILITY_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+/// Digest a validator signs to declare a compute capability.
+pub fn compute_capability_message(
+    network_id: &[u8],
+    validator_id: Hash64,
+    bond_outpoint: TransactionOutpoint,
+    model_weights_hash: Hash64,
+    runtime_hash: Hash64,
+    runtime_class_id: Hash64,
+    expiry_daa_score: u64,
+) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(COMPUTE_CAPABILITY_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
+    hasher.update(validator_id.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+    hasher.update(model_weights_hash.as_byte_slice());
+    hasher.update(runtime_hash.as_byte_slice());
+    hasher.update(runtime_class_id.as_byte_slice());
+    hasher.update(&expiry_daa_score.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
 /// Digest a challenger signs for a fraud proof.
 pub fn compute_challenge_message(
     network_id: &[u8],
@@ -487,6 +607,138 @@ pub fn compute_challenge_message(
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
+}
+
+// ---------------------------------------------------------------------
+// PALW runtime registry — the pinned Qwen3.6-35B-A3B Metal profile.
+// ---------------------------------------------------------------------
+
+/// Keyed-BLAKE2b-512 domain for [`derive_model_weights_hash`].
+pub const MODEL_IDENTITY_KEY: &[u8] = b"misaka-vlt-model-identity-v1";
+/// Keyed-BLAKE2b-512 domain for [`derive_runtime_hash`].
+pub const RUNTIME_IDENTITY_KEY: &[u8] = b"misaka-vlt-runtime-identity-v1";
+/// Keyed-BLAKE2b-512 domain for [`derive_runtime_class_id`].
+pub const RUNTIME_CLASS_KEY: &[u8] = b"misaka-vlt-runtime-class-v1";
+
+/// Immutable upstream pins of the supported PALW profile, copied verbatim from the runtime
+/// repository's `config/runtime-pins.sh`. Public identifiers only.
+///
+/// These are what make `h_M` / `h_R` *checkable*: anyone can re-derive the registered hashes
+/// from these strings and confirm the consensus entry names the artifact they actually have.
+pub mod palw_pins {
+    /// `PALW_GGUF_SHA256` — the Q4_K_M GGUF content digest (also the Ollama blob revision).
+    pub const GGUF_SHA256: &str = "1dc494614bee8a3bc00e79fe5a49da0fc1c36b3b118c4156e223e98e5a0a671b";
+    /// `PALW_GGUF_SIZE` — bytes.
+    pub const GGUF_SIZE: u64 = 23_938_321_728;
+    /// `PALW_GGUF_FILENAME`.
+    pub const GGUF_FILENAME: &str = "Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf";
+    /// `PALW_BASE_REPO_ID` / `PALW_BASE_REVISION` — the base metadata (tokenizer, config) the
+    /// GGUF was produced from. Part of the model identity because a different tokenizer turns
+    /// the same weights into a different function from prompt bytes to tokens.
+    pub const BASE_REPO_ID: &str = "huihui-ai/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated";
+    pub const BASE_REVISION: &str = "ac18882735d037f6074a7630eb68d85db8234c25";
+
+    /// `PALW_LLAMA_COMMIT` — pinned llama.cpp commit.
+    pub const LLAMA_COMMIT: &str = "12127defda4f41b7679cb2477a4b0d65ee6a0c8f";
+    /// `PALW_LLAMA_VERSION` — `LLAMA_BUILD_NUMBER`.
+    pub const LLAMA_BUILD_NUMBER: u64 = 10_015;
+    /// `PALW_LLAMA_PATCH_SHA256` — the PALW observer patch applied on top of the commit.
+    pub const LLAMA_PATCH_SHA256: &str = "d155a88b7c11ee74f48011760cb1a37773a694c8cab28258ee108c85e2f9e02c";
+
+    /// Canonical tag for the build profile in `PALW_METAL_CMAKE_ARGS`: Release, arm64, Metal on
+    /// (embedded shader library), CUDA off, LTO off, native off, Accelerate/BLAS on.
+    ///
+    /// Every one of those flags can change floating-point results, so the build profile is part
+    /// of the runtime identity, not metadata about it.
+    pub const METAL_BUILD_PROFILE: &str =
+        "release/arm64/metal-embed/no-native/no-lto/no-kleidiai/accelerate-blas-apple/cuda-off/shared";
+
+    /// The determinism **class** tag. PALW's currently-production class is "fp per-vendor":
+    /// byte-identical results only within one microarchitecture and toolchain. This tag names
+    /// that class for Apple Silicon + Metal.
+    pub const METAL_RUNTIME_CLASS: &str = "palw-fp-per-vendor/apple-metal-arm64/v1";
+}
+
+/// `h_M` for a GGUF-distributed model: keyed digest over the content digest, size, filename, and
+/// the base-metadata revision the GGUF was converted from.
+///
+/// Widens the upstream 32-byte SHA-256 into the overlay's 64-byte [`Hash64`] identity space
+/// while binding the surrounding facts, so two different conversions of the same weights (a
+/// different tokenizer revision, say) are different models to consensus — as they must be, since
+/// they map the same prompt to different tokens.
+pub fn derive_model_weights_hash(
+    gguf_sha256_hex: &str,
+    gguf_size: u64,
+    filename: &str,
+    base_repo: &str,
+    base_revision: &str,
+) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(MODEL_IDENTITY_KEY).to_state();
+    hasher.update(gguf_sha256_hex.as_bytes());
+    hasher.update(&gguf_size.to_le_bytes());
+    hasher.update(filename.as_bytes());
+    hasher.update(base_repo.as_bytes());
+    hasher.update(base_revision.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// `h_R` — the exact inference runtime build: upstream commit, applied patch, build number, and
+/// the build profile. Corresponds to PALW's `runtime_manifest_hash` role in `MatchProjectionV1`.
+pub fn derive_runtime_hash(commit: &str, patch_sha256_hex: &str, build_number: u64, build_profile: &str) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(RUNTIME_IDENTITY_KEY).to_state();
+    hasher.update(commit.as_bytes());
+    hasher.update(patch_sha256_hex.as_bytes());
+    hasher.update(&build_number.to_le_bytes());
+    hasher.update(build_profile.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Per-job token ceiling for the PALW profile. Deliberately far below the model's 262 144
+/// context: a verifier must FULLY re-execute every accepted job under
+/// [`VerificationScheme::CanonicalFullReplay`], so this is an audit-cost bound, not a
+/// capability bound. Raising it multiplies every honest verifier's workload.
+pub const PALW_QWEN36_MAX_TOKENS: u32 = 4096;
+
+/// The registered [`ModelCostEntry`] for the pinned PALW Qwen3.6-35B-A3B Metal profile.
+pub fn palw_qwen36_metal_entry() -> ModelCostEntry {
+    ModelCostEntry {
+        model_weights_hash: derive_model_weights_hash(
+            palw_pins::GGUF_SHA256,
+            palw_pins::GGUF_SIZE,
+            palw_pins::GGUF_FILENAME,
+            palw_pins::BASE_REPO_ID,
+            palw_pins::BASE_REVISION,
+        ),
+        runtime_hash: derive_runtime_hash(
+            palw_pins::LLAMA_COMMIT,
+            palw_pins::LLAMA_PATCH_SHA256,
+            palw_pins::LLAMA_BUILD_NUMBER,
+            palw_pins::METAL_BUILD_PROFILE,
+        ),
+        runtime_class_id: derive_runtime_class_id(palw_pins::METAL_RUNTIME_CLASS),
+        // Single registered model ⇒ it IS the reference, so ρ = 1.0 and one VLT unit is one
+        // reference-token-equivalent. A second model would be calibrated against this one.
+        rho_micro: VLT_MICRO as u64,
+        max_tokens: PALW_QWEN36_MAX_TOKENS,
+    }
+}
+
+/// The **determinism class** two replicas must share for a byte-exact comparison to be a fair
+/// test. Corresponds to PALW's `runtime_class_id`.
+///
+/// This is coarser than [`derive_runtime_hash`] on purpose: several runtime builds can belong to
+/// one class, but a comparison *across* classes is meaningless under the current fp-per-vendor
+/// regime. See [`select_verifiers`] for why consensus must enforce it.
+pub fn derive_runtime_class_id(class_tag: &str) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(RUNTIME_CLASS_KEY).to_state();
+    hasher.update(class_tag.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 // ---------------------------------------------------------------------
@@ -514,14 +766,40 @@ pub fn compute_challenge_message(
 /// This is **weight-blind on purpose**: verification is an audit role, not a voting
 /// role, so sampling it uniformly keeps a high-`W_i` validator from also dominating
 /// the audit of its competitors' compute.
-pub fn select_verifiers(job_id: Hash64, executor_id: Hash64, beacon: BlockHash, candidates: &[Hash64], k: usize) -> Vec<Hash64> {
+///
+/// # Determinism class matching (not optional)
+///
+/// `candidates` is `(validator_id, runtime_class_id)` and only candidates whose class equals
+/// `runtime_class_id` are drawable. This is a **correctness requirement**, not a policy
+/// preference, and it follows from what the runtime actually guarantees.
+///
+/// PALW's production determinism class is *fp per-vendor*: byte-identical results hold only
+/// within one microarchitecture and toolchain (its integration spec: "k=2 pairs must be from
+/// same vendor class"; the cross-vendor integer-canonical class is still under development).
+/// A verifier in a different class re-executing an honest executor's job would legitimately
+/// compute a different `R_j` and sign `Refuted`. Because acceptance is refutation-dominant
+/// ([`verify_compute_certificate`]), a single such verifier would zero an honest validator's
+/// VLT — and a `ForgedReceipt` challenge built on that divergence would slash an honest
+/// executor's bond. Cross-class sampling would therefore not merely be noisy, it would make
+/// the honest strategy unprofitable and the slashing conditions unsound.
+///
+/// A job whose class has fewer than `k` other members simply draws a smaller committee; the
+/// caller's `min_verifier_confirmations` then decides whether that is enough to mint.
+pub fn select_verifiers(
+    job_id: Hash64,
+    executor_id: Hash64,
+    beacon: BlockHash,
+    runtime_class_id: Hash64,
+    candidates: &[(Hash64, Hash64)],
+    k: usize,
+) -> Vec<Hash64> {
     if k == 0 {
         return Vec::new();
     }
     let mut ticketed: Vec<(Hash64, Hash64)> = candidates
         .iter()
-        .filter(|c| **c != executor_id)
-        .map(|c| {
+        .filter(|(id, class)| *id != executor_id && *class == runtime_class_id)
+        .map(|(c, _)| {
             let mut hasher = Blake2bParams::new().hash_length(64).key(VERIFIER_SORTITION_KEY).to_state();
             hasher.update(job_id.as_byte_slice());
             hasher.update(executor_id.as_byte_slice());
@@ -554,6 +832,11 @@ pub fn select_verifiers(job_id: Hash64, executor_id: Hash64, beacon: BlockHash, 
 pub struct ModelCostEntry {
     pub model_weights_hash: Hash64,
     pub runtime_hash: Hash64,
+    /// The determinism class this runtime belongs to — PALW's `runtime_class_id`. Consensus
+    /// draws a job's verifier committee only from validators declaring this same class, because
+    /// a byte-exact replay comparison is only a fair test within a class. See
+    /// [`select_verifiers`].
+    pub runtime_class_id: Hash64,
     /// `ρ` in [`VLT_MICRO`] fixed point (`1_000_000` = the reference model, ×1.0).
     /// Reflects active parameters, context length, precision, and sparsity — i.e. how
     /// much real compute one token of this model costs relative to the reference.
@@ -588,10 +871,32 @@ impl ModelCostTable {
         entries: [ModelCostEntry {
             model_weights_hash: Hash64::from_bytes([0u8; 64]),
             runtime_hash: Hash64::from_bytes([0u8; 64]),
+            runtime_class_id: Hash64::from_bytes([0u8; 64]),
             rho_micro: 0,
             max_tokens: 0,
         }; MAX_MODEL_COST_ENTRIES],
     };
+
+    /// The single-model registry for the pinned PALW Qwen3.6-35B-A3B Metal profile.
+    ///
+    /// `ρ = 1.0`: with one registered model it *is* the reference, so `x_j` reduces to
+    /// `a·t_in + b·t_out` and one VLT unit is one reference-token-equivalent. Introducing a
+    /// second model later means calibrating its `ρ` against this one, not renumbering this.
+    ///
+    /// `max_tokens = 4096` bounds what one job can cost a verifier. The model's own context is
+    /// 262 144, but a verifier must *fully re-execute* every accepted job under
+    /// [`VerificationScheme::CanonicalFullReplay`], so the ceiling is an audit-cost decision,
+    /// not a capability one. Raising it multiplies the honest verifier's workload.
+    ///
+    /// Not `const` because the identities are keyed BLAKE2b digests of the pinned strings
+    /// ([`palw_pins`]); `tests::palw_registry_derives_from_the_published_pins` re-derives them,
+    /// so a changed pin is a failing test rather than a silent identity drift.
+    pub fn palw_qwen36_metal() -> Self {
+        let mut table = Self::EMPTY;
+        table.len = 1;
+        table.entries[0] = palw_qwen36_metal_entry();
+        table
+    }
 
     pub fn live(&self) -> &[ModelCostEntry] {
         &self.entries[..(self.len as usize).min(MAX_MODEL_COST_ENTRIES)]
@@ -664,6 +969,16 @@ pub struct VltParams {
     /// ≤ [`Self::verifier_committee_size`] ([`Self::is_coherent`]).
     pub min_verifier_confirmations: u8,
 
+    /// Maximum blocks a certificate's phase-1 commitment may lie behind the certificate itself.
+    /// Bounds the lookback the credit walk must do to resolve a beacon, and stops an executor
+    /// from hoarding old commitments to pick a favourable moment to reveal.
+    pub max_commitment_age_blocks: u64,
+
+    /// Maximum blocks past its accepting block that a [`ComputeCapabilityPayload`] may remain
+    /// valid. Caps a declaration's reach so an operator that stops running the runtime drops out
+    /// of verifier committees instead of sinking every job it is sampled for.
+    pub max_capability_validity_blocks: u64,
+
     /// The consensus-registered model set (§3.2).
     pub model_cost_table: ModelCostTable,
 }
@@ -703,6 +1018,12 @@ impl VltParams {
         challenge_window_blocks: 300,
         verifier_committee_size: 3,
         min_verifier_confirmations: 2,
+        // ~10 min at 10 bps: comfortably longer than one epoch (so the beacon epoch can mature)
+        // plus a full job, and short enough that stockpiled commitments expire.
+        max_commitment_age_blocks: 6_000,
+        // ~1 day at 10 bps. Long enough that renewal is routine, short enough that a departed
+        // operator leaves the committee pool within a day.
+        max_capability_validity_blocks: 864_000,
         model_cost_table: ModelCostTable::EMPTY,
     };
 
@@ -771,6 +1092,51 @@ impl VltParams {
 // ---------------------------------------------------------------------
 // Normalization (§3.2 eq. 4).
 // ---------------------------------------------------------------------
+
+/// One epoch's finalized per-validator VLT credit, as persisted by the credit accumulator store.
+///
+/// Only **finalized** epochs are ever written: an epoch is finalized once it is buried past both
+/// the challenge window (no challenge can still zero one of its certificates) and the reorg
+/// horizon (no branch under consideration can still change its contents). Below that depth every
+/// branch shares the same history, so a cached value is branch-independent and it is sound to
+/// read it on the sink path *and* while scoring a candidate branch in the reorg gate.
+///
+/// This is what turns `C_i(E)`'s `credit_window_epochs`-deep sum from a full rewalk per virtual
+/// commit into a walk of only the unfinalized tail.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct VltEpochCredits {
+    /// `(validator_id, X_i(epoch))` in µRTE, sorted ascending by `validator_id` so the encoding
+    /// is byte-deterministic.
+    pub credits: Vec<(Hash64, u128)>,
+}
+
+impl VltEpochCredits {
+    /// Build from an unordered iterator, canonicalising the order.
+    pub fn from_unordered(entries: impl IntoIterator<Item = (Hash64, u128)>) -> Self {
+        let mut credits: Vec<(Hash64, u128)> = entries.into_iter().collect();
+        credits.sort_by(|a, b| a.0.cmp(&b.0));
+        Self { credits }
+    }
+
+    pub fn get(&self, validator_id: &Hash64) -> u128 {
+        self.credits.binary_search_by(|probe| probe.0.cmp(validator_id)).map(|i| self.credits[i].1).unwrap_or(0)
+    }
+}
+
+// The store uses an untracked (`Count`) cache policy, so this estimate is never consulted for
+// eviction — an empty impl mirrors `EpochTally` / `StakeBondRecord`.
+impl kaspa_utils::mem_size::MemSizeEstimator for VltEpochCredits {}
+
+/// Whether an epoch's credits can never change again, and may therefore be cached.
+///
+/// Requires burial past **both** windows, and both are load-bearing:
+/// * `challenge_window_blocks` — a later challenge can still zero one of the epoch's
+///   certificates, which would change `X_i(epoch)`.
+/// * `max_reorg_horizon_blocks` — above it, a competing branch could carry different
+///   certificates for the same epoch, so a single cached value would be wrong for one of them.
+pub fn vlt_epoch_finalized(epoch_anchor_daa: u64, tip_daa: u64, challenge_window_blocks: u64, max_reorg_horizon_blocks: u64) -> bool {
+    tip_daa.saturating_sub(epoch_anchor_daa) > challenge_window_blocks.saturating_add(max_reorg_horizon_blocks)
+}
 
 /// Why a job minted no VLT. Diagnostic only — every variant normalizes to `0`, which
 /// is the entire consensus effect.
@@ -997,8 +1363,13 @@ mod tests {
     fn params_with_model() -> VltParams {
         let mut table = ModelCostTable::EMPTY;
         table.len = 1;
-        table.entries[0] =
-            ModelCostEntry { model_weights_hash: h64(1), runtime_hash: h64(2), rho_micro: 1_000_000, max_tokens: 100_000 };
+        table.entries[0] = ModelCostEntry {
+            model_weights_hash: h64(1),
+            runtime_hash: h64(2),
+            runtime_class_id: h64(3),
+            rho_micro: 1_000_000,
+            max_tokens: 100_000,
+        };
         VltParams { model_cost_table: table, ..VltParams::INERT }
     }
 
@@ -1208,31 +1579,133 @@ mod tests {
         }
     }
 
+    /// The one class every candidate in the simple fixtures belongs to.
+    fn metal() -> Hash64 {
+        derive_runtime_class_id(palw_pins::METAL_RUNTIME_CLASS)
+    }
+
+    fn same_class(ids: &[Hash64]) -> Vec<(Hash64, Hash64)> {
+        ids.iter().map(|i| (*i, metal())).collect()
+    }
+
     #[test]
     fn verifier_sortition_excludes_the_executor_and_is_deterministic() {
-        let candidates: Vec<Hash64> = (0u8..10).map(h64).collect();
+        let ids: Vec<Hash64> = (0u8..10).map(h64).collect();
+        let candidates = same_class(&ids);
         let executor = h64(3);
-        let a = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), &candidates, 3);
+        let a = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 3);
         assert_eq!(a.len(), 3);
         assert!(!a.contains(&executor), "§6: an executor must never verify its own job");
 
         // Same inputs => same committee, regardless of candidate ordering.
         let mut shuffled = candidates.clone();
         shuffled.reverse();
-        let b = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), &shuffled, 3);
+        let b = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), metal(), &shuffled, 3);
         assert_eq!(a, b, "sortition must not depend on candidate order");
 
         // A different beacon draws a different committee (the executor cannot pre-pick).
-        let c = select_verifiers(h64(100), executor, BlockHash::from_bytes([2u8; 64]), &candidates, 3);
+        let c = select_verifiers(h64(100), executor, BlockHash::from_bytes([2u8; 64]), metal(), &candidates, 3);
         assert_ne!(a, c);
     }
 
     #[test]
     fn sortition_handles_undersized_candidate_sets() {
-        let candidates = vec![h64(1), h64(2)];
-        let picked = select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), &candidates, 3);
+        let candidates = same_class(&[h64(1), h64(2)]);
+        let picked = select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 3);
         assert_eq!(picked, vec![h64(2)], "only non-executor candidates are drawable");
-        assert!(select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), &candidates, 0).is_empty());
+        assert!(select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 0).is_empty());
+    }
+
+    /// Cross-class sampling is not merely noisy — under PALW's fp-per-vendor determinism it
+    /// would let an honest verifier legitimately refute an honest executor, zeroing its VLT and
+    /// arming a `ForgedReceipt` slash against it. Consensus must never draw such a verifier.
+    #[test]
+    fn sortition_never_draws_a_verifier_from_another_determinism_class() {
+        let cuda = derive_runtime_class_id("palw-fp-per-vendor/nvidia-sm89/v1");
+        assert_ne!(metal(), cuda);
+        let mixed: Vec<(Hash64, Hash64)> = (1u8..=8).map(|i| (h64(i), if i % 2 == 0 { metal() } else { cuda })).collect();
+
+        let picked = select_verifiers(h64(100), h64(99), BlockHash::from_bytes([1u8; 64]), metal(), &mixed, 4);
+        assert!(!picked.is_empty());
+        for id in &picked {
+            let class = mixed.iter().find(|(i, _)| i == id).unwrap().1;
+            assert_eq!(class, metal(), "drew a verifier from the wrong determinism class");
+        }
+
+        // A class with no other members yields no committee at all — the job then simply fails
+        // to reach `min_verifier_confirmations` and mints nothing, which is the safe outcome.
+        let lonely = derive_runtime_class_id("palw-fp-per-vendor/rocm-gfx1100/v1");
+        assert!(select_verifiers(h64(100), h64(99), BlockHash::from_bytes([1u8; 64]), lonely, &mixed, 4).is_empty());
+    }
+
+    /// The registered identities must be re-derivable from the published `runtime-pins.sh`
+    /// values by anyone holding the artifacts. Changing a pin is therefore a visible consensus
+    /// change (this test fails), never a silent identity drift.
+    #[test]
+    fn palw_registry_derives_from_the_published_pins() {
+        let e = palw_qwen36_metal_entry();
+        assert_eq!(
+            e.model_weights_hash,
+            derive_model_weights_hash(
+                "1dc494614bee8a3bc00e79fe5a49da0fc1c36b3b118c4156e223e98e5a0a671b",
+                23_938_321_728,
+                "Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf",
+                "huihui-ai/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated",
+                "ac18882735d037f6074a7630eb68d85db8234c25",
+            )
+        );
+        assert_eq!(
+            e.runtime_hash,
+            derive_runtime_hash(
+                "12127defda4f41b7679cb2477a4b0d65ee6a0c8f",
+                "d155a88b7c11ee74f48011760cb1a37773a694c8cab28258ee108c85e2f9e02c",
+                10_015,
+                palw_pins::METAL_BUILD_PROFILE,
+            )
+        );
+        // Single registered model ⇒ it is the reference.
+        assert_eq!(e.rho_micro, VLT_MICRO as u64);
+        assert_eq!(e.max_tokens, PALW_QWEN36_MAX_TOKENS);
+
+        // The three identities are independent domains: a model can never be mistaken for a
+        // runtime or a class.
+        assert_ne!(e.model_weights_hash, e.runtime_hash);
+        assert_ne!(e.runtime_hash, e.runtime_class_id);
+        assert_ne!(e.model_weights_hash, e.runtime_class_id);
+
+        // Every pinned input is load-bearing: perturbing any one changes the identity.
+        assert_ne!(
+            e.model_weights_hash,
+            derive_model_weights_hash(
+                palw_pins::GGUF_SHA256,
+                palw_pins::GGUF_SIZE + 1,
+                palw_pins::GGUF_FILENAME,
+                palw_pins::BASE_REPO_ID,
+                palw_pins::BASE_REVISION,
+            )
+        );
+        // A different tokenizer revision is a different model: same weights, different function
+        // from prompt bytes to tokens.
+        assert_ne!(
+            e.model_weights_hash,
+            derive_model_weights_hash(
+                palw_pins::GGUF_SHA256,
+                palw_pins::GGUF_SIZE,
+                palw_pins::GGUF_FILENAME,
+                palw_pins::BASE_REPO_ID,
+                "0000000000000000000000000000000000000000",
+            )
+        );
+        // A CUDA build of the same commit is a different runtime AND a different class.
+        assert_ne!(
+            e.runtime_hash,
+            derive_runtime_hash(palw_pins::LLAMA_COMMIT, palw_pins::LLAMA_PATCH_SHA256, palw_pins::LLAMA_BUILD_NUMBER, "cuda-sm89")
+        );
+
+        let table = ModelCostTable::palw_qwen36_metal();
+        assert_eq!(table.live().len(), 1);
+        assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
+        assert!(table.lookup(e.runtime_hash, e.model_weights_hash).is_none(), "lookup must not be order-insensitive");
     }
 
     #[test]

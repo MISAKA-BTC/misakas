@@ -191,6 +191,17 @@ pub enum DatabaseStorePrefixes {
     /// commitment.
     EvmTraceReplay = 219,
 
+    // ---- MISAKA Verified LLM Token-Weighted BFT (`vlt`) ----
+    /// Keyed by `u64` epoch: the per-epoch verified-compute credit `X_i(epoch)`
+    /// (`VltEpochCredits`), written ONLY once an epoch is buried past both the challenge window
+    /// and the reorg horizon — i.e. once no challenge and no branch can still change it, which
+    /// is what makes one epoch-keyed row valid for every branch. Turns the `C_i(E)` sum from a
+    /// full `credit_window_epochs`-deep re-walk (re-verifying every certificate's ML-DSA-87
+    /// signatures) into a walk of the unfinalized tail. Inert (never written) while
+    /// `DnsParams::vlt.vlt_activation_daa_score` is `u64::MAX`, which it is on every shipped
+    /// preset.
+    VltCredits = 235,
+
     /// kaspa-pq EVM Lane (§12 archive) — keyed by canonical `BlockHash`: the forward
     /// state DIFF ([`EvmStateDiffV2`]) of the block over its selected parent. The
     /// long-term retention form (the per-block full snapshot at prefix 206 is the
