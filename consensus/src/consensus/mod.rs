@@ -37,7 +37,7 @@ use crate::{
         deps_manager::{BlockProcessingMessage, BlockResultSender, BlockTask, VirtualStateProcessingMessage},
         header_processor::HeaderProcessor,
         pruning_processor::processor::{PruningProcessingMessage, PruningProcessor},
-        virtual_processor::{VirtualStateProcessor, errors::PruningImportResult},
+        virtual_processor::{ContributionWeight, VirtualStateProcessor, errors::PruningImportResult},
     },
     processes::{
         ghostdag::ordering::SortableBlock,
@@ -1061,7 +1061,7 @@ impl ConsensusApi for Consensus {
         }
 
         let sink = self.get_sink();
-        let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params);
+        let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score);
         if anchors.is_empty() {
             return Vec::new();
         }
@@ -1074,6 +1074,10 @@ impl ConsensusApi for Consensus {
             &bonds,
             self.config.params.genesis.hash.as_byte_slice(),
             dns_params,
+            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
+            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
+            // stay on bonded stake regardless of the VLT fence.
+            ContributionWeight::BondedStake,
         );
 
         let mut seen = HashSet::new();
@@ -1085,7 +1089,7 @@ impl ConsensusApi for Consensus {
                 continue;
             }
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_stake_sompi);
+            *entry = entry.saturating_add(c.signed_weight as u64);
             contributed_by_epoch.entry(c.epoch).or_default().push(MandatoryAttestationContributionKey {
                 bond_outpoint: c.bond_outpoint,
                 validator_id: c.validator_id,
@@ -1157,7 +1161,7 @@ impl ConsensusApi for Consensus {
         }
 
         let sink = self.get_sink();
-        let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params);
+        let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score);
         if anchors.is_empty() {
             return Vec::new();
         }
@@ -1170,6 +1174,10 @@ impl ConsensusApi for Consensus {
             &bonds,
             self.config.params.genesis.hash.as_byte_slice(),
             dns_params,
+            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
+            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
+            // stay on bonded stake regardless of the VLT fence.
+            ContributionWeight::BondedStake,
         );
 
         let mut seen = HashSet::new();
@@ -1180,7 +1188,7 @@ impl ConsensusApi for Consensus {
                 continue;
             }
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_stake_sompi);
+            *entry = entry.saturating_add(c.signed_weight as u64);
         }
 
         let health = self.storage.dns_state_store.read().get().map(|state| state.health).unwrap_or_default();
@@ -1265,6 +1273,10 @@ impl ConsensusApi for Consensus {
             &bonds,
             self.config.params.genesis.hash.as_byte_slice(),
             dns_params,
+            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
+            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
+            // stay on bonded stake regardless of the VLT fence.
+            ContributionWeight::BondedStake,
         );
         let mut seen = HashSet::new();
         let mut signed_by_epoch: HashMap<u64, u64> = HashMap::new();
@@ -1274,7 +1286,7 @@ impl ConsensusApi for Consensus {
                 continue;
             }
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_stake_sompi);
+            *entry = entry.saturating_add(c.signed_weight as u64);
             if c.bond_outpoint == bond_outpoint && c.validator_id == bond.validator_pubkey_hash {
                 signed_by_this_bond.insert(c.epoch);
             }
@@ -1282,7 +1294,9 @@ impl ConsensusApi for Consensus {
 
         let mut deficient = Vec::new();
         let mut fallback = Vec::new();
-        for (epoch, anchor) in self.virtual_processor.canonical_anchors_in_window(sink, dns_params) {
+        for (epoch, anchor) in
+            self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score)
+        {
             if epoch < from_epoch || epoch > latest_ready || signed_by_this_bond.contains(&epoch) {
                 continue;
             }

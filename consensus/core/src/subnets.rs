@@ -81,6 +81,8 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD
             || *self == SUBNETWORK_ID_SLASHING_EVIDENCE
             || *self == SUBNETWORK_ID_STAKE_UNBOND
+            || *self == SUBNETWORK_ID_COMPUTE_CERTIFICATE
+            || *self == SUBNETWORK_ID_COMPUTE_CHALLENGE
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
@@ -166,6 +168,16 @@ pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::fr
 pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);
 /// kaspa-pq H-05 (ADR-0010 "Unbonding"): an owner-authorized request to begin unbonding a bond.
 pub const SUBNETWORK_ID_STAKE_UNBOND: SubnetworkId = SubnetworkId::from_byte(0x13);
+
+// MISAKA Verified LLM Token-Weighted BFT (`vlt`) subnetwork ids. They extend the DNS overlay band
+// (0x10-0x13 → 0x10-0x15) because they feed the same finality overlay: these are what mint the
+// voting weight the attestation shards then spend.
+/// A verified LLM job's compute certificate — [`crate::vlt::ComputeCertificatePayload`]. Surviving
+/// the challenge window credits `X_i(e)`, which becomes voting weight from epoch `e + 1`.
+pub const SUBNETWORK_ID_COMPUTE_CERTIFICATE: SubnetworkId = SubnetworkId::from_byte(0x14);
+/// A fraud proof against an accepted compute certificate —
+/// [`crate::vlt::ComputeChallengePayload`].
+pub const SUBNETWORK_ID_COMPUTE_CHALLENGE: SubnetworkId = SubnetworkId::from_byte(0x15);
 
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte
 // values 0x20/0x21/0x22 sit above the DNS overlay band (0x10-0x13) and the

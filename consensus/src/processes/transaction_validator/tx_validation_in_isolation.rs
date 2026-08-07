@@ -1,8 +1,8 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
-    DnsTxKind, dns_tx_kind, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx,
-    validate_stake_unbond_payload,
+    DnsTxKind, dns_tx_kind, validate_compute_certificate_payload, validate_compute_challenge_tx, validate_slashing_evidence_tx,
+    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -241,6 +241,16 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // kaspa-pq H-05: stateless shape of a stake-unbond request (owner-key
             // binding + signature are verified in the stateful block-validity rule).
             DnsTxKind::StakeUnbond => validate_stake_unbond_payload(&tx.payload),
+            // MISAKA Verified LLM Token-Weighted BFT: stateless shape of a compute
+            // certificate. Executor/verifier signatures, sortition membership, the
+            // model-cost-table lookup and the challenge window are stateful and run
+            // in the credit walk — a structurally valid certificate still mints zero
+            // VLT if any of those fail.
+            DnsTxKind::ComputeCertificate => validate_compute_certificate_payload(&tx.payload),
+            // Like slashing evidence, a compute challenge is a pure evidence carrier
+            // and must declare no outputs (the reporter reward is minted at
+            // (challenge_tx_id, 0)).
+            DnsTxKind::ComputeChallenge => validate_compute_challenge_tx(&tx.payload, &tx.outputs),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

@@ -11,6 +11,7 @@ use crate::{
         RewardParams, STAKE_SCORE_SCALE, StakeScore,
     },
     network::{NetworkId, NetworkType},
+    vlt::VltParams,
 };
 use kaspa_addresses::Prefix;
 use kaspa_math::{Uint256, Uint576};
@@ -794,6 +795,10 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // rejoins the work-dominant chain instead of wedging forever, which a strictly absolute stake
     // veto cannot do (no node can locally tell that it is the minority side of a partition).
     emergency_work_override_multiplier: 4,
+    // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
+    // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
+    vlt: VltParams::INERT,
+    vlt_credit_window_blue_score: 0,
 };
 
 /// Number of blocks in 14 days at the production 10 BPS block rate
@@ -951,6 +956,21 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // because the deadlock is structural, not threshold-dependent: it is reachable on any network
     // whose `reorg_mode` is TwoDimensionalDominance, which is every current preset.
     emergency_work_override_multiplier: 4,
+    // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
+    // by verified useful compute as the source of voting power. Shipped DORMANT
+    // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
+    // hard fork and must not be scheduled until the active set can actually produce verified
+    // compute, because with no VLT every `W_i(E)` is zero and no epoch reaches the `Q(E)` quorum.
+    //
+    // Note what is deliberately NOT changed by this: `min_bond_amount_sompi` and
+    // `min_active_stake_sompi` stay at 20M KAS above. Under VLT weighting the bond stops being
+    // voting power and becomes the participation requirement plus the slashable collateral that
+    // caps convertible compute (`λ·B_i`) — the same 20M number, a different job.
+    vlt: VltParams::INERT,
+    // Sized for `VltParams::INERT`'s K = 96 + delay 1 epochs at the 100-blue_score attestation
+    // epoch length, plus the 300-block challenge window and a lag/grace margin. This is the walk
+    // cost VLT weighting adds per recompute; it is paid only once the fence above is moved.
+    vlt_credit_window_blue_score: 10_400,
 };
 
 /// kaspa-pq Phase 2 (ADR-0007): testnet DNS params = [`PRODUCTION_DNS_PARAMS`] with a lowered

@@ -7,7 +7,12 @@
 //! the in-process validator architecture, and
 //! [ADR-0011](../../docs/adr/0011-validator-deployment-and-equivocation-safety.md)
 //! for the single-host deployment + equivocation-safety operating
-//! model. This module carries the **type surface only** that Phase
+//! model, and
+//! [ADR-0024](../../docs/adr/0024-verified-llm-token-weighted-bft.md) for
+//! the MISAKA Verified LLM Token-Weighted BFT replacement of the
+//! **voting-weight source** (bonded capital → verified useful compute)
+//! implemented in [`crate::vlt`] and switched here by
+//! [`DnsParams::epoch_credit_rule`]. This module carries the **type surface only** that Phase
 //! 10 follow-up PRs (10.4 — 10.14) will reference; consensus rule
 //! implementations panic with explicit `unimplemented!()` so the
 //! missing surface is loud rather than silently-zero.
@@ -115,12 +120,13 @@ mod serde_reward_payload64 {
 }
 
 use crate::subnets::{
-    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND,
-    SubnetworkId,
+    SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE, SUBNETWORK_ID_SLASHING_EVIDENCE,
+    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use crate::{
     BlockHash, BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
+    vlt::{ComputeCertificatePayload, ComputeChallengePayload, ComputeFraudKind, MAX_VERIFIER_ATTESTATIONS, VltParams},
 };
 
 /// 2592 bytes — matches `kaspa_txscript::MLDSA87_PK_LEN`. Repeated
@@ -901,6 +907,37 @@ pub struct DnsParams {
     /// fork, where canonical's since-ancestor work is substantial. Shallow forks keep the confirmed
     /// anchor, never reach this branch, and are unaffected.
     pub emergency_work_override_multiplier: u32,
+
+    /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the parameters that replace
+    /// bonded capital with verified useful compute as the source of validator voting power.
+    ///
+    /// At and above [`VltParams::vlt_activation_daa_score`] a validator's per-epoch voting weight
+    /// becomes `W_i(E) = min{C_i(E), λ·B_i(E)}` instead of its bonded `amount`, and an epoch earns
+    /// credit through the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum instead of the
+    /// [`Self::stake_event_quality_floor_bps`] φS floor. Below the fence every VLT code path is
+    /// dormant and the overlay is byte-identical to the stake-weighted behaviour.
+    ///
+    /// This is INDEPENDENT of [`Self::min_bond_amount_sompi`], which is deliberately unchanged:
+    /// under the VLT model the bond stops being voting power and becomes purely (a) the
+    /// participation requirement and (b) the slashable collateral that caps how much verified
+    /// compute a validator may convert into weight. The 20M-KAS production floor therefore keeps
+    /// its exact prior value and meaning as a *collateral* threshold.
+    ///
+    /// [`VltParams::INERT`] on every shipped preset. Appended last to keep the borsh layout change
+    /// localized; NOT a genesis-block input, so adopting it leaves genesis hashes unchanged.
+    pub vlt: VltParams,
+
+    /// blue_score window the VLT credit walk scans back from the tip when collecting each
+    /// validator's per-epoch `X_i(e)` for [`crate::vlt::recent_compute_score`].
+    ///
+    /// Must cover `(credit_window_epochs + credit_delay_epochs) × attestation_epoch_length_blue_score`
+    /// plus the challenge window, or the oldest epochs of the `C_i(E)` sum are silently truncated to
+    /// zero — which would under-count honest validators' weight rather than over-count it, but would
+    /// still make weight depend on a window the paper does not define. Kept as its own knob (rather
+    /// than reusing [`Self::stake_score_window_blue_score`]) because the compute-credit window is
+    /// necessarily much longer than the attestation window, and its walk cost is the price of
+    /// activating VLT weighting. `0` while the fence is inert.
+    pub vlt_credit_window_blue_score: u64,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -982,6 +1019,63 @@ pub fn canonical_lagged_epoch_anchor(
 }
 
 impl DnsParams {
+    /// Which epoch-credit rule — and therefore which source of voting weight — is in force at
+    /// `daa_score`.
+    ///
+    /// This single call site is the switch that performs the paper's replacement. Below
+    /// [`VltParams::vlt_activation_daa_score`] it returns the pre-VLT φS graded rule over bonded
+    /// stake, so every shipped network is byte-identical to its behaviour before this module
+    /// existed. At and above the fence it returns [`EpochCreditRule::BftQuorum`], and the weight
+    /// producers switch to `W_i(E) = min{C_i(E), λ·B_i(E)}` in lockstep.
+    ///
+    /// Keyed on DAA (not on the pov-dependent `DnsState.rollout_stage`) for the same reason the
+    /// reward-split stage is: the construction and validation paths must select the same rule for
+    /// the same block, or they would disagree on whether an epoch is credited.
+    pub fn epoch_credit_rule(&self, daa_score: u64) -> EpochCreditRule {
+        if self.vlt.is_active_at(daa_score) {
+            EpochCreditRule::BftQuorum
+        } else {
+            EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
+        }
+    }
+
+    /// Whether VLT-weighted voting is live at `daa_score` — i.e. whether the weight fed to the
+    /// tally is verified compute rather than bonded stake. Convenience mirror of
+    /// [`Self::epoch_credit_rule`] for the weight-producing call sites.
+    pub fn vlt_weighting_active_at(&self, daa_score: u64) -> bool {
+        self.vlt.is_active_at(daa_score)
+    }
+
+    /// Whether this preset's VLT configuration is internally consistent **and** its unbonding
+    /// window covers the §7 bound `U ≥ credit window + max challenge period`.
+    ///
+    /// Not a block-validity rule — a startup/test assertion. A preset whose fence is inert trivially
+    /// passes (nothing reads the VLT knobs), so this only bites on a network that has actually
+    /// switched the weight source. The unbonding term matters because a validator that could exit
+    /// faster than its compute credit decays would still be drawing voting weight from jobs it can
+    /// no longer be slashed for.
+    pub fn vlt_params_consistent(&self) -> bool {
+        if self.vlt.vlt_activation_daa_score == u64::MAX {
+            return true;
+        }
+        if self.vlt.is_coherent().is_err() {
+            return false;
+        }
+        // The credit walk — AND the canonical-anchor map it resolves each certificate's epoch
+        // against — must reach back over the whole `C_i(E)` sum: `K + delay` epochs, plus the
+        // challenge window a certificate waits out before counting, plus the lag/backoff an
+        // epoch's anchor needs before it is decidable. A short window here does not fail loudly;
+        // it silently truncates the oldest epochs of every validator's `C_i(E)` to zero.
+        let needed_credit_window = (self.vlt.credit_window_epochs as u64)
+            .saturating_add(self.vlt.credit_delay_epochs as u64)
+            .saturating_mul(self.attestation_epoch_length_blue_score)
+            .saturating_add(self.vlt.challenge_window_blocks)
+            .saturating_add(self.attestation_lag_blue_score)
+            .saturating_add(self.attestation_anchor_backoff_blue_score);
+        self.vlt_credit_window_blue_score >= needed_credit_window
+            && self.unbonding_period_blocks >= self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score)
+    }
+
     /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
     /// The reorg gate only engages in the `Active` stage, where finality depends entirely on
     /// these; a misconfiguration (e.g. a zero epoch length, or a stake-score window too short
@@ -3040,14 +3134,21 @@ pub fn resolve_slashing_side_effects(
 /// `(bond_outpoint, validator_id, epoch)` uniqueness rule, so
 /// `signed_stake_sompi` already excludes any validator double-counted
 /// across attestation shards.
+/// **Voting-weight units.** Under the pre-VLT rule these are sompi of bonded stake; at and above
+/// [`DnsParams::vlt`]'s fence they are µRTE of [`crate::vlt::effective_voting_weight`]
+/// (`W_i(E) = min{C_i(E), λ·B_i(E)}`). The tally is unit-agnostic on purpose — it only ever
+/// compares `signed` against `total`, so the same aggregation, dedup and credit code serves both
+/// weight sources and only the *producer* of the numbers changes at the fence. `u128` because VLT
+/// weight is µRTE-scaled and overflows `u64` far sooner than sompi does.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EpochStakeTally {
     pub epoch: u64,
-    /// Deduplicated active stake whose validators signed this epoch's
+    /// Deduplicated voting weight whose validators signed this epoch's
     /// selected-chain anchor.
-    pub signed_stake_sompi: u64,
-    /// Total active stake at this epoch (the normalisation denominator).
-    pub total_active_stake_sompi: u64,
+    pub signed_weight: u128,
+    /// Total active voting weight at this epoch — `W(E)` under the VLT rule
+    /// (the normalisation denominator, and the quorum base).
+    pub total_weight: u128,
 }
 
 /// Per-epoch **quality-gated** StakeScore credit (ADR-0018 §B; refines ADR-0009
@@ -3087,19 +3188,58 @@ pub fn epoch_stake_credit(included_stake: u128, expected_stake: u128, quality_fl
     numerator.saturating_mul(STAKE_SCORE_SCALE) / expected.saturating_mul(denom)
 }
 
+/// Which rule turns an epoch's `(signed, total)` voting weight into StakeScore credit.
+///
+/// The two variants are the before and after of the MISAKA Verified LLM Token-Weighted BFT
+/// replacement, selected per block by [`DnsParams::epoch_credit_rule`]:
+///
+/// * [`Self::QualityFloor`] — the pre-VLT ADR-0018 §B graded credit. Weight is bonded stake and an
+///   epoch earns a *fraction* of `STAKE_SCORE_SCALE` that rises smoothly above φS.
+/// * [`Self::BftQuorum`] — the paper's §4/§5 rule. Weight is verified compute and an epoch earns
+///   credit **binarily**, on whether its signed weight reached `Q(E) = ⌊2W(E)/3⌋ + 1`.
+///
+/// The move from graded to binary is not incidental: a Precommit set either constitutes a Finality
+/// Certificate or it does not (§5 eq. 8), and it is that all-or-nothing threshold — not a partial
+/// score — that the §8.1 quorum-intersection safety argument rests on. A graded credit would let
+/// two sub-quorum sets on competing branches both accumulate StakeScore, which is precisely the
+/// case the intersection argument has to exclude.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EpochCreditRule {
+    /// Pre-VLT: ADR-0018 §B graded credit above the φS stake-event quality floor.
+    QualityFloor { quality_floor_bps: u16 },
+    /// VLT-weighted BFT: binary credit on the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum.
+    BftQuorum,
+}
+
+/// One epoch's StakeScore credit under `rule`.
+///
+/// Under [`EpochCreditRule::BftQuorum`] an epoch that reaches quorum earns the **full**
+/// [`STAKE_SCORE_SCALE`], exactly as a fully-participated epoch does under the graded rule. That
+/// keeps the existing `required_stake_depth` calibrations meaningful across the fence: PRODUCTION's
+/// `10 × STAKE_SCORE_SCALE` still means "ten confirmed epochs", it just now means ten epochs that
+/// reached a BFT quorum of verified-compute weight rather than ten epochs of full stake inclusion.
+pub fn epoch_credit(signed_weight: u128, total_weight: u128, rule: EpochCreditRule) -> u128 {
+    match rule {
+        EpochCreditRule::QualityFloor { quality_floor_bps } => epoch_stake_credit(signed_weight, total_weight, quality_floor_bps),
+        EpochCreditRule::BftQuorum => {
+            if crate::vlt::meets_bft_quorum(signed_weight, total_weight) {
+                STAKE_SCORE_SCALE
+            } else {
+                0
+            }
+        }
+    }
+}
+
 /// Deterministic `StakeScore(H)` aggregation over the epochs whose anchors lie on the
 /// selected chain ending at the target (ADR-0009 §"StakeScore mechanics", quality-gated
-/// per ADR-0018 §B). Each epoch's credit passes through the `quality_floor_bps` φS gate
-/// ([`epoch_stake_credit`]); every node observing the same on-chain shard set + the same
-/// `φS` reaches the same number — integer `u128` throughout, no floats.
-pub fn compute_stake_score(per_epoch: &[EpochStakeTally], quality_floor_bps: u16) -> StakeScore {
+/// per ADR-0018 §B; quorum-gated per the VLT paper §4 when `rule` is
+/// [`EpochCreditRule::BftQuorum`]). Every node observing the same on-chain shard set + the same
+/// `rule` reaches the same number — integer `u128` throughout, no floats.
+pub fn compute_stake_score(per_epoch: &[EpochStakeTally], rule: EpochCreditRule) -> StakeScore {
     let mut acc: u128 = 0;
     for e in per_epoch {
-        acc = acc.saturating_add(epoch_stake_credit(
-            e.signed_stake_sompi as u128,
-            e.total_active_stake_sompi as u128,
-            quality_floor_bps,
-        ));
+        acc = acc.saturating_add(epoch_credit(e.signed_weight, e.total_weight, rule));
     }
     StakeScore(acc)
 }
@@ -3110,14 +3250,20 @@ pub fn compute_stake_score(per_epoch: &[EpochStakeTally], quality_floor_bps: u16
 /// never affects block validity.
 ///
 /// - `overlay_active == false` → `DisabledBeforeActivation`.
-/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs meets φS
-///   (`quality_floor_bps`), or if there is less than `degraded_epochs` epochs of history.
-/// - Otherwise the last `degraded_epochs` epochs are all below φS → degraded:
+/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs **earned credit under `rule`**
+///   (met φS, or reached the BFT quorum), or if there is less than `degraded_epochs` epochs of
+///   history.
+/// - Otherwise the last `degraded_epochs` epochs all earned nothing → degraded:
 ///   `DegradedCertificateCensored` when they are **all** below the near-zero
 ///   `censorship_floor_bps` (the censorship signature), else `DegradedStakeQualityLow`.
+///
+/// The censorship discriminator stays fraction-based under both rules: "essentially no signed
+/// weight is landing on chain" reads the same whether weight is stake or verified compute, and it
+/// is what separates *nobody's shards are being included* from *validators are participating but
+/// not reaching the threshold*.
 pub fn derive_dns_health(
     per_epoch: &[EpochStakeTally],
-    quality_floor_bps: u16,
+    rule: EpochCreditRule,
     censorship_floor_bps: u16,
     degraded_epochs: u32,
     overlay_active: bool,
@@ -3131,13 +3277,22 @@ pub fn derive_dns_health(
     }
     let window = &per_epoch[per_epoch.len() - m..];
     let frac_bps = |e: &EpochStakeTally| -> u128 {
-        if e.total_active_stake_sompi == 0 {
+        if e.total_weight == 0 {
             return 0;
         }
-        (e.signed_stake_sompi.min(e.total_active_stake_sompi) as u128) * 10_000 / (e.total_active_stake_sompi as u128)
+        e.signed_weight.min(e.total_weight) * 10_000 / e.total_weight
     };
-    if window.iter().any(|e| frac_bps(e) >= quality_floor_bps as u128) {
-        return DnsHealth::Active; // a recent epoch met φS
+    // "Cleared the threshold" is per-rule, and deliberately NOT `epoch_credit(..) > 0`:
+    // `epoch_stake_credit` pays exactly zero at `f == φS` (its numerator vanishes there), so a
+    // credit-based test would flip an epoch sitting exactly on φS from Active to degraded and
+    // change the legacy signal below the VLT fence. The φS arm keeps the original
+    // `frac >= φS` comparison byte-for-byte; the quorum arm asks the quorum directly.
+    let cleared = |e: &EpochStakeTally| match rule {
+        EpochCreditRule::QualityFloor { quality_floor_bps } => frac_bps(e) >= quality_floor_bps as u128,
+        EpochCreditRule::BftQuorum => crate::vlt::meets_bft_quorum(e.signed_weight, e.total_weight),
+    };
+    if window.iter().any(cleared) {
+        return DnsHealth::Active; // a recent epoch cleared the active threshold
     }
     if window.iter().all(|e| frac_bps(e) < censorship_floor_bps as u128) {
         DnsHealth::DegradedCertificateCensored
@@ -3392,6 +3547,10 @@ pub enum DnsTxKind {
     SlashingEvidence,
     /// `SUBNETWORK_ID_STAKE_UNBOND` — [`StakeUnbondRequestPayload`].
     StakeUnbond,
+    /// `SUBNETWORK_ID_COMPUTE_CERTIFICATE` — [`crate::vlt::ComputeCertificatePayload`].
+    ComputeCertificate,
+    /// `SUBNETWORK_ID_COMPUTE_CHALLENGE` — [`crate::vlt::ComputeChallengePayload`].
+    ComputeChallenge,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -3406,6 +3565,10 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::SlashingEvidence)
     } else if *subnetwork_id == SUBNETWORK_ID_STAKE_UNBOND {
         Some(DnsTxKind::StakeUnbond)
+    } else if *subnetwork_id == SUBNETWORK_ID_COMPUTE_CERTIFICATE {
+        Some(DnsTxKind::ComputeCertificate)
+    } else if *subnetwork_id == SUBNETWORK_ID_COMPUTE_CHALLENGE {
+        Some(DnsTxKind::ComputeChallenge)
     } else {
         None
     }
@@ -3462,6 +3625,27 @@ pub enum DnsTxError {
     /// declared output (even a zero-value one) would collide with that mint.
     /// `n` is the offending output count.
     SlashingEvidenceHasOutputs(usize),
+
+    // ---- MISAKA Verified LLM Token-Weighted BFT (`vlt`) ----
+    /// The job's `v_j` is not consensus-eligible in this version (only
+    /// [`crate::vlt::VerificationScheme::CanonicalFullReplay`] is).
+    IneligibleVerificationScheme,
+    /// The job's `q` is an unknown [`crate::vlt::QuantizationProfile`] discriminant.
+    UnknownQuantizationProfile,
+    /// A compute certificate carries no verifier attestation — an unverified receipt, which by
+    /// §3.2 eq. (4) mints no VLT and so has no business on chain.
+    NoVerifierAttestations,
+    /// A compute certificate exceeds [`crate::vlt::MAX_VERIFIER_ATTESTATIONS`].
+    TooManyVerifierAttestations(usize),
+    /// One `validator_id` appears twice among a certificate's verifiers — an attempt to reach the
+    /// confirmation threshold with a single key.
+    DuplicateVerifier,
+    /// The executor appears among its own verifiers (§6 separates the two roles).
+    ExecutorVerifiedOwnJob,
+    /// A [`crate::vlt::ComputeFraudKind::ContradictoryVerification`] challenge does not carry two
+    /// genuinely conflicting verdicts by one verifier, or another challenge kind carries verdicts
+    /// it has no use for.
+    MalformedContradictionProof,
 }
 
 impl Display for DnsTxError {
@@ -3490,6 +3674,19 @@ impl Display for DnsTxError {
             DnsTxError::BondOutputScriptMismatch => write!(f, "stake-bond output-0 is not the owner's P2PKH-ML-DSA script"),
             DnsTxError::SlashingEvidenceHasOutputs(n) => {
                 write!(f, "slashing-evidence tx must declare no outputs but has {n}")
+            }
+            DnsTxError::IneligibleVerificationScheme => {
+                write!(f, "compute certificate declares a verification scheme that is not consensus-eligible")
+            }
+            DnsTxError::UnknownQuantizationProfile => write!(f, "compute certificate declares an unknown quantization profile"),
+            DnsTxError::NoVerifierAttestations => write!(f, "compute certificate carries no verifier attestation"),
+            DnsTxError::TooManyVerifierAttestations(n) => {
+                write!(f, "compute certificate carries {n} verifier attestations, above the permitted maximum")
+            }
+            DnsTxError::DuplicateVerifier => write!(f, "compute certificate lists the same verifier twice"),
+            DnsTxError::ExecutorVerifiedOwnJob => write!(f, "compute certificate lists its own executor as a verifier"),
+            DnsTxError::MalformedContradictionProof => {
+                write!(f, "compute challenge does not carry a well-formed contradiction proof")
             }
         }
     }
@@ -3883,7 +4080,19 @@ pub fn bond_mutations_from_accepted_txs(
                     muts.push(BondMutation::Unbond(req.bond_outpoint, accepted_daa_score));
                 }
             }
-            Some(DnsTxKind::StakeAttestationShard) | None => {}
+            Some(DnsTxKind::ComputeChallenge) => {
+                // VLT paper §7(b)/(c): a successful compute fraud proof slashes the offending bond,
+                // exactly as equivocation evidence does. Which bond that is depends on the fraud
+                // kind and is named by `target_bond_outpoint`; the payload/eligibility checks that
+                // make the naming truthful run as block-validity rules before acceptance, so a
+                // challenge reaching here is valid and applies once.
+                if let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload) {
+                    muts.push(BondMutation::Slash(c.target_bond_outpoint, accepted_daa_score));
+                }
+            }
+            // A compute certificate mints VLT credit, not a bond mutation — it flows through
+            // `aggregate_compute_credits` into the voting weight, never into the bond registry.
+            Some(DnsTxKind::StakeAttestationShard) | Some(DnsTxKind::ComputeCertificate) | None => {}
         }
     }
     muts
@@ -4081,8 +4290,10 @@ pub struct AttestationContribution {
     pub epoch: u64,
     pub validator_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
-    /// The contributing bond's stake in sompi.
-    pub signed_stake_sompi: u64,
+    /// This validator's voting weight for `epoch`, in the units described on
+    /// [`EpochStakeTally`]: the bond's stake in sompi below the VLT fence, and
+    /// `W_i(E) = min{C_i(E), λ·B_i(E)}` in µRTE at and above it.
+    pub signed_weight: u128,
 }
 
 /// Aggregate validated attestation contributions into per-epoch
@@ -4098,25 +4309,25 @@ pub struct AttestationContribution {
 /// are returned ascending by epoch for deterministic downstream hashing.
 pub fn aggregate_epoch_tallies(
     contributions: &[AttestationContribution],
-    total_active_stake_by_epoch: &BTreeMap<u64, u64>,
+    total_weight_by_epoch: &BTreeMap<u64, u128>,
 ) -> Vec<EpochStakeTally> {
     let mut seen: HashSet<(TransactionOutpoint, Hash64, u64)> = HashSet::new();
-    let mut signed_by_epoch: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut signed_by_epoch: BTreeMap<u64, u128> = BTreeMap::new();
     for c in contributions {
-        // Dedup the (bond, validator, epoch) triple; count its stake once.
+        // Dedup the (bond, validator, epoch) triple; count its weight once.
         if seen.insert((c.bond_outpoint, c.validator_id, c.epoch)) {
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_stake_sompi);
+            *entry = entry.saturating_add(c.signed_weight);
         }
     }
-    total_active_stake_by_epoch
+    total_weight_by_epoch
         .iter()
         .map(|(&epoch, &total)| EpochStakeTally {
             epoch,
-            // `signed` is clamped to `total` inside `epoch_stake_credit`,
-            // so an over-count cannot inflate the score.
-            signed_stake_sompi: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
-            total_active_stake_sompi: total,
+            // `signed` is clamped to `total` by both credit rules, so an
+            // over-count cannot inflate the score or manufacture a quorum.
+            signed_weight: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
+            total_weight: total,
         })
         .collect()
 }
@@ -4198,14 +4409,64 @@ pub fn advance_dns_confirmation(
 /// [`is_bond_active_at`] (DAA-stamped, so this is reorg-safe with no
 /// incremental state). Pairs with [`aggregate_epoch_tallies`] to feed
 /// [`compute_stake_score`].
-pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u64> {
+pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u128> {
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
-            let total = bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u64, |acc, b| acc.saturating_add(b.amount));
+            let total =
+                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
             (epoch, total)
         })
         .collect()
+}
+
+/// The VLT-weighted counterpart of [`total_active_stake_by_epoch`]: `W(E) = Σ_i W_i(E)` over the
+/// bonds active at each epoch's anchor (VLT paper §4 eq. 7).
+///
+/// `credited_by_validator` maps `validator_id → (epoch → X_i(epoch))`, i.e. each validator's
+/// challenge-window-survived VLT per epoch, as collected from the selected chain. A validator with
+/// no entry contributes `C_i(E) = 0` and therefore `W_i(E) = 0` — an active, fully-bonded validator
+/// that has produced no verified compute adds **nothing** to the quorum base. That is the intended
+/// behaviour and the reason the fence must not be moved before the set can produce compute: `W(E)`
+/// would be 0 network-wide and no epoch could reach [`crate::vlt::bft_quorum`].
+///
+/// Pure and DAA-stamped like its stake counterpart, so it is reorg-safe with no incremental state:
+/// the caller supplies the per-epoch anchor DAA scores, and bond activation / slash / unbond are
+/// re-evaluated at each anchor via [`is_bond_active_at`].
+pub fn total_voting_weight_by_epoch(
+    bonds: &[StakeBondRecord],
+    epoch_anchor_daa: &BTreeMap<u64, u64>,
+    credited_by_validator: &HashMap<Hash64, BTreeMap<u64, u128>>,
+    vlt: &VltParams,
+) -> BTreeMap<u64, u128> {
+    epoch_anchor_daa
+        .iter()
+        .map(|(&epoch, &anchor_daa)| {
+            let total = bonds
+                .iter()
+                .filter(|b| is_bond_active_at(b, anchor_daa))
+                .fold(0u128, |acc, b| acc.saturating_add(validator_voting_weight(b, epoch, credited_by_validator, vlt)));
+            (epoch, total)
+        })
+        .collect()
+}
+
+/// `W_i(E) = min{C_i(E), λ·B_i(E)}` for one bond at one epoch (VLT paper §4 eq. 5 + 6).
+///
+/// Shared by the denominator ([`total_voting_weight_by_epoch`]) and the numerator (the per-
+/// attestation contribution weight) so a validator's weight is by construction the same number on
+/// both sides of the quorum comparison. Computing them separately would be a latent consensus split.
+pub fn validator_voting_weight(
+    bond: &StakeBondRecord,
+    epoch: u64,
+    credited_by_validator: &HashMap<Hash64, BTreeMap<u64, u128>>,
+    vlt: &VltParams,
+) -> u128 {
+    let recent = credited_by_validator
+        .get(&bond.validator_pubkey_hash)
+        .map(|per_epoch| crate::vlt::recent_compute_score(epoch, per_epoch, vlt))
+        .unwrap_or(0);
+    crate::vlt::effective_voting_weight(recent, bond.amount, vlt.lambda_vlt_per_kas)
 }
 
 /// kaspa-pq ADR-0018 "本格版" (PoS-v2) — the per-epoch accumulator tally (Phase 1).
@@ -4545,6 +4806,213 @@ pub fn slashing_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<SlashingE
     out
 }
 
+// =====================================================================
+// MISAKA Verified LLM Token-Weighted BFT — compute-credit collection.
+//
+// These mirror the attestation helpers above: pure extraction from a chain
+// block's accepted transactions, with the DAG-dependent facts (challenge
+// window, epoch anchoring) supplied by the consensus pipeline so the credit
+// derivation stays deterministic and unit-testable.
+// =====================================================================
+
+/// Every decodable [`ComputeCertificatePayload`] among `txs`, paired with its transaction id (the
+/// id a [`ComputeChallengePayload`] names when challenging it).
+pub fn compute_certificates_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, ComputeCertificatePayload)> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCertificate)
+            && let Ok(cert) = borsh::from_slice::<ComputeCertificatePayload>(&tx.payload)
+        {
+            out.push((tx.id(), cert));
+        }
+    }
+    out
+}
+
+/// Every decodable [`ComputeChallengePayload`] among `txs`.
+pub fn compute_challenges_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeChallengePayload> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeChallenge)
+            && let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload)
+        {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// One certificate as seen by the credit walk, after signature and eligibility checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComputeCreditContribution {
+    /// Executor's `validator_id`.
+    pub validator_id: Hash64,
+    /// Executor's bond — the `λ·B_i` cap this credit is later measured against.
+    pub bond_outpoint: TransactionOutpoint,
+    /// Epoch the credit is attributed to (`X_i(epoch)`).
+    pub epoch: u64,
+    /// The certificate transaction, for challenge matching and `(executor, job)` dedup.
+    pub certificate_tx_id: TransactionId,
+    /// `H(S_j)` — the dedup key that stops one job from being certified twice.
+    pub job_id: Hash64,
+    /// Normalized VLT (`x_j`, µRTE) from [`crate::vlt::normalize_vlt`].
+    pub vlt: u128,
+    /// DAA score of the chain block that accepted the certificate. Compared against the pov DAA to
+    /// decide whether the challenge window has closed.
+    pub accepted_daa_score: u64,
+}
+
+/// Fold verified certificate contributions into `validator_id → (epoch → X_i(epoch))`, the input
+/// [`validator_voting_weight`] reads (VLT paper §6, §4 eq. 5).
+///
+/// Two consensus rules are enforced here, both necessary for the weight to mean anything:
+///
+/// * **Challenge window.** A certificate counts only once
+///   `pov_daa_score − accepted_daa_score ≥ challenge_window_blocks` (§6: "challenge window を経て
+///   初めて X_i(E) へ加算される"). Without it an executor could mint credit and spend it as voting
+///   weight before anyone could re-execute the job and refute it — and, per §8.3, credit created on
+///   a fork could be used to defend that fork immediately.
+/// * **Challenged certificates earn nothing.** A certificate named by any accepted challenge in
+///   `challenged` is dropped, whatever its verdicts said (§6: "不正証明が成立した Receipt は credit
+///   をゼロにし").
+///
+/// `(executor, job_id)` is deduplicated so resubmitting the same job — the cheapest possible
+/// inflation attack, since a replayed certificate carries valid signatures — credits once.
+pub fn aggregate_compute_credits(
+    contributions: &[ComputeCreditContribution],
+    challenged: &HashSet<TransactionId>,
+    pov_daa_score: u64,
+    challenge_window_blocks: u64,
+) -> HashMap<Hash64, BTreeMap<u64, u128>> {
+    let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
+    let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+    for c in contributions {
+        if challenged.contains(&c.certificate_tx_id) {
+            continue;
+        }
+        if pov_daa_score.saturating_sub(c.accepted_daa_score) < challenge_window_blocks {
+            continue; // still challengeable — not creditable yet.
+        }
+        if !seen.insert((c.validator_id, c.job_id)) {
+            continue; // the same job cannot be certified twice.
+        }
+        let entry = out.entry(c.validator_id).or_default().entry(c.epoch).or_insert(0);
+        *entry = entry.saturating_add(c.vlt);
+    }
+    out
+}
+
+/// Stateless validation of a [`ComputeCertificatePayload`]'s bytes.
+///
+/// Structure only — the caller still checks signatures, sortition membership, and the model table.
+/// Rejects, in order: undecodable/trailing bytes, wrong version (payload or any nested part), a
+/// non-eligible verification scheme, an unknown quantization discriminant, wrong ML-DSA-87 key/sig
+/// lengths, an empty or over-large verifier set, a duplicated verifier, and an executor that
+/// appears among its own verifiers (§6 requires the two roles be separated).
+pub fn validate_compute_certificate_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let cert: ComputeCertificatePayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
+    if cert.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(cert.version));
+    }
+    if cert.spec.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(cert.spec.version));
+    }
+    if cert.receipt.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(cert.receipt.version));
+    }
+    if !cert.spec.verification_scheme.is_consensus_eligible() {
+        return Err(DnsTxError::IneligibleVerificationScheme);
+    }
+    if !cert.spec.quantization.is_known() {
+        return Err(DnsTxError::UnknownQuantizationProfile);
+    }
+    if cert.executor_signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(cert.executor_signature.len()));
+    }
+    if cert.verifier_attestations.is_empty() {
+        return Err(DnsTxError::NoVerifierAttestations);
+    }
+    if cert.verifier_attestations.len() > MAX_VERIFIER_ATTESTATIONS {
+        return Err(DnsTxError::TooManyVerifierAttestations(cert.verifier_attestations.len()));
+    }
+    let mut seen: HashSet<Hash64> = HashSet::new();
+    for v in &cert.verifier_attestations {
+        if v.version != DNS_PAYLOAD_VERSION_V1 {
+            return Err(DnsTxError::UnsupportedVersion(v.version));
+        }
+        if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+            return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
+        }
+        if v.verifier_id == cert.executor_id {
+            return Err(DnsTxError::ExecutorVerifiedOwnJob);
+        }
+        if !seen.insert(v.verifier_id) {
+            return Err(DnsTxError::DuplicateVerifier);
+        }
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`ComputeChallengePayload`]'s bytes.
+///
+/// A [`ComputeFraudKind::ContradictoryVerification`] challenge must carry exactly the two
+/// conflicting verdicts, from one verifier over one job, that actually contradict each other — the
+/// offence is provable from the payload alone, so a challenge that does not carry the proof is
+/// rejected outright rather than deferred to an adjudication step.
+pub fn validate_compute_challenge_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let c: ComputeChallengePayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
+    if c.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(c.version));
+    }
+    if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
+    }
+    match c.kind {
+        ComputeFraudKind::ContradictoryVerification => {
+            if c.contradictory_verdicts.len() != 2 {
+                return Err(DnsTxError::MalformedContradictionProof);
+            }
+            let (a, b) = (&c.contradictory_verdicts[0], &c.contradictory_verdicts[1]);
+            if a.verifier_id != b.verifier_id {
+                return Err(DnsTxError::MalformedContradictionProof);
+            }
+            // The slashed bond must be the contradicting verifier's own — provable here without
+            // touching the certificate, so a contradiction proof can never be aimed at a third party.
+            if c.target_bond_outpoint != a.bond_outpoint || a.bond_outpoint != b.bond_outpoint {
+                return Err(DnsTxError::MalformedContradictionProof);
+            }
+            // Identical verdicts are not a contradiction; two signatures over the same claim are
+            // just a duplicate.
+            if a.verdict == b.verdict && a.replay_receipt_hash == b.replay_receipt_hash {
+                return Err(DnsTxError::MalformedContradictionProof);
+            }
+            for v in &c.contradictory_verdicts {
+                if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+                    return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
+                }
+            }
+        }
+        _ => {
+            if !c.contradictory_verdicts.is_empty() {
+                return Err(DnsTxError::MalformedContradictionProof);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// ADR-0013 Addendum C.2 shape rule, applied to compute challenges: like a
+/// [`SlashingEvidencePayload`] tx, a challenge is a pure evidence carrier and must declare **no**
+/// outputs, because consensus mints the reporter reward as a side-effect at `(challenge_tx_id, 0)`
+/// and a declared output would collide with that mint.
+pub fn validate_compute_challenge_tx(payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), DnsTxError> {
+    validate_compute_challenge_payload(payload)?;
+    if !outputs.is_empty() {
+        return Err(DnsTxError::SlashingEvidenceHasOutputs(outputs.len()));
+    }
+    Ok(())
+}
+
 /// Builds the [`DnsConfirmation`] RPC view from the current [`DnsState`] and
 /// the network's confirmation thresholds (ADR-0009; the `getDnsConfirmation`
 /// RPC, PR-10.14). Pure. `pow_confirmed` is the work-depth threshold alone;
@@ -4843,24 +5311,26 @@ mod tests {
     #[test]
     fn compute_stake_score_sums_credits_deterministically() {
         let epochs = vec![
-            EpochStakeTally { epoch: 1, signed_stake_sompi: 10, total_active_stake_sompi: 10 }, // 1.0
-            EpochStakeTally { epoch: 2, signed_stake_sompi: 5, total_active_stake_sompi: 10 },  // 0.5
-            EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 10 },  // 0.0
+            EpochStakeTally { epoch: 1, signed_weight: 10, total_weight: 10 }, // 1.0
+            EpochStakeTally { epoch: 2, signed_weight: 5, total_weight: 10 },  // 0.5
+            EpochStakeTally { epoch: 3, signed_weight: 0, total_weight: 10 },  // 0.0
         ];
         // φS = 0 (no floor): linear sum 1.0 + 0.5 + 0.0.
-        let s = compute_stake_score(&epochs, 0);
+        let s = compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 0 });
         assert_eq!(s, StakeScore(STAKE_SCORE_SCALE + STAKE_SCORE_SCALE / 2));
-        assert_eq!(compute_stake_score(&epochs, 0), s); // deterministic
-        assert_eq!(compute_stake_score(&[], 0), StakeScore(0));
+        assert_eq!(compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 0 }), s); // deterministic
+        assert_eq!(compute_stake_score(&[], EpochCreditRule::QualityFloor { quality_floor_bps: 0 }), StakeScore(0));
         // φS = 0.60: epoch 2 (0.50) and 3 (0.0) drop to 0; only epoch 1 (1.0) credits.
-        assert_eq!(compute_stake_score(&epochs, 6000), StakeScore(STAKE_SCORE_SCALE));
+        assert_eq!(
+            compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 6000 }),
+            StakeScore(STAKE_SCORE_SCALE)
+        );
     }
 
     #[test]
     fn derive_dns_health_signal() {
-        let tally =
-            |signed: u64, total: u64| EpochStakeTally { epoch: 0, signed_stake_sompi: signed, total_active_stake_sompi: total };
-        let (floor, censor, m) = (6000u16, 1000u16, 3u32);
+        let tally = |signed: u128, total: u128| EpochStakeTally { epoch: 0, signed_weight: signed, total_weight: total };
+        let (floor, censor, m) = (EpochCreditRule::QualityFloor { quality_floor_bps: 6000 }, 1000u16, 3u32);
         // Not active → DisabledBeforeActivation regardless of tallies.
         assert_eq!(derive_dns_health(&[tally(0, 10)], floor, censor, m, false), DnsHealth::DisabledBeforeActivation);
         // Fewer than M epochs of history → Active (no sustained signal yet).
@@ -5426,6 +5896,410 @@ mod tests {
         // dns_tx_kind agrees with the SubnetworkId::is_dns_overlay predicate.
         assert!(SUBNETWORK_ID_STAKE_BOND.is_dns_overlay());
         assert!(!SubnetworkId::from_byte(0).is_dns_overlay());
+        // MISAKA Verified LLM Token-Weighted BFT subnets are routed and overlay-classified.
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_COMPUTE_CERTIFICATE), Some(DnsTxKind::ComputeCertificate));
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_COMPUTE_CHALLENGE), Some(DnsTxKind::ComputeChallenge));
+        assert!(SUBNETWORK_ID_COMPUTE_CERTIFICATE.is_dns_overlay());
+        assert!(SUBNETWORK_ID_COMPUTE_CHALLENGE.is_dns_overlay());
+    }
+
+    // ---- MISAKA Verified LLM Token-Weighted BFT: the voting-power replacement ----
+
+    /// A bond with `amount`, active from DAA 0, whose `validator_pubkey_hash` is `Hash64(seed + 2)`
+    /// (matching [`mk_bond`], so `credits` maps can be keyed the same way).
+    fn vlt_bond(seed: u64, amount: u64) -> StakeBondRecord {
+        StakeBondRecord { activation_daa_score: 0, ..mk_bond(seed, amount) }
+    }
+
+    fn vlt_params_active() -> VltParams {
+        VltParams { vlt_activation_daa_score: 0, ..VltParams::INERT }
+    }
+
+    /// Credit `x` µRTE to validator `seed` for every epoch in `epochs`.
+    fn credits_for(entries: &[(u64, &[u64], u128)]) -> HashMap<Hash64, BTreeMap<u64, u128>> {
+        let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+        for (seed, epochs, x) in entries {
+            let per = out.entry(Hash64::from_u64_word(seed + 2)).or_default();
+            for e in *epochs {
+                per.insert(*e, *x);
+            }
+        }
+        out
+    }
+
+    /// The headline replacement property, end to end: capital alone no longer votes.
+    ///
+    /// Three validators bond the production 20M-KAS floor. Only two of them performed verified
+    /// compute. Under the *old* stake rule all three would carry weight and the epoch's included
+    /// fraction would be whatever signed; under the VLT rule the compute-less validator carries
+    /// **zero** weight and simply is not part of `W(E)` at all.
+    #[test]
+    fn vlt_weight_comes_from_compute_not_bond() {
+        let vlt = vlt_params_active();
+        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
+        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
+        // Validators 1 and 2 produced compute in epoch 9; validator 3 produced none.
+        let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
+
+        let w1 = validator_voting_weight(&bonds[0], 10, &credits, &vlt);
+        let w3 = validator_voting_weight(&bonds[2], 10, &credits, &vlt);
+        assert_eq!(w1, 1_000 * crate::vlt::VLT_MICRO, "compute at epoch 9 weights epoch 10 undecayed");
+        assert_eq!(w3, 0, "a fully-bonded validator with no verified compute has NO voting power");
+
+        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
+        assert_eq!(totals[&10], w1 * 2, "W(E) counts only validators with compute");
+    }
+
+    /// The quorum is over *weight*, and a compute-less majority of validators cannot block or
+    /// forge it — they contribute nothing to either side of the comparison.
+    #[test]
+    fn vlt_epoch_credit_is_binary_on_the_two_thirds_quorum() {
+        let rule = EpochCreditRule::BftQuorum;
+        // 2 of 3 weight is NOT a quorum (Q(3) = 3); 3 of 3 is.
+        assert_eq!(epoch_credit(2, 3, rule), 0);
+        assert_eq!(epoch_credit(3, 3, rule), STAKE_SCORE_SCALE);
+        // 67 of 99 is (Q(99) = 67); 66 is not. Credit is full or nothing — never partial.
+        assert_eq!(epoch_credit(66, 99, rule), 0);
+        assert_eq!(epoch_credit(67, 99, rule), STAKE_SCORE_SCALE);
+        // Zero total weight never credits, however much is claimed.
+        assert_eq!(epoch_credit(u128::MAX, 0, rule), 0);
+        // Contrast with the graded rule, which pays a fraction at the same inputs.
+        let graded = EpochCreditRule::QualityFloor { quality_floor_bps: 0 };
+        assert_eq!(epoch_credit(66, 99, graded), STAKE_SCORE_SCALE * 2 / 3);
+    }
+
+    /// Full path: attestations → dedup → per-epoch tally → quorum → StakeScore, with VLT weights.
+    #[test]
+    fn vlt_stake_score_accrues_only_on_quorum_epochs() {
+        let vlt = vlt_params_active();
+        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
+        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
+        let x = 1_000 * crate::vlt::VLT_MICRO;
+        // All three earned identical compute in the epochs feeding epochs 10 and 11.
+        let credits = credits_for(&[(1, &[9, 10], x), (2, &[9, 10], x), (3, &[9, 10], x)]);
+        let epoch_anchor_daa = BTreeMap::from([(10u64, 0u64), (11u64, 0u64)]);
+        let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &credits, &vlt);
+
+        let contrib = |b: &StakeBondRecord, epoch: u64| AttestationContribution {
+            epoch,
+            validator_id: b.validator_pubkey_hash,
+            bond_outpoint: b.bond_outpoint,
+            signed_weight: validator_voting_weight(b, epoch, &credits, &vlt),
+        };
+        // Epoch 10: all three sign → quorum. Epoch 11: only two of three → 2/3 exactly, which is
+        // NOT strictly above two thirds, so it earns nothing.
+        let contributions = vec![
+            contrib(&bonds[0], 10),
+            contrib(&bonds[1], 10),
+            contrib(&bonds[2], 10),
+            contrib(&bonds[0], 11),
+            contrib(&bonds[1], 11),
+        ];
+        let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
+        assert_eq!(per_epoch.len(), 2);
+        assert_eq!(compute_stake_score(&per_epoch, EpochCreditRule::BftQuorum), StakeScore(STAKE_SCORE_SCALE));
+    }
+
+    /// The fence is the whole safety story for existing networks: below it, nothing about the
+    /// weight or the credit changes, and every shipped preset sits below it forever.
+    #[test]
+    fn vlt_fence_keeps_shipped_presets_on_the_legacy_rule() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in
+            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
+        {
+            assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name} must ship with VLT dormant");
+            assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
+            assert!(
+                matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
+                "{name} must stay on the graded φS rule below the fence"
+            );
+            // The 20M-KAS bond requirement is untouched by the VLT work.
+            if name != "genesis-active" && name != "testnet" {
+                assert_eq!(p.min_bond_amount_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+                assert_eq!(p.min_active_stake_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+            }
+            // Inert presets pass the consistency gate trivially; a moved fence must still hold.
+            assert!(p.vlt_params_consistent(), "{name}");
+            let activated = DnsParams { vlt: VltParams { vlt_activation_daa_score: 0, ..p.vlt }, ..p.clone() };
+            if name == "production" || name == "testnet" {
+                assert!(activated.vlt_params_consistent(), "{name} would be self-consistent if activated as shipped");
+                // The credit window must genuinely cover `K + delay` epochs + challenge + lag +
+                // backoff. A short window would not fail loudly at runtime — it would silently
+                // truncate the oldest epochs of every `C_i(E)` — so pin it here: one blue_score
+                // below the requirement must be rejected.
+                let short = DnsParams {
+                    vlt_credit_window_blue_score: (activated.vlt.credit_window_epochs as u64
+                        + activated.vlt.credit_delay_epochs as u64)
+                        * activated.attestation_epoch_length_blue_score
+                        + activated.vlt.challenge_window_blocks
+                        + activated.attestation_lag_blue_score
+                        + activated.attestation_anchor_backoff_blue_score
+                        - 1,
+                    ..activated.clone()
+                };
+                assert!(!short.vlt_params_consistent(), "{name}: a credit window one short must be rejected");
+            }
+        }
+    }
+
+    /// Health must not shift under any network still on the legacy rule. The boundary case is
+    /// `f == φS` exactly: it earns ZERO StakeScore credit (the graded numerator vanishes there)
+    /// yet has always reported `Active`, so a credit-based health test would silently change the
+    /// signal on live networks. Pin both halves.
+    #[test]
+    fn dns_health_preserves_the_legacy_phi_s_boundary() {
+        let rule = EpochCreditRule::QualityFloor { quality_floor_bps: 6000 };
+        let at_floor = EpochStakeTally { epoch: 0, signed_weight: 6, total_weight: 10 }; // f == φS
+        assert_eq!(epoch_credit(6, 10, rule), 0, "exactly at φS earns no credit");
+        assert_eq!(
+            derive_dns_health(&[at_floor, at_floor, at_floor], rule, 1000, 3, true),
+            DnsHealth::Active,
+            "but health has always read exactly-at-φS as Active"
+        );
+        // Just below φS is genuinely degraded.
+        let below = EpochStakeTally { epoch: 0, signed_weight: 5, total_weight: 10 };
+        assert_eq!(derive_dns_health(&[below, below, below], rule, 1000, 3, true), DnsHealth::DegradedStakeQualityLow);
+
+        // Under the quorum rule the threshold is the quorum itself: 2 of 3 is not one, 3 of 3 is.
+        let q = EpochCreditRule::BftQuorum;
+        let two_of_three = EpochStakeTally { epoch: 0, signed_weight: 2, total_weight: 3 };
+        let three_of_three = EpochStakeTally { epoch: 0, signed_weight: 3, total_weight: 3 };
+        assert_eq!(
+            derive_dns_health(&[two_of_three, two_of_three, two_of_three], q, 1000, 3, true),
+            DnsHealth::DegradedStakeQualityLow
+        );
+        assert_eq!(derive_dns_health(&[two_of_three, two_of_three, three_of_three], q, 1000, 3, true), DnsHealth::Active);
+    }
+
+    /// Above the fence the rule flips, and with it the weight source.
+    #[test]
+    fn vlt_fence_flips_the_credit_rule() {
+        use crate::config::params::PRODUCTION_DNS_PARAMS;
+        let p = DnsParams { vlt: VltParams { vlt_activation_daa_score: 5_000, ..VltParams::INERT }, ..PRODUCTION_DNS_PARAMS.clone() };
+        assert!(matches!(p.epoch_credit_rule(4_999), EpochCreditRule::QualityFloor { .. }));
+        assert!(!p.vlt_weighting_active_at(4_999));
+        assert!(matches!(p.epoch_credit_rule(5_000), EpochCreditRule::BftQuorum));
+        assert!(p.vlt_weighting_active_at(5_000));
+    }
+
+    /// §6: credit is withheld until the challenge window closes, dropped outright if challenged,
+    /// and counted once per `(executor, job)`.
+    #[test]
+    fn compute_credits_respect_the_challenge_window_and_dedup() {
+        let v = Hash64::from_u64_word(3);
+        let job = Hash64::from_u64_word(77);
+        let mk = |tx: u64, job_id: Hash64, vlt: u128, accepted: u64| ComputeCreditContribution {
+            validator_id: v,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(1), 0),
+            epoch: 4,
+            certificate_tx_id: Hash64::from_u64_word(tx),
+            job_id,
+            vlt,
+            accepted_daa_score: accepted,
+        };
+        let window = 300;
+        let none = HashSet::new();
+
+        // Accepted at 1000, pov 1299 → still challengeable → no credit yet.
+        let fresh = [mk(1, job, 500, 1_000)];
+        assert!(aggregate_compute_credits(&fresh, &none, 1_299, window).is_empty());
+        // pov 1300 → the window has closed.
+        let credited = aggregate_compute_credits(&fresh, &none, 1_300, window);
+        assert_eq!(credited[&v][&4], 500);
+
+        // A challenged certificate earns nothing even after its window closes.
+        let challenged: HashSet<TransactionId> = HashSet::from([Hash64::from_u64_word(1)]);
+        assert!(aggregate_compute_credits(&fresh, &challenged, 9_999, window).is_empty());
+
+        // The same job resubmitted under a second tx credits ONCE...
+        let replayed = [mk(1, job, 500, 1_000), mk(2, job, 500, 1_000)];
+        assert_eq!(aggregate_compute_credits(&replayed, &none, 1_300, window)[&v][&4], 500);
+        // ...while a genuinely different job adds on top.
+        let two_jobs = [mk(1, job, 500, 1_000), mk(2, Hash64::from_u64_word(78), 700, 1_000)];
+        assert_eq!(aggregate_compute_credits(&two_jobs, &none, 1_300, window)[&v][&4], 1_200);
+    }
+
+    fn fixture_verdict(id: u64, verdict: crate::vlt::VerificationVerdict, replay: Hash64) -> crate::vlt::VerifierAttestation {
+        crate::vlt::VerifierAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            verifier_id: Hash64::from_u64_word(id),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(id + 100), 0),
+            verdict,
+            replay_receipt_hash: replay,
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    fn fixture_certificate() -> ComputeCertificatePayload {
+        ComputeCertificatePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            epoch: 7,
+            executor_id: Hash64::from_u64_word(1),
+            executor_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(2), 0),
+            spec: crate::vlt::LlmJobSpec {
+                version: DNS_PAYLOAD_VERSION_V1,
+                model_weights_hash: Hash64::from_u64_word(10),
+                runtime_hash: Hash64::from_u64_word(11),
+                quantization: crate::vlt::QuantizationProfile::Bf16,
+                input_commitment: Hash64::from_u64_word(12),
+                sampling_seed: [3u8; 32],
+                max_tokens: 4096,
+                verification_scheme: crate::vlt::VerificationScheme::CanonicalFullReplay,
+            },
+            receipt: crate::vlt::ComputeReceipt {
+                version: DNS_PAYLOAD_VERSION_V1,
+                output_commitment: Hash64::from_u64_word(13),
+                prefill_tokens: 100,
+                decode_tokens: 20,
+                trace_commitment: Hash64::from_u64_word(14),
+            },
+            executor_signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            verifier_attestations: vec![
+                fixture_verdict(21, crate::vlt::VerificationVerdict::Confirmed, Hash64::from_u64_word(99)),
+                fixture_verdict(22, crate::vlt::VerificationVerdict::Confirmed, Hash64::from_u64_word(99)),
+            ],
+        }
+    }
+
+    #[test]
+    fn validate_compute_certificate_accepts_wellformed_and_rejects_role_confusion() {
+        let ok = fixture_certificate();
+        assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&ok).unwrap()), Ok(()));
+
+        // Reserved schemes are not consensus-eligible in v0.1.
+        let mut reserved = fixture_certificate();
+        reserved.spec.verification_scheme = crate::vlt::VerificationScheme::SuccinctProof;
+        assert_eq!(
+            validate_compute_certificate_payload(&borsh::to_vec(&reserved).unwrap()),
+            Err(DnsTxError::IneligibleVerificationScheme)
+        );
+
+        // §6: an executor may not verify its own job.
+        let mut self_verified = fixture_certificate();
+        self_verified.verifier_attestations[0].verifier_id = self_verified.executor_id;
+        assert_eq!(
+            validate_compute_certificate_payload(&borsh::to_vec(&self_verified).unwrap()),
+            Err(DnsTxError::ExecutorVerifiedOwnJob)
+        );
+
+        // One key cannot supply two of the required confirmations.
+        let mut dup = fixture_certificate();
+        dup.verifier_attestations[1].verifier_id = dup.verifier_attestations[0].verifier_id;
+        assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&dup).unwrap()), Err(DnsTxError::DuplicateVerifier));
+
+        // An unverified receipt has no business on chain (it would mint nothing anyway).
+        let mut bare = fixture_certificate();
+        bare.verifier_attestations.clear();
+        assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&bare).unwrap()), Err(DnsTxError::NoVerifierAttestations));
+
+        // Wrong ML-DSA-87 signature width.
+        let mut short_sig = fixture_certificate();
+        short_sig.executor_signature = vec![0u8; 10];
+        assert_eq!(
+            validate_compute_certificate_payload(&borsh::to_vec(&short_sig).unwrap()),
+            Err(DnsTxError::InvalidSignatureLen(10))
+        );
+
+        assert_eq!(validate_compute_certificate_payload(b"not borsh"), Err(DnsTxError::Decode));
+    }
+
+    #[test]
+    fn validate_compute_challenge_requires_a_real_contradiction_and_no_outputs() {
+        let bond = TransactionOutpoint::new(Hash64::from_u64_word(121), 0);
+        let a = fixture_verdict(21, crate::vlt::VerificationVerdict::Confirmed, Hash64::from_u64_word(99));
+        let b = fixture_verdict(21, crate::vlt::VerificationVerdict::Refuted, Hash64::from_u64_word(98));
+        let base = ComputeChallengePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            certificate_tx_id: Hash64::from_u64_word(5),
+            job_id: Hash64::from_u64_word(6),
+            kind: ComputeFraudKind::ContradictoryVerification,
+            challenger_id: Hash64::from_u64_word(7),
+            challenger_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(8), 0),
+            target_bond_outpoint: bond,
+            replay_receipt_hash: Hash64::from_u64_word(99),
+            contradictory_verdicts: vec![a.clone(), b.clone()],
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            reporter_reward_spk_payload: [0u8; 64],
+        };
+        assert_eq!(validate_compute_challenge_payload(&borsh::to_vec(&base).unwrap()), Ok(()));
+
+        // Two identical verdicts are a duplicate, not a contradiction.
+        let mut same = base.clone();
+        same.contradictory_verdicts = vec![a.clone(), a.clone()];
+        assert_eq!(validate_compute_challenge_payload(&borsh::to_vec(&same).unwrap()), Err(DnsTxError::MalformedContradictionProof));
+
+        // Two different verifiers disagreeing is normal, not an offence by either.
+        let mut two_verifiers = base.clone();
+        two_verifiers.contradictory_verdicts[1].verifier_id = Hash64::from_u64_word(22);
+        assert_eq!(
+            validate_compute_challenge_payload(&borsh::to_vec(&two_verifiers).unwrap()),
+            Err(DnsTxError::MalformedContradictionProof)
+        );
+
+        // A contradiction proof may not be aimed at a third party's bond.
+        let mut wrong_target = base.clone();
+        wrong_target.target_bond_outpoint = TransactionOutpoint::new(Hash64::from_u64_word(999), 0);
+        assert_eq!(
+            validate_compute_challenge_payload(&borsh::to_vec(&wrong_target).unwrap()),
+            Err(DnsTxError::MalformedContradictionProof)
+        );
+
+        // Other kinds carry no verdicts.
+        let mut forged = base.clone();
+        forged.kind = ComputeFraudKind::ForgedReceipt;
+        assert_eq!(validate_compute_challenge_payload(&borsh::to_vec(&forged).unwrap()), Err(DnsTxError::MalformedContradictionProof));
+        forged.contradictory_verdicts.clear();
+        assert_eq!(validate_compute_challenge_payload(&borsh::to_vec(&forged).unwrap()), Ok(()));
+
+        // Pure evidence carrier: no outputs, so the reporter mint at (tx, 0) cannot collide.
+        let bytes = borsh::to_vec(&forged).unwrap();
+        assert_eq!(validate_compute_challenge_tx(&bytes, &[]), Ok(()));
+        let out = TransactionOutput::new(1, ScriptPublicKey::new(0, ScriptVec::from_slice(&[0x51])));
+        assert_eq!(validate_compute_challenge_tx(&bytes, &[out]), Err(DnsTxError::SlashingEvidenceHasOutputs(1)));
+    }
+
+    /// A successful compute fraud proof slashes the named bond, exactly as equivocation evidence
+    /// does — the §7(b)/(c) offences are enforced through the same bond-mutation path.
+    #[test]
+    fn compute_challenge_slashes_the_named_bond() {
+        let target = TransactionOutpoint::new(Hash64::from_u64_word(121), 0);
+        let challenge = ComputeChallengePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            certificate_tx_id: Hash64::from_u64_word(5),
+            job_id: Hash64::from_u64_word(6),
+            kind: ComputeFraudKind::ForgedReceipt,
+            challenger_id: Hash64::from_u64_word(7),
+            challenger_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(8), 0),
+            target_bond_outpoint: target,
+            replay_receipt_hash: Hash64::from_u64_word(42),
+            contradictory_verdicts: vec![],
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            reporter_reward_spk_payload: [0u8; 64],
+        };
+        let tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            SUBNETWORK_ID_COMPUTE_CHALLENGE,
+            0,
+            borsh::to_vec(&challenge).unwrap(),
+        );
+        let muts = bond_mutations_from_accepted_txs(&[tx], 4_242, 0, 0);
+        assert_eq!(muts, vec![BondMutation::Slash(target, 4_242)]);
+
+        // A compute CERTIFICATE, by contrast, never touches the bond registry — it mints credit.
+        let cert_tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            SUBNETWORK_ID_COMPUTE_CERTIFICATE,
+            0,
+            borsh::to_vec(&fixture_certificate()).unwrap(),
+        );
+        assert!(bond_mutations_from_accepted_txs(&[cert_tx], 4_242, 0, 0).is_empty());
     }
 
     #[test]
@@ -6385,20 +7259,23 @@ mod tests {
         let v1 = Hash64::from_bytes([0xa1; 64]);
         let v2 = Hash64::from_bytes([0xa2; 64]);
         let contribs = vec![
-            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
+            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
             // Duplicate (op1, v1, epoch 1) — must NOT be double-counted.
-            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
-            AttestationContribution { epoch: 1, validator_id: v2, bond_outpoint: op2, signed_stake_sompi: 20 },
-            AttestationContribution { epoch: 2, validator_id: v1, bond_outpoint: op1, signed_stake_sompi: 30 },
+            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
+            AttestationContribution { epoch: 1, validator_id: v2, bond_outpoint: op2, signed_weight: 20 },
+            AttestationContribution { epoch: 2, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
         ];
-        let totals = BTreeMap::from([(1u64, 100u64), (2u64, 100u64), (3u64, 100u64)]);
+        let totals = BTreeMap::from([(1u64, 100u128), (2u64, 100u128), (3u64, 100u128)]);
         let tallies = aggregate_epoch_tallies(&contribs, &totals);
         assert_eq!(tallies.len(), 3); // ascending by epoch
-        assert_eq!(tallies[0], EpochStakeTally { epoch: 1, signed_stake_sompi: 50, total_active_stake_sompi: 100 });
-        assert_eq!(tallies[1], EpochStakeTally { epoch: 2, signed_stake_sompi: 30, total_active_stake_sompi: 100 });
-        assert_eq!(tallies[2], EpochStakeTally { epoch: 3, signed_stake_sompi: 0, total_active_stake_sompi: 100 });
+        assert_eq!(tallies[0], EpochStakeTally { epoch: 1, signed_weight: 50, total_weight: 100 });
+        assert_eq!(tallies[1], EpochStakeTally { epoch: 2, signed_weight: 30, total_weight: 100 });
+        assert_eq!(tallies[2], EpochStakeTally { epoch: 3, signed_weight: 0, total_weight: 100 });
         // End-to-end (φS = 0, linear): 0.5 + 0.3 + 0.0 = 0.8.
-        assert_eq!(compute_stake_score(&tallies, 0), StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10));
+        assert_eq!(
+            compute_stake_score(&tallies, EpochCreditRule::QualityFloor { quality_floor_bps: 0 }),
+            StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10)
+        );
     }
 
     #[test]
@@ -6408,7 +7285,7 @@ mod tests {
             epoch: 9,
             validator_id: Hash64::from_bytes([0xa1; 64]),
             bond_outpoint: op,
-            signed_stake_sompi: 50,
+            signed_weight: 50,
         }];
         assert!(aggregate_epoch_tallies(&contribs, &BTreeMap::new()).is_empty());
     }
@@ -6691,6 +7568,10 @@ mod tests {
             bond_spend_gate_mergeset_activation_daa_score: 9_000_000,
             mandatory_attestation_inclusion_daa_score: 10_000_000,
             bridge_finality_max_staleness_daa_score: 11_000_000,
+            // Non-default VLT values so the borsh round-trip actually exercises the appended
+            // fields (an all-default `INERT` would round-trip even if the encoding dropped them).
+            vlt: VltParams { vlt_activation_daa_score: 12_000_000, credit_window_epochs: 42, ..VltParams::INERT },
+            vlt_credit_window_blue_score: 13_000_000,
         };
         let bytes = borsh::to_vec(&params).unwrap();
         let back: DnsParams = borsh::from_slice(&bytes).unwrap();

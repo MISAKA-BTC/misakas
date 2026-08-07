@@ -1,4 +1,4 @@
-use super::VirtualStateProcessor;
+use super::{ContributionWeight, VirtualStateProcessor};
 use crate::{
     errors::{
         BlockProcessResult,
@@ -883,7 +883,7 @@ impl VirtualStateProcessor {
         // reward and StakeScore agree on what counts. A non-canonical or duplicate target earns
         // nothing (it is simply absent from `creditable`), and so never enters `rewarded_keys`
         // (hence never the §D bounty, §E pool, cross-block dedup, or the deferred bonus).
-        let creditable = self.canonical_anchors_in_window(selected_parent, dns_params);
+        let creditable = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
 
         // Resolve eligible, recent, CANONICAL attestations (canonical order). Recency
         // (§B.3(c)): an attestation whose target is older than the window earns
@@ -1153,20 +1153,26 @@ impl VirtualStateProcessor {
             return Ok(());
         }
 
-        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params);
+        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
         if anchors.is_empty() {
             return Ok(());
         }
 
         let bonds = selected_parent_bond_view.records();
-        let (parent_contributions, _) =
-            self.collect_stake_contributions_v2(selected_parent, None, &bonds, self.genesis.hash.as_byte_slice(), dns_params);
+        let (parent_contributions, _) = self.collect_stake_contributions_v2(
+            selected_parent,
+            None,
+            &bonds,
+            self.genesis.hash.as_byte_slice(),
+            dns_params,
+            ContributionWeight::BondedStake,
+        );
         let mut seen_parent: HashSet<(TransactionOutpoint, TransactionId, u64)> = HashSet::new();
         let mut parent_included_by_epoch: HashMap<u64, u64> = HashMap::new();
         for c in parent_contributions {
             if seen_parent.insert((c.bond_outpoint, c.validator_id, c.epoch)) {
                 let entry = parent_included_by_epoch.entry(c.epoch).or_insert(0);
-                *entry = entry.saturating_add(c.signed_stake_sompi);
+                *entry = entry.saturating_add(c.signed_weight as u64);
             }
         }
 

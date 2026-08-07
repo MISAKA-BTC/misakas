@@ -1,4 +1,7 @@
-use crate::{consensus::test_consensus::TestConsensus, model::services::reachability::ReachabilityService};
+use crate::{
+    consensus::test_consensus::TestConsensus, model::services::reachability::ReachabilityService,
+    pipeline::virtual_processor::ContributionWeight,
+};
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet,
@@ -2345,14 +2348,21 @@ async fn dns_v3_canonical_attestation_credited() {
         let vp = ctx.consensus.virtual_processor();
         let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("the funded bond is persisted").amount;
-        let (c, d) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
+        let (c, d) = vp.collect_stake_contributions_v2(
+            new_sink,
+            None,
+            &bonds,
+            genesis_hash.as_byte_slice(),
+            &dns,
+            ContributionWeight::BondedStake,
+        );
         (c, d, bond_amount)
     };
 
     // The canonical attestation is credited with the bond's full stake at its epoch.
     let credited = contributions.iter().find(|c| c.bond_outpoint == bond_outpoint).expect("the canonical attestation is credited");
     assert_eq!(credited.epoch, anchor.epoch, "credited at the canonical epoch");
-    assert_eq!(credited.signed_stake_sompi, bond_amount, "credited with the bond's full stake");
+    assert_eq!(credited.signed_weight, bond_amount as u128, "credited with the bond's full stake");
     // The denominator is keyed by the CANONICAL anchor DAA for that epoch.
     assert_eq!(denom.get(&anchor.epoch).copied(), Some(anchor.anchor_daa_score), "denominator keyed by the canonical anchor DAA");
     // A ready epoch with no attestation still appears in the denominator (visible gap).
@@ -2469,7 +2479,7 @@ async fn dns_v3_noncanonical_attestation_rejected() {
     let (contributions, denom) = {
         let vp = ctx.consensus.virtual_processor();
         let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns)
+        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns, ContributionWeight::BondedStake)
     };
 
     // The non-canonical attestation also earns NO StakeScore credit (PR4)...
@@ -3006,7 +3016,8 @@ async fn duplicate_epoch_attestation_credited_once() {
     let new_sink = ctx.consensus.get_sink();
     let vp = ctx.consensus.virtual_processor();
     let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-    let (contributions, denom) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
+    let (contributions, denom) =
+        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns, ContributionWeight::BondedStake);
 
     // The (bond, epoch) pair is credited at most once even though two shards carry it.
     let credited_for_epoch = contributions.iter().filter(|c| c.bond_outpoint == bond_outpoint && c.epoch == anchor.epoch).count();
@@ -3018,9 +3029,9 @@ async fn duplicate_epoch_attestation_credited_once() {
     let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("bond persisted").amount;
     let tally = per_epoch.iter().find(|t| t.epoch == anchor.epoch).expect("the epoch is tallied");
     assert_eq!(
-        tally.signed_stake_sompi, bond_amount,
+        tally.signed_weight, bond_amount as u128,
         "the duplicate (bond, epoch) is credited exactly once (signed stake == one bond's stake, got {})",
-        tally.signed_stake_sompi
+        tally.signed_weight
     );
 }
 

@@ -143,6 +143,7 @@ pub mod subnets;
 pub mod trusted;
 pub mod tx;
 pub mod utxo;
+pub mod vlt;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///
