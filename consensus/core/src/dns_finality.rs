@@ -121,15 +121,15 @@ mod serde_reward_payload64 {
 
 use crate::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
-    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
-    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_SLASHING_EVIDENCE,
+    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use crate::{
     BlockHash, BlueWorkType, TransactionId,
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
-        MAX_VERIFIER_ATTESTATIONS, VltParams,
+        ComputeVerdictPayload, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
     },
 };
 
@@ -3696,6 +3696,8 @@ pub enum DnsTxKind {
     ComputeCapability,
     /// `SUBNETWORK_ID_COMPUTE_COMMITMENT` — [`crate::vlt::ComputeCommitmentPayload`].
     ComputeCommitment,
+    /// `SUBNETWORK_ID_COMPUTE_VERDICT` — [`crate::vlt::ComputeVerdictPayload`].
+    ComputeVerdict,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -3718,6 +3720,8 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::ComputeCapability)
     } else if *subnetwork_id == SUBNETWORK_ID_COMPUTE_COMMITMENT {
         Some(DnsTxKind::ComputeCommitment)
+    } else if *subnetwork_id == SUBNETWORK_ID_COMPUTE_VERDICT {
+        Some(DnsTxKind::ComputeVerdict)
     } else {
         None
     }
@@ -3795,6 +3799,9 @@ pub enum DnsTxError {
     /// genuinely conflicting verdicts by one verifier, or another challenge kind carries verdicts
     /// it has no use for.
     MalformedContradictionProof,
+    /// A verdict contradicts its own two receipt hashes — it claims `Confirmed` over a hash it
+    /// did not reproduce, or `Refuted` over one it did.
+    SelfContradictoryVerdict,
 }
 
 impl Display for DnsTxError {
@@ -3836,6 +3843,9 @@ impl Display for DnsTxError {
             DnsTxError::ExecutorVerifiedOwnJob => write!(f, "compute certificate lists its own executor as a verifier"),
             DnsTxError::MalformedContradictionProof => {
                 write!(f, "compute challenge does not carry a well-formed contradiction proof")
+            }
+            DnsTxError::SelfContradictoryVerdict => {
+                write!(f, "compute verdict contradicts its own executor/replay receipt hashes")
             }
         }
     }
@@ -4245,6 +4255,7 @@ pub fn bond_mutations_from_accepted_txs(
             | Some(DnsTxKind::ComputeCertificate)
             | Some(DnsTxKind::ComputeCapability)
             | Some(DnsTxKind::ComputeCommitment)
+            | Some(DnsTxKind::ComputeVerdict)
             | None => {}
         }
     }
@@ -5177,28 +5188,99 @@ pub fn validate_compute_certificate_payload(payload: &[u8]) -> Result<(), DnsTxE
     if cert.executor_signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(cert.executor_signature.len()));
     }
-    if cert.verifier_attestations.is_empty() {
-        return Err(DnsTxError::NoVerifierAttestations);
+    Ok(())
+}
+
+/// Stateless validation of a [`ComputeVerdictPayload`]'s bytes.
+///
+/// The verdict must be **self-consistent**: `Confirmed` requires the verifier's replay hash to
+/// equal the executor's, `Refuted` requires it to differ. A verdict that contradicts its own two
+/// hashes is a lie on its face and is rejected here rather than counted and adjudicated later.
+///
+/// The verifier's committee membership, its bond, and its signature are stateful and are checked
+/// by the credit walk when it collects the verdicts belonging to a certificate.
+pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let v: ComputeVerdictPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
+    if v.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(v.version));
     }
-    if cert.verifier_attestations.len() > MAX_VERIFIER_ATTESTATIONS {
-        return Err(DnsTxError::TooManyVerifierAttestations(cert.verifier_attestations.len()));
+    if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
     }
-    let mut seen: HashSet<Hash64> = HashSet::new();
-    for v in &cert.verifier_attestations {
-        if v.version != DNS_PAYLOAD_VERSION_V1 {
-            return Err(DnsTxError::UnsupportedVersion(v.version));
-        }
-        if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
-            return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
-        }
-        if v.verifier_id == cert.executor_id {
-            return Err(DnsTxError::ExecutorVerifiedOwnJob);
-        }
-        if !seen.insert(v.verifier_id) {
-            return Err(DnsTxError::DuplicateVerifier);
-        }
+    if !v.is_self_consistent() {
+        return Err(DnsTxError::SelfContradictoryVerdict);
     }
     Ok(())
+}
+
+/// Every decodable [`ComputeVerdictPayload`] among `txs`.
+pub fn compute_verdicts_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeVerdictPayload> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeVerdict)
+            && let Ok(v) = borsh::from_slice::<ComputeVerdictPayload>(&tx.payload)
+        {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// A signature- and bond-verified verdict, as the credit walk collects it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComputeVerdictRecord {
+    pub certificate_tx_id: TransactionId,
+    pub payload: ComputeVerdictPayload,
+    /// DAA score of the chain block that accepted the verdict. A verdict accepted BEFORE its
+    /// certificate is nonsense and is dropped.
+    pub accepted_daa_score: u64,
+}
+
+/// Reduce the verdicts collected for one certificate to the attestation set
+/// [`crate::vlt::verify_compute_certificate`] consumes.
+///
+/// Enforces, in order:
+/// * the verdict was accepted at or after its certificate (a verdict cannot precede the claim it
+///   judges);
+/// * it agrees with the executor's claimed receipt hash as the thing being judged;
+/// * one verdict per verifier — the FIRST by acceptance order wins, so a verifier cannot flood
+///   the chain with verdicts and have consensus pick the convenient one. A later disagreeing
+///   verdict is left for the `ContradictoryVerification` challenge to slash, not silently used;
+/// * the verifier is in the sortitioned committee.
+///
+/// Bounded by [`MAX_VERIFIER_ATTESTATIONS`]: beyond that the extra verdicts are ignored rather
+/// than growing the per-certificate verification cost without limit.
+pub fn verdicts_for_certificate(
+    records: &[ComputeVerdictRecord],
+    certificate_tx_id: TransactionId,
+    executor_receipt_hash: Hash64,
+    certificate_daa_score: u64,
+    committee: &HashSet<Hash64>,
+) -> Vec<VerifierAttestation> {
+    let mut ordered: Vec<&ComputeVerdictRecord> = records
+        .iter()
+        .filter(|r| {
+            r.certificate_tx_id == certificate_tx_id
+                && r.accepted_daa_score >= certificate_daa_score
+                && r.payload.executor_receipt_hash == executor_receipt_hash
+                && committee.contains(&r.payload.verifier_id)
+        })
+        .collect();
+    // Deterministic order: acceptance depth first, then verifier id as the tie-break within a
+    // block, so every node picks the same "first" verdict per verifier.
+    ordered.sort_by(|a, b| a.accepted_daa_score.cmp(&b.accepted_daa_score).then(a.payload.verifier_id.cmp(&b.payload.verifier_id)));
+    let mut seen: HashSet<Hash64> = HashSet::new();
+    let mut out = Vec::new();
+    for r in ordered {
+        if !seen.insert(r.payload.verifier_id) {
+            continue;
+        }
+        out.push(r.payload.as_attestation());
+        if out.len() == MAX_VERIFIER_ATTESTATIONS {
+            break;
+        }
+    }
+    out
 }
 
 /// Stateless validation of a [`ComputeChallengePayload`]'s bytes.
@@ -6837,15 +6919,25 @@ mod tests {
                 trace_commitment: Hash64::from_u64_word(14),
             },
             executor_signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
-            verifier_attestations: vec![
-                fixture_verdict(21, crate::vlt::VerificationVerdict::Confirmed, Hash64::from_u64_word(99)),
-                fixture_verdict(22, crate::vlt::VerificationVerdict::Confirmed, Hash64::from_u64_word(99)),
-            ],
+        }
+    }
+
+    fn fixture_verdict_payload(verifier: u64, verdict: crate::vlt::VerificationVerdict, replay: Hash64) -> ComputeVerdictPayload {
+        ComputeVerdictPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            certificate_tx_id: Hash64::from_u64_word(500),
+            job_id: Hash64::from_u64_word(501),
+            executor_receipt_hash: Hash64::from_u64_word(99),
+            verifier_id: Hash64::from_u64_word(verifier),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(verifier + 100), 0),
+            verdict,
+            replay_receipt_hash: replay,
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
         }
     }
 
     #[test]
-    fn validate_compute_certificate_accepts_wellformed_and_rejects_role_confusion() {
+    fn validate_compute_certificate_accepts_wellformed() {
         let ok = fixture_certificate();
         assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&ok).unwrap()), Ok(()));
 
@@ -6857,24 +6949,6 @@ mod tests {
             Err(DnsTxError::IneligibleVerificationScheme)
         );
 
-        // §6: an executor may not verify its own job.
-        let mut self_verified = fixture_certificate();
-        self_verified.verifier_attestations[0].verifier_id = self_verified.executor_id;
-        assert_eq!(
-            validate_compute_certificate_payload(&borsh::to_vec(&self_verified).unwrap()),
-            Err(DnsTxError::ExecutorVerifiedOwnJob)
-        );
-
-        // One key cannot supply two of the required confirmations.
-        let mut dup = fixture_certificate();
-        dup.verifier_attestations[1].verifier_id = dup.verifier_attestations[0].verifier_id;
-        assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&dup).unwrap()), Err(DnsTxError::DuplicateVerifier));
-
-        // An unverified receipt has no business on chain (it would mint nothing anyway).
-        let mut bare = fixture_certificate();
-        bare.verifier_attestations.clear();
-        assert_eq!(validate_compute_certificate_payload(&borsh::to_vec(&bare).unwrap()), Err(DnsTxError::NoVerifierAttestations));
-
         // Wrong ML-DSA-87 signature width.
         let mut short_sig = fixture_certificate();
         short_sig.executor_signature = vec![0u8; 10];
@@ -6884,6 +6958,76 @@ mod tests {
         );
 
         assert_eq!(validate_compute_certificate_payload(b"not borsh"), Err(DnsTxError::Decode));
+    }
+
+    /// A verdict must agree with its own two receipt hashes. A `Confirmed` over a hash the
+    /// verifier did not reproduce (or a `Refuted` over one it did) is a lie visible in the
+    /// payload alone, so it is refused at the stateless layer rather than counted and argued
+    /// about later.
+    #[test]
+    fn validate_compute_verdict_requires_self_consistency() {
+        use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
+        let executor_hash = Hash64::from_u64_word(99);
+        let other = Hash64::from_u64_word(98);
+
+        let honest_confirm = fixture_verdict_payload(21, Confirmed, executor_hash);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&honest_confirm).unwrap()), Ok(()));
+        let honest_refute = fixture_verdict_payload(21, Refuted, other);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&honest_refute).unwrap()), Ok(()));
+
+        // "I confirm" while reporting a different replay result.
+        let liar = fixture_verdict_payload(21, Confirmed, other);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&liar).unwrap()), Err(DnsTxError::SelfContradictoryVerdict));
+        // "I refute" while reporting the same result — a griefing refutation.
+        let griefer = fixture_verdict_payload(21, Refuted, executor_hash);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&griefer).unwrap()), Err(DnsTxError::SelfContradictoryVerdict));
+
+        let mut short_sig = honest_confirm.clone();
+        short_sig.signature = vec![0u8; 4];
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&short_sig).unwrap()), Err(DnsTxError::InvalidSignatureLen(4)));
+        assert_eq!(validate_compute_verdict_payload(b"not borsh"), Err(DnsTxError::Decode));
+    }
+
+    /// Verdict collection is where a certificate's audit is actually assembled, so its filtering
+    /// carries the role separation the certificate no longer can.
+    #[test]
+    fn verdict_collection_enforces_ordering_committee_and_one_vote_per_verifier() {
+        use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
+        let cert_tx = Hash64::from_u64_word(500);
+        let executor_hash = Hash64::from_u64_word(99);
+        let cert_daa = 1_000u64;
+        let rec = |v: u64, verdict, replay, daa: u64, tx: Hash64| ComputeVerdictRecord {
+            certificate_tx_id: tx,
+            payload: ComputeVerdictPayload { certificate_tx_id: tx, ..fixture_verdict_payload(v, verdict, replay) },
+            accepted_daa_score: daa,
+        };
+        let committee: HashSet<Hash64> = [21u64, 22, 23].into_iter().map(Hash64::from_u64_word).collect();
+
+        let records = vec![
+            rec(21, Confirmed, executor_hash, 1_010, cert_tx),
+            // Not in the sortitioned committee — an uninvited auditor cannot vote.
+            rec(99, Confirmed, executor_hash, 1_010, cert_tx),
+            // Accepted BEFORE the certificate: cannot have judged a claim that did not exist.
+            rec(22, Confirmed, executor_hash, 999, cert_tx),
+            // Belongs to a different certificate.
+            rec(23, Confirmed, executor_hash, 1_010, Hash64::from_u64_word(777)),
+        ];
+        let got = verdicts_for_certificate(&records, cert_tx, executor_hash, cert_daa, &committee);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].verifier_id, Hash64::from_u64_word(21));
+
+        // One verifier, two verdicts: the FIRST by acceptance order counts. Otherwise a verifier
+        // could publish both answers and let consensus pick whichever suits it; the later
+        // conflicting one is evidence for a ContradictoryVerification challenge, not a vote.
+        let flip_flop =
+            vec![rec(21, Refuted, Hash64::from_u64_word(98), 1_020, cert_tx), rec(21, Confirmed, executor_hash, 1_005, cert_tx)];
+        let got = verdicts_for_certificate(&flip_flop, cert_tx, executor_hash, cert_daa, &committee);
+        assert_eq!(got.len(), 1, "one vote per verifier");
+        assert_eq!(got[0].verdict, Confirmed, "the earliest verdict is the one that counts");
+
+        // A verdict judging a different receipt hash is not about this claim at all.
+        let wrong_claim = vec![rec(21, Confirmed, executor_hash, 1_010, cert_tx)];
+        assert!(verdicts_for_certificate(&wrong_claim, cert_tx, Hash64::from_u64_word(1), cert_daa, &committee).is_empty());
     }
 
     #[test]

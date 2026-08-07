@@ -19,8 +19,8 @@ use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
-    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
-    SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
@@ -29,8 +29,8 @@ use kaspa_consensus_core::tx::{
 use kaspa_consensus_core::vlt::{
     COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
     COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
-    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, LlmJobSpec, VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict,
-    VerifierAttestation, compute_capability_message, compute_certificate_message, compute_challenge_message,
+    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, VERIFIER_VERDICT_MLDSA87_CONTEXT,
+    VerificationVerdict, VerifierAttestation, compute_capability_message, compute_certificate_message, compute_challenge_message,
     compute_commitment_message, compute_receipt_hash, job_spec_id, verifier_verdict_message,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
@@ -365,34 +365,59 @@ impl ValidatorKey {
 
     /// Sign this validator's **verifier verdict** over a peer's receipt.
     ///
-    /// Returns the attestation for the executor to embed in its certificate; it is not a
-    /// transaction of its own. `replay_receipt_hash` MUST be what this node's own independent
-    /// re-execution produced — signing the executor's value without having reproduced it is the
-    /// §7(b) contradictory-verification offence waiting to happen, and it is provable from two
-    /// signatures alone.
+    /// `replay_receipt_hash` MUST be what this node's own independent re-execution produced. The
+    /// verdict itself follows from the comparison, never from intent: equal ⇒ `Confirmed`,
+    /// different ⇒ `Refuted`. Deriving it here rather than accepting it as a parameter removes
+    /// the call site's ability to sign a verdict its own replay does not support — which is
+    /// exactly the §7(b) contradictory-verification offence, and provable from two signatures.
     pub fn sign_verifier_verdict(
         &self,
         network_id: &[u8],
+        certificate_tx_id: TransactionId,
         job_id: Hash64,
         executor_receipt_hash: Hash64,
         replay_receipt_hash: Hash64,
         bond_outpoint: TransactionOutpoint,
-    ) -> VerifierAttestation {
-        // The verdict follows from the comparison, never from intent: equal ⇒ Confirmed,
-        // different ⇒ Refuted. Deriving it here rather than taking it as a parameter removes the
-        // call site's ability to sign a verdict its own replay does not support.
+    ) -> ComputeVerdictPayload {
         let verdict =
             if replay_receipt_hash == executor_receipt_hash { VerificationVerdict::Confirmed } else { VerificationVerdict::Refuted };
-        let message = verifier_verdict_message(network_id, job_id, executor_receipt_hash, verdict, replay_receipt_hash, bond_outpoint);
+        let message = verifier_verdict_message(
+            network_id,
+            certificate_tx_id,
+            job_id,
+            executor_receipt_hash,
+            verdict,
+            replay_receipt_hash,
+            bond_outpoint,
+        );
         let signature = self.sign_with_context(message.as_bytes().as_slice(), VERIFIER_VERDICT_MLDSA87_CONTEXT).to_vec();
-        VerifierAttestation {
+        ComputeVerdictPayload {
             version: DNS_PAYLOAD_VERSION_V1,
+            certificate_tx_id,
+            job_id,
+            executor_receipt_hash,
             verifier_id: self.validator_id,
             bond_outpoint,
             verdict,
             replay_receipt_hash,
             signature,
         }
+    }
+
+    /// Build the fee-funded transaction carrying a signed verdict.
+    ///
+    /// A verdict is its own transaction rather than something handed to the executor: embedding
+    /// it in the certificate would force the executor to collect verdicts off-chain before it
+    /// could publish, and a verifier's judgement should not travel through the party it judges.
+    pub fn build_verdict_tx(
+        &self,
+        verdict: &ComputeVerdictPayload,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let bytes = borsh::to_vec(verdict).expect("borsh serialization of a well-formed verdict is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_VERDICT, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Sign and build the **compute certificate** — phase 2, completing the commitment.
@@ -404,7 +429,6 @@ impl ValidatorKey {
         commitment_tx_id: TransactionId,
         spec: LlmJobSpec,
         receipt: ComputeReceipt,
-        verifier_attestations: Vec<VerifierAttestation>,
         bond_outpoint: TransactionOutpoint,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
@@ -423,7 +447,6 @@ impl ValidatorKey {
             spec,
             receipt,
             executor_signature,
-            verifier_attestations,
         };
         let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed certificate is infallible");
         self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CERTIFICATE, bytes, funding_outpoint, funding, fee, false)
@@ -1228,7 +1251,7 @@ mod tests {
     fn compute_overlay_txs_are_wellformed_and_stateless_valid() {
         use kaspa_consensus_core::dns_finality::{
             DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload,
-            validate_compute_challenge_tx, validate_compute_commitment_payload,
+            validate_compute_challenge_tx, validate_compute_commitment_payload, validate_compute_verdict_payload,
         };
         let key = compute_key();
         let (fop, fentry) = compute_funding();
@@ -1264,25 +1287,17 @@ mod tests {
 
         let receipt = compute_receipt();
         let receipt_hash = compute_receipt_hash(&spec, &receipt);
-        let verdicts = vec![
-            ValidatorKey::from_seed([0x01; VALIDATOR_SEED_LEN]).sign_verifier_verdict(
-                net,
-                job_id,
-                receipt_hash,
-                receipt_hash,
-                fop_bond2(),
-            ),
-            ValidatorKey::from_seed([0x02; VALIDATOR_SEED_LEN]).sign_verifier_verdict(
-                net,
-                job_id,
-                receipt_hash,
-                receipt_hash,
-                fop_bond3(),
-            ),
-        ];
-        let cert = key.build_certificate_tx(net, 7, commit.id(), spec.clone(), receipt, verdicts, bond, fop, &fentry, fee).unwrap();
+        let cert = key.build_certificate_tx(net, 7, commit.id(), spec.clone(), receipt, bond, fop, &fentry, fee).unwrap();
         assert_eq!(dns_tx_kind(&cert.subnetwork_id), Some(DnsTxKind::ComputeCertificate));
         assert_eq!(validate_compute_certificate_payload(&cert.payload), Ok(()));
+
+        // Verdicts are standalone transactions published by the verifiers themselves, so the
+        // executor never has to collect them before it can publish its certificate.
+        let verifier = ValidatorKey::from_seed([0x01; VALIDATOR_SEED_LEN]);
+        let verdict = verifier.sign_verifier_verdict(net, cert.id(), job_id, receipt_hash, receipt_hash, fop_bond2());
+        let vtx = verifier.build_verdict_tx(&verdict, fop, &fentry, fee).unwrap();
+        assert_eq!(dns_tx_kind(&vtx.subnetwork_id), Some(DnsTxKind::ComputeVerdict));
+        assert_eq!(validate_compute_verdict_payload(&vtx.payload), Ok(()));
 
         // A challenge is a pure evidence carrier: NO outputs, or it would collide with the
         // reporter reward consensus mints at (challenge_tx_id, 0).
@@ -1313,9 +1328,6 @@ mod tests {
     fn fop_bond2() -> TransactionOutpoint {
         fop(0xB1, 0)
     }
-    fn fop_bond3() -> TransactionOutpoint {
-        fop(0xB2, 0)
-    }
 
     /// A verifier's verdict follows from its own replay, never from intent. Signing `Confirmed`
     /// over a hash it did not reproduce is the §7(b) contradictory-verification offence, so the
@@ -1328,11 +1340,12 @@ mod tests {
         let executor = Hash64::from_bytes([0x31; 64]);
         let bond = fop_bond();
 
-        let agreed = key.sign_verifier_verdict(net, job, executor, executor, bond);
+        let cert_tx = fop(0xC0, 0).transaction_id;
+        let agreed = key.sign_verifier_verdict(net, cert_tx, job, executor, executor, bond);
         assert_eq!(agreed.verdict, VerificationVerdict::Confirmed);
         assert_eq!(agreed.replay_receipt_hash, executor);
 
-        let diverged = key.sign_verifier_verdict(net, job, executor, Hash64::from_bytes([0x32; 64]), bond);
+        let diverged = key.sign_verifier_verdict(net, cert_tx, job, executor, Hash64::from_bytes([0x32; 64]), bond);
         assert_eq!(diverged.verdict, VerificationVerdict::Refuted, "a replay that differs must refute");
 
         // Both are signed by this validator's own key over the matching message, and the two

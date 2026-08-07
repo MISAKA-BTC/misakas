@@ -2,8 +2,8 @@ use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
-    validate_compute_commitment_payload, validate_slashing_evidence_tx, validate_stake_attestation_shard_payload,
-    validate_stake_bond_tx, validate_stake_unbond_payload,
+    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_slashing_evidence_tx,
+    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -260,6 +260,10 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // beacon epoch, so the stateless layer only checks shape; the binding to a
             // certificate and the beacon derivation are stateful.
             DnsTxKind::ComputeCommitment => validate_compute_commitment_payload(&tx.payload),
+            // A sortitioned verifier's standalone verdict. The self-consistency check (the
+            // declared verdict must be what comparing the two receipt hashes implies) is
+            // context-free and lives here; committee membership and the signature are stateful.
+            DnsTxKind::ComputeVerdict => validate_compute_verdict_payload(&tx.payload),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

@@ -4622,6 +4622,82 @@ async fn dns_gate_common_ancestor_search_matches_walk_on_canonical_rewind_depth(
     assert_eq!(vp.chain_common_ancestor_walk(fork_point, sink, 100), Some(fork_point));
 }
 
+/// Critical-1 regression: **a long secret branch must not buy an abstain.**
+///
+/// The gate's horizon is a bound on the search, and turning "I stopped looking" into a consensus
+/// decision is what made the old candidate-side walk exploitable. Shape of the attack it allowed:
+///
+/// ```text
+///   fork F
+///     canonical:  F → C1 … C15          (15 blocks — all this candidate would rewind)
+///     secret:     F → A1 … A60          (60 blocks — mined in private, arbitrarily long)
+/// ```
+///
+/// Walking back from the CANDIDATE, a horizon of 20 runs out 40 blocks short of `F`, reports "no
+/// common ancestor", and the gate abstains — so an attacker bought a pass out of DNS adjudication
+/// purely by making the secret branch longer, which costs nothing to do. Walking back from
+/// CANONICAL asks the question the horizon is actually named for — how many of MY blocks does this
+/// rewind — and 15 is well inside 20, so the ancestor is found and the gate adjudicates.
+///
+/// This is the mirror of `dns_gate_common_ancestor_search_matches_walk_on_canonical_rewind_depth`,
+/// which pins the same metric from the other side (side branch SHORTER than the rewind). Both
+/// asymmetries are needed: one proves a short branch cannot dodge the horizon, this one proves a
+/// long branch cannot dodge the gate.
+#[tokio::test]
+async fn dns_gate_long_secret_branch_cannot_buy_an_abstain() {
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..40 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+
+    const REWIND: usize = 15; // canonical blocks the secret branch would rewind
+    const SECRET_LEN: usize = 60; // secret branch — deliberately MUCH longer than the rewind
+    const HORIZON: u64 = 20; // covers the rewind, nowhere near the secret branch
+    assert!(REWIND < HORIZON as usize && (HORIZON as usize) < SECRET_LEN, "the horizon must separate the two metrics");
+
+    let sink = ctx.consensus.get_sink();
+    let fork_point = {
+        let vp = ctx.consensus.virtual_processor();
+        vp.reachability_service.default_backward_chain_iterator(sink).nth(REWIND).expect("the chain is longer than REWIND")
+    };
+    let secret_tip = ctx.build_and_insert_disqualified_chain(vec![fork_point], SECRET_LEN).await;
+    // Built up front: extending the branch needs `&mut ctx`, which cannot overlap the `vp` borrow.
+    let longer_tip = ctx.build_and_insert_disqualified_chain(vec![secret_tip], SECRET_LEN).await;
+
+    let vp = ctx.consensus.virtual_processor();
+    // The ancestor is found: the horizon bounds the canonical rewind (15), not the secret branch (60).
+    assert_eq!(
+        vp.chain_common_ancestor_within(secret_tip, sink, HORIZON),
+        Some(fork_point),
+        "a {SECRET_LEN}-block secret branch must not push a {REWIND}-block rewind out of a {HORIZON} horizon"
+    );
+    assert_eq!(vp.chain_common_ancestor_walk(secret_tip, sink, HORIZON), Some(fork_point), "the reference walk agrees");
+
+    // Lengthening the secret branch further changes nothing — the metric is not on that side.
+    assert_eq!(
+        vp.chain_common_ancestor_within(longer_tip, sink, HORIZON),
+        Some(fork_point),
+        "doubling the secret branch must not change the verdict"
+    );
+    assert_eq!(vp.chain_common_ancestor_walk(longer_tip, sink, HORIZON), Some(fork_point));
+
+    // And the horizon still bites where it should: one short of the canonical rewind, both abstain.
+    assert_eq!(vp.chain_common_ancestor_within(secret_tip, sink, REWIND as u64 - 1), None);
+    assert_eq!(vp.chain_common_ancestor_walk(secret_tip, sink, REWIND as u64 - 1), None);
+
+    // The bug this pins, stated executably. Swapping the arguments makes the walk measure the
+    // SECRET side — exactly what the pre-fix code did — and at the same horizon it reports "no
+    // common ancestor", which the gate turns into an abstain. Same DAG, same horizon, opposite
+    // verdict: the metric alone is the difference between adjudicating and standing aside.
+    assert_eq!(
+        vp.chain_common_ancestor_walk(sink, secret_tip, HORIZON),
+        None,
+        "measuring the secret side abstains — this is the hole, kept here so it cannot come back unnoticed"
+    );
+}
+
 /// Confirmed-anchor TTL (`dns_veto_ttl_daa_score`) end to end on a real DAG — the release path for
 /// a node defending an anchor its own branch no longer supports.
 ///

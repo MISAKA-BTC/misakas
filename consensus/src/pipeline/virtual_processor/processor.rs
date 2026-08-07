@@ -72,16 +72,17 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
-        DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, MandatoryAttestationContributionKey, MandatoryAttestationDeficit,
-        MandatoryAttestationValidator, OverlaySnapshot, PruningPointOverlaySnapshot, StakeBondRecord, StakeScore,
-        advance_dns_confirmation, aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool,
-        check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_certificates_from_accepted_txs,
-        compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs, compute_stake_score, derive_dns_health,
-        dns_finality_fresh_for_bridge, effective_bond_status, epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed,
-        mandatory_attestation_mass_capacity, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
-        total_active_stake_by_epoch, total_voting_weight_by_epoch, validator_voting_weight,
+        ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, MandatoryAttestationContributionKey,
+        MandatoryAttestationDeficit, MandatoryAttestationValidator, OverlaySnapshot, PruningPointOverlaySnapshot, StakeBondRecord,
+        StakeScore, advance_dns_confirmation, aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score,
+        apply_bond_stamp, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor,
+        capability_candidate_pool, check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs,
+        compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
+        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
+        effective_bond_status, epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed, mandatory_attestation_mass_capacity,
+        ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
+        required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, total_active_stake_by_epoch,
+        total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -2607,6 +2608,7 @@ impl VirtualStateProcessor {
         let mut challenged: HashSet<TransactionId> = HashSet::new();
         let mut capabilities: Vec<ComputeCapabilityRecord> = Vec::new();
         let mut commitments: HashMap<TransactionId, ComputeCommitmentRecord> = HashMap::new();
+        let mut verdicts: Vec<ComputeVerdictRecord> = Vec::new();
         let mut pending: Vec<(TransactionId, ComputeCertificatePayload, u64, u64)> = Vec::new();
         for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
             let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
@@ -2624,6 +2626,42 @@ impl VirtualStateProcessor {
 
             for c in compute_challenges_from_accepted_txs(&txs) {
                 challenged.insert(c.certificate_tx_id);
+            }
+
+            // Standalone verdicts. Signature-checked here against the verifier's own bond; the
+            // committee-membership and ordering rules are applied per certificate below, since
+            // the committee is not known until the certificate's beacon is resolved.
+            for v in compute_verdicts_from_accepted_txs(&txs) {
+                if !v.is_self_consistent() {
+                    continue;
+                }
+                let Some(vb) = bonds.iter().find(|b| b.bond_outpoint == v.bond_outpoint) else {
+                    continue;
+                };
+                if v.verifier_id != vb.validator_pubkey_hash {
+                    continue;
+                }
+                let digest = verifier_verdict_message(
+                    net_id,
+                    v.certificate_tx_id,
+                    v.job_id,
+                    v.executor_receipt_hash,
+                    v.verdict,
+                    v.replay_receipt_hash,
+                    v.bond_outpoint,
+                )
+                .as_bytes();
+                if !matches!(
+                    verify_mldsa87_with_context(&vb.validator_pubkey, &digest, &v.signature, VERIFIER_VERDICT_MLDSA87_CONTEXT),
+                    Ok(true)
+                ) {
+                    continue;
+                }
+                verdicts.push(ComputeVerdictRecord {
+                    certificate_tx_id: v.certificate_tx_id,
+                    payload: v,
+                    accepted_daa_score: block_daa,
+                });
             }
 
             // Phase-1 commitments. Recorded with the blue_score that accepted them, because that
@@ -2793,30 +2831,16 @@ impl VirtualStateProcessor {
             )
             .into_iter()
             .collect();
-            let verdicts_ok = cert.verifier_attestations.iter().all(|v| {
-                if !committee.contains(&v.verifier_id) {
-                    return false;
-                }
-                let Some(vb) = bonds.iter().find(|b| b.bond_outpoint == v.bond_outpoint) else {
-                    return false;
-                };
-                if v.verifier_id != vb.validator_pubkey_hash || !is_bond_active_at(vb, anchor.anchor_daa_score) {
-                    return false;
-                }
-                let vd = verifier_verdict_message(net_id, job_id, receipt_hash, v.verdict, v.replay_receipt_hash, v.bond_outpoint)
-                    .as_bytes();
-                matches!(
-                    verify_mldsa87_with_context(&vb.validator_pubkey, &vd, &v.signature, VERIFIER_VERDICT_MLDSA87_CONTEXT),
-                    Ok(true)
-                )
-            });
-            if !verdicts_ok {
-                continue;
-            }
-            // (5) Verify(S,R,C) = 1, then normalize. An unregistered model or a
-            // below-threshold verdict set simply mints nothing.
-            let verified =
-                verify_compute_certificate(receipt_hash, &cert.verifier_attestations, dns_params.vlt.min_verifier_confirmations);
+            // (5) Gather THIS certificate's verdicts from the chain, keep only committee members
+            // whose bonds are Active at the anchor, then apply Verify(S,R,C). A verdict set below
+            // the confirmation threshold — including the common case of verifiers simply not
+            // having published yet — mints nothing, and will mint once they do.
+            let active_committee: HashSet<Hash64> = committee
+                .into_iter()
+                .filter(|id| bonds.iter().any(|b| b.validator_pubkey_hash == *id && is_bond_active_at(b, anchor.anchor_daa_score)))
+                .collect();
+            let attestations = verdicts_for_certificate(&verdicts, cert_tx_id, receipt_hash, block_daa, &active_committee);
+            let verified = verify_compute_certificate(receipt_hash, &attestations, dns_params.vlt.min_verifier_confirmations);
             let Ok(vlt) = normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) else {
                 continue;
             };

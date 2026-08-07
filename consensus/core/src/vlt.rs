@@ -299,7 +299,14 @@ pub enum VerificationVerdict {
     Refuted = 1,
 }
 
-/// One verifier's signed verdict, carried inside [`ComputeCertificatePayload`].
+/// One verifier's signed verdict.
+///
+/// Published as its own [`ComputeVerdictPayload`] transaction rather than embedded in the
+/// certificate. Embedding would force the executor to collect signed verdicts off-chain BEFORE it
+/// could publish — an off-chain round trip that has to exist, be reachable, and be waited on. As
+/// standalone transactions the verdicts are instead discovered from the chain by the verifiers
+/// themselves, publicly auditable, and a contradiction between two of them is provable by anyone
+/// reading the chain rather than only by whoever received both.
 ///
 /// `replay_receipt_hash` is recorded even for [`VerificationVerdict::Confirmed`]
 /// (where it necessarily equals the executor's `R_j`) because it is what makes the
@@ -350,8 +357,6 @@ pub struct ComputeCertificatePayload {
     /// ML-DSA-87 signature over [`compute_certificate_message`] under
     /// [`COMPUTE_CERT_MLDSA87_CONTEXT`].
     pub executor_signature: Vec<u8>,
-    /// Sortitioned verifiers' verdicts. Bounded by [`MAX_VERIFIER_ATTESTATIONS`].
-    pub verifier_attestations: Vec<VerifierAttestation>,
 }
 
 /// Why a [`ComputeChallengePayload`] says a certificate is fraudulent — the §7(b)/(c)
@@ -458,8 +463,15 @@ pub fn compute_certificate_message(
 /// inside the digest, so a verifier cannot later claim it signed the other verdict —
 /// which is exactly what makes [`ComputeFraudKind::ContradictoryVerification`]
 /// provable from two signatures alone.
+///
+/// `certificate_tx_id` is bound in so a verdict cannot be lifted onto a different certificate.
+/// It also pins what "contradictory" means: two verdicts by one verifier over the SAME
+/// certificate that disagree. Judging two different certificates differently is not an
+/// offence — they are different claims, and a verifier may legitimately confirm one and refute
+/// the other.
 pub fn verifier_verdict_message(
     network_id: &[u8],
+    certificate_tx_id: TransactionId,
     job_id: Hash64,
     executor_receipt_hash: Hash64,
     verdict: VerificationVerdict,
@@ -468,6 +480,7 @@ pub fn verifier_verdict_message(
 ) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(VERIFIER_VERDICT_MESSAGE_DOMAIN).to_state();
     hasher.update(network_id);
+    hasher.update(certificate_tx_id.as_byte_slice());
     hasher.update(job_id.as_byte_slice());
     hasher.update(executor_receipt_hash.as_byte_slice());
     hasher.update(&[verdict as u8]);
@@ -524,6 +537,64 @@ pub fn compute_commitment_message(network_id: &[u8], job_id: Hash64, bond_outpoi
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
+}
+
+/// A sortitioned verifier's standalone verdict transaction — phase 3 of a job's life.
+///
+/// The verifier discovers it was drawn for a job by re-deriving the committee from the chain
+/// (the certificate and its commitment are both on chain, and so is the beacon), re-executes the
+/// job independently, and publishes this. Consensus collects the verdicts belonging to each
+/// certificate and applies [`verify_compute_certificate`] to them.
+///
+/// Nothing here is taken on trust from the executor: `executor_receipt_hash` records what the
+/// executor claimed, `replay_receipt_hash` records what this verifier independently computed, and
+/// the verdict must agree with their comparison.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ComputeVerdictPayload {
+    pub version: u16,
+    /// The certificate transaction this verdict judges.
+    pub certificate_tx_id: TransactionId,
+    /// `H(S_j)` — redundant with the certificate but carried so verdicts can be indexed and
+    /// contradiction-checked without a transaction lookup.
+    pub job_id: Hash64,
+    /// `R_j` as the executor claimed it.
+    pub executor_receipt_hash: Hash64,
+    pub verifier_id: Hash64,
+    /// The verifier's own bond. A verdict must be slashable, or refuting honest work would be
+    /// free (§6: "互いに矛盾する Certificate へ署名した場合は slash 対象").
+    pub bond_outpoint: TransactionOutpoint,
+    pub verdict: VerificationVerdict,
+    /// `R_j` as this verifier independently recomputed it.
+    pub replay_receipt_hash: Hash64,
+    /// ML-DSA-87 signature over [`verifier_verdict_message`] under
+    /// [`VERIFIER_VERDICT_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+impl ComputeVerdictPayload {
+    /// The [`VerifierAttestation`] view consensus feeds to [`verify_compute_certificate`].
+    pub fn as_attestation(&self) -> VerifierAttestation {
+        VerifierAttestation {
+            version: self.version,
+            verifier_id: self.verifier_id,
+            bond_outpoint: self.bond_outpoint,
+            verdict: self.verdict,
+            replay_receipt_hash: self.replay_receipt_hash,
+            signature: self.signature.clone(),
+        }
+    }
+
+    /// Whether this verdict is self-consistent: the declared verdict must be what comparing the
+    /// two receipt hashes actually implies.
+    ///
+    /// A "Confirmed" over a hash the verifier did not reproduce, or a "Refuted" over one it did,
+    /// is a lie on its face — rejected here rather than silently counted.
+    pub fn is_self_consistent(&self) -> bool {
+        match self.verdict {
+            VerificationVerdict::Confirmed => self.replay_receipt_hash == self.executor_receipt_hash,
+            VerificationVerdict::Refuted => self.replay_receipt_hash != self.executor_receipt_hash,
+        }
+    }
 }
 
 /// A validator's on-chain declaration that it can execute — and therefore audit — a specific
@@ -1717,7 +1788,8 @@ mod tests {
         let op = outpoint(1);
 
         let cert = compute_certificate_message(net, 5, jid, rh, op);
-        let verd = verifier_verdict_message(net, jid, rh, VerificationVerdict::Confirmed, rh, op);
+        let ctx = TransactionId::from_bytes([0x5A; 64]);
+        let verd = verifier_verdict_message(net, ctx, jid, rh, VerificationVerdict::Confirmed, rh, op);
         let chal = compute_challenge_message(net, TransactionId::from_bytes([1u8; 64]), jid, ComputeFraudKind::ForgedReceipt, rh, op);
         assert_ne!(cert, verd);
         assert_ne!(cert, chal);
@@ -1725,7 +1797,7 @@ mod tests {
 
         // A verifier's two possible verdicts are distinct messages, so a signature
         // over one is never a signature over the other.
-        let refuted = verifier_verdict_message(net, jid, rh, VerificationVerdict::Refuted, rh, op);
+        let refuted = verifier_verdict_message(net, ctx, jid, rh, VerificationVerdict::Refuted, rh, op);
         assert_ne!(verd, refuted);
 
         // The receipt hash is bound to its spec: the same output under a cheaper spec
