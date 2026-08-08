@@ -3,7 +3,7 @@ use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
     validate_compute_commitment_payload, validate_compute_verdict_payload, validate_slashing_evidence_tx,
-    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_unbond_payload,
+    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload, validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -264,6 +264,11 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // declared verdict must be what comparing the two receipt hashes implies) is
             // context-free and lives here; committee membership and the signature are stateful.
             DnsTxKind::ComputeVerdict => validate_compute_verdict_payload(&tx.payload),
+            // Round 2 of DNS finality. The declared lock's *internal* possibility is context-free
+            // and checked here; whether it is the lock this chain actually shows is a question
+            // about history, answered by the credit walk, which counts a precommit only if the
+            // declaration matches.
+            DnsTxKind::StakePrecommit => validate_stake_precommit_payload(&tx.payload),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

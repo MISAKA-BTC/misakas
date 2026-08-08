@@ -16,9 +16,9 @@ use crate::compute::{ComputeConfig, ComputeInflight, ComputeRole, capability_exp
 use async_trait::async_trait;
 use kaspa_addresses::Prefix;
 use kaspa_consensus_core::dns_finality::{
-    BondStatus, DNS_PAYLOAD_VERSION_V1, OpenComputeCommitment, PendingComputeVerdict, SignedEpochCheckOutcome, SignedEpochRecord,
-    StakeAttestation, ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint,
-    single_attestation_shard,
+    BondStatus, DNS_PAYLOAD_VERSION_V1, OpenComputeCommitment, PendingComputeVerdict, PrecommitLock, SignedEpochCheckOutcome,
+    SignedEpochRecord, StakeAttestation, ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at,
+    signature_fingerprint, single_attestation_shard,
 };
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
@@ -88,6 +88,9 @@ const COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 
 const COMPUTE_CERTIFICATE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 8 + 64 + 68 + 64 + 256 + 192 + 64;
 /// version + certificate tx id + job_id + 2 receipt hashes + verifier_id + bond outpoint + verdict.
 const COMPUTE_VERDICT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 2 * 64 + 64 + 68 + 1 + 64;
+/// MISAKA §5 round 2: version + validator_id + bond outpoint + epoch + target (hash, daa) + the
+/// declared lock (epoch, hash).
+const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64;
 /// The challenge, sized for the `ForgedReceipt` kind (no contradiction proof attached).
 const COMPUTE_CHALLENGE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 1 + 64 + 68 + 68 + 64 + 64 + 64;
 
@@ -498,6 +501,12 @@ impl ValidatorService {
                             self.try_attest(target, key, outpoint).await;
                         }
 
+                        // MISAKA §5 round 2, immediately after the prevotes and before the
+                        // compute cycle. Nothing is DNS-confirmed until the precommit round
+                        // reaches quorum, so a validator that prevotes and then spends the tick
+                        // on a multi-minute inference would leave finality stalled at round 1.
+                        self.run_precommit_cycle(key, outpoint).await;
+
                         // MISAKA Verified LLM Token-Weighted BFT. After the attestations, because
                         // DNS finality must not wait behind a multi-minute inference: attesting is
                         // what keeps the overlay confirming, and it is cheap.
@@ -745,6 +754,45 @@ impl ValidatorService {
     /// At most one *job* runs per pass. A job is a full LLM inference measured in minutes, so
     /// starting a second one would just queue work the next tick would have picked up anyway —
     /// while holding a stale view of the chain the whole time.
+    /// MISAKA §5 round 2: lock on the oldest epoch whose prevote quorum this chain shows and that
+    /// this validator has not locked yet.
+    ///
+    /// **One per tick, oldest first.** The lock a precommit declares must be the previous counted
+    /// one, so the chain of locks is built a link at a time and in order; signing several at once
+    /// would produce a batch whose later members declare locks the chain has not accepted yet, and
+    /// the walk would drop everything after the first.
+    ///
+    /// The lock comes from `duty.held` — what the network can see this validator has published —
+    /// and never from local state. A node restored from a backup, or resynced, would otherwise
+    /// declare a lock the chain contradicts, which stops its precommits counting at best and, if
+    /// its old lock came from another branch, is precisely the equivocation this round exists to
+    /// make provable.
+    async fn run_precommit_cycle(&self, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        let session = self.consensus_manager.consensus().session().await;
+        let duty = session.async_get_precommit_duty(key.validator_id, bond_outpoint).await;
+        drop(session);
+        let Some(duty) = duty.filter(|d| d.round_active) else {
+            trace!("[{VALIDATOR}] precommit: round 2 is not live at the sink; nothing to lock");
+            return;
+        };
+        let Some(&(epoch, target_hash, target_daa_score)) = duty.due.first() else {
+            trace!("[{VALIDATOR}] precommit: nothing due (held lock is epoch {})", duty.held.epoch);
+            return;
+        };
+        let held = if duty.held == PrecommitLock::default() { None } else { Some(duty.held) };
+        let precommit = match key.sign_precommit(&self.config.network_id, epoch, target_hash, target_daa_score, held, bond_outpoint) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: refusing to sign epoch {epoch}: {e}");
+                return;
+            }
+        };
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| key.build_precommit_tx(&precommit, funding_outpoint, funding, fee);
+        if self.build_and_submit_overlay_tx("precommit", PRECOMMIT_PAYLOAD_BYTES, false, build).await.is_some() {
+            info!("[{VALIDATOR}] precommit: LOCKED epoch {epoch} on anchor {target_hash} (previous lock: epoch {})", duty.held.epoch);
+        }
+    }
+
     async fn run_compute_cycle(&self, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
         let Some(role) = &self.compute else {
             return;

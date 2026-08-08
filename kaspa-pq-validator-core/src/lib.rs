@@ -10,9 +10,10 @@
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
-    StakeAttestationShardPayload, StakeBondPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record,
-    single_attestation_shard, unbond_request_message, validator_id_from_pubkey,
+    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PrecommitLock, SignedEpochCheckOutcome,
+    SignedEpochRecord, StakeAttestation, StakeAttestationShardPayload, StakeBondPayload, StakePrecommitPayload,
+    StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record, single_attestation_shard, stake_precommit_message,
+    unbond_request_message, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -20,7 +21,7 @@ use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
-    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
@@ -188,6 +189,64 @@ impl ValidatorKey {
     /// aggregator uses.
     pub fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
         self.sign_with_context(message, ATTESTATION_MLDSA87_CONTEXT)
+    }
+
+    /// Sign a **precommit** — round 2 of DNS finality (MISAKA §5).
+    ///
+    /// `held` is the lock this validator is currently carrying, as the chain shows it; `None`
+    /// means it has never precommitted. It is a parameter rather than something this method
+    /// remembers, because the chain — not this process — is the authority on what a validator has
+    /// published, and a node that restarted, resynced or was restored from a backup must restate
+    /// the lock the network can see rather than one its local state invented.
+    ///
+    /// The lock goes into the signed digest, which is what makes the declaration binding: a
+    /// signature that did not cover it would leave anyone free to restate this validator's lock as
+    /// whatever suited them, and both the on-chain lock check and the cross-branch equivocation
+    /// proof would then rest on an unsigned field.
+    ///
+    /// Refuses to sign a lock that is not strictly below the epoch being locked — that is a lock
+    /// the signer could not yet have held, and consensus rejects it at the stateless layer, so
+    /// producing one only burns a fee.
+    pub fn sign_precommit(
+        &self,
+        network_id: &[u8],
+        epoch: u64,
+        target_hash: Hash64,
+        target_daa_score: u64,
+        held: Option<PrecommitLock>,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Result<StakePrecommitPayload, String> {
+        let lock = held.unwrap_or_default();
+        let message =
+            stake_precommit_message(network_id, epoch, target_hash, target_daa_score, lock.epoch, lock.anchor, bond_outpoint);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), PRECOMMIT_MLDSA87_CONTEXT).to_vec();
+        let payload = StakePrecommitPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: self.validator_id,
+            bond_outpoint,
+            epoch,
+            target_hash,
+            target_daa_score,
+            locked_epoch: lock.epoch,
+            locked_hash: lock.anchor,
+            signature,
+        };
+        if !payload.lock_is_self_consistent() {
+            return Err(format!("held lock (epoch {}) is not strictly below the epoch {epoch} being locked", lock.epoch));
+        }
+        Ok(payload)
+    }
+
+    /// Build the fee-funded transaction carrying a signed precommit.
+    pub fn build_precommit_tx(
+        &self,
+        precommit: &StakePrecommitPayload,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let bytes = borsh::to_vec(precommit).expect("borsh serialization of a well-formed precommit is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_STAKE_PRECOMMIT, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Build a fee-funded, signed `StakeAttestationShard` transaction (ADR-0010 step 9,

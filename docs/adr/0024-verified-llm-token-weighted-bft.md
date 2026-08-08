@@ -45,10 +45,11 @@ W(E)    = Σ_i W_i(E),   Q(E) = ⌊2W(E)/3⌋ + 1                               
 - **`min_bond_amount_sompi` and `min_active_stake_sompi` stay at 20M KAS on production.** Same
   number, different job: it is now the participation requirement and the `λ·B_i` collateral
   ceiling rather than voting power itself.
-- PoW/GHOSTDAG block production and ordering. The paper's §5 round machinery (Proposal /
-  Prevote / Lock+Precommit) is *not* adopted; MISAKA's finality layer is the attestation
-  overlay, and it is that overlay's weight and quorum that were replaced. Canonical history is
-  still decided by GHOSTDAG.
+- PoW/GHOSTDAG block production and ordering. The paper's §5 rounds are adopted as **overlay**
+  rounds, not as a replacement consensus (see "Two rounds" below): canonical history is still
+  decided by GHOSTDAG. There is no Proposal round because there is nothing to propose — the chain
+  proposes, and the canonical lagged anchor is the proposal. What the overlay gained is the
+  Prevote → Lock+Precommit pair that turns a single tally into an accountable commit.
 - The mandatory-attestation-inclusion gate and mining prioritization, which are
   stake-denominated block-inclusion policy and stay on `ContributionWeight::BondedStake`.
 - Reward distribution (ADR-0013 / ADR-0018 §E), which remains stake-proportional.
@@ -140,8 +141,9 @@ model. Populating `model_cost_table` is a governance action and part of any acti
 | `W_i(E)` per bond, `W(E)` denominator, credit rule, credit folding | `consensus/core/src/dns_finality.rs` |
 | Per-network params + fence | `consensus/core/src/config/params.rs` |
 | Snapshot walk + its pin, weight-source switch, per-branch scoring | `consensus/src/pipeline/virtual_processor/processor.rs` |
+| Prevote/precommit rounds, the lock chain, `PrecommitDuty` | `consensus/core/src/dns_finality.rs` + `processor.rs` |
 | Stateless payload validation | `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs` |
-| Subnetwork ids `0x14` / `0x15` | `consensus/core/src/subnets.rs` |
+| Subnetwork ids `0x14`–`0x19` | `consensus/core/src/subnets.rs` |
 
 The switch itself is one call — `DnsParams::epoch_credit_rule(daa_score)` — plus the matching
 `ContributionWeight` selector, which is an explicit argument so every call site declares whether
@@ -149,6 +151,45 @@ it wants finality weight or stake-denominated inclusion policy.
 
 `validator_voting_weight` is shared by the quorum's numerator and its denominator on purpose:
 computing them separately would be a latent consensus split.
+
+### Two rounds: prevote, then lock and precommit
+
+One round of attestations is a tally, not a commit. It answers "did two thirds of the weight
+approve anchor A for epoch E" and nothing about epoch E+1 — a validator may support A here and a
+conflicting A' on another branch later, and no artefact anywhere makes that a provable fault.
+Safety then rests on validators behaving rather than on their being unable to misbehave
+undetected, which is the difference between a quorum and a BFT commit.
+
+The attestation shard is now round 1, the **prevote**, unchanged on the wire. Round 2 is the
+**precommit** (`SUBNETWORK_ID_STAKE_PRECOMMIT`, 0x19): signed only for an epoch whose prevote
+quorum this chain already shows, and carrying `(locked_epoch, locked_hash)` — the lock the signer
+held when it signed — inside the signed digest. An anchor is DNS-confirmed only once **both**
+rounds clear quorum over the same pinned `W(E)`.
+
+The declaration is what makes the lock mean something, and it is enforced twice:
+
+- **On chain**, the walk counts a precommit only if its declared lock is exactly what this chain
+  shows as that validator's previous counted precommit. The first misdeclaration drops that
+  precommit *and every later one*, because the next declaration refers to a precommit that never
+  counted. A validator cannot quietly forget a lock it published.
+- **Across branches**, that restatement is self-contained evidence: two precommits naming one
+  `locked_epoch` with different `locked_hash` prove the signer held two locks at one height, using
+  only the two payloads — no reachability, no access to the losing branch's blocks.
+
+So two conflicting anchors cannot both confirm without more than a third of the weight having
+signed both, on chain, with the signature attached. `PrecommitDuty` is how a validator learns what
+to sign: the lock comes from the **chain**, never from local memory, so a node that restarted,
+resynced or was restored from a backup restates the lock everyone else already holds a signature
+for rather than one its own state invented.
+
+Fenced on the weight fence: below it `anchor_epoch_precommitted` is passed `true` and confirmation
+is the single-round rule every current network runs today. Above the shadow fence but below the
+weight fence the round is inert — validators have no lock to carry until their votes are
+compute-weighted.
+
+Not yet built: the lock-violation **slashing** path. The evidence is self-contained by
+construction, but burning a bond for it needs its own evidence payload and reward, so today a
+misdeclaring validator stops accumulating round-2 weight rather than losing its bond.
 
 ### The denominator is pinned, not per-branch
 
@@ -193,6 +234,9 @@ shared function of the pinned *compute*, and not yet of a shared validator set.
   backed by collateral that can be burned.
 - The BFT quorum is exact and strictly above two thirds, restoring the §8.1
   quorum-intersection argument that a graded credit could not support.
+- Finality is a two-round commit with an accountable lock, so a validator that supports
+  conflicting anchors leaves signed evidence of having done so instead of merely being suspected
+  of it.
 - Existing networks are untouched until a fence moves.
 
 **Negative / open**

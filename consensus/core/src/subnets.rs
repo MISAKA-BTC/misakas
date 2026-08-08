@@ -86,6 +86,7 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_COMPUTE_CAPABILITY
             || *self == SUBNETWORK_ID_COMPUTE_COMMITMENT
             || *self == SUBNETWORK_ID_COMPUTE_VERDICT
+            || *self == SUBNETWORK_ID_STAKE_PRECOMMIT
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
@@ -192,6 +193,14 @@ pub const SUBNETWORK_ID_COMPUTE_COMMITMENT: SubnetworkId = SubnetworkId::from_by
 /// [`crate::vlt::ComputeVerdictPayload`]. Standalone rather than embedded in the certificate so
 /// no off-chain executor↔verifier round trip is needed and every verdict is publicly auditable.
 pub const SUBNETWORK_ID_COMPUTE_VERDICT: SubnetworkId = SubnetworkId::from_byte(0x18);
+
+/// Round 2 of DNS finality — [`crate::dns_finality::StakePrecommitPayload`]. A validator that has
+/// seen the prevote quorum for an epoch's anchor **locks** on it and says so on chain. An anchor
+/// is DNS-confirmed only once the precommit round reaches quorum too, so finality is a two-round
+/// commit rather than a single tally, and a validator that moves its lock has published the
+/// evidence of doing so. In the 0x10-0x18 overlay band because it is the same finality overlay:
+/// the attestation shard is the prevote, this is the precommit.
+pub const SUBNETWORK_ID_STAKE_PRECOMMIT: SubnetworkId = SubnetworkId::from_byte(0x19);
 
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte
 // values 0x20/0x21/0x22 sit above the DNS overlay band (0x10-0x13) and the

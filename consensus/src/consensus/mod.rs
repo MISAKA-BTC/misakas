@@ -62,9 +62,9 @@ use kaspa_consensus_core::{
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, PendingComputeVerdict,
-        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state,
-        epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds, ready_epoch_from_tip_blue_score,
-        required_stake_for_quality_floor, stake_attestation_message,
+        PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
+        dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds,
+        ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -1364,6 +1364,25 @@ impl ConsensusApi for Consensus {
         let sink = self.get_sink();
         let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
         Some(self.virtual_processor.compute_status(
+            sink,
+            &self.all_stake_bond_records(),
+            self.config.params.genesis.hash.as_byte_slice(),
+            dns_params,
+            sink_daa,
+            validator_id,
+            bond_outpoint,
+        ))
+    }
+
+    fn get_precommit_duty(
+        &self,
+        validator_id: kaspa_consensus_core::Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Option<PrecommitDuty> {
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let sink = self.get_sink();
+        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
+        Some(self.virtual_processor.precommit_duty_view(
             sink,
             &self.all_stake_bond_records(),
             self.config.params.genesis.hash.as_byte_slice(),

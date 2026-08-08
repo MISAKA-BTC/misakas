@@ -122,7 +122,8 @@ mod serde_reward_payload64 {
 use crate::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_SLASHING_EVIDENCE,
-    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND,
+    SubnetworkId,
 };
 use crate::{
     BlockHash, BlueWorkType, TransactionId,
@@ -183,6 +184,15 @@ pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
 /// `StakeUnbondRequest`. Distinct from the tx / attestation / takeover contexts
 /// so an unbond authorization can never be replayed as any of those.
 pub const UNBOND_REQUEST_CONTEXT: &[u8] = b"kaspa-pq-v1/unbond/mldsa87";
+
+/// MISAKA §5 round 2: ML-DSA-87 signing context for a [`StakePrecommitPayload`]. Distinct from
+/// [`ATTESTATION_MLDSA87_CONTEXT`] on purpose and load-bearing — sharing it would let a prevote
+/// signature be replayed as a precommit, collapsing the two rounds into one and taking the whole
+/// commit property with it.
+pub const PRECOMMIT_MLDSA87_CONTEXT: &[u8] = b"misaka-v1/precommit/mldsa87";
+
+/// BLAKE2b-256 domain key for the precommit message. See [`stake_precommit_message`].
+pub const PRECOMMIT_MESSAGE_DOMAIN: &[u8] = b"misaka-v1/stake-precommit";
 
 /// kaspa-pq H-05: BLAKE2b-256 domain key for the unbond-request message the
 /// owner signs over (binds the authorization to the specific bond outpoint).
@@ -494,6 +504,109 @@ pub fn single_attestation_shard(attestation: StakeAttestation) -> StakeAttestati
 pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Transaction {
     let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
     Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload)
+}
+
+/// Round 2 of DNS finality: one validator's **precommit** — a lock on an epoch's canonical
+/// anchor, published on chain.
+///
+/// The attestation shard is round 1, the prevote: "I have seen this anchor and I accept it".
+/// One round of that is a tally, not a commit. It answers "did two thirds of the weight approve
+/// anchor A for epoch E" and nothing at all about epoch E+1: a validator may support A here and a
+/// conflicting A' on another branch later, and no artefact anywhere makes that a provable fault.
+/// Safety then rests on validators behaving, rather than on their being unable to misbehave
+/// undetected — which is the difference between a quorum and a BFT commit.
+///
+/// A precommit closes that. It is only signed after the prevote quorum for `(epoch, target_hash)`
+/// is visible, and it carries [`Self::locked_epoch`] / [`Self::locked_hash`] — the lock the signer
+/// held when it signed. Two consequences:
+///
+/// * **On chain**, the credit walk counts a precommit only if its declared lock matches what this
+///   chain shows as that validator's previous precommit. A validator cannot quietly forget a lock
+///   it published; it has to restate it, correctly, every time it locks again.
+/// * **Across branches**, that restatement is self-contained evidence. Two precommits naming the
+///   same `locked_epoch` with different `locked_hash` prove the signer held two different locks at
+///   one height, and proving it needs only the two payloads — no reachability, no access to the
+///   losing branch's blocks. That is the accountability a single round cannot produce.
+///
+/// An anchor is DNS-confirmed only once **both** rounds reach quorum over the same pinned `W(E)`
+/// ([`crate::vlt::VltEpochSnapshot`]). Two conflicting anchors for one epoch therefore cannot both
+/// commit without more than a third of the weight having signed both — which is equivocation, on
+/// chain, with the signature attached.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StakePrecommitPayload {
+    pub version: u16,
+
+    /// 64-byte validator identifier, bound to `bond_outpoint`'s bond exactly as an attestation's
+    /// is — without the binding, varying it would evade the one-precommit-per-epoch dedup.
+    pub validator_id: Hash64,
+    pub bond_outpoint: TransactionOutpoint,
+
+    /// The epoch whose canonical lagged anchor this locks on.
+    pub epoch: u64,
+    /// That anchor. Must be this chain's canonical anchor for `epoch`, and must already hold a
+    /// prevote quorum, or the precommit counts for nothing.
+    pub target_hash: Hash64,
+    /// The anchor's DAA score, carried for the same reason an attestation carries it: the
+    /// precommit can be partially checked without a header lookup.
+    pub target_daa_score: u64,
+
+    /// The epoch of the lock this validator held when it signed, or `0` for none.
+    pub locked_epoch: u64,
+    /// That lock's anchor, or [`Hash64::default`] for none. Declaring a lock the chain
+    /// contradicts makes this precommit uncountable; declaring two different ones at the same
+    /// `locked_epoch` on two branches is provable equivocation.
+    pub locked_hash: Hash64,
+
+    /// ML-DSA-87 over [`stake_precommit_message`] under [`PRECOMMIT_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+impl StakePrecommitPayload {
+    /// Whether this payload's own fields are mutually possible, independent of any chain.
+    ///
+    /// A lock is something the signer held *before* this precommit, so it must name a strictly
+    /// earlier epoch; and "no lock" is exactly `(0, default)` — a zero epoch with a real hash, or
+    /// a real epoch with a zero hash, is a half-declared lock that the chain check could neither
+    /// confirm nor contradict.
+    pub fn lock_is_self_consistent(&self) -> bool {
+        match (self.locked_epoch, self.locked_hash == Hash64::default()) {
+            (0, true) => true,
+            (0, false) => false,
+            (_, true) => false,
+            (l, false) => l < self.epoch,
+        }
+    }
+}
+
+/// The lock a validator is carrying, as the chain shows it.
+///
+/// `None` for a validator with no counted precommit yet; that is the `(0, default)` a first
+/// precommit must declare.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecommitLock {
+    pub epoch: u64,
+    pub anchor: Hash64,
+}
+
+/// What round 2 asks of one validator at the current sink.
+///
+/// Read from the chain rather than remembered locally, and that is the point: `held` is what the
+/// **network** can see this validator has locked, so a node that restarted, resynced or was
+/// restored from a backup restates the lock everyone else already has a signature for. A node
+/// trusting its own memory here would eventually declare a lock the chain contradicts — which
+/// stops its precommits counting — or, worse, one that contradicts a lock it published on another
+/// branch, which is the equivocation the round exists to make provable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecommitDuty {
+    /// Whether the precommit round is live at the sink (the VLT weight fence).
+    pub round_active: bool,
+    pub sink_daa_score: u64,
+    /// The lock this validator is carrying on this chain, as counted.
+    pub held: PrecommitLock,
+    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet, with
+    /// the canonical anchor to lock on. Ascending, so signing them in order builds the lock chain
+    /// the walk expects.
+    pub due: Vec<(u64, Hash64, u64)>,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
@@ -1726,6 +1839,54 @@ pub fn stake_attestation_message(
     hasher.update(target_hash.as_byte_slice());
     hasher.update(&target_daa_score.to_le_bytes());
     hasher.update(validator_set_commitment.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// The 32-byte digest a [`StakePrecommitPayload`] signs.
+///
+/// ```text
+/// BLAKE2b-256(
+///     key   = PRECOMMIT_MESSAGE_DOMAIN,
+///     input = network_id
+///          || epoch.to_le_bytes()
+///          || target_hash.as_bytes()           (64 B)
+///          || target_daa_score.to_le_bytes()
+///          || locked_epoch.to_le_bytes()
+///          || locked_hash.as_bytes()           (64 B)
+///          || bond_outpoint.transaction_id     (64 B)
+///          || bond_outpoint.index.to_le_bytes()  (4 B),
+/// )
+/// ```
+///
+/// The **lock is inside the digest**, which is the whole reason this is not just an attestation
+/// with a different context byte. A signature that did not cover `(locked_epoch, locked_hash)`
+/// would leave the declaration unsigned, and anyone could restate a validator's lock as whatever
+/// the chain happened to want — so the on-chain lock check would verify nothing and the
+/// cross-branch evidence would prove nothing.
+///
+/// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
+/// weight it pledges, exactly as in [`stake_attestation_message`].
+pub fn stake_precommit_message(
+    network_id: &[u8],
+    epoch: u64,
+    target_hash: Hash64,
+    target_daa_score: u64,
+    locked_epoch: u64,
+    locked_hash: Hash64,
+    bond_outpoint: TransactionOutpoint,
+) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(PRECOMMIT_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
+    hasher.update(&epoch.to_le_bytes());
+    hasher.update(target_hash.as_byte_slice());
+    hasher.update(&target_daa_score.to_le_bytes());
+    hasher.update(&locked_epoch.to_le_bytes());
+    hasher.update(locked_hash.as_byte_slice());
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
 
@@ -3725,6 +3886,8 @@ pub enum DnsTxKind {
     ComputeCommitment,
     /// `SUBNETWORK_ID_COMPUTE_VERDICT` — [`crate::vlt::ComputeVerdictPayload`].
     ComputeVerdict,
+    /// `SUBNETWORK_ID_STAKE_PRECOMMIT` — [`StakePrecommitPayload`].
+    StakePrecommit,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -3749,6 +3912,8 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::ComputeCommitment)
     } else if *subnetwork_id == SUBNETWORK_ID_COMPUTE_VERDICT {
         Some(DnsTxKind::ComputeVerdict)
+    } else if *subnetwork_id == SUBNETWORK_ID_STAKE_PRECOMMIT {
+        Some(DnsTxKind::StakePrecommit)
     } else {
         None
     }
@@ -3832,6 +3997,10 @@ pub enum DnsTxError {
     /// A job commitment's published input is empty or exceeds [`crate::vlt::MAX_JOB_INPUT_BYTES`].
     /// Empty is refused too: a job with no input has nothing for a verifier to replay.
     JobInputSize(usize),
+    /// A precommit's declared lock is not internally possible: half-declared (one of
+    /// `locked_epoch` / `locked_hash` zero and the other not), or naming an epoch at or above the
+    /// one being locked, which would be a lock the signer could not yet have held.
+    IncoherentPrecommitLock,
 }
 
 impl Display for DnsTxError {
@@ -3879,6 +4048,9 @@ impl Display for DnsTxError {
             }
             DnsTxError::JobInputSize(n) => {
                 write!(f, "compute commitment publishes a {n}-byte job input, which is empty or above the permitted maximum")
+            }
+            DnsTxError::IncoherentPrecommitLock => {
+                write!(f, "precommit declares a lock that is half-declared or not strictly below the epoch it locks")
             }
         }
     }
@@ -4296,12 +4468,16 @@ pub fn bond_mutations_from_accepted_txs(
                 }
             }
             // A compute certificate mints VLT credit and a capability declaration only joins a
-            // sortition pool — neither is a bond mutation.
+            // sortition pool — neither is a bond mutation. A precommit is round 2 of finality: it
+            // feeds the confirmation gate, not the bond set. (A precommit that *contradicts* an
+            // earlier one is slashable, but only on presented evidence, like every other
+            // equivocation — never as a side effect of accepting one.)
             Some(DnsTxKind::StakeAttestationShard)
             | Some(DnsTxKind::ComputeCertificate)
             | Some(DnsTxKind::ComputeCapability)
             | Some(DnsTxKind::ComputeCommitment)
             | Some(DnsTxKind::ComputeVerdict)
+            | Some(DnsTxKind::StakePrecommit)
             | None => {}
         }
     }
@@ -4616,6 +4792,104 @@ pub fn aggregate_epoch_tallies(
         .collect()
 }
 
+/// One validator's precommit as the walk collected it, in chain order.
+///
+/// `accepted_daa_score` is what puts them in order: the lock chain is a statement about *history*,
+/// so it can only be checked against the sequence the chain actually accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrecommitRecord {
+    pub epoch: u64,
+    pub validator_id: Hash64,
+    pub bond_outpoint: TransactionOutpoint,
+    pub target_hash: Hash64,
+    pub declared_lock: PrecommitLock,
+    pub accepted_daa_score: u64,
+    /// The bond's weight for this epoch, in whatever unit the round is denominated in — the same
+    /// number the prevote round used, from the same pinned snapshot.
+    pub signed_weight: u128,
+}
+
+/// Keep only the precommits whose declared lock matches what this chain shows, and turn them into
+/// contributions the ordinary tally can count.
+///
+/// Per validator, in chain order: the first counted precommit must declare no lock at all, and
+/// every later one must declare its predecessor's `(epoch, target_hash)` exactly. A precommit that
+/// declares anything else is dropped — and dropping it drops everything after it too, because the
+/// next one's declaration refers to a precommit that never counted.
+///
+/// That severity is the point. The declaration is what a validator can later be held to, so it has
+/// to be a faithful running record rather than a field it fills in when convenient. A validator
+/// that misdeclares stops accumulating weight in round 2 until it restates the truth, and if it
+/// misdeclared because it is carrying a *different* lock on another branch, the two signed
+/// payloads are the proof.
+///
+pub fn lock_consistent_precommits(records: &[PrecommitRecord]) -> Vec<AttestationContribution> {
+    // `TransactionOutpoint` is not `Ord`, so group in a hash map and impose the order explicitly
+    // on the way out — the answer must not depend on map iteration order.
+    let mut by_validator: HashMap<(Hash64, TransactionOutpoint), Vec<&PrecommitRecord>> = HashMap::new();
+    for r in records {
+        by_validator.entry((r.validator_id, r.bond_outpoint)).or_default().push(r);
+    }
+    let mut groups: Vec<_> = by_validator.into_iter().collect();
+    groups.sort_by_key(|((v, op), _)| (*v, op.transaction_id, op.index));
+
+    let mut out = Vec::new();
+    for (_, chain) in groups {
+        let (kept, _) = lock_consistent_prefix(chain);
+        out.extend(kept.into_iter().map(|r| AttestationContribution {
+            epoch: r.epoch,
+            validator_id: r.validator_id,
+            bond_outpoint: r.bond_outpoint,
+            signed_weight: r.signed_weight,
+        }));
+    }
+    out
+}
+
+/// The lock `(validator_id, bond_outpoint)` is carrying on this chain — the anchor of the last
+/// precommit in its own lock-consistent prefix, or the default when it has none.
+///
+/// This is what a validator must declare in its next precommit, and reading it from the chain
+/// rather than from local memory is deliberate: the chain is what everyone else can check the
+/// declaration against.
+pub fn held_precommit_lock(records: &[PrecommitRecord], validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> PrecommitLock {
+    let mine: Vec<&PrecommitRecord> =
+        records.iter().filter(|r| r.validator_id == validator_id && r.bond_outpoint == bond_outpoint).collect();
+    lock_consistent_prefix(mine).1
+}
+
+/// One validator's precommits in chain order, truncated at the first misdeclared lock, plus the
+/// lock the surviving prefix leaves it holding.
+///
+/// Ties inside one DAA score are broken by `(epoch, bond txid, index, target)` so the order — and
+/// therefore the answer — is identical on every node.
+fn lock_consistent_prefix(mut chain: Vec<&PrecommitRecord>) -> (Vec<&PrecommitRecord>, PrecommitLock) {
+    chain.sort_by_key(|r| (r.accepted_daa_score, r.epoch, r.bond_outpoint.transaction_id, r.bond_outpoint.index, r.target_hash));
+    let mut held = PrecommitLock::default();
+    let mut kept = Vec::new();
+    for r in chain {
+        if r.declared_lock != held {
+            break; // misdeclared: this one and everything after it are uncountable.
+        }
+        held = PrecommitLock { epoch: r.epoch, anchor: r.target_hash };
+        kept.push(r);
+    }
+    (kept, held)
+}
+
+/// The epochs in `tallies` that reached the §4 quorum.
+///
+/// Used by **both** rounds, and deliberately so: two rounds counted by different rules would not
+/// compose into a commit, and the §8.1 intersection argument needs both to be fractions of one
+/// `W(E)`. What differs between the rounds is only which signatures were tallied.
+pub fn quorum_epochs(tallies: &[EpochStakeTally], min_network_compute: u128) -> BTreeSet<u64> {
+    tallies
+        .iter()
+        .filter(|t| crate::vlt::meets_bft_quorum(t.signed_weight, t.total_weight, min_network_compute))
+        .map(|t| t.epoch)
+        .collect()
+}
+
 /// Build the new [`DnsState`] for `anchor`, advancing the last
 /// DNS-confirmed anchor when `anchor` clears **both** depth thresholds
 /// (ADR-0009 Addendum A.5; via [`is_dns_confirmed`]).
@@ -4652,6 +4926,7 @@ pub fn advance_dns_confirmation(
     required_stake_depth: StakeScore,
     anchor_epoch_attesters: u32,
     min_anchor_attesters: u32,
+    anchor_epoch_precommitted: bool,
 ) -> DnsState {
     // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
     //
@@ -4667,8 +4942,21 @@ pub fn advance_dns_confirmation(
     // same reasoning to *who* the support comes from: a veto that can hold a whole network off its
     // chain should not be arm-able by one signer. `1` is exactly the original "≥1 credited
     // attestation" rule.
+    //
+    // `anchor_epoch_precommitted` is round 2 (MISAKA §5). Everything above it is the prevote
+    // tally: enough weight approved this anchor. That is a quorum, and a quorum is not a commit —
+    // it says nothing about whether the same validators will approve a conflicting anchor at a
+    // later epoch, and nothing anywhere would prove that they had. Confirming also on the
+    // precommit quorum means the anchor is only finalized once two thirds of the weight has
+    // **locked** on it, having published the lock it held while doing so. Two conflicting anchors
+    // then cannot both confirm without more than a third of the weight having signed both locks,
+    // which is equivocation with the signature attached.
+    //
+    // Passed as `true` below the VLT weight fence, where the precommit round does not exist and
+    // confirmation is the single-round rule every current network already runs.
     let confirmed = confirmable_anchor.is_some()
         && anchor_epoch_attesters >= min_anchor_attesters.max(1)
+        && anchor_epoch_precommitted
         && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
     let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
         (true, Some(canonical), _) => canonical,
@@ -5269,6 +5557,51 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
         return Err(DnsTxError::SelfContradictoryVerdict);
     }
     Ok(())
+}
+
+/// Stateless shape of a [`StakePrecommitPayload`] (subnetwork `SUBNETWORK_ID_STAKE_PRECOMMIT`).
+///
+/// Everything checkable without a chain: version, signature width, and the lock's internal
+/// consistency. Whether the declared lock is the *true* one is a question about history and is
+/// answered by the credit walk, which counts a precommit only if its lock matches what the chain
+/// shows.
+pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let p: StakePrecommitPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
+    if p.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(p.version));
+    }
+    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
+    }
+    if !p.lock_is_self_consistent() {
+        return Err(DnsTxError::IncoherentPrecommitLock);
+    }
+    Ok(())
+}
+
+/// Every decodable [`StakePrecommitPayload`] among `txs`.
+pub fn precommits_from_accepted_txs(txs: &[Transaction]) -> Vec<StakePrecommitPayload> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakePrecommit)
+            && let Ok(p) = borsh::from_slice::<StakePrecommitPayload>(&tx.payload)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Build the subnetwork [`Transaction`] carrying a borsh-encoded [`StakePrecommitPayload`].
+///
+/// **TEST HELPER — NOT for production**, for the same reason
+/// [`stake_attestation_shard_tx`] is: no inputs or outputs, so `NoTxInputs` rejects it everywhere
+/// a real block is built. Production validators fund and sign the tx through
+/// `kaspa_pq_validator_core`.
+#[doc(hidden)]
+pub fn stake_precommit_tx(precommit: &StakePrecommitPayload) -> Transaction {
+    let payload = borsh::to_vec(precommit).expect("borsh serialization of a well-formed precommit is infallible");
+    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_PRECOMMIT, 0, payload)
 }
 
 /// Every decodable [`ComputeVerdictPayload`] among `txs`.
@@ -6962,6 +7295,149 @@ mod tests {
         assert!(inert.is_empty());
         assert_eq!(validator_voting_weight(&bond, 10, &inert, &vlt), 0);
         assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt)[&10], 0);
+    }
+
+    // ---- MISAKA §5 round 2: prevote / precommit ----
+
+    fn pc(epoch: u64, seed: u8, anchor: u8, lock: (u64, u8), daa: u64, w: u128) -> PrecommitRecord {
+        PrecommitRecord {
+            epoch,
+            validator_id: Hash64::from_bytes([seed; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+            target_hash: Hash64::from_bytes([anchor; 64]),
+            declared_lock: PrecommitLock {
+                epoch: lock.0,
+                anchor: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
+            },
+            accepted_daa_score: daa,
+            signed_weight: w,
+        }
+    }
+
+    /// The lock chain is a running record, and it is checked link by link.
+    ///
+    /// A first precommit must declare no lock; each later one must declare its predecessor
+    /// exactly. The first misdeclaration takes everything after it too — not out of severity for
+    /// its own sake, but because the next declaration refers to a precommit that never counted, so
+    /// there is nothing left to check it against.
+    #[test]
+    fn precommit_lock_chain_must_be_declared_link_by_link() {
+        // Validator 1 declares faithfully: none → epoch 10 → epoch 11.
+        let honest = vec![pc(10, 1, 0xa1, (0, 0), 100, 5), pc(11, 1, 0xa2, (10, 0xa1), 200, 5), pc(12, 1, 0xa3, (11, 0xa2), 300, 5)];
+        assert_eq!(lock_consistent_precommits(&honest).len(), 3, "a faithful record counts in full");
+        assert_eq!(
+            held_precommit_lock(&honest, Hash64::from_bytes([1; 64]), TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0)),
+            PrecommitLock { epoch: 12, anchor: Hash64::from_bytes([0xa3; 64]) }
+        );
+
+        // Validator 2 forgets the middle lock — it declares epoch 10's anchor while actually
+        // holding epoch 11's. That one and the one after it are uncountable.
+        let forgetful =
+            vec![pc(10, 2, 0xa1, (0, 0), 100, 5), pc(11, 2, 0xa2, (10, 0xa1), 200, 5), pc(12, 2, 0xa3, (10, 0xa1), 300, 5)];
+        let counted = lock_consistent_precommits(&forgetful);
+        assert_eq!(counted.len(), 2, "the misdeclared link and everything after it drop out");
+        assert!(counted.iter().all(|c| c.epoch < 12));
+
+        // A first precommit that claims a lock it never published counts for nothing at all.
+        let inventing = vec![pc(10, 3, 0xa1, (9, 0xb0), 100, 5)];
+        assert!(lock_consistent_precommits(&inventing).is_empty(), "a lock the chain never saw is not a lock");
+        assert_eq!(
+            held_precommit_lock(&inventing, Hash64::from_bytes([3; 64]), TransactionOutpoint::new(Hash64::from_bytes([3; 64]), 0)),
+            PrecommitLock::default(),
+            "and it leaves the validator holding nothing"
+        );
+    }
+
+    /// Round 2 is a real second bar, over the same denominator as round 1.
+    ///
+    /// Two thirds prevoting is where the single-round overlay stopped. Here the same epoch also
+    /// has to clear the precommit quorum, and weight that only prevoted does not carry over — a
+    /// validator that approved an anchor but would not lock on it has not committed to anything.
+    #[test]
+    fn precommit_quorum_is_a_second_bar_over_the_same_denominator() {
+        let totals = BTreeMap::from([(10u64, 30u128)]);
+        let att = |seed: u8, w: u128| AttestationContribution {
+            epoch: 10,
+            validator_id: Hash64::from_bytes([seed; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+            signed_weight: w,
+        };
+        // All three prevoted: round 1 is met.
+        let prevotes = vec![att(1, 10), att(2, 10), att(3, 10)];
+        assert!(quorum_epochs(&aggregate_epoch_tallies(&prevotes, &totals), 0).contains(&10));
+
+        // Only two of the three lock. 20 of 30 is exactly two thirds, which is not strictly above
+        // it, so the anchor is prevoted but NOT committed.
+        let two = lock_consistent_precommits(&[pc(10, 1, 0xa1, (0, 0), 100, 10), pc(10, 2, 0xa1, (0, 0), 100, 10)]);
+        assert!(
+            !quorum_epochs(&aggregate_epoch_tallies(&two, &totals), 0).contains(&10),
+            "a quorum of prevotes is not a commit; round 2 has to clear on its own"
+        );
+
+        // The third locks too.
+        let three = lock_consistent_precommits(&[
+            pc(10, 1, 0xa1, (0, 0), 100, 10),
+            pc(10, 2, 0xa1, (0, 0), 100, 10),
+            pc(10, 3, 0xa1, (0, 0), 100, 10),
+        ]);
+        assert!(quorum_epochs(&aggregate_epoch_tallies(&three, &totals), 0).contains(&10));
+    }
+
+    /// The lock is inside the signed digest. Without that the declaration would be an unsigned
+    /// field anyone could restate, and both the on-chain lock check and the cross-branch
+    /// equivocation proof would be checking a number nobody committed to.
+    #[test]
+    fn precommit_digest_covers_the_declared_lock() {
+        let net = b"misaka-test";
+        let op = TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0);
+        let anchor = Hash64::from_bytes([0xa1; 64]);
+        let base = stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), op);
+        // Same vote, different declared lock ⇒ different digest ⇒ the old signature does not carry.
+        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xbb; 64]), op));
+        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 9, Hash64::from_bytes([0xa0; 64]), op));
+        // And it is bound to the network and the bond, like an attestation.
+        assert_ne!(base, stake_precommit_message(b"other-net", 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), op));
+        assert_ne!(
+            base,
+            stake_precommit_message(
+                net,
+                11,
+                anchor,
+                500,
+                10,
+                Hash64::from_bytes([0xa0; 64]),
+                TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 0)
+            )
+        );
+    }
+
+    /// A lock is something the signer held *before* the epoch it is locking, and "no lock" is
+    /// exactly `(0, zero)`. A half-declared lock is refused at the stateless layer: the chain
+    /// check could neither confirm nor contradict it.
+    #[test]
+    fn precommit_lock_must_be_whole_and_in_the_past() {
+        let sig = vec![0u8; STAKE_ATTESTATION_SIG_LEN];
+        let mk = |locked_epoch: u64, locked_hash: Hash64| StakePrecommitPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([1; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
+            epoch: 10,
+            target_hash: Hash64::from_bytes([0xa1; 64]),
+            target_daa_score: 500,
+            locked_epoch,
+            locked_hash,
+            signature: sig.clone(),
+        };
+        let some = Hash64::from_bytes([0xa0; 64]);
+        assert!(mk(0, Hash64::default()).lock_is_self_consistent(), "no lock at all is the first precommit's case");
+        assert!(mk(9, some).lock_is_self_consistent());
+        assert!(!mk(0, some).lock_is_self_consistent(), "an epoch-less lock is half-declared");
+        assert!(!mk(9, Hash64::default()).lock_is_self_consistent(), "an anchor-less lock is half-declared");
+        assert!(!mk(10, some).lock_is_self_consistent(), "a lock at the epoch it locks is not one the signer held");
+        assert!(!mk(11, some).lock_is_self_consistent(), "nor is one from the future");
+
+        assert_eq!(validate_stake_precommit_payload(&borsh::to_vec(&mk(10, some)).unwrap()), Err(DnsTxError::IncoherentPrecommitLock));
+        assert!(validate_stake_precommit_payload(&borsh::to_vec(&mk(9, some)).unwrap()).is_ok());
     }
 
     /// The fence is the whole safety story for existing networks: below it, nothing about the
@@ -8680,6 +9156,7 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
+            true,
         );
         assert_eq!(s1.selected_chain_anchor, sink1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
@@ -8702,6 +9179,7 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
+            true,
         );
         assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
         assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
@@ -8726,6 +9204,7 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
+            true,
         );
         assert_eq!(s3.selected_chain_anchor, sink3);
         assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
@@ -8746,6 +9225,7 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
+            true,
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
         assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
@@ -8776,6 +9256,7 @@ mod tests {
                 cs,
                 attesters,
                 min_attesters,
+                true,
             )
             .last_dns_confirmed_anchor
         };
@@ -8818,6 +9299,7 @@ mod tests {
                 cs,
                 1,
                 1,
+                true,
             )
             .last_dns_confirmed_anchor
         };

@@ -10,8 +10,8 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, StakeBondPage,
-        StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
+        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, PrecommitDuty,
+        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
     },
     errors::consensus::ConsensusResult,
     header::Header,
@@ -322,6 +322,12 @@ impl ConsensusSessionOwned {
         bond_outpoint: TransactionOutpoint,
     ) -> Option<ComputeStatusView> {
         self.clone().spawn_blocking(move |c| c.get_compute_status(validator_id, bond_outpoint)).await
+    }
+
+    /// MISAKA §5 round 2: the lock this validator carries on the selected chain, and the epochs it
+    /// still owes a precommit for.
+    pub async fn async_get_precommit_duty(&self, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
+        self.clone().spawn_blocking(move |c| c.get_precommit_duty(validator_id, bond_outpoint)).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

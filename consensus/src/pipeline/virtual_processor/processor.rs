@@ -74,16 +74,18 @@ use kaspa_consensus_core::{
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
         ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
-        OverlaySnapshot, PendingComputeVerdict, PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation,
-        aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool,
-        check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_certificates_from_accepted_txs,
+        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
+        PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_compute_credits,
+        aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
+        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool, check_dns_reorg_rule,
+        commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_certificates_from_accepted_txs,
         compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs, compute_stake_score,
         compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge, effective_bond_status,
-        epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
+        epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at, is_dns_confirmed, lock_consistent_precommits,
+        mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk, precommits_from_accepted_txs, quorum_epochs,
         ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
-        required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, total_active_stake_by_epoch,
-        total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
+        required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, stake_precommit_message,
+        total_active_stake_by_epoch, total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -132,7 +134,7 @@ use rayon::{
 use rocksdb::WriteBatch;
 use std::{
     cmp::min,
-    collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque},
     iter::once,
     ops::Deref,
     sync::{Arc, atomic::Ordering},
@@ -2401,6 +2403,22 @@ impl VirtualStateProcessor {
             contributions.iter().filter(|c| c.epoch == a.epoch).map(|c| c.validator_id).collect::<HashSet<_>>().len() as u32
         });
 
+        // MISAKA §5 round 2. Everything above this is the prevote tally — enough weight approved
+        // the anchor. Round 2 asks the stronger question: has enough weight **locked** on it,
+        // each signer having published the lock it was carrying at the time. Only then is the
+        // anchor confirmed, so two conflicting anchors cannot both finalize without more than a
+        // third of the weight having signed both locks.
+        //
+        // `true` below the VLT weight fence, where the round does not exist: every current network
+        // keeps its single-round confirmation byte-for-byte.
+        let anchor_epoch_precommitted = if dns_params.vlt_weighting_active_at(sink_daa) {
+            let prevoted = quorum_epochs(&per_epoch, dns_params.vlt.min_network_compute);
+            let precommitted = self.precommitted_epochs(sink, &bonds, net_id.as_byte_slice(), dns_params, weight, &totals, &prevoted);
+            confirmable.is_some_and(|a| precommitted.contains(&a.epoch))
+        } else {
+            true
+        };
+
         // true WorkDepth (audit H-02 Option A): WorkDepth(B) is the blue work accumulated SINCE the
         // confirmable anchor B — anchor-relative (`blue_work(sink) − blue_work(anchor)`), NOT the
         // cumulative-from-genesis `blue_work(sink)`. This makes it a real confirmation DEPTH (how much
@@ -2433,6 +2451,7 @@ impl VirtualStateProcessor {
             dns_params.required_stake_depth,
             anchor_epoch_attesters,
             dns_params.min_anchor_attesters,
+            anchor_epoch_precommitted,
         );
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
@@ -2639,6 +2658,165 @@ impl VirtualStateProcessor {
         let mut seen = std::collections::HashSet::new();
         window.retain(|c| seen.insert(c.block_hash));
         window
+    }
+
+    /// MISAKA §5 round 2: the epochs whose **precommit** quorum is met on this chain.
+    ///
+    /// Walks the same window and applies the same eligibility rules the prevote round applies —
+    /// canonical anchor for the epoch, bond `Active` at that anchor, `validator_id` bound to the
+    /// bond, ML-DSA-87 signature — and then two rules that only exist in round 2:
+    ///
+    /// 1. **The lock chain.** A precommit counts only if its declared `(locked_epoch,
+    ///    locked_hash)` is exactly what this chain shows as that validator's previous counted
+    ///    precommit ([`lock_consistent_precommits`]). The declaration is what the validator can be
+    ///    held to later, so it has to be a faithful running record, not a field filled in when
+    ///    convenient.
+    /// 2. **Round order.** A precommit is a lock on an anchor the network already approved, so it
+    ///    counts only for an epoch whose *prevote* quorum is met here — passed in as `prevote_ok`.
+    ///    Locking on an anchor two thirds have not approved is not round 2 of anything.
+    ///
+    /// The weight is read through the same [`ContributionWeight`] the prevote round used, from the
+    /// same pinned snapshot. Two rounds counted in different units would not compose into a
+    /// commit, and the quorum-intersection argument needs both to be fractions of one `W(E)`.
+    #[allow(clippy::too_many_arguments)]
+    fn precommitted_epochs(
+        &self,
+        tip: BlockHash,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
+        weight: ContributionWeight<'_>,
+        totals: &BTreeMap<u64, u128>,
+        prevote_quorum: &BTreeSet<u64>,
+    ) -> BTreeSet<u64> {
+        let records = self.collect_precommits(tip, bonds, net_id, dns_params, weight, prevote_quorum);
+        let counted = lock_consistent_precommits(&records);
+        quorum_epochs(&aggregate_epoch_tallies(&counted, totals), dns_params.vlt.min_network_compute)
+    }
+
+    /// The eligibility-checked precommits on this chain, in no particular order —
+    /// [`lock_consistent_precommits`] imposes the chain order the lock rule needs.
+    fn collect_precommits(
+        &self,
+        tip: BlockHash,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
+        weight: ContributionWeight<'_>,
+        prevote_quorum: &BTreeSet<u64>,
+    ) -> Vec<PrecommitRecord> {
+        let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.stake_score_window_blue_score);
+        let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
+            return Vec::new();
+        };
+        let mut records: Vec<PrecommitRecord> = Vec::new();
+        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
+            let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
+                break;
+            };
+            if tip_blue.saturating_sub(bs) > dns_params.stake_score_window_blue_score {
+                break;
+            }
+            let Ok(block_daa) = self.headers_store.get_daa_score(chain_block) else {
+                break;
+            };
+            let txs = self.accepted_txs_of_chain_block(chain_block);
+            for p in precommits_from_accepted_txs(&txs) {
+                if !p.lock_is_self_consistent() {
+                    continue;
+                }
+                // Round order: a precommit is a lock on an anchor the network has already
+                // approved. Locking on one two thirds have not prevoted is not round 2 of
+                // anything, so it counts for nothing.
+                if !prevote_quorum.contains(&p.epoch) {
+                    continue;
+                }
+                // The anchor must be THIS chain's canonical one for the epoch, exactly as a
+                // prevote's target must be — a lock on a target nobody else is voting on is not a
+                // lock on anything.
+                let Some(anchor) = anchors.get(&p.epoch) else {
+                    continue;
+                };
+                if p.target_hash != anchor.anchor_hash || p.target_daa_score != anchor.anchor_daa_score {
+                    continue;
+                }
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == p.bond_outpoint) else {
+                    continue;
+                };
+                if p.validator_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
+                    continue;
+                }
+                let digest = stake_precommit_message(
+                    net_id,
+                    p.epoch,
+                    p.target_hash,
+                    p.target_daa_score,
+                    p.locked_epoch,
+                    p.locked_hash,
+                    p.bond_outpoint,
+                )
+                .as_bytes();
+                if !matches!(
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
+                    Ok(true)
+                ) {
+                    continue;
+                }
+                records.push(PrecommitRecord {
+                    epoch: p.epoch,
+                    validator_id: p.validator_id,
+                    bond_outpoint: p.bond_outpoint,
+                    target_hash: p.target_hash,
+                    declared_lock: PrecommitLock { epoch: p.locked_epoch, anchor: p.locked_hash },
+                    accepted_daa_score: block_daa,
+                    signed_weight: weight.of(bond, p.epoch),
+                });
+            }
+        }
+        records
+    }
+
+    /// MISAKA §5 round 2, from one validator's side: the lock it is carrying on this chain and the
+    /// epochs it still owes a precommit for. Backs `ConsensusApi::get_precommit_duty`.
+    ///
+    /// The lock comes from the chain, never from the caller's memory — see [`PrecommitDuty`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn precommit_duty_view(
+        &self,
+        tip: BlockHash,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
+        sink_daa: u64,
+        validator_id: Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> PrecommitDuty {
+        let mut duty = PrecommitDuty {
+            round_active: dns_params.vlt_weighting_active_at(sink_daa),
+            sink_daa_score: sink_daa,
+            ..Default::default()
+        };
+        if !duty.round_active {
+            return duty;
+        }
+        let snapshot = self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa));
+        let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
+        let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
+        let totals = self.total_weight_by_epoch(bonds, &epoch_anchor_daa, weight);
+        let prevoted = quorum_epochs(&aggregate_epoch_tallies(&contributions, &totals), dns_params.vlt.min_network_compute);
+
+        let records = self.collect_precommits(tip, bonds, net_id, dns_params, weight, &prevoted);
+        duty.held = held_precommit_lock(&records, validator_id, bond_outpoint);
+        // Only epochs strictly above the held lock are still owed: a precommit at or below it
+        // would declare a lock that is not below the epoch it locks, which consensus rejects at the
+        // stateless layer, and one already counted needs no repeat.
+        let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.stake_score_window_blue_score);
+        duty.due = prevoted
+            .iter()
+            .filter(|&&e| e > duty.held.epoch)
+            .filter_map(|&e| anchors.get(&e).map(|a| (e, a.anchor_hash, a.anchor_daa_score)))
+            .collect();
+        duty
     }
 
     /// kaspa-pq Phase 13 (ADR-0018 §H) + DNS v3 (PR6): the StakeScore a branch accumulated
