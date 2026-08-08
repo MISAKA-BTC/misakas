@@ -188,6 +188,31 @@ message VersionMessage{
   bytes consensusParamsId = 12;
 }
 
+// A peer's answer to "which chain are you on?", asked during an IBD so that the chain a
+// node adopts can be chosen by comparison rather than by which peer relayed first.
+//
+// Carries no block bodies and no proof: it is a CLAIM, cheap to make and cheap to serve.
+// What it is for is deciding whom to ask for a pruning proof, and in what order. Nothing
+// in it may decide which chain is canonical — see IbdCandidateSummary in flows.
+message RequestIbdCandidateSummaryMessage{
+}
+
+message IbdCandidateSummaryMessage{
+  // The peer's current virtual selected parent header. Its blue_work is the peer's
+  // CLAIM about the weight of its chain: a header commits to the value through PoW, but
+  // nothing in a single header shows the value was derived correctly from its parents
+  // (that is contextual validation, and `UnexpectedHeaderBlueWork` is the rule that
+  // catches it). A peer that mines one valid block can write any number here.
+  BlockHeader virtualSelectedParent = 1;
+  // The peer's pruning point. Together with the selected parent this identifies the
+  // chain being offered, so peers offering the same chain collapse to one candidate.
+  Hash pruningPoint = 2;
+  // Repeated from the handshake so a candidate can be rejected on rules alone, without
+  // trusting that the connection was verified elsewhere.
+  bytes genesisHash = 3;
+  bytes consensusParamsId = 4;
+}
+
 message RejectMessage{
   string reason = 1;
 }

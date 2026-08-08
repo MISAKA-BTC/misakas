@@ -25,6 +25,7 @@ pub(crate) mod request_antipast;
 pub(crate) mod request_block_locator;
 pub(crate) mod request_headers;
 pub(crate) mod request_ibd_blocks;
+pub(crate) mod request_ibd_candidate_summary;
 pub(crate) mod request_ibd_chain_block_locator;
 pub(crate) mod request_pp_proof;
 pub(crate) mod request_pruning_point_and_anticone;

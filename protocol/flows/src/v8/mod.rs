@@ -6,6 +6,7 @@ use crate::v7::{
     request_block_locator::RequestBlockLocatorFlow,
     request_headers::RequestHeadersFlow,
     request_ibd_blocks::HandleIbdBlockRequests,
+    request_ibd_candidate_summary::RequestIbdCandidateSummaryFlow,
     request_ibd_chain_block_locator::RequestIbdChainBlockLocatorFlow,
     request_pp_proof::RequestPruningPointProofFlow,
     request_pruning_point_and_anticone::PruningPointAndItsAnticoneRequestsFlow,
@@ -82,6 +83,14 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointProof]),
+            header_format,
+        )),
+        // "Which chain are you on?" — cheap enough to serve to anyone, and the only way a peer
+        // mid-IBD can learn what else is on offer without fetching blocks.
+        Box::new(RequestIbdCandidateSummaryFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestIbdCandidateSummary]),
             header_format,
         )),
         Box::new(RequestIbdChainBlockLocatorFlow::new(

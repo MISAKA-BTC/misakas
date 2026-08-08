@@ -145,3 +145,16 @@ impl TryFrom<protowire::BlockLevelParents> for Vec<BlockHash> {
         item.parent_hashes.into_iter().map(|x| x.try_into()).collect()
     }
 }
+
+impl TryFrom<Versioned<protowire::IbdCandidateSummaryMessage>> for crate::convert::model::ibd_candidate::IbdCandidateSummary {
+    type Error = ConversionError;
+    fn try_from(Versioned(format, msg): Versioned<protowire::IbdCandidateSummaryMessage>) -> Result<Self, Self::Error> {
+        let header = msg.virtual_selected_parent.ok_or(ConversionError::NoneValue)?;
+        Ok(Self {
+            virtual_selected_parent: Versioned(format, header).try_into()?,
+            pruning_point: msg.pruning_point.try_into_ex()?,
+            genesis_hash: msg.genesis_hash,
+            consensus_params_id: msg.consensus_params_id,
+        })
+    }
+}

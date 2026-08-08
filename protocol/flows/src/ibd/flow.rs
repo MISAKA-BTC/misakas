@@ -1,5 +1,5 @@
 use crate::{
-    flow_context::{FlowContext, IbdCandidateHint},
+    flow_context::FlowContext,
     flow_trait::Flow,
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
@@ -113,62 +113,7 @@ impl IbdFlow {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
 
-                        // Report what was passed over while this IBD held the latch, measured
-                        // against the chain we actually landed on.
-                        //
-                        // The latch is still awarded by arrival order, so this is a report on a
-                        // decision already made rather than an input to it. It exists because the
-                        // incident that motivated this work ran for 86 minutes on a lower-blue-work
-                        // branch with a heavier peer connected throughout and produced no log line
-                        // at all: an operator had no way to know a choice had even been made, let
-                        // alone that it had gone the wrong way.
-                        //
-                        // "Offer" is the honest word, not "chain": all that was seen is an inv hash,
-                        // which may be a side block, a merge block, or simply a newer block on the
-                        // chain we just synced. Nothing here identifies a competing branch.
-                        let passed_over = self.ctx.take_ibd_candidate_hints();
-                        if !passed_over.is_empty() {
-                            // Compare against this node's own verified tip rather than the blue work
-                            // claimed by the block that triggered the IBD. That trigger is older than
-                            // everything relayed since, so measuring against it would flag ordinary
-                            // traffic from peers on our own chain as if it were a rival branch.
-                            let session = self.ctx.consensus().session().await;
-                            let tip = session.async_get_headers_selected_tip().await;
-                            let adopted = session.async_get_header(tip).await.ok().map(|h| h.blue_work);
-                            drop(session);
-
-                            let describe = |h: &IbdCandidateHint| match h.header {
-                                Some(c) => format!("{} (offered {}x, blue work {}, {})", h.peer, h.passed_over, c.blue_work, c.hash),
-                                None => format!("{} (offered {}x, never probed, latest {})", h.peer, h.passed_over, h.relay_hash),
-                            };
-                            let ahead: Vec<_> = passed_over
-                                .iter()
-                                .filter(|h| matches!((h.header, adopted), (Some(c), Some(a)) if c.blue_work > a))
-                                .collect();
-
-                            if ahead.is_empty() {
-                                warn!(
-                                    "IBD with {} finished with {} unexamined relay offer(s) from other peers: {}. None claimed to \
-                                     be ahead of the chain this node landed on, but none were compared either — the syncer was \
-                                     chosen by which peer relayed first.",
-                                    self.router,
-                                    passed_over.len(),
-                                    passed_over.iter().map(describe).collect::<Vec<_>>().join(", ")
-                                );
-                            } else {
-                                warn!(
-                                    "IBD with {} landed on a chain with blue work {}, and {} peer(s) were offering MORE the whole \
-                                     time, passed over because that peer relayed first: {}. These are unverified claims and may \
-                                     just be newer blocks on this same chain — but if this node is on the wrong branch, this is \
-                                     what it looks like. Compare its sink against another node before trusting it.",
-                                    self.router,
-                                    adopted.map(|w| w.to_string()).unwrap_or_else(|| "unknown".to_owned()),
-                                    ahead.len(),
-                                    ahead.into_iter().map(describe).collect::<Vec<_>>().join(", ")
-                                );
-                            }
-                        }
-
+                        self.report_unresolved_candidates();
                         self.ctx.finish_ibd_after_success(POST_IBD_CANDIDATE_REVIEW);
                     }
                     Err(e) => {
@@ -176,7 +121,6 @@ impl IbdFlow {
                         // `staging.commit()` runs partway through `ibd()`, so a failure here does not
                         // mean nothing happened — the active consensus may already have been replaced
                         // with a chain whose sync then failed.
-                        self.ctx.take_ibd_candidate_hints();
                         if self.ctx.finish_ibd_after_failure() {
                             warn!(
                                 "IBD with {} failed AFTER the active consensus had already been replaced. This node is now on a \
@@ -190,6 +134,81 @@ impl IbdFlow {
             }
         }
 
+        Ok(())
+    }
+
+    /// Say what was on offer that this node never got to the bottom of.
+    ///
+    /// A candidate still sitting at `Observed` or `SummaryReceived` is one nobody verified: the
+    /// commit barrier could not account for it, so the chain this node is on was not compared
+    /// against it. That is worth saying out loud — the incident this work follows ran for 86
+    /// minutes beside a heavier peer and produced no log line at all.
+    fn report_unresolved_candidates(&self) {
+        let registry = self.ctx.ibd_candidates().read();
+        let unresolved = registry.unresolved();
+        if unresolved.is_empty() {
+            return;
+        }
+        warn!(
+            "IBD with {} finished with {} chain candidate(s) still unverified: {}. Their claims were never backed by a \
+             pruning proof, so this node's chain was not compared against them.",
+            self.router,
+            unresolved.len(),
+            unresolved
+                .iter()
+                .map(|c| format!(
+                    "{} (pruning point {}, {} source(s))",
+                    c.id.virtual_selected_parent,
+                    c.id.pruning_point,
+                    c.sources.len()
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    /// The last check before this node's active consensus is replaced.
+    ///
+    /// `staging.commit()` is the point of no return: after it the old chain's state is gone, the
+    /// new pruning point is adopted, and everything downstream — DNS overlay, validator support —
+    /// follows the branch that was just installed. testnet-22 committed here with a heavier peer
+    /// connected and nothing ever reconsidered.
+    ///
+    /// Two ways this refuses:
+    ///
+    /// - a candidate this node **verified** is strictly better than what staging holds. Verified,
+    ///   not claimed: a peer shouting a large `blue_work` cannot cancel an IBD, or cancelling
+    ///   would be free for anyone willing to lie.
+    /// - a valid candidate exists that nobody could compare. Deciding between them by which peer
+    ///   relayed first is the bug; quarantine and let an operator decide.
+    async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
+        let tip = staging.async_get_headers_selected_tip().await;
+        let staged_work = staging.async_get_header(tip).await?.blue_work;
+
+        let registry = self.ctx.ibd_candidates().read();
+        if let Some(better) = registry.verified_superior_to(staged_work) {
+            let id = better.id;
+            let work = better.verified_blue_work().expect("verified by construction");
+            drop(registry);
+            self.ctx.chain_participation().quarantine();
+            return Err(ProtocolError::OtherOwned(format!(
+                "refusing to commit the chain synced from {}: candidate {} (pruning point {}) has a VALIDATED blue work of {} \
+                 against the staged {}. Committing would adopt the weaker branch purely because its peer relayed first.",
+                self.router, id.virtual_selected_parent, id.pruning_point, work, staged_work
+            )));
+        }
+
+        let unresolved = registry.unresolved().len();
+        drop(registry);
+        if unresolved > 0 {
+            self.ctx.chain_participation().quarantine();
+            return Err(ProtocolError::OtherOwned(format!(
+                "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
+                 verified in time. Choosing by arrival order is what fixes a partition in place; this node is quarantined \
+                 until an operator resolves which branch is canonical.",
+                self.router, unresolved
+            )));
+        }
         Ok(())
     }
 
@@ -247,6 +266,13 @@ impl IbdFlow {
                 let staging = self.ctx.consensus_manager.new_staging_consensus();
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_block).await {
                     Ok(()) => {
+                        // The commit barrier. Everything above this line is reversible by
+                        // cancelling staging; nothing below it is.
+                        if let Err(e) = self.authorize_commit(&staging.session().await).await {
+                            warn!("{}", e);
+                            staging.cancel();
+                            return Err(e);
+                        }
                         spawn_blocking(|| staging.commit()).await.unwrap();
                         // From here the node runs the new chain regardless of what the rest of the
                         // IBD does, so a later failure must not be reported and forgotten.
