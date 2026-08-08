@@ -313,17 +313,17 @@ mod tests {
     use std::net::IpAddr;
     use uuid::Uuid;
 
-    fn peer(n: u8) -> PeerKey {
+    pub(super) fn peer(n: u8) -> PeerKey {
         PeerKey::new(PeerId::new(Uuid::from_u128(n as u128)), IpAddress::new(IpAddr::from([10, 0, 0, n])))
     }
 
-    fn header(tip: u64, blue_work: u64) -> Header {
+    pub(super) fn header(tip: u64, blue_work: u64) -> Header {
         let mut h = Header::from_precomputed_hash(BlockHash::from_u64_word(tip), vec![ORIGIN]);
         h.blue_work = BlueWorkType::from_u64(blue_work);
         h
     }
 
-    fn pp(n: u64) -> BlockHash {
+    pub(super) fn pp(n: u64) -> BlockHash {
         BlockHash::from_u64_word(1000 + n)
     }
 
@@ -486,5 +486,167 @@ mod tests {
 
         r.observe_summary(peer(2), &h, pp(1), now + Duration::from_secs(1));
         assert!(r.get(&id).unwrap().verified_blue_work().is_some(), "a peer must not be able to undo a check by re-offering");
+    }
+}
+
+/// The commit barrier's verdict: may this node replace its active consensus?
+///
+/// Extracted from the flow so the policy can be tested without a consensus, a router, or a peer.
+/// The decision is the security-critical part; fetching the numbers it operates on is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommitVerdict {
+    Allow,
+    /// A chain the operator did not vouch for. Refused before any work comparison.
+    RefuseCheckpointMissing,
+    /// The checkpoint describes rules this build does not run, so it cannot be acted on.
+    RefuseCheckpointParamsMismatch,
+    /// A candidate this node VERIFIED beats what is staged.
+    RefuseVerifiedSuperior {
+        candidate: CandidateId,
+        verified_blue_work: BlueWorkType,
+    },
+    /// Chains are on offer that nobody could verify. Committing would pick by arrival order.
+    RefuseUnresolved {
+        count: usize,
+    },
+}
+
+/// What the barrier knows at the moment of decision.
+pub struct CommitInputs<'a> {
+    /// Blue work of the staged chain's headers-selected tip — computed here, not received.
+    pub staged_blue_work: BlueWorkType,
+    /// Whether the staged chain descends from the operator's checkpoint. `None` when no checkpoint
+    /// is configured.
+    pub descends_from_checkpoint: Option<bool>,
+    /// Whether the configured checkpoint's params id matches this build. `None` when unconfigured.
+    pub checkpoint_params_match: Option<bool>,
+    pub registry: &'a IbdCandidateRegistry,
+}
+
+/// Decide whether the staged chain may become this node's active consensus.
+///
+/// Order matters and is not arbitrary:
+///
+/// 1. **Checkpoint rules, then checkpoint ancestry.** Work is what an attacker manufactures, so
+///    admissibility is settled before quality. A checkpoint about rules this build does not run is
+///    unusable, which is a different failure from a chain that simply lacks it.
+/// 2. **A verified superior candidate.** Verified, never claimed — otherwise cancelling someone
+///    else's IBD costs a liar nothing. Strictly superior, because equal work is not a reason to
+///    abandon a sync already in progress.
+/// 3. **Anything left unverified.** This is the case that fixed testnet-22 in place: a chain was on
+///    offer, nobody compared it, and the node committed anyway because its peer relayed first.
+///    Refusing here is the whole point — silence about a candidate is not evidence against it.
+pub fn decide_commit(inputs: CommitInputs<'_>) -> CommitVerdict {
+    if inputs.checkpoint_params_match == Some(false) {
+        return CommitVerdict::RefuseCheckpointParamsMismatch;
+    }
+    if inputs.descends_from_checkpoint == Some(false) {
+        return CommitVerdict::RefuseCheckpointMissing;
+    }
+    if let Some(better) = inputs.registry.verified_superior_to(inputs.staged_blue_work) {
+        return CommitVerdict::RefuseVerifiedSuperior {
+            candidate: better.id,
+            verified_blue_work: better.verified_blue_work().expect("verified by construction"),
+        };
+    }
+    let unresolved = inputs.registry.unresolved().len();
+    if unresolved > 0 {
+        return CommitVerdict::RefuseUnresolved { count: unresolved };
+    }
+    CommitVerdict::Allow
+}
+
+#[cfg(test)]
+mod commit_barrier_tests {
+    use super::{tests::*, *};
+
+    fn inputs<'a>(staged: u64, registry: &'a IbdCandidateRegistry) -> CommitInputs<'a> {
+        CommitInputs {
+            staged_blue_work: BlueWorkType::from_u64(staged),
+            descends_from_checkpoint: None,
+            checkpoint_params_match: None,
+            registry,
+        }
+    }
+
+    #[test]
+    fn a_clean_sync_with_nothing_else_on_offer_commits() {
+        let r = IbdCandidateRegistry::default();
+        assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::Allow);
+    }
+
+    #[test]
+    fn the_incident_scenario_does_not_commit() {
+        // testnet-22: IBD starts from branch B, and 22 seconds later a peer on the heavier branch A
+        // connects. Under the old code A was discarded unseen and B was committed. Now A is a
+        // candidate nobody managed to verify, and that alone stops the commit.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now + Duration::from_secs(22));
+
+        assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::RefuseUnresolved { count: 1 });
+    }
+
+    #[test]
+    fn a_verified_better_chain_stops_the_commit() {
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        r.set_validation(id, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(900) });
+
+        assert_eq!(
+            decide_commit(inputs(100, &r)),
+            CommitVerdict::RefuseVerifiedSuperior { candidate: id, verified_blue_work: BlueWorkType::from_u64(900) }
+        );
+    }
+
+    #[test]
+    fn a_fake_blue_work_cannot_stop_a_commit() {
+        // The other half of "claims never decide": a liar must not be able to cancel an honest
+        // node's sync either, or stalling the network costs one lie.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let liar = r.observe_summary(peer(9), &header(0xF, u64::MAX), pp(0xF), now);
+        r.set_validation(liar, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+
+        assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::Allow, "a refuted claim blocks nothing");
+    }
+
+    #[test]
+    fn a_verified_worse_or_equal_chain_does_not_stop_the_commit() {
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 100), pp(0xA), now);
+        r.set_validation(id, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(100) });
+
+        assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::Allow, "equal work is not a reason to switch");
+        assert_eq!(decide_commit(inputs(101, &r)), CommitVerdict::Allow);
+    }
+
+    #[test]
+    fn a_chain_without_the_operators_checkpoint_is_refused_before_work_is_considered() {
+        // Admissibility is settled before quality, because work is the thing an attacker can make.
+        let r = IbdCandidateRegistry::default();
+        let mut i = inputs(u64::MAX, &r);
+        i.descends_from_checkpoint = Some(false);
+        assert_eq!(decide_commit(i), CommitVerdict::RefuseCheckpointMissing);
+    }
+
+    #[test]
+    fn a_checkpoint_for_other_rules_is_refused_rather_than_ignored() {
+        let r = IbdCandidateRegistry::default();
+        let mut i = inputs(100, &r);
+        i.checkpoint_params_match = Some(false);
+        i.descends_from_checkpoint = Some(true);
+        assert_eq!(decide_commit(i), CommitVerdict::RefuseCheckpointParamsMismatch);
+    }
+
+    #[test]
+    fn a_checkpoint_that_is_satisfied_gets_out_of_the_way() {
+        let r = IbdCandidateRegistry::default();
+        let mut i = inputs(100, &r);
+        i.checkpoint_params_match = Some(true);
+        i.descends_from_checkpoint = Some(true);
+        assert_eq!(decide_commit(i), CommitVerdict::Allow, "a checkpoint constrains, it does not select");
     }
 }

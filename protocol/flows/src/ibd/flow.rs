@@ -1,6 +1,7 @@
 use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
+    flowcontext::ibd_candidates::{CommitInputs, CommitVerdict, decide_commit},
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
 use futures::future::{Either, join_all, select, try_join_all};
@@ -183,60 +184,58 @@ impl IbdFlow {
     ///   relayed first is the bug; quarantine and let an operator decide.
     async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
         let tip = staging.async_get_headers_selected_tip().await;
-        let staged_work = staging.async_get_header(tip).await?.blue_work;
+        let staged_blue_work = staging.async_get_header(tip).await?.blue_work;
 
-        // The operator's trust root, if they set one. Checked before work, because work is what an
-        // attacker manufactures: a chain that does not contain the checkpoint is not a worse
-        // candidate, it is not a candidate. A node with no chain of its own cannot tell two
-        // internally consistent histories apart, and on a network that has already forked this is
-        // the only thing that can decide which one it may join.
-        if let Some(checkpoint) = self.ctx.config.trusted_checkpoint {
-            let local_params_id = self.ctx.config.params.consensus_params_id();
-            if checkpoint.consensus_params_id != local_params_id {
-                self.ctx.chain_participation().quarantine();
-                return Err(ProtocolError::OtherOwned(format!(
+        // Gather the facts; `decide_commit` applies the policy. Split so the security-critical part
+        // is unit-testable without a consensus, a router, or a peer.
+        let (descends_from_checkpoint, checkpoint_params_match) = match self.ctx.config.trusted_checkpoint {
+            Some(cp) => (
+                Some(staging.async_is_chain_ancestor_of(cp.block_hash, tip).await.unwrap_or(false)),
+                Some(cp.consensus_params_id == self.ctx.config.params.consensus_params_id()),
+            ),
+            None => (None, None),
+        };
+
+        let verdict = {
+            let registry = self.ctx.ibd_candidates().read();
+            decide_commit(CommitInputs { staged_blue_work, descends_from_checkpoint, checkpoint_params_match, registry: &registry })
+        };
+
+        let refusal = match verdict {
+            CommitVerdict::Allow => return Ok(()),
+            CommitVerdict::RefuseCheckpointParamsMismatch => {
+                let cp = self.ctx.config.trusted_checkpoint.expect("set when this verdict is reachable");
+                format!(
                     "--trusted-checkpoint was taken under consensus params {} but this node runs {}. A block hash means \
                      nothing without the rules it was validated under, so this node cannot act on that checkpoint.",
-                    checkpoint.consensus_params_id, local_params_id
-                )));
+                    cp.consensus_params_id,
+                    self.ctx.config.params.consensus_params_id()
+                )
             }
-            let contains = staging.async_is_chain_ancestor_of(checkpoint.block_hash, tip).await.unwrap_or(false);
-            if !contains {
-                self.ctx.chain_participation().quarantine();
-                return Err(ProtocolError::OtherOwned(format!(
+            CommitVerdict::RefuseCheckpointMissing => {
+                let cp = self.ctx.config.trusted_checkpoint.expect("set when this verdict is reachable");
+                format!(
                     "refusing to commit the chain synced from {}: it does not descend from the trusted checkpoint {} at DAA \
-                     {}. This is the history the operator vouched for, so a chain without it is not admissible no matter how \
-                     much work it claims.",
-                    self.router, checkpoint.block_hash, checkpoint.daa_score
-                )));
+                     {}. That is the history this operator vouched for, so a chain without it is not admissible however much \
+                     work it claims.",
+                    self.router, cp.block_hash, cp.daa_score
+                )
             }
-        }
-
-        let registry = self.ctx.ibd_candidates().read();
-        if let Some(better) = registry.verified_superior_to(staged_work) {
-            let id = better.id;
-            let work = better.verified_blue_work().expect("verified by construction");
-            drop(registry);
-            self.ctx.chain_participation().quarantine();
-            return Err(ProtocolError::OtherOwned(format!(
-                "refusing to commit the chain synced from {}: candidate {} (pruning point {}) has a VALIDATED blue work of {} \
-                 against the staged {}. Committing would adopt the weaker branch purely because its peer relayed first.",
-                self.router, id.virtual_selected_parent, id.pruning_point, work, staged_work
-            )));
-        }
-
-        let unresolved = registry.unresolved().len();
-        drop(registry);
-        if unresolved > 0 {
-            self.ctx.chain_participation().quarantine();
-            return Err(ProtocolError::OtherOwned(format!(
+            CommitVerdict::RefuseVerifiedSuperior { candidate, verified_blue_work } => format!(
+                "refusing to commit the chain synced from {}: candidate {} (pruning point {}) has a VALIDATED blue work of \
+                 {} against the staged {}. Committing would adopt the weaker branch purely because its peer relayed first.",
+                self.router, candidate.virtual_selected_parent, candidate.pruning_point, verified_blue_work, staged_blue_work
+            ),
+            CommitVerdict::RefuseUnresolved { count } => format!(
                 "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
-                 verified in time. Choosing by arrival order is what fixes a partition in place; this node is quarantined \
-                 until an operator resolves which branch is canonical.",
-                self.router, unresolved
-            )));
-        }
-        Ok(())
+                 verified in time. Choosing by arrival order is what fixes a partition in place, so this node is \
+                 quarantined until an operator resolves which branch is canonical.",
+                self.router, count
+            ),
+        };
+
+        self.ctx.chain_participation().quarantine();
+        Err(ProtocolError::OtherOwned(refusal))
     }
 
     async fn ibd(&mut self, relay_block: Block) -> Result<(), ProtocolError> {
