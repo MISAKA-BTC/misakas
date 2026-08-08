@@ -154,10 +154,35 @@ impl HandleRelayInvsFlow {
             // the flow's behaviour; it only makes the offer visible to the coordinator.
             if !self.ctx.is_consensus_participation_allowed() && self.ctx.ibd_peer_key() != Some(self.router.key()) {
                 self.ctx.observe_ibd_candidate_peer(self.router.key());
-                if self.ctx.claim_ibd_summary_request(self.router.key())
-                    && let Err(e) = self.request_ibd_candidate_summary().await
-                {
-                    debug!("Could not get a candidate summary from {}: {}", self.router, e);
+                record_stage(
+                    RecoveryStage::CandidateObserved,
+                    None,
+                    None,
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    "participation withheld; this peer has something on offer",
+                );
+                if self.ctx.claim_ibd_summary_request(self.router.key()) {
+                    if let Err(e) = self.request_ibd_candidate_summary().await {
+                        record_stage(
+                            RecoveryStage::Rejected,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            format!("summary request failed: {e}"),
+                        );
+                        debug!("Could not get a candidate summary from {}: {}", self.router, e);
+                    }
+                } else {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        None,
+                        None,
+                        Some(self.router.to_string()),
+                        self.ctx.chain_participation().state().as_str(),
+                        "summary request rate-limited (per-peer cooldown)",
+                    );
                 }
             }
 
@@ -315,7 +340,18 @@ impl HandleRelayInvsFlow {
             self.ctx.chain_participation().state().as_str(),
             "",
         );
-        self.router.enqueue(make_message!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {})).await?;
+        // `make_request!`, not `make_message!`. This flow's `msg_route` subscribes to no payload
+        // types (`router.subscribe(vec![])`) — replies reach it by REQUEST ID, which is how
+        // `request_block` above gets its block back. Sent as a plain message the request carries
+        // BLANK_ROUTE_ID, the peer's reply is addressed to nothing, and the summary is silently
+        // never delivered.
+        //
+        // Which is precisely what the recovery trace showed: SummaryRequested=8, SummaryReceived=0,
+        // and not one rejection. Requests going out, nothing coming back, and no error to explain
+        // it — the signature of a reply with nowhere to go.
+        self.router
+            .enqueue(make_request!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {}, self.msg_route.id()))
+            .await?;
         let msg = dequeue_with_timeout!(self.msg_route, Payload::IbdCandidateSummary, IBD_CANDIDATE_SUMMARY_TIMEOUT)?;
         let summary: IbdCandidateSummary = Versioned(self.header_format, msg).try_into()?;
 
