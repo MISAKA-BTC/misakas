@@ -205,6 +205,18 @@ pub fn diagnosis(expected: RecoveryStage) -> String {
     out
 }
 
+/// Formats a work comparison the way a diagnosis needs to read it.
+pub fn describe_comparison(challenger: BlueWorkType, defender: BlueWorkType) -> String {
+    let verdict = if challenger > defender {
+        "ChallengerStrictlySuperior"
+    } else if challenger == defender {
+        "Equal"
+    } else {
+        "DefenderFavored"
+    };
+    format!("challenger_work={challenger} defender_work={defender} comparison={verdict}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,16 +236,4 @@ mod tests {
     fn attempt_ids_are_distinct() {
         assert_ne!(RecoveryAttemptId::next(), RecoveryAttemptId::next());
     }
-}
-
-/// Formats a work comparison the way a diagnosis needs to read it.
-pub fn describe_comparison(challenger: BlueWorkType, defender: BlueWorkType) -> String {
-    let verdict = if challenger > defender {
-        "ChallengerStrictlySuperior"
-    } else if challenger == defender {
-        "Equal"
-    } else {
-        "DefenderFavored"
-    };
-    format!("challenger_work={challenger} defender_work={defender} comparison={verdict}")
 }

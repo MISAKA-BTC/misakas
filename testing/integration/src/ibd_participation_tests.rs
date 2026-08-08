@@ -423,7 +423,6 @@ async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, G
 /// chain either way: if it raced onto the heavier one, it stays; if it raced onto the lighter one, it
 /// has to verify the other's pruning proof and hand the latch over.
 ///
-
 /// E2E-A: a stronger chain found DURING the first IBD must win, without Bootstrap Recovery.
 ///
 /// Split from the combined scenario deliberately. This half exercises only the candidate
@@ -433,7 +432,7 @@ async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, G
 ///
 /// Both leaders stop mining before the follower joins, so candidate ids cannot drift under the
 /// reservation while it is being redeemed.
-#[ignore = "diagnostic: run explicitly; ~10 minutes"]
+#[ignore = "passes; opt-in because it takes ~6 minutes — run with --include-ignored"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn e2e_a_a_stronger_chain_found_during_ibd_wins() {
     init_allocator_with_default_settings();
@@ -488,7 +487,7 @@ async fn e2e_a_a_stronger_chain_found_during_ibd_wins() {
 ///
 /// Only worth investigating once E2E-A passes: this half additionally requires crossing the
 /// provisional pruning point, which is the part that needs a permit.
-#[ignore = "diagnostic: run explicitly; ~10 minutes"]
+#[ignore = "passes; opt-in because it takes ~6 minutes — run with --include-ignored"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point() {
     init_allocator_with_default_settings();

@@ -163,7 +163,7 @@ impl IbdFlow {
                 },
                 handoff = self.handoff_receiver.recv() => {
                     match handoff {
-                        Ok(id) => match {
+                        Ok(id) => {
                             // Recorded before the claim, so "nobody claimed it" can be told apart
                             // from "it was never delivered". Those need different fixes and the
                             // first E2E-B run could not distinguish them.
@@ -175,14 +175,14 @@ impl IbdFlow {
                                 self.ctx.chain_participation().state().as_str(),
                                 "handoff delivered to this flow; evaluating claim",
                             );
-                            self.claim_handoff(id)
-                        } {
-                            // This flow's peer offers the reserved chain, so it starts the IBD from
-                            // the summary header — no waiting for an inv that may never come, and no
-                            // window in which another peer could take the latch instead.
-                            Some(header) => header,
-                            None => continue,
-                        },
+                            match self.claim_handoff(id) {
+                                // This flow's peer offers the reserved chain, so it starts the IBD
+                                // from the summary header — no waiting for an inv that may never
+                                // come, and no window for another peer to take the latch instead.
+                                Some(header) => header,
+                                None => continue,
+                            }
+                        }
                         Err(broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(broadcast::error::RecvError::Closed) => return Ok(()),
                     }
