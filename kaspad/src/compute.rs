@@ -17,6 +17,20 @@
 //! costs *other* validators their credit, while an executor that goes quiet costs only itself.
 //! The cycle therefore serves the verifier queue first.
 //!
+//! # Jobs are self-originated, and that is why only one role is paid
+//!
+//! There is no external party submitting work: a validator supplies its own input
+//! (`--compute-prompt`) and is credited for computing it. §6's "Job fee" therefore has nobody to
+//! collect it from and nobody to pay it — it is not missing, it does not apply.
+//!
+//! What follows from that is the shape of the incentives, and it explains why the §6 audit fee
+//! exists but no matching execution reward does. Executing is **self-interested**: it costs GPU
+//! time and two overlay transactions, and it buys this validator voting weight. Verifying is
+//! **not**: it costs a full replay and a transaction, and everything it produces accrues to the
+//! executor being audited. Only the second needs paying, and paying the first would contradict §7
+//! anyway — "Reward の配分は投票 weight の定義と分離する". An executor's income is the ordinary
+//! validator participation reward it earns by attesting, exactly like every other operator.
+//!
 //! # Why an unregistered runtime disables the whole role
 //!
 //! A node whose runtime is not the consensus-registered build mints nothing (the model table
