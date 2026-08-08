@@ -26,3 +26,8 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# MISAKA: the devnet-only deterministic compute runtime that matches the consensus fixture
+# profile. Never in a release build.
+devnet-vlt-fixture = ["kaspa-consensus-core/devnet-vlt-fixture"]

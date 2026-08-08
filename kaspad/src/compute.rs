@@ -50,7 +50,9 @@ use kaspa_consensus_core::vlt::{
 };
 use kaspa_core::{info, warn};
 use kaspa_hashes::Hash64;
-use misaka_palw::{ComputeRuntime, MatchProjection, MockRuntime, PalwError, PalwWorkerConfig, PalwWorkerRuntime};
+#[cfg(not(feature = "devnet-vlt-fixture"))]
+use misaka_palw::MockRuntime;
+use misaka_palw::{ComputeRuntime, MatchProjection, PalwError, PalwWorkerConfig, PalwWorkerRuntime};
 
 const COMPUTE: &str = "validator-compute";
 
@@ -139,7 +141,7 @@ impl ComputeRole {
     /// `vlt` is the network's VLT parameters; the model table is what decides whether the runtime
     /// this node is actually running is one consensus knows about. On every shipped preset that
     /// table is empty, so this returns `None` and the role stays dormant without any flag saying so.
-    pub fn new(cfg: &ComputeConfig, vlt: Option<&VltParams>) -> Option<Self> {
+    pub fn new(cfg: &ComputeConfig, vlt: Option<&VltParams>, genesis_hash: Hash64) -> Option<Self> {
         if !cfg.enabled {
             return None;
         }
@@ -154,7 +156,23 @@ impl ComputeRole {
                 work_dir: cfg.work_dir.clone(),
                 timeout: cfg.timeout,
             })),
+            // MISAKA devnet fixture: a deterministic executor whose identity is the one this
+            // network's own preset registered. It is chosen only when no real worker was given —
+            // an explicit `--compute-worker` always means the operator wants the real thing — and
+            // it only *works* where the fixture profile is registered, which is the devnet preset
+            // alone. On any other network the table lookup below finds nothing and the role stays
+            // disabled, so the feature flag is not the only thing standing between this and
+            // production.
+            #[cfg(feature = "devnet-vlt-fixture")]
             None => {
+                warn!(
+                    "[{COMPUTE}] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered."
+                );
+                Arc::new(misaka_palw::DevnetFixtureRuntime::new(genesis_hash))
+            }
+            #[cfg(not(feature = "devnet-vlt-fixture"))]
+            None => {
+                let _ = genesis_hash;
                 warn!("[{COMPUTE}] --enable-compute set without --compute-worker; the mock runtime cannot be the registered profile");
                 Arc::new(MockRuntime::default())
             }
@@ -444,10 +462,10 @@ mod tests {
         vlt.model_cost_table = kaspa_consensus_core::vlt::ModelCostTable::palw_qwen36_metal();
         // No worker binary ⇒ the mock, which never claims the registered identity.
         let cfg = ComputeConfig { enabled: true, ..Default::default() };
-        assert!(ComputeRole::new(&cfg, Some(&vlt)).is_none());
+        assert!(ComputeRole::new(&cfg, Some(&vlt), Hash64::from_u64_word(7)).is_none());
         // Disabled by flag, and on a network with no overlay at all.
-        assert!(ComputeRole::new(&ComputeConfig::default(), Some(&vlt)).is_none());
-        assert!(ComputeRole::new(&cfg, None).is_none());
+        assert!(ComputeRole::new(&ComputeConfig::default(), Some(&vlt), Hash64::from_u64_word(7)).is_none());
+        assert!(ComputeRole::new(&cfg, None, Hash64::from_u64_word(7)).is_none());
     }
 
     /// An empty model table — every shipped preset — leaves the role dormant without any flag
@@ -455,7 +473,7 @@ mod tests {
     #[test]
     fn an_empty_model_table_leaves_the_role_disabled() {
         let cfg = ComputeConfig { enabled: true, ..Default::default() };
-        assert!(ComputeRole::new(&cfg, Some(&VltParams::INERT)).is_none());
+        assert!(ComputeRole::new(&cfg, Some(&VltParams::INERT), Hash64::from_u64_word(7)).is_none());
         assert!(VltParams::INERT.model_cost_table.live().is_empty(), "the shipped presets register no model");
     }
 }

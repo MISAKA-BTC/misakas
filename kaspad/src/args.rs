@@ -368,10 +368,16 @@ impl Args {
                      and must ship in a release, not a command line."
                 );
             }
+            // The genesis hash goes in because the devnet fixture profile is derived from it: the
+            // fixture of one network is not the fixture of another, so a fixture certificate is
+            // meaningless anywhere but the devnet it was built for — a constraint that holds even
+            // if the feature flag were somehow on in the wrong build.
+            let genesis_hash = config.params.genesis.hash;
             let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_vlt_devnet(
                 shadow_daa,
                 self.vlt_devnet_credit_window_epochs,
                 self.vlt_shadow_only,
+                genesis_hash,
             );
             // Fail loudly rather than let the node start into a configuration `update_dns_state`
             // would silently refuse to leave Bootstrap for.

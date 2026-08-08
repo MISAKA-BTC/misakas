@@ -361,7 +361,12 @@ impl ValidatorService {
             .map_or(ATTESTATION_TX_FEE_FLOOR_SOMPI, |k| k.estimate_attestation_fee(&mass_calculator, config.address_prefix));
         // The compute role resolves (and logs) at startup so a misconfigured runtime surfaces
         // before the first job rather than at the first sortition.
-        let compute = ComputeRole::new(&config.compute, config.vlt.as_ref());
+        let compute = {
+            // `network_id` is the per-network genesis hash (ADR-0009 Addendum A.3), which is what
+            // the devnet fixture profile is derived from.
+            let genesis_hash = Hash64::try_from(config.network_id.as_slice()).unwrap_or_default();
+            ComputeRole::new(&config.compute, config.vlt.as_ref(), genesis_hash)
+        };
         Self {
             config,
             consensus_manager,

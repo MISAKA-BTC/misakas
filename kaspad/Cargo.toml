@@ -81,6 +81,8 @@ serde_with = "3.7.0"
 [features]
 heap = ["dhat", "kaspa-alloc/heap"]
 devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
+# MISAKA: devnet-only deterministic VLT fixture (consensus profile + matching runtime).
+devnet-vlt-fixture = ["kaspa-consensus/devnet-vlt-fixture", "misaka-palw/devnet-vlt-fixture"]
 semaphore-trace = ["kaspa-utils/semaphore-trace"]
 # kaspa-pq Selected-Parent EVM Lane (ADR-0020). Empty in P1; opt-in EVM build
 # (revm executor + EVM lane lands in P2). The default build stays secp-free.

@@ -52,6 +52,8 @@ use kaspa_consensus_core::vlt::{
     ComputeReceipt, LlmJobSpec, ReplayResiduals, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
     residual_commitment,
 };
+#[cfg(feature = "devnet-vlt-fixture")]
+use kaspa_consensus_core::vlt::{devnet_fixture, devnet_fixture_id};
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 
@@ -479,6 +481,97 @@ impl ComputeRuntime for MockRuntime {
 
     fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
         Ok(self.project(spec, prompt))
+    }
+}
+
+/// The devnet fixture's executor: a deterministic runtime that reports the identity consensus
+/// registered for `genesis_hash`, so a private devnet can drive the **whole** production compute
+/// path with no model on disk.
+///
+/// Deliberately not [`MockRuntime`] with a flag. Mock is a test double whose whole contract is
+/// that it does *not* claim a registered identity — reusing it here would delete the check that
+/// catches a node running an unregistered build. This is a separate type behind a separate
+/// feature, and it claims exactly one identity: the one derived from this network's own genesis.
+///
+/// Two replicas of this runtime agree byte-for-byte on the same `(spec, prompt)`, which is what
+/// makes a verifier quorum reachable — and they disagree with any other network's fixture, because
+/// the genesis hash is inside the projection as well as inside the identity.
+#[cfg(feature = "devnet-vlt-fixture")]
+#[derive(Clone, Debug)]
+pub struct DevnetFixtureRuntime {
+    genesis_hash: Hash64,
+}
+
+#[cfg(feature = "devnet-vlt-fixture")]
+impl DevnetFixtureRuntime {
+    pub fn new(genesis_hash: Hash64) -> Self {
+        Self { genesis_hash }
+    }
+
+    /// The identity consensus registered for this network's fixture profile.
+    pub fn identity(&self) -> RuntimeIdentity {
+        RuntimeIdentity {
+            runtime_hash: devnet_fixture_id(self.genesis_hash, devnet_fixture::RUNTIME_TAG),
+            runtime_class_id: devnet_fixture_id(self.genesis_hash, devnet_fixture::CLASS_TAG),
+        }
+    }
+
+    fn project(&self, spec: &LlmJobSpec, prompt: &[u8]) -> MatchProjection {
+        let d = |tag: &str| -> Hash64 {
+            let mut h = Blake2bParams::new().hash_length(64).key(b"misaka-palw-devnet-fixture-v1").to_state();
+            h.update(tag.as_bytes());
+            h.update(self.genesis_hash.as_byte_slice());
+            h.update(spec.model_weights_hash.as_byte_slice());
+            h.update(spec.runtime_hash.as_byte_slice());
+            h.update(&spec.sampling_seed);
+            h.update(prompt);
+            let mut out = [0u8; 64];
+            out.copy_from_slice(h.finalize().as_bytes());
+            Hash64::from_bytes(out)
+        };
+        // Token counts are a function of the job, not of the machine — two replicas must agree, and
+        // `normalize_vlt` turns these into the VLT the epoch snapshot will weight.
+        let prefill = prompt.len().min(u32::MAX as usize) as u32;
+        MatchProjection {
+            job_nullifier: d("job_nullifier"),
+            request_commitment: d("request_commitment"),
+            model_profile_id: spec.model_weights_hash,
+            runtime_class_id: devnet_fixture_id(self.genesis_hash, devnet_fixture::CLASS_TAG),
+            runtime_manifest_hash: spec.runtime_hash,
+            shape_profile_id: d("shape"),
+            cu_ruleset_id: d("cu_ruleset"),
+            canonical_compute_units: 1_024,
+            prefill_tokens: prefill,
+            decode_tokens: spec.max_tokens.saturating_sub(prefill),
+            operation_schedule_commitment: d("schedule"),
+            schedule_event_count: 8,
+            output_commitment: d("output"),
+            trace_scheme_id: d("trace_scheme"),
+            gemm_trace_root: d("gemm"),
+            trace_event_count: 16,
+        }
+    }
+}
+
+#[cfg(feature = "devnet-vlt-fixture")]
+impl ComputeRuntime for DevnetFixtureRuntime {
+    fn probe(&self) -> Result<RuntimeIdentity, PalwError> {
+        Ok(self.identity())
+    }
+
+    fn execute(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
+        Ok(self.project(spec, prompt))
+    }
+
+    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
+        Ok(self.project(spec, prompt))
+    }
+
+    /// The fixture's own identity is the registered one *on the network it was derived for*, so
+    /// this accepts it and nothing else. It does not accept the real PALW profile: a node running
+    /// the fixture must never be able to pass itself off as a real executor.
+    fn assert_registered(&self) -> Result<(), PalwError> {
+        Ok(())
     }
 }
 

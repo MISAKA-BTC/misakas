@@ -1031,6 +1031,75 @@ pub fn derive_model_weights_hash(
     Hash64::from_bytes(out)
 }
 
+/// Keyed BLAKE2b-512 domain for the devnet VLT fixture's identities.
+#[cfg(feature = "devnet-vlt-fixture")]
+pub const DEVNET_FIXTURE_KEY: &[u8] = b"misaka-vlt-devnet-fixture-v1";
+
+/// A deterministic compute profile for a **private devnet**, so the BFT half of this design can be
+/// exercised without a 24 GB model on disk.
+///
+/// The point is not to skip the compute path — it is to run the *whole* production path
+/// (commitment → certificate → verifier quorum → challenge maturity → credit → epoch snapshot)
+/// with only the executor backend replaced by something reproducible. Handing consensus a VLT
+/// number directly would test none of it.
+///
+/// # Why it cannot escape a devnet
+///
+/// Three independent constraints, because a test hatch that only had one would eventually be
+/// found propped open:
+///
+/// 1. `#[cfg(feature = "devnet-vlt-fixture")]` — absent from a release build entirely.
+/// 2. **The genesis hash is in the derivation.** The profile's `(h_M, h_R)` are a function of the
+///    network's own genesis, so the devnet fixture profile is a different profile on every
+///    network and simply does not exist as a value on mainnet.
+/// 3. **Registration is per-preset.** Only `DnsParams::with_vlt_devnet` — devnet/simnet only,
+///    refused on a public network by `Args::apply_to_config` — puts it in a `ModelCostTable`. A
+///    certificate naming an unregistered `(h_M, h_R)` mints zero (`VltRejection::UnregisteredModel`),
+///    so even a fixture-enabled binary pointed at mainnet credits nothing.
+///
+/// Any one of the three would do. Together they mean the hatch has to be opened deliberately, at
+/// build time, at genesis time, and in a preset — which is the standard a test-only path should be
+/// held to when the alternative is it quietly going into production.
+#[cfg(feature = "devnet-vlt-fixture")]
+pub mod devnet_fixture {
+    /// Cost per reference token. `1.0` — the fixture exists to make weights *predictable*, not to
+    /// model a real model's economics.
+    pub const RHO_MICRO: u64 = super::VLT_MICRO as u64;
+    /// Small enough that a job is instant and large enough that `normalize_vlt` mints a non-zero,
+    /// easily-reasoned-about amount.
+    pub const MAX_TOKENS: u32 = 256;
+    pub const MODEL_TAG: &str = "model";
+    pub const RUNTIME_TAG: &str = "runtime";
+    pub const CLASS_TAG: &str = "class";
+}
+
+/// Derive one of the fixture's three identities for `genesis_hash`.
+///
+/// The genesis hash is mixed in so the fixture profile of one network is not the fixture profile
+/// of another — the constraint that makes a fixture certificate meaningless off the devnet it was
+/// built for, independently of any feature flag.
+#[cfg(feature = "devnet-vlt-fixture")]
+pub fn devnet_fixture_id(genesis_hash: Hash64, tag: &str) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(DEVNET_FIXTURE_KEY).to_state();
+    hasher.update(genesis_hash.as_byte_slice());
+    hasher.update(tag.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The devnet fixture's registrable [`ModelCostEntry`] for `genesis_hash`.
+#[cfg(feature = "devnet-vlt-fixture")]
+pub fn devnet_fixture_entry(genesis_hash: Hash64) -> ModelCostEntry {
+    ModelCostEntry {
+        model_weights_hash: devnet_fixture_id(genesis_hash, devnet_fixture::MODEL_TAG),
+        runtime_hash: devnet_fixture_id(genesis_hash, devnet_fixture::RUNTIME_TAG),
+        runtime_class_id: devnet_fixture_id(genesis_hash, devnet_fixture::CLASS_TAG),
+        rho_micro: devnet_fixture::RHO_MICRO,
+        max_tokens: devnet_fixture::MAX_TOKENS,
+    }
+}
+
 /// `h_R` — the exact inference runtime build: upstream commit, applied patch, build number, and
 /// the build profile. Corresponds to PALW's `runtime_manifest_hash` role in `MatchProjectionV1`.
 pub fn derive_runtime_hash(commit: &str, patch_sha256_hex: &str, build_number: u64, build_profile: &str) -> Hash64 {
@@ -1242,6 +1311,15 @@ impl ModelCostTable {
         let mut table = Self::EMPTY;
         table.len = 1;
         table.entries[0] = palw_qwen36_metal_entry();
+        table
+    }
+
+    /// A table holding only the devnet fixture profile for `genesis_hash`.
+    #[cfg(feature = "devnet-vlt-fixture")]
+    pub fn devnet_fixture(genesis_hash: Hash64) -> Self {
+        let mut table = Self::EMPTY;
+        table.len = 1;
+        table.entries[0] = devnet_fixture_entry(genesis_hash);
         table
     }
 
@@ -2461,6 +2539,58 @@ mod tests {
         assert_ne!(base.commitment_root(), VltEpochSnapshot::pinned(h64(1), 101, credits(2, 500)).commitment_root());
         // "No credit" and "no snapshot" stay distinguishable.
         assert_ne!(VltEpochSnapshot::inert().commitment_root(), Hash64::default());
+    }
+
+    /// The devnet fixture must be devnet-shaped by *construction*, not by convention.
+    ///
+    /// The feature flag is the outermost of three constraints and the least interesting: a flag is
+    /// a thing someone can turn on. The two that survive a mistake are here — the profile is a
+    /// function of the network's own genesis, so it differs per network and exists as a value
+    /// nowhere else; and it is not the real PALW profile, so a fixture executor cannot pass itself
+    /// off as a real one (nor vice versa).
+    #[cfg(feature = "devnet-vlt-fixture")]
+    #[test]
+    fn devnet_fixture_is_bound_to_its_own_genesis() {
+        let devnet = h64(0x11);
+        let other = h64(0x22);
+        let a = devnet_fixture_entry(devnet);
+        let b = devnet_fixture_entry(other);
+
+        // Same network ⇒ same profile, or two honest replicas could not agree.
+        assert_eq!(a, devnet_fixture_entry(devnet));
+        // Different network ⇒ every identity differs, so a certificate minted against one
+        // network's fixture names a profile the other has never registered.
+        assert_ne!(a.model_weights_hash, b.model_weights_hash);
+        assert_ne!(a.runtime_hash, b.runtime_hash);
+        assert_ne!(a.runtime_class_id, b.runtime_class_id);
+
+        // And it is nobody's real profile: a fixture node cannot be mistaken for a PALW executor.
+        let palw = palw_qwen36_metal_entry();
+        assert_ne!(a.model_weights_hash, palw.model_weights_hash);
+        assert_ne!(a.runtime_hash, palw.runtime_hash);
+        assert_ne!(a.runtime_class_id, palw.runtime_class_id, "a fixture must never share a determinism class with the real runtime");
+
+        // The devnet table holds the fixture and nothing else, so a real PALW executor pointed at
+        // this devnet finds its own profile unregistered and mints zero.
+        let table = ModelCostTable::devnet_fixture(devnet);
+        assert_eq!(table.live(), &[a]);
+        assert!(table.lookup(palw.model_weights_hash, palw.runtime_hash).is_none());
+        assert!(table.lookup(a.model_weights_hash, a.runtime_hash).is_some());
+        // The other network's fixture is equally unregistered here.
+        assert!(table.lookup(b.model_weights_hash, b.runtime_hash).is_none());
+    }
+
+    /// The shipped presets never carry the fixture, feature or no feature. This is the assertion
+    /// that would fail if the hatch were ever wired into a public preset by accident.
+    #[cfg(feature = "devnet-vlt-fixture")]
+    #[test]
+    fn no_shipped_preset_registers_the_fixture() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in
+            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
+        {
+            assert!(p.vlt.model_cost_table.live().is_empty(), "{name} ships with an empty model table");
+        }
     }
 
     #[test]

@@ -1383,12 +1383,24 @@ impl DnsParams {
     ///
     /// **Devnet and simnet only.** These are consensus fences: on a public network they belong to
     /// a release, not to whoever started the node. The caller enforces that.
-    pub fn with_vlt_devnet(mut self, shadow_daa: u64, credit_window_epochs: u32, shadow_only: bool) -> Self {
+    pub fn with_vlt_devnet(mut self, shadow_daa: u64, credit_window_epochs: u32, shadow_only: bool, genesis_hash: Hash64) -> Self {
+        // With the fixture feature the devnet registers ONLY the fixture profile, derived from
+        // this network's own genesis — so a fixture certificate names a profile that exists on no
+        // other network, and a real PALW executor pointed here would find its own profile
+        // unregistered. Without the feature the devnet registers the real PALW profile, which is
+        // what an actual model-running devnet wants.
+        #[cfg(feature = "devnet-vlt-fixture")]
+        let model_cost_table = crate::vlt::ModelCostTable::devnet_fixture(genesis_hash);
+        #[cfg(not(feature = "devnet-vlt-fixture"))]
+        let model_cost_table = {
+            let _ = genesis_hash;
+            crate::vlt::ModelCostTable::palw_qwen36_metal()
+        };
         self.vlt = VltParams {
             vlt_shadow_activation_daa_score: shadow_daa,
             vlt_activation_daa_score: u64::MAX,
             credit_window_epochs,
-            model_cost_table: crate::vlt::ModelCostTable::palw_qwen36_metal(),
+            model_cost_table,
             ..self.vlt
         };
         let soak = self.vlt_credit_span();
@@ -7783,7 +7795,7 @@ mod tests {
     fn vlt_devnet_switch_produces_a_network_that_can_actually_finalize() {
         use crate::config::params::GENESIS_ACTIVE_DNS_PARAMS;
         let base = GENESIS_ACTIVE_DNS_PARAMS;
-        let devnet = base.clone().with_vlt_devnet(200, 8, false);
+        let devnet = base.clone().with_vlt_devnet(200, 8, false, Hash64::from_u64_word(1));
 
         assert!(devnet.vlt_params_consistent(), "the switch must not produce a Bootstrap-forever network");
         assert_eq!(devnet.vlt.vlt_shadow_activation_daa_score, 200);
@@ -7802,12 +7814,12 @@ mod tests {
 
         // K is what makes a devnet's soak minutes rather than tens of minutes, and it must move
         // both the fence gap and the walk together.
-        let slower = base.clone().with_vlt_devnet(200, 96, false);
+        let slower = base.clone().with_vlt_devnet(200, 96, false, Hash64::from_u64_word(1));
         assert!(slower.vlt_credit_span() > devnet.vlt_credit_span());
         assert!(slower.vlt_params_consistent());
 
         // Shadow Mode: the overlay runs, the vote never moves.
-        let shadow = base.clone().with_vlt_devnet(200, 8, true);
+        let shadow = base.clone().with_vlt_devnet(200, 8, true, Hash64::from_u64_word(1));
         assert!(shadow.vlt_shadow_active_at(200));
         assert!(!shadow.vlt_weighting_active_at(u64::MAX - 1), "the weight fence stays dormant");
         assert!(shadow.vlt_params_consistent(), "and a dormant weight fence is trivially consistent");
