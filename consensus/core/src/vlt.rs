@@ -1254,9 +1254,39 @@ impl ModelCostTable {
 ///
 /// Carried inside [`crate::dns_finality::DnsParams`] so it inherits the same
 /// `Option` gating the rest of the overlay has, and fenced independently by
-/// [`Self::vlt_activation_daa_score`].
+/// [`Self::vlt_shadow_activation_daa_score`] and [`Self::vlt_activation_daa_score`].
+///
+/// # Two fences, because activation is two different risks
+///
+/// Turning the compute overlay on and handing it the vote are separate decisions with
+/// separate failure modes, and one fence could not express that. Everything the overlay
+/// *does* — crediting certificates, drawing committees, paying the audit fee, slashing a
+/// settled challenge, filling the credit accumulator — runs at and above the **shadow**
+/// fence, while finality keeps running on bonded stake exactly as before. Only at and above
+/// the **weight** fence does `W_i(E) = min{C_i(E), λ·B_i(E)}` become voting power.
+///
+/// The gap between them is not slack, it is the soak: `C_i(E)` sums a `credit_window_epochs`
+/// window, so a network that flipped both fences at once would switch its voting power to a
+/// table that is still empty — `W(E) = 0`, no epoch reaches quorum, DNS finality stops on the
+/// spot. [`crate::dns_finality::DnsParams::vlt_params_consistent`] requires the weight fence
+/// to sit at least one full credit window above the shadow fence, so that failure is a preset
+/// error caught before launch rather than a stall discovered afterwards.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct VltParams {
+    /// DAA score at which the compute overlay starts **running but not voting**: certificates
+    /// are credited into `X_i(e)`, committees are drawn, verdicts are counted and paid the
+    /// [`Self::audit_fee_sompi`], a settled challenge slashes the side that lost, and the
+    /// credit accumulator fills. Finality still runs on bonded stake and the φS graded rule, so
+    /// nothing here can stall it.
+    ///
+    /// This is a consensus change of its own — it moves coinbase value and it slashes bonds —
+    /// so moving it is a hard fork. That is the point of having it: it is the hard fork whose
+    /// blast radius excludes finality, taken first, so the mesh can produce and police real
+    /// verified compute before anything depends on the result.
+    ///
+    /// `u64::MAX` (inert) on every shipped preset.
+    pub vlt_shadow_activation_daa_score: u64,
+
     /// DAA score at which voting weight switches from bonded stake to
     /// `W_i(E) = min{C_i(E), λ·B_i(E)}`, and the epoch credit switches from the φS
     /// graded floor to the §4 `Q(E) = ⌊2W(E)/3⌋ + 1` quorum.
@@ -1265,7 +1295,9 @@ pub struct VltParams {
     /// byte-identical to the pre-VLT stake-weighted behaviour. Activating it is a
     /// hard fork and must be coordinated across the mesh — and must not be scheduled
     /// before the active set can actually produce verified compute, since with no VLT
-    /// every `W_i(E)` is 0, `W(E)` is 0, and no epoch can reach quorum.
+    /// every `W_i(E)` is 0, `W(E)` is 0, and no epoch can reach quorum. Running above
+    /// [`Self::vlt_shadow_activation_daa_score`] for a full credit window first is what
+    /// turns that from a hope into an observation.
     ///
     /// [`Self::min_network_compute`] is the graded form of that same warning: a network above the
     /// fence but below `W_min` does not finalize on the compute dimension either, and falls back
@@ -1393,6 +1425,7 @@ impl VltParams {
     /// network moves its fence — see [`RECOMMENDED_*`](Self::RECOMMENDED_NOTE) on the
     /// individual fields for the reasoning.
     pub const INERT: Self = Self {
+        vlt_shadow_activation_daa_score: u64::MAX,
         vlt_activation_daa_score: u64::MAX,
         // K = 96 epochs. At the shipped `attestation_epoch_length_blue_score = 100`
         // and ~10 bps this is ~16 minutes of compute history — long enough that a
@@ -1453,8 +1486,20 @@ impl VltParams {
     /// Doc anchor for the [`Self::INERT`] calibration rationale.
     pub const RECOMMENDED_NOTE: () = ();
 
-    /// Whether the overlay's VLT weighting is live at `daa_score`.
-    pub fn is_active_at(&self, daa_score: u64) -> bool {
+    /// Whether the compute overlay is **running** at `daa_score` — certificates credited,
+    /// committees drawn, verdicts paid, challenges adjudicated, accumulator filling. Says nothing
+    /// about who votes; see [`Self::weight_active_at`] for that.
+    pub fn shadow_active_at(&self, daa_score: u64) -> bool {
+        daa_score >= self.vlt_shadow_activation_daa_score
+    }
+
+    /// Whether verified compute is the **voting weight** at `daa_score`.
+    ///
+    /// Implies [`Self::shadow_active_at`] on any preset that passes
+    /// [`crate::dns_finality::DnsParams::vlt_params_consistent`], which requires the weight fence
+    /// to sit above the shadow fence. It is not enforced here, because a param-shape predicate
+    /// that silently rewrote a misordered preset would hide exactly the error worth catching.
+    pub fn weight_active_at(&self, daa_score: u64) -> bool {
         daa_score >= self.vlt_activation_daa_score
     }
 
@@ -1471,7 +1516,14 @@ impl VltParams {
     ///   new: the opposite of §4.
     /// * verifier committee / confirmation counts inconsistent, or zero confirmations
     ///   (which would accept an unverified receipt as VLT).
+    /// * the shadow fence above the weight fence — the vote would switch to an overlay that is
+    ///   not running yet.
     pub fn is_coherent(&self) -> Result<(), &'static str> {
+        if self.vlt_shadow_activation_daa_score > self.vlt_activation_daa_score {
+            return Err(
+                "vlt_shadow_activation_daa_score must be <= vlt_activation_daa_score (weight cannot switch before the overlay runs)",
+            );
+        }
         if self.credit_delay_epochs == 0 {
             return Err("credit_delay_epochs must be >= 1 (§8.3: same-fork compute must not weight its own fork)");
         }
@@ -2090,8 +2142,10 @@ mod tests {
     #[test]
     fn inert_params_are_dormant_but_coherent() {
         assert_eq!(VltParams::INERT.vlt_activation_daa_score, u64::MAX);
-        assert!(!VltParams::INERT.is_active_at(u64::MAX - 1));
-        assert!(VltParams::INERT.is_active_at(u64::MAX));
+        assert_eq!(VltParams::INERT.vlt_shadow_activation_daa_score, u64::MAX, "the overlay ships dormant, not merely powerless");
+        assert!(!VltParams::INERT.weight_active_at(u64::MAX - 1));
+        assert!(VltParams::INERT.weight_active_at(u64::MAX));
+        assert!(!VltParams::INERT.shadow_active_at(u64::MAX - 1));
         // The shipped calibration must be usable the moment a network moves its fence.
         VltParams::INERT.is_coherent().expect("shipped preset must be coherent");
         // No registered model => every job mints zero, so a fence moved by accident

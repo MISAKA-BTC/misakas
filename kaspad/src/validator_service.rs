@@ -755,10 +755,20 @@ impl ValidatorService {
         let session = self.consensus_manager.consensus().session().await;
         let status = session.async_get_compute_status(key.validator_id, bond_outpoint).await;
         drop(session);
-        let Some(status) = status.filter(|s| s.vlt_active) else {
-            trace!("[{VALIDATOR}] compute: VLT weighting is not active at the sink; nothing to do");
+        // Keyed on the SHADOW fence, not the weight fence. The soak between them is precisely the
+        // interval in which this node has to commit, execute, audit and certify for real — that is
+        // what fills `C_i(E)` — while finality is still stake-weighted. Waiting for the weight
+        // fence would leave the credit table empty at the moment the vote moves onto it.
+        let Some(status) = status.filter(|s| s.shadow_active) else {
+            trace!("[{VALIDATOR}] compute: the compute overlay is not live at the sink; nothing to do");
             return;
         };
+        if !status.vlt_active {
+            trace!(
+                "[{VALIDATOR}] compute: overlay live at DAA {} but voting weight is still bonded stake (soak) — producing credit anyway",
+                status.sink_daa_score
+            );
+        }
         let now_daa = status.sink_daa_score;
 
         // (1) Keep the capability declaration live.

@@ -1110,7 +1110,7 @@ impl DnsParams {
     /// reward-split stage is: the construction and validation paths must select the same rule for
     /// the same block, or they would disagree on whether an epoch is credited.
     pub fn epoch_credit_rule(&self, daa_score: u64) -> EpochCreditRule {
-        if self.vlt.is_active_at(daa_score) {
+        if self.vlt.weight_active_at(daa_score) {
             EpochCreditRule::BftQuorum { min_network_compute: self.vlt.min_network_compute }
         } else {
             EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
@@ -1120,8 +1120,26 @@ impl DnsParams {
     /// Whether VLT-weighted voting is live at `daa_score` — i.e. whether the weight fed to the
     /// tally is verified compute rather than bonded stake. Convenience mirror of
     /// [`Self::epoch_credit_rule`] for the weight-producing call sites.
+    ///
+    /// This is the **narrow** fence. Only the three places that decide *what a vote weighs* may
+    /// ask it: the credit rule, and the two `ContributionWeight` selections. Everything else the
+    /// compute overlay does belongs to [`Self::vlt_shadow_active_at`], which opens earlier —
+    /// gating the machinery on the weight fence is what would make activation a single
+    /// all-or-nothing fork with finality inside the blast radius.
     pub fn vlt_weighting_active_at(&self, daa_score: u64) -> bool {
-        self.vlt.is_active_at(daa_score)
+        self.vlt.weight_active_at(daa_score)
+    }
+
+    /// Whether the compute overlay is **running** at `daa_score`: certificates credited into
+    /// `X_i(e)`, committees drawn, verdicts counted and paid, a settled challenge slashing the
+    /// side that lost, and the credit accumulator filling.
+    ///
+    /// True from the shadow fence onward, which is at or below the weight fence, so every VLT
+    /// machinery call site is live for at least one full credit window before anything depends on
+    /// what it produced. Below it the overlay is dormant and every shipped network stays
+    /// byte-identical to its pre-VLT behaviour.
+    pub fn vlt_shadow_active_at(&self, daa_score: u64) -> bool {
+        self.vlt.shadow_active_at(daa_score)
     }
 
     /// Whether this preset's VLT configuration is internally consistent **and** its unbonding
@@ -1150,7 +1168,16 @@ impl DnsParams {
             .saturating_add(self.vlt.challenge_window_blocks)
             .saturating_add(self.attestation_lag_blue_score)
             .saturating_add(self.attestation_anchor_backoff_blue_score);
+        // The soak. `C_i(E)` sums a `credit_window_epochs` window, so the weight fence must sit at
+        // least one full window above the shadow fence or it switches the vote to a table that has
+        // not finished filling: `W(E)` short of what the mesh actually produces, or 0 outright, and
+        // no epoch reaches quorum. This is the same span the credit walk must cover, for the same
+        // reason — it is how long it takes for `C_i(E)` to mean anything. A misordered or
+        // too-close pair is a preset error, catchable here, rather than a finality stall found
+        // after the fork.
+        let soak = self.vlt.vlt_activation_daa_score.saturating_sub(self.vlt.vlt_shadow_activation_daa_score);
         self.vlt_credit_window_blue_score >= needed_credit_window
+            && soak >= needed_credit_window
             && self.unbonding_period_blocks >= self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score)
     }
 
@@ -5544,7 +5571,13 @@ pub struct PendingComputeVerdict {
 /// whether to declare a capability, commit to a job, or certify one it already committed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComputeStatusView {
-    /// Whether VLT weighting is active at the sink. Everything else here is idle when it is not.
+    /// Whether the compute overlay is **running** at the sink (the shadow fence). Everything else
+    /// here is idle when it is not — an operator's node has nothing to execute, audit or certify
+    /// below this fence.
+    pub shadow_active: bool,
+    /// Whether verified compute is the **voting weight** at the sink (the weight fence). False
+    /// with `shadow_active` true is the soak: the overlay is producing and policing real compute,
+    /// and finality is still running on bonded stake.
     pub vlt_active: bool,
     pub sink_daa_score: u64,
     /// Epoch at the sink — what a certificate must declare to be creditable in the block that
@@ -6740,7 +6773,7 @@ mod tests {
     }
 
     fn vlt_params_active() -> VltParams {
-        VltParams { vlt_activation_daa_score: 0, ..VltParams::INERT }
+        VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: 0, ..VltParams::INERT }
     }
 
     /// Credit `x` µRTE to validator `seed` for every epoch in `epochs`, as a table pinned at DAA
@@ -6940,7 +6973,9 @@ mod tests {
             [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
         {
             assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name} must ship with VLT dormant");
+            assert_eq!(p.vlt.vlt_shadow_activation_daa_score, u64::MAX, "{name} must ship with the overlay dormant too");
             assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
+            assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
             assert!(
                 matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
                 "{name} must stay on the graded φS rule below the fence"
@@ -6952,23 +6987,45 @@ mod tests {
             }
             // Inert presets pass the consistency gate trivially; a moved fence must still hold.
             assert!(p.vlt_params_consistent(), "{name}");
-            let activated = DnsParams { vlt: VltParams { vlt_activation_daa_score: 0, ..p.vlt }, ..p.clone() };
+            // The one span that governs both the credit walk's depth and the soak between the two
+            // fences: `K + delay` epochs, plus the challenge window a certificate waits out, plus
+            // the lag/backoff an epoch's anchor needs. It is how long `C_i(E)` takes to mean
+            // anything, so it is both how far back the walk must reach and how long the overlay
+            // must run before the vote may depend on it.
+            let needed = (p.vlt.credit_window_epochs as u64 + p.vlt.credit_delay_epochs as u64)
+                * p.attestation_epoch_length_blue_score
+                + p.vlt.challenge_window_blocks
+                + p.attestation_lag_blue_score
+                + p.attestation_anchor_backoff_blue_score;
+            // Activation is TWO fences: the overlay starts running at `shadow`, and only after a
+            // full soak does the vote move to what it produced.
+            let activated = DnsParams {
+                vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: needed, ..p.vlt },
+                ..p.clone()
+            };
             if name == "production" || name == "testnet" {
                 assert!(activated.vlt_params_consistent(), "{name} would be self-consistent if activated as shipped");
-                // The credit window must genuinely cover `K + delay` epochs + challenge + lag +
-                // backoff. A short window would not fail loudly at runtime — it would silently
-                // truncate the oldest epochs of every `C_i(E)` — so pin it here: one blue_score
-                // below the requirement must be rejected.
-                let short = DnsParams {
-                    vlt_credit_window_blue_score: (activated.vlt.credit_window_epochs as u64
-                        + activated.vlt.credit_delay_epochs as u64)
-                        * activated.attestation_epoch_length_blue_score
-                        + activated.vlt.challenge_window_blocks
-                        + activated.attestation_lag_blue_score
-                        + activated.attestation_anchor_backoff_blue_score
-                        - 1,
-                    ..activated.clone()
+                // Both fences at the same height is the failure the split exists to make
+                // unrepresentable: the vote switches to a `C_i(E)` that has had no time to fill.
+                let at_once = DnsParams {
+                    vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: 0, ..p.vlt },
+                    ..p.clone()
                 };
+                assert!(!at_once.vlt_params_consistent(), "{name}: shadow and weight at the same height must be rejected");
+                // One blue_score short of a full soak is still short.
+                let hasty = DnsParams {
+                    vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: needed - 1, ..p.vlt },
+                    ..p.clone()
+                };
+                assert!(!hasty.vlt_params_consistent(), "{name}: a soak one blue_score short must be rejected");
+                // And the shadow fence may never sit ABOVE the weight fence — that would switch
+                // the vote onto an overlay that is not running.
+                let inverted = VltParams { vlt_shadow_activation_daa_score: needed + 1, vlt_activation_daa_score: needed, ..p.vlt };
+                assert!(inverted.is_coherent().is_err(), "{name}: shadow above weight must be incoherent");
+                // The credit window must genuinely cover that same span. A short window would not
+                // fail loudly at runtime — it would silently truncate the oldest epochs of every
+                // `C_i(E)` — so pin it here: one blue_score below the requirement must be rejected.
+                let short = DnsParams { vlt_credit_window_blue_score: needed - 1, ..activated.clone() };
                 assert!(!short.vlt_params_consistent(), "{name}: a credit window one short must be rejected");
             }
         }
@@ -7007,11 +7064,61 @@ mod tests {
     #[test]
     fn vlt_fence_flips_the_credit_rule() {
         use crate::config::params::PRODUCTION_DNS_PARAMS;
-        let p = DnsParams { vlt: VltParams { vlt_activation_daa_score: 5_000, ..VltParams::INERT }, ..PRODUCTION_DNS_PARAMS.clone() };
+        let p = DnsParams {
+            vlt: VltParams { vlt_shadow_activation_daa_score: 1_000, vlt_activation_daa_score: 5_000, ..VltParams::INERT },
+            ..PRODUCTION_DNS_PARAMS.clone()
+        };
         assert!(matches!(p.epoch_credit_rule(4_999), EpochCreditRule::QualityFloor { .. }));
         assert!(!p.vlt_weighting_active_at(4_999));
         assert!(matches!(p.epoch_credit_rule(5_000), EpochCreditRule::BftQuorum { .. }));
         assert!(p.vlt_weighting_active_at(5_000));
+    }
+
+    /// The soak: between the two fences the compute overlay is fully live and the vote has not
+    /// moved. That interval is the whole reason the fence was split — everything that mints,
+    /// audits, pays and slashes runs for a full credit window, under the legacy stake-weighted
+    /// finality, before anything depends on what it produced.
+    #[test]
+    fn vlt_shadow_fence_runs_the_overlay_while_stake_still_votes() {
+        use crate::config::params::PRODUCTION_DNS_PARAMS;
+        let p = DnsParams {
+            vlt: VltParams { vlt_shadow_activation_daa_score: 1_000, vlt_activation_daa_score: 5_000, ..VltParams::INERT },
+            ..PRODUCTION_DNS_PARAMS.clone()
+        };
+
+        // Below both: dormant, and byte-identical to the pre-VLT overlay.
+        assert!(!p.vlt_shadow_active_at(999));
+        assert!(!p.vlt_weighting_active_at(999));
+
+        // In the soak: the overlay runs, finality does not notice.
+        for daa in [1_000, 3_000, 4_999] {
+            assert!(p.vlt_shadow_active_at(daa), "overlay must be live at {daa}");
+            assert!(!p.vlt_weighting_active_at(daa), "but the vote must not have moved at {daa}");
+            assert!(
+                matches!(p.epoch_credit_rule(daa), EpochCreditRule::QualityFloor { .. }),
+                "finality stays on the graded φS rule for the whole soak"
+            );
+        }
+
+        // At the weight fence: the vote moves onto an overlay that has been running all along.
+        assert!(p.vlt_shadow_active_at(5_000));
+        assert!(p.vlt_weighting_active_at(5_000));
+    }
+
+    /// The ordering invariant, stated on its own: weight may never open before shadow. A preset
+    /// that inverted them would switch the vote to an overlay that credits nothing, so `W(E)` is
+    /// 0 and DNS finality stops at the fence.
+    #[test]
+    fn vlt_weight_fence_cannot_open_before_the_shadow_fence() {
+        let inverted = VltParams { vlt_shadow_activation_daa_score: 10_000, vlt_activation_daa_score: 9_999, ..VltParams::INERT };
+        assert_eq!(
+            inverted.is_coherent(),
+            Err("vlt_shadow_activation_daa_score must be <= vlt_activation_daa_score (weight cannot switch before the overlay runs)")
+        );
+        // Equal is not incoherent — it is merely too hasty, which `vlt_params_consistent` catches
+        // with the soak requirement rather than here.
+        let simultaneous = VltParams { vlt_shadow_activation_daa_score: 9_999, vlt_activation_daa_score: 9_999, ..VltParams::INERT };
+        assert!(simultaneous.is_coherent().is_ok());
     }
 
     /// §6: credit is withheld until the challenge window closes, dropped outright if challenged,
@@ -8842,7 +8949,12 @@ mod tests {
             bridge_finality_max_staleness_daa_score: 11_000_000,
             // Non-default VLT values so the borsh round-trip actually exercises the appended
             // fields (an all-default `INERT` would round-trip even if the encoding dropped them).
-            vlt: VltParams { vlt_activation_daa_score: 12_000_000, credit_window_epochs: 42, ..VltParams::INERT },
+            vlt: VltParams {
+                vlt_shadow_activation_daa_score: 11_500_000,
+                vlt_activation_daa_score: 12_000_000,
+                credit_window_epochs: 42,
+                ..VltParams::INERT
+            },
             vlt_credit_window_blue_score: 13_000_000,
             dns_gate_horizon_blocks: 14_000_000,
             dns_veto_ttl_daa_score: 15_000_000,

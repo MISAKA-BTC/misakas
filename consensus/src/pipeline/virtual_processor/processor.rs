@@ -1991,14 +1991,18 @@ impl VirtualStateProcessor {
     /// The window crossing is the trigger because it happens exactly once per certificate per
     /// chain, so the mutation applies once and reverts cleanly, with no dedup state.
     ///
-    /// Inert below the VLT fence — every shipped network — where no verdict is ever counted. Above
-    /// it this walks the compute overlay per chain block, the same cost noted on
+    /// Inert below the **shadow** fence — every shipped network — where no verdict is ever counted.
+    /// Above it this walks the compute overlay per chain block, the same cost noted on
     /// [`Self::compute_audit_fee_outputs`] and fixable the same way.
+    ///
+    /// Shadow, not weight: a credit table accumulated without slashing is a table nobody was
+    /// policed for producing, and switching the vote onto it later would weight exactly that. The
+    /// overlay's enforcement has to be live for the whole soak, not switched on with the vote.
     fn compute_challenge_adjudication_slashes(&self, chain_block: BlockHash, daa_score: u64) -> Vec<BondMutation> {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return Vec::new();
         };
-        if !dns_params.vlt_weighting_active_at(daa_score) {
+        if !dns_params.vlt_shadow_active_at(daa_score) {
             return Vec::new();
         }
         let Ok(parent) = self.ghostdag_store.get_selected_parent(chain_block) else {
@@ -2265,6 +2269,13 @@ impl VirtualStateProcessor {
             // are self-consistent. In Active the reorg gate's finality depends entirely on them,
             // so an invalid config fails safe (stay Bootstrap, gate dormant) rather than splitting.
             && dns_params.dns_v3_params_consistent()
+            // MISAKA VLT: the same fail-safe for the VLT knobs, and for the reason the fence was
+            // split in two. A preset whose weight fence does not sit a full credit window above
+            // its shadow fence would move the vote onto a `C_i(E)` that has not finished filling —
+            // `W(E)` short or zero, no epoch at quorum, the reorg gate armed over a denominator
+            // that means nothing. Staying in Bootstrap keeps the gate dormant instead. Trivially
+            // true on every shipped (inert) preset, so this cannot demote a current network.
+            && dns_params.vlt_params_consistent()
             // kaspa-pq optional hard mandatory capacity: only hard-inclusion deployments require
             // proving that the current stake distribution can physically reach φS in one block.
             // Shipped liveness-first presets keep mandatory inclusion at u64::MAX, so capacity
@@ -2289,13 +2300,15 @@ impl VirtualStateProcessor {
         // branches ARE compared is `dns_reorg_outcome`, and that one pins at the block they share
         // (see `stake_score_since_ancestor`) — which is what stops a competing branch from
         // bringing its own denominator to the comparison this state feeds.
+        // Built from the SHADOW fence, so the table is already full — and already observable —
+        // when the weight fence opens below.
         let snapshot = self.vlt_epoch_snapshot(
             sink,
             sink_daa,
             &bonds,
             net_id.as_byte_slice(),
             dns_params,
-            dns_params.vlt_weighting_active_at(sink_daa),
+            dns_params.vlt_shadow_active_at(sink_daa),
         );
         let credit_rule = dns_params.epoch_credit_rule(sink_daa);
         let weight = if dns_params.vlt_weighting_active_at(sink_daa) {
@@ -3191,7 +3204,7 @@ impl VirtualStateProcessor {
         validator_id: Hash64,
         limit: usize,
     ) -> Vec<PendingComputeVerdict> {
-        if limit == 0 || !dns_params.vlt_weighting_active_at(pov_daa_score) {
+        if limit == 0 || !dns_params.vlt_shadow_active_at(pov_daa_score) {
             return Vec::new();
         }
         let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.vlt_credit_window_blue_score);
@@ -3286,7 +3299,7 @@ impl VirtualStateProcessor {
         budget: u64,
     ) -> (Vec<TransactionOutput>, u64) {
         let fee = dns_params.vlt.audit_fee_sompi;
-        if fee == 0 || budget < fee || !dns_params.vlt_weighting_active_at(daa_score) {
+        if fee == 0 || budget < fee || !dns_params.vlt_shadow_active_at(daa_score) {
             return (Vec::new(), 0);
         }
         let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
@@ -3366,12 +3379,16 @@ impl VirtualStateProcessor {
             return ComputeStatusView { sink_daa_score: pov_daa_score, ..Default::default() };
         };
         let mut view = ComputeStatusView {
+            shadow_active: dns_params.vlt_shadow_active_at(pov_daa_score),
             vlt_active: dns_params.vlt_weighting_active_at(pov_daa_score),
             sink_daa_score: pov_daa_score,
             epoch: tip_blue / epoch_len,
             ..Default::default()
         };
-        if !view.vlt_active {
+        // Keyed on the shadow fence: during the soak an operator has real work to do — commitments
+        // to certify, committee seats to serve — and a view that went dark until the weight fence
+        // would hide exactly the period it exists to make visible.
+        if !view.shadow_active {
             return view;
         }
         let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.vlt_credit_window_blue_score);
@@ -3452,7 +3469,7 @@ impl VirtualStateProcessor {
     ///
     /// Inert while the VLT fence is: no row is ever written on today's networks.
     fn stage_vlt_credits(&self, batch: &mut WriteBatch, sink: BlockHash, sink_daa: u64, dns_params: &DnsParams) {
-        if !dns_params.vlt_weighting_active_at(sink_daa) {
+        if !dns_params.vlt_shadow_active_at(sink_daa) {
             return;
         }
         let bonds: Vec<StakeBondRecord> =

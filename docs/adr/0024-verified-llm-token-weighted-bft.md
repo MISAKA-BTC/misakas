@@ -71,26 +71,47 @@ decide who to slash.
 
 ## Activation
 
-Everything is fenced behind `VltParams::vlt_activation_daa_score`, `u64::MAX` (dormant) on
-**every** shipped preset. Below the fence the overlay is byte-identical to its pre-VLT
-behaviour, so adopting this ADR is not by itself a consensus change.
+Two fences, because turning the overlay on and handing it the vote are different risks:
 
-Moving a network's fence is a coordinated hard fork, and it **must not be scheduled before the
-active set can actually produce verified compute**: with no VLT every `W_i(E)` is 0, so `W(E)`
-is 0, no epoch reaches quorum, and DNS finality stalls (the base ledger keeps advancing — the
-overlay is liveness-first). The paper's §2 "計算 bootstrap 期間" is this same caveat.
+| Fence | At and above it | Finality |
+|---|---|---|
+| `vlt_shadow_activation_daa_score` | certificates credited into `X_i(e)`, committees drawn, verdicts counted and paid the audit fee, settled challenges slashing, credit accumulator filling | unchanged — bonded stake, φS graded rule |
+| `vlt_activation_daa_score` | `W_i(E) = min{C_i(E), λ·B_i(E)}` becomes voting weight; credit rule becomes `Q(E) = ⌊2W(E)/3⌋ + 1` | replaced |
+
+Both are `u64::MAX` (dormant) on **every** shipped preset. Below the shadow fence the overlay
+is byte-identical to its pre-VLT behaviour, so adopting this ADR is not by itself a consensus
+change.
+
+Each fence is its own coordinated hard fork. The shadow one moves coinbase value (the audit
+fee) and slashes bonds, so it is a real fork — but its blast radius excludes finality, which is
+the entire point of taking it first. The mesh produces and *polices* verified compute for a
+while with nothing depending on the answer; only then does the second fork move the vote.
+
+The interval between them is not slack, it is the **soak**. `C_i(E)` sums a
+`credit_window_epochs` window, so flipping both at once switches voting power to a table that
+is still empty: every `W_i(E)` is 0, `W(E)` is 0, no epoch reaches quorum, and DNS finality
+stalls (the base ledger keeps advancing — the overlay is liveness-first). The paper's §2
+"計算 bootstrap 期間" is this same caveat, and the split is what turns it from a scheduling
+convention into a checkable property.
 
 `DnsParams::vlt_params_consistent()` is the pre-flight check. It verifies the VLT knobs are
-coherent, that `unbonding_period_blocks` covers the §7 bound
+coherent (including shadow ≤ weight), that `unbonding_period_blocks` covers the §7 bound
 `U ≥ credit window + max challenge period` (production's 14-day window covers the shipped
-calibration with wide margin), and that `vlt_credit_window_blue_score` spans
-`(K + delay) × epoch_len + challenge_window + lag + backoff`.
+calibration with wide margin), that `vlt_credit_window_blue_score` spans
+`(K + delay) × epoch_len + challenge_window + lag + backoff`, and that the soak spans that same
+quantity — it is how long `C_i(E)` takes to mean anything, so it is both how far back the walk
+must reach and how long the overlay must run before the vote may depend on it.
 
-That last one matters more than it looks: the credit walk resolves each certificate's epoch
-against a canonical-anchor map built over the *same* window, and an epoch with no anchor is
+`update_dns_state` now consults it before entering `Active`, alongside
+`dns_v3_params_consistent()`: a preset that would arm the reorg gate over a denominator that
+has not filled stays in Bootstrap with the gate dormant. Trivially true on every shipped inert
+preset, so no current network is affected.
+
+The window requirement matters more than it looks: the credit walk resolves each certificate's
+epoch against a canonical-anchor map built over the *same* window, and an epoch with no anchor is
 skipped. A short window therefore does not fail loudly — it silently truncates the oldest epochs
-of every validator's `C_i(E)` to zero and makes weight depend on an unrelated parameter. The
-requirement is asserted in both directions by
+of every validator's `C_i(E)` to zero and makes weight depend on an unrelated parameter. Both it
+and the soak are asserted in both directions by
 `vlt_fence_keeps_shipped_presets_on_the_legacy_rule`.
 
 ## Recommended calibration (`VltParams::INERT`'s non-fence values)
