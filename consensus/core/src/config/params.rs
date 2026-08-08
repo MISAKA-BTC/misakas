@@ -976,6 +976,23 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // `min_active_stake_sompi` stay at 20M KAS above. Under VLT weighting the bond stops being
     // voting power and becomes the participation requirement plus the slashable collateral that
     // caps convertible compute (`λ·B_i`) — the same 20M number, a different job.
+    //
+    // SCHEDULING THE FORK (ADR-0024 "Activation runbook", steps 3 and 4) is an edit to exactly
+    // three fields of this struct, and nothing else in this preset:
+    //
+    //     vlt: VltParams {
+    //         vlt_shadow_activation_daa_score: <H>,          // step 3 — the overlay starts running
+    //         vlt_activation_daa_score: <H + vlt_credit_span()>,  // step 4 — the vote moves
+    //         model_cost_table: ModelCostTable::palw_qwen36_metal(),
+    //         ..VltParams::INERT
+    //     },
+    //
+    // Everything else here is already sized for `INERT`'s K = 96: the credit walk below covers
+    // the span, and `unbonding_period_blocks` covers the §7 bound. Two tests hold that claim —
+    // `public_presets_need_only_the_two_heights_and_the_model_to_fork` proves no other constant
+    // has to move, and `shipped_presets_are_either_dormant_or_fully_forkable` fails the build if
+    // a fence is moved without the rest of the edit. The model table is not optional: an empty
+    // one credits every job zero, so the fork would cost a hard fork to discover it did nothing.
     vlt: VltParams::INERT,
     // Sized for `VltParams::INERT`'s K = 96 + delay 1 epochs at the 100-blue_score attestation
     // epoch length, plus the 300-block challenge window and a lag/grace margin. This is the walk

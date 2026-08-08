@@ -7147,6 +7147,11 @@ mod tests {
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_COMPUTE_CHALLENGE), Some(DnsTxKind::ComputeChallenge));
         assert!(SUBNETWORK_ID_COMPUTE_CERTIFICATE.is_dns_overlay());
         assert!(SUBNETWORK_ID_COMPUTE_CHALLENGE.is_dns_overlay());
+        // MISAKA §5 round 2. Both halves matter and they are separate code paths: `is_dns_overlay`
+        // is what routes the tx at all (a `false` here means `SubnetworksDisabled` and precommits
+        // never reach a block), while `dns_tx_kind` is what picks its stateless validator.
+        assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_PRECOMMIT), Some(DnsTxKind::StakePrecommit));
+        assert!(SUBNETWORK_ID_STAKE_PRECOMMIT.is_dns_overlay());
     }
 
     // ---- MISAKA Verified LLM Token-Weighted BFT: the voting-power replacement ----
@@ -7490,6 +7495,83 @@ mod tests {
 
         assert_eq!(validate_stake_precommit_payload(&borsh::to_vec(&mk(10, some)).unwrap()), Err(DnsTxError::IncoherentPrecommitLock));
         assert!(validate_stake_precommit_payload(&borsh::to_vec(&mk(9, some)).unwrap()).is_ok());
+    }
+
+    /// The guard that makes scheduling a public fork a two-line edit rather than a research
+    /// project: whatever heights a shipped preset carries, it is either fully dormant or fully
+    /// forkable.
+    ///
+    /// Today every preset is dormant, so this asserts nothing about the present. It exists for the
+    /// commit that moves a fence — the one edit in this whole feature that cannot be tested on a
+    /// devnet first, because by the time it is wrong the network has already forked. Each clause
+    /// is a way that edit could look right and produce a network that does not finalize:
+    /// half-moved fences, a soak too short for `C_i(E)` to form, a walk shallower than the score
+    /// it computes, an unbonding window that lets a validator exit while its compute is still
+    /// challengeable, or an empty model table — which credits every job zero and makes the whole
+    /// fork a no-op that costs a hard fork to discover.
+    #[test]
+    fn shipped_presets_are_either_dormant_or_fully_forkable() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in
+            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
+        {
+            let dormant = p.vlt.vlt_shadow_activation_daa_score == u64::MAX && p.vlt.vlt_activation_daa_score == u64::MAX;
+            if dormant {
+                continue;
+            }
+            assert_eq!(p.vlt.is_coherent(), Ok(()), "{name}: a preset with a moved fence must be coherent");
+            assert!(p.vlt_params_consistent(), "{name}: fences moved but the configuration would keep it in Bootstrap");
+            assert!(
+                !p.vlt.model_cost_table.live().is_empty(),
+                "{name}: fences moved with an empty model table — every job would mint zero and the fork would be a no-op"
+            );
+            assert!(
+                p.vlt_credit_window_blue_score >= p.vlt_credit_span(),
+                "{name}: the credit walk is shallower than the score it computes"
+            );
+            assert!(
+                p.unbonding_period_blocks >= p.vlt.min_unbonding_period_blocks(p.attestation_epoch_length_blue_score),
+                "{name}: §7 — a validator could exit while the compute it votes with is still challengeable"
+            );
+        }
+    }
+
+    /// The public presets are ready for the fork *as shipped*: moving the two heights is the whole
+    /// edit, apart from registering the model.
+    ///
+    /// Everything else — the credit window, the unbonding window, the epoch geometry — is already
+    /// sized for `VltParams::INERT`'s K = 96, so scheduling does not require re-deriving any of it.
+    /// This is what "the testnet hard fork is implemented" means concretely, and it is worth a test
+    /// because the alternative is discovering at fork time that one more constant also had to move.
+    #[test]
+    fn public_presets_need_only_the_two_heights_and_the_model_to_fork() {
+        use crate::config::params::{PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in [("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)] {
+            // The edit: two heights one soak apart, plus the model table. Nothing else.
+            let shadow = 12_000_000u64;
+            let soak = p.vlt_credit_span();
+            let forked = DnsParams {
+                vlt: VltParams {
+                    vlt_shadow_activation_daa_score: shadow,
+                    vlt_activation_daa_score: shadow + soak,
+                    model_cost_table: crate::vlt::ModelCostTable::palw_qwen36_metal(),
+                    ..p.vlt
+                },
+                ..p.clone()
+            };
+            assert!(forked.vlt_params_consistent(), "{name} must be forkable without touching any other constant");
+            assert!(
+                forked.unbonding_period_blocks >= forked.vlt.min_unbonding_period_blocks(forked.attestation_epoch_length_blue_score),
+                "{name}: the shipped unbonding window already covers the §7 bound"
+            );
+            assert!(forked.vlt_credit_window_blue_score >= soak, "{name}: the shipped credit walk already covers the span");
+
+            // And the soak is a real interval, not a formality: at the nominal 10 BPS it is the
+            // time `C_i(E)` needs to form, and scheduling the two heights closer is refused.
+            assert!(soak > 0);
+            let hasty = DnsParams { vlt: VltParams { vlt_activation_daa_score: shadow + soak - 1, ..forked.vlt }, ..forked.clone() };
+            assert!(!hasty.vlt_params_consistent(), "{name}: one blue_score short of a soak is still short");
+        }
     }
 
     /// `--vlt-devnet` must produce a network that can actually reach weighted finality.
