@@ -175,6 +175,14 @@ pub struct Args {
     /// ADR-0009 documents rather than a safe default.
     pub trusted_checkpoint: Option<String>,
 
+    /// Enforce the chain-participation gate on a network where it is off by default.
+    ///
+    /// The gate is scoped to mainnet/testnet because a peerless devnet or simnet node has no
+    /// competing branch to overlook. That is a default, not a law: a devnet with real peers wants
+    /// production behaviour, and a test that means to exercise the gate has to be able to turn it
+    /// on. Never needed on mainnet or testnet, where it is always enforced.
+    pub enforce_chain_participation: bool,
+
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
     pub enable_validator: bool,
     pub validator_key: Option<String>,
@@ -271,6 +279,7 @@ impl Default for Args {
             enable_unsynced_mining: false,
             enable_mainnet_mining: true,
             trusted_checkpoint: None,
+            enforce_chain_participation: false,
             enable_validator: false,
             validator_key: None,
             evm_fee_recipient: None,
@@ -594,6 +603,10 @@ pub fn cli() -> Command {
                 )
                 .env("KASPAD_TRUSTED_CHECKPOINT"),
         )
+        .arg(
+            arg!(--"enforce-chain-participation" "kaspa-pq: enforce the post-IBD chain-participation gate on networks where it is off by default (devnet/simnet). Always enforced on mainnet and testnet.")
+                .env("KASPAD_ENFORCE_CHAIN_PARTICIPATION"),
+        )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
             Arg::new("evm-fee-recipient")
@@ -904,6 +917,11 @@ impl Args {
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
+            enforce_chain_participation: arg_match_unwrap_or::<bool>(
+                &m,
+                "enforce-chain-participation",
+                defaults.enforce_chain_participation,
+            ),
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),

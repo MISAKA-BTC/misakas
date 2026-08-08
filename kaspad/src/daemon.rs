@@ -826,10 +826,12 @@ Do you confirm? (y/n)";
     let chain_participation_store = Arc::new(ChainParticipationStore::new(meta_db.clone()));
     let restored_participation = chain_participation_store.load();
     let chain_participation = Arc::new(
-        ChainParticipationGate::new(matches!(
-            config.net.network_type,
-            kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
-        ))
+        ChainParticipationGate::new(
+            matches!(
+                config.net.network_type,
+                kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
+            ) || args.enforce_chain_participation,
+        )
         .with_persistence(chain_participation_store, restored_participation),
     );
     match chain_participation.state() {
