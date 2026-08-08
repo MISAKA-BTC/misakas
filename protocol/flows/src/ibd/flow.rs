@@ -196,14 +196,30 @@ impl IbdFlow {
             None => (None, None),
         };
 
-        // Separate rival branches from peers on this same chain that have simply moved on. Every
-        // relayed tip becomes a candidate id, so without this a healthy node would refuse every
-        // headers-proof IBD. A tip the staged chain already knows is the same history, further
-        // along; a tip it has never heard of is the thing that must not be committed past.
+        // Separate rival branches from peers on this same chain that have simply moved on.
+        //
+        // Tip containment alone is not that test. A peer at B120 while staging holds B100 is the
+        // same history seen further along, and its tip is unknown to staging precisely because it
+        // is ahead — so "unknown tip means rival" would refuse a healthy sync every time a peer
+        // produced a block during it. Which, over a multi-minute IBD, is always.
+        //
+        // Lineage is the test that survives that. A candidate rooted at the staged pruning point —
+        // or at one of the recent pruning points staging descends through, matching the syncer-lag
+        // tolerance `determine_ibd_type` already applies — is the same history whatever its tip. A
+        // candidate rooted somewhere staging has never heard of is a genuinely different history,
+        // and that is what must not be committed past.
+        let staged_pruning_point = staging.async_pruning_point().await;
+        let recent_pruning_points = staging.async_get_n_last_pruning_points(4).await;
         let unresolved_ids: Vec<_> = self.ctx.ibd_candidates().read().unresolved().iter().map(|c| c.id).collect();
         let mut unresolved_competing = 0usize;
         for id in unresolved_ids {
-            if staging.async_get_block_status(id.virtual_selected_parent).await.is_none() {
+            let same_lineage = id.pruning_point == staged_pruning_point
+                || recent_pruning_points.contains(&id.pruning_point)
+                // Staging knowing the tip settles it outright — same history, at or behind us.
+                || staging.async_get_block_status(id.virtual_selected_parent).await.is_some()
+                // Or the candidate is rooted in staging's future along the same chain.
+                || staging.async_is_chain_ancestor_of(staged_pruning_point, id.pruning_point).await.unwrap_or(false);
+            if !same_lineage {
                 unresolved_competing += 1;
             }
         }

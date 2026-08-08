@@ -520,12 +520,15 @@ pub struct CommitInputs<'a> {
     pub descends_from_checkpoint: Option<bool>,
     /// Whether the configured checkpoint's params id matches this build. `None` when unconfigured.
     pub checkpoint_params_match: Option<bool>,
-    /// Unresolved candidates whose tip the staged chain does **not** already contain.
+    /// Unresolved candidates rooted in a lineage the staged chain does **not** share.
     ///
-    /// Containment is what separates a rival branch from ordinary traffic. Peers on the chain being
-    /// synced keep relaying, and each new tip is a new candidate id — so counting every unverified
-    /// candidate would refuse essentially every IBD on a healthy network. A candidate the staged
-    /// chain already knows about is the same history seen a little further along, not a competitor.
+    /// Lineage, not tip. Peers on the chain being synced keep producing blocks, and each new tip is
+    /// a new candidate id whose hash staging has never seen — so counting unknown tips as rivals
+    /// refuses a healthy sync every time a peer moves during it. What distinguishes a rival is
+    /// where the chain is rooted: a candidate at the staged pruning point (or one staging descends
+    /// through) is the same history however far ahead its tip, while a candidate rooted somewhere
+    /// staging has never heard of is a different history. The caller computes this because only it
+    /// can query staging.
     pub unresolved_competing: usize,
     pub registry: &'a IbdCandidateRegistry,
 }
@@ -598,9 +601,9 @@ mod commit_barrier_tests {
 
     #[test]
     fn ordinary_traffic_from_peers_on_this_same_chain_does_not_block_the_commit() {
-        // Peers on the chain being synced keep relaying, and each new tip is a new candidate id.
-        // If those counted as rivals, a healthy node would quarantine on every headers-proof IBD.
-        // The caller resolves them by containment; here that shows up as a zero count.
+        // A peer at B120 while staging holds B100 has a tip staging has never seen — because it is
+        // AHEAD, not because it forked. Counting that as a rival would quarantine a healthy node on
+        // every headers-proof IBD. The caller resolves it by lineage; here that is a zero count.
         let mut r = IbdCandidateRegistry::default();
         let now = Instant::now();
         r.observe_summary(peer(1), &header(0xB1, 110), pp(0xB), now);

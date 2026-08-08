@@ -27,7 +27,7 @@ use kaspa_consensus_core::vlt::{
 };
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
-    info,
+    debug, info,
     task::{
         service::{AsyncService, AsyncServiceFuture},
         tick::{TickReason, TickService},
@@ -628,6 +628,17 @@ impl ValidatorService {
     /// guarded + signed shard transaction, and — in `Active` mode — submit it. No-ops
     /// cleanly when there is no funding UTXO or the equivocation guard blocks/skips.
     async fn try_attest(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        // Re-checked here, not only at the top of the heartbeat.
+        //
+        // This is where an attestation is signed, and the gate must be enforced AT the dangerous
+        // operation rather than upstream of it: a future caller that reaches this function by some
+        // other path — a new mode, an RPC trigger, a retry — would otherwise sign on a chain the
+        // node has said it cannot vouch for. The whole class of bug being fixed here is a signer
+        // that decided sync state for itself.
+        if !self.flow_context.is_consensus_participation_allowed() {
+            debug!("[{VALIDATOR}] not attesting: chain participation is {}", self.flow_context.chain_participation().state().as_str());
+            return;
+        }
         let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
         let fee = self.attestation_fee_sompi;
         let candidates = self.find_funding_candidates(&funding_spk).await;
@@ -1083,6 +1094,9 @@ impl ValidatorService {
     ///
     /// Returns the submitted transaction's id, or `None` if funding, building or submission
     /// failed — every one of which is a retry-next-tick condition, not an error to escalate.
+    /// Common path for every overlay transaction this service submits (capability, commitment,
+    /// verdict). Gated here for the same reason as `try_attest`: the check belongs at the point of
+    /// signing, so a new submitter cannot bypass it by not knowing about the heartbeat's check.
     async fn build_and_submit_overlay_tx<F>(
         &self,
         kind: &str,
@@ -1094,6 +1108,13 @@ impl ValidatorService {
         F: FnOnce(TransactionOutpoint, &UtxoEntry, u64) -> Result<Transaction, String>,
     {
         let key = self.key.as_ref()?;
+        if !self.flow_context.is_consensus_participation_allowed() {
+            debug!(
+                "[{VALIDATOR}] not submitting the {kind} transaction: chain participation is {}",
+                self.flow_context.chain_participation().state().as_str()
+            );
+            return None;
+        }
         if self.config.mode != ValidatorMode::Active {
             trace!("[{VALIDATOR}] compute: mode={} so not submitting the {kind} transaction", self.config.mode);
             return None;
