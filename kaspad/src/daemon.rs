@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
     mining_rules::MiningRules,
 };
 use kaspa_consensus_notify::{root::ConsensusNotificationRoot, service::NotifyService};
-use kaspa_core::{core::Core, debug, info, warn};
+use kaspa_core::{chain_participation::ChainParticipationGate, core::Core, debug, info, warn};
 use kaspa_core::{kaspad_env::version, task::tick::TickService};
 use kaspa_database::{
     prelude::{CachePolicy, DbWriter, DirectDbWriter, RocksDbPreset},
@@ -817,6 +817,13 @@ Do you confirm? (y/n)";
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
 
     let hub = Hub::new();
+    // One gate, consulted by mining, both validator paths, and compute. Scoped to the networks that
+    // have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a peerless
+    // devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
+    let chain_participation = Arc::new(ChainParticipationGate::new(matches!(
+        config.net.network_type,
+        kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
+    )));
     let mining_rule_engine = Arc::new(MiningRuleEngine::new(
         consensus_manager.clone(),
         config.clone(),
@@ -824,6 +831,7 @@ Do you confirm? (y/n)";
         tick_service.clone(),
         hub.clone(),
         mining_rules,
+        chain_participation.clone(),
     ));
     let flow_context = Arc::new(FlowContext::new(
         consensus_manager.clone(),

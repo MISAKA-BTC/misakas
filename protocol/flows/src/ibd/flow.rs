@@ -42,6 +42,18 @@ use tokio::time::sleep;
 use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
 
+/// Minimum time a node holds back after an IBD before it will mine, attest, or call itself synced.
+///
+/// A **floor**, not a verdict. When it expires the node resumes because time passed, not because
+/// anything was compared — a clock has no opinion about chain quality. It is a placeholder for the
+/// pre-commit candidate comparison, and it is only tolerable meanwhile because the alternative,
+/// never releasing, is a node that can never mine again.
+///
+/// Sized for the machinery that can still catch a bad adoption: with the latch released, the relay
+/// guard stops discarding competing offers, so a heavier peer's block is requested, lands as an
+/// orphan, and orphan resolution starts a fresh IBD.
+const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
+
 /// Flow for managing IBD - Initial Block Download
 pub struct IbdFlow {
     pub(super) ctx: FlowContext,
@@ -101,26 +113,8 @@ impl IbdFlow {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
 
-                        // Do not start supporting this chain yet.
-                        //
-                        // Which chain this node just adopted was decided by which peer took the
-                        // latch first. Mining onto it and attesting its anchor is what turns that
-                        // arbitrary pick into a branch-local DNS anchor, after which the reorg
-                        // gate rejects the alternative and the fork can no longer heal on its own.
-                        // Hold participation back for a bounded window; the latch is released now,
-                        // so a competing peer's blocks are finally requested rather than dropped.
-                        if let Some(remaining) = self.ctx.begin_post_ibd_probation() {
-                            info!(
-                                "Post-IBD probation: withholding mining and reporting unsynced for {}s. The chain just \
-                                 adopted from {} was chosen by relay arrival order, not by comparing candidates — this \
-                                 window is for a competing chain to surface before this node mines or attests on it.",
-                                remaining.as_secs(),
-                                self.router
-                            );
-                        }
-
-                        // Say out loud which peers were passed over while this IBD held the latch,
-                        // and how their offers measured up against the one that was taken.
+                        // Report what was passed over while this IBD held the latch, measured
+                        // against the chain we actually landed on.
                         //
                         // The latch is still awarded by arrival order, so this is a report on a
                         // decision already made rather than an input to it. It exists because the
@@ -128,47 +122,68 @@ impl IbdFlow {
                         // branch with a heavier peer connected throughout and produced no log line
                         // at all: an operator had no way to know a choice had even been made, let
                         // alone that it had gone the wrong way.
+                        //
+                        // "Offer" is the honest word, not "chain": all that was seen is an inv hash,
+                        // which may be a side block, a merge block, or simply a newer block on the
+                        // chain we just synced. Nothing here identifies a competing branch.
                         let passed_over = self.ctx.take_ibd_candidate_hints();
                         if !passed_over.is_empty() {
-                            let adopted = self.ctx.ibd_relay_blue_work();
+                            // Compare against this node's own verified tip rather than the blue work
+                            // claimed by the block that triggered the IBD. That trigger is older than
+                            // everything relayed since, so measuring against it would flag ordinary
+                            // traffic from peers on our own chain as if it were a rival branch.
+                            let session = self.ctx.consensus().session().await;
+                            let tip = session.async_get_headers_selected_tip().await;
+                            let adopted = session.async_get_header(tip).await.ok().map(|h| h.blue_work);
+                            drop(session);
+
                             let describe = |h: &IbdCandidateHint| match h.header {
                                 Some(c) => format!("{} (offered {}x, blue work {}, {})", h.peer, h.passed_over, c.blue_work, c.hash),
                                 None => format!("{} (offered {}x, never probed, latest {})", h.peer, h.passed_over, h.relay_hash),
                             };
-
-                            // The signature of the incident: something heavier was on offer the
-                            // whole time. Only claims — these peers were never asked for a proof —
-                            // but a claim that beats what we took is exactly what warrants a look.
-                            let heavier: Vec<_> = passed_over
+                            let ahead: Vec<_> = passed_over
                                 .iter()
                                 .filter(|h| matches!((h.header, adopted), (Some(c), Some(a)) if c.blue_work > a))
                                 .collect();
 
-                            if heavier.is_empty() {
+                            if ahead.is_empty() {
                                 warn!(
-                                    "IBD with {} finished, but {} other peer(s) advertised chains that were never compared: {}. \
-                                     This node's chain was chosen by which peer relayed first — none of the offers seen claimed \
-                                     to beat it, but nothing here was verified either.",
+                                    "IBD with {} finished with {} unexamined relay offer(s) from other peers: {}. None claimed to \
+                                     be ahead of the chain this node landed on, but none were compared either — the syncer was \
+                                     chosen by which peer relayed first.",
                                     self.router,
                                     passed_over.len(),
                                     passed_over.iter().map(describe).collect::<Vec<_>>().join(", ")
                                 );
                             } else {
                                 warn!(
-                                    "IBD with {} finished on a chain claiming blue work {}, but {} peer(s) were offering MORE the \
-                                     whole time and were passed over because that peer relayed first: {}. The heavier claims are \
-                                     unverified, but this node may well be on the wrong branch — compare its sink against another \
-                                     node before letting it mine or attest.",
+                                    "IBD with {} landed on a chain with blue work {}, and {} peer(s) were offering MORE the whole \
+                                     time, passed over because that peer relayed first: {}. These are unverified claims and may \
+                                     just be newer blocks on this same chain — but if this node is on the wrong branch, this is \
+                                     what it looks like. Compare its sink against another node before trusting it.",
                                     self.router,
                                     adopted.map(|w| w.to_string()).unwrap_or_else(|| "unknown".to_owned()),
-                                    heavier.len(),
-                                    heavier.into_iter().map(describe).collect::<Vec<_>>().join(", ")
+                                    ahead.len(),
+                                    ahead.into_iter().map(describe).collect::<Vec<_>>().join(", ")
                                 );
                             }
                         }
+
+                        self.ctx.finish_ibd_after_success(POST_IBD_CANDIDATE_REVIEW);
                     }
                     Err(e) => {
                         info!("IBD with peer {} completed with error: {}", self.router, e);
+                        // `staging.commit()` runs partway through `ibd()`, so a failure here does not
+                        // mean nothing happened — the active consensus may already have been replaced
+                        // with a chain whose sync then failed.
+                        self.ctx.take_ibd_candidate_hints();
+                        if self.ctx.finish_ibd_after_failure() {
+                            warn!(
+                                "IBD with {} failed AFTER the active consensus had already been replaced. This node is now on a \
+                                 chain whose sync never completed; participation is QUARANTINED until an operator intervenes.",
+                                self.router
+                            );
+                        }
                         return Err(e);
                     }
                 }
@@ -233,6 +248,9 @@ impl IbdFlow {
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_block).await {
                     Ok(()) => {
                         spawn_blocking(|| staging.commit()).await.unwrap();
+                        // From here the node runs the new chain regardless of what the rest of the
+                        // IBD does, so a later failure must not be reported and forgotten.
+                        self.ctx.mark_active_consensus_replaced();
                         info!(
                             "Header download stage of IBD with headers proof completed successfully from {}. Committed staging consensus.",
                             self.router

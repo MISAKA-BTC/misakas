@@ -133,8 +133,13 @@ impl HandleRelayInvsFlow {
                 // happened to relay first (incident 2026-08-08: 86 minutes on a lower-blue-work
                 // branch with a heavier peer connected throughout, zero retry attempts).
                 //
-                // Record the offer instead, so the IBD path can come back and ASK.
-                self.ctx.observe_ibd_candidate_hint(self.router.key(), inv.hash);
+                // Record the offer instead, so the IBD path can come back and ASK — but not for the
+                // peer we are currently syncing FROM. Its blockrelay flow hits this same guard while
+                // its IBD flow holds the latch, so without this it would log itself as a rival
+                // offering a heavier chain than the (older) block that triggered the IBD.
+                if self.ctx.ibd_peer_key() != Some(self.router.key()) {
+                    self.ctx.observe_ibd_candidate_hint(self.router.key(), inv.hash);
+                }
 
                 // A bare hash says a peer had something; it does not say whether that something was
                 // heavier than what we are syncing. Ranking candidates needs a header, and a header
@@ -146,7 +151,8 @@ impl HandleRelayInvsFlow {
                 // validation cost this guard exists to avoid is incurred, and the figures it yields
                 // stay claims (see `IbdCandidateHeader`) — bounded not here but at the pruning-proof
                 // check that any winning claim must survive.
-                if self.ctx.should_probe_ibd_candidate(self.router.key())
+                if self.ctx.ibd_peer_key() != Some(self.router.key())
+                    && self.ctx.should_probe_ibd_candidate(self.router.key())
                     && let Some((block, request_scope)) = self.request_block(inv.hash, self.msg_route.id(), self.header_format).await?
                 {
                     request_scope.report_obtained();

@@ -27,6 +27,7 @@ use kaspa_consensus_notify::{
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusInstance, ConsensusManager, ConsensusProxy, ConsensusSessionOwned};
 use kaspa_core::{
+    chain_participation::ChainParticipationGate,
     debug, info,
     kaspad_env::{name, version},
     task::tick::TickService,
@@ -354,6 +355,9 @@ pub struct FlowContextInner {
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     /// Chains advertised by peers that were passed over because another IBD held the latch.
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
+    /// Set once `staging.commit()` has swapped in a new active consensus during the running IBD.
+    /// A failure after this point is not a no-op — see `finish_ibd_after_failure`.
+    active_consensus_replaced: Arc<AtomicBool>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -395,6 +399,13 @@ impl Drop for IbdRunningGuard {
 /// normally-connected node be weighed once, and stops there. Reaching it means peers are churning
 /// through reconnects faster than an IBD runs, which is not a case worth spending fetches on.
 const MAX_IBD_CANDIDATE_PROBES: usize = 64;
+
+/// Ceiling on distinct peers tracked as passed-over offers during a single IBD.
+///
+/// The registry is drained when an IBD settles, but peers reconnecting under fresh keys mid-IBD
+/// would otherwise accumulate. Set well above any real peer count: hitting it means churn, and the
+/// oldest entries are the least interesting.
+const MAX_IBD_CANDIDATE_HINTS: usize = 256;
 
 /// A chain a peer advertised while this node could not even look at it.
 ///
@@ -468,6 +479,9 @@ struct IbdCandidateRegistry {
 
 impl IbdCandidateRegistry {
     fn observe(&mut self, peer: PeerKey, relay_hash: BlockHash, now: Instant) {
+        if !self.hints.contains_key(&peer) && self.hints.len() >= MAX_IBD_CANDIDATE_HINTS {
+            return;
+        }
         self.hints
             .entry(peer)
             .and_modify(|h| {
@@ -590,6 +604,7 @@ impl FlowContext {
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
                 ibd_candidates: Default::default(),
+                active_consensus_replaced: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -653,6 +668,11 @@ impl FlowContext {
             self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score, blue_work: relay_blue_work });
             // Fresh budget for the IBD that is starting now — see `should_probe_ibd_candidate`.
             self.ibd_candidates.write().probes_spent = 0;
+            self.active_consensus_replaced.store(false, Ordering::SeqCst);
+            // Stop participating NOW. `staging.commit()` happens partway through an IBD, so waiting
+            // for the IBD to report success leaves a window in which this node is already running
+            // the new chain and still mining and attesting on it.
+            self.chain_participation().enter_ibd();
             Some(IbdRunningGuard { indicator: self.is_ibd_running.clone() })
         } else {
             None
@@ -712,11 +732,6 @@ impl FlowContext {
     /// Callers must treat the result as a list of peers worth asking, in no authoritative order.
     pub fn take_ibd_candidate_hints(&self) -> Vec<IbdCandidateHint> {
         self.ibd_candidates.write().take()
-    }
-
-    /// Forget a disconnected peer's hint so the registry cannot grow without bound.
-    pub fn forget_ibd_candidate_hint(&self, peer: &PeerKey) {
-        self.ibd_candidates.write().hints.remove(peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {
@@ -958,14 +973,57 @@ impl FlowContext {
         self.mining_rule_engine.should_mine(sink_daa_score_and_timestamp)
     }
 
-    /// Hold back mining and the `is_synced` flag for a bounded window after an IBD, returning how
-    /// long the node will wait (`None` where probation does not apply).
+    /// The gate every participation path consults — mining, both validators, compute.
+    pub fn chain_participation(&self) -> &Arc<ChainParticipationGate> {
+        self.mining_rule_engine.chain_participation()
+    }
+
+    /// Whether this node may act on the chain it is holding: mine, attest, sign, call itself synced.
     ///
-    /// See `MiningRuleEngine::POST_IBD_PROBATION`: IBD adopts whichever peer took the latch first,
-    /// and this stops the node from turning that pick into mined blocks and validator attestations
-    /// before the relay path has had any chance to surface a competing chain.
-    pub fn begin_post_ibd_probation(&self) -> Option<Duration> {
-        self.mining_rule_engine.begin_post_ibd_probation()
+    /// Deliberately not `should_mine`, which folds in the sync-rate rule and peer connectivity —
+    /// conditions about mining throughput, not about whether the chain under us has been settled.
+    /// A validator that reused `should_mine` would inherit the sync-rate override, which can hold
+    /// `true` on a chain nobody has compared.
+    pub fn is_consensus_participation_allowed(&self) -> bool {
+        self.chain_participation().allows_participation()
+    }
+
+    /// Record that an IBD has replaced the active consensus (`staging.commit()` returned).
+    ///
+    /// From here on the node is running on the new chain whether or not the rest of the IBD
+    /// succeeds, so a later failure cannot simply be reported and forgotten — see
+    /// [`FlowContext::finish_ibd_after_failure`].
+    pub fn mark_active_consensus_replaced(&self) {
+        self.active_consensus_replaced.store(true, Ordering::SeqCst);
+    }
+
+    /// Settle the gate after an IBD that failed.
+    ///
+    /// If the active consensus was already replaced, the node is now running a chain whose sync
+    /// never finished: quarantine, because nothing here can tell whether that chain is usable and
+    /// guessing means signing on it. If nothing was replaced, the failure changed nothing and the
+    /// node goes back to whatever it was doing.
+    pub fn finish_ibd_after_failure(&self) -> bool {
+        let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
+        if replaced {
+            self.chain_participation().quarantine();
+        } else {
+            self.chain_participation().release_after_noop_ibd();
+        }
+        replaced
+    }
+
+    /// Settle the gate after an IBD that succeeded, holding the node for at least `min_review`.
+    ///
+    /// Deliberately does NOT quarantine on an unverified competing claim. A passed-over offer is
+    /// just an inv hash from some peer: it may be a side block, a merge block, or simply a newer
+    /// block on the very chain we just synced. None of those are competing branches, and all of
+    /// them out-weigh an older tip, so quarantining on "someone claimed more work" would fire on
+    /// routine relay traffic and take honest nodes offline. Quarantine is reserved for the case
+    /// this node can state without guessing — see [`FlowContext::finish_ibd_after_failure`].
+    pub fn finish_ibd_after_success(&self, min_review: Duration) {
+        self.active_consensus_replaced.store(false, Ordering::SeqCst);
+        self.chain_participation().enter_candidate_review(min_review.as_millis() as u64);
     }
 
     /// Notifies that the UTXO set was reset due to pruning point change via IBD.

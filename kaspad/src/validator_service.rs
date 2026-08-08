@@ -397,6 +397,28 @@ impl ValidatorService {
                 break;
             }
 
+            // Before reading any consensus state: is this node entitled to act on the chain it is
+            // holding at all?
+            //
+            // This service reads consensus directly and submits attestation transactions through
+            // `flow_context` (see `try_attest` / `run_compute_cycle`). It never went through the
+            // RPC `is_synced` flag, so the gate that stops the EXTERNAL validator did nothing here:
+            // an in-process validator would happily attest mid-IBD, on a chain that `staging.commit()`
+            // had swapped in minutes earlier and that nothing had compared. Attesting that chain is
+            // what mints the branch-local DNS anchor which then refuses the opposing branch forever
+            // — precisely the amplification this work exists to break.
+            //
+            // Note this asks the participation gate, NOT `should_mine`: that folds in the sync-rate
+            // rule, which can hold true on a chain nobody has compared, and peer connectivity, which
+            // is a mining concern. Signing needs the stricter question.
+            if !self.flow_context.is_consensus_participation_allowed() {
+                info!(
+                    "[{VALIDATOR}] status=ChainReviewPending (participation={}); not attesting, signing, or running compute",
+                    self.flow_context.chain_participation().state().as_str()
+                );
+                continue;
+            }
+
             // Heartbeat: report the node tip, the validator's own bond status, and its
             // active-set membership for the current epoch. When eligible (bond active AND
             // in the active set) it also builds + signs the attestation for the sink and
