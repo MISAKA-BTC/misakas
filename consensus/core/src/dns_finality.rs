@@ -1111,7 +1111,7 @@ impl DnsParams {
     /// the same block, or they would disagree on whether an epoch is credited.
     pub fn epoch_credit_rule(&self, daa_score: u64) -> EpochCreditRule {
         if self.vlt.is_active_at(daa_score) {
-            EpochCreditRule::BftQuorum
+            EpochCreditRule::BftQuorum { min_network_compute: self.vlt.min_network_compute }
         } else {
             EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
         }
@@ -3315,8 +3315,10 @@ pub fn epoch_stake_credit(included_stake: u128, expected_stake: u128, quality_fl
 pub enum EpochCreditRule {
     /// Pre-VLT: ADR-0018 §B graded credit above the φS stake-event quality floor.
     QualityFloor { quality_floor_bps: u16 },
-    /// VLT-weighted BFT: binary credit on the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum.
-    BftQuorum,
+    /// VLT-weighted BFT: binary credit on the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum, over a network whose
+    /// total weight clears `W_min` — the rule carries its own floor exactly as the graded arm
+    /// carries φS, so a call site cannot apply the quorum without it.
+    BftQuorum { min_network_compute: u128 },
 }
 
 /// One epoch's StakeScore credit under `rule`.
@@ -3329,12 +3331,8 @@ pub enum EpochCreditRule {
 pub fn epoch_credit(signed_weight: u128, total_weight: u128, rule: EpochCreditRule) -> u128 {
     match rule {
         EpochCreditRule::QualityFloor { quality_floor_bps } => epoch_stake_credit(signed_weight, total_weight, quality_floor_bps),
-        EpochCreditRule::BftQuorum => {
-            if crate::vlt::meets_bft_quorum(signed_weight, total_weight) {
-                STAKE_SCORE_SCALE
-            } else {
-                0
-            }
+        EpochCreditRule::BftQuorum { min_network_compute } => {
+            if crate::vlt::meets_bft_quorum(signed_weight, total_weight, min_network_compute) { STAKE_SCORE_SCALE } else { 0 }
         }
     }
 }
@@ -3397,7 +3395,9 @@ pub fn derive_dns_health(
     // `frac >= φS` comparison byte-for-byte; the quorum arm asks the quorum directly.
     let cleared = |e: &EpochStakeTally| match rule {
         EpochCreditRule::QualityFloor { quality_floor_bps } => frac_bps(e) >= quality_floor_bps as u128,
-        EpochCreditRule::BftQuorum => crate::vlt::meets_bft_quorum(e.signed_weight, e.total_weight),
+        EpochCreditRule::BftQuorum { min_network_compute } => {
+            crate::vlt::meets_bft_quorum(e.signed_weight, e.total_weight, min_network_compute)
+        }
     };
     if window.iter().any(cleared) {
         return DnsHealth::Active; // a recent epoch cleared the active threshold
@@ -6769,7 +6769,7 @@ mod tests {
     /// forge it — they contribute nothing to either side of the comparison.
     #[test]
     fn vlt_epoch_credit_is_binary_on_the_two_thirds_quorum() {
-        let rule = EpochCreditRule::BftQuorum;
+        let rule = EpochCreditRule::BftQuorum { min_network_compute: 0 };
         // 2 of 3 weight is NOT a quorum (Q(3) = 3); 3 of 3 is.
         assert_eq!(epoch_credit(2, 3, rule), 0);
         assert_eq!(epoch_credit(3, 3, rule), STAKE_SCORE_SCALE);
@@ -6812,7 +6812,10 @@ mod tests {
         ];
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         assert_eq!(per_epoch.len(), 2);
-        assert_eq!(compute_stake_score(&per_epoch, EpochCreditRule::BftQuorum), StakeScore(STAKE_SCORE_SCALE));
+        assert_eq!(
+            compute_stake_score(&per_epoch, EpochCreditRule::BftQuorum { min_network_compute: 0 }),
+            StakeScore(STAKE_SCORE_SCALE)
+        );
     }
 
     /// The fence is the whole safety story for existing networks: below it, nothing about the
@@ -6877,7 +6880,7 @@ mod tests {
         assert_eq!(derive_dns_health(&[below, below, below], rule, 1000, 3, true), DnsHealth::DegradedStakeQualityLow);
 
         // Under the quorum rule the threshold is the quorum itself: 2 of 3 is not one, 3 of 3 is.
-        let q = EpochCreditRule::BftQuorum;
+        let q = EpochCreditRule::BftQuorum { min_network_compute: 0 };
         let two_of_three = EpochStakeTally { epoch: 0, signed_weight: 2, total_weight: 3 };
         let three_of_three = EpochStakeTally { epoch: 0, signed_weight: 3, total_weight: 3 };
         assert_eq!(
@@ -6894,7 +6897,7 @@ mod tests {
         let p = DnsParams { vlt: VltParams { vlt_activation_daa_score: 5_000, ..VltParams::INERT }, ..PRODUCTION_DNS_PARAMS.clone() };
         assert!(matches!(p.epoch_credit_rule(4_999), EpochCreditRule::QualityFloor { .. }));
         assert!(!p.vlt_weighting_active_at(4_999));
-        assert!(matches!(p.epoch_credit_rule(5_000), EpochCreditRule::BftQuorum));
+        assert!(matches!(p.epoch_credit_rule(5_000), EpochCreditRule::BftQuorum { .. }));
         assert!(p.vlt_weighting_active_at(5_000));
     }
 

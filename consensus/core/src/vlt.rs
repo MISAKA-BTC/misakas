@@ -1234,6 +1234,12 @@ pub struct VltParams {
     /// hard fork and must be coordinated across the mesh — and must not be scheduled
     /// before the active set can actually produce verified compute, since with no VLT
     /// every `W_i(E)` is 0, `W(E)` is 0, and no epoch can reach quorum.
+    ///
+    /// [`Self::min_network_compute`] is the graded form of that same warning: a network above the
+    /// fence but below `W_min` does not finalize on the compute dimension either, and falls back
+    /// to PoW ordering until it has done enough work. Scheduling the fence is therefore a question
+    /// about how much verified compute the mesh will be producing by that height, not merely
+    /// whether it produces any.
     pub vlt_activation_daa_score: u64,
 
     /// `K` — credit window length in epochs (§4 eq. 5). Compute older than `K`
@@ -1287,6 +1293,29 @@ pub struct VltParams {
     /// valid. Caps a declaration's reach so an operator that stops running the runtime drops out
     /// of verifier committees instead of sinking every job it is sampled for.
     pub max_capability_validity_blocks: u64,
+
+    /// `W_min` — the minimum total network compute, in µRTE, for an epoch's quorum to mean
+    /// anything (§4: "新しい Validator set は W(E) が minimum network compute W_min 以上の場合に
+    /// のみ有効化される。下回る場合、set transition を延期し、recovery rule へ移行する").
+    ///
+    /// # Why a floor is needed at all
+    ///
+    /// `Q(E) = ⌊2W(E)/3⌋ + 1` is a *fraction* of whatever weight exists, so it is trivially
+    /// reachable when almost none does: at `W(E) = 1` the quorum is 1, and a single validator
+    /// holding one µRTE of credit finalizes the chain for everybody. [`meets_bft_quorum`] already
+    /// refuses `W(E) = 0` for exactly this reason; `W_min` is that same guard with a number behind
+    /// it instead of a special case.
+    ///
+    /// # What happens below it
+    ///
+    /// The epoch earns no credit and reports as degraded, so `StakeScore` stops accumulating,
+    /// the DNS-confirmed anchor stops advancing, and the reorg gate abstains — the overlay steps
+    /// back and PoW alone orders the chain. That is the paper's "recovery rule": the network keeps
+    /// running on the dimension that still has weight behind it rather than letting a trivial
+    /// amount of compute speak for the whole validator set.
+    ///
+    /// `0` disables the floor, leaving only the `W(E) = 0` guard.
+    pub min_network_compute: u128,
 
     /// §6 audit fee: sompi minted to each verifier whose verdict was counted for a certificate,
     /// paid once, at the block where that certificate leaves its challenge window.
@@ -1353,6 +1382,15 @@ impl VltParams {
         // ~1 day at 10 bps. Long enough that renewal is routine, short enough that a departed
         // operator leaves the committee pool within a day.
         max_capability_validity_blocks: 864_000,
+        // W_min = 1e11 µRTE (100 000 reference-token-equivalents). Derived from the smallest
+        // network that can verify anything at all: activation needs `1 + min_verifier_confirmations`
+        // = 3 validators in one runtime class, and one job at the registered profile's 4096-token
+        // ceiling is worth ~3.3e10 µRTE (b = 8.0 per decode token). Three validators each having
+        // completed roughly one full job is therefore the point below which "the network's compute"
+        // is not a meaningful quantity to take two thirds of. A running mesh clears this in its
+        // first epochs and never sees it again — the floor exists to exclude the vacuous case, not
+        // to throttle a healthy one.
+        min_network_compute: 100_000_000_000,
         // 50 000 000 sompi (0.5 KAS) per counted verdict. Calibrated against the cost it has to
         // beat: a full replay at the registered profile's 4096-token ceiling, plus the overlay
         // transaction that carries the verdict (whose own mass-based fee is ~250 000 sompi). Two
@@ -1670,13 +1708,19 @@ pub fn bft_quorum(total_weight: u128) -> u128 {
     total_weight.saturating_mul(2) / 3 + 1
 }
 
-/// Whether an epoch's signed weight reaches [`bft_quorum`].
+/// Whether an epoch's signed weight reaches [`bft_quorum`] over a network whose total weight is
+/// itself large enough to be worth taking two thirds of (§4 `W_min`).
 ///
-/// `total_weight == 0` is always `false`: an epoch with no weight has not been
-/// finalized by anybody, and returning `true` for it would let a network with no
-/// verified compute finalize everything vacuously.
-pub fn meets_bft_quorum(signed_weight: u128, total_weight: u128) -> bool {
-    if total_weight == 0 {
+/// Both floors say the same thing at different scales. `total_weight == 0` is always `false`
+/// because an epoch with no weight has not been finalized by anybody; `total_weight <
+/// min_network_compute` is `false` because a quorum is a *fraction*, and two thirds of almost
+/// nothing is almost nothing. Without the second, a network with one µRTE of verified compute has
+/// `Q(E) = 1` and its single holder finalizes the chain for everyone.
+///
+/// `min_network_compute == 0` leaves only the zero guard — see
+/// [`VltParams::min_network_compute`] for what a network below the floor does instead.
+pub fn meets_bft_quorum(signed_weight: u128, total_weight: u128, min_network_compute: u128) -> bool {
+    if total_weight == 0 || total_weight < min_network_compute {
         return false;
     }
     // Clamp: an over-count (which the callers' dedup already prevents) must not be
@@ -2100,20 +2144,50 @@ mod tests {
 
     #[test]
     fn quorum_is_strictly_above_two_thirds() {
+        // No W_min here: this is the quorum arithmetic on its own.
+        let q = |signed, total| meets_bft_quorum(signed, total, 0);
         // The classic off-by-one: 2 of 3 must NOT be a quorum.
         assert_eq!(bft_quorum(3), 3);
-        assert!(!meets_bft_quorum(2, 3));
-        assert!(meets_bft_quorum(3, 3));
+        assert!(!q(2, 3));
+        assert!(q(3, 3));
 
         assert_eq!(bft_quorum(99), 67);
-        assert!(!meets_bft_quorum(66, 99));
-        assert!(meets_bft_quorum(67, 99));
+        assert!(!q(66, 99));
+        assert!(q(67, 99));
 
         // Zero total weight never finalizes, however much is claimed.
-        assert!(!meets_bft_quorum(0, 0));
-        assert!(!meets_bft_quorum(u128::MAX, 0));
+        assert!(!q(0, 0));
+        assert!(!q(u128::MAX, 0));
         // An over-count cannot manufacture a quorum.
-        assert!(meets_bft_quorum(u128::MAX, 99));
+        assert!(q(u128::MAX, 99));
+    }
+
+    /// §4 `W_min`. A quorum is a fraction, so on a network with almost no verified compute it is
+    /// almost nothing: at `W(E) = 1` the quorum is 1 and its single holder finalizes the chain for
+    /// everybody. The floor is the same guard `W(E) = 0` already gets, with a number behind it.
+    #[test]
+    fn a_quorum_over_too_little_compute_is_not_a_quorum() {
+        let w_min = VltParams::INERT.min_network_compute;
+        assert!(w_min > 0, "the shipped calibration must actually set a floor");
+
+        // Unanimous, and still not finality: the network as a whole has not done enough work for
+        // two thirds of it to mean anything.
+        assert!(!meets_bft_quorum(w_min - 1, w_min - 1, w_min));
+        assert!(!meets_bft_quorum(u128::MAX, 1, w_min), "the W = 1 case the floor exists for");
+        // At the floor the ordinary arithmetic resumes, unchanged.
+        assert!(meets_bft_quorum(bft_quorum(w_min), w_min, w_min));
+        assert!(!meets_bft_quorum(bft_quorum(w_min) - 1, w_min, w_min));
+
+        // The floor is on the NETWORK's weight, not the signers': a well-supplied network whose
+        // signers fall short still fails for the ordinary reason.
+        assert!(!meets_bft_quorum(1, w_min * 10, w_min));
+
+        // The rule carries the floor, so a call site cannot apply the quorum without it.
+        use crate::dns_finality::{EpochCreditRule, STAKE_SCORE_SCALE, epoch_credit};
+        let epoch = |signed, total, min| epoch_credit(signed, total, EpochCreditRule::BftQuorum { min_network_compute: min });
+        assert_eq!(epoch(3, 3, 0), STAKE_SCORE_SCALE, "no floor configured ⇒ pure quorum");
+        assert_eq!(epoch(3, 3, w_min), 0, "below W_min the epoch earns nothing");
+        assert_eq!(epoch(w_min, w_min, w_min), STAKE_SCORE_SCALE);
     }
 
     #[test]
