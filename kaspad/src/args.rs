@@ -186,6 +186,13 @@ pub struct Args {
     pub compute_timeout_secs: Option<u64>,
     pub compute_auto_challenge: bool,
 
+    // MISAKA VLT activation, for PRIVATE devnets only. These are consensus fences: on a public
+    // network they belong to a release, not to whoever started the node, so `apply_to_config`
+    // refuses them anywhere but devnet/simnet.
+    pub vlt_devnet_shadow_daa: Option<u64>,
+    pub vlt_devnet_credit_window_epochs: u32,
+    pub vlt_shadow_only: bool,
+
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
     pub testnet_suffix: u32,
@@ -274,6 +281,9 @@ impl Default for Args {
             compute_max_tokens: None,
             compute_timeout_secs: None,
             compute_auto_challenge: false,
+            vlt_devnet_shadow_daa: None,
+            vlt_devnet_credit_window_epochs: 8,
+            vlt_shadow_only: false,
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -346,6 +356,36 @@ impl Args {
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
+
+        // MISAKA VLT: private-devnet activation. Refused anywhere else — these are consensus
+        // fences, and a node that moved them by flag would simply fork itself off the network it
+        // thinks it is on. On a public network they belong to a release.
+        if let Some(shadow_daa) = self.vlt_devnet_shadow_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--vlt-devnet is devnet/simnet only (got {net:?}). Moving a VLT activation fence is a consensus change \
+                     and must ship in a release, not a command line."
+                );
+            }
+            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_vlt_devnet(
+                shadow_daa,
+                self.vlt_devnet_credit_window_epochs,
+                self.vlt_shadow_only,
+            );
+            // Fail loudly rather than let the node start into a configuration `update_dns_state`
+            // would silently refuse to leave Bootstrap for.
+            assert!(
+                dns.vlt_params_consistent(),
+                "--vlt-devnet produced an inconsistent VLT configuration (credit window {}, K {}); \
+                 the overlay would never leave Bootstrap",
+                dns.vlt_credit_window_blue_score,
+                self.vlt_devnet_credit_window_epochs
+            );
+            config.params.dns_params = Some(dns);
+        } else if self.vlt_shadow_only {
+            panic!("--vlt-shadow-only only means something together with --vlt-devnet");
+        }
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -651,6 +691,40 @@ pub fn cli() -> Command {
                  divergence that a mis-declared determinism class would also produce.")
                 .env("KASPAD_COMPUTE_AUTO_CHALLENGE"),
         )
+        .arg(
+            Arg::new("vlt-devnet")
+                .long("vlt-devnet")
+                .value_name("shadow-daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "MISAKA VLT: activate the compute overlay on a PRIVATE devnet, with the shadow fence at this DAA score \
+                     and the weight fence one full credit window above it. Also registers the shipped PALW model, without \
+                     which every job would mint zero. DEVNET/SIMNET ONLY — on a public network the fences are a release \
+                     decision, not a node-operator one, and the node refuses to start.",
+                )
+                .env("KASPAD_VLT_DEVNET"),
+        )
+        .arg(
+            Arg::new("vlt-devnet-credit-window-epochs")
+                .long("vlt-devnet-credit-window-epochs")
+                .value_name("K")
+                .value_parser(clap::value_parser!(u32))
+                .require_equals(false)
+                .help(
+                    "MISAKA VLT: K for --vlt-devnet (default 8, against production's 96). K sets both the credit walk's \
+                     depth and the soak between the two fences, so a smaller K is a devnet that reaches weighted finality \
+                     in minutes instead of tens of minutes.",
+                )
+                .env("KASPAD_VLT_DEVNET_CREDIT_WINDOW_EPOCHS"),
+        )
+        .arg(
+            arg!(--"vlt-shadow-only" "MISAKA VLT Shadow Mode: with --vlt-devnet, leave the WEIGHT fence dormant. The overlay \
+                 runs and is policed for real — certificates credited, committees drawn, verdicts paid, challenges slashing — \
+                 while DNS finality stays on bonded stake indefinitely. This is the mode to run before committing to a \
+                 weight fence: it produces the C_i(E) you need to see before deciding it is safe to vote on.")
+                .env("KASPAD_VLT_SHADOW_ONLY"),
+        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -882,6 +956,13 @@ impl Args {
             compute_max_tokens: m.get_one::<u32>("compute-max-tokens").copied().or(defaults.compute_max_tokens),
             compute_timeout_secs: m.get_one::<u64>("compute-timeout-secs").copied().or(defaults.compute_timeout_secs),
             compute_auto_challenge: arg_match_unwrap_or::<bool>(&m, "compute-auto-challenge", defaults.compute_auto_challenge),
+            vlt_devnet_shadow_daa: m.get_one::<u64>("vlt-devnet").copied(),
+            vlt_devnet_credit_window_epochs: arg_match_unwrap_or::<u32>(
+                &m,
+                "vlt-devnet-credit-window-epochs",
+                defaults.vlt_devnet_credit_window_epochs,
+            ),
+            vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

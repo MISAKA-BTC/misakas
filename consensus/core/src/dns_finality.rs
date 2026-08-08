@@ -1263,6 +1263,63 @@ impl DnsParams {
     /// switched the weight source. The unbonding term matters because a validator that could exit
     /// faster than its compute credit decays would still be drawing voting weight from jobs it can
     /// no longer be slashed for.
+    /// The one span that governs both how far back the credit walk must reach and how long the
+    /// overlay must run before the vote may depend on it: `K + delay` epochs, plus the challenge
+    /// window a certificate waits out before it counts, plus the lag and backoff an epoch's anchor
+    /// needs before it is decidable.
+    ///
+    /// One definition because it is one quantity — how long `C_i(E)` takes to mean anything. A
+    /// walk shorter than this silently truncates the oldest epochs of every validator's score; a
+    /// soak shorter than this moves the vote onto a score that has not finished forming.
+    pub fn vlt_credit_span(&self) -> u64 {
+        (self.vlt.credit_window_epochs as u64)
+            .saturating_add(self.vlt.credit_delay_epochs as u64)
+            .saturating_mul(self.attestation_epoch_length_blue_score)
+            .saturating_add(self.vlt.challenge_window_blocks)
+            .saturating_add(self.attestation_lag_blue_score)
+            .saturating_add(self.attestation_anchor_backoff_blue_score)
+    }
+
+    /// Rewrite this preset's VLT knobs into a coherent **private-devnet** calibration, with the
+    /// shadow fence at `shadow_daa` and the weight fence one full soak above it (or dormant, if
+    /// `shadow_only` — that is Shadow Mode: the overlay runs and is policed for real while
+    /// finality stays on bonded stake indefinitely).
+    ///
+    /// Only the calibration changes, never a rule. `credit_window_epochs` drops from the
+    /// production 96 to `K` so the soak is minutes rather than tens of minutes, and the model cost
+    /// table gains the shipped PALW entry — without a registered model every job mints zero VLT,
+    /// so a devnet with the empty production table would run the whole overlay and produce a
+    /// `W(E)` of nothing. The committee shape (5 drawn, 3 to decide either way) is the shipped one
+    /// and is left alone: it is exactly a five-validator network's shape already.
+    ///
+    /// `vlt_credit_window_blue_score` is derived rather than configured, so the walk depth and the
+    /// soak cannot drift apart — they are the same quantity ([`Self::vlt_credit_span`]).
+    ///
+    /// **Devnet and simnet only.** These are consensus fences: on a public network they belong to
+    /// a release, not to whoever started the node. The caller enforces that.
+    pub fn with_vlt_devnet(mut self, shadow_daa: u64, credit_window_epochs: u32, shadow_only: bool) -> Self {
+        self.vlt = VltParams {
+            vlt_shadow_activation_daa_score: shadow_daa,
+            vlt_activation_daa_score: u64::MAX,
+            credit_window_epochs,
+            model_cost_table: crate::vlt::ModelCostTable::palw_qwen36_metal(),
+            ..self.vlt
+        };
+        let soak = self.vlt_credit_span();
+        self.vlt_credit_window_blue_score = soak;
+        // §7: a validator must not be able to exit faster than the compute it still draws weight
+        // from can be challenged, or it would vote with jobs it can no longer be slashed for.
+        // Devnet's stock 700-block unbonding window predates VLT and does not cover it, so raise
+        // it to the bound rather than leave the preset quietly inconsistent — this is the one
+        // knob outside `vlt` that a live credit window forces.
+        self.unbonding_period_blocks =
+            self.unbonding_period_blocks.max(self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score));
+        if !shadow_only {
+            self.vlt.vlt_activation_daa_score = shadow_daa.saturating_add(soak);
+        }
+        self
+    }
+
     pub fn vlt_params_consistent(&self) -> bool {
         if self.vlt.vlt_activation_daa_score == u64::MAX {
             return true;
@@ -1275,12 +1332,7 @@ impl DnsParams {
         // challenge window a certificate waits out before counting, plus the lag/backoff an
         // epoch's anchor needs before it is decidable. A short window here does not fail loudly;
         // it silently truncates the oldest epochs of every validator's `C_i(E)` to zero.
-        let needed_credit_window = (self.vlt.credit_window_epochs as u64)
-            .saturating_add(self.vlt.credit_delay_epochs as u64)
-            .saturating_mul(self.attestation_epoch_length_blue_score)
-            .saturating_add(self.vlt.challenge_window_blocks)
-            .saturating_add(self.attestation_lag_blue_score)
-            .saturating_add(self.attestation_anchor_backoff_blue_score);
+        let needed_credit_window = self.vlt_credit_span();
         // The soak. `C_i(E)` sums a `credit_window_epochs` window, so the weight fence must sit at
         // least one full window above the shadow fence or it switches the vote to a table that has
         // not finished filling: `W(E)` short of what the mesh actually produces, or 0 outright, and
@@ -7438,6 +7490,51 @@ mod tests {
 
         assert_eq!(validate_stake_precommit_payload(&borsh::to_vec(&mk(10, some)).unwrap()), Err(DnsTxError::IncoherentPrecommitLock));
         assert!(validate_stake_precommit_payload(&borsh::to_vec(&mk(9, some)).unwrap()).is_ok());
+    }
+
+    /// `--vlt-devnet` must produce a network that can actually reach weighted finality.
+    ///
+    /// Every part of this is a way the switch could hand someone a devnet that runs, logs
+    /// plausibly, and never does the thing they started it for: an inconsistent calibration stays
+    /// in Bootstrap with the gate dormant; a walk shorter than the soak silently truncates
+    /// `C_i(E)`; an empty model table credits every job zero, so `W(E)` stays at zero forever
+    /// while the overlay looks busy.
+    #[test]
+    fn vlt_devnet_switch_produces_a_network_that_can_actually_finalize() {
+        use crate::config::params::GENESIS_ACTIVE_DNS_PARAMS;
+        let base = GENESIS_ACTIVE_DNS_PARAMS;
+        let devnet = base.clone().with_vlt_devnet(200, 8, false);
+
+        assert!(devnet.vlt_params_consistent(), "the switch must not produce a Bootstrap-forever network");
+        assert_eq!(devnet.vlt.vlt_shadow_activation_daa_score, 200);
+        assert_eq!(
+            devnet.vlt.vlt_activation_daa_score,
+            200 + devnet.vlt_credit_span(),
+            "the weight fence sits exactly one soak above the shadow fence"
+        );
+        assert_eq!(devnet.vlt_credit_window_blue_score, devnet.vlt_credit_span(), "walk depth and soak are one quantity");
+        assert!(!devnet.vlt.model_cost_table.live().is_empty(), "without a registered model every job mints zero");
+        assert!(
+            devnet.unbonding_period_blocks >= devnet.vlt.min_unbonding_period_blocks(devnet.attestation_epoch_length_blue_score),
+            "§7: a validator must not be able to exit while the compute it votes with is still challengeable"
+        );
+        assert!(devnet.unbonding_period_blocks > base.unbonding_period_blocks, "devnet's stock window predates VLT and is raised");
+
+        // K is what makes a devnet's soak minutes rather than tens of minutes, and it must move
+        // both the fence gap and the walk together.
+        let slower = base.clone().with_vlt_devnet(200, 96, false);
+        assert!(slower.vlt_credit_span() > devnet.vlt_credit_span());
+        assert!(slower.vlt_params_consistent());
+
+        // Shadow Mode: the overlay runs, the vote never moves.
+        let shadow = base.clone().with_vlt_devnet(200, 8, true);
+        assert!(shadow.vlt_shadow_active_at(200));
+        assert!(!shadow.vlt_weighting_active_at(u64::MAX - 1), "the weight fence stays dormant");
+        assert!(shadow.vlt_params_consistent(), "and a dormant weight fence is trivially consistent");
+
+        // The shipped presets are untouched by any of this.
+        assert_eq!(base.vlt.vlt_shadow_activation_daa_score, u64::MAX);
+        assert_eq!(base.vlt.vlt_activation_daa_score, u64::MAX);
     }
 
     /// The fence is the whole safety story for existing networks: below it, nothing about the

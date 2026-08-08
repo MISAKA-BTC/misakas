@@ -72,7 +72,7 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
-        ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
+        ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, EpochCreditRule,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_compute_credits,
@@ -100,8 +100,8 @@ use kaspa_consensus_core::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
         ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits, VltEpochSnapshot,
         adjudicate_compute_challenge, compute_capability_message, compute_certificate_message, compute_commitment_message,
-        compute_receipt_hash, job_input_commitment, job_spec_id, normalize_vlt, select_verifiers, verifier_verdict_message,
-        verify_compute_certificate, vlt_epoch_finalized,
+        compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
+        verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -2338,6 +2338,37 @@ impl VirtualStateProcessor {
             dns_params.degraded_stake_quality_epochs,
             rollout_stage == DnsRolloutStage::Active,
         );
+
+        // MISAKA Shadow Mode. Between the two fences the overlay is producing and policing real
+        // verified compute while finality still runs on bonded stake, and the only reason to run
+        // that interval is to *look* at it — so report, every recompute, the answer the weight
+        // fence would give if it opened here. `W(E)`, how much of it signed, and whether the epoch
+        // would have reached `Q(E)`. A soak nobody can read is just a delay.
+        if dns_params.vlt_shadow_active_at(sink_daa) && !dns_params.vlt_weighting_active_at(sink_daa) {
+            let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
+            let (shadow_contribs, shadow_anchor_daa) =
+                self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
+            let shadow_totals = self.total_weight_by_epoch(&bonds, &shadow_anchor_daa, shadow_weight);
+            let shadow_epochs = aggregate_epoch_tallies(&shadow_contribs, &shadow_totals);
+            let shadow_rule = EpochCreditRule::BftQuorum { min_network_compute: dns_params.vlt.min_network_compute };
+            let quorum = shadow_epochs
+                .iter()
+                .filter(|t| meets_bft_quorum(t.signed_weight, t.total_weight, dns_params.vlt.min_network_compute))
+                .count();
+            let newest = shadow_epochs.last();
+            info!(
+                "[vlt-shadow] sink_daa={} {} validator(s) with credit; {}/{} epoch(s) would reach quorum; newest epoch {:?}: W(E)={} signed={} (would-be stake_depth={}) — the weight fence is at {}",
+                sink_daa,
+                snapshot.credits().len(),
+                quorum,
+                shadow_epochs.len(),
+                newest.map(|t| t.epoch),
+                newest.map(|t| t.total_weight).unwrap_or(0),
+                newest.map(|t| t.signed_weight).unwrap_or(0),
+                compute_stake_score(&shadow_epochs, shadow_rule).0,
+                dns_params.vlt.vlt_activation_daa_score,
+            );
+        }
 
         // kaspa-pq DNS-finality (§6.5): structured diagnostics for the StakeScore credit
         // path — how many attestations were credited at this sink, the credited

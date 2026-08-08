@@ -108,6 +108,37 @@ must reach and how long the overlay must run before the vote may depend on it.
 has not filled stays in Bootstrap with the gate dormant. Trivially true on every shipped inert
 preset, so no current network is affected.
 
+### Activation runbook
+
+Four steps, each of which must produce evidence before the next is scheduled.
+
+**1. Five-validator private devnet.** `scripts/misaka-vlt-devnet.sh`. Five is the smallest set
+where the shipped committee shape (5 drawn / 3 to confirm / 3 to refute) is a real sample rather
+than the whole network, where one hostile verifier is neither decisive nor pivotal, and where the
+two verdict quorums genuinely cannot both be reached. `--vlt-devnet <shadow_daa>` moves both
+fences and registers the PALW model; `--vlt-devnet-credit-window-epochs` shrinks `K` from 96 so
+the soak is minutes. Devnet and simnet only — kaspad refuses the flag anywhere else, because a
+fence moved by command line is a node forking itself off the network it thinks it is on.
+
+**2. Shadow Mode.** `--vlt-shadow-only` leaves the weight fence dormant: the overlay runs and is
+policed for real — certificates credited, committees drawn, verdicts paid, settled challenges
+slashing — while finality stays on bonded stake indefinitely. Every recompute logs `[vlt-shadow]`
+with `W(E)`, how much of it signed, and how many epochs *would* have reached `Q(E)`. That line is
+the whole point of the mode and the entry criterion for step 3: schedule a weight fence when it
+has been reporting a healthy `W(E)` and a consistent quorum, not before.
+
+**3. Testnet shadow fork.** Move `TESTNET_DNS_PARAMS.vlt.vlt_shadow_activation_daa_score` to a
+scheduled height and populate `model_cost_table`. This is a real hard fork — it moves coinbase
+value and it slashes bonds — but finality is outside its blast radius, so a mistake costs
+compute-overlay behaviour rather than the chain.
+
+**4. Testnet weight fork.** Move `vlt_activation_daa_score`, at least one full soak above the
+shadow fence. `vlt_params_consistent()` refuses anything less, and `update_dns_state` keeps a
+preset that fails it in Bootstrap rather than arming the gate over a denominator that has not
+filled.
+
+Mainnet repeats 3 and 4 with its own heights, after testnet has run both.
+
 The window requirement matters more than it looks: the credit walk resolves each certificate's
 epoch against a canonical-anchor map built over the *same* window, and an epoch with no anchor is
 skipped. A short window therefore does not fail loudly — it silently truncates the oldest epochs
