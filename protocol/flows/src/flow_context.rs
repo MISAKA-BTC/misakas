@@ -491,8 +491,11 @@ impl FlowContext {
     pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64, relay_blue_work: BlueWorkType) -> Option<IbdRunningGuard> {
         if self.is_ibd_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score, blue_work: relay_blue_work });
-            // Fresh budget for the IBD that is starting now — see `should_probe_ibd_candidate`.
-            self.ibd_candidates.write().clear();
+            // Deliberately NOT cleared. A validated pruning proof costs the prover minutes and this
+            // node a large transfer, and the reason an IBD is starting may well be that the last one
+            // was abandoned for a candidate verified during it. Throwing that away would mean
+            // re-fetching the same proofs and, worse, forgetting which chain won — the registry
+            // expires by TTL instead.
             self.active_consensus_replaced.store(false, Ordering::SeqCst);
             // Stop participating NOW. `staging.commit()` happens partway through an IBD, so waiting
             // for the IBD to report success leaves a window in which this node is already running

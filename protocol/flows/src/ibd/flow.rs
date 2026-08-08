@@ -64,6 +64,14 @@ const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
 /// misses this has its candidate refused, not left pending.
 const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// How many times this node may abandon a sync for a verified-better candidate before giving up.
+///
+/// Switching on evidence is the recovery path and should not be rationed lightly — but two branches
+/// trading the latch forever is a different failure that looks the same from inside. A node cannot
+/// distinguish "I keep finding better chains" from "I am being played" on its own, so past this
+/// count it stops and says so.
+const MAX_CHAIN_SWITCHES: u32 = 5;
+
 /// Flow for managing IBD - Initial Block Download
 pub struct IbdFlow {
     pub(super) ctx: FlowContext,
@@ -359,6 +367,52 @@ impl IbdFlow {
             })
         };
 
+        // A verified-better candidate is not a dead end — it is the answer.
+        //
+        // Abandoning this sync releases the latch, and the relay guard stops discarding that peer's
+        // blocks the moment it does; its next inv triggers a fresh IBD from it. That IBD runs the
+        // ordinary pipeline, so the chain finally adopted has had its headers CONTEXTUALLY
+        // validated all the way to the tip — the thing a pruning proof alone cannot establish, and
+        // which one staging consensus per node means can only be done for the chain being synced.
+        //
+        // The registry survives the handover, so the winner's verification is not repeated and the
+        // loser cannot quietly win the next race.
+        if let CommitVerdict::RefuseVerifiedSuperior { candidate, verified_blue_work } = verdict {
+            let switches = {
+                let mut registry = self.ctx.ibd_candidates().write();
+                registry.note_switch();
+                registry.switches()
+            };
+            if switches <= MAX_CHAIN_SWITCHES {
+                warn!(
+                    "Abandoning the sync from {}: candidate {} (pruning point {}) has a VALIDATED blue work of {} against the \
+                     staged {}. Switching to it — its headers will be contextually validated to the tip by the IBD that \
+                     follows, which is the only way this node can establish that work rather than take it on trust. \
+                     (switch {} of {})",
+                    self.router,
+                    candidate.virtual_selected_parent,
+                    candidate.pruning_point,
+                    verified_blue_work,
+                    staged_blue_work,
+                    switches,
+                    MAX_CHAIN_SWITCHES
+                );
+                // Deliberately no quarantine: the node is not stuck, it is changing its mind on
+                // evidence. Participation stays closed because the gate is still in IbdRunning.
+                return Err(ProtocolError::OtherOwned(format!(
+                    "switching from {} to a verified-better chain candidate {}",
+                    self.router, candidate.virtual_selected_parent
+                )));
+            }
+            self.ctx.chain_participation().quarantine();
+            return Err(ProtocolError::OtherOwned(format!(
+                "refusing to commit the chain synced from {}: candidate {} is verified-better, but this node has already \
+                 switched chains {} times. Two branches trading the latch is a different problem from being on the wrong \
+                 one, and this node cannot tell them apart on its own.",
+                self.router, candidate.virtual_selected_parent, switches
+            )));
+        }
+
         let refusal = match verdict {
             CommitVerdict::Allow => return Ok(()),
             CommitVerdict::RefuseCheckpointParamsMismatch => {
@@ -379,11 +433,8 @@ impl IbdFlow {
                     self.router, cp.block_hash, cp.daa_score
                 )
             }
-            CommitVerdict::RefuseVerifiedSuperior { candidate, verified_blue_work } => format!(
-                "refusing to commit the chain synced from {}: candidate {} (pruning point {}) has a VALIDATED blue work of \
-                 {} against the staged {}. Committing would adopt the weaker branch purely because its peer relayed first.",
-                self.router, candidate.virtual_selected_parent, candidate.pruning_point, verified_blue_work, staged_blue_work
-            ),
+            // Handled above: a verified-better candidate is a switch, not a refusal.
+            CommitVerdict::RefuseVerifiedSuperior { .. } => unreachable!("handled before this match"),
             CommitVerdict::RefuseUnresolved { count } => format!(
                 "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
                  verified in time. Choosing by arrival order is what fixes a partition in place, so this node is \

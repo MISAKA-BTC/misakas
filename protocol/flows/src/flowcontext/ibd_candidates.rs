@@ -171,6 +171,8 @@ pub struct IbdCandidateRegistry {
     candidates: HashMap<CandidateId, IbdCandidate>,
     /// Last time each peer was asked for a summary, for the per-peer rate limit.
     last_asked: HashMap<PeerKey, Instant>,
+    /// Syncs abandoned in favour of a verified-better candidate, since the node started.
+    switches: u32,
 }
 
 impl IbdCandidateRegistry {
@@ -255,6 +257,18 @@ impl IbdCandidateRegistry {
     /// This — and only this — is what a chain decision may be based on.
     pub fn best_verified(&self) -> Option<&IbdCandidate> {
         self.candidates.values().filter(|c| c.verified_blue_work().is_some()).max_by_key(|c| c.verified_blue_work().unwrap())
+    }
+
+    /// How many times this node has abandoned a sync in favour of a verified-better candidate.
+    ///
+    /// Bounded so that two chains cannot trade the latch forever. Switching is the recovery path;
+    /// switching without end is a different failure with the same symptom.
+    pub fn switches(&self) -> u32 {
+        self.switches
+    }
+
+    pub fn note_switch(&mut self) {
+        self.switches = self.switches.saturating_add(1);
     }
 
     /// A verified candidate strictly better than `current`, if one exists.
@@ -613,6 +627,15 @@ mod tests {
             r.get(&id).unwrap().validation,
             CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout }
         ));
+    }
+
+    #[test]
+    fn switches_are_counted_so_two_branches_cannot_trade_the_latch_forever() {
+        let mut r = IbdCandidateRegistry::default();
+        assert_eq!(r.switches(), 0);
+        r.note_switch();
+        r.note_switch();
+        assert_eq!(r.switches(), 2, "a node cannot tell 'I keep finding better chains' from 'I am being played'");
     }
 
     #[test]
