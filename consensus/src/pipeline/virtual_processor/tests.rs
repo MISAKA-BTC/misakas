@@ -4698,6 +4698,71 @@ async fn dns_gate_long_secret_branch_cannot_buy_an_abstain() {
     );
 }
 
+/// **The boundary of the DNS liveness work, stated executably.** Releasing the DNS veto —
+/// horizon, TTL, work override, all of it — cannot converge a fork whose branches disagree about
+/// whether each other's blocks are *valid*.
+///
+/// Every DNS release path acts at sink selection, on candidates that have already passed UTXO
+/// validation. When a node judges the other branch UTXO-invalid, those blocks are disqualified
+/// **before** the gate is ever consulted, so no amount of gate permissiveness reaches them. That
+/// is why the incident reports separate the two layers: testnet-21's split was verdict divergence
+/// (layer 1) wearing a relay/IBD closure (layer 2), and testnet-22 still lists overlay-commitment
+/// verdict divergence among its unresolved candidate causes.
+///
+/// Construction is deliberately blunt: a side branch heavier than canonical, built UTXO-invalid,
+/// with the DNS gate provably dormant (no bond ⇒ never `Active`) so it cannot be blamed for the
+/// non-convergence. The heavier branch is refused anyway.
+///
+/// Kept so nobody reads the partition-liveness commits as "chain splits are fixed". They are not:
+/// what is fixed is DNS turning a split into a permanent one.
+#[tokio::test]
+async fn verdict_divergent_branch_does_not_converge_even_with_the_dns_gate_dormant() {
+    use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader};
+    use kaspa_consensus_core::dns_finality::DnsRolloutStage;
+
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..20 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    }
+
+    const REWIND: usize = 5; // canonical blocks the side branch forks below
+    const SIDE_LEN: usize = 40; // long enough to out-work the canonical tail by a wide margin
+    let sink_before = ctx.consensus.get_sink();
+    let fork_point = {
+        let vp = ctx.consensus.virtual_processor();
+        vp.reachability_service.default_backward_chain_iterator(sink_before).nth(REWIND).expect("chain longer than REWIND")
+    };
+    let side_tip = ctx.build_and_insert_disqualified_chain(vec![fork_point], SIDE_LEN).await;
+
+    // The side branch really is heavier — this is not a work-starved branch being ignored.
+    {
+        let vp = ctx.consensus.virtual_processor();
+        let side_work = vp.ghostdag_store.get_blue_work(side_tip).unwrap();
+        let canon_work = vp.ghostdag_store.get_blue_work(sink_before).unwrap();
+        assert!(side_work > canon_work, "the side branch must out-work canonical ({side_work} vs {canon_work})");
+
+        // And the DNS gate is dormant: no bond was ever created, so the rollout never reached
+        // `Active` and `dns_reorg_outcome` short-circuits to `GateInactive` before any horizon,
+        // TTL or override logic runs. Whatever refuses this branch, it is not the DNS veto.
+        let stage = vp.dns_state_store.read().get().map(|s| s.rollout_stage).unwrap_or(DnsRolloutStage::Launch);
+        assert_ne!(stage, DnsRolloutStage::Active, "the gate must be provably out of the picture for this test to mean anything");
+    }
+
+    // Refused anyway: the blocks never became sink candidates, because this node judged them
+    // UTXO-invalid. Sink selection — where every DNS release path lives — is downstream of that.
+    assert_eq!(ctx.consensus.block_status(side_tip), BlockStatus::StatusDisqualifiedFromChain, "the branch is verdict-rejected");
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "a heavier but verdict-rejected branch does not move the sink");
+
+    // The honest reading: DNS bounded ⇒ a split cannot be made permanent BY DNS. A split caused by
+    // divergent validation still needs the divergence itself fixed.
+    assert!(
+        ctx.consensus.virtual_processor().reachability_service.is_chain_ancestor_of(fork_point, ctx.consensus.get_sink()),
+        "both branches still share the fork point; nothing converged them"
+    );
+}
+
 /// Confirmed-anchor TTL (`dns_veto_ttl_daa_score`) end to end on a real DAG — the release path for
 /// a node defending an anchor its own branch no longer supports.
 ///
