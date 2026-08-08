@@ -30,6 +30,9 @@ blake2b_hasher! {
     struct MuHashElementHash => b"MuHashElement",
     struct MuHashFinalizeHash => b"MuHashFinalize",
     struct PersonalMessageSigningHash => b"PersonalMessageSigningHash",
+    // ConsensusParamsId: fingerprint of a node's consensus parameters, exchanged at handshake so
+    // peers running different rule sets under the same network name are separated before they fork.
+    struct ConsensusParamsId => b"ConsensusParamsId",
 }
 
 // kaspa-pq Phase 9 (PR-9.2): 64-byte keyed BLAKE2b-512 hashers.

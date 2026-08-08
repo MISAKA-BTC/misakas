@@ -176,6 +176,16 @@ message VersionMessage{
   bool disableRelayTx = 8;
   SubnetworkId subnetworkId = 9;
   string network = 10;
+  // kaspa-pq: the rule set this node actually runs, not just the name it answers to.
+  // A shared network name does not imply shared consensus rules — testnet-22 forked
+  // because an older build computed different overlay commitments while presenting an
+  // identical handshake. Peers that disagree here can never reach consensus, so they
+  // are disconnected before either can become an IBD source for the other.
+  // Opaque bytes rather than the Hash message: these two are different widths
+  // (genesis is a 64-byte block hash, the params id a 32-byte digest) and neither
+  // is ever interpreted — only compared.
+  bytes genesisHash = 11;
+  bytes consensusParamsId = 12;
 }
 
 message RejectMessage{

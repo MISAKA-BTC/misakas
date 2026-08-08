@@ -75,12 +75,15 @@ use uuid::Uuid;
 // immediately. See docs/adr/0001-network-isolation.md.
 //
 // 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages; 102 adds the EVM
-// deposit-claim relay messages (oneof 67-70). Lower-version peers are still fully
+// deposit-claim relay messages (oneof 67-70); 103 adds `genesisHash` /
+// `consensusParamsId` to the handshake. Peers below 103 send those empty, which the
+// handshake treats as a mismatch — a peer that cannot state which rules it runs is
+// exactly the testnet-22 shape, so it is disconnected rather than waved through. Lower-version peers are still fully
 // served (they negotiate the same flow set minus the newer relay flows), but must
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 102;
+const PROTOCOL_VERSION: u32 = 103;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -391,6 +394,12 @@ impl Drop for IbdRunningGuard {
         let result = self.indicator.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
         assert!(result.is_ok())
     }
+}
+
+/// Render a peer's handshake fingerprint for an error message, distinguishing "an older build that
+/// does not send this" from "a different value", since the operator response differs.
+fn describe_fingerprint(bytes: &[u8]) -> String {
+    if bytes.is_empty() { "absent (peer predates this field)".to_owned() } else { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 }
 
 /// Ceiling on competing offers fetched during a single IBD, across all peers.
@@ -1231,7 +1240,15 @@ impl ConnectionInitializer for FlowContext {
 
         // Build the local version message
         // Subnets are not currently supported
-        let mut self_version_message = Version::new(local_address, self.node_id, network_name.clone(), None, PROTOCOL_VERSION);
+        let mut self_version_message = Version::new(
+            local_address,
+            self.node_id,
+            network_name.clone(),
+            None,
+            PROTOCOL_VERSION,
+            self.config.genesis.hash.as_bytes().to_vec(),
+            self.config.params.consensus_params_id().as_bytes().to_vec(),
+        );
         self_version_message.add_user_agent(name(), version(), &self.config.user_agent_comments);
         // TODO: get number of live services
         // TODO: disable_relay_tx from config/cmd
@@ -1254,6 +1271,35 @@ impl ConnectionInitializer for FlowContext {
 
         if peer_version.network != network_name {
             return Err(ProtocolError::WrongNetwork(network_name, peer_version.network));
+        }
+
+        // Answering to the same network name does not mean running the same rules.
+        //
+        // testnet-22 forked because an older build computed different overlay commitments while
+        // presenting a handshake indistinguishable from a correct node's. The two peered, synced
+        // from each other, and disagreed about block validity — which no amount of candidate
+        // selection downstream can repair, because by then both sides believe they are right.
+        // Separate them here, before either can become an IBD source for the other.
+        //
+        // Peers predating these fields send them empty. Treated as a mismatch rather than waved
+        // through: an unknown rule set is exactly the case this check exists for, and the protocol
+        // version bump means anything that omits them is an older build.
+        let local_genesis = self.config.genesis.hash.as_bytes().to_vec();
+        if peer_version.genesis_hash != local_genesis {
+            return Err(ProtocolError::WrongGenesis(
+                network_name,
+                self.config.genesis.hash.to_string(),
+                describe_fingerprint(&peer_version.genesis_hash),
+            ));
+        }
+
+        let local_params_id = self.config.params.consensus_params_id();
+        if peer_version.consensus_params_id != local_params_id.as_bytes().to_vec() {
+            return Err(ProtocolError::WrongConsensusParams(
+                network_name,
+                local_params_id.to_string(),
+                describe_fingerprint(&peer_version.consensus_params_id),
+            ));
         }
 
         debug!("protocol versions - self: {}, peer: {}", PROTOCOL_VERSION, peer_version.protocol_version);

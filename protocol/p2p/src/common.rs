@@ -18,6 +18,21 @@ pub enum ProtocolError {
     #[error("Network mismatch - local: {0}, remote: {1}")]
     WrongNetwork(String, String),
 
+    /// Same network name, different genesis. Kept distinct from `WrongNetwork` and
+    /// `WrongConsensusParams` so an operator reading the log can tell which of the three
+    /// "you are not on my chain" cases they hit.
+    #[error(
+        "Genesis mismatch on network {0} - local: {1}, remote: {2}. The peer answers to this network name but builds on a different genesis"
+    )]
+    WrongGenesis(String, String, String),
+
+    /// Same network name and genesis, different rule set. This is the case that forked testnet-22:
+    /// an older build computing different overlay commitments, indistinguishable at handshake.
+    #[error(
+        "Consensus params mismatch on network {0} - local: {1}, remote: {2}. The peer runs different consensus rules and cannot agree with this node on block validity; syncing from it would fork"
+    )]
+    WrongConsensusParams(String, String, String),
+
     #[error("expected message type/s {0} but got {1:?}")]
     UnexpectedMessage(&'static str, Option<KaspadMessagePayloadType>),
 

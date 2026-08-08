@@ -14,6 +14,7 @@ use crate::{
     vlt::VltParams,
 };
 use kaspa_addresses::Prefix;
+use kaspa_hashes::{ConsensusParamsId, Hash};
 use kaspa_math::{Uint256, Uint576};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -406,6 +407,29 @@ pub struct Params {
 }
 
 impl Params {
+    /// A fingerprint of every consensus parameter this node runs, for the P2P handshake.
+    ///
+    /// Two nodes that answer the same network name but disagree here cannot reach consensus — this
+    /// struct's own contract says so — and today nothing stops them from peering, syncing from each
+    /// other and forking. testnet-22 forked exactly this way: an older build computing different
+    /// overlay commitments, indistinguishable at handshake from a correct one.
+    ///
+    /// Derived from the `Debug` rendering rather than a hand-listed set of fields. That is a
+    /// deliberate trade. A hand-written list silently stops covering any field added after it was
+    /// written, and the failure mode is two nodes that believe they agree and do not — the exact
+    /// bug this exists to prevent. Hashing the whole rendering cannot miss a field.
+    ///
+    /// The cost is that cosmetic changes — renaming a field, adding a non-consensus one, a change
+    /// in how `Debug` formats a type — also change the fingerprint, so builds that would in fact
+    /// have interoperated refuse to peer. That direction is safe (it costs connectivity, not
+    /// consensus) and is why this is a fingerprint for *separating* nodes, never an identifier to
+    /// persist, publish, or compare across versions.
+    pub fn consensus_params_id(&self) -> Hash {
+        let mut hasher = ConsensusParamsId::new();
+        hasher.write(format!("{self:?}").as_bytes());
+        hasher.finalize()
+    }
+
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
     /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
     /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
@@ -1425,3 +1449,52 @@ pub const DEVNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::never(),
 };
+
+#[cfg(test)]
+mod consensus_params_id_tests {
+    use super::*;
+
+    #[test]
+    fn a_different_rule_set_gets_a_different_fingerprint() {
+        // The whole point of the handshake check: two nodes answering the same network name must
+        // not be able to peer while disagreeing about block validity.
+        let base = SIMNET_PARAMS;
+        let mut tweaked = SIMNET_PARAMS;
+        tweaked.ghostdag_k += 1;
+        assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
+    }
+
+    #[test]
+    fn identical_params_agree() {
+        assert_eq!(SIMNET_PARAMS.consensus_params_id(), SIMNET_PARAMS.clone().consensus_params_id());
+    }
+
+    #[test]
+    fn every_shipped_preset_is_distinguishable() {
+        let ids = [
+            ("mainnet", MAINNET_PARAMS.consensus_params_id()),
+            ("testnet", TESTNET_PARAMS.consensus_params_id()),
+            ("simnet", SIMNET_PARAMS.consensus_params_id()),
+            ("devnet", DEVNET_PARAMS.consensus_params_id()),
+        ];
+        for (i, (name_a, a)) in ids.iter().enumerate() {
+            for (name_b, b) in ids.iter().skip(i + 1) {
+                assert_ne!(a, b, "{name_a} and {name_b} must not share a fingerprint");
+            }
+        }
+    }
+
+    #[test]
+    fn an_overlay_rule_change_is_caught() {
+        // testnet-22's shape: a build whose overlay behaviour differs while everything visible at
+        // handshake looks identical. The fingerprint covers the whole struct, so it is caught.
+        let base = TESTNET_PARAMS;
+        let mut tweaked = TESTNET_PARAMS;
+        if let Some(dns) = tweaked.dns_params.as_mut() {
+            dns.dns_activation_daa_score += 1;
+        } else {
+            tweaked.dns_params = Some(GENESIS_ACTIVE_DNS_PARAMS);
+        }
+        assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
+    }
+}

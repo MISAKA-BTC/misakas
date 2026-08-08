@@ -18,6 +18,11 @@ pub struct Version {
     pub user_agent: String,
     pub disable_relay_tx: bool,
     pub subnetwork_id: Option<SubnetworkId>,
+    /// The genesis this node builds on. Empty from peers predating this field.
+    pub genesis_hash: Vec<u8>,
+    /// Fingerprint of this node's consensus parameters — see `Params::consensus_params_id`.
+    /// Empty from peers predating this field. Opaque: only ever compared, never interpreted.
+    pub consensus_params_id: Vec<u8>,
 }
 
 impl Version {
@@ -27,6 +32,8 @@ impl Version {
         network: String,
         subnetwork_id: Option<SubnetworkId>,
         protocol_version: u32,
+        genesis_hash: Vec<u8>,
+        consensus_params_id: Vec<u8>,
     ) -> Self {
         Self {
             protocol_version,
@@ -38,6 +45,8 @@ impl Version {
             user_agent: format!("/{}:{}/", name(), version()),
             disable_relay_tx: false,
             subnetwork_id,
+            genesis_hash,
+            consensus_params_id,
         }
     }
 

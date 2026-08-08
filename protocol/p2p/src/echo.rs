@@ -101,6 +101,9 @@ fn build_dummy_version_message() -> VersionMessage {
         disable_relay_tx: false,
         subnetwork_id: None,
         network: "kaspa-mainnet".to_string(),
+        // Echo is a protocol test harness, not a node: it has no consensus to fingerprint.
+        genesis_hash: Vec::new(),
+        consensus_params_id: Vec::new(),
     }
 }
 
