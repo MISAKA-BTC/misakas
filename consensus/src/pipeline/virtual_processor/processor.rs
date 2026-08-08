@@ -72,7 +72,7 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
-        ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, EpochCreditRule,
+        ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_compute_credits,
@@ -98,10 +98,10 @@ use kaspa_consensus_core::{
     },
     vlt::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
-        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits, VltEpochSnapshot,
-        adjudicate_compute_challenge, compute_capability_message, compute_certificate_message, compute_commitment_message,
-        compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
-        verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
+        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltActivationState, VltEpochCredits,
+        VltEpochSnapshot, VltMetrics, adjudicate_compute_challenge, compute_capability_message, compute_certificate_message,
+        compute_commitment_message, compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt,
+        select_verifiers, verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -137,7 +137,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque},
     iter::once,
     ops::Deref,
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, Mutex, atomic::Ordering},
 };
 
 /// O9 (optimization design v0.1): rolling EVM-lane throughput counters.
@@ -372,6 +372,13 @@ pub struct VirtualStateProcessor {
     // `pos_v2_activation_daa_score` (`u64::MAX` today).
     pub(super) epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
     pub(super) vlt_credit_store: Arc<DbVltCreditStore>,
+    /// MISAKA: the last reported activation state, so a TRANSITION can be announced rather than
+    /// left for an operator to infer from a periodic line changing shape. In-memory only — it is
+    /// a report about the chain, not a fact of it, and it re-derives on the next recompute.
+    pub(crate) vlt_state: Arc<Mutex<Option<VltActivationState>>>,
+    /// MISAKA: the scrape-shaped gauges behind that state, updated on the same cadence. Read by
+    /// `ConsensusApi::get_vlt_status` without re-walking anything.
+    pub(crate) vlt_metrics: Arc<VltMetrics>,
     pub(super) block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub(super) reserve_balance_store: Arc<DbReserveBalanceStore>,
     pub(super) utxo_multisets_store: Arc<DbUtxoMultisetsStore>,
@@ -519,6 +526,8 @@ impl VirtualStateProcessor {
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             vlt_credit_store: storage.vlt_credit_store.clone(),
+            vlt_state: Arc::new(Mutex::new(None)),
+            vlt_metrics: Arc::new(VltMetrics::default()),
             block_quality_pool_store: storage.block_quality_pool_store.clone(),
             reserve_balance_store: storage.reserve_balance_store.clone(),
             utxo_multisets_store: storage.utxo_multisets_store.clone(),
@@ -2360,36 +2369,89 @@ impl VirtualStateProcessor {
             rollout_stage == DnsRolloutStage::Active,
         );
 
-        // MISAKA Shadow Mode. Between the two fences the overlay is producing and policing real
-        // verified compute while finality still runs on bonded stake, and the only reason to run
-        // that interval is to *look* at it — so report, every recompute, the answer the weight
-        // fence would give if it opened here. `W(E)`, how much of it signed, and whether the epoch
-        // would have reached `Q(E)`. A soak nobody can read is just a delay.
-        if dns_params.vlt_shadow_active_at(sink_daa) && !dns_params.vlt_weighting_active_at(sink_daa) {
-            let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
-            let (shadow_contribs, shadow_anchor_daa) =
-                self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
-            let shadow_totals = self.total_weight_by_epoch(&bonds, &shadow_anchor_daa, shadow_weight);
-            let shadow_epochs = aggregate_epoch_tallies(&shadow_contribs, &shadow_totals);
-            let shadow_rule = EpochCreditRule::BftQuorum { min_network_compute: dns_params.vlt.min_network_compute };
-            let quorum = shadow_epochs
+        // MISAKA: report where this network sits on the activation path, POSITIVELY.
+        //
+        // The first version of this reported only the shadow phase, so "the weight fence engaged"
+        // had to be inferred from a log line no longer appearing — which is indistinguishable from
+        // the node having stopped, and is not a thing to build an operational check on. Every
+        // state now announces itself by name, and the numbers behind the decision come with it.
+        //
+        // `FenceReachedNoSnapshot` is the state two booleans could not express and the one this
+        // exists for: the fence is behind us and there is still nothing to vote with, so finality
+        // is waiting rather than live. Reporting that as "active" is how a network says it is
+        // healthy while finalizing nothing.
+        let vlt_state = {
+            let shadow_active = dns_params.vlt_shadow_active_at(sink_daa);
+            let weight_active = dns_params.vlt_weighting_active_at(sink_daa);
+            // Under the weight rule the tallies above are already VLT-denominated; in the soak
+            // they are stake-denominated, so the shadow view has to be computed separately. That
+            // second pass is the price of being able to see the soak at all.
+            let vlt_epochs = if weight_active {
+                per_epoch.clone()
+            } else if shadow_active {
+                let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
+                let (shadow_contribs, shadow_anchor_daa) =
+                    self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
+                let shadow_totals = self.total_weight_by_epoch(&bonds, &shadow_anchor_daa, shadow_weight);
+                aggregate_epoch_tallies(&shadow_contribs, &shadow_totals)
+            } else {
+                Vec::new()
+            };
+            let newest = vlt_epochs.last().map(|t| (t.epoch, t.total_weight));
+            let snapshot_root = snapshot.commitment_root();
+            let last_anchor = prev_dns_state.as_ref().map_or(Hash64::default(), |p| p.last_dns_confirmed_anchor);
+            let state = VltActivationState::derive(
+                shadow_active,
+                weight_active,
+                newest,
+                snapshot_root,
+                dns_params.vlt.min_network_compute,
+                last_anchor,
+            );
+            let quorum_epochs = vlt_epochs
                 .iter()
                 .filter(|t| meets_bft_quorum(t.signed_weight, t.total_weight, dns_params.vlt.min_network_compute))
                 .count();
-            let newest = shadow_epochs.last();
-            info!(
-                "[vlt-shadow] sink_daa={} {} validator(s) with credit; {}/{} epoch(s) would reach quorum; newest epoch {:?}: W(E)={} signed={} (would-be stake_depth={}) — the weight fence is at {}",
-                sink_daa,
-                snapshot.credits().len(),
-                quorum,
-                shadow_epochs.len(),
-                newest.map(|t| t.epoch),
-                newest.map(|t| t.total_weight).unwrap_or(0),
-                newest.map(|t| t.signed_weight).unwrap_or(0),
-                compute_stake_score(&shadow_epochs, shadow_rule).0,
-                dns_params.vlt.vlt_activation_daa_score,
-            );
+            match &state {
+                VltActivationState::PreShadow => {}
+                VltActivationState::Shadow => info!(
+                    "[vlt-shadow] sink_daa={sink_daa} {} validator(s) with credit; {quorum_epochs}/{} epoch(s) would reach quorum; newest epoch {:?}: W(E)={} signed={} snapshot_root={snapshot_root} — the weight fence is at {}",
+                    snapshot.credits().len(),
+                    vlt_epochs.len(),
+                    newest.map(|(e, _)| e),
+                    newest.map(|(_, w)| w).unwrap_or(0),
+                    vlt_epochs.last().map(|t| t.signed_weight).unwrap_or(0),
+                    dns_params.vlt.vlt_activation_daa_score,
+                ),
+                VltActivationState::FenceReachedNoSnapshot { total_weight, min_network_compute } => info!(
+                    "[vlt-weight-fence-reached] daa={sink_daa} fence={} — [vlt-finality-inactive] reason={} total_weight={total_weight} min_network_compute={min_network_compute} validators_with_credit={} last_finalized_anchor=none",
+                    dns_params.vlt.vlt_activation_daa_score,
+                    if *total_weight == 0 { "zero_total_weight" } else { "below_min_network_compute" },
+                    snapshot.credits().len(),
+                ),
+                VltActivationState::Recovery { last_finalized_anchor, total_weight, min_network_compute } => info!(
+                    "[vlt-finality-inactive] reason={} total_weight={total_weight} min_network_compute={min_network_compute} last_finalized_anchor={last_finalized_anchor} — holding the last finalized anchor until weight returns",
+                    if *total_weight == 0 { "zero_total_weight" } else { "below_min_network_compute" },
+                ),
+                VltActivationState::Active { epoch, snapshot_root, total_weight, quorum_weight } => info!(
+                    "[vlt-weight-snapshot-activated] epoch={epoch} snapshot_root={snapshot_root} total_weight={total_weight} quorum_weight={quorum_weight} quorum_epochs={quorum_epochs}/{} validators_with_credit={}",
+                    vlt_epochs.len(),
+                    snapshot.credits().len(),
+                ),
+            }
+            state
+        };
+        // Announce a CHANGE at warn level too. The per-epoch lines above are the steady state; a
+        // transition is the thing an operator wants paged on, and the two fences are each a
+        // one-time event that must not be buried in a periodic report.
+        {
+            let mut last = self.vlt_state.lock().unwrap();
+            if last.as_ref() != Some(&vlt_state) {
+                warn!("[vlt-state] {} -> {} at daa={sink_daa}", last.as_ref().map_or("none", |s| s.label()), vlt_state.label());
+                *last = Some(vlt_state.clone());
+            }
         }
+        self.vlt_metrics.record(&vlt_state, sink_daa);
 
         // kaspa-pq DNS-finality (§6.5): structured diagnostics for the StakeScore credit
         // path — how many attestations were credited at this sink, the credited

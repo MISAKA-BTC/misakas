@@ -1516,11 +1516,40 @@ pub struct GetDnsConfirmationResponse {
     pub block_is_confirmed_anchor: bool,
     #[serde(default)]
     pub block_daa_score: u64,
+    /// MISAKA VLT activation/finality state, appended in v4. These are what a monitoring system
+    /// alerts on, and they are here rather than behind a new RPC because DNS confirmation IS the
+    /// finality report — the VLT fences decide whether the numbers above are stake- or
+    /// compute-denominated, and whether they can move at all.
+    ///
+    /// `vlt_state` is the stable label (`pre_shadow` | `shadow` | `fence_reached_no_snapshot` |
+    /// `active` | `recovery`). The alert worth writing is
+    /// `vlt_weight_fence_reached && !vlt_finality_active`: the hard fork happened and nothing is
+    /// being finalized. Weights are decimal strings because `W(E)` is µRTE-scaled `u128`.
+    #[serde(default)]
+    pub vlt_state: String,
+    #[serde(default)]
+    pub vlt_shadow_active: bool,
+    #[serde(default)]
+    pub vlt_weight_fence_reached: bool,
+    #[serde(default)]
+    pub vlt_finality_active: bool,
+    #[serde(default)]
+    pub vlt_total_weight: String,
+    #[serde(default)]
+    pub vlt_quorum_weight: String,
+    #[serde(default)]
+    pub vlt_snapshot_epoch: u64,
+    #[serde(default)]
+    pub vlt_snapshot_root: String,
+    /// Sink DAA the gauges were written at — lets a scraper tell a steady state from a recompute
+    /// that has stopped, which the values alone cannot express.
+    #[serde(default)]
+    pub vlt_gauges_daa_score: u64,
 }
 
 impl Serializer for GetDnsConfirmationResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.block_hash, writer)?;
         store!(String, &self.work_depth, writer)?;
@@ -1542,6 +1571,15 @@ impl Serializer for GetDnsConfirmationResponse {
         store!(bool, &self.block_is_dns_final, writer)?;
         store!(bool, &self.block_is_confirmed_anchor, writer)?;
         store!(u64, &self.block_daa_score, writer)?;
+        store!(String, &self.vlt_state, writer)?;
+        store!(bool, &self.vlt_shadow_active, writer)?;
+        store!(bool, &self.vlt_weight_fence_reached, writer)?;
+        store!(bool, &self.vlt_finality_active, writer)?;
+        store!(String, &self.vlt_total_weight, writer)?;
+        store!(String, &self.vlt_quorum_weight, writer)?;
+        store!(u64, &self.vlt_snapshot_epoch, writer)?;
+        store!(String, &self.vlt_snapshot_root, writer)?;
+        store!(u64, &self.vlt_gauges_daa_score, writer)?;
         Ok(())
     }
 }
@@ -1573,6 +1611,23 @@ impl Deserializer for GetDnsConfirmationResponse {
         } else {
             (false, false, false, 0)
         };
+        // MISAKA: VLT activation/finality gauges appended in v4 — tolerate v1..v3 payloads. A peer
+        // that predates the fences reports `pre_shadow`, which is what it is.
+        let vlt = if version >= 4 {
+            (
+                load!(String, reader)?,
+                load!(bool, reader)?,
+                load!(bool, reader)?,
+                load!(bool, reader)?,
+                load!(String, reader)?,
+                load!(String, reader)?,
+                load!(u64, reader)?,
+                load!(String, reader)?,
+                load!(u64, reader)?,
+            )
+        } else {
+            ("pre_shadow".to_string(), false, false, false, "0".to_string(), "0".to_string(), 0, String::new(), 0)
+        };
         Ok(Self {
             available,
             block_hash,
@@ -1591,6 +1646,15 @@ impl Deserializer for GetDnsConfirmationResponse {
             health,
             last_dns_confirmed_anchor,
             last_dns_confirmed_anchor_daa_score,
+            vlt_state: vlt.0,
+            vlt_shadow_active: vlt.1,
+            vlt_weight_fence_reached: vlt.2,
+            vlt_finality_active: vlt.3,
+            vlt_total_weight: vlt.4,
+            vlt_quorum_weight: vlt.5,
+            vlt_snapshot_epoch: vlt.6,
+            vlt_snapshot_root: vlt.7,
+            vlt_gauges_daa_score: vlt.8,
             block_found,
             block_is_dns_final,
             block_is_confirmed_anchor,

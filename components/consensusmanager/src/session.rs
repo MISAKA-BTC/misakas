@@ -11,7 +11,7 @@ use kaspa_consensus_core::{
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, PrecommitDuty,
-        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
+        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, VltStatusView,
     },
     errors::consensus::ConsensusResult,
     header::Header,
@@ -322,6 +322,11 @@ impl ConsensusSessionOwned {
         bond_outpoint: TransactionOutpoint,
     ) -> Option<ComputeStatusView> {
         self.clone().spawn_blocking(move |c| c.get_compute_status(validator_id, bond_outpoint)).await
+    }
+
+    /// MISAKA: the node's VLT activation/finality state and the gauges behind it.
+    pub async fn async_get_vlt_status(&self) -> Option<VltStatusView> {
+        self.clone().spawn_blocking(|c| c.get_vlt_status()).await
     }
 
     /// MISAKA §5 round 2: the lock this validator carries on the selected chain, and the epochs it

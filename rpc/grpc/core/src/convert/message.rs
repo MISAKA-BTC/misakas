@@ -391,6 +391,15 @@ from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::G
         block_is_dns_final: item.block_is_dns_final,
         block_is_confirmed_anchor: item.block_is_confirmed_anchor,
         block_daa_score: item.block_daa_score,
+        vlt_state: item.vlt_state.clone(),
+        vlt_shadow_active: item.vlt_shadow_active,
+        vlt_weight_fence_reached: item.vlt_weight_fence_reached,
+        vlt_finality_active: item.vlt_finality_active,
+        vlt_total_weight: item.vlt_total_weight.clone(),
+        vlt_quorum_weight: item.vlt_quorum_weight.clone(),
+        vlt_snapshot_epoch: item.vlt_snapshot_epoch,
+        vlt_snapshot_root: item.vlt_snapshot_root.clone(),
+        vlt_gauges_daa_score: item.vlt_gauges_daa_score,
         error: None,
     }
 });
@@ -1017,6 +1026,15 @@ try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_r
         block_is_dns_final: item.block_is_dns_final,
         block_is_confirmed_anchor: item.block_is_confirmed_anchor,
         block_daa_score: item.block_daa_score,
+        vlt_state: item.vlt_state.clone(),
+        vlt_shadow_active: item.vlt_shadow_active,
+        vlt_weight_fence_reached: item.vlt_weight_fence_reached,
+        vlt_finality_active: item.vlt_finality_active,
+        vlt_total_weight: item.vlt_total_weight.clone(),
+        vlt_quorum_weight: item.vlt_quorum_weight.clone(),
+        vlt_snapshot_epoch: item.vlt_snapshot_epoch,
+        vlt_snapshot_root: item.vlt_snapshot_root.clone(),
+        vlt_gauges_daa_score: item.vlt_gauges_daa_score,
     }
 });
 

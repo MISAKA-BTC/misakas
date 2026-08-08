@@ -71,6 +71,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 
 use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -150,6 +151,11 @@ pub const COMPUTE_CAPABILITY_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-cap
 pub const COMPUTE_COMMITMENT_MESSAGE_DOMAIN: &[u8] = b"misaka-vlt-v1/compute-commitment";
 /// Keyed-BLAKE2b-512 domain for the §6 post-commit verifier sortition.
 pub const VERIFIER_SORTITION_KEY: &[u8] = b"misaka-vlt-verifier-sortition-v1";
+
+/// Keyed BLAKE2b-512 domain for [`VltEpochSnapshot::commitment_root`] — the quorum denominator's
+/// identity, and what a vote must bind to so two votes counted against different `W(E)` are
+/// distinguishable.
+pub const VLT_SNAPSHOT_COMMITMENT_KEY: &[u8] = b"misaka-vlt-snapshot-v1";
 
 /// ML-DSA-87 signing context for an executor's compute-certificate signature.
 pub const COMPUTE_CERT_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/cert/mldsa87";
@@ -1706,6 +1712,237 @@ impl VltEpochSnapshot {
     pub fn credited(&self, validator_id: &Hash64, epoch: u64) -> u128 {
         self.credits.get(validator_id).and_then(|per_epoch| per_epoch.get(&epoch)).copied().unwrap_or(0)
     }
+
+    /// A commitment over the whole pinned table: the pin, its DAA score, and every
+    /// `(validator, epoch, X_i)` in canonical order.
+    ///
+    /// Two nodes weighting the same branch must produce the same root, and two nodes weighting
+    /// *different* denominators must produce different ones. That is what makes the root usable as
+    /// the thing a vote binds to: without it in the signed message, a vote counted against one
+    /// `W(E)` is indistinguishable from a vote counted against another, and the two-thirds
+    /// threshold silently stops meaning anything. It is also what lets an operator compare five
+    /// nodes with one string instead of diffing tables.
+    ///
+    /// Canonical by construction: validators sorted by id, epochs by number (`BTreeMap`), and the
+    /// pin included so a table taken at a different block never collides with this one. The empty
+    /// table has a well-defined root rather than a zero, so "no credit" and "no snapshot" stay
+    /// distinguishable.
+    pub fn commitment_root(&self) -> Hash64 {
+        let mut hasher = Blake2bParams::new().hash_length(64).key(VLT_SNAPSHOT_COMMITMENT_KEY).to_state();
+        hasher.update(self.pin.as_byte_slice());
+        hasher.update(&self.pin_daa_score.to_le_bytes());
+        let mut validators: Vec<&Hash64> = self.credits.keys().collect();
+        validators.sort();
+        hasher.update(&(validators.len() as u64).to_le_bytes());
+        for v in validators {
+            hasher.update(v.as_byte_slice());
+            let per_epoch = &self.credits[v];
+            hasher.update(&(per_epoch.len() as u64).to_le_bytes());
+            for (epoch, x) in per_epoch {
+                hasher.update(&epoch.to_le_bytes());
+                hasher.update(&x.to_le_bytes());
+            }
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(hasher.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+}
+
+/// Where a network sits on the two-fence activation path, as one value rather than two booleans.
+///
+/// Two booleans could express states that cannot exist (`weight && !shadow`) and, worse, could not
+/// express the one that matters most: **the weight fence is behind us and there is still nothing
+/// to vote with.** That is not "VLT finality is on with zero weight" — under §4 an epoch whose
+/// `W(E)` is below `min_network_compute` does not finalize at all, so the honest description is
+/// that the fence was reached and finality is waiting for a usable snapshot. Collapsing that into
+/// "active" is how a network ends up reporting healthy while finalizing nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VltActivationState {
+    /// Below the shadow fence: the compute overlay is dormant.
+    PreShadow,
+    /// The soak. The overlay credits, audits, pays and slashes; finality is still bonded stake.
+    Shadow,
+    /// At or above the weight fence, but `W(E)` is zero or below `min_network_compute`, so no
+    /// epoch can reach `Q(E)`. The base ledger keeps advancing — the overlay is liveness-first —
+    /// and finality resumes on its own once weight appears.
+    FenceReachedNoSnapshot { total_weight: u128, min_network_compute: u128 },
+    /// Weighted finality is live: a snapshot with enough weight to take two thirds of.
+    Active { epoch: u64, snapshot_root: Hash64, total_weight: u128, quorum_weight: u128 },
+    /// Weight has fallen back below the floor **after** something was already finalized. Distinct
+    /// from `FenceReachedNoSnapshot` because there is a confirmed anchor to hold: §4 defers the
+    /// transition rather than finalizing over too little compute, and the last finalized anchor is
+    /// what the network stays on meanwhile.
+    Recovery { last_finalized_anchor: Hash64, total_weight: u128, min_network_compute: u128 },
+}
+
+/// The live gauge set a scraper reads, updated once per recompute.
+///
+/// Atomics rather than a lock because this is written on the virtual-processor's commit path and
+/// read by RPC threads: a metrics read must never be able to stall consensus, and a torn read of
+/// a gauge is a worse outcome than a stale one only if the fields have to agree — they do not,
+/// each is independently meaningful.
+///
+/// `u128` weights are stored as two `u64` halves for the same reason (no atomic u128 on the
+/// targets we build for); a reader that catches a half-update sees a wrong weight for one scrape,
+/// never a wrong *state*, which is the field alerts key on.
+#[derive(Debug, Default)]
+pub struct VltMetrics {
+    shadow_active: AtomicBool,
+    weight_fence_reached: AtomicBool,
+    finality_active: AtomicBool,
+    total_weight_lo: AtomicU64,
+    total_weight_hi: AtomicU64,
+    quorum_weight_lo: AtomicU64,
+    quorum_weight_hi: AtomicU64,
+    snapshot_epoch: AtomicU64,
+    /// The snapshot root, as 8 `u64` limbs. Zero while there is no active snapshot.
+    snapshot_root: [AtomicU64; 8],
+    /// The sink DAA the gauges were last written at, so a scraper can tell a stalled recompute
+    /// from a steady state.
+    sink_daa_score: AtomicU64,
+}
+
+impl VltMetrics {
+    pub fn record(&self, state: &VltActivationState, sink_daa_score: u64) {
+        let g = state.gauges();
+        self.shadow_active.store(g.shadow_active, AtomicOrdering::Relaxed);
+        self.weight_fence_reached.store(g.weight_fence_reached, AtomicOrdering::Relaxed);
+        self.finality_active.store(g.finality_active, AtomicOrdering::Relaxed);
+        self.total_weight_lo.store(g.total_weight as u64, AtomicOrdering::Relaxed);
+        self.total_weight_hi.store((g.total_weight >> 64) as u64, AtomicOrdering::Relaxed);
+        self.quorum_weight_lo.store(g.quorum_weight as u64, AtomicOrdering::Relaxed);
+        self.quorum_weight_hi.store((g.quorum_weight >> 64) as u64, AtomicOrdering::Relaxed);
+        self.snapshot_epoch.store(g.snapshot_epoch, AtomicOrdering::Relaxed);
+        let root = g.snapshot_root.as_bytes();
+        for (i, slot) in self.snapshot_root.iter().enumerate() {
+            let mut limb = [0u8; 8];
+            limb.copy_from_slice(&root[i * 8..i * 8 + 8]);
+            slot.store(u64::from_le_bytes(limb), AtomicOrdering::Relaxed);
+        }
+        self.sink_daa_score.store(sink_daa_score, AtomicOrdering::Relaxed);
+    }
+
+    pub fn read(&self) -> (VltGauges, u64) {
+        let mut root = [0u8; 64];
+        for (i, slot) in self.snapshot_root.iter().enumerate() {
+            root[i * 8..i * 8 + 8].copy_from_slice(&slot.load(AtomicOrdering::Relaxed).to_le_bytes());
+        }
+        let wide = |lo: &AtomicU64, hi: &AtomicU64| {
+            ((hi.load(AtomicOrdering::Relaxed) as u128) << 64) | lo.load(AtomicOrdering::Relaxed) as u128
+        };
+        (
+            VltGauges {
+                shadow_active: self.shadow_active.load(AtomicOrdering::Relaxed),
+                weight_fence_reached: self.weight_fence_reached.load(AtomicOrdering::Relaxed),
+                finality_active: self.finality_active.load(AtomicOrdering::Relaxed),
+                total_weight: wide(&self.total_weight_lo, &self.total_weight_hi),
+                quorum_weight: wide(&self.quorum_weight_lo, &self.quorum_weight_hi),
+                snapshot_epoch: self.snapshot_epoch.load(AtomicOrdering::Relaxed),
+                snapshot_root: Hash64::from_bytes(root),
+            },
+            self.sink_daa_score.load(AtomicOrdering::Relaxed),
+        )
+    }
+}
+
+/// The flat gauge set behind [`VltActivationState::gauges`] — one struct so the RPC view, the
+/// metrics exporter and any test assert on the same fields.
+///
+/// `weight_fence_reached && !finality_active` is the alertable condition: the fork happened and
+/// the network is finalizing nothing. Do not collapse the two into one "active" flag.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct VltGauges {
+    pub shadow_active: bool,
+    pub weight_fence_reached: bool,
+    pub finality_active: bool,
+    pub total_weight: u128,
+    pub quorum_weight: u128,
+    pub snapshot_epoch: u64,
+    pub snapshot_root: Hash64,
+}
+
+impl VltActivationState {
+    /// Which state a network is in, from the numbers a recompute already has.
+    ///
+    /// `newest` is the newest scored epoch and its `W(E)`, or `None` when no epoch is scorable
+    /// yet. `last_finalized_anchor` is the DNS-confirmed anchor — the default hash means nothing
+    /// has ever been finalized, which is what separates "not started" from "fell back".
+    pub fn derive(
+        shadow_active: bool,
+        weight_active: bool,
+        newest: Option<(u64, u128)>,
+        snapshot_root: Hash64,
+        min_network_compute: u128,
+        last_finalized_anchor: Hash64,
+    ) -> Self {
+        if !shadow_active {
+            return Self::PreShadow;
+        }
+        if !weight_active {
+            return Self::Shadow;
+        }
+        let (epoch, total_weight) = newest.unwrap_or((0, 0));
+        // The same floor `meets_bft_quorum` applies, checked here so the reported state and the
+        // credit rule can never disagree about whether this epoch was finalizable.
+        if total_weight == 0 || total_weight < min_network_compute {
+            return if last_finalized_anchor == Hash64::default() {
+                Self::FenceReachedNoSnapshot { total_weight, min_network_compute }
+            } else {
+                Self::Recovery { last_finalized_anchor, total_weight, min_network_compute }
+            };
+        }
+        Self::Active { epoch, snapshot_root, total_weight, quorum_weight: bft_quorum(total_weight) }
+    }
+
+    /// Whether weighted finality can actually finalize anything right now. False in every state
+    /// but [`Self::Active`] — including both fence-reached states, which is the distinction the
+    /// booleans could not draw.
+    pub fn finality_active(&self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+
+    /// Whether the weight fence is behind us, regardless of whether anything can be finalized.
+    pub fn weight_fence_reached(&self) -> bool {
+        matches!(self, Self::FenceReachedNoSnapshot { .. } | Self::Active { .. } | Self::Recovery { .. })
+    }
+
+    /// The scrape-shaped view of this state: the gauges an operator alerts on.
+    ///
+    /// Flat and numeric on purpose — a monitoring system cannot match on a Rust enum, and the
+    /// distinction that matters most (`weight_fence_reached && !finality_active`) has to be
+    /// expressible as a query. `snapshot_root` is carried as the hash so five nodes can be
+    /// compared by one string.
+    pub fn gauges(&self) -> VltGauges {
+        let (total_weight, quorum_weight, epoch, root) = match self {
+            Self::PreShadow | Self::Shadow => (0, 0, 0, Hash64::default()),
+            Self::FenceReachedNoSnapshot { total_weight, .. } => (*total_weight, 0, 0, Hash64::default()),
+            Self::Recovery { total_weight, .. } => (*total_weight, 0, 0, Hash64::default()),
+            Self::Active { epoch, snapshot_root, total_weight, quorum_weight } => {
+                (*total_weight, *quorum_weight, *epoch, *snapshot_root)
+            }
+        };
+        VltGauges {
+            shadow_active: !matches!(self, Self::PreShadow),
+            weight_fence_reached: self.weight_fence_reached(),
+            finality_active: self.finality_active(),
+            total_weight,
+            quorum_weight,
+            snapshot_epoch: epoch,
+            snapshot_root: root,
+        }
+    }
+
+    /// A short, stable label for logs and metrics.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::PreShadow => "pre_shadow",
+            Self::Shadow => "shadow",
+            Self::FenceReachedNoSnapshot { .. } => "fence_reached_no_snapshot",
+            Self::Active { .. } => "active",
+            Self::Recovery { .. } => "recovery",
+        }
+    }
 }
 
 /// Why a job minted no VLT. Diagnostic only — every variant normalizes to `0`, which
@@ -2137,6 +2374,93 @@ mod tests {
             mutate(&mut m);
             assert_ne!(residual_commitment(&m), root);
         }
+    }
+
+    /// The distinction two booleans could not draw, and the reason this is an enum.
+    ///
+    /// "Past the weight fence" and "finalizing" are different facts. A network that crossed the
+    /// fence with nothing to vote with is not active — under §4 an epoch below
+    /// `min_network_compute` does not finalize at all — and reporting it as active is how a node
+    /// says it is healthy while finalizing nothing. That state is also not `Recovery`: nothing was
+    /// ever finalized, so there is no anchor to hold.
+    #[test]
+    fn activation_state_separates_reaching_the_fence_from_finalizing() {
+        let root = h64(9);
+        let anchor = h64(7);
+        let derive = |shadow, weight, newest, last| VltActivationState::derive(shadow, weight, newest, root, 1_000, last);
+
+        assert_eq!(derive(false, false, None, Hash64::default()), VltActivationState::PreShadow);
+        assert_eq!(derive(true, false, Some((4, 5_000)), Hash64::default()), VltActivationState::Shadow);
+
+        // Past the fence, nothing to vote with, nothing ever finalized.
+        let s = derive(true, true, Some((4, 0)), Hash64::default());
+        assert_eq!(s, VltActivationState::FenceReachedNoSnapshot { total_weight: 0, min_network_compute: 1_000 });
+        assert!(s.weight_fence_reached(), "the fork DID happen");
+        assert!(!s.finality_active(), "and nothing can be finalized — the two are not the same fact");
+
+        // Weight exists but is below `W_min`: still not finalizable, same reasoning.
+        let s = derive(true, true, Some((4, 999)), Hash64::default());
+        assert!(s.weight_fence_reached() && !s.finality_active());
+
+        // The same shortfall AFTER something was finalized is `Recovery`: there is an anchor to
+        // hold, which is what §4 defers the transition in favour of.
+        assert_eq!(
+            derive(true, true, Some((4, 0)), anchor),
+            VltActivationState::Recovery { last_finalized_anchor: anchor, total_weight: 0, min_network_compute: 1_000 }
+        );
+
+        // Enough weight to take two thirds of ⇒ genuinely active, with the quorum it will apply.
+        let s = derive(true, true, Some((4, 3_000)), Hash64::default());
+        assert_eq!(
+            s,
+            VltActivationState::Active { epoch: 4, snapshot_root: root, total_weight: 3_000, quorum_weight: bft_quorum(3_000) }
+        );
+        assert!(s.finality_active());
+    }
+
+    /// The gauges are what a monitoring query can match on, so the alertable condition has to be
+    /// expressible in them — not just in the enum.
+    #[test]
+    fn gauges_expose_the_alertable_condition() {
+        let fence_no_snapshot = VltActivationState::FenceReachedNoSnapshot { total_weight: 0, min_network_compute: 1_000 };
+        let g = fence_no_snapshot.gauges();
+        assert!(g.weight_fence_reached && !g.finality_active, "the one alert worth writing");
+        assert_eq!(g.quorum_weight, 0, "no quorum is being applied, so do not report one");
+
+        let active = VltActivationState::Active { epoch: 7, snapshot_root: h64(3), total_weight: 900, quorum_weight: 601 };
+        let g = active.gauges();
+        assert!(g.finality_active && g.weight_fence_reached);
+        assert_eq!((g.snapshot_epoch, g.snapshot_root, g.total_weight, g.quorum_weight), (7, h64(3), 900, 601));
+
+        // Round-trip through the atomic gauge set the RPC reads.
+        let m = VltMetrics::default();
+        m.record(&active, 12_345);
+        assert_eq!(m.read(), (g, 12_345));
+        m.record(&fence_no_snapshot, 12_400);
+        let (back, daa) = m.read();
+        assert!(back.weight_fence_reached && !back.finality_active);
+        assert_eq!(daa, 12_400, "the scrape can tell a stalled recompute from a steady state");
+    }
+
+    /// The snapshot root is the denominator's identity. Two tables that would give a vote a
+    /// different `W(E)` must not share a root, or a vote counted against one is indistinguishable
+    /// from a vote counted against the other.
+    #[test]
+    fn snapshot_root_distinguishes_denominators() {
+        let credits = |v: u8, x: u128| {
+            let mut m: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+            m.insert(h64(v), BTreeMap::from([(9u64, x)]));
+            m
+        };
+        let base = VltEpochSnapshot::pinned(h64(1), 100, credits(2, 500));
+        assert_eq!(base.commitment_root(), VltEpochSnapshot::pinned(h64(1), 100, credits(2, 500)).commitment_root());
+        // A different credit, validator, pin or pin height is a different denominator.
+        assert_ne!(base.commitment_root(), VltEpochSnapshot::pinned(h64(1), 100, credits(2, 501)).commitment_root());
+        assert_ne!(base.commitment_root(), VltEpochSnapshot::pinned(h64(1), 100, credits(3, 500)).commitment_root());
+        assert_ne!(base.commitment_root(), VltEpochSnapshot::pinned(h64(4), 100, credits(2, 500)).commitment_root());
+        assert_ne!(base.commitment_root(), VltEpochSnapshot::pinned(h64(1), 101, credits(2, 500)).commitment_root());
+        // "No credit" and "no snapshot" stay distinguishable.
+        assert_ne!(VltEpochSnapshot::inert().commitment_root(), Hash64::default());
     }
 
     #[test]

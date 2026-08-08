@@ -168,6 +168,18 @@ async fn status(ctx: &Ctx, args: StatusArgs) -> CliResult {
                 println!("stake_depth:   {}/{}", d.stake_depth, d.required_stake_depth);
                 println!("dns_health:    {health}");
                 println!("dns_anchor:    {} (daa {})", d.last_dns_confirmed_anchor, d.last_dns_confirmed_anchor_daa_score);
+                // MISAKA VLT: the activation state and the numbers behind it. Printed even in the
+                // dormant case, because "which fence are we behind" is the first question about a
+                // network whose finality source can change, and an absent line answers nothing.
+                println!("vlt_state:     {}", d.vlt_state);
+                println!(
+                    "vlt_finality:  {} (weight fence reached: {})",
+                    if d.vlt_finality_active { "active" } else { "INACTIVE" },
+                    d.vlt_weight_fence_reached
+                );
+                println!("vlt_weight:    W(E)={} Q(E)={}", d.vlt_total_weight, d.vlt_quorum_weight);
+                println!("vlt_snapshot:  epoch={} root={}", d.vlt_snapshot_epoch, d.vlt_snapshot_root);
+                println!("vlt_gauges_at: daa {}", d.vlt_gauges_daa_score);
             }
             json!({
                 "available": true,
@@ -181,6 +193,15 @@ async fn status(ctx: &Ctx, args: StatusArgs) -> CliResult {
                 "healthCode": d.health,
                 "anchor": d.last_dns_confirmed_anchor,
                 "anchorDaaScore": d.last_dns_confirmed_anchor_daa_score,
+                "vltState": d.vlt_state,
+                "vltShadowActive": d.vlt_shadow_active,
+                "vltWeightFenceReached": d.vlt_weight_fence_reached,
+                "vltFinalityActive": d.vlt_finality_active,
+                "vltTotalWeight": d.vlt_total_weight,
+                "vltQuorumWeight": d.vlt_quorum_weight,
+                "vltSnapshotEpoch": d.vlt_snapshot_epoch,
+                "vltSnapshotRoot": d.vlt_snapshot_root,
+                "vltGaugesDaaScore": d.vlt_gauges_daa_score,
             })
         }
         Ok(_) => {

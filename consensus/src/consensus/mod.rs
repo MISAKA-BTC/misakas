@@ -44,6 +44,7 @@ use crate::{
         window::{WindowManager, WindowType},
     },
 };
+use kaspa_consensus_core::vlt::VltActivationState;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, ChainPath, HashMapCustomHasher,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
@@ -62,7 +63,7 @@ use kaspa_consensus_core::{
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, PendingComputeVerdict,
-        PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord,
+        PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, VltStatusView,
         dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds,
         ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
     },
@@ -1372,6 +1373,18 @@ impl ConsensusApi for Consensus {
             validator_id,
             bond_outpoint,
         ))
+    }
+
+    fn get_vlt_status(&self) -> Option<VltStatusView> {
+        let dns_params = self.config.params.dns_params.as_ref()?;
+        let (gauges, sink_daa_score) = self.virtual_processor.vlt_metrics.read();
+        Some(VltStatusView {
+            state: self.virtual_processor.vlt_state.lock().unwrap().as_ref().map_or("pre_shadow", VltActivationState::label),
+            gauges,
+            shadow_fence_daa_score: dns_params.vlt.vlt_shadow_activation_daa_score,
+            weight_fence_daa_score: dns_params.vlt.vlt_activation_daa_score,
+            sink_daa_score,
+        })
     }
 
     fn get_precommit_duty(

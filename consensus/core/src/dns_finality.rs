@@ -654,6 +654,26 @@ pub struct PrecommitEvidencePayload {
     pub reporter_reward_spk_payload: [u8; 64],
 }
 
+/// MISAKA: the node's VLT activation and finality status, as an operator (or a scraper) sees it.
+///
+/// The named state and the flat gauges together, because each answers a question the other
+/// cannot: the state says *why* finality is or is not running, the gauges are what a monitoring
+/// query can actually match on. The one alert worth writing is
+/// `weight_fence_reached && !finality_active` — the fork happened and nothing is being finalized.
+///
+/// `sink_daa_score` is when these numbers were last written. A scraper comparing it to the node's
+/// current DAA can tell a steady state from a recompute that has stopped, which the values alone
+/// cannot express.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VltStatusView {
+    /// Stable label: `pre_shadow` | `shadow` | `fence_reached_no_snapshot` | `active` | `recovery`.
+    pub state: &'static str,
+    pub gauges: crate::vlt::VltGauges,
+    pub shadow_fence_daa_score: u64,
+    pub weight_fence_daa_score: u64,
+    pub sink_daa_score: u64,
+}
+
 /// What round 2 asks of one validator at the current sink.
 ///
 /// Read from the chain rather than remembered locally, and that is the point: `held` is what the

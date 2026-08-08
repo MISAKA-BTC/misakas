@@ -692,6 +692,21 @@ message GetDnsConfirmationResponseMessage {
   bool blockIsDnsFinal = 19;
   bool blockIsConfirmedAnchor = 20;
   uint64 blockDaaScore = 21;
+  // MISAKA VLT: where this node sits on the two-fence activation path, and the gauges behind it.
+  // vltState is the stable label: pre_shadow | shadow | fence_reached_no_snapshot | active |
+  // recovery. The alert worth writing is `vltWeightFenceReached && !vltFinalityActive` — the hard
+  // fork happened and nothing is being finalized. Weights are decimal strings (W(E) is a
+  // uRTE-scaled u128). vltGaugesDaaScore is the sink these were written at, so a scraper can tell
+  // a steady state from a recompute that has stopped.
+  string vltState = 22;
+  bool vltShadowActive = 23;
+  bool vltWeightFenceReached = 24;
+  bool vltFinalityActive = 25;
+  string vltTotalWeight = 26;
+  string vltQuorumWeight = 27;
+  uint64 vltSnapshotEpoch = 28;
+  string vltSnapshotRoot = 29;
+  uint64 vltGaugesDaaScore = 30;
 
   RPCError error = 1000;
 }

@@ -15,6 +15,7 @@ use crate::{
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, MandatoryAttestationDeficit,
         PendingComputeVerdict, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
+        VltStatusView,
     },
     errors::{
         block::{BlockProcessResult, RuleError},
@@ -288,6 +289,16 @@ pub trait ConsensusApi: Send + Sync {
     ///
     /// `None` when the DNS overlay is not configured for this network.
     fn get_compute_status(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<ComputeStatusView> {
+        None
+    }
+
+    /// MISAKA: where this network sits on the two-fence activation path, plus the gauges behind
+    /// that decision — `W(E)`, `Q(E)`, the snapshot epoch and its root.
+    ///
+    /// Read from the last recompute rather than derived on demand: deriving it would re-walk the
+    /// credit window, and a metrics scrape must never be able to stall consensus. `None` when the
+    /// DNS overlay is not configured.
+    fn get_vlt_status(&self) -> Option<VltStatusView> {
         None
     }
 
