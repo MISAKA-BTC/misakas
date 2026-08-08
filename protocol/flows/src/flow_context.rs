@@ -4,6 +4,7 @@ use crate::flowcontext::{
     ibd_candidates::{CandidateId, CandidateValidation, IbdCandidateRegistry, PreferredIbdCandidate},
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
+    recovery_trace::{RecoveryStage, record_stage},
     transactions::TransactionsSpread,
 };
 use crate::{v7, v8};
@@ -562,12 +563,23 @@ impl FlowContext {
                 _ => None,
             })
         };
-        if let Some((id, claimed_blue_work)) = nominee {
-            self.ibd_candidates
-                .write()
-                .set_validation(id, CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work });
-            // Failure means no IBD flow is listening, which simply means nobody can serve it.
-            let _ = self.challenger_tx.send(id);
+        match nominee {
+            Some((id, claimed_blue_work)) => {
+                self.ibd_candidates
+                    .write()
+                    .set_validation(id, CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work });
+                record_stage(RecoveryStage::CandidateNominated, None, Some(id), None, self.chain_participation().state().as_str(), "");
+                // Failure means no IBD flow is listening, which simply means nobody can serve it.
+                let _ = self.challenger_tx.send(id);
+            }
+            None => record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                None,
+                self.chain_participation().state().as_str(),
+                "nothing to nominate: no SummaryReceived candidate, or a verification is already in flight",
+            ),
         }
     }
 
@@ -591,10 +603,28 @@ impl FlowContext {
             let registry = self.ibd_candidates.read();
             match registry.get(&candidate_id) {
                 Some(c) => (c.header.clone(), c.sources.clone()),
-                None => return false,
+                None => {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        None,
+                        Some(candidate_id),
+                        None,
+                        self.chain_participation().state().as_str(),
+                        "cannot reserve: candidate is no longer in the registry",
+                    );
+                    return false;
+                }
             }
         };
         if preferred_sources.is_empty() {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(candidate_id),
+                None,
+                self.chain_participation().state().as_str(),
+                "cannot reserve: no connected peer still offers this chain",
+            );
             return false;
         }
         let switch_generation = self.ibd_candidates.read().switches();
@@ -605,6 +635,17 @@ impl FlowContext {
             verified_blue_work,
             switch_generation,
         });
+        record_stage(
+            RecoveryStage::PreferredCandidateReserved,
+            None,
+            Some(candidate_id),
+            None,
+            self.chain_participation().state().as_str(),
+            format!(
+                "verified_blue_work={verified_blue_work} sources={} generation={switch_generation}",
+                self.ibd_candidates.read().sources_of(&candidate_id).len()
+            ),
+        );
         // Failure means no IBD flow is listening; the reservation still stands and will be honoured
         // when one of the sources next relays.
         let _ = self.handoff_tx.send(candidate_id);

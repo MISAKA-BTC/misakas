@@ -1,3 +1,4 @@
+use crate::flowcontext::recovery_trace::{RecoveryStage, record_stage};
 use crate::{
     flow_context::{BlockLogEvent, FlowContext, RequestScope},
     flow_trait::Flow,
@@ -306,6 +307,14 @@ impl HandleRelayInvsFlow {
     /// be asked again after the cooldown. Failing to learn about a chain must never take down a
     /// connection — that would make the coordinator itself an attack surface.
     async fn request_ibd_candidate_summary(&mut self) -> Result<(), ProtocolError> {
+        record_stage(
+            RecoveryStage::SummaryRequested,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
         self.router.enqueue(make_message!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {})).await?;
         let msg = dequeue_with_timeout!(self.msg_route, Payload::IbdCandidateSummary, IBD_CANDIDATE_SUMMARY_TIMEOUT)?;
         let summary: IbdCandidateSummary = Versioned(self.header_format, msg).try_into()?;
@@ -315,6 +324,14 @@ impl HandleRelayInvsFlow {
         if summary.genesis_hash != self.ctx.config.genesis.hash.as_bytes()
             || summary.consensus_params_id != self.ctx.config.params.consensus_params_id().as_bytes()
         {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                "summary rejected: different genesis or consensus params",
+            );
             debug!("Ignoring candidate summary from {}: different genesis or consensus params", self.router);
             return Ok(());
         }
@@ -323,6 +340,14 @@ impl HandleRelayInvsFlow {
         debug!(
             "Candidate {} from {}: pruning point {}, claimed blue work {}",
             id.virtual_selected_parent, self.router, id.pruning_point, summary.virtual_selected_parent.blue_work
+        );
+        record_stage(
+            RecoveryStage::SummaryReceived,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!("claimed_blue_work={} pruning_point={}", summary.virtual_selected_parent.blue_work, id.pruning_point),
         );
         // Learning about a chain is only useful if somebody then checks it. Ask for the strongest
         // unverified candidate to be verified — which may or may not be the one just recorded.

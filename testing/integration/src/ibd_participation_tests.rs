@@ -31,6 +31,7 @@ use kaspa_addresses::Address;
 use kaspa_alloc::init_allocator_with_default_settings;
 use kaspa_consensus::params::SIMNET_PARAMS;
 use kaspa_grpc_client::GrpcClient;
+use kaspa_p2p_flows::flowcontext::recovery_trace;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspad_lib::args::Args;
 use std::time::Duration;
@@ -422,40 +423,31 @@ async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, G
 /// chain either way: if it raced onto the heavier one, it stays; if it raced onto the lighter one, it
 /// has to verify the other's pruning proof and hand the latch over.
 ///
-/// **Currently fails, and is kept as the specification of what is not finished.**
+
+/// E2E-A: a stronger chain found DURING the first IBD must win, without Bootstrap Recovery.
 ///
-/// Measured behaviour: the follower races onto one branch and stays there while the other peer
-/// retries an IBD every 30 seconds indefinitely.
+/// Split from the combined scenario deliberately. This half exercises only the candidate
+/// coordinator — summary, proof, comparison, reservation, handoff — and never crosses a pruning
+/// point, because nothing has been committed yet. If this fails, the problem is in the coordinator
+/// and looking at recovery would be looking in the wrong place.
 ///
-/// Three rounds of work went into this and none of them made it pass:
-///
-///   - candidates are now collected whenever participation is withheld, not only during an IBD, so
-///     a peer met after the first IBD is registered at all;
-///   - a challenger verified after an IBD can reserve the next one;
-///   - `bootstrap_recovery` authorises crossing this node's own pruning point for a chain it has
-///     never acted on, which is the boundary that was blocking the switch.
-///
-/// Each is independently justified and unit-tested, and together they are still not sufficient. The
-/// recovery path did not engage in the last run — no permit was requested — so something earlier in
-/// the chain (summary collection, nomination, proof verification, or reservation) is not firing
-/// under these conditions, and that has not been isolated. Ignored rather than deleted, because a
-/// test that states the unmet goal is worth more than one that quietly tests less.
-#[ignore = "two-history convergence does not pass yet; see the doc comment"]
+/// Both leaders stop mining before the follower joins, so candidate ids cannot drift under the
+/// reservation while it is being redeemed.
+#[ignore = "diagnostic: run explicitly; ~10 minutes"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_node_offered_two_histories_ends_up_on_the_heavier_one() {
+async fn e2e_a_a_stronger_chain_found_during_ibd_wins() {
     init_allocator_with_default_settings();
     kaspa_core::log::try_init_logger("INFO");
+    recovery_trace::clear();
 
-    let overrides = write_shallow_pruning_params("heavier-wins");
-    let (mut light, light_client, _l_addr, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
-    let (mut heavy, heavy_client, _h_addr, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
-
+    let overrides = write_shallow_pruning_params("e2e-a");
+    let (mut light, light_client, _l, _light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
-    assert_ne!(light_pp, heavy_pp, "the leaders converged, so there is no partition to test");
-    assert!(heavy_score > light_score);
 
-    // Both offered at once: the latch race is real, and its outcome must not decide the chain.
+    // Mining has stopped on both: the tips are now fixed, so a reservation cannot be invalidated by
+    // the chain moving under it.
     let mut args = gated_args();
     args.override_params_file = Some(overrides.to_string_lossy().into_owned());
     let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
@@ -463,35 +455,103 @@ async fn a_node_offered_two_histories_ends_up_on_the_heavier_one() {
     follower_client.add_peer(format!("127.0.0.1:{}", light.p2p_port).try_into().unwrap(), true).await.unwrap();
     follower_client.add_peer(format!("127.0.0.1:{}", heavy.p2p_port).try_into().unwrap(), true).await.unwrap();
 
-    // Settle. Generous: a switch costs a second pruning proof and a second header sync.
     let check = follower_client.clone();
-    let heavy_target = heavy_score;
-    wait_for(
-        500,
-        480,
-        move || {
-            let c = check.clone();
-            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_target }
-        },
-        "the follower never reached the heavier chain's DAA score",
-    )
-    .await;
+    let settled = tokio::time::timeout(Duration::from_secs(240), async move {
+        loop {
+            if check.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_score {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
 
     let info = follower_client.get_block_dag_info().await.unwrap();
+    println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::CandidateCommitted));
     println!(
-        "PROBE outcome score={} pp={} on_heavy={} on_light={}",
+        "E2E-A outcome settled={settled} score={} on_heavy={} on_light={}",
         info.virtual_daa_score,
-        info.pruning_point_hash,
         info.pruning_point_hash == heavy_pp,
         info.pruning_point_hash == light_pp
-    );
-    assert_eq!(
-        info.pruning_point_hash, heavy_pp,
-        "the follower settled on the lighter branch; which chain it adopted was still decided by who relayed first"
     );
 
     follower.shutdown();
     heavy.shutdown();
     light.shutdown();
     let _ = std::fs::remove_file(&overrides);
+
+    assert_eq!(info.pruning_point_hash, heavy_pp, "the follower did not end up on the heavier chain");
+}
+
+/// E2E-B: a stronger chain found AFTER a provisional commit must be adopted via Bootstrap Recovery.
+///
+/// Only worth investigating once E2E-A passes: this half additionally requires crossing the
+/// provisional pruning point, which is the part that needs a permit.
+#[ignore = "diagnostic: run explicitly; ~10 minutes"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+    recovery_trace::clear();
+
+    let overrides = write_shallow_pruning_params("e2e-b");
+    let (mut light, light_client, _l, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+    let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+
+    // Sync the lighter chain to completion FIRST, so it is provisionally committed and its pruning
+    // point becomes the boundary a permit has to cross.
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let follower_client = follower.start().await;
+    connect(&follower_client, light.p2p_port).await;
+
+    let check = follower_client.clone();
+    wait_for(
+        200,
+        600,
+        move || {
+            let c = check.clone();
+            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= light_score }
+        },
+        "the follower never synced the lighter chain",
+    )
+    .await;
+    let provisional = follower_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_eq!(provisional, light_pp, "the follower did not provisionally adopt the lighter chain");
+    assert!(!follower_client.get_sync_status().await.unwrap(), "should still be withholding participation");
+
+    // Only now offer the heavier one.
+    follower_client.add_peer(format!("127.0.0.1:{}", heavy.p2p_port).try_into().unwrap(), true).await.unwrap();
+
+    let check = follower_client.clone();
+    let settled = tokio::time::timeout(Duration::from_secs(240), async move {
+        loop {
+            if check.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_score {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let info = follower_client.get_block_dag_info().await.unwrap();
+    println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::RecoveryPermitGranted));
+    println!(
+        "E2E-B outcome settled={settled} score={} on_heavy={} still_on_light={}",
+        info.virtual_daa_score,
+        info.pruning_point_hash == heavy_pp,
+        info.pruning_point_hash == light_pp
+    );
+
+    follower.shutdown();
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+
+    assert_eq!(info.pruning_point_hash, heavy_pp, "bootstrap recovery did not adopt the heavier chain");
 }

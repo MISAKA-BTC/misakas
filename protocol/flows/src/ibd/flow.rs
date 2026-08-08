@@ -7,6 +7,7 @@ use crate::{
     flowcontext::ibd_candidates::{
         CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
     },
+    flowcontext::recovery_trace::{RecoveryAttemptId, RecoveryStage, describe_comparison, record_stage},
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
 use futures::future::{Either, join_all, select, try_join_all};
@@ -198,6 +199,14 @@ impl IbdFlow {
 
                         self.report_unresolved_candidates();
                         self.ctx.finish_ibd_after_success(POST_IBD_CANDIDATE_REVIEW);
+                        record_stage(
+                            RecoveryStage::IbdStartedForPreferredCandidate,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            if served_reservation { "this IBD served a reservation" } else { "ordinary IBD" },
+                        );
                     }
                     Err(e) => {
                         info!("IBD with peer {} completed with error: {}", self.router, e);
@@ -227,6 +236,14 @@ impl IbdFlow {
         if preferred.candidate_id != id || !preferred.preferred_sources.contains(&self.router.key()) {
             return None;
         }
+        record_stage(
+            RecoveryStage::HandoffReceived,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
         info!(
             "Taking over the sync: this peer ({}) offers candidate {}, which this node verified at blue work {}",
             self.router, id.virtual_selected_parent, preferred.verified_blue_work
@@ -260,9 +277,18 @@ impl IbdFlow {
             _ => return,
         };
 
+        let attempt = RecoveryAttemptId::next();
         info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
-        match self.fetch_and_validate_challenger_proof(id, claimed_blue_work).await {
+        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work).await {
             Ok((verified_blue_work, proof_hash)) => {
+                record_stage(
+                    RecoveryStage::ProofValidated,
+                    Some(attempt),
+                    Some(id),
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    format!("verified_blue_work={verified_blue_work}"),
+                );
                 info!(
                     "Candidate {} from {} is backed by a valid pruning proof; verified blue work at its pruning point is {}",
                     id.virtual_selected_parent, self.router, verified_blue_work
@@ -290,8 +316,37 @@ impl IbdFlow {
     /// the node has participated and the boundary simply stands.
     async fn bootstrap_recovery_permit_for(&self, syncer_pruning_point: BlockHash) -> Option<BootstrapRecoveryPermit> {
         let gate = self.ctx.chain_participation();
-        let reserved = self.ctx.preferred_ibd_candidate()?;
+        record_stage(
+            RecoveryStage::RecoveryPermitRequested,
+            None,
+            None,
+            Some(self.router.to_string()),
+            gate.state().as_str(),
+            format!("syncer_pruning_point={syncer_pruning_point}"),
+        );
+        let Some(reserved) = self.ctx.preferred_ibd_candidate() else {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                "no permit: nothing is reserved",
+            );
+            return None;
+        };
         if reserved.candidate_id.pruning_point != syncer_pruning_point {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(reserved.candidate_id),
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                format!(
+                    "no permit: reservation is for pruning point {} but this syncer offers {syncer_pruning_point}",
+                    reserved.candidate_id.pruning_point
+                ),
+            );
             return None;
         }
 
@@ -342,8 +397,26 @@ impl IbdFlow {
             reserved_candidate: Some(reserved.candidate_id),
             switch_limit: MAX_CHAIN_SWITCHES,
         }) {
-            Ok(permit) => Some(permit),
+            Ok(permit) => {
+                record_stage(
+                    RecoveryStage::RecoveryPermitGranted,
+                    None,
+                    Some(reserved.candidate_id),
+                    Some(self.router.to_string()),
+                    gate.state().as_str(),
+                    format!("adoption_generation={} switch_generation={}", permit.adoption_generation, permit.switch_generation),
+                );
+                Some(permit)
+            }
             Err(e) => {
+                record_stage(
+                    RecoveryStage::Rejected,
+                    None,
+                    Some(reserved.candidate_id),
+                    Some(self.router.to_string()),
+                    gate.state().as_str(),
+                    format!("permit refused: {e:?}"),
+                );
                 debug!("No bootstrap-recovery permit for candidate {}: {:?}", reserved.candidate_id.virtual_selected_parent, e);
                 None
             }
@@ -362,6 +435,18 @@ impl IbdFlow {
     /// selection.
     async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) {
         if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                if self.ctx.is_ibd_running() {
+                    "post-IBD switch skipped: an IBD is running (the commit barrier owns this decision)"
+                } else {
+                    "post-IBD switch skipped: node is already participating"
+                },
+            );
             return;
         }
         let session = self.ctx.consensus().session().await;
@@ -370,7 +455,23 @@ impl IbdFlow {
         drop(session);
 
         let Some(ours) = ours else { return };
+        record_stage(
+            RecoveryStage::CandidateCompared,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            describe_comparison(verified_blue_work, ours),
+        );
         if verified_blue_work <= ours {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("not strictly superior: {}", describe_comparison(verified_blue_work, ours)),
+            );
             return;
         }
         let switches = {
@@ -399,11 +500,28 @@ impl IbdFlow {
 
     async fn fetch_and_validate_challenger_proof(
         &mut self,
+        attempt: RecoveryAttemptId,
         id: CandidateId,
         claimed_blue_work: ClaimedBlueWork,
     ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
+        record_stage(
+            RecoveryStage::ProofRequestSent,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, CHALLENGER_PROOF_TIMEOUT)?;
+        record_stage(
+            RecoveryStage::ProofReceived,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
         let proof: PruningPointProof = Versioned(self.header_format, msg).try_into()?;
 
         // Validated against CURRENT consensus, exactly as a real IBD would: same rules, same
@@ -702,6 +820,14 @@ impl IbdFlow {
                             staging.cancel();
                             return Err(e);
                         }
+                        record_stage(
+                            RecoveryStage::CandidateCommitted,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            "staging committed",
+                        );
                         spawn_blocking(|| staging.commit()).await.unwrap();
                         // From here the node runs the new chain regardless of what the rest of the
                         // IBD does, so a later failure must not be reported and forgotten.
@@ -848,6 +974,14 @@ impl IbdFlow {
             // `Ready`, the chain under it was chosen by a race and is provisional, so treating it as
             // a finality boundary is what makes the first peer's chain permanent. After `Ready` this
             // is unreachable and the conflict stands — reorg policy belongs to the DNS gate.
+            record_stage(
+                RecoveryStage::FinalityConflictDetected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("syncer_pruning_point={syncer_pruning_point}"),
+            );
             if let Some(permit) = self.bootstrap_recovery_permit_for(syncer_pruning_point).await {
                 warn!(
                     "Crossing this node's own pruning point to adopt candidate {} from {}: the chain currently held is \
