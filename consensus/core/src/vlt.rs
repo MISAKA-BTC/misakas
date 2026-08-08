@@ -433,6 +433,14 @@ pub struct ComputeChallengePayload {
     /// `H(S_j)` of the challenged job — redundant with `certificate_tx_id` but
     /// carried so the challenge can be indexed and dedup'd without a tx lookup.
     pub job_id: Hash64,
+    /// `R_j` as the challenged certificate's executor claimed it.
+    ///
+    /// Carried so a [`ComputeFraudKind::ContradictoryVerification`] proof is checkable **without
+    /// fetching the certificate**: [`verifier_verdict_message`] binds it, and [`VerifierAttestation`]
+    /// does not, so without it the two verdict signatures could not be reconstructed and the
+    /// "proof" would be two unverifiable blobs. Claiming a false value here does not help an
+    /// attacker — the signatures then simply fail to verify.
+    pub executor_receipt_hash: Hash64,
     pub kind: ComputeFraudKind,
     /// `validator_id` of the challenger.
     pub challenger_id: Hash64,
@@ -722,6 +730,7 @@ pub fn compute_challenge_message(
     certificate_tx_id: TransactionId,
     job_id: Hash64,
     kind: ComputeFraudKind,
+    executor_receipt_hash: Hash64,
     replay_receipt_hash: Hash64,
     bond_outpoint: TransactionOutpoint,
 ) -> Hash {
@@ -730,6 +739,7 @@ pub fn compute_challenge_message(
     hasher.update(certificate_tx_id.as_byte_slice());
     hasher.update(job_id.as_byte_slice());
     hasher.update(&[kind as u8]);
+    hasher.update(executor_receipt_hash.as_byte_slice());
     hasher.update(replay_receipt_hash.as_byte_slice());
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
@@ -1866,7 +1876,8 @@ mod tests {
         let cert = compute_certificate_message(net, 5, jid, rh, op);
         let ctx = TransactionId::from_bytes([0x5A; 64]);
         let verd = verifier_verdict_message(net, ctx, jid, rh, VerificationVerdict::Confirmed, rh, op);
-        let chal = compute_challenge_message(net, TransactionId::from_bytes([1u8; 64]), jid, ComputeFraudKind::ForgedReceipt, rh, op);
+        let chal =
+            compute_challenge_message(net, TransactionId::from_bytes([1u8; 64]), jid, ComputeFraudKind::ForgedReceipt, rh, rh, op);
         assert_ne!(cert, verd);
         assert_ne!(cert, chal);
         assert_ne!(verd, chal);

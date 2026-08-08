@@ -5,7 +5,8 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
             InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock, NonReleasableBondSpendInBlock,
-            UnauthorizedUnbondRequestInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -32,11 +33,12 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
         OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, decode_attestation_shard,
-        effective_bond_status, epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity,
-        recompute_epoch_tallies, resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool,
-        stake_attestation_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
+        decode_attestation_shard, effective_bond_status, epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at,
+        mandatory_attestation_mass_capacity, recompute_epoch_tallies, resolve_slashing_side_effects,
+        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message, unbond_request_message,
+        unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_participation_reward_outputs,
+        validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -49,6 +51,10 @@ use kaspa_consensus_core::{
     utxo::{
         utxo_diff::UtxoDiff,
         utxo_view::{UtxoView, UtxoViewComposition},
+    },
+    vlt::{
+        COMPUTE_CHALLENGE_MLDSA87_CONTEXT, ComputeFraudKind, VERIFIER_VERDICT_MLDSA87_CONTEXT, compute_challenge_message,
+        verifier_verdict_message,
     },
 };
 use kaspa_core::{info, trace};
@@ -684,6 +690,12 @@ impl VirtualStateProcessor {
         // bad owner key / signature), so an attacker cannot force honest bonds into
         // Unbonding to grief them out of the active set. Genesis-active.
         self.check_unbond_request_authorized(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // MISAKA VLT §7: reject a block whose compute fraud proof is not genuine. A challenge both
+        // denies a certificate its credit and — for `ContradictoryVerification` — slashes a bond,
+        // so an unchecked one is a one-transaction attack on any validator's stake. Genesis-active,
+        // like the equivocation-evidence rule it mirrors.
+        self.check_compute_challenge_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
         // §F+§E): the validator reward outputs the coinbase must carry. The §F
@@ -1349,6 +1361,27 @@ impl VirtualStateProcessor {
         .map_err(UnverifiableSlashingEvidenceInBlock)
     }
 
+    /// MISAKA Verified LLM Token-Weighted BFT (§7): rejects a block carrying a compute fraud proof
+    /// that is not genuine — the sibling of [`Self::check_slashing_evidence_genuine`], and for the
+    /// same reason. A `ComputeChallenge` both denies a certificate its credit and (for the one
+    /// provable kind) slashes a bond, so without this rule a well-formed but baseless challenge
+    /// would be a one-transaction attack on any validator's stake.
+    ///
+    /// Active when the overlay is configured **and** past `dns_activation_daa_score` (= 0
+    /// everywhere today), i.e. this is live now, not behind the VLT fence — because the
+    /// transactions it guards are accepted now.
+    fn check_compute_challenge_genuine(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
+        let activated = daa_score >= params.dns_activation_daa_score;
+        compute_challenge_genuine(txs, selected_parent_bond_view, self.genesis.hash, daa_score, activated)
+            .map_err(UnverifiableComputeChallengeInBlock)
+    }
+
     /// kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. Rejects a
     /// block that includes a transaction spending a **known** bond outpoint
     /// (present in the block's selected-parent bond view) whose bond is **not
@@ -1798,6 +1831,116 @@ fn slashing_evidence_genuine(
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pure core of the MISAKA VLT §7 compute-fraud-proof genuineness rule (testable without a
+/// processor). `activated` folds the overlay gate; `false` makes it a no-op.
+///
+/// # What a challenge has to prove before it is allowed on chain
+///
+/// Every kind must show that a **bonded, identified party is behind it**: the challenger's bond
+/// exists in the block's selected-parent view, `challenger_id` is that bond's validator, the bond
+/// had slashable stake at this block, and the challenger's ML-DSA-87 signature over
+/// [`compute_challenge_message`] verifies. That is what makes a challenge cost something — §7(c)
+/// prices a failed one against exactly this collateral — and it is what stops an anonymous party
+/// from denying an arbitrary certificate its credit for the price of a transaction fee.
+///
+/// [`ComputeFraudKind::ContradictoryVerification`] must additionally carry its whole proof, since
+/// it is the only kind that slashes at acceptance: both verdicts must be signed by the **target
+/// bond's own key** over their reconstructed [`verifier_verdict_message`] digests. Two signatures
+/// from one verifier that cannot both be true is a fact, checkable here, with nothing re-executed
+/// and no transaction looked up. The stateless layer has already pinned them to one verifier, one
+/// bond, and genuinely differing claims.
+///
+/// The remaining kinds are claims about a computation ("I re-ran it and got something else"),
+/// which no validator can check without re-running it. They are allowed on chain — a bonded party
+/// may flag a certificate, and flagging denies it credit — but they slash nobody.
+fn compute_challenge_genuine(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    including_daa: u64,
+    activated: bool,
+) -> Result<(), TransactionId> {
+    if !activated {
+        return Ok(());
+    }
+    // An undecodable payload never reached acceptance (the stateless layer refuses it), so the
+    // decoder's defensive skip cannot hide a challenge from this rule.
+    for (tx_id, c) in compute_challenges_with_ids(txs) {
+        // (1) The challenger is a bonded validator with stake at risk.
+        let Some(challenger) = bond_view.get(&c.challenger_bond_outpoint) else {
+            return Err(tx_id);
+        };
+        if c.challenger_id != challenger.validator_pubkey_hash {
+            return Err(tx_id);
+        }
+        if !matches!(effective_bond_status(challenger, including_daa), BondStatus::Active | BondStatus::Unbonding) {
+            return Err(tx_id);
+        }
+        // (2) …and actually authored this challenge.
+        let digest = compute_challenge_message(
+            net_id.as_byte_slice(),
+            c.certificate_tx_id,
+            c.job_id,
+            c.kind,
+            c.executor_receipt_hash,
+            c.replay_receipt_hash,
+            c.challenger_bond_outpoint,
+        );
+        if !matches!(
+            verify_mldsa87_with_context(
+                &challenger.validator_pubkey,
+                digest.as_bytes().as_slice(),
+                &c.signature,
+                COMPUTE_CHALLENGE_MLDSA87_CONTEXT
+            ),
+            Ok(true)
+        ) {
+            return Err(tx_id);
+        }
+        // (3) The one kind that slashes must carry its own proof.
+        if c.kind != ComputeFraudKind::ContradictoryVerification {
+            continue;
+        }
+        // The stateless layer pinned `target_bond_outpoint` to the verdicts' shared bond, so the
+        // proof can only ever be aimed at the verifier it incriminates.
+        let Some(target) = bond_view.get(&c.target_bond_outpoint) else {
+            return Err(tx_id);
+        };
+        if !matches!(effective_bond_status(target, including_daa), BondStatus::Active | BondStatus::Unbonding) {
+            return Err(tx_id);
+        }
+        for v in &c.contradictory_verdicts {
+            // The verdict's declared verifier must be the bond's own validator: `verifier_id` is
+            // not inside the signed digest, so without this a real signature could be re-labelled
+            // onto another identity.
+            if v.verifier_id != target.validator_pubkey_hash {
+                return Err(tx_id);
+            }
+            let vd = verifier_verdict_message(
+                net_id.as_byte_slice(),
+                c.certificate_tx_id,
+                c.job_id,
+                c.executor_receipt_hash,
+                v.verdict,
+                v.replay_receipt_hash,
+                v.bond_outpoint,
+            );
+            if !matches!(
+                verify_mldsa87_with_context(
+                    &target.validator_pubkey,
+                    vd.as_bytes().as_slice(),
+                    &v.signature,
+                    VERIFIER_VERDICT_MLDSA87_CONTEXT
+                ),
+                Ok(true)
+            ) {
+                return Err(tx_id);
             }
         }
     }
@@ -2534,6 +2677,165 @@ mod tests {
         #[test]
         fn ok_when_no_slashing_evidence() {
             assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
+        }
+    }
+
+    // MISAKA VLT §7: the compute-fraud-proof genuineness rule's pure core.
+    //
+    // The rule exists because a `ComputeChallenge` both denies a certificate its credit and — for
+    // `ContradictoryVerification` — slashes a bond. Before it, a payload-shaped challenge naming
+    // an arbitrary victim was accepted, so one transaction with a garbage signature could burn any
+    // validator's stake. These cases pin each way a baseless challenge is now refused. The
+    // accept-with-valid-signatures path needs ML-DSA-87 signing and is covered by the builder's
+    // round-trip in `kaspa-pq-validator-core`.
+    mod compute_challenge_genuine {
+        use super::super::compute_challenge_genuine as genuine;
+        use kaspa_consensus_core::{
+            BlockHash,
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                StakeBondRecord,
+            },
+            subnets::SUBNETWORK_ID_COMPUTE_CHALLENGE,
+            tx::{Transaction, TransactionOutpoint},
+            vlt::{ComputeChallengePayload, ComputeFraudKind, VerificationVerdict, VerifierAttestation},
+        };
+        use kaspa_hashes::Hash64;
+
+        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
+        const DAA: u64 = 10_000;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn bond(op: TransactionOutpoint, validator_id: Hash64) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: validator_id,
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        fn verdict(verifier_id: Hash64, v: VerificationVerdict, replay: u8) -> VerifierAttestation {
+            VerifierAttestation {
+                version: DNS_PAYLOAD_VERSION_V1,
+                verifier_id,
+                bond_outpoint: outpoint(0x21),
+                verdict: v,
+                replay_receipt_hash: Hash64::from_bytes([replay; 64]),
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+            }
+        }
+
+        /// A challenge by `challenger_id`, bonded at `challenger_bond`, against `target`.
+        fn challenge_tx(
+            kind: ComputeFraudKind,
+            challenger_id: Hash64,
+            challenger_bond: TransactionOutpoint,
+            target: TransactionOutpoint,
+            verdicts: Vec<VerifierAttestation>,
+        ) -> Transaction {
+            let c = ComputeChallengePayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                certificate_tx_id: Hash64::from_bytes([0x05; 64]),
+                job_id: Hash64::from_bytes([0x06; 64]),
+                executor_receipt_hash: Hash64::from_bytes([0x63; 64]),
+                kind,
+                challenger_id,
+                challenger_bond_outpoint: challenger_bond,
+                target_bond_outpoint: target,
+                replay_receipt_hash: Hash64::from_bytes([0x42; 64]),
+                contradictory_verdicts: verdicts,
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+                reporter_reward_spk_payload: [0xee; 64],
+            };
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_COMPUTE_CHALLENGE, 0, borsh::to_vec(&c).unwrap())
+        }
+
+        fn forged(challenger_id: Hash64, challenger_bond: TransactionOutpoint, target: TransactionOutpoint) -> Transaction {
+            challenge_tx(ComputeFraudKind::ForgedReceipt, challenger_id, challenger_bond, target, vec![])
+        }
+
+        #[test]
+        fn noop_when_not_activated() {
+            let tx = forged(Hash64::from_bytes([0xb1; 64]), outpoint(1), outpoint(9));
+            assert_eq!(genuine(&[tx], &ActiveBondView::new(), NET(), DAA, false), Ok(()));
+        }
+
+        #[test]
+        fn ok_when_there_is_no_challenge() {
+            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), DAA, true), Ok(()));
+        }
+
+        /// The attack the rule exists to stop: an unbonded party naming a victim's bond.
+        #[test]
+        fn rejects_a_challenge_from_an_unknown_challenger() {
+            let victim = outpoint(9);
+            let tx = forged(Hash64::from_bytes([0xb1; 64]), outpoint(1), victim);
+            let view = ActiveBondView::from_records([(victim, bond(victim, Hash64::from_bytes([0x99; 64])))]);
+            assert!(genuine(&[tx], &view, NET(), DAA, true).is_err(), "an unbonded challenger must not be able to file");
+        }
+
+        /// A bonded party may not borrow someone else's bond as its collateral: `challenger_id`
+        /// is not inside the signed digest, so the binding has to be checked here.
+        #[test]
+        fn rejects_a_challenger_id_that_is_not_its_bond() {
+            let cb = outpoint(1);
+            let view = ActiveBondView::from_records([(cb, bond(cb, Hash64::from_bytes([0xb1; 64])))]);
+            let tx = forged(Hash64::from_bytes([0xff; 64]), cb, outpoint(9));
+            assert!(genuine(&[tx], &view, NET(), DAA, true).is_err());
+        }
+
+        /// Bonded and correctly bound, but the challenger's own signature is garbage.
+        #[test]
+        fn rejects_a_challenge_the_challenger_did_not_sign() {
+            let cb = outpoint(1);
+            let id = Hash64::from_bytes([0xb1; 64]);
+            let view = ActiveBondView::from_records([(cb, bond(cb, id))]);
+            assert!(genuine(&[forged(id, cb, outpoint(9))], &view, NET(), DAA, true).is_err());
+        }
+
+        /// A challenger whose bond has no stake at risk cannot be priced by §7(c), so it cannot
+        /// file: otherwise a slashed operator could grief certificates for free forever.
+        #[test]
+        fn rejects_a_challenger_whose_bond_has_no_stake_at_risk() {
+            let cb = outpoint(1);
+            let id = Hash64::from_bytes([0xb1; 64]);
+            let mut slashed = bond(cb, id);
+            slashed.slashed_at_daa_score = Some(1);
+            let view = ActiveBondView::from_records([(cb, slashed)]);
+            assert!(genuine(&[forged(id, cb, outpoint(9))], &view, NET(), DAA, true).is_err());
+        }
+
+        /// The slashing kind must carry verdicts signed by the bond it incriminates. Garbage
+        /// signatures are exactly the forged-proof case, and they must not reach acceptance.
+        #[test]
+        fn rejects_a_contradiction_proof_whose_verdicts_do_not_verify() {
+            let cb = outpoint(1);
+            let id = Hash64::from_bytes([0xb1; 64]);
+            let target = outpoint(0x21);
+            let target_id = Hash64::from_bytes([0x77; 64]);
+            let view = ActiveBondView::from_records([(cb, bond(cb, id)), (target, bond(target, target_id))]);
+            let tx = challenge_tx(
+                ComputeFraudKind::ContradictoryVerification,
+                id,
+                cb,
+                target,
+                vec![verdict(target_id, VerificationVerdict::Confirmed, 0x63), verdict(target_id, VerificationVerdict::Refuted, 0x64)],
+            );
+            assert!(genuine(&[tx], &view, NET(), DAA, true).is_err());
         }
     }
 

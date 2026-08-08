@@ -4246,12 +4246,25 @@ pub fn bond_mutations_from_accepted_txs(
                 }
             }
             Some(DnsTxKind::ComputeChallenge) => {
-                // VLT paper §7(b)/(c): a successful compute fraud proof slashes the offending bond,
-                // exactly as equivocation evidence does. Which bond that is depends on the fraud
-                // kind and is named by `target_bond_outpoint`; the payload/eligibility checks that
-                // make the naming truthful run as block-validity rules before acceptance, so a
-                // challenge reaching here is valid and applies once.
-                if let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload) {
+                // VLT paper §7(b): only an **objectively provable** offence may slash at
+                // acceptance, and of the four fraud kinds exactly one is.
+                //
+                // `ContradictoryVerification` is proved by two signatures from one verifier over
+                // one certificate that cannot both be true. Nothing has to be re-executed and
+                // nothing has to be looked up: `compute_challenge_genuine` reconstructs both
+                // verdict digests from the payload and verifies them against the named bond's own
+                // key, so a forged proof cannot reach acceptance.
+                //
+                // The other three are claims, not proofs. `ForgedReceipt` says "I re-ran the job
+                // and got something else" — unverifiable without re-running it, which consensus
+                // cannot do. `InvalidCertificate` and `FailedChallenge` need an adjudication the
+                // protocol does not yet have. Slashing on an unprovable claim is worse than not
+                // slashing at all: it lets any bonded party burn any other party's stake. They
+                // still deny the certificate its credit (`aggregate_compute_credits` drops any
+                // challenged certificate), which is the part that IS decidable from chain data.
+                if let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload)
+                    && c.kind == ComputeFraudKind::ContradictoryVerification
+                {
                     muts.push(BondMutation::Slash(c.target_bond_outpoint, accepted_daa_score));
                 }
             }
@@ -5096,12 +5109,19 @@ pub fn compute_certificates_from_accepted_txs(txs: &[Transaction]) -> Vec<(Trans
 
 /// Every decodable [`ComputeChallengePayload`] among `txs`.
 pub fn compute_challenges_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeChallengePayload> {
+    compute_challenges_with_ids(txs).into_iter().map(|(_, c)| c).collect()
+}
+
+/// As [`compute_challenges_from_accepted_txs`], but paired with each challenge's own transaction
+/// id — what the block-validity rule needs in order to name the offending transaction when it
+/// rejects a block.
+pub fn compute_challenges_with_ids(txs: &[Transaction]) -> Vec<(TransactionId, ComputeChallengePayload)> {
     let mut out = Vec::new();
     for tx in txs {
         if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeChallenge)
             && let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload)
         {
-            out.push(c);
+            out.push((tx.id(), c));
         }
     }
     out
@@ -7157,6 +7177,7 @@ mod tests {
             version: DNS_PAYLOAD_VERSION_V1,
             certificate_tx_id: Hash64::from_u64_word(5),
             job_id: Hash64::from_u64_word(6),
+            executor_receipt_hash: Hash64::from_u64_word(99),
             kind: ComputeFraudKind::ContradictoryVerification,
             challenger_id: Hash64::from_u64_word(7),
             challenger_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(8), 0),
@@ -7203,16 +7224,22 @@ mod tests {
         assert_eq!(validate_compute_challenge_tx(&bytes, &[out]), Err(DnsTxError::SlashingEvidenceHasOutputs(1)));
     }
 
-    /// A successful compute fraud proof slashes the named bond, exactly as equivocation evidence
-    /// does — the §7(b)/(c) offences are enforced through the same bond-mutation path.
+    /// Only an **objectively provable** offence may slash at acceptance.
+    ///
+    /// `ContradictoryVerification` is proved by two of the accused's own signatures, so it slashes.
+    /// `ForgedReceipt` is the claim "I re-ran it and got something else" — no validator can check
+    /// that without re-running the job, so it must NOT slash: were it to, any bonded party could
+    /// burn any other party's stake with one transaction and no evidence. It still denies the
+    /// certificate its credit, which is the part that is decidable from chain data.
     #[test]
-    fn compute_challenge_slashes_the_named_bond() {
+    fn only_a_provable_compute_offence_slashes() {
         let target = TransactionOutpoint::new(Hash64::from_u64_word(121), 0);
-        let challenge = ComputeChallengePayload {
+        let challenge = |kind| ComputeChallengePayload {
             version: DNS_PAYLOAD_VERSION_V1,
             certificate_tx_id: Hash64::from_u64_word(5),
             job_id: Hash64::from_u64_word(6),
-            kind: ComputeFraudKind::ForgedReceipt,
+            executor_receipt_hash: Hash64::from_u64_word(99),
+            kind,
             challenger_id: Hash64::from_u64_word(7),
             challenger_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(8), 0),
             target_bond_outpoint: target,
@@ -7221,17 +7248,27 @@ mod tests {
             signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
             reporter_reward_spk_payload: [0u8; 64],
         };
-        let tx = Transaction::new(
-            crate::constants::TX_VERSION,
-            vec![],
-            vec![],
-            0,
-            SUBNETWORK_ID_COMPUTE_CHALLENGE,
-            0,
-            borsh::to_vec(&challenge).unwrap(),
+        let tx = |kind| {
+            Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_COMPUTE_CHALLENGE,
+                0,
+                borsh::to_vec(&challenge(kind)).unwrap(),
+            )
+        };
+        assert_eq!(
+            bond_mutations_from_accepted_txs(&[tx(ComputeFraudKind::ContradictoryVerification)], 4_242, 0, 0),
+            vec![BondMutation::Slash(target, 4_242)]
         );
-        let muts = bond_mutations_from_accepted_txs(&[tx], 4_242, 0, 0);
-        assert_eq!(muts, vec![BondMutation::Slash(target, 4_242)]);
+        for unprovable in [ComputeFraudKind::ForgedReceipt, ComputeFraudKind::InvalidCertificate, ComputeFraudKind::FailedChallenge] {
+            assert!(
+                bond_mutations_from_accepted_txs(&[tx(unprovable)], 4_242, 0, 0).is_empty(),
+                "{unprovable:?} is a claim, not a proof, and must not slash"
+            );
+        }
 
         // A compute CERTIFICATE, by contrast, never touches the bond registry — it mints credit.
         let cert_tx = Transaction::new(

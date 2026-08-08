@@ -476,6 +476,7 @@ impl ValidatorKey {
         certificate_tx_id: TransactionId,
         job_id: Hash64,
         kind: ComputeFraudKind,
+        executor_receipt_hash: Hash64,
         replay_receipt_hash: Hash64,
         target_bond_outpoint: TransactionOutpoint,
         contradictory_verdicts: Vec<VerifierAttestation>,
@@ -485,12 +486,21 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
-        let message = compute_challenge_message(network_id, certificate_tx_id, job_id, kind, replay_receipt_hash, bond_outpoint);
+        let message = compute_challenge_message(
+            network_id,
+            certificate_tx_id,
+            job_id,
+            kind,
+            executor_receipt_hash,
+            replay_receipt_hash,
+            bond_outpoint,
+        );
         let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CHALLENGE_MLDSA87_CONTEXT).to_vec();
         let payload = ComputeChallengePayload {
             version: DNS_PAYLOAD_VERSION_V1,
             certificate_tx_id,
             job_id,
+            executor_receipt_hash,
             kind,
             challenger_id: self.validator_id,
             challenger_bond_outpoint: bond_outpoint,
@@ -1350,6 +1360,7 @@ mod tests {
                 cert.id(),
                 job_id,
                 ComputeFraudKind::ForgedReceipt,
+                receipt_hash,
                 Hash64::from_bytes([0x99; 64]),
                 bond,
                 vec![],

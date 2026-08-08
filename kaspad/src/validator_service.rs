@@ -1001,6 +1001,7 @@ impl ValidatorService {
                 job.certificate_tx_id,
                 job.job_id,
                 ComputeFraudKind::ForgedReceipt,
+                job.executor_receipt_hash,
                 replay_receipt_hash,
                 job.executor_bond_outpoint,
                 Vec::new(),

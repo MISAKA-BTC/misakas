@@ -244,6 +244,17 @@ pub enum RuleError {
     #[error("block includes unverifiable slashing evidence against bond {0}")]
     UnverifiableSlashingEvidenceInBlock(TransactionId),
 
+    // MISAKA Verified LLM Token-Weighted BFT (§7): a block carrying a compute
+    // fraud proof that is not genuine — an unknown or unbonded challenger, a
+    // challenger signature that does not verify, or (for the one slashing kind,
+    // ContradictoryVerification) verdicts that do not ML-DSA-verify against the
+    // bond they incriminate — is rejected. Without it a well-formed but baseless
+    // challenge would deny any certificate its credit, and slash any bond, for
+    // the price of one transaction. Arg: the challenge transaction's id. Inert
+    // below dns_activation_daa_score.
+    #[error("block includes an unverifiable compute fraud proof in transaction {0}")]
+    UnverifiableComputeChallengeInBlock(TransactionId),
+
     // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. A block
     // containing a transaction whose input spends a known bond outpoint (present
     // in the block's selected-parent active-bond view) whose bond is not
