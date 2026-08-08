@@ -277,6 +277,9 @@ pub struct FlowContextInner {
     shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
+    /// Chains advertised by peers that were passed over because another IBD held the latch.
+    /// One entry per peer (the newest hash wins), so a chatty peer cannot flood it.
+    ibd_candidate_hints: Arc<RwLock<HashMap<PeerKey, IbdCandidateHint>>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -310,6 +313,35 @@ impl Drop for IbdRunningGuard {
         let result = self.indicator.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
         assert!(result.is_ok())
     }
+}
+
+/// A chain a peer advertised while this node could not even look at it.
+///
+/// While `is_ibd_running` is set and the node is out of sync, `blockrelay` returns early before
+/// requesting the block (see the `is_ibd_running` guard there), so a competing peer's offer used
+/// to vanish on arrival: not requested, not queued, not counted. With a headers-proof IBD running
+/// for tens of minutes, that made the first peer to take the latch the de-facto chooser of the
+/// node's chain, and left nothing behind to reconsider afterwards. Incident 2026-08-08: a fresh
+/// node adopted a lower-blue-work branch and sat on it for 86 minutes with a heavier peer
+/// connected the whole time — zero retries, because every one of that peer's offers had been
+/// dropped at the relay guard.
+///
+/// **This is a hint, never evidence.** All that is known here is a hash an unauthenticated peer
+/// mentioned: the block was never fetched, so there is no header, no blue work, no DAA score, and
+/// nothing verified. It may only be used to decide *whom to ask*. Which chain is canonical stays
+/// where it can be proven — the pruning-proof comparison.
+#[derive(Clone, Copy, Debug)]
+pub struct IbdCandidateHint {
+    /// The peer that advertised it, i.e. who to ask.
+    pub peer: PeerKey,
+    /// The most recent hash this peer advertised while we were latched out.
+    pub relay_hash: BlockHash,
+    /// When this peer first offered something we could not consider.
+    pub first_seen: Instant,
+    /// When it last did.
+    pub last_seen: Instant,
+    /// How many offers from this peer were passed over. High counts mean a peer that kept trying.
+    pub passed_over: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -397,6 +429,7 @@ impl FlowContext {
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
+                ibd_candidate_hints: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -462,6 +495,37 @@ impl FlowContext {
         } else {
             None
         }
+    }
+
+    /// Remember that `peer` advertised `relay_hash` at a moment when this node could not act on
+    /// it. Called from the relay guard instead of dropping the offer on the floor.
+    ///
+    /// Deliberately cheap and lossy: one entry per peer, newest hash wins, no fetch, no
+    /// validation. It records only that a peer had something to offer — see [`IbdCandidateHint`]
+    /// for why nothing here may influence which chain is chosen.
+    pub fn observe_ibd_candidate_hint(&self, peer: PeerKey, relay_hash: BlockHash) {
+        let now = Instant::now();
+        let mut hints = self.ibd_candidate_hints.write();
+        hints
+            .entry(peer)
+            .and_modify(|h| {
+                h.relay_hash = relay_hash;
+                h.last_seen = now;
+                h.passed_over = h.passed_over.saturating_add(1);
+            })
+            .or_insert(IbdCandidateHint { peer, relay_hash, first_seen: now, last_seen: now, passed_over: 1 });
+    }
+
+    /// Take every hint gathered while the latch was held, clearing the registry.
+    ///
+    /// Callers must treat the result as a list of peers worth asking, in no authoritative order.
+    pub fn take_ibd_candidate_hints(&self) -> Vec<IbdCandidateHint> {
+        self.ibd_candidate_hints.write().drain().map(|(_, h)| h).collect()
+    }
+
+    /// Forget a disconnected peer's hint so the registry cannot grow without bound.
+    pub fn forget_ibd_candidate_hint(&self, peer: &PeerKey) {
+        self.ibd_candidate_hints.write().remove(peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {

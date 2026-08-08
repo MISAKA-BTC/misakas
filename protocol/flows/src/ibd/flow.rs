@@ -96,7 +96,33 @@ impl IbdFlow {
                 info!("IBD started with peer {}", self.router);
 
                 match self.ibd(relay_block).await {
-                    Ok(_) => info!("IBD with peer {} completed successfully", self.router),
+                    Ok(_) => {
+                        info!("IBD with peer {} completed successfully", self.router);
+                        // Say out loud which peers were passed over while this IBD held the latch.
+                        //
+                        // Their chains were never fetched, let alone compared: the relay guard
+                        // returns before requesting the block. So this node has just adopted one
+                        // peer's chain without ever having looked at the alternatives, and until
+                        // the pre-commit candidate comparison lands that is a decision made by
+                        // arrival order. The incident that motivated this ran for 86 minutes with
+                        // a heavier peer connected and produced no log line at all; an operator
+                        // had no way to know a choice had even been made.
+                        let passed_over = self.ctx.take_ibd_candidate_hints();
+                        if !passed_over.is_empty() {
+                            warn!(
+                                "IBD with {} finished, but {} other peer(s) advertised chains that were never fetched or compared: {}. \
+                                 This node's chain was chosen by which peer relayed first, not by comparing candidates — verify the \
+                                 resulting chain against another node before trusting it.",
+                                self.router,
+                                passed_over.len(),
+                                passed_over
+                                    .iter()
+                                    .map(|h| format!("{} (offered {}x, latest {})", h.peer, h.passed_over, h.relay_hash))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        }
+                    }
                     Err(e) => {
                         info!("IBD with peer {} completed with error: {}", self.router, e);
                         return Err(e);

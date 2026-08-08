@@ -124,7 +124,21 @@ impl HandleRelayInvsFlow {
             if self.ctx.is_ibd_running() && !self.ctx.should_mine(&session).await {
                 // Note: If the node is considered nearly synced we continue processing relay blocks even though an IBD is in progress.
                 // For instance this means that downloading a side-chain from a delayed node does not interop the normal flow of live blocks.
-                debug!("Got relay block {} while in IBD and the node is out of sync, continuing...", inv.hash);
+                //
+                // Returning early here is right — fetching and validating every relayed block mid-IBD
+                // is a DoS — but it used to also ERASE the fact that this peer had anything to offer.
+                // The block is not requested, so it never reaches `try_trigger_ibd`, never enters the
+                // IBD job channel, and leaves no trace: after the running IBD commits, there is
+                // nothing left to reconsider. That is how a node ends up married to whichever peer
+                // happened to relay first (incident 2026-08-08: 86 minutes on a lower-blue-work
+                // branch with a heavier peer connected throughout, zero retry attempts).
+                //
+                // Record the offer instead. One entry per peer, no fetch, no validation — just
+                // "this peer had something we could not look at", so the IBD path can come back and
+                // ASK. It must not be read as a claim about which chain is better; that is decided
+                // by the pruning-proof comparison, on data this node verifies itself.
+                self.ctx.observe_ibd_candidate_hint(self.router.key(), inv.hash);
+                debug!("Got relay block {} while in IBD and the node is out of sync, recorded as an IBD candidate hint", inv.hash);
                 continue;
             }
 
