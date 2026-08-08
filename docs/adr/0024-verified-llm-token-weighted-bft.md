@@ -115,10 +115,10 @@ model. Populating `model_cost_table` is a governance action and part of any acti
 
 | Concern | Where |
 |---|---|
-| Types, normalization, decay, weight, quorum, sortition | `consensus/core/src/vlt.rs` |
+| Types, normalization, decay, weight, quorum, sortition, `VltEpochSnapshot` | `consensus/core/src/vlt.rs` |
 | `W_i(E)` per bond, `W(E)` denominator, credit rule, credit folding | `consensus/core/src/dns_finality.rs` |
 | Per-network params + fence | `consensus/core/src/config/params.rs` |
-| Credit walk, weight-source switch, per-branch scoring | `consensus/src/pipeline/virtual_processor/processor.rs` |
+| Snapshot walk + its pin, weight-source switch, per-branch scoring | `consensus/src/pipeline/virtual_processor/processor.rs` |
 | Stateless payload validation | `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs` |
 | Subnetwork ids `0x14` / `0x15` | `consensus/core/src/subnets.rs` |
 
@@ -128,6 +128,39 @@ it wants finality weight or stake-denominated inclusion policy.
 
 `validator_voting_weight` is shared by the quorum's numerator and its denominator on purpose:
 computing them separately would be a latent consensus split.
+
+### The denominator is pinned, not per-branch
+
+`Q(E) = ⌊2W(E)/3⌋ + 1` is a two-thirds threshold only if everyone arguing about epoch `E` divides
+by the same `W(E)`. A branch that derives its own `W(E)` by walking its own chain does not: omit
+the other side's certificates and `W(E)` falls, `Q(E)` falls with it, and the branch clears a bar
+it set for itself. Two branches then each "reach quorum" for one epoch over disjoint validator
+sets, which is exactly what §8.1 forbids — the intersection argument is the safety claim, and
+without a shared denominator there is nothing to intersect.
+
+So weights are read from a `VltEpochSnapshot`: the credit table plus the block it was taken at.
+The reorg gate builds **one**, pinned at the selected-chain common ancestor of the two branches,
+and hands the same one to both. Every DAA-stamped decision inside it — bond status, challenge
+survival, epoch finalization — is taken at the pin, and the bond set is cut to what existed
+there, so two branches derive a byte-identical table. A bond minted above the pin weighs zero on
+both sides: admitted to the numerator alone it would manufacture quorums outright, since
+`meets_bft_quorum` clamps signed weight up to the total. Pinning is also cheaper than what it
+replaces — one walk from the ancestor instead of one per branch.
+
+This subsumes `credit_delay_epochs`, which remains as the floor. The delay stops a fork from
+weighting votes with VLT minted in the *same* epoch; the pin stops it from weighting votes with
+VLT that exists only on itself, at any epoch distance (§8.3).
+
+`update_dns_state` pins at its own sink, because that recompute has one chain in view — it scores
+the selected chain rather than comparing it to anything. The comparison is the reorg gate, and
+that is where the shared pin is load-bearing.
+
+What is *not* pinned, and is inherited unchanged from ADR-0009/0018 rather than introduced here:
+the denominator still filters by `is_bond_active_at` over the branch's own bond set, at the
+branch's own canonical lagged anchor DAA. Bonds minted above the pin now weigh zero either way,
+so the residue is narrower than it was — a bond that existed at the pin but was slashed or
+unbonded above it, on one branch only, still moves that branch's `W(E)`. `W(E)` is therefore a
+shared function of the pinned *compute*, and not yet of a shared validator set.
 
 ## Consequences
 
@@ -147,6 +180,17 @@ computing them separately would be a latent consensus split.
   vs. 1 500 for the attestation walk) per recompute. It is skipped entirely while the fence is
   inert. A persisted per-epoch credit accumulator is the obvious optimization if activation is
   scheduled.
+- **The pin costs weight at depth, and `W_min` is the part that notices.** A snapshot pinned at
+  the common ancestor holds no epoch above it, so for an epoch `E` far above the fork the newest
+  — and, under geometric decay, heaviest — terms of `C_i(E)` are simply absent. Every validator
+  loses them equally, so the quorum *ratio* is untouched; `min_network_compute` is the one test
+  that is not scale-invariant, and a deep-divergence comparison can shrink `W(E)` under it and
+  earn nothing for the epochs nearest the tips. The effect grows with divergence and is bounded
+  by `dns_gate_horizon_blocks`, it is symmetric between the two branches, and it fails toward
+  `DominanceViolation` — keeping the canonical chain — with the work override and the
+  `dns_veto_ttl_daa_score` release still available as liveness escapes. Calibrating `W_min`
+  against the gate horizon, rather than against the healthy-network total alone, is part of any
+  activation plan.
 - **Sortition beacon (known limitation).** §6 wants verifiers drawn from randomness the executor
   could not see when it committed. The beacon used is the epoch's canonical lagged anchor:
   chain-derived, identical on every node, not chooseable by the executor — but observable before

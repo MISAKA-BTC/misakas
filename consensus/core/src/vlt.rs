@@ -34,6 +34,11 @@
 //! * **Compute credit cannot bootstrap its own fork.** `C_i(E)` reads only epochs
 //!   `≤ E − credit_delay_epochs` (≥ 1 by construction, §4/§8.3), so VLT minted on the
 //!   current fork cannot inflate that fork's own voting power — the eq. (5) epoch delay.
+//!   The delay is the floor; [`VltEpochSnapshot`] is the rest of it. Weights are read from a
+//!   table pinned at a block every competing branch contains, so a fork weights its votes with
+//!   the compute the network agreed on and never with compute that exists only on itself.
+//!   That pin is also what makes `W(E)` a shared denominator rather than one each fork writes
+//!   for itself, which is what the §8.1 quorum-intersection argument actually needs.
 //! * **Stale compute decays.** `d_τ` is geometric in [`decay_coefficient`], so a
 //!   validator that stops producing verified compute loses weight instead of holding
 //!   it forever (§4).
@@ -64,7 +69,7 @@
 //! the active set can actually produce verified compute — with no VLT, `W(E) = 0`
 //! and no epoch reaches quorum (the paper's §2 "計算 bootstrap 期間" caveat).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display, Formatter};
 
 use blake2b_simd::Params as Blake2bParams;
@@ -1565,6 +1570,90 @@ impl kaspa_utils::mem_size::MemSizeEstimator for VltEpochCredits {}
 ///   certificates for the same epoch, so a single cached value would be wrong for one of them.
 pub fn vlt_epoch_finalized(epoch_anchor_daa: u64, tip_daa: u64, challenge_window_blocks: u64, max_reorg_horizon_blocks: u64) -> bool {
     tip_daa.saturating_sub(epoch_anchor_daa) > challenge_window_blocks.saturating_add(max_reorg_horizon_blocks)
+}
+
+// ---------------------------------------------------------------------
+// The pinned weight table (§4 eq. 7, §8.1).
+// ---------------------------------------------------------------------
+
+/// The verified-compute credits `X_i(e)` a quorum is measured against, together with the block
+/// they were read at.
+///
+/// `W(E) = Σ_i W_i(E)` is the quorum **denominator**, and `Q(E) = ⌊2W(E)/3⌋ + 1` is a two-thirds
+/// threshold only if everyone arguing about epoch `E` divides by the same `W(E)`. Derived
+/// per-branch it is not a threshold at all: a branch that omits other validators' certificates
+/// shrinks its own `W(E)`, and with it its own `Q(E)`, until the weight it *does* hold clears the
+/// bar. Two branches can then each "reach quorum" for the same epoch over disjoint validator
+/// sets — and the §8.1 quorum-intersection argument, which is the entire safety claim of the
+/// overlay, is void. A denominator each fork writes for itself is not a denominator.
+///
+/// So the table is taken at a **pin**: a block that every branch being compared contains. The
+/// walk that fills it starts at the pin and can therefore only see certificates in the shared
+/// prefix, and every DAA-stamped test inside it is evaluated at [`Self::pin_daa_score`] or below,
+/// where the branches agree by construction. Those two properties are what make two branches
+/// derive a byte-identical table — see [`Self::pinned`] for the obligation that carries.
+///
+/// This subsumes and strengthens the eq. (5) `credit_delay_epochs` delay. The delay stops a fork
+/// from weighting votes with VLT it minted in the *same* epoch; the pin stops a fork from
+/// weighting votes with VLT that exists only on itself, at any epoch distance (§8.3).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VltEpochSnapshot {
+    pin: BlockHash,
+    pin_daa_score: u64,
+    credits: HashMap<Hash64, BTreeMap<u64, u128>>,
+}
+
+impl VltEpochSnapshot {
+    /// The empty table: no validator holds credit, so `W(E) = 0` at every epoch and no epoch
+    /// reaches quorum. This is what every consumer gets below the VLT fence — and what a network
+    /// that moved its fence before the active set could produce compute would get, which is the
+    /// ADR-0024 "Activation" caveat expressed as a value.
+    pub fn inert() -> Self {
+        Self::default()
+    }
+
+    /// Build a table pinned at `pin`.
+    ///
+    /// The caller owes this constructor the invariant the type exists for: `credits` must have
+    /// been derived from the chain **ending at `pin`**, with every DAA-stamped decision inside
+    /// that derivation — bond status, challenge-window survival, epoch finalization — taken at
+    /// `pin_daa_score` or lower. A table built from a branch tip instead satisfies the type and
+    /// none of its meaning.
+    pub fn pinned(pin: BlockHash, pin_daa_score: u64, credits: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
+        Self { pin, pin_daa_score, credits }
+    }
+
+    /// The block this table was read at. Every branch weighted by it must contain this block.
+    pub fn pin(&self) -> BlockHash {
+        self.pin
+    }
+
+    /// The DAA score of [`Self::pin`] — the horizon below which the branches agree, and therefore
+    /// the newest bond a validator may vote with (see `validator_voting_weight`).
+    pub fn pin_daa_score(&self) -> u64 {
+        self.pin_daa_score
+    }
+
+    /// `validator_id → (epoch → X_i(epoch))`, for the credit accumulator store and diagnostics.
+    pub fn credits(&self) -> &HashMap<Hash64, BTreeMap<u64, u128>> {
+        &self.credits
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.credits.is_empty()
+    }
+
+    /// `C_i(E)` — the decayed recent-compute score this table gives `validator_id` at `epoch`.
+    /// Absent validators score 0, which is the whole point of the replacement: an active,
+    /// fully-bonded validator that supplied no verified compute has no voting power.
+    pub fn recent_compute(&self, validator_id: &Hash64, epoch: u64, params: &VltParams) -> u128 {
+        self.credits.get(validator_id).map(|per_epoch| recent_compute_score(epoch, per_epoch, params)).unwrap_or(0)
+    }
+
+    /// `X_i(e)` — one validator's raw credit at one epoch, undecayed.
+    pub fn credited(&self, validator_id: &Hash64, epoch: u64) -> u128 {
+        self.credits.get(validator_id).and_then(|per_epoch| per_epoch.get(&epoch)).copied().unwrap_or(0)
+    }
 }
 
 /// Why a job minted no VLT. Diagnostic only — every variant normalizes to `0`, which

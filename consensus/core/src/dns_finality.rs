@@ -129,7 +129,7 @@ use crate::{
     tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
-        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
+        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltEpochSnapshot, VltParams,
     },
 };
 
@@ -4685,12 +4685,12 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
 /// The VLT-weighted counterpart of [`total_active_stake_by_epoch`]: `W(E) = Σ_i W_i(E)` over the
 /// bonds active at each epoch's anchor (VLT paper §4 eq. 7).
 ///
-/// `credited_by_validator` maps `validator_id → (epoch → X_i(epoch))`, i.e. each validator's
-/// challenge-window-survived VLT per epoch, as collected from the selected chain. A validator with
-/// no entry contributes `C_i(E) = 0` and therefore `W_i(E) = 0` — an active, fully-bonded validator
-/// that has produced no verified compute adds **nothing** to the quorum base. That is the intended
-/// behaviour and the reason the fence must not be moved before the set can produce compute: `W(E)`
-/// would be 0 network-wide and no epoch could reach [`crate::vlt::bft_quorum`].
+/// `snapshot` is the [`VltEpochSnapshot`] pinned at a block every branch under comparison
+/// contains — never a per-branch walk. A validator absent from it contributes `C_i(E) = 0` and
+/// therefore `W_i(E) = 0`: an active, fully-bonded validator that has produced no verified compute
+/// adds **nothing** to the quorum base. That is the intended behaviour and the reason the fence
+/// must not be moved before the set can produce compute — `W(E)` would be 0 network-wide and no
+/// epoch could reach [`crate::vlt::bft_quorum`].
 ///
 /// Pure and DAA-stamped like its stake counterpart, so it is reorg-safe with no incremental state:
 /// the caller supplies the per-epoch anchor DAA scores, and bond activation / slash / unbond are
@@ -4698,7 +4698,7 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
 pub fn total_voting_weight_by_epoch(
     bonds: &[StakeBondRecord],
     epoch_anchor_daa: &BTreeMap<u64, u64>,
-    credited_by_validator: &HashMap<Hash64, BTreeMap<u64, u128>>,
+    snapshot: &VltEpochSnapshot,
     vlt: &VltParams,
 ) -> BTreeMap<u64, u128> {
     epoch_anchor_daa
@@ -4707,7 +4707,7 @@ pub fn total_voting_weight_by_epoch(
             let total = bonds
                 .iter()
                 .filter(|b| is_bond_active_at(b, anchor_daa))
-                .fold(0u128, |acc, b| acc.saturating_add(validator_voting_weight(b, epoch, credited_by_validator, vlt)));
+                .fold(0u128, |acc, b| acc.saturating_add(validator_voting_weight(b, epoch, snapshot, vlt)));
             (epoch, total)
         })
         .collect()
@@ -4718,16 +4718,18 @@ pub fn total_voting_weight_by_epoch(
 /// Shared by the denominator ([`total_voting_weight_by_epoch`]) and the numerator (the per-
 /// attestation contribution weight) so a validator's weight is by construction the same number on
 /// both sides of the quorum comparison. Computing them separately would be a latent consensus split.
-pub fn validator_voting_weight(
-    bond: &StakeBondRecord,
-    epoch: u64,
-    credited_by_validator: &HashMap<Hash64, BTreeMap<u64, u128>>,
-    vlt: &VltParams,
-) -> u128 {
-    let recent = credited_by_validator
-        .get(&bond.validator_pubkey_hash)
-        .map(|per_epoch| crate::vlt::recent_compute_score(epoch, per_epoch, vlt))
-        .unwrap_or(0);
+///
+/// A bond that did not exist at the snapshot's pin weighs **zero on both sides**. It has no
+/// compute in the pinned table, so it is not in that denominator; letting it into the numerator
+/// anyway would hand a branch a quorum it never had, because [`crate::vlt::meets_bft_quorum`]
+/// clamps the signed weight up to the total and `total ≥ Q(total)` always holds. The rule this
+/// states is the same one the pin states: voting weight comes from what the branches agreed on,
+/// and a bond minted after the fork is not that.
+pub fn validator_voting_weight(bond: &StakeBondRecord, epoch: u64, snapshot: &VltEpochSnapshot, vlt: &VltParams) -> u128 {
+    if bond.activation_daa_score > snapshot.pin_daa_score() {
+        return 0;
+    }
+    let recent = snapshot.recent_compute(&bond.validator_pubkey_hash, epoch, vlt);
     crate::vlt::effective_voting_weight(recent, bond.amount, vlt.lambda_vlt_per_kas)
 }
 
@@ -6741,8 +6743,10 @@ mod tests {
         VltParams { vlt_activation_daa_score: 0, ..VltParams::INERT }
     }
 
-    /// Credit `x` µRTE to validator `seed` for every epoch in `epochs`.
-    fn credits_for(entries: &[(u64, &[u64], u128)]) -> HashMap<Hash64, BTreeMap<u64, u128>> {
+    /// Credit `x` µRTE to validator `seed` for every epoch in `epochs`, as a table pinned at DAA
+    /// 0 — the same score [`vlt_bond`] activates its bonds at, so every fixture bond is "at or
+    /// below the pin" and carries the weight its credits say it does.
+    fn credits_for(entries: &[(u64, &[u64], u128)]) -> VltEpochSnapshot {
         let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
         for (seed, epochs, x) in entries {
             let per = out.entry(Hash64::from_u64_word(seed + 2)).or_default();
@@ -6750,7 +6754,7 @@ mod tests {
                 per.insert(*e, *x);
             }
         }
-        out
+        VltEpochSnapshot::pinned(BlockHash::default(), 0, out)
     }
 
     /// The headline replacement property, end to end: capital alone no longer votes.
@@ -6827,6 +6831,104 @@ mod tests {
             compute_stake_score(&per_epoch, EpochCreditRule::BftQuorum { min_network_compute: 0 }),
             StakeScore(STAKE_SCORE_SCALE)
         );
+    }
+
+    /// The attack the pin exists for, spelled out in arithmetic.
+    ///
+    /// Three validators with equal compute. A fork drops validator 3's certificates — nothing
+    /// else — and scores itself on what is left. Under a table it derives for itself its `W(E)`
+    /// is two thirds of the network's, so `Q(E) = ⌊2W/3⌋ + 1` falls with it and the two
+    /// validators the fork *does* hold clear a bar the fork lowered for itself. On the real
+    /// denominator the same two validators are exactly two thirds, which is not **strictly**
+    /// above two thirds, and the epoch earns nothing.
+    ///
+    /// That gap is a safety failure, not a scoring quirk: the honest branch credits epoch 10 to
+    /// no one while the fork credits it to itself, so both branches "finalize" the same epoch
+    /// over disjoint validator sets. Pinning the table at a block both contain is what removes
+    /// the fork's ability to choose. Its numerator falls with its denominator, and the answer
+    /// stops depending on who is asking.
+    #[test]
+    fn vlt_quorum_denominator_cannot_be_chosen_by_the_branch_asking() {
+        let vlt = vlt_params_active();
+        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
+        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
+        let x = 1_000 * crate::vlt::VLT_MICRO;
+        let epoch_anchor_daa = BTreeMap::from([(10u64, 0u64)]);
+        let rule = EpochCreditRule::BftQuorum { min_network_compute: 0 };
+
+        // The shared table: all three validators certified compute in epoch 9.
+        let shared = credits_for(&[(1, &[9], x), (2, &[9], x), (3, &[9], x)]);
+        // What a fork that censored validator 3 would derive by walking its own chain.
+        let fork_local = credits_for(&[(1, &[9], x), (2, &[9], x)]);
+
+        // Only validators 1 and 2 attest on the fork — it does not have 3's attestation either.
+        let signed = |snapshot: &VltEpochSnapshot| {
+            let contributions: Vec<_> = bonds[..2]
+                .iter()
+                .map(|b| AttestationContribution {
+                    epoch: 10,
+                    validator_id: b.validator_pubkey_hash,
+                    bond_outpoint: b.bond_outpoint,
+                    signed_weight: validator_voting_weight(b, 10, snapshot, &vlt),
+                })
+                .collect();
+            let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, snapshot, &vlt);
+            compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals), rule)
+        };
+
+        assert_eq!(
+            total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &fork_local, &vlt)[&10],
+            2 * x,
+            "a self-derived table is two thirds the size, so the bar it sets is two thirds as high"
+        );
+        assert_eq!(signed(&fork_local), StakeScore(STAKE_SCORE_SCALE), "the fork clears the bar it wrote for itself");
+        assert_eq!(
+            signed(&shared),
+            StakeScore(0),
+            "on the shared denominator the same two validators are exactly 2/3, which is not a quorum"
+        );
+    }
+
+    /// A bond minted after the fork weighs zero — on **both** sides of the comparison.
+    ///
+    /// Leaving it out of the pinned denominator alone would not be safe, it would be the opposite:
+    /// `meets_bft_quorum` clamps the signed weight up to the total, and `total ≥ Q(total)` always
+    /// holds, so weight admitted to the numerator but absent from the denominator manufactures a
+    /// quorum outright. The rule has to be the same rule on both sides, and it is, because both
+    /// sides call `validator_voting_weight`.
+    #[test]
+    fn vlt_a_bond_minted_after_the_pin_has_no_voting_weight() {
+        let vlt = vlt_params_active();
+        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
+        let x = 1_000 * crate::vlt::VLT_MICRO;
+        // Same validator id as bond 1 (`credits_for` keys on the id), but activated at DAA 500 —
+        // above the pin at 0. The compute is real and in the shared table; the bond is not.
+        let post_fork = StakeBondRecord { activation_daa_score: 500, ..vlt_bond(1, bond_amount) };
+        let pre_fork = vlt_bond(1, bond_amount);
+        let snapshot = credits_for(&[(1, &[9], x)]);
+        assert_eq!(snapshot.pin_daa_score(), 0);
+        assert_eq!(snapshot.credited(&post_fork.validator_pubkey_hash, 9), x, "the compute itself is in the shared table");
+
+        assert_eq!(validator_voting_weight(&pre_fork, 10, &snapshot, &vlt), x, "the bond the branches agreed on votes");
+        assert_eq!(validator_voting_weight(&post_fork, 10, &snapshot, &vlt), 0, "a bond only one branch has does not");
+
+        // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
+        // the other side's recent bonds either.
+        let totals = total_voting_weight_by_epoch(&[post_fork], &BTreeMap::from([(10u64, 600u64)]), &snapshot, &vlt);
+        assert_eq!(totals[&10], 0, "Active at the epoch anchor, but not at the pin — not in W(E)");
+    }
+
+    /// The inert table is the below-fence and pre-activation answer: no credit, no weight, no
+    /// quorum. `W(E) = 0` makes `Q(E) = 1` unreachable rather than trivial, which is the ADR-0024
+    /// "do not move the fence before the set can produce compute" caveat as a value.
+    #[test]
+    fn vlt_inert_snapshot_gives_every_validator_zero_weight() {
+        let vlt = vlt_params_active();
+        let bond = vlt_bond(1, 20_000_000 * crate::constants::SOMPI_PER_KASPA);
+        let inert = VltEpochSnapshot::inert();
+        assert!(inert.is_empty());
+        assert_eq!(validator_voting_weight(&bond, 10, &inert, &vlt), 0);
+        assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt)[&10], 0);
     }
 
     /// The fence is the whole safety story for existing networks: below it, nothing about the

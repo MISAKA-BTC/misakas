@@ -96,7 +96,7 @@ use kaspa_consensus_core::{
     },
     vlt::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
-        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits,
+        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits, VltEpochSnapshot,
         adjudicate_compute_challenge, compute_capability_message, compute_certificate_message, compute_commitment_message,
         compute_receipt_hash, job_input_commitment, job_spec_id, normalize_vlt, select_verifiers, verifier_verdict_message,
         verify_compute_certificate, vlt_epoch_finalized,
@@ -195,8 +195,9 @@ impl EvmLaneKpi {
 pub(crate) enum ContributionWeight<'a> {
     /// The bond's stake in sompi.
     BondedStake,
-    /// `W_i(E) = min{C_i(E), λ·B_i(E)}` in µRTE, from the collected compute credits.
-    Vlt { credits: &'a HashMap<Hash64, BTreeMap<u64, u128>>, vlt: &'a kaspa_consensus_core::vlt::VltParams },
+    /// `W_i(E) = min{C_i(E), λ·B_i(E)}` in µRTE, read from a [`VltEpochSnapshot`] pinned at a
+    /// block every branch in the comparison contains — never from a per-branch walk.
+    Vlt { snapshot: &'a VltEpochSnapshot, vlt: &'a kaspa_consensus_core::vlt::VltParams },
 }
 
 impl ContributionWeight<'_> {
@@ -204,7 +205,7 @@ impl ContributionWeight<'_> {
     fn of(&self, bond: &StakeBondRecord, epoch: u64) -> u128 {
         match self {
             Self::BondedStake => bond.amount as u128,
-            Self::Vlt { credits, vlt } => validator_voting_weight(bond, epoch, credits, vlt),
+            Self::Vlt { snapshot, vlt } => validator_voting_weight(bond, epoch, snapshot, vlt),
         }
     }
 }
@@ -2279,13 +2280,26 @@ impl VirtualStateProcessor {
         // attestations naming THIS chain's canonical lagged anchor for their (ready,
         // non-duplicate) epoch, with the per-epoch denominator keyed by the canonical anchor
         // DAA and zero-attestation ready epochs included (`collect_stake_contributions_v2`).
-        // MISAKA Verified LLM Token-Weighted BFT: collect each validator's challenge-window-survived
+        // MISAKA Verified LLM Token-Weighted BFT: read each validator's challenge-window-survived
         // verified compute first — it is the input to every weight below. Empty (and free) while
         // the VLT fence is inert.
-        let credits = self.collect_compute_credits(sink, &bonds, net_id.as_byte_slice(), dns_params, sink_daa);
+        //
+        // The pin here is the sink itself, because this recompute has exactly one chain in view:
+        // it is scoring the selected chain, not comparing it to anything. The place where two
+        // branches ARE compared is `dns_reorg_outcome`, and that one pins at the block they share
+        // (see `stake_score_since_ancestor`) — which is what stops a competing branch from
+        // bringing its own denominator to the comparison this state feeds.
+        let snapshot = self.vlt_epoch_snapshot(
+            sink,
+            sink_daa,
+            &bonds,
+            net_id.as_byte_slice(),
+            dns_params,
+            dns_params.vlt_weighting_active_at(sink_daa),
+        );
         let credit_rule = dns_params.epoch_credit_rule(sink_daa);
         let weight = if dns_params.vlt_weighting_active_at(sink_daa) {
-            ContributionWeight::Vlt { credits: &credits, vlt: &dns_params.vlt }
+            ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt }
         } else {
             ContributionWeight::BondedStake
         };
@@ -2622,6 +2636,16 @@ impl VirtualStateProcessor {
     /// epochs anchored strictly above the common ancestor (its OWN segment) — byte-identical to
     /// the sink-side StakeScore and immune to a branch inflating its score with non-canonical
     /// (current-sink / fabricated) targets. Inert wherever the overlay is dormant.
+    ///
+    /// `snapshot` is the VLT weight table, and it is an argument rather than something this
+    /// function derives because **both branches must be handed the same one** — see
+    /// [`VltEpochSnapshot`]. Its pin is the `ancestor` both calls share, so a certificate that
+    /// exists only on the branch being scored contributes nothing to either the weight that
+    /// branch signs with or the `W(E)` it is measured against. Deriving it here from `tip`, as
+    /// this used to, let each branch write its own denominator: omit the other side's
+    /// certificates, `W(E)` falls, `Q(E) = ⌊2W(E)/3⌋ + 1` falls with it, and the branch clears a
+    /// quorum bar it set for itself. Two branches could then both "reach quorum" for one epoch
+    /// over disjoint validators, which is precisely what the §8.1 intersection argument forbids.
     fn stake_score_since_ancestor(
         &self,
         tip: BlockHash,
@@ -2630,13 +2654,13 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         net_id: &[u8],
         pov_daa_score: u64,
+        snapshot: &VltEpochSnapshot,
     ) -> StakeScore {
-        // Each branch is scored under its OWN compute credits for the same reason it is scored
-        // under its own bond set: certificates that live only on the candidate branch are part of
-        // what that branch's weight is.
-        let credits = self.collect_compute_credits(tip, bonds, net_id, dns_params, pov_daa_score);
+        // The weight SOURCE is still decided at this branch's own tip — around the activation
+        // fence the two branches can straddle it, and scoring one in µRTE against the other in
+        // sompi would compare nothing. Only the table is shared.
         let weight = if dns_params.vlt_weighting_active_at(pov_daa_score) {
-            ContributionWeight::Vlt { credits: &credits, vlt: &dns_params.vlt }
+            ContributionWeight::Vlt { snapshot, vlt: &dns_params.vlt }
         } else {
             ContributionWeight::BondedStake
         };
@@ -2659,16 +2683,28 @@ impl VirtualStateProcessor {
     ) -> BTreeMap<u64, u128> {
         match weight {
             ContributionWeight::BondedStake => total_active_stake_by_epoch(bonds, epoch_anchor_daa),
-            ContributionWeight::Vlt { credits, vlt } => total_voting_weight_by_epoch(bonds, epoch_anchor_daa, credits, vlt),
+            ContributionWeight::Vlt { snapshot, vlt } => total_voting_weight_by_epoch(bonds, epoch_anchor_daa, snapshot, vlt),
         }
     }
 
-    /// MISAKA Verified LLM Token-Weighted BFT (§3, §6): walk the selected chain and fold every
-    /// creditable compute certificate into `validator_id → (epoch → X_i(epoch))`, the per-epoch
-    /// verified-compute credit that [`validator_voting_weight`] turns into voting weight.
+    /// MISAKA Verified LLM Token-Weighted BFT (§3, §6): walk the chain ending at `pin` and fold
+    /// every creditable compute certificate into the [`VltEpochSnapshot`] that
+    /// [`validator_voting_weight`] turns into voting weight.
     ///
-    /// Returns an empty map — and does **no** walking at all — while the VLT fence is inert, so the
-    /// added walk cost is paid only by a network that has actually switched its weight source.
+    /// **`pin` is the whole point of this function's shape.** The table it produces is a quorum
+    /// denominator, and a denominator each branch derives for itself is not one (see
+    /// [`VltEpochSnapshot`]). `pin` must therefore be a block every branch that will be weighted
+    /// by the result contains — the selected-chain common ancestor when two branches are being
+    /// compared. Every DAA-stamped decision below is taken at `pin_daa_score`, never at a branch
+    /// tip: `bonds` is cut to those that existed at the pin, the anchor map and the walk both
+    /// start from `pin`, and challenge-window survival and epoch finalization are measured
+    /// against `pin_daa_score`. That is what makes two branches derive the identical table.
+    ///
+    /// `active` is the fence decision, passed in rather than taken here, because the branches
+    /// being compared can straddle `vlt_activation_daa_score` and the pin below them can sit on
+    /// the other side of it again. Returns [`VltEpochSnapshot::inert`] — doing **no** walking at
+    /// all — when it is false, so the added walk cost is paid only by a network that has actually
+    /// switched its weight source.
     ///
     /// A certificate is creditable only if all of the following hold. Each is a place an executor
     /// would otherwise be able to mint weight it did not earn:
@@ -2699,25 +2735,36 @@ impl VirtualStateProcessor {
     /// **after** the one that accepted the commitment, so it did not exist when the executor fixed
     /// `sampling_seed` and therefore `job_id`. Grinding at commitment time is grinding against
     /// randomness that has not been drawn.
-    fn collect_compute_credits(
+    fn vlt_epoch_snapshot(
         &self,
-        tip: BlockHash,
+        pin: BlockHash,
+        pin_daa_score: u64,
         bonds: &[StakeBondRecord],
         net_id: &[u8],
         dns_params: &DnsParams,
-        pov_daa_score: u64,
-    ) -> HashMap<Hash64, BTreeMap<u64, u128>> {
-        if !dns_params.vlt_weighting_active_at(pov_daa_score) {
-            return HashMap::new();
+        active: bool,
+    ) -> VltEpochSnapshot {
+        if !active {
+            return VltEpochSnapshot::inert();
         }
+        // Bonds that did not exist at the pin are cut here, once, rather than trusted not to
+        // matter at each of the four places below that look a bond up by outpoint. A record
+        // created above the pin exists on one branch and not the other, so leaving it in would
+        // let the branch that has it resolve a certificate, a verdict or a committee seat the
+        // other branch cannot — the table would stop being a function of the shared prefix. Every
+        // *status* test below is already evaluated at an anchor at or under the pin, where a
+        // slash or unbond stamped above the pin is invisible to `effective_bond_status`, so this
+        // filter is the only branch-dependence the bond set can still introduce.
+        let pinned_bonds: Vec<StakeBondRecord> = bonds.iter().filter(|b| b.activation_daa_score <= pin_daa_score).cloned().collect();
+        let bonds = pinned_bonds.as_slice();
         // The anchor map MUST span the same depth as the credit walk below. Using the (much
         // shorter) attestation window here would leave every certificate older than
         // `stake_score_window_blue_score` without an anchor, silently truncating `C_i(E)` from
         // `credit_window_epochs` down to the attestation window — an under-count that no test
         // would fail on and that would make weight depend on an unrelated parameter.
-        let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.vlt_credit_window_blue_score);
-        let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
-            return HashMap::new();
+        let anchors = self.canonical_anchors_in_window(pin, dns_params, dns_params.vlt_credit_window_blue_score);
+        let Ok(pin_blue) = self.headers_store.get_blue_score(pin) else {
+            return VltEpochSnapshot::inert();
         };
 
         // Finalized epochs come from the accumulator store instead of being re-derived. An epoch
@@ -2731,11 +2778,11 @@ impl VirtualStateProcessor {
         // did not move.
         let mut credited: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
         let mut cached_epochs: HashSet<u64> = HashSet::new();
-        let mut oldest_uncached_blue = tip_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
+        let mut oldest_uncached_blue = pin_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
         for (&epoch, anchor) in anchors.iter() {
             if !vlt_epoch_finalized(
                 anchor.anchor_daa_score,
-                pov_daa_score,
+                pin_daa_score,
                 dns_params.vlt.challenge_window_blocks,
                 dns_params.max_reorg_horizon_blocks,
             ) {
@@ -2755,10 +2802,10 @@ impl VirtualStateProcessor {
             oldest_uncached_blue = oldest_uncached_blue.max(anchor.epoch_start_blue_score);
         } else if !anchors.is_empty() {
             // Everything in the window is cached: nothing left to walk for.
-            oldest_uncached_blue = tip_blue;
+            oldest_uncached_blue = pin_blue;
         }
 
-        let walk = self.walk_compute_overlay(tip, bonds, net_id, dns_params, oldest_uncached_blue, tip_blue);
+        let walk = self.walk_compute_overlay(pin, bonds, net_id, dns_params, oldest_uncached_blue, pin_blue);
 
         let mut contributions: Vec<ComputeCreditContribution> = Vec::new();
         // Certificates whose challenge was ADJUDICATED as standing. §6 zeroes the credit of a
@@ -2826,7 +2873,7 @@ impl VirtualStateProcessor {
         }
         // Drop anything the store already answered for, so a certificate straddling the boundary
         // cannot be counted twice, then merge the freshly-derived tail onto the cached rows.
-        let walked = aggregate_compute_credits(&contributions, &refuted, pov_daa_score, dns_params.vlt.challenge_window_blocks);
+        let walked = aggregate_compute_credits(&contributions, &refuted, pin_daa_score, dns_params.vlt.challenge_window_blocks);
         for (validator_id, per_epoch) in walked {
             let slot = credited.entry(validator_id).or_default();
             for (epoch, x) in per_epoch {
@@ -2835,7 +2882,7 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        credited
+        VltEpochSnapshot::pinned(pin, pin_daa_score, credited)
     }
 
     /// ONE backward walk over `[oldest_blue, tip]` collecting every compute-overlay contribution;
@@ -3411,7 +3458,11 @@ impl VirtualStateProcessor {
         let bonds: Vec<StakeBondRecord> =
             self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let net_id_hash = self.genesis.hash;
-        let credits = self.collect_compute_credits(sink, &bonds, net_id_hash.as_byte_slice(), dns_params, sink_daa);
+        // Pinned at the sink, and only finalized epochs are read out of it below — past both the
+        // challenge window and the reorg horizon, where every branch already agrees, so the rows
+        // this writes are the same rows a branch-pinned snapshot would later serve.
+        let snapshot = self.vlt_epoch_snapshot(sink, sink_daa, &bonds, net_id_hash.as_byte_slice(), dns_params, true);
+        let credits = snapshot.credits();
         let anchors = self.canonical_anchors_in_window(sink, dns_params, dns_params.vlt_credit_window_blue_score);
         for (&epoch, anchor) in anchors.iter() {
             if !vlt_epoch_finalized(
@@ -3904,9 +3955,46 @@ impl VirtualStateProcessor {
                 // one branch's rule would compare µRTE against sompi. (`canonical_daa` is the same
                 // value the TTL check above read from `prev_sink`.)
                 let candidate_daa = self.headers_store.get_daa_score(candidate).unwrap_or_default();
+                // ONE VLT weight table, pinned at the common ancestor, for both sides. This is the
+                // quorum denominator: `Q(E) = ⌊2W(E)/3⌋ + 1` only means "two thirds" if both
+                // branches divide by the same `W(E)`, and `ancestor` is the deepest block they are
+                // known to share, so it is the deepest point at which they cannot disagree. Read
+                // at either tip instead, each branch would derive a `W(E)` over its own
+                // certificates and clear a bar it wrote itself (§8.1). It is also strictly less
+                // work than the two per-branch walks it replaces.
+                //
+                // The fence is checked at the TIPS, not at the pin: a pin below
+                // `vlt_activation_daa_score` with both tips above it is a live VLT comparison
+                // whose shared history predates activation, and it still needs the table.
+                //
+                // Handing it `canonical_bonds` is not a bias toward the canonical side. The
+                // builder keeps only bonds that existed at the pin, and those the two branches
+                // hold identically — a record created above the ancestor is filtered out of
+                // either set, and a slash or unbond stamped above the ancestor is invisible to
+                // `effective_bond_status` at every anchor the pinned walk evaluates. Passing
+                // `candidate_bonds` would produce the same table.
+                let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap_or_default();
+                let vlt_live = dns_params.vlt_weighting_active_at(candidate_daa) || dns_params.vlt_weighting_active_at(canonical_daa);
+                let snapshot = self.vlt_epoch_snapshot(ancestor, ancestor_daa, &canonical_bonds, net_id, dns_params, vlt_live);
                 (
-                    self.stake_score_since_ancestor(candidate, ancestor, &candidate_bonds, dns_params, net_id, candidate_daa),
-                    self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id, canonical_daa),
+                    self.stake_score_since_ancestor(
+                        candidate,
+                        ancestor,
+                        &candidate_bonds,
+                        dns_params,
+                        net_id,
+                        candidate_daa,
+                        &snapshot,
+                    ),
+                    self.stake_score_since_ancestor(
+                        prev_sink,
+                        ancestor,
+                        &canonical_bonds,
+                        dns_params,
+                        net_id,
+                        canonical_daa,
+                        &snapshot,
+                    ),
                 )
             } else {
                 (StakeScore(0), StakeScore(0))
