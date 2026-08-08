@@ -13,13 +13,20 @@
 //! IBD. Reaching `DownloadHeadersProof` needs the peer's chain to be a pruning depth ahead, which
 //! at simnet parameters is far more blocks than a test can mine.
 //!
-//! So the states behind an IBD — IbdRunning, CandidateReview, Quarantined, the commit barrier, the
-//! challenger handshake — are covered by unit tests over the same code, not end to end. What is
-//! covered here is everything reachable without an IBD: the handshake that keeps incompatible rule
-//! sets apart (the actual testnet-22 fork source), and the false-positive direction, where a gate
-//! that closed when it should not would stop honest nodes from mining.
+//! The way through is to shorten the pruning depth so the leader actually prunes — see
+//! `common::shallow_pruning`. With that, a joining node has to run a real IBD, and the tests below
+//! exercise `IbdRunning` end to end over TCP.
+//!
+//! Still not covered end to end: `Quarantined`, the commit barrier's refusals, and the challenger
+//! proof exchange. Those need two peers offering genuinely different chains at pruning depth, which
+//! means two independently-mined histories rather than one shared one — a harness of its own. They
+//! remain covered by unit tests over the same code.
 
-use crate::common::{daemon::Daemon, utils::wait_for};
+use crate::common::{
+    daemon::Daemon,
+    shallow_pruning::{BLOCKS_TO_PRUNE, write_shallow_pruning_params},
+    utils::wait_for,
+};
 use kaspa_addresses::Address;
 use kaspa_alloc::init_allocator_with_default_settings;
 use kaspa_consensus::params::SIMNET_PARAMS;
@@ -204,5 +211,132 @@ async fn peers_running_different_consensus_rules_do_not_connect() {
 
     divergent.shutdown();
     normal.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+}
+
+/// Probe: confirm the shallow preset actually makes the pruning point leave genesis.
+///
+/// The IBD tests below are only meaningful if it does — that is the whole mechanism by which a
+/// fresh node stops being able to unorphan its way forward.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_shallow_preset_advances_the_pruning_point() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let overrides = write_shallow_pruning_params("probe");
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+
+    let mut node = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let client = node.start().await;
+    let address = miner_address(&node);
+
+    let genesis = client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let score = mine(&client, &address, BLOCKS_TO_PRUNE).await;
+    let info = client.get_block_dag_info().await.unwrap();
+    println!("PROBE score={} pruning_point_moved={} pp={}", score, info.pruning_point_hash != genesis, info.pruning_point_hash);
+    assert_ne!(info.pruning_point_hash, genesis, "the shallow preset did not move the pruning point off genesis");
+
+    node.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+}
+
+/// Set up a leader whose pruning point has left genesis, so a joining node must run a real IBD.
+///
+/// Returns the leader, its client, the pay address, and the override file to clean up. Both daemons
+/// must be given the SAME override file: differing consensus params would — correctly — stop them
+/// peering, which is a different test.
+async fn pruned_leader(tag: &str) -> (Daemon, GrpcClient, Address, std::path::PathBuf, u64) {
+    let overrides = write_shallow_pruning_params(tag);
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+
+    let mut leader = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let client = leader.start().await;
+    let address = miner_address(&leader);
+
+    let genesis_pp = client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let score = mine(&client, &address, BLOCKS_TO_PRUNE).await;
+    let pp = client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_ne!(pp, genesis_pp, "the leader never pruned, so a follower would unorphan instead of running an IBD");
+
+    (leader, client, address, overrides, score)
+}
+
+async fn joined_follower(overrides: &std::path::Path, leader_p2p_port: u16, target: u64) -> (Daemon, GrpcClient) {
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let client = follower.start().await;
+    connect(&client, leader_p2p_port).await;
+
+    let check = client.clone();
+    wait_for(
+        200,
+        600,
+        move || {
+            let c = check.clone();
+            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= target }
+        },
+        "the follower never synced the leader's chain",
+    )
+    .await;
+    (follower, client)
+}
+
+/// A node that adopted a peer's chain wholesale must not call itself synced.
+///
+/// This is the property everything else rests on. The in-process validator, the external validator
+/// and every miner take `is_synced` as permission to act, and testnet-22 is what happens when a node
+/// grants that permission for a chain nothing compared. Asserted through the same RPC a real
+/// validator polls, on a node that really did run an IBD against a real peer over TCP.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_that_ran_an_ibd_does_not_report_itself_synced() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let (mut leader, leader_client, _address, overrides, target) = pruned_leader("no-synced").await;
+    assert!(leader_client.get_sync_status().await.unwrap(), "the leader mined its own chain and should not be held back");
+
+    let (mut follower, follower_client) = joined_follower(&overrides, leader.p2p_port, target).await;
+
+    // At the leader's DAA score, and still refusing to say it is synced. Being at the tip is not the
+    // same as having established that the tip is the right one.
+    //
+    // What rules out an unrelated cause is the control test below:
+    // `a_node_that_caught_up_by_relay_is_not_held_back` reaches the same DAG parity through the same
+    // RPCs on the same harness and reports synced=TRUE. The only difference between them is whether
+    // an IBD ran. (The logs agree: "IBD started with peer" → "Chain participation held:
+    // state=ibd-running" → "IBD with peer ... completed successfully".)
+    assert!(
+        !follower_client.get_server_info().await.unwrap().is_synced,
+        "the follower reported is_synced=true after an IBD; a validator polling this would attest on a chain nothing compared"
+    );
+    assert!(!follower_client.get_sync_status().await.unwrap(), "getSyncStatus disagreed with getServerInfo");
+    assert!(!follower_client.get_info().await.unwrap().is_synced, "getInfo disagreed with getServerInfo");
+
+    follower.shutdown();
+    leader.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+}
+
+/// The gate must reach the block template too, or a miner would build on the unreviewed chain while
+/// the validator sat out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_that_ran_an_ibd_does_not_advertise_a_mineable_template() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let (mut leader, _leader_client, address, overrides, target) = pruned_leader("no-template").await;
+    let (mut follower, follower_client) = joined_follower(&overrides, leader.p2p_port, target).await;
+
+    let template = follower_client.get_block_template(address.clone(), vec![]).await.unwrap();
+    assert!(
+        !template.is_synced,
+        "the follower handed out a template marked synced while its chain was still under review; miners honour this flag"
+    );
+
+    follower.shutdown();
+    leader.shutdown();
     let _ = std::fs::remove_file(&overrides);
 }
