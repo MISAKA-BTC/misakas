@@ -28,6 +28,10 @@ use std::sync::Mutex;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PersistedChainParticipation {
     state: String,
+    /// Syncs abandoned for a verified-better chain. `Option` so rows written before this field
+    /// existed still decode — absent reads as zero, which is the fresh-node value.
+    #[serde(default)]
+    switches: u32,
     /// Absolute unix-ms deadline of a `CandidateReview` floor. Absolute, not a duration, so a
     /// restart neither extends the floor nor escapes it.
     review_until_ms: u64,
@@ -89,8 +93,21 @@ impl ChainParticipationStore {
 }
 
 impl ChainParticipationPersistence for ChainParticipationStore {
+    fn persist_switches(&self, switches: u32) {
+        let (state, review_until_ms) = self.load().map(|(s, r)| (s.as_str().to_owned(), r)).unwrap_or(("ready".to_owned(), 0));
+        let persisted = PersistedChainParticipation { state, review_until_ms, switches };
+        if let Err(e) = self.item.lock().unwrap().write(DirectDbWriter::new(&self.db), &persisted) {
+            warn!("Could not persist the chain-switch count ({switches}): {e}. A restart will not preserve it.");
+        }
+    }
+
+    fn restore_switches(&self) -> u32 {
+        self.item.lock().unwrap().read().optional().ok().flatten().map(|p| p.switches).unwrap_or(0)
+    }
+
     fn persist(&self, state: ChainParticipation, review_until_ms: u64) {
-        let persisted = PersistedChainParticipation { state: state.as_str().to_owned(), review_until_ms };
+        let switches = self.restore_switches();
+        let persisted = PersistedChainParticipation { state: state.as_str().to_owned(), review_until_ms, switches };
         // Non-fatal by contract: a node that cannot write this must keep running with an in-memory
         // gate rather than abort. It is louder than a debug line because the consequence is that a
         // restart would silently resume participation.

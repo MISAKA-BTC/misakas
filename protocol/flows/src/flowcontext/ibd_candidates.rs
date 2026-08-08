@@ -23,6 +23,7 @@ use std::{
 
 use kaspa_consensus_core::{BlockHash, BlueWorkType, header::Header};
 use kaspa_p2p_lib::PeerKey;
+use std::sync::Arc;
 
 /// How long an unrefreshed candidate stays in the registry.
 ///
@@ -131,9 +132,34 @@ pub struct CandidateId {
     pub virtual_selected_parent: BlockHash,
 }
 
+/// The chain this node has decided to sync next, and who can serve it.
+///
+/// Cancelling an IBD releases the latch, and without a reservation the next peer to relay anything
+/// takes it — possibly the branch just rejected, possibly an unrelated one. The switch would then be
+/// decided by arrival order, which is the bug the switch exists to fix. So the winner is named, and
+/// the latch is closed to everyone else until it has had its turn.
+#[derive(Clone, Debug)]
+pub struct PreferredIbdCandidate {
+    pub candidate_id: CandidateId,
+    /// Peers known to offer this chain. Any of them may serve it — a reservation names a chain, not
+    /// a peer, so one source disconnecting does not void it.
+    pub preferred_sources: Vec<PeerKey>,
+    /// The virtual selected parent header from the summary, so the handoff can start an IBD without
+    /// waiting for the peer to relay something.
+    pub header: Arc<Header>,
+    /// The work this node verified for itself, carried for the log that explains the switch.
+    pub verified_blue_work: BlueWorkType,
+    /// Which switch this is. Guards against a stale reservation from an earlier round being honoured
+    /// after the situation has moved on.
+    pub switch_generation: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct IbdCandidate {
     pub id: CandidateId,
+    /// The virtual selected parent header this peer advertised. Kept so a handoff can start an IBD
+    /// directly instead of waiting for the peer to relay a block.
+    pub header: Arc<Header>,
     /// Every peer offering this chain. More than one is a liveness benefit — a source to fail over
     /// to — and **not** a vote: N peers is N sybils just as easily.
     pub sources: Vec<PeerKey>,
@@ -226,6 +252,7 @@ impl IbdCandidateRegistry {
             id,
             IbdCandidate {
                 id,
+                header: Arc::new(header.clone()),
                 sources: vec![peer],
                 validation: CandidateValidation::SummaryReceived { claimed_blue_work: claimed },
                 first_seen: now,
@@ -269,6 +296,11 @@ impl IbdCandidateRegistry {
 
     pub fn note_switch(&mut self) {
         self.switches = self.switches.saturating_add(1);
+    }
+
+    /// Adopt a switch count carried over from a previous run, so the cap is not per-process.
+    pub fn resume_switches(&mut self, switches: u32) {
+        self.switches = self.switches.max(switches);
     }
 
     /// A verified candidate strictly better than `current`, if one exists.
@@ -864,5 +896,23 @@ mod commit_barrier_tests {
         i.checkpoint_params_match = Some(true);
         i.descends_from_checkpoint = Some(true);
         assert_eq!(decide_commit(i), CommitVerdict::Allow, "a checkpoint constrains, it does not select");
+    }
+}
+
+#[cfg(test)]
+mod switch_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn a_resumed_switch_count_is_never_lowered() {
+        // Folding in a previous run's count must not be able to *reset* this process's, or a node
+        // that switched twice since starting would forget by resuming an older, smaller figure.
+        let mut r = IbdCandidateRegistry::default();
+        r.note_switch();
+        r.note_switch();
+        r.resume_switches(1);
+        assert_eq!(r.switches(), 2, "resuming an older count must not lower the current one");
+        r.resume_switches(7);
+        assert_eq!(r.switches(), 7, "but a larger carried-over count must win");
     }
 }

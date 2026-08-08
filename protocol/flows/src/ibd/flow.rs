@@ -83,6 +83,10 @@ pub struct IbdFlow {
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
 
+    /// Handoffs: a chain this node has decided to sync next. Consumed by whichever flow serves it,
+    /// so a switch does not depend on the winning peer happening to relay something.
+    handoff_receiver: broadcast::Receiver<CandidateId>,
+
     /// Nominations of chains worth verifying. An IBD flow whose peer is not the syncer is otherwise
     /// idle, and it is the only flow that can fetch that peer's pruning proof — `PruningPointProof`
     /// is routed here. So this is where a challenger gets checked.
@@ -123,7 +127,17 @@ impl IbdFlow {
         header_format: HeaderFormat,
     ) -> Self {
         let challenger_receiver = ctx.subscribe_challenger_nominations();
-        Self { ctx, router, incoming_route, relay_receiver, body_only_ibd_permitted, header_format, challenger_receiver }
+        let handoff_receiver = ctx.subscribe_ibd_handoffs();
+        Self {
+            ctx,
+            router,
+            incoming_route,
+            relay_receiver,
+            body_only_ibd_permitted,
+            header_format,
+            challenger_receiver,
+            handoff_receiver,
+        }
     }
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
@@ -132,11 +146,24 @@ impl IbdFlow {
             // nomination to go check what some peer is claiming. Only one IBD runs at a time, but
             // every other peer's flow is idle meanwhile — and idle is what let the node adopt a
             // branch without ever asking anyone else for evidence.
-            let relay_block = tokio::select! {
+            let relay_header = tokio::select! {
                 block = self.relay_receiver.recv() => match block {
-                    Ok(block) => block,
+                    Ok(block) => block.header.clone(),
                     Err(_) => return Ok(()),
                 },
+                handoff = self.handoff_receiver.recv() => {
+                    match handoff {
+                        Ok(id) => match self.claim_handoff(id) {
+                            // This flow's peer offers the reserved chain, so it starts the IBD from
+                            // the summary header — no waiting for an inv that may never come, and no
+                            // window in which another peer could take the latch instead.
+                            Some(header) => header,
+                            None => continue,
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                }
                 nomination = self.challenger_receiver.recv() => {
                     match nomination {
                         Ok(id) => {
@@ -150,12 +177,19 @@ impl IbdFlow {
                     }
                 }
             };
-            if let Some(_guard) =
-                self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score, relay_block.header.blue_work)
-            {
+            if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_header.daa_score, relay_header.blue_work) {
                 info!("IBD started with peer {}", self.router);
 
-                match self.ibd(relay_block).await {
+                // Whatever happens next, the reservation has had its turn. Leaving it in place would
+                // lock the node out of syncing from anyone else.
+                let served_reservation =
+                    self.ctx.preferred_ibd_candidate().is_some_and(|p| p.preferred_sources.contains(&self.router.key()));
+
+                let outcome = self.ibd(relay_header).await;
+                if served_reservation {
+                    self.ctx.clear_preferred_ibd_candidate();
+                }
+                match outcome {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
 
@@ -179,6 +213,22 @@ impl IbdFlow {
                 }
             }
         }
+    }
+
+    /// Whether this flow should serve a reserved chain, and the header to start from.
+    ///
+    /// The reservation names a chain and its sources, so several flows may see the same handoff;
+    /// only one wins the latch, and the rest fall through harmlessly.
+    fn claim_handoff(&self, id: CandidateId) -> Option<Arc<Header>> {
+        let preferred = self.ctx.preferred_ibd_candidate()?;
+        if preferred.candidate_id != id || !preferred.preferred_sources.contains(&self.router.key()) {
+            return None;
+        }
+        info!(
+            "Taking over the sync: this peer ({}) offers candidate {}, which this node verified at blue work {}",
+            self.router, id.virtual_selected_parent, preferred.verified_blue_work
+        );
+        Some(preferred.header)
     }
 
     /// Ask this peer to back the chain it advertised, and record what comes of it.
@@ -380,10 +430,26 @@ impl IbdFlow {
         if let CommitVerdict::RefuseVerifiedSuperior { candidate, verified_blue_work } = verdict {
             let switches = {
                 let mut registry = self.ctx.ibd_candidates().write();
+                // Fold in anything carried over from a previous run before counting this one, so the
+                // cap bounds the node's history rather than this process's.
+                registry.resume_switches(self.ctx.chain_participation().restored_switches());
                 registry.note_switch();
                 registry.switches()
             };
+            self.ctx.chain_participation().record_switch(switches);
             if switches <= MAX_CHAIN_SWITCHES {
+                // Reserve the latch for the winner BEFORE releasing it. Without this the next peer
+                // to relay anything takes it — possibly the branch just rejected — and the switch
+                // would be decided by arrival order all over again.
+                let reserved = self.ctx.reserve_preferred_ibd_candidate(candidate, verified_blue_work);
+                if !reserved {
+                    self.ctx.chain_participation().quarantine();
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "candidate {} is verified-better than the chain synced from {}, but no connected peer still offers it, \
+                         so this node cannot switch to it and will not commit the weaker branch either.",
+                        candidate.virtual_selected_parent, self.router
+                    )));
+                }
                 warn!(
                     "Abandoning the sync from {}: candidate {} (pruning point {}) has a VALIDATED blue work of {} against the \
                      staged {}. Switching to it — its headers will be contextually validated to the tip by the IBD that \
@@ -447,14 +513,14 @@ impl IbdFlow {
         Err(ProtocolError::OtherOwned(refusal))
     }
 
-    async fn ibd(&mut self, relay_block: Block) -> Result<(), ProtocolError> {
+    async fn ibd(&mut self, relay_header: Arc<Header>) -> Result<(), ProtocolError> {
         let mut session = self.ctx.consensus().session().await;
 
         let negotiation_output = self.negotiate_missing_syncer_chain_segment(&session).await?;
         let ibd_type = self
             .determine_ibd_type(
                 &session,
-                &relay_block.header,
+                relay_header.as_ref(),
                 negotiation_output.highest_known_syncer_chain_hash,
                 negotiation_output.syncer_pruning_point,
             )
@@ -492,14 +558,14 @@ impl IbdFlow {
                     &session,
                     negotiation_output.syncer_virtual_selected_parent,
                     highest_known_syncer_chain_hash,
-                    &relay_block,
+                    &relay_header,
                 )
                 .await?;
             }
             IbdType::DownloadHeadersProof => {
                 drop(session); // Avoid holding the previous consensus throughout the staging IBD
                 let staging = self.ctx.consensus_manager.new_staging_consensus();
-                match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_block).await {
+                match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
                     Ok(()) => {
                         // The commit barrier. Everything above this line is reversible by
                         // cancelling staging; nothing below it is.
@@ -537,7 +603,7 @@ impl IbdFlow {
             }
             IbdType::PruningCatchUp { highest_known_syncer_chain_hash } => {
                 info!("catching up to new pruning point {} ", negotiation_output.syncer_pruning_point);
-                match self.pruning_point_catchup(&session, &negotiation_output, &relay_block, highest_known_syncer_chain_hash).await {
+                match self.pruning_point_catchup(&session, &negotiation_output, &relay_header, highest_known_syncer_chain_hash).await {
                     Ok(()) => {
                         info!("header stage of pruning catchup from peer {} completed", self.router);
                         self.sync_missing_trusted_bodies(&session).await?;
@@ -560,7 +626,7 @@ impl IbdFlow {
 
         // Relay block might be in the antipast of syncer sink, thus
         // check its past for missing bodies as well.
-        self.sync_missing_block_bodies(&session, relay_block.hash()).await?;
+        self.sync_missing_block_bodies(&session, relay_header.hash).await?;
 
         // Following IBD we revalidate orphans since many of them might have been processed during the IBD
         // or are now processable
@@ -683,14 +749,14 @@ impl IbdFlow {
         &mut self,
         consensus: &ConsensusProxy,
         negotiation_output: &ChainNegotiationOutput,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
         highest_known_syncer_chain_hash: BlockHash,
     ) -> Result<(), ProtocolError> {
         // Before attempting to update to the syncer's pruning point, sync to the latest headers of the syncer,
         // to ensure that we will locally have sufficient headers on top of the syncer's pruning point
         let syncer_pp = negotiation_output.syncer_pruning_point;
         let syncer_sink = negotiation_output.syncer_virtual_selected_parent;
-        self.sync_headers(consensus, syncer_sink, highest_known_syncer_chain_hash, relay_block).await?;
+        self.sync_headers(consensus, syncer_sink, highest_known_syncer_chain_hash, relay_header).await?;
 
         // This function's main effect is to confirm the syncer's pruning point can be finalized into the consensus, and to update
         // all the relevant stores
@@ -710,14 +776,14 @@ impl IbdFlow {
         &mut self,
         staging: &StagingConsensus,
         syncer_virtual_selected_parent: BlockHash,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<(), ProtocolError> {
         info!("Starting IBD with headers proof with peer {}", self.router);
 
         let staging_session = staging.session().await;
 
-        let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_block).await?;
-        self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_block).await?;
+        let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_header).await?;
+        self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_header).await?;
         staging_session.async_validate_pruning_points(syncer_virtual_selected_parent).await?;
         self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
         Ok(())
@@ -726,7 +792,7 @@ impl IbdFlow {
     async fn sync_and_validate_pruning_proof(
         &mut self,
         staging: &ConsensusProxy,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<BlockHash, ProtocolError> {
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
 
@@ -739,7 +805,7 @@ impl IbdFlow {
             proof.iter().flatten().unique_by(|h| h.hash).count()
         );
 
-        let proof_metadata = PruningProofMetadata::new(relay_block.header.blue_work);
+        let proof_metadata = PruningProofMetadata::new(relay_header.blue_work);
 
         // Get a new session for current consensus (non staging)
         let consensus = self.ctx.consensus().session().await;
@@ -891,10 +957,10 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         syncer_virtual_selected_parent: BlockHash,
         highest_known_syncer_chain_hash: BlockHash,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<(), ProtocolError> {
         let highest_shared_header_score = consensus.async_get_header(highest_known_syncer_chain_hash).await?.daa_score;
-        let mut progress_reporter = ProgressReporter::new(highest_shared_header_score, relay_block.header.daa_score, "block headers");
+        let mut progress_reporter = ProgressReporter::new(highest_shared_header_score, relay_header.daa_score, "block headers");
 
         self.router
             .enqueue(make_message!(
@@ -947,7 +1013,7 @@ impl IbdFlow {
             )));
         }
 
-        self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_block.hash()).await?;
+        self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_header.hash).await?;
 
         Ok(())
     }

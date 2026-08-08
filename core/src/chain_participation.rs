@@ -62,6 +62,16 @@ pub trait ChainParticipationPersistence: Send + Sync + std::fmt::Debug {
     /// Called on every transition. Implementations must be non-panicking: a node that cannot write
     /// this should keep running with an in-memory gate, not die.
     fn persist(&self, state: ChainParticipation, review_until_ms: u64);
+
+    /// Record how many times this node has abandoned a sync for a verified-better chain.
+    ///
+    /// Kept with the participation state because it bounds the same thing: a switch cap that a
+    /// restart resets is not a cap, and restarting is exactly what an operator does when a node
+    /// looks stuck flipping between branches.
+    fn persist_switches(&self, switches: u32);
+
+    /// The switch count from the previous run, or 0 on a fresh node.
+    fn restore_switches(&self) -> u32;
 }
 
 const READY: u8 = 0;
@@ -122,6 +132,19 @@ impl ChainParticipationGate {
         if let Some(p) = self.persistence.as_ref() {
             p.persist(self.peek(), self.review_until_ms.load(Ordering::SeqCst));
         }
+    }
+
+    /// Record a chain switch durably. Bounded by the same reasoning as the gate itself: a cap a
+    /// restart resets is not a cap.
+    pub fn record_switch(&self, switches: u32) {
+        if let Some(p) = self.persistence.as_ref() {
+            p.persist_switches(switches);
+        }
+    }
+
+    /// Switches carried over from previous runs.
+    pub fn restored_switches(&self) -> u32 {
+        self.persistence.as_ref().map(|p| p.restore_switches()).unwrap_or(0)
     }
 
     /// State without the elapsed-review promotion, for persisting and for internal checks.
@@ -252,11 +275,19 @@ mod tests {
     /// Stands in for the meta-DB row, so a "restart" is just building a new gate from what the
     /// previous one wrote.
     #[derive(Debug, Default)]
-    struct Recorder(Mutex<Option<(ChainParticipation, u64)>>);
+    struct Recorder(Mutex<Option<(ChainParticipation, u64)>>, Mutex<u32>);
 
     impl ChainParticipationPersistence for Recorder {
         fn persist(&self, state: ChainParticipation, review_until_ms: u64) {
             *self.0.lock().unwrap() = Some((state, review_until_ms));
+        }
+
+        fn persist_switches(&self, switches: u32) {
+            *self.1.lock().unwrap() = switches;
+        }
+
+        fn restore_switches(&self) -> u32 {
+            *self.1.lock().unwrap()
         }
     }
 
@@ -332,6 +363,15 @@ mod tests {
         gate.enter_ibd();
         gate.release_after_noop_ibd();
         assert!(gate.allows_participation());
+    }
+
+    #[test]
+    fn a_switch_cap_survives_a_restart() {
+        // A cap that a restart resets is not a cap — and restarting is exactly what an operator does
+        // when a node looks stuck flipping between branches.
+        let recorder = Arc::new(Recorder::default());
+        recorder.persist_switches(4);
+        assert_eq!(recorder.restore_switches(), 4);
     }
 
     #[test]

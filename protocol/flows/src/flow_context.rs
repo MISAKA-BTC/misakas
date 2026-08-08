@@ -1,7 +1,7 @@
 use crate::flowcontext::{
     evm_deposit_claims::EvmDepositClaimsSpread,
     evm_transactions::EvmTransactionsSpread,
-    ibd_candidates::{CandidateId, CandidateValidation, IbdCandidateRegistry},
+    ibd_candidates::{CandidateId, CandidateValidation, IbdCandidateRegistry, PreferredIbdCandidate},
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
     transactions::TransactionsSpread,
@@ -291,6 +291,12 @@ pub struct FlowContextInner {
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     /// Chains peers advertised while an IBD held the latch, keyed by chain rather than by peer.
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
+    /// The chain this node has decided to sync next, reserved so that cancelling an IBD hands the
+    /// latch to the winner rather than to whoever relays first. See [`PreferredIbdCandidate`].
+    preferred_ibd_candidate: Arc<RwLock<Option<PreferredIbdCandidate>>>,
+    /// Wakes the flow that should serve a reserved candidate, so the handoff does not depend on that
+    /// peer happening to relay something.
+    handoff_tx: broadcast::Sender<CandidateId>,
     /// Nominates a candidate for proof verification. Broadcast because only the IBD flow of a peer
     /// that actually offers the chain can fetch its proof — `PruningPointProof` is routed to that
     /// flow — and every idle IBD flow listens to see whether the nomination is theirs to serve.
@@ -429,6 +435,8 @@ impl FlowContext {
                 ibd_metadata: Default::default(),
                 ibd_candidates: Default::default(),
                 challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
+                preferred_ibd_candidate: Default::default(),
+                handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 active_consensus_replaced: Default::default(),
                 hub,
                 address_manager,
@@ -489,6 +497,14 @@ impl FlowContext {
     }
 
     pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64, relay_blue_work: BlueWorkType) -> Option<IbdRunningGuard> {
+        // A reservation closes the latch to everyone but the reserved chain's sources. This is what
+        // makes a switch a handoff rather than a fresh race: without it, abandoning an IBD would
+        // simply re-run the arrival-order lottery, and the branch just rejected could win it.
+        if let Some(preferred) = self.preferred_ibd_candidate.read().as_ref()
+            && !preferred.preferred_sources.contains(&peer)
+        {
+            return None;
+        }
         if self.is_ibd_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score, blue_work: relay_blue_work });
             // Deliberately NOT cleared. A validated pruning proof costs the prover minutes and this
@@ -557,6 +573,53 @@ impl FlowContext {
 
     pub fn subscribe_challenger_nominations(&self) -> broadcast::Receiver<CandidateId> {
         self.challenger_tx.subscribe()
+    }
+
+    pub fn subscribe_ibd_handoffs(&self) -> broadcast::Receiver<CandidateId> {
+        self.handoff_tx.subscribe()
+    }
+
+    /// Reserve the next IBD for a chain this node verified, and wake whoever can serve it.
+    ///
+    /// Called when the commit barrier abandons a sync for a better candidate. Until the reservation
+    /// is consumed or cleared, `try_set_ibd_running` refuses every peer that does not offer this
+    /// chain — otherwise the latch would go to whichever peer relayed next, which may be the branch
+    /// just rejected. The switch would then be decided by arrival order, which is the thing the
+    /// switch exists to stop.
+    pub fn reserve_preferred_ibd_candidate(&self, candidate_id: CandidateId, verified_blue_work: BlueWorkType) -> bool {
+        let (header, preferred_sources) = {
+            let registry = self.ibd_candidates.read();
+            match registry.get(&candidate_id) {
+                Some(c) => (c.header.clone(), c.sources.clone()),
+                None => return false,
+            }
+        };
+        if preferred_sources.is_empty() {
+            return false;
+        }
+        let switch_generation = self.ibd_candidates.read().switches();
+        self.preferred_ibd_candidate.write().replace(PreferredIbdCandidate {
+            candidate_id,
+            preferred_sources,
+            header,
+            verified_blue_work,
+            switch_generation,
+        });
+        // Failure means no IBD flow is listening; the reservation still stands and will be honoured
+        // when one of the sources next relays.
+        let _ = self.handoff_tx.send(candidate_id);
+        true
+    }
+
+    pub fn preferred_ibd_candidate(&self) -> Option<PreferredIbdCandidate> {
+        self.preferred_ibd_candidate.read().clone()
+    }
+
+    /// Release the reservation. Called once the reserved chain has had its turn at the latch,
+    /// whether it succeeded or failed — a reservation that outlived its attempt would lock the node
+    /// out of syncing from anyone.
+    pub fn clear_preferred_ibd_candidate(&self) {
+        self.preferred_ibd_candidate.write().take();
     }
 
     /// The candidate registry, for the commit barrier and for reporting.
