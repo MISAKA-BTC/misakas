@@ -3,6 +3,7 @@ pub mod constants;
 pub mod genesis;
 pub mod params;
 pub mod premine;
+pub mod trusted_checkpoint;
 
 use kaspa_utils::networking::{ContextualNetAddress, NetAddress};
 
@@ -38,6 +39,14 @@ pub struct Config {
 
     /// Enable various sanity checks which might be compute-intensive (mostly performed during pruning)
     pub enable_sanity_checks: bool,
+
+    /// The history this node's operator vouches for, from `--trusted-checkpoint`.
+    ///
+    /// A hard constraint on which chains are admissible, not a score: a candidate either descends
+    /// from it or it is not a candidate. Chain quality among the admissible ones is still decided
+    /// by verified work. `None` means the node has no external trust root and must rely on work
+    /// alone — which is the weak-subjectivity gap ADR-0009 documents, not a safe default.
+    pub trusted_checkpoint: Option<trusted_checkpoint::TrustedCheckpoint>,
 
     // TODO: move non-consensus parameters like utxoindex to a higher scoped Config
     /// Enable the UTXO index
@@ -139,6 +148,7 @@ impl Config {
             process_genesis: true,
             is_archival: false,
             enable_sanity_checks: false,
+            trusted_checkpoint: None,
             utxoindex: false,
             unsafe_rpc: false,
             enable_unsynced_mining: false,
@@ -222,6 +232,11 @@ impl ConfigBuilder {
 
     pub fn set_archival(mut self) -> Self {
         self.config.is_archival = true;
+        self
+    }
+
+    pub fn set_trusted_checkpoint(mut self, checkpoint: Option<trusted_checkpoint::TrustedCheckpoint>) -> Self {
+        self.config.trusted_checkpoint = checkpoint;
         self
     }
 

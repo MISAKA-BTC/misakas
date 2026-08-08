@@ -185,6 +185,33 @@ impl IbdFlow {
         let tip = staging.async_get_headers_selected_tip().await;
         let staged_work = staging.async_get_header(tip).await?.blue_work;
 
+        // The operator's trust root, if they set one. Checked before work, because work is what an
+        // attacker manufactures: a chain that does not contain the checkpoint is not a worse
+        // candidate, it is not a candidate. A node with no chain of its own cannot tell two
+        // internally consistent histories apart, and on a network that has already forked this is
+        // the only thing that can decide which one it may join.
+        if let Some(checkpoint) = self.ctx.config.trusted_checkpoint {
+            let local_params_id = self.ctx.config.params.consensus_params_id();
+            if checkpoint.consensus_params_id != local_params_id {
+                self.ctx.chain_participation().quarantine();
+                return Err(ProtocolError::OtherOwned(format!(
+                    "--trusted-checkpoint was taken under consensus params {} but this node runs {}. A block hash means \
+                     nothing without the rules it was validated under, so this node cannot act on that checkpoint.",
+                    checkpoint.consensus_params_id, local_params_id
+                )));
+            }
+            let contains = staging.async_is_chain_ancestor_of(checkpoint.block_hash, tip).await.unwrap_or(false);
+            if !contains {
+                self.ctx.chain_participation().quarantine();
+                return Err(ProtocolError::OtherOwned(format!(
+                    "refusing to commit the chain synced from {}: it does not descend from the trusted checkpoint {} at DAA \
+                     {}. This is the history the operator vouched for, so a chain without it is not admissible no matter how \
+                     much work it claims.",
+                    self.router, checkpoint.block_hash, checkpoint.daa_score
+                )));
+            }
+        }
+
         let registry = self.ctx.ibd_candidates().read();
         if let Some(better) = registry.verified_superior_to(staged_work) {
             let id = better.id;
