@@ -309,8 +309,16 @@ pub struct ComputeReceipt {
 /// through [`job_spec_id`], a receipt is bound to its spec: the same output claimed
 /// under a cheaper spec is a different `R_j`.
 pub fn compute_receipt_hash(spec: &LlmJobSpec, receipt: &ComputeReceipt) -> Hash64 {
+    compute_receipt_hash_for_job(job_spec_id(spec), receipt)
+}
+
+/// `R_j` from the job identity directly, for a holder of `H(S_j)` that does not have `S_j`.
+///
+/// A verdict carries `job_id` but not the spec, and this is what lets its replay proof be checked
+/// against the receipt it claims to have produced — statelessly, with no certificate lookup.
+pub fn compute_receipt_hash_for_job(job_id: Hash64, receipt: &ComputeReceipt) -> Hash64 {
     let mut hasher = Blake2bParams::new().hash_length(64).key(COMPUTE_RECEIPT_KEY).to_state();
-    hasher.update(job_spec_id(spec).as_byte_slice());
+    hasher.update(job_id.as_byte_slice());
     hasher.update(&receipt.version.to_le_bytes());
     hasher.update(receipt.output_commitment.as_byte_slice());
     hasher.update(&receipt.prefill_tokens.to_le_bytes());
@@ -460,6 +468,7 @@ pub fn adjudicate_compute_challenge(
     executor_receipt_hash: Hash64,
     attestations: &[VerifierAttestation],
     min_confirmations: u8,
+    min_refutations: u8,
 ) -> ChallengeOutcome {
     match kind {
         // Objectively decided from the payload alone at acceptance; nothing to re-decide here.
@@ -467,7 +476,7 @@ pub fn adjudicate_compute_challenge(
         ComputeFraudKind::InvalidCertificate => {
             if !resolved {
                 ChallengeOutcome::Succeeded
-            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations) {
+            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations, min_refutations) {
                 ChallengeOutcome::Failed
             } else {
                 ChallengeOutcome::Undecided
@@ -478,9 +487,11 @@ pub fn adjudicate_compute_challenge(
                 // The certificate credits nothing regardless, and its committee was never drawn, so
                 // there is no evidence either way. Not an occasion to slash anyone.
                 ChallengeOutcome::Undecided
-            } else if attestations.iter().any(|a| a.verdict == VerificationVerdict::Refuted) {
+            } else if refutation_quorum_reached(attestations, min_refutations) {
+                // A quorum of drawn verifiers, each having paid for an execution to say so. One
+                // dissenting voice is not a fraud proof — it is exactly what a griefer produces.
                 ChallengeOutcome::Succeeded
-            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations) {
+            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations, min_refutations) {
                 ChallengeOutcome::Failed
             } else {
                 ChallengeOutcome::Undecided
@@ -721,6 +732,40 @@ pub struct ReplayResiduals {
     pub trace_event_count: u64,
 }
 
+/// What a verifier publishes to show it actually ran the job: the receipt its own execution
+/// produced, and the residuals that receipt's `trace_commitment` folds.
+///
+/// Required for **both** verdicts, and that symmetry is the point. A refutation used to be the one
+/// claim in the protocol that cost nothing to fabricate — "my replay gave something else" is
+/// satisfied by any hash at all — while being strong enough on its own to deny an honest executor
+/// its credit. Once the §6 audit fee pays for refutations too, fabricating them became profitable.
+/// Carrying the receipt makes a refutation cost exactly what a confirmation costs: one execution.
+///
+/// Everything about it is checkable from the verdict alone, with no certificate lookup:
+/// `compute_receipt_hash_for_job(job_id, receipt)` must equal the declared `replay_receipt_hash`,
+/// and [`residual_commitment`] of the residuals must equal `receipt.trace_commitment`. For a
+/// confirmation that chain of equalities reaches the certificate's own `trace_commitment` by
+/// construction — the receipt hash covers it — so the certificate binding falls out rather than
+/// needing its own rule.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ReplayProof {
+    /// The receipt this verifier's own execution produced.
+    pub receipt: ComputeReceipt,
+    /// The preimage of `receipt.trace_commitment`.
+    pub residuals: ReplayResiduals,
+}
+
+impl ReplayProof {
+    /// Whether the proof is internally consistent and produces `replay_receipt_hash` for `job_id`.
+    ///
+    /// Fabricating one means producing residuals that fold to a chosen digest — a preimage attack
+    /// on BLAKE2b-512 — so the cheap way to satisfy this is to run the job.
+    pub fn attests(&self, job_id: Hash64, replay_receipt_hash: Hash64) -> bool {
+        residual_commitment(&self.residuals) == self.receipt.trace_commitment
+            && compute_receipt_hash_for_job(job_id, &self.receipt) == replay_receipt_hash
+    }
+}
+
 /// Fold [`ReplayResiduals`] into the `trace_commitment` a [`ComputeReceipt`] carries.
 ///
 /// Fixed-width little-endian scalars in a fixed field order, exactly as the runtime bridge writes
@@ -772,20 +817,11 @@ pub struct ComputeVerdictPayload {
     pub verdict: VerificationVerdict,
     /// `R_j` as this verifier independently recomputed it.
     pub replay_receipt_hash: Hash64,
-    /// Proof that this verifier actually executed the job — required for
-    /// [`VerificationVerdict::Confirmed`], absent for [`VerificationVerdict::Refuted`].
+    /// Proof that this verifier actually executed the job — required for **both** verdicts.
     ///
-    /// A confirmation is the claim that this verifier reproduced the executor's `R_j`, and the
-    /// credit walk only counts it if these residuals fold to the certificate's own
-    /// `trace_commitment`. Since that digest is one-way, a verifier holding only the certificate
-    /// cannot construct them — which is what stops a confirmation from being a copied field.
-    ///
-    /// `None` for a refutation, because there is nothing to check against: the refuting verifier's
-    /// receipt is by definition not the certificate's, and consensus never learns that receipt in
-    /// full, so any bytes would "prove" a refutation. Carrying them would be dead weight and a
-    /// second encoding of the same verdict. Deterring a *dishonest* refutation is the §7(c)
-    /// challenge path's job, not this field's.
-    pub replay_proof: Option<ReplayResiduals>,
+    /// See [`ReplayProof`]. A confirmation without it is one field copied off the certificate; a
+    /// refutation without it is any hash at all, and under the §6 audit fee both would be paid.
+    pub replay_proof: ReplayProof,
     /// ML-DSA-87 signature over [`verifier_verdict_message`] under
     /// [`VERIFIER_VERDICT_MLDSA87_CONTEXT`].
     pub signature: Vec<u8>,
@@ -809,27 +845,18 @@ impl ComputeVerdictPayload {
     ///
     /// A "Confirmed" over a hash the verifier did not reproduce, or a "Refuted" over one it did,
     /// is a lie on its face — rejected here rather than silently counted.
-    /// Whether this verdict is self-consistent: the declared verdict must be what comparing the
-    /// two receipt hashes implies, and the replay proof must be present exactly when it is
-    /// meaningful.
-    pub fn is_self_consistent(&self) -> bool {
-        match self.verdict {
-            VerificationVerdict::Confirmed => self.replay_receipt_hash == self.executor_receipt_hash && self.replay_proof.is_some(),
-            VerificationVerdict::Refuted => self.replay_receipt_hash != self.executor_receipt_hash && self.replay_proof.is_none(),
-        }
-    }
-
-    /// Whether this verdict's replay proof folds to `trace_commitment` — the certificate's own.
+    /// Whether this verdict stands on its own: the declared verdict is what comparing the two
+    /// receipt hashes implies, and the replay proof actually produces the replay hash it declares.
     ///
-    /// A refutation carries no proof and is never gated on one; the credit walk still counts it,
-    /// because a refutation's cost is that it is *checkable against the executor* later, not that
-    /// it is proved now.
-    pub fn proves_replay_of(&self, certificate_trace_commitment: Hash64) -> bool {
-        match (&self.verdict, &self.replay_proof) {
-            (VerificationVerdict::Confirmed, Some(p)) => residual_commitment(p) == certificate_trace_commitment,
-            (VerificationVerdict::Confirmed, None) => false,
-            (VerificationVerdict::Refuted, _) => true,
-        }
+    /// Entirely stateless — no certificate is needed. For a confirmation the proof necessarily
+    /// reaches the certificate's own `trace_commitment`, because `replay_receipt_hash` equals the
+    /// executor's and a receipt hash covers its trace commitment.
+    pub fn is_self_consistent(&self) -> bool {
+        let compared = match self.verdict {
+            VerificationVerdict::Confirmed => self.replay_receipt_hash == self.executor_receipt_hash,
+            VerificationVerdict::Refuted => self.replay_receipt_hash != self.executor_receipt_hash,
+        };
+        compared && self.replay_proof.attests(self.job_id, self.replay_receipt_hash)
     }
 }
 
@@ -1284,6 +1311,17 @@ pub struct VltParams {
     /// ≤ [`Self::verifier_committee_size`] ([`Self::is_coherent`]).
     pub min_verifier_confirmations: u8,
 
+    /// How many drawn verifiers must refute before the committee's answer is "refuted".
+    ///
+    /// Refutation dominates acceptance, so this is the bar in front of *destroying* a job's credit
+    /// and it has to be a real one. At 1 — the old, implicit value — a single drawn verifier could
+    /// zero an honest executor's credit with a made-up hash, and the §6 audit fee would pay it for
+    /// doing so. Setting it alongside [`Self::min_verifier_confirmations`] means confirming and
+    /// refuting take the same collusion.
+    ///
+    /// Must be ≥ 1 and ≤ [`Self::verifier_committee_size`] ([`Self::is_coherent`]).
+    pub min_verifier_refutations: u8,
+
     /// Maximum blocks a certificate's phase-1 commitment may lie behind the certificate itself.
     /// Bounds the lookback the credit walk must do to resolve a beacon, and stops an executor
     /// from hoarding old commitments to pick a favourable moment to reveal.
@@ -1374,8 +1412,14 @@ impl VltParams {
         // so a certificate is challengeable for at least as long as its including block
         // is reorgable.
         challenge_window_blocks: 300,
-        verifier_committee_size: 3,
-        min_verifier_confirmations: 2,
+        // Five drawn, three to decide either way. Three is what makes the two quorums mutually
+        // exclusive (3 + 3 > 5, checked by `is_coherent`) while still tolerating two committee
+        // members being absent, faulty, or hostile — the smallest committee where one bad verifier
+        // is neither decisive nor pivotal. The audit cost is five full replays per job, which is
+        // the price of that tolerance and the reason not to go higher.
+        verifier_committee_size: 5,
+        min_verifier_confirmations: 3,
+        min_verifier_refutations: 3,
         // ~10 min at 10 bps: comfortably longer than one epoch (so the beacon epoch can mature)
         // plus a full job, and short enough that stockpiled commitments expire.
         max_commitment_age_blocks: 6_000,
@@ -1384,10 +1428,10 @@ impl VltParams {
         max_capability_validity_blocks: 864_000,
         // W_min = 1e11 µRTE (100 000 reference-token-equivalents). Derived from the smallest
         // network that can verify anything at all: activation needs `1 + min_verifier_confirmations`
-        // = 3 validators in one runtime class, and one job at the registered profile's 4096-token
-        // ceiling is worth ~3.3e10 µRTE (b = 8.0 per decode token). Three validators each having
-        // completed roughly one full job is therefore the point below which "the network's compute"
-        // is not a meaningful quantity to take two thirds of. A running mesh clears this in its
+        // = 4 validators in one runtime class, and one job at the registered profile's 4096-token
+        // ceiling is worth ~3.3e10 µRTE (b = 8.0 per decode token). A handful of validators each
+        // having completed roughly one full job is therefore the point below which "the network's
+        // compute" is not a meaningful quantity to take two thirds of. A running mesh clears this in its
         // first epochs and never sees it again — the floor exists to exclude the vacuous case, not
         // to throttle a healthy one.
         min_network_compute: 100_000_000_000,
@@ -1443,6 +1487,17 @@ impl VltParams {
         }
         if self.min_verifier_confirmations > self.verifier_committee_size {
             return Err("min_verifier_confirmations must be <= verifier_committee_size (otherwise unsatisfiable)");
+        }
+        if self.min_verifier_refutations == 0 {
+            return Err("min_verifier_refutations must be >= 1 (0 would make an empty committee a refutation)");
+        }
+        if self.min_verifier_refutations > self.verifier_committee_size {
+            return Err("min_verifier_refutations must be <= verifier_committee_size (otherwise unsatisfiable)");
+        }
+        // The two quorums must not be simultaneously reachable, or one committee could both
+        // confirm and refute the same job and the answer would depend on which rule ran first.
+        if (self.min_verifier_confirmations as u16) + (self.min_verifier_refutations as u16) <= self.verifier_committee_size as u16 {
+            return Err("min_verifier_confirmations + min_verifier_refutations must exceed verifier_committee_size");
         }
         if self.verifier_committee_size as usize > MAX_VERIFIER_ATTESTATIONS {
             return Err("verifier_committee_size must be <= MAX_VERIFIER_ATTESTATIONS");
@@ -1551,31 +1606,44 @@ impl Display for VltRejection {
 /// [`VerificationScheme::CanonicalFullReplay`], given the verdicts already
 /// signature-checked and sortition-checked by the caller.
 ///
-/// The relation is deliberately **refutation-dominant**: a single
-/// [`VerificationVerdict::Refuted`] fails the job even if the confirmation count is
-/// met. Under full replay a refutation means some verifier's independent execution
-/// disagreed byte-for-byte, and there is no honest reading under which the same
-/// fixed spec yields two different receipts — so the safe resolution is to mint
-/// nothing and let the §7 challenge path decide who to slash.
+/// Refutation still dominates — a job with a refutation quorum mints nothing whatever its
+/// confirmations say — but it takes a **quorum**, not one voice.
 ///
-/// A confirming verdict must also carry a `replay_receipt_hash` equal to the
-/// executor's; a "confirmation" of a different hash is self-contradictory and is
-/// treated as a refutation rather than silently ignored.
-pub fn verify_compute_certificate(executor_receipt_hash: Hash64, verdicts: &[VerifierAttestation], min_confirmations: u8) -> bool {
-    let mut confirmations = 0usize;
-    for v in verdicts {
-        match v.verdict {
-            VerificationVerdict::Refuted => return false,
-            VerificationVerdict::Confirmed => {
-                if v.replay_receipt_hash != executor_receipt_hash {
-                    // Claims to confirm, but reports a different replay result.
-                    return false;
-                }
-                confirmations += 1;
-            }
-        }
+/// A single refuter used to be decisive, which made griefing an honest executor cost one
+/// transaction and a made-up hash: one of three drawn verifiers could zero anybody's credit, and
+/// under the §6 audit fee be paid for it. Requiring `min_refutations` puts the same collusion bar
+/// in front of destroying a job as in front of confirming one, and [`ReplayProof`] makes each
+/// refuter pay for an execution to cast its vote. Below both thresholds the job is simply
+/// undecided: it mints nothing yet, and will once the committee finishes speaking.
+///
+/// A confirming verdict must also carry a `replay_receipt_hash` equal to the executor's; a
+/// "confirmation" of a different hash is self-contradictory and counts for nothing rather than
+/// being silently ignored.
+pub fn verify_compute_certificate(
+    executor_receipt_hash: Hash64,
+    verdicts: &[VerifierAttestation],
+    min_confirmations: u8,
+    min_refutations: u8,
+) -> bool {
+    if refutation_quorum_reached(verdicts, min_refutations) {
+        return false;
     }
+    let confirmations = verdicts
+        .iter()
+        .filter(|v| v.verdict == VerificationVerdict::Confirmed && v.replay_receipt_hash == executor_receipt_hash)
+        .count();
     confirmations >= min_confirmations as usize
+}
+
+/// Whether enough drawn verifiers refuted for the refutation to be the committee's answer rather
+/// than one member's.
+///
+/// `min_refutations == 0` would make an empty verdict set a refutation, so it is read as 1 — the
+/// coherence check refuses 0 in a preset, and this keeps a hand-built params value from inverting
+/// the rule.
+pub fn refutation_quorum_reached(verdicts: &[VerifierAttestation], min_refutations: u8) -> bool {
+    let refutations = verdicts.iter().filter(|v| v.verdict == VerificationVerdict::Refuted).count();
+    refutations > 0 && refutations >= (min_refutations as usize).max(1)
 }
 
 /// `x_j = ρ(S_j)·(a·t_j^in + b·t_j^out)` when `Verify = 1`, else `0` (§3.2 eq. 4).
@@ -1805,12 +1873,16 @@ mod tests {
         assert_ne!(job_spec_id(&a), job_spec_id(&b));
     }
 
-    /// The property the replay proof exists for: a verifier holding only the certificate can
-    /// produce a self-consistent, signable `Confirmed` verdict — it copies `executor_receipt_hash`
-    /// — but it cannot produce the preimage of the certificate's `trace_commitment`. Once auditing
-    /// pays, that gap is the only thing separating a paid auditor from a paid rubber stamp.
+    /// The property the replay proof exists for, now on both verdicts.
+    ///
+    /// A verifier holding only the certificate can produce a self-consistent, signable `Confirmed`
+    /// — it copies `executor_receipt_hash` — and could always produce a `Refuted` from thin air,
+    /// since "my replay gave something else" is satisfied by any hash. Neither can produce a
+    /// receipt whose trace commitment it has the preimage of. Once auditing pays, that gap is the
+    /// only thing separating a paid auditor from a paid rubber stamp or a paid griefer.
     #[test]
-    fn a_confirmation_copied_from_the_certificate_cannot_prove_replay() {
+    fn a_verdict_that_did_not_execute_cannot_be_self_consistent() {
+        let job_id = h64(6);
         let residuals = ReplayResiduals {
             job_nullifier: h64(11),
             request_commitment: h64(12),
@@ -1826,12 +1898,18 @@ mod tests {
             gemm_trace_root: h64(20),
             trace_event_count: 2_466,
         };
-        let trace_commitment = residual_commitment(&residuals);
-        let executor_hash = h64(99);
-        let verdict = |proof: Option<ReplayResiduals>, v, replay| ComputeVerdictPayload {
+        let executor_receipt = ComputeReceipt {
+            version: VLT_PAYLOAD_VERSION_V1,
+            output_commitment: h64(30),
+            prefill_tokens: 100,
+            decode_tokens: 20,
+            trace_commitment: residual_commitment(&residuals),
+        };
+        let executor_hash = compute_receipt_hash_for_job(job_id, &executor_receipt);
+        let verdict = |v, replay, proof: ReplayProof| ComputeVerdictPayload {
             version: VLT_PAYLOAD_VERSION_V1,
             certificate_tx_id: TransactionId::from_bytes([5u8; 64]),
-            job_id: h64(6),
+            job_id,
             executor_receipt_hash: executor_hash,
             verifier_id: h64(21),
             bond_outpoint: outpoint(21),
@@ -1840,32 +1918,41 @@ mod tests {
             replay_proof: proof,
             signature: vec![0u8; 4],
         };
+        let honest_proof = ReplayProof { receipt: executor_receipt, residuals: residuals.clone() };
 
-        // The honest replay has the preimage and proves it.
-        let honest = verdict(Some(residuals.clone()), VerificationVerdict::Confirmed, executor_hash);
-        assert!(honest.is_self_consistent());
-        assert!(honest.proves_replay_of(trace_commitment));
+        // Reproduced the executor's receipt, and can show the preimage.
+        assert!(verdict(VerificationVerdict::Confirmed, executor_hash, honest_proof.clone()).is_self_consistent());
 
-        // The copier has everything the certificate published — and that is not enough. A verdict
-        // with no proof is refused at the stateless layer; one with invented residuals folds to
-        // something else.
-        let bare = verdict(None, VerificationVerdict::Confirmed, executor_hash);
-        assert!(!bare.is_self_consistent(), "a confirmation without a proof is not well-formed");
-        assert!(!bare.proves_replay_of(trace_commitment));
-        let invented = verdict(
-            Some(ReplayResiduals { gemm_trace_root: h64(21), ..residuals.clone() }),
-            VerificationVerdict::Confirmed,
-            executor_hash,
-        );
-        assert!(invented.is_self_consistent(), "well-formed on its face…");
-        assert!(!invented.proves_replay_of(trace_commitment), "…but it does not fold to the certificate");
+        // The copier has everything the certificate published — the receipt hash — and that is not
+        // enough: it cannot exhibit residuals folding to a trace commitment inside that hash.
+        let invented =
+            ReplayProof { residuals: ReplayResiduals { gemm_trace_root: h64(99), ..residuals.clone() }, ..honest_proof.clone() };
+        assert!(!verdict(VerificationVerdict::Confirmed, executor_hash, invented).is_self_consistent());
 
-        // A refutation carries no proof and is never gated on one.
-        let refutes = verdict(None, VerificationVerdict::Refuted, h64(98));
-        assert!(refutes.is_self_consistent());
-        assert!(refutes.proves_replay_of(trace_commitment));
-        // Attaching a proof to a refutation is not a canonical encoding.
-        assert!(!verdict(Some(residuals), VerificationVerdict::Refuted, h64(98)).is_self_consistent());
+        // A refutation is no longer free. It must exhibit a receipt that really hashes to the
+        // divergent value it reports — i.e. it has to have run something.
+        let other_residuals = ReplayResiduals { gemm_trace_root: h64(77), ..residuals };
+        let other_receipt = ComputeReceipt { trace_commitment: residual_commitment(&other_residuals), ..other_receipt_base() };
+        let other_hash = compute_receipt_hash_for_job(job_id, &other_receipt);
+        assert_ne!(other_hash, executor_hash);
+        let refute_proof = ReplayProof { receipt: other_receipt, residuals: other_residuals };
+        assert!(verdict(VerificationVerdict::Refuted, other_hash, refute_proof.clone()).is_self_consistent());
+        // …and a refutation reporting a hash its own proof does not produce is refused.
+        assert!(!verdict(VerificationVerdict::Refuted, h64(123), refute_proof.clone()).is_self_consistent());
+        // A "refutation" carrying the executor's own proof contradicts itself.
+        assert!(!verdict(VerificationVerdict::Refuted, executor_hash, honest_proof.clone()).is_self_consistent());
+        // …as does a "confirmation" over a hash it did not reproduce.
+        assert!(!verdict(VerificationVerdict::Confirmed, other_hash, refute_proof).is_self_consistent());
+    }
+
+    fn other_receipt_base() -> ComputeReceipt {
+        ComputeReceipt {
+            version: VLT_PAYLOAD_VERSION_V1,
+            output_commitment: h64(31),
+            prefill_tokens: 100,
+            decode_tokens: 21,
+            trace_commitment: h64(0),
+        }
     }
 
     /// Every residual field must be load-bearing, or two different executions could fold to one
@@ -1939,10 +2026,14 @@ mod tests {
         let r = h64(50);
         let confirm = |id| verdict(id, VerificationVerdict::Confirmed, r);
         let refute = |id| verdict(id, VerificationVerdict::Refuted, h64(51));
-        let judge = |kind, resolved, atts: &[VerifierAttestation]| adjudicate_compute_challenge(kind, resolved, r, atts, 2);
+        let judge = |kind, resolved, atts: &[VerifierAttestation]| adjudicate_compute_challenge(kind, resolved, r, atts, 2, 2);
 
-        // A drawn verifier refuted: the accusation is corroborated by someone who ran the job.
-        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), refute(2)]), ChallengeOutcome::Succeeded);
+        // A QUORUM of drawn verifiers refuted, each having paid for an execution to say so: the
+        // accusation is corroborated.
+        assert_eq!(judge(ForgedReceipt, true, &[refute(1), refute(2)]), ChallengeOutcome::Succeeded);
+        // One dissenting voice is not a fraud proof — it is exactly what a griefer produces, and
+        // slashing an executor on it would make griefing the profitable strategy.
+        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), refute(2)]), ChallengeOutcome::Undecided);
         // The certificate cleared verification: the accusation is disproved, and §7(c) takes the
         // accuser's bond.
         assert_eq!(judge(ForgedReceipt, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Failed);
@@ -2060,25 +2151,38 @@ mod tests {
         assert!(matches!(normalize_vlt(&huge, &receipt(1, 1), &p, true), Err(VltRejection::TokenLimitExceeded { .. })));
     }
 
+    /// Refutation still dominates — but by quorum, not by one voice. At one voice, a single drawn
+    /// verifier could destroy an honest executor's credit with a hash it made up, and under the §6
+    /// audit fee be paid for it; confirming and refuting have to take the same collusion.
     #[test]
-    fn verification_is_refutation_dominant() {
+    fn refutation_dominates_but_only_as_a_quorum() {
         let r = h64(9);
         let other = h64(10);
-        // Threshold met, but one verifier refuted.
-        let mixed = [
-            verdict(1, VerificationVerdict::Confirmed, r),
-            verdict(2, VerificationVerdict::Confirmed, r),
-            verdict(3, VerificationVerdict::Refuted, other),
-        ];
-        assert!(!verify_compute_certificate(r, &mixed, 2), "a single refutation must fail the job");
+        let confirm = |id| verdict(id, VerificationVerdict::Confirmed, r);
+        let refute = |id| verdict(id, VerificationVerdict::Refuted, other);
+        let verify = |atts: &[VerifierAttestation]| verify_compute_certificate(r, atts, 2, 2);
 
-        let clean = [verdict(1, VerificationVerdict::Confirmed, r), verdict(2, VerificationVerdict::Confirmed, r)];
-        assert!(verify_compute_certificate(r, &clean, 2));
-        assert!(!verify_compute_certificate(r, &clean[..1], 2), "below the confirmation threshold");
+        // Threshold met, and one dissenter. The job stands.
+        let mixed = [confirm(1), confirm(2), refute(3)];
+        assert!(verify(&mixed), "one refuter must not overturn a confirmed job");
+        assert!(!refutation_quorum_reached(&mixed, 2));
 
-        // "Confirms" while reporting a different replay hash — self-contradictory.
-        let liar = [verdict(1, VerificationVerdict::Confirmed, r), verdict(2, VerificationVerdict::Confirmed, other)];
-        assert!(!verify_compute_certificate(r, &liar, 2));
+        // A refutation QUORUM dominates, whatever the confirmations say.
+        let refuted = [confirm(1), confirm(2), refute(3), refute(4)];
+        assert!(refutation_quorum_reached(&refuted, 2));
+        assert!(!verify(&refuted));
+
+        let clean = [confirm(1), confirm(2)];
+        assert!(verify(&clean));
+        assert!(!verify(&clean[..1]), "below the confirmation threshold");
+
+        // "Confirms" while reporting a different replay hash — counts for nothing.
+        let liar = [confirm(1), verdict(2, VerificationVerdict::Confirmed, other)];
+        assert!(!verify(&liar));
+
+        // An empty set is neither a confirmation nor a refutation.
+        assert!(!verify(&[]));
+        assert!(!refutation_quorum_reached(&[], 2));
     }
 
     #[test]

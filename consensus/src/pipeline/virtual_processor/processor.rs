@@ -2037,8 +2037,8 @@ impl VirtualStateProcessor {
                     let attestations = verdicts_for_certificate(
                         &walk.verdicts,
                         *cert_tx_id,
+                        resolved.job_id,
                         resolved.receipt_hash,
-                        cert.receipt.trace_commitment,
                         *accepted,
                         &resolved.committee,
                     );
@@ -2056,6 +2056,7 @@ impl VirtualStateProcessor {
                     receipt_hash,
                     attestations,
                     dns_params.vlt.min_verifier_confirmations,
+                    dns_params.vlt.min_verifier_refutations,
                 ) {
                     // The challenge stands: the bond it named — the executor's, pinned to this
                     // certificate by the walk — is the one that loses.
@@ -2781,8 +2782,8 @@ impl VirtualStateProcessor {
             let attestations = verdicts_for_certificate(
                 &walk.verdicts,
                 cert_tx_id,
+                resolved.job_id,
                 resolved.receipt_hash,
-                cert.receipt.trace_commitment,
                 block_daa,
                 &resolved.committee,
             );
@@ -2795,12 +2796,18 @@ impl VirtualStateProcessor {
                     resolved.receipt_hash,
                     &attestations,
                     dns_params.vlt.min_verifier_confirmations,
+                    dns_params.vlt.min_verifier_refutations,
                 ) == ChallengeOutcome::Succeeded
                 {
                     refuted.insert(cert_tx_id);
                 }
             }
-            let verified = verify_compute_certificate(resolved.receipt_hash, &attestations, dns_params.vlt.min_verifier_confirmations);
+            let verified = verify_compute_certificate(
+                resolved.receipt_hash,
+                &attestations,
+                dns_params.vlt.min_verifier_confirmations,
+                dns_params.vlt.min_verifier_refutations,
+            );
             let Ok(vlt) = normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) else {
                 continue;
             };
@@ -2981,6 +2988,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 capabilities.push(ComputeCapabilityRecord {
+                    accepted_daa_score: block_daa,
                     validator_id: cap.validator_id,
                     bond_outpoint: cap.bond_outpoint,
                     model_weights_hash: cap.model_weights_hash,
@@ -3085,7 +3093,17 @@ impl VirtualStateProcessor {
         //
         // Unregistered profile ⇒ mints nothing anyway.
         let entry = dns_params.vlt.model_cost_table.lookup(cert.spec.model_weights_hash, cert.spec.runtime_hash)?;
-        let declared = capability_candidate_pool(&walk.capabilities, cert.spec.model_weights_hash, cert.spec.runtime_hash, block_daa);
+        // The pool is taken AT THE BEACON, not at the certificate. The beacon is the moment the
+        // randomness is fixed, so measuring the candidates there is what makes the committee a
+        // function of that draw alone. Measured at the certificate instead, the executor picks the
+        // pool by choosing when to publish — and anyone can change a drawn committee after the fact
+        // by declaring a capability, invalidating verdicts the real committee already gave.
+        let declared = capability_candidate_pool(
+            &walk.capabilities,
+            cert.spec.model_weights_hash,
+            cert.spec.runtime_hash,
+            beacon_anchor.anchor_daa_score,
+        );
         let candidates: Vec<(Hash64, Hash64)> = declared
             .into_iter()
             .filter(|(id, _)| bonds.iter().any(|b| b.validator_pubkey_hash == *id && is_bond_active_at(b, anchor.anchor_daa_score)))
@@ -3136,10 +3154,17 @@ impl VirtualStateProcessor {
         let oldest_blue = tip_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
         let walk = self.walk_compute_overlay(tip, bonds, net_id, dns_params, oldest_blue, tip_blue);
 
+        // Challenged certificates FIRST. A challenge is an accusation, not a finding, and only the
+        // committee's verdicts can settle it — so a challenged job is the one the network most
+        // needs audited, not the one to skip. Skipping it was a free denial-of-service: file a
+        // challenge, no verifier looks, no verdict arrives, the challenge stays Undecided forever
+        // and the executor's credit never lands. Within each group the backward walk's newest-first
+        // order stands, so the executor still waiting on its committee is served before older work.
+        let mut queue: Vec<&(TransactionId, ComputeCertificatePayload, u64)> = walk.certificates.iter().collect();
+        queue.sort_by_key(|(cert_tx_id, _, _)| !walk.challenges.iter().any(|c| c.certificate_tx_id == *cert_tx_id));
+
         let mut out = Vec::new();
-        // `certificates` comes off a backward walk, so it is already newest-first: the freshest
-        // job — the one whose executor is still waiting on its committee — is audited first.
-        for (cert_tx_id, cert, block_daa) in walk.certificates.iter() {
+        for (cert_tx_id, cert, block_daa) in queue {
             if out.len() == limit {
                 break;
             }
@@ -3147,11 +3172,6 @@ impl VirtualStateProcessor {
             // Auditing our own job is the one thing sortition guarantees we are never asked to do;
             // check it here too so a bug in the pool cannot make us build a certainly-invalid tx.
             if cert.executor_id == validator_id {
-                continue;
-            }
-            // A certificate a fraud proof already named is settled; re-auditing it spends a fee on
-            // a job that credits nothing either way.
-            if walk.challenges.iter().any(|c| c.certificate_tx_id == cert_tx_id) {
                 continue;
             }
             let Some(anchor) = anchors.get(&cert.epoch) else {
@@ -3257,8 +3277,8 @@ impl VirtualStateProcessor {
             for att in verdicts_for_certificate(
                 &walk.verdicts,
                 *cert_tx_id,
+                resolved.job_id,
                 resolved.receipt_hash,
-                cert.receipt.trace_commitment,
                 *accepted,
                 &resolved.committee,
             ) {

@@ -29,10 +29,10 @@ use kaspa_consensus_core::tx::{
 use kaspa_consensus_core::vlt::{
     COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
     COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
-    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, MAX_JOB_INPUT_BYTES,
-    ReplayResiduals, VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict, VerifierAttestation, compute_capability_message,
-    compute_certificate_message, compute_challenge_message, compute_commitment_message, compute_receipt_hash, job_input_commitment,
-    job_spec_id, verifier_verdict_message,
+    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, MAX_JOB_INPUT_BYTES, ReplayProof,
+    VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict, VerifierAttestation, compute_capability_message,
+    compute_certificate_message, compute_challenge_message, compute_commitment_message, compute_receipt_hash,
+    compute_receipt_hash_for_job, job_input_commitment, job_spec_id, verifier_verdict_message,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
@@ -387,18 +387,16 @@ impl ValidatorKey {
         certificate_tx_id: TransactionId,
         job_id: Hash64,
         executor_receipt_hash: Hash64,
-        replay_receipt_hash: Hash64,
-        replay_residuals: ReplayResiduals,
+        replay_proof: ReplayProof,
         bond_outpoint: TransactionOutpoint,
     ) -> ComputeVerdictPayload {
+        // Both the reported hash and the verdict are DERIVED from this node's own execution rather
+        // than taken as parameters. A call site that could state either separately could state one
+        // its execution does not support — which is the §7(b) offence, and, for a refutation, the
+        // cheapest attack there is on an honest executor.
+        let replay_receipt_hash = compute_receipt_hash_for_job(job_id, &replay_proof.receipt);
         let verdict =
             if replay_receipt_hash == executor_receipt_hash { VerificationVerdict::Confirmed } else { VerificationVerdict::Refuted };
-        // The proof is attached only where it can be checked. A confirmation must reveal the
-        // preimage of the certificate's `trace_commitment` — that is what makes it a claim about
-        // work done rather than a field copied off the certificate. A refutation reports a receipt
-        // consensus never learns in full, so nothing could be checked against, and carrying the
-        // residuals would only add a second encoding of the same claim.
-        let replay_proof = matches!(verdict, VerificationVerdict::Confirmed).then_some(replay_residuals);
         let message = verifier_verdict_message(
             network_id,
             certificate_tx_id,
@@ -1277,11 +1275,23 @@ mod tests {
 
     const COMPUTE_INPUT: &[u8] = b"the capital of France is";
 
-    /// Stand-in for the residual fields a real replay produces. Only their *presence* and their
-    /// fold matter to the tests here; reproducing PALW's actual values needs the runtime.
-    fn residuals(tag: u8) -> ReplayResiduals {
+    /// Stand-in for a real replay's proof: internally consistent, so it satisfies the same rule a
+    /// real one does. Reproducing PALW's actual values needs the runtime.
+    fn proof(tag: u8) -> ReplayProof {
+        let residuals = residuals(tag);
+        let receipt = ComputeReceipt {
+            version: DNS_PAYLOAD_VERSION_V1,
+            output_commitment: Hash64::from_bytes([tag; 64]),
+            prefill_tokens: 100,
+            decode_tokens: 20,
+            trace_commitment: kaspa_consensus_core::vlt::residual_commitment(&residuals),
+        };
+        ReplayProof { receipt, residuals }
+    }
+
+    fn residuals(tag: u8) -> kaspa_consensus_core::vlt::ReplayResiduals {
         let h = |b: u8| Hash64::from_bytes([b; 64]);
-        ReplayResiduals {
+        kaspa_consensus_core::vlt::ReplayResiduals {
             job_nullifier: h(tag),
             request_commitment: h(tag.wrapping_add(1)),
             model_profile_id: h(tag.wrapping_add(2)),
@@ -1376,7 +1386,7 @@ mod tests {
         // Verdicts are standalone transactions published by the verifiers themselves, so the
         // executor never has to collect them before it can publish its certificate.
         let verifier = ValidatorKey::from_seed([0x01; VALIDATOR_SEED_LEN]);
-        let verdict = verifier.sign_verifier_verdict(net, cert.id(), job_id, receipt_hash, receipt_hash, residuals(0x40), fop_bond2());
+        let verdict = verifier.sign_verifier_verdict(net, cert.id(), job_id, receipt_hash, proof(0x40), fop_bond2());
         let vtx = verifier.build_verdict_tx(&verdict, fop, &fentry, fee).unwrap();
         assert_eq!(dns_tx_kind(&vtx.subnetwork_id), Some(DnsTxKind::ComputeVerdict));
         assert_eq!(validate_compute_verdict_payload(&vtx.payload), Ok(()));
@@ -1420,23 +1430,29 @@ mod tests {
         let key = ValidatorKey::from_seed([0x0Fu8; VALIDATOR_SEED_LEN]);
         let net = b"misaka-test";
         let job = Hash64::from_bytes([0x21; 64]);
-        let executor = Hash64::from_bytes([0x31; 64]);
         let bond = fop_bond();
 
         let cert_tx = fop(0xC0, 0).transaction_id;
-        let agreed = key.sign_verifier_verdict(net, cert_tx, job, executor, executor, residuals(0x40), bond);
+        // A proof that reproduces the executor's claim confirms; one that does not refutes.
+        let matching = proof(0x40);
+        let executor = compute_receipt_hash_for_job(job, &matching.receipt);
+        let agreed = key.sign_verifier_verdict(net, cert_tx, job, executor, matching, bond);
         assert_eq!(agreed.verdict, VerificationVerdict::Confirmed);
         assert_eq!(agreed.replay_receipt_hash, executor);
 
-        let diverged = key.sign_verifier_verdict(net, cert_tx, job, executor, Hash64::from_bytes([0x32; 64]), residuals(0x40), bond);
+        let diverged = key.sign_verifier_verdict(net, cert_tx, job, executor, proof(0x41), bond);
         assert_eq!(diverged.verdict, VerificationVerdict::Refuted, "a replay that differs must refute");
 
-        // A confirmation must carry the preimage of the certificate's trace_commitment — that is
-        // what distinguishes a replay from a field copied off the certificate. A refutation has
-        // nothing checkable to prove, so it carries none.
-        assert!(agreed.replay_proof.is_some(), "a confirmation must prove it executed the job");
-        assert!(diverged.replay_proof.is_none(), "a refutation has no checkable proof to carry");
+        // Both verdicts must exhibit an execution that really produces the hash they report — a
+        // confirmation so it is not a field copied off the certificate, a refutation so it is not
+        // a hash pulled out of the air. Neither is free.
         assert!(agreed.is_self_consistent() && diverged.is_self_consistent());
+        assert!(agreed.replay_proof.attests(job, agreed.replay_receipt_hash));
+        assert!(diverged.replay_proof.attests(job, diverged.replay_receipt_hash));
+        // Swapping in another execution's proof breaks the verdict, whichever way it points.
+        let mut swapped = agreed.clone();
+        swapped.replay_proof = proof(0x41);
+        assert!(!swapped.is_self_consistent(), "a confirmation cannot borrow a divergent execution's proof");
 
         // Both are signed by this validator's own key over the matching message, and the two
         // verdicts are distinct messages — which is what makes a contradiction provable from the

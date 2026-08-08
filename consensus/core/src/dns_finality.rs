@@ -5276,18 +5276,19 @@ pub struct ComputeVerdictRecord {
 ///   the chain with verdicts and have consensus pick the convenient one. A later disagreeing
 ///   verdict is left for the `ContradictoryVerification` challenge to slash, not silently used;
 /// * the verifier is in the sortitioned committee;
-/// * a **confirmation** proves the verifier actually executed the job — its
-///   [`crate::vlt::ReplayResiduals`] must fold to `certificate_trace_commitment`. Without this a
-///   confirmation is one field copied from the certificate, and a paid committee would rubber-stamp
-///   rather than audit. See [`crate::vlt::ReplayResiduals`].
+/// * it names this certificate's job, so a verdict cannot be lifted between jobs that happen to
+///   share a receipt hash;
+/// * its [`crate::vlt::ReplayProof`] attests — both verdicts must show an execution that actually
+///   produces the hash they report. See [`crate::vlt::ReplayProof`] for why a refutation needs
+///   this every bit as much as a confirmation.
 ///
 /// Bounded by [`MAX_VERIFIER_ATTESTATIONS`]: beyond that the extra verdicts are ignored rather
 /// than growing the per-certificate verification cost without limit.
 pub fn verdicts_for_certificate(
     records: &[ComputeVerdictRecord],
     certificate_tx_id: TransactionId,
+    job_id: Hash64,
     executor_receipt_hash: Hash64,
-    certificate_trace_commitment: Hash64,
     certificate_daa_score: u64,
     committee: &HashSet<Hash64>,
 ) -> Vec<VerifierAttestation> {
@@ -5296,9 +5297,10 @@ pub fn verdicts_for_certificate(
         .filter(|r| {
             r.certificate_tx_id == certificate_tx_id
                 && r.accepted_daa_score >= certificate_daa_score
+                && r.payload.job_id == job_id
                 && r.payload.executor_receipt_hash == executor_receipt_hash
                 && committee.contains(&r.payload.verifier_id)
-                && r.payload.proves_replay_of(certificate_trace_commitment)
+                && r.payload.replay_proof.attests(r.payload.job_id, r.payload.replay_receipt_hash)
         })
         .collect();
     // Deterministic order: acceptance depth first, then verifier id as the tie-break within a
@@ -5460,14 +5462,23 @@ pub struct ComputeCapabilityRecord {
     pub model_weights_hash: Hash64,
     pub runtime_hash: Hash64,
     pub runtime_class_id: Hash64,
+    /// DAA score of the chain block that accepted the declaration.
+    ///
+    /// Without it a declaration has no beginning, only an end, and `is_live_at` would answer "yes"
+    /// for every point of view before it existed. A validator could then watch a certificate land
+    /// and declare afterwards to insert itself into that certificate's already-drawn committee —
+    /// or merely to enlarge the candidate pool and re-roll somebody else out of it, which silently
+    /// invalidates the verdicts the real committee already published.
+    pub accepted_daa_score: u64,
     /// Effective expiry: `min(declared, accepted + max_capability_validity_blocks)`.
     pub expiry_daa_score: u64,
 }
 
 impl ComputeCapabilityRecord {
-    /// Whether this declaration still stands at `pov_daa_score`.
+    /// Whether this declaration stands at `pov_daa_score` — bounded at **both** ends, so a
+    /// point of view before the declaration existed does not see it.
     pub fn is_live_at(&self, pov_daa_score: u64) -> bool {
-        pov_daa_score < self.expiry_daa_score
+        self.accepted_daa_score <= pov_daa_score && pov_daa_score < self.expiry_daa_score
     }
 
     /// Whether it covers the `(model, runtime)` profile a job names.
@@ -6964,6 +6975,7 @@ mod tests {
         let metal = Hash64::from_u64_word(3);
         let cuda = Hash64::from_u64_word(4);
         let rec = |v: u64, m: Hash64, r: Hash64, class: Hash64, expiry: u64| ComputeCapabilityRecord {
+            accepted_daa_score: 0,
             validator_id: Hash64::from_u64_word(v),
             bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(v + 900), 0),
             model_weights_hash: m,
@@ -7036,7 +7048,30 @@ mod tests {
         }
     }
 
-    /// The residual set whose fold is `FIXTURE_TRACE_COMMITMENT` — what an honest replay reveals.
+    const FIXTURE_JOB_ID: u64 = 501;
+    /// The seed of the execution the fixture certificate claims.
+    const FIXTURE_EXECUTOR_SEED: u64 = 99;
+
+    /// A replay proof for the execution identified by `seed` — internally consistent, exactly as a
+    /// real one is, so the fixture verdicts have to satisfy the same rule real ones do.
+    fn fixture_proof(seed: u64) -> crate::vlt::ReplayProof {
+        let residuals = crate::vlt::ReplayResiduals { job_nullifier: Hash64::from_u64_word(seed), ..fixture_residuals() };
+        let receipt = crate::vlt::ComputeReceipt {
+            version: DNS_PAYLOAD_VERSION_V1,
+            output_commitment: Hash64::from_u64_word(seed),
+            prefill_tokens: 100,
+            decode_tokens: 20,
+            trace_commitment: crate::vlt::residual_commitment(&residuals),
+        };
+        crate::vlt::ReplayProof { receipt, residuals }
+    }
+
+    /// The `R_j` that execution produces — what a verdict over it must declare.
+    fn fixture_hash(seed: u64) -> Hash64 {
+        crate::vlt::compute_receipt_hash_for_job(Hash64::from_u64_word(FIXTURE_JOB_ID), &fixture_proof(seed).receipt)
+    }
+
+    /// The residual set whose fold is the fixture trace commitment — what an honest replay reveals.
     fn fixture_residuals() -> crate::vlt::ReplayResiduals {
         crate::vlt::ReplayResiduals {
             job_nullifier: Hash64::from_u64_word(201),
@@ -7055,22 +7090,19 @@ mod tests {
         }
     }
 
-    /// The certificate `trace_commitment` a confirmation must prove the preimage of.
-    fn fixture_trace_commitment() -> Hash64 {
-        crate::vlt::residual_commitment(&fixture_residuals())
-    }
-
-    fn fixture_verdict_payload(verifier: u64, verdict: crate::vlt::VerificationVerdict, replay: Hash64) -> ComputeVerdictPayload {
+    /// A verdict whose replay proof really produces the hash it reports, for the execution `seed`.
+    /// `seed == FIXTURE_EXECUTOR_SEED` is a reproduction of the certificate; anything else diverges.
+    fn fixture_verdict_payload(verifier: u64, verdict: crate::vlt::VerificationVerdict, seed: u64) -> ComputeVerdictPayload {
         ComputeVerdictPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             certificate_tx_id: Hash64::from_u64_word(500),
-            job_id: Hash64::from_u64_word(501),
-            executor_receipt_hash: Hash64::from_u64_word(99),
+            job_id: Hash64::from_u64_word(FIXTURE_JOB_ID),
+            executor_receipt_hash: fixture_hash(FIXTURE_EXECUTOR_SEED),
             verifier_id: Hash64::from_u64_word(verifier),
             bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(verifier + 100), 0),
             verdict,
-            replay_receipt_hash: replay,
-            replay_proof: matches!(verdict, crate::vlt::VerificationVerdict::Confirmed).then(fixture_residuals),
+            replay_receipt_hash: fixture_hash(seed),
+            replay_proof: fixture_proof(seed),
             signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
         }
     }
@@ -7106,8 +7138,8 @@ mod tests {
     #[test]
     fn validate_compute_verdict_requires_self_consistency() {
         use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
-        let executor_hash = Hash64::from_u64_word(99);
-        let other = Hash64::from_u64_word(98);
+        let executor_hash = FIXTURE_EXECUTOR_SEED;
+        let other = 98u64;
 
         let honest_confirm = fixture_verdict_payload(21, Confirmed, executor_hash);
         assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&honest_confirm).unwrap()), Ok(()));
@@ -7121,10 +7153,52 @@ mod tests {
         let griefer = fixture_verdict_payload(21, Refuted, executor_hash);
         assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&griefer).unwrap()), Err(DnsTxError::SelfContradictoryVerdict));
 
+        // A confirmation whose proof does not produce the hash it reports never ran the job.
+        let mut fabricated = honest_confirm.clone();
+        fabricated.replay_proof = fixture_proof(other);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&fabricated).unwrap()), Err(DnsTxError::SelfContradictoryVerdict));
+        // …and a refutation is no longer free either: it must exhibit the execution it claims.
+        let mut baseless = honest_refute.clone();
+        baseless.replay_proof = fixture_proof(FIXTURE_EXECUTOR_SEED);
+        assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&baseless).unwrap()), Err(DnsTxError::SelfContradictoryVerdict));
+
         let mut short_sig = honest_confirm.clone();
         short_sig.signature = vec![0u8; 4];
         assert_eq!(validate_compute_verdict_payload(&borsh::to_vec(&short_sig).unwrap()), Err(DnsTxError::InvalidSignatureLen(4)));
         assert_eq!(validate_compute_verdict_payload(b"not borsh"), Err(DnsTxError::Decode));
+    }
+
+    /// A capability declaration has a beginning as well as an end. Without the lower bound, a
+    /// validator could watch a certificate land and declare afterwards — inserting itself into an
+    /// already-drawn committee, or merely enlarging the candidate pool so the sortition re-rolls
+    /// somebody else out of it and the verdicts the real committee already published stop counting.
+    #[test]
+    fn a_capability_does_not_exist_before_it_was_accepted() {
+        let model = Hash64::from_u64_word(1);
+        let runtime = Hash64::from_u64_word(2);
+        let class = Hash64::from_u64_word(3);
+        let cap = |validator: u64, accepted: u64, expiry: u64| ComputeCapabilityRecord {
+            validator_id: Hash64::from_u64_word(validator),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(validator + 100), 0),
+            model_weights_hash: model,
+            runtime_hash: runtime,
+            runtime_class_id: class,
+            accepted_daa_score: accepted,
+            expiry_daa_score: expiry,
+        };
+
+        let early = cap(21, 1_000, 9_000);
+        let late = cap(22, 5_000, 9_000);
+        assert!(!early.is_live_at(999), "not yet declared");
+        assert!(early.is_live_at(1_000), "live from the block that accepted it");
+        assert!(early.is_live_at(8_999));
+        assert!(!early.is_live_at(9_000), "expired");
+
+        // A beacon at 2_000 draws from whoever had declared by then — and only them.
+        let pool = capability_candidate_pool(&[early.clone(), late.clone()], model, runtime, 2_000);
+        assert_eq!(pool, vec![(Hash64::from_u64_word(21), class)], "a later declaration cannot join a past draw");
+        // By 6_000 both are in.
+        assert_eq!(capability_candidate_pool(&[early, late], model, runtime, 6_000).len(), 2);
     }
 
     /// The job input rides the commitment so a sortitioned verifier can replay from chain data
@@ -7169,72 +7243,105 @@ mod tests {
     fn verdict_collection_enforces_ordering_committee_and_one_vote_per_verifier() {
         use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
         let cert_tx = Hash64::from_u64_word(500);
-        let executor_hash = Hash64::from_u64_word(99);
+        let job_id = Hash64::from_u64_word(FIXTURE_JOB_ID);
+        let executor_hash = fixture_hash(FIXTURE_EXECUTOR_SEED);
         let cert_daa = 1_000u64;
-        let rec = |v: u64, verdict, replay, daa: u64, tx: Hash64| ComputeVerdictRecord {
+        let rec = |v: u64, verdict, seed: u64, daa: u64, tx: Hash64| ComputeVerdictRecord {
             certificate_tx_id: tx,
-            payload: ComputeVerdictPayload { certificate_tx_id: tx, ..fixture_verdict_payload(v, verdict, replay) },
+            payload: ComputeVerdictPayload { certificate_tx_id: tx, ..fixture_verdict_payload(v, verdict, seed) },
             accepted_daa_score: daa,
         };
+        let collect = |records: &[ComputeVerdictRecord], committee: &HashSet<Hash64>| {
+            verdicts_for_certificate(records, cert_tx, job_id, executor_hash, cert_daa, committee)
+        };
         let committee: HashSet<Hash64> = [21u64, 22, 23].into_iter().map(Hash64::from_u64_word).collect();
+        const OK: u64 = FIXTURE_EXECUTOR_SEED;
+        const DIVERGENT: u64 = 98;
 
         let records = vec![
-            rec(21, Confirmed, executor_hash, 1_010, cert_tx),
+            rec(21, Confirmed, OK, 1_010, cert_tx),
             // Not in the sortitioned committee — an uninvited auditor cannot vote.
-            rec(99, Confirmed, executor_hash, 1_010, cert_tx),
+            rec(99, Confirmed, OK, 1_010, cert_tx),
             // Accepted BEFORE the certificate: cannot have judged a claim that did not exist.
-            rec(22, Confirmed, executor_hash, 999, cert_tx),
+            rec(22, Confirmed, OK, 999, cert_tx),
             // Belongs to a different certificate.
-            rec(23, Confirmed, executor_hash, 1_010, Hash64::from_u64_word(777)),
+            rec(23, Confirmed, OK, 1_010, Hash64::from_u64_word(777)),
         ];
-        let got = verdicts_for_certificate(&records, cert_tx, executor_hash, fixture_trace_commitment(), cert_daa, &committee);
+        let got = collect(&records, &committee);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].verifier_id, Hash64::from_u64_word(21));
 
         // One verifier, two verdicts: the FIRST by acceptance order counts. Otherwise a verifier
         // could publish both answers and let consensus pick whichever suits it; the later
         // conflicting one is evidence for a ContradictoryVerification challenge, not a vote.
-        let flip_flop =
-            vec![rec(21, Refuted, Hash64::from_u64_word(98), 1_020, cert_tx), rec(21, Confirmed, executor_hash, 1_005, cert_tx)];
-        let got = verdicts_for_certificate(&flip_flop, cert_tx, executor_hash, fixture_trace_commitment(), cert_daa, &committee);
+        let flip_flop = vec![rec(21, Refuted, DIVERGENT, 1_020, cert_tx), rec(21, Confirmed, OK, 1_005, cert_tx)];
+        let got = collect(&flip_flop, &committee);
         assert_eq!(got.len(), 1, "one vote per verifier");
         assert_eq!(got[0].verdict, Confirmed, "the earliest verdict is the one that counts");
 
         // A verdict judging a different receipt hash is not about this claim at all.
-        let wrong_claim = vec![rec(21, Confirmed, executor_hash, 1_010, cert_tx)];
+        let wrong_claim = vec![rec(21, Confirmed, OK, 1_010, cert_tx)];
+        assert!(verdicts_for_certificate(&wrong_claim, cert_tx, job_id, Hash64::from_u64_word(1), cert_daa, &committee).is_empty());
+        // …nor is one naming another job that happens to share a receipt hash.
         assert!(
-            verdicts_for_certificate(
-                &wrong_claim,
-                cert_tx,
-                Hash64::from_u64_word(1),
-                fixture_trace_commitment(),
-                cert_daa,
-                &committee
-            )
-            .is_empty()
+            verdicts_for_certificate(&wrong_claim, cert_tx, Hash64::from_u64_word(4_242), executor_hash, cert_daa, &committee)
+                .is_empty()
         );
 
-        // A confirmation whose residuals do not fold to the certificate's trace_commitment did not
-        // replay the job — it copied a hash. Counting it would be paying for a rubber stamp.
-        let copied = vec![rec(21, Confirmed, executor_hash, 1_010, cert_tx)];
-        assert!(
-            verdicts_for_certificate(&copied, cert_tx, executor_hash, Hash64::from_u64_word(4_242), cert_daa, &committee).is_empty(),
-            "a confirmation that cannot produce the preimage must not count"
-        );
-        // …and one with no proof at all is refused likewise.
-        let mut bare = rec(21, Confirmed, executor_hash, 1_010, cert_tx);
-        bare.payload.replay_proof = None;
-        assert!(
-            verdicts_for_certificate(&[bare], cert_tx, executor_hash, fixture_trace_commitment(), cert_daa, &committee).is_empty()
-        );
+        // A verdict whose proof does not produce the hash it reports never ran the job. Counting a
+        // confirmation like that would be paying for a rubber stamp; counting a refutation like
+        // that would let one griefer destroy an honest certificate for the price of a transaction.
+        let mut copied = rec(21, Confirmed, OK, 1_010, cert_tx);
+        copied.payload.replay_proof = fixture_proof(DIVERGENT);
+        assert!(collect(&[copied], &committee).is_empty(), "a confirmation that cannot produce the preimage must not count");
+        let mut baseless = rec(22, Refuted, DIVERGENT, 1_010, cert_tx);
+        baseless.payload.replay_proof = fixture_proof(FIXTURE_EXECUTOR_SEED);
+        assert!(collect(&[baseless], &committee).is_empty(), "a refutation must exhibit the execution it claims");
 
-        // A refutation carries no proof and is still counted — its cost is that it can be
-        // challenged, not that it is proved now.
-        let refutes = vec![rec(22, Refuted, Hash64::from_u64_word(98), 1_010, cert_tx)];
-        assert_eq!(
-            verdicts_for_certificate(&refutes, cert_tx, executor_hash, fixture_trace_commitment(), cert_daa, &committee).len(),
-            1
-        );
+        // An honest refutation — a real, divergent execution — is counted.
+        let refutes = vec![rec(22, Refuted, DIVERGENT, 1_010, cert_tx)];
+        assert_eq!(collect(&refutes, &committee).len(), 1);
+    }
+
+    /// Refutation dominates acceptance, so the bar in front of it has to be a quorum. At one voice
+    /// a single drawn verifier destroys an honest executor's credit — and under the §6 audit fee is
+    /// paid to. Confirming and refuting must take the same collusion.
+    #[test]
+    fn one_refuter_cannot_destroy_a_certificate() {
+        use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
+        let executor_hash = fixture_hash(FIXTURE_EXECUTOR_SEED);
+        let att = |v: u64, verdict, seed: u64| fixture_verdict_payload(v, verdict, seed).as_attestation();
+        let verify = |atts: &[crate::vlt::VerifierAttestation]| crate::vlt::verify_compute_certificate(executor_hash, atts, 3, 3);
+
+        // Three honest confirmations out of five: verified.
+        assert!(verify(&[
+            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(23, Confirmed, FIXTURE_EXECUTOR_SEED)
+        ]));
+        // One dissenter among them no longer decides the job.
+        let with_griefer = [
+            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(23, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(24, Refuted, 98),
+        ];
+        assert!(verify(&with_griefer), "one refuter must not overturn a confirmed job");
+        assert!(!crate::vlt::refutation_quorum_reached(&with_griefer, 3));
+        // A refutation quorum still dominates, whatever the confirmations say.
+        let refuted = [
+            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(23, Confirmed, FIXTURE_EXECUTOR_SEED),
+            att(24, Refuted, 98),
+            att(25, Refuted, 97),
+            att(26, Refuted, 96),
+        ];
+        assert!(crate::vlt::refutation_quorum_reached(&refuted, 3));
+        assert!(!verify(&refuted), "refutation still dominates — it just takes a quorum");
+        // An empty set is not a refutation.
+        assert!(!crate::vlt::refutation_quorum_reached(&[], 3));
+        assert!(!crate::vlt::refutation_quorum_reached(&[], 0), "a zero threshold must not invert the rule");
     }
 
     #[test]

@@ -22,7 +22,9 @@ use kaspa_consensus_core::dns_finality::{
 };
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
-use kaspa_consensus_core::vlt::{ComputeFraudKind, LlmJobSpec, VerificationVerdict, VltParams, compute_receipt_hash, job_spec_id};
+use kaspa_consensus_core::vlt::{
+    ComputeFraudKind, LlmJobSpec, ReplayProof, VerificationVerdict, VltParams, compute_receipt_hash, job_spec_id,
+};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
     info,
@@ -962,19 +964,19 @@ impl ValidatorService {
         let Some(projection) = self.run_job(role, &job.spec, job.input.clone(), true).await else {
             return;
         };
-        let replay_receipt_hash = compute_receipt_hash(&job.spec, &projection.to_compute_receipt());
-        // The residuals come from THIS node's own projection. They are the preimage of the receipt's
-        // `trace_commitment`, so publishing them is what makes a confirmation a statement about work
-        // this node did rather than a hash it read off the certificate.
+        // The proof is THIS node's own projection — the receipt it produced and the preimage of that
+        // receipt's `trace_commitment`. Everything else about the verdict, including which way it
+        // points, is derived from it, so there is no path here that reports a result this node's
+        // execution does not support.
         let verdict = key.sign_verifier_verdict(
             &self.config.network_id,
             job.certificate_tx_id,
             job.job_id,
             job.executor_receipt_hash,
-            replay_receipt_hash,
-            projection.residuals(),
+            ReplayProof { receipt: projection.to_compute_receipt(), residuals: projection.residuals() },
             bond_outpoint,
         );
+        let replay_receipt_hash = verdict.replay_receipt_hash;
         let refuted = verdict.verdict == VerificationVerdict::Refuted;
         let build = |funding_outpoint, funding: &UtxoEntry, fee| key.build_verdict_tx(&verdict, funding_outpoint, funding, fee);
         if self.build_and_submit_overlay_tx("verdict", COMPUTE_VERDICT_PAYLOAD_BYTES, false, build).await.is_none() {
