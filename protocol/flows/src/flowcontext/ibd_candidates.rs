@@ -520,6 +520,13 @@ pub struct CommitInputs<'a> {
     pub descends_from_checkpoint: Option<bool>,
     /// Whether the configured checkpoint's params id matches this build. `None` when unconfigured.
     pub checkpoint_params_match: Option<bool>,
+    /// Unresolved candidates whose tip the staged chain does **not** already contain.
+    ///
+    /// Containment is what separates a rival branch from ordinary traffic. Peers on the chain being
+    /// synced keep relaying, and each new tip is a new candidate id — so counting every unverified
+    /// candidate would refuse essentially every IBD on a healthy network. A candidate the staged
+    /// chain already knows about is the same history seen a little further along, not a competitor.
+    pub unresolved_competing: usize,
     pub registry: &'a IbdCandidateRegistry,
 }
 
@@ -536,6 +543,8 @@ pub struct CommitInputs<'a> {
 /// 3. **Anything left unverified.** This is the case that fixed testnet-22 in place: a chain was on
 ///    offer, nobody compared it, and the node committed anyway because its peer relayed first.
 ///    Refusing here is the whole point — silence about a candidate is not evidence against it.
+///    Counted by the caller, which alone can tell a rival branch from a peer on this same chain
+///    that has simply moved on (see [`CommitInputs::unresolved_competing`]).
 pub fn decide_commit(inputs: CommitInputs<'_>) -> CommitVerdict {
     if inputs.checkpoint_params_match == Some(false) {
         return CommitVerdict::RefuseCheckpointParamsMismatch;
@@ -549,9 +558,8 @@ pub fn decide_commit(inputs: CommitInputs<'_>) -> CommitVerdict {
             verified_blue_work: better.verified_blue_work().expect("verified by construction"),
         };
     }
-    let unresolved = inputs.registry.unresolved().len();
-    if unresolved > 0 {
-        return CommitVerdict::RefuseUnresolved { count: unresolved };
+    if inputs.unresolved_competing > 0 {
+        return CommitVerdict::RefuseUnresolved { count: inputs.unresolved_competing };
     }
     CommitVerdict::Allow
 }
@@ -565,6 +573,7 @@ mod commit_barrier_tests {
             staged_blue_work: BlueWorkType::from_u64(staged),
             descends_from_checkpoint: None,
             checkpoint_params_match: None,
+            unresolved_competing: registry.unresolved().len(),
             registry,
         }
     }
@@ -585,6 +594,22 @@ mod commit_barrier_tests {
         r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now + Duration::from_secs(22));
 
         assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::RefuseUnresolved { count: 1 });
+    }
+
+    #[test]
+    fn ordinary_traffic_from_peers_on_this_same_chain_does_not_block_the_commit() {
+        // Peers on the chain being synced keep relaying, and each new tip is a new candidate id.
+        // If those counted as rivals, a healthy node would quarantine on every headers-proof IBD.
+        // The caller resolves them by containment; here that shows up as a zero count.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        r.observe_summary(peer(1), &header(0xB1, 110), pp(0xB), now);
+        r.observe_summary(peer(2), &header(0xB2, 120), pp(0xB), now);
+        assert_eq!(r.unresolved().len(), 2, "both look unresolved to the registry");
+
+        let mut i = inputs(100, &r);
+        i.unresolved_competing = 0; // the staged chain already contains both tips
+        assert_eq!(decide_commit(i), CommitVerdict::Allow);
     }
 
     #[test]

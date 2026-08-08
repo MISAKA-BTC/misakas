@@ -196,9 +196,27 @@ impl IbdFlow {
             None => (None, None),
         };
 
+        // Separate rival branches from peers on this same chain that have simply moved on. Every
+        // relayed tip becomes a candidate id, so without this a healthy node would refuse every
+        // headers-proof IBD. A tip the staged chain already knows is the same history, further
+        // along; a tip it has never heard of is the thing that must not be committed past.
+        let unresolved_ids: Vec<_> = self.ctx.ibd_candidates().read().unresolved().iter().map(|c| c.id).collect();
+        let mut unresolved_competing = 0usize;
+        for id in unresolved_ids {
+            if staging.async_get_block_status(id.virtual_selected_parent).await.is_none() {
+                unresolved_competing += 1;
+            }
+        }
+
         let verdict = {
             let registry = self.ctx.ibd_candidates().read();
-            decide_commit(CommitInputs { staged_blue_work, descends_from_checkpoint, checkpoint_params_match, registry: &registry })
+            decide_commit(CommitInputs {
+                staged_blue_work,
+                descends_from_checkpoint,
+                checkpoint_params_match,
+                unresolved_competing,
+                registry: &registry,
+            })
         };
 
         let refusal = match verdict {
