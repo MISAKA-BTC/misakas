@@ -1900,6 +1900,27 @@ impl VirtualStateProcessor {
         if self.dns_params.is_none() {
             return;
         }
+        // Derive every mutation FIRST, with no lock held, and only then take the write lock to
+        // apply them.
+        //
+        // `dns_bond_mutations_for_chain_block` reads the bond store — `compute_challenge_
+        // adjudication_slashes` needs the validator keys to check a challenge's evidence — and
+        // `parking_lot::RwLock` is not reentrant, so deriving inside the write guard deadlocks the
+        // thread against itself: one thread parked in `lock_shared_slow`, no thread holding
+        // anything visible, the virtual processor stopped for good. That was unreachable while the
+        // adjudication sat behind the VLT weight fence and became reachable the moment it moved to
+        // the shadow fence, which is the first thing a private devnet crosses.
+        //
+        // Deriving up front also means every block in the path is derived against the bond set as
+        // of the previous sink rather than against the partially-applied one. That is not a
+        // behaviour change worth guarding: the adjudication judges a challenge at its
+        // certificate's anchor, and a bond created inside this same chain path cannot be `Active`
+        // at an anchor that old.
+        let removed_muts: Vec<Vec<BondMutation>> =
+            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+        let added_muts: Vec<Vec<BondMutation>> =
+            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+
         let mut store = self.stake_bonds_store.write();
 
         // Revert blocks that left the selected chain (most-recent first). The stamp transitions go
@@ -1907,8 +1928,8 @@ impl VirtualStateProcessor {
         // the persisted store and the in-memory per-block view cannot drift. It undoes a stamp only
         // when this mutation is the one that set it, which is what keeps an earlier slash that is
         // still in the chain prefix from being cleared by reverting a later, duplicate one.
-        for removed in chain_path.removed.iter().rev().copied() {
-            for mutation in self.dns_bond_mutations_for_chain_block(removed).into_iter().rev() {
+        for muts in removed_muts {
+            for mutation in muts.into_iter().rev() {
                 match mutation {
                     BondMutation::Insert(outpoint, _) => {
                         store.delete_batch(batch, outpoint).unwrap();
@@ -1925,8 +1946,8 @@ impl VirtualStateProcessor {
         }
 
         // Apply blocks that joined the selected chain (in chain order).
-        for added in chain_path.added.iter().copied() {
-            for mutation in self.dns_bond_mutations_for_chain_block(added) {
+        for muts in added_muts {
+            for mutation in muts {
                 match mutation {
                     BondMutation::Insert(outpoint, record) => {
                         store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
