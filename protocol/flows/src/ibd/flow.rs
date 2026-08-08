@@ -157,7 +157,20 @@ impl IbdFlow {
                 },
                 handoff = self.handoff_receiver.recv() => {
                     match handoff {
-                        Ok(id) => match self.claim_handoff(id) {
+                        Ok(id) => match {
+                            // Recorded before the claim, so "nobody claimed it" can be told apart
+                            // from "it was never delivered". Those need different fixes and the
+                            // first E2E-B run could not distinguish them.
+                            record_stage(
+                                RecoveryStage::Rejected,
+                                None,
+                                Some(id),
+                                Some(self.router.to_string()),
+                                self.ctx.chain_participation().state().as_str(),
+                                "handoff delivered to this flow; evaluating claim",
+                            );
+                            self.claim_handoff(id)
+                        } {
                             // This flow's peer offers the reserved chain, so it starts the IBD from
                             // the summary header — no waiting for an inv that may never come, and no
                             // window in which another peer could take the latch instead.
@@ -232,8 +245,46 @@ impl IbdFlow {
     /// The reservation names a chain and its sources, so several flows may see the same handoff;
     /// only one wins the latch, and the rest fall through harmlessly.
     fn claim_handoff(&self, id: CandidateId) -> Option<Arc<Header>> {
-        let preferred = self.ctx.preferred_ibd_candidate()?;
-        if preferred.candidate_id != id || !preferred.preferred_sources.contains(&self.router.key()) {
+        // Every refusal is recorded separately. "The handoff was never claimed" has several
+        // possible causes and they need different fixes, so the trace has to say which one — the
+        // first E2E-B run could only report that nobody claimed it.
+        let Some(preferred) = self.ctx.preferred_ibd_candidate() else {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                "handoff delivered but nothing is reserved any more",
+            );
+            return None;
+        };
+        if preferred.candidate_id != id {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!(
+                    "handoff is for {} but the reservation names {}",
+                    id.virtual_selected_parent, preferred.candidate_id.virtual_selected_parent
+                ),
+            );
+            return None;
+        }
+        if !preferred.preferred_sources.contains(&self.router.key()) {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!(
+                    "this flow's peer is not among the {} reserved source(s) for the candidate",
+                    preferred.preferred_sources.len()
+                ),
+            );
             return None;
         }
         record_stage(
@@ -532,8 +583,32 @@ impl IbdFlow {
         // the proof harder to supply, not easier.
         let proof_metadata = PruningProofMetadata::new(claimed_blue_work.for_priority_only());
         let consensus = self.ctx.consensus().session().await;
-        let proof =
-            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)).await?;
+        // Validation runs on a blocking pool and can fail in ways that are not a returned Err — a
+        // panic inside it takes the flow's task down with it, leaving neither a success nor a
+        // recorded refusal. The previous E2E-B run showed exactly that shape (ProofReceived=1,
+        // ProofValidated=0, zero rejections), so the attempt is announced before it starts.
+        record_stage(
+            RecoveryStage::Rejected,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!("validating proof: levels={} claimed_blue_work={}", proof.len(), claimed_blue_work.for_priority_only()),
+        );
+        let proof = consensus
+            .clone()
+            .spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof))
+            .await
+            .inspect_err(|e| {
+                record_stage(
+                    RecoveryStage::Rejected,
+                    Some(attempt),
+                    Some(id),
+                    None,
+                    "",
+                    format!("validate_pruning_proof returned an error: {e}"),
+                )
+            })?;
         drop(consensus);
 
         let pruning_point_header = proof[0].last().ok_or(ProtocolError::Other("the challenger's proof has no level-0 headers"))?;
@@ -654,6 +729,26 @@ impl IbdFlow {
 
         let verdict = {
             let registry = self.ctx.ibd_candidates().read();
+            // Record the comparison here, where it is actually decided.
+            //
+            // It was only recorded in the post-IBD switch path before, which returns early while an
+            // IBD is running — so a run whose outcome was decided right here reported
+            // CandidateCompared=0 and looked as though no comparison had happened at all. The
+            // measurement has to sit at the decision, not next to it.
+            let best = registry.best_verified();
+            record_stage(
+                RecoveryStage::CandidateCompared,
+                None,
+                best.map(|c| c.id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                match best.and_then(|c| c.verified_blue_work()) {
+                    Some(challenger) => {
+                        format!("at commit barrier: {}", describe_comparison(challenger, staged_blue_work))
+                    }
+                    None => format!("at commit barrier: no verified candidate to compare; staged_work={staged_blue_work}"),
+                },
+            );
             decide_commit(CommitInputs {
                 staged_blue_work,
                 descends_from_checkpoint,
