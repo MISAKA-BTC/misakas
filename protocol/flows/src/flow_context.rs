@@ -767,6 +767,16 @@ impl FlowContext {
         self.mining_rule_engine.should_mine(sink_daa_score_and_timestamp)
     }
 
+    /// Hold back mining and the `is_synced` flag for a bounded window after an IBD, returning how
+    /// long the node will wait (`None` where probation does not apply).
+    ///
+    /// See `MiningRuleEngine::POST_IBD_PROBATION`: IBD adopts whichever peer took the latch first,
+    /// and this stops the node from turning that pick into mined blocks and validator attestations
+    /// before the relay path has had any chance to surface a competing chain.
+    pub fn begin_post_ibd_probation(&self) -> Option<Duration> {
+        self.mining_rule_engine.begin_post_ibd_probation()
+    }
+
     /// Notifies that the UTXO set was reset due to pruning point change via IBD.
     pub fn on_pruning_point_utxoset_override(&self) {
         // Notifications from the flow context might be ignored if the inner channel is already closing

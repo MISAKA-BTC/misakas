@@ -98,6 +98,25 @@ impl IbdFlow {
                 match self.ibd(relay_block).await {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
+
+                        // Do not start supporting this chain yet.
+                        //
+                        // Which chain this node just adopted was decided by which peer took the
+                        // latch first. Mining onto it and attesting its anchor is what turns that
+                        // arbitrary pick into a branch-local DNS anchor, after which the reorg
+                        // gate rejects the alternative and the fork can no longer heal on its own.
+                        // Hold participation back for a bounded window; the latch is released now,
+                        // so a competing peer's blocks are finally requested rather than dropped.
+                        if let Some(remaining) = self.ctx.begin_post_ibd_probation() {
+                            info!(
+                                "Post-IBD probation: withholding mining and reporting unsynced for {}s. The chain just \
+                                 adopted from {} was chosen by relay arrival order, not by comparing candidates — this \
+                                 window is for a competing chain to surface before this node mines or attests on it.",
+                                remaining.as_secs(),
+                                self.router
+                            );
+                        }
+
                         // Say out loud which peers were passed over while this IBD held the latch.
                         //
                         // Their chains were never fetched, let alone compared: the relay guard
