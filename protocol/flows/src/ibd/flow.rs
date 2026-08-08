@@ -265,6 +265,7 @@ impl IbdFlow {
                     id.virtual_selected_parent, self.router, verified_blue_work
                 );
                 self.ctx.set_ibd_candidate_validation(id, CandidateValidation::ProofValidated { verified_blue_work });
+                self.consider_post_ibd_switch(id, verified_blue_work).await;
             }
             Err(e) => {
                 // Failing to back a claim is the peer's failure. Recording the refusal is what stops
@@ -276,6 +277,53 @@ impl IbdFlow {
                 self.ctx
                     .set_ibd_candidate_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
             }
+        }
+    }
+
+    /// Switch to a verified-better chain that was found AFTER an IBD already finished.
+    ///
+    /// The commit barrier only runs during an IBD, so without this a challenger discovered while the
+    /// node is in review has nothing to act on it: it would sit on whichever branch it raced onto
+    /// while the better peer retried an IBD forever. Measured against two independently pruned
+    /// histories, that is exactly what happened.
+    ///
+    /// Only while participation is still withheld. Once the node is `Ready` it has committed to its
+    /// chain, and abandoning it then is a reorg — governed by the DNS reorg gate, not by IBD source
+    /// selection.
+    async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) {
+        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+            return;
+        }
+        let session = self.ctx.consensus().session().await;
+        let our_pruning_point = session.async_pruning_point().await;
+        let ours = session.async_get_header(our_pruning_point).await.ok().map(|h| h.blue_work);
+        drop(session);
+
+        let Some(ours) = ours else { return };
+        if verified_blue_work <= ours {
+            return;
+        }
+        let switches = {
+            let mut registry = self.ctx.ibd_candidates().write();
+            registry.resume_switches(self.ctx.chain_participation().restored_switches());
+            registry.note_switch();
+            registry.switches()
+        };
+        self.ctx.chain_participation().record_switch(switches);
+        if switches > MAX_CHAIN_SWITCHES {
+            warn!(
+                "Candidate {} is verified-better, but this node has already switched chains {} times; quarantining instead.",
+                id.virtual_selected_parent, switches
+            );
+            self.ctx.chain_participation().quarantine();
+            return;
+        }
+        if self.ctx.reserve_preferred_ibd_candidate(id, verified_blue_work) {
+            warn!(
+                "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving the next \
+                 IBD for it and handing over. (switch {} of {})",
+                id.virtual_selected_parent, verified_blue_work, ours, switches, MAX_CHAIN_SWITCHES
+            );
         }
     }
 

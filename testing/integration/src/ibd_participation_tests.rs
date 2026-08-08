@@ -340,3 +340,153 @@ async fn a_node_that_ran_an_ibd_does_not_advertise_a_mineable_template() {
     leader.shutdown();
     let _ = std::fs::remove_file(&overrides);
 }
+
+/// Probe: two independently mined chains, both pruned, offered to one fresh node.
+///
+/// This is the testnet-22 shape and the precondition for every remaining assertion. Two leaders
+/// that never met each other mine past pruning depth on identical rules, so a joining node is
+/// offered two genuinely different histories rather than two views of one. Confirms the setup is
+/// reachable before anything is asserted about which one wins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_independent_pruned_chains_can_be_offered_to_one_node() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let overrides = write_shallow_pruning_params("two-chains");
+
+    // Branch B: the one that will be synced first, and is the lighter of the two.
+    let (mut b, b_client, _b_addr, b_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    // Branch A: independently mined, never connected to B, and deliberately heavier.
+    let (mut a, a_client, _a_addr, a_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 1500).await;
+
+    let b_info = b_client.get_block_dag_info().await.unwrap();
+    let a_info = a_client.get_block_dag_info().await.unwrap();
+    println!(
+        "PROBE b_score={} b_pp={} a_score={} a_pp={} different_chains={}",
+        b_score,
+        b_info.pruning_point_hash,
+        a_score,
+        a_info.pruning_point_hash,
+        a_info.pruning_point_hash != b_info.pruning_point_hash
+    );
+    assert_ne!(
+        a_info.pruning_point_hash, b_info.pruning_point_hash,
+        "the two leaders converged on one history, so there is no partition to test"
+    );
+    assert!(a_score > b_score, "branch A must be the heavier one for the switch to be the correct outcome");
+
+    // A fresh node meets B first, then A — the incident's ordering.
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let follower_client = follower.start().await;
+    connect(&follower_client, b.p2p_port).await;
+    follower_client.add_peer(format!("127.0.0.1:{}", a.p2p_port).try_into().unwrap(), true).await.unwrap();
+
+    // Whatever it settles on, it must not be reporting itself synced while two histories are open.
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let peers = follower_client.get_connected_peer_info().await.unwrap().peer_info.len();
+    let synced = follower_client.get_sync_status().await.unwrap();
+    println!("PROBE follower peers={peers} synced={synced}");
+    assert!(!synced, "the follower called itself synced while two conflicting histories were on offer");
+
+    follower.shutdown();
+    a.shutdown();
+    b.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+}
+
+/// Mine an independent branch on the shared shallow preset, past its pruning depth.
+async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, GrpcClient, Address, u64) {
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut node = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let client = node.start().await;
+    let address = miner_address(&node);
+
+    let genesis_pp = client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let score = mine(&client, &address, blocks).await;
+    assert_ne!(
+        client.get_block_dag_info().await.unwrap().pruning_point_hash,
+        genesis_pp,
+        "branch never pruned, so a follower would unorphan instead of running an IBD"
+    );
+    (node, client, address, score)
+}
+
+/// The whole point, end to end: which chain a node adopts must not depend on who relayed first.
+///
+/// Two leaders that never met mine independently past pruning depth on identical rules, one heavier
+/// than the other. A fresh node is connected to both at once, so which of them wins the IBD latch is
+/// a genuine race — exactly the race that decided testnet-22. The node must end up on the heavier
+/// chain either way: if it raced onto the heavier one, it stays; if it raced onto the lighter one, it
+/// has to verify the other's pruning proof and hand the latch over.
+///
+/// **Currently fails, and is kept as the specification of what is not finished.**
+///
+/// Measured behaviour: the follower races onto one branch, and the other peer then retries an IBD
+/// every 30 seconds indefinitely while the node stays where it landed. The switch machinery does not
+/// rescue it, for a reason that is structural rather than a tuning problem — once the first IBD has
+/// committed, the competing branch conflicts with the local pruning point, and adopting it is a
+/// reorg. Reorg policy belongs to the DNS gate, not to IBD source selection, so the fix is not
+/// simply more candidate work.
+///
+/// Two changes were made in response to what this measured — candidates are now collected whenever
+/// participation is withheld rather than only during an IBD, and a challenger verified after an IBD
+/// can reserve the next one — and they are necessary but not sufficient. Ignored rather than deleted
+/// because a test that states the unmet goal is worth more than one that quietly tests less.
+#[ignore = "two-history convergence is not implemented; see the doc comment"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_offered_two_histories_ends_up_on_the_heavier_one() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let overrides = write_shallow_pruning_params("heavier-wins");
+    let (mut light, light_client, _l_addr, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h_addr, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+
+    let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_ne!(light_pp, heavy_pp, "the leaders converged, so there is no partition to test");
+    assert!(heavy_score > light_score);
+
+    // Both offered at once: the latch race is real, and its outcome must not decide the chain.
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let follower_client = follower.start().await;
+    follower_client.add_peer(format!("127.0.0.1:{}", light.p2p_port).try_into().unwrap(), true).await.unwrap();
+    follower_client.add_peer(format!("127.0.0.1:{}", heavy.p2p_port).try_into().unwrap(), true).await.unwrap();
+
+    // Settle. Generous: a switch costs a second pruning proof and a second header sync.
+    let check = follower_client.clone();
+    let heavy_target = heavy_score;
+    wait_for(
+        500,
+        480,
+        move || {
+            let c = check.clone();
+            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_target }
+        },
+        "the follower never reached the heavier chain's DAA score",
+    )
+    .await;
+
+    let info = follower_client.get_block_dag_info().await.unwrap();
+    println!(
+        "PROBE outcome score={} pp={} on_heavy={} on_light={}",
+        info.virtual_daa_score,
+        info.pruning_point_hash,
+        info.pruning_point_hash == heavy_pp,
+        info.pruning_point_hash == light_pp
+    );
+    assert_eq!(
+        info.pruning_point_hash, heavy_pp,
+        "the follower settled on the lighter branch; which chain it adopted was still decided by who relayed first"
+    );
+
+    follower.shutdown();
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+}

@@ -139,6 +139,27 @@ impl HandleRelayInvsFlow {
                 }
             }
 
+            // Collect candidates whenever this node is withholding participation, not only while an
+            // IBD is in flight.
+            //
+            // Measured gap: with two independently pruned histories on offer, a peer met AFTER the
+            // first IBD finished was never registered as a candidate — the only collection point was
+            // inside the IBD guard below. So nothing verified it, nothing could switch to it, and the
+            // node sat on whichever branch it had raced onto while that peer retried an IBD every 30
+            // seconds forever. That is the testnet-22 deadlock reproduced.
+            //
+            // CandidateReview exists precisely because the chain is not settled, so that is exactly
+            // when a competing offer matters. Recording it here does not process the block or change
+            // the flow's behaviour; it only makes the offer visible to the coordinator.
+            if !self.ctx.is_consensus_participation_allowed() && self.ctx.ibd_peer_key() != Some(self.router.key()) {
+                self.ctx.observe_ibd_candidate_peer(self.router.key());
+                if self.ctx.claim_ibd_summary_request(self.router.key())
+                    && let Err(e) = self.request_ibd_candidate_summary().await
+                {
+                    debug!("Could not get a candidate summary from {}: {}", self.router, e);
+                }
+            }
+
             if self.ctx.is_ibd_running() && !self.ctx.should_mine(&session).await {
                 // Note: If the node is considered nearly synced we continue processing relay blocks even though an IBD is in progress.
                 // For instance this means that downloading a side-chain from a delayed node does not interop the normal flow of live blocks.
