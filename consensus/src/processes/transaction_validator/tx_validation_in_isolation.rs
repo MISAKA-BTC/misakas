@@ -2,8 +2,9 @@ use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
-    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_slashing_evidence_tx,
-    validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload, validate_stake_unbond_payload,
+    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_precommit_evidence_tx,
+    validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
+    validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -269,6 +270,11 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
             // about history, answered by the credit walk, which counts a precommit only if the
             // declaration matches.
             DnsTxKind::StakePrecommit => validate_stake_precommit_payload(&tx.payload),
+            // Round 2's equivocation evidence. Like slashing evidence it is a pure evidence
+            // carrier and must declare no outputs; the two signatures are verified as a
+            // block-validity rule, because this payload burns a bond and anyone can author a
+            // contradiction naming someone else's.
+            DnsTxKind::PrecommitEvidence => validate_precommit_evidence_tx(&tx.payload, &tx.outputs),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())

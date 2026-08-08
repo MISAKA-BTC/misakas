@@ -87,6 +87,7 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_COMPUTE_COMMITMENT
             || *self == SUBNETWORK_ID_COMPUTE_VERDICT
             || *self == SUBNETWORK_ID_STAKE_PRECOMMIT
+            || *self == SUBNETWORK_ID_PRECOMMIT_EVIDENCE
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
@@ -201,6 +202,13 @@ pub const SUBNETWORK_ID_COMPUTE_VERDICT: SubnetworkId = SubnetworkId::from_byte(
 /// evidence of doing so. In the 0x10-0x18 overlay band because it is the same finality overlay:
 /// the attestation shard is the prevote, this is the precommit.
 pub const SUBNETWORK_ID_STAKE_PRECOMMIT: SubnetworkId = SubnetworkId::from_byte(0x19);
+
+/// Two precommits from one validator that cannot both be honest —
+/// [`crate::dns_finality::PrecommitEvidencePayload`]. The round-2 sibling of
+/// `SUBNETWORK_ID_SLASHING_EVIDENCE`: a lock is only worth carrying if breaking it costs the
+/// bond, and the two signed payloads are the whole proof, so no reachability and no access to the
+/// losing branch's blocks is needed to check it.
+pub const SUBNETWORK_ID_PRECOMMIT_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x1a);
 
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte
 // values 0x20/0x21/0x22 sit above the DNS overlay band (0x10-0x13) and the

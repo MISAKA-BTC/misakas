@@ -121,9 +121,9 @@ mod serde_reward_payload64 {
 
 use crate::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
-    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_SLASHING_EVIDENCE,
-    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND,
-    SubnetworkId,
+    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT,
+    SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use crate::{
     BlockHash, BlueWorkType, TransactionId,
@@ -586,6 +586,72 @@ impl StakePrecommitPayload {
 pub struct PrecommitLock {
     pub epoch: u64,
     pub anchor: Hash64,
+}
+
+/// What two precommits from one validator prove, when they cannot both be honest.
+///
+/// Both are decided from the two payloads **alone** — no chain, no reachability, no access to the
+/// branch the other one came from. That is the property the lock declaration was designed for: a
+/// partition's losing side does not have to be reconstructed for its signatures to convict.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PrecommitFault {
+    /// Two precommits for the **same epoch** that disagree about the anchor, or about the lock
+    /// held while signing. A validator has exactly one of each at the moment it locks an epoch, so
+    /// two different answers are two different histories.
+    Equivocation,
+    /// Two precommits declaring **different anchors at the same `locked_epoch`**. The signer is
+    /// claiming to have held two different locks at one height, which cannot happen on a single
+    /// chain: each precommit's declaration names its predecessor, and there is only one.
+    ContradictoryLock,
+}
+
+/// The fault two precommits prove, or `None` if they are compatible.
+///
+/// Requires the same validator and the same bond — evidence against a bond is evidence about the
+/// key that bond pledges, and a pair from two different signers proves nothing about either.
+/// Byte-identical payloads are a rebroadcast, not an offence.
+///
+/// Deliberately narrower than "anything the walk would reject". A precommit that re-declares a
+/// lock the validator has already moved past is refused credit by
+/// [`lock_consistent_precommits`], but the two payloads alone cannot say which came first on
+/// chain, so it is not *proof* of two histories and must not burn a bond. Slashing is for what is
+/// provable from the evidence itself; everything else is denied credit and left alone.
+pub fn precommit_fault(a: &StakePrecommitPayload, b: &StakePrecommitPayload) -> Option<PrecommitFault> {
+    if a.validator_id != b.validator_id || a.bond_outpoint != b.bond_outpoint {
+        return None;
+    }
+    if a.epoch == b.epoch {
+        let same_vote = a.target_hash == b.target_hash
+            && a.target_daa_score == b.target_daa_score
+            && a.locked_epoch == b.locked_epoch
+            && a.locked_hash == b.locked_hash;
+        return if same_vote { None } else { Some(PrecommitFault::Equivocation) };
+    }
+    // A zero `locked_epoch` is "no lock yet", which every validator holds exactly once and which
+    // says nothing about history — two first-precommits are not two locks.
+    if a.locked_epoch != 0 && a.locked_epoch == b.locked_epoch && a.locked_hash != b.locked_hash {
+        return Some(PrecommitFault::ContradictoryLock);
+    }
+    None
+}
+
+/// Two precommits from one validator that cannot both be honest, plus the reporter that presented
+/// them (ADR-0013 Addendum C — the reward is minted by consensus at `(evidence_tx_id, 0)`).
+///
+/// The round-2 sibling of [`SlashingEvidencePayload`], and the reason round 2 is worth running: a
+/// lock that costs nothing to break is not a lock. Round 1's equivocation evidence covers two
+/// attestations for one epoch; this covers a validator that carried two locks, which is the fault
+/// a single round could not express at all.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PrecommitEvidencePayload {
+    pub version: u16,
+    pub bond_outpoint: TransactionOutpoint,
+    pub precommit_a: StakePrecommitPayload,
+    pub precommit_b: StakePrecommitPayload,
+    /// The reporter's 64-byte ML-DSA P2PKH spend payload, as in
+    /// [`SlashingEvidencePayload::reporter_reward_spk_payload`]. A malformed value only misdirects
+    /// the reporter's own reward, so consensus checks nothing beyond the fixed width.
+    pub reporter_reward_spk_payload: [u8; 64],
 }
 
 /// What round 2 asks of one validator at the current sink.
@@ -3445,21 +3511,34 @@ pub fn resolve_slashing_side_effects(
     // so each evidence keeps its **slashing tx id** — the mint outpoint
     // `(slashing_tx_id, 0)` under Addendum C.2.
     for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) != Some(DnsTxKind::SlashingEvidence) {
-            continue;
-        }
-        let Ok(ev) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) else {
+        // `(bond_outpoint, reporter_payload, slashed_epoch)` for whichever evidence kind this is.
+        // Round 1 slashes on two attestations for one epoch; round 2 on two precommits that cannot
+        // both be honest. Same side effect, because they are the same offence at two different
+        // rounds, and a lock nobody can be burned for breaking is not a lock.
+        let claim = match dns_tx_kind(&tx.subnetwork_id) {
+            Some(DnsTxKind::SlashingEvidence) => borsh::from_slice::<SlashingEvidencePayload>(&tx.payload)
+                .ok()
+                // Both attestations share an epoch — that is what makes them equivocating.
+                .map(|ev| (ev.bond_outpoint, ev.reporter_reward_spk_payload, ev.attestation_a.epoch)),
+            Some(DnsTxKind::PrecommitEvidence) => borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload).ok().map(|ev| {
+                // The two precommits share an epoch only for `Equivocation`; a `ContradictoryLock`
+                // pair spans two. Attribute it to the newer, which is the one whose lock the
+                // validator was breaking.
+                let epoch = ev.precommit_a.epoch.max(ev.precommit_b.epoch);
+                (ev.bond_outpoint, ev.reporter_reward_spk_payload, epoch)
+            }),
+            _ => None,
+        };
+        let Some((bond_outpoint, reporter_payload, slashed_epoch)) = claim else {
             continue;
         };
-        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
+        let Some(bond) = bond_view.get(&bond_outpoint) else {
             continue;
         };
         // Only a bond whose stake is still locked (Active/Unbonding) has a
         // removable output-0 UTXO; Pending/Slashed/unknown contribute nothing.
         if matches!(effective_bond_status(bond, daa_score), BondStatus::Active | BondStatus::Unbonding) {
-            // The slashed (equivocation) epoch is the attestations' shared epoch (both attestations
-            // are for the same epoch — that is what makes them equivocating).
-            resolved.push((ev.bond_outpoint, bond.amount, ev.reporter_reward_spk_payload, tx.id(), ev.attestation_a.epoch));
+            resolved.push((bond_outpoint, bond.amount, reporter_payload, tx.id(), slashed_epoch));
         }
     }
     slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, security_reserve_bps, victim_epoch_pool_bps, None)
@@ -3940,6 +4019,8 @@ pub enum DnsTxKind {
     ComputeVerdict,
     /// `SUBNETWORK_ID_STAKE_PRECOMMIT` — [`StakePrecommitPayload`].
     StakePrecommit,
+    /// `SUBNETWORK_ID_PRECOMMIT_EVIDENCE` — [`PrecommitEvidencePayload`].
+    PrecommitEvidence,
 }
 
 /// Maps a subnetwork id to its DNS overlay payload kind, or `None` for a
@@ -3966,6 +4047,8 @@ pub fn dns_tx_kind(subnetwork_id: &SubnetworkId) -> Option<DnsTxKind> {
         Some(DnsTxKind::ComputeVerdict)
     } else if *subnetwork_id == SUBNETWORK_ID_STAKE_PRECOMMIT {
         Some(DnsTxKind::StakePrecommit)
+    } else if *subnetwork_id == SUBNETWORK_ID_PRECOMMIT_EVIDENCE {
+        Some(DnsTxKind::PrecommitEvidence)
     } else {
         None
     }
@@ -4053,6 +4136,16 @@ pub enum DnsTxError {
     /// `locked_epoch` / `locked_hash` zero and the other not), or naming an epoch at or above the
     /// one being locked, which would be a lock the signer could not yet have held.
     IncoherentPrecommitLock,
+    /// Precommit evidence whose two payloads are not both bound to the bond it names, or come
+    /// from different validators — evidence against a bond has to be about that bond's own key.
+    PrecommitEvidenceBondMismatch,
+    /// Precommit evidence whose two payloads are compatible: they could both be honest, so they
+    /// prove nothing and must not burn a bond.
+    PrecommitEvidenceNotContradictory,
+    /// A precommit-evidence tx declares outputs. Like slashing evidence it is a pure evidence
+    /// carrier whose reporter reward is minted at `(tx_id, 0)`, and a declared output would
+    /// collide with that mint.
+    PrecommitEvidenceHasOutputs(usize),
 }
 
 impl Display for DnsTxError {
@@ -4103,6 +4196,15 @@ impl Display for DnsTxError {
             }
             DnsTxError::IncoherentPrecommitLock => {
                 write!(f, "precommit declares a lock that is half-declared or not strictly below the epoch it locks")
+            }
+            DnsTxError::PrecommitEvidenceBondMismatch => {
+                write!(f, "precommit evidence's two payloads are not both bound to the bond and validator it names")
+            }
+            DnsTxError::PrecommitEvidenceNotContradictory => {
+                write!(f, "precommit evidence's two payloads could both be honest, so they prove no fault")
+            }
+            DnsTxError::PrecommitEvidenceHasOutputs(n) => {
+                write!(f, "precommit-evidence tx declares {n} output(s); it must declare none")
             }
         }
     }
@@ -4484,6 +4586,15 @@ pub fn bond_mutations_from_accepted_txs(
             }
             Some(DnsTxKind::SlashingEvidence) => {
                 if let Ok(payload) = borsh::from_slice::<SlashingEvidencePayload>(&tx.payload) {
+                    muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
+                }
+            }
+            Some(DnsTxKind::PrecommitEvidence) => {
+                // Round 2's equivocation, and the reason a lock is worth carrying: two precommits
+                // that cannot both be honest burn the bond exactly as two attestations do. Both
+                // signatures are verified as a block-validity rule
+                // (`precommit_evidence_genuine`), so anything reaching here is proved.
+                if let Ok(payload) = borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload) {
                     muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
                 }
             }
@@ -5654,6 +5765,73 @@ pub fn precommits_from_accepted_txs(txs: &[Transaction]) -> Vec<StakePrecommitPa
 pub fn stake_precommit_tx(precommit: &StakePrecommitPayload) -> Transaction {
     let payload = borsh::to_vec(precommit).expect("borsh serialization of a well-formed precommit is infallible");
     Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_PRECOMMIT, 0, payload)
+}
+
+/// Stateless shape of a [`PrecommitEvidencePayload`]: both precommits well-formed and bound to the
+/// bond the evidence names, and the pair genuinely contradictory.
+///
+/// Everything here is decided from the payload alone, which is the whole design of round 2's
+/// evidence — the signatures are checked as a block-validity rule
+/// (`precommit_evidence_genuine`), because a structurally valid forgery must not be able to burn
+/// a bond.
+pub fn validate_precommit_evidence_payload(payload: &[u8]) -> Result<(), DnsTxError> {
+    let ev: PrecommitEvidencePayload = decode_dns_payload(payload)?;
+    if ev.version != DNS_PAYLOAD_VERSION_V1 {
+        return Err(DnsTxError::UnsupportedVersion(ev.version));
+    }
+    for p in [&ev.precommit_a, &ev.precommit_b] {
+        if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+            return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
+        }
+        if !p.lock_is_self_consistent() {
+            return Err(DnsTxError::IncoherentPrecommitLock);
+        }
+        if p.bond_outpoint != ev.bond_outpoint {
+            return Err(DnsTxError::PrecommitEvidenceBondMismatch);
+        }
+    }
+    if ev.precommit_a.validator_id != ev.precommit_b.validator_id {
+        return Err(DnsTxError::PrecommitEvidenceBondMismatch);
+    }
+    if precommit_fault(&ev.precommit_a, &ev.precommit_b).is_none() {
+        return Err(DnsTxError::PrecommitEvidenceNotContradictory);
+    }
+    Ok(())
+}
+
+/// Stateless validation of a `SUBNETWORK_ID_PRECOMMIT_EVIDENCE` **transaction**: valid evidence,
+/// and **no outputs** — the reporter reward is minted at `(evidence_tx_id, 0)`, so a declared
+/// output would collide with the mint. Mirrors [`validate_slashing_evidence_tx`], for the same
+/// reason and enforced at the same layer (body processing, which runs for every block).
+pub fn validate_precommit_evidence_tx(payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), DnsTxError> {
+    validate_precommit_evidence_payload(payload)?;
+    if !outputs.is_empty() {
+        return Err(DnsTxError::PrecommitEvidenceHasOutputs(outputs.len()));
+    }
+    Ok(())
+}
+
+/// Every decodable [`PrecommitEvidencePayload`] among `txs`.
+pub fn precommit_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<PrecommitEvidencePayload> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::PrecommitEvidence)
+            && let Ok(ev) = borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload)
+        {
+            out.push(ev);
+        }
+    }
+    out
+}
+
+/// Build the subnetwork [`Transaction`] carrying borsh-encoded precommit evidence.
+///
+/// **TEST HELPER — NOT for production**, like [`stake_precommit_tx`]: no inputs, so `NoTxInputs`
+/// rejects it in any real block.
+#[doc(hidden)]
+pub fn precommit_evidence_tx(ev: &PrecommitEvidencePayload) -> Transaction {
+    let payload = borsh::to_vec(ev).expect("borsh serialization of well-formed evidence is infallible");
+    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, payload)
 }
 
 /// Every decodable [`ComputeVerdictPayload`] among `txs`.
@@ -7617,6 +7795,126 @@ mod tests {
         // The shipped presets are untouched by any of this.
         assert_eq!(base.vlt.vlt_shadow_activation_daa_score, u64::MAX);
         assert_eq!(base.vlt.vlt_activation_daa_score, u64::MAX);
+    }
+
+    // ---- MISAKA §5 round 2: what a broken lock costs ----
+
+    fn pcp(epoch: u64, anchor: u8, target_daa: u64, lock: (u64, u8)) -> StakePrecommitPayload {
+        StakePrecommitPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([1; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
+            epoch,
+            target_hash: Hash64::from_bytes([anchor; 64]),
+            target_daa_score: target_daa,
+            locked_epoch: lock.0,
+            locked_hash: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
+            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    /// The fault the two-round design exists to make provable — and, just as importantly, what it
+    /// deliberately does not call a fault.
+    ///
+    /// A validator holds exactly one lock at a time, so two precommits declaring different anchors
+    /// at one `locked_epoch` are two histories, and two precommits disagreeing about one epoch are
+    /// the same. Both are decided from the payloads alone: no chain, no reachability, no access to
+    /// the branch either came from — which is the point, because the second one is typically from
+    /// a fork this node will never have the blocks for.
+    #[test]
+    fn precommit_evidence_convicts_only_what_two_payloads_prove() {
+        use PrecommitFault::*;
+        // Two anchors at one locked_epoch: the signer held two locks at one height.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (10, 0xc0))), Some(ContradictoryLock));
+        // Two answers for one epoch — anchor, or the lock held while signing.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa2, 500, (10, 0xb0))), Some(Equivocation));
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa1, 500, (10, 0xc0))), Some(Equivocation));
+
+        // A rebroadcast is not an offence.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa1, 500, (10, 0xb0))), None);
+        // An ordinary lock chain: each precommit declares its predecessor, so the locked_epochs
+        // differ and nothing contradicts.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (11, 0xa1))), None);
+        // "No lock yet" is held by every validator exactly once and says nothing about history —
+        // two first-precommits are not two locks.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (0, 0)), &pcp(12, 0xa2, 600, (0, 0))), None);
+        // Two different signers prove nothing about either.
+        let other = StakePrecommitPayload { validator_id: Hash64::from_bytes([2; 64]), ..pcp(11, 0xa2, 500, (10, 0xc0)) };
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &other), None);
+
+        // Re-declaring a lock the validator has moved past is a fault the WALK punishes (it stops
+        // counting), but the two payloads alone cannot say which came first on chain, so it is not
+        // proof of two histories and must not burn a bond.
+        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (10, 0xb0))), None);
+    }
+
+    /// The stateless layer accepts only evidence that is bound to one bond and genuinely
+    /// contradictory, and — like round 1's — carries no outputs, because the reporter reward is
+    /// minted at `(tx_id, 0)`.
+    #[test]
+    fn precommit_evidence_payload_shape_is_enforced() {
+        let ev = |a: StakePrecommitPayload, b: StakePrecommitPayload| PrecommitEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
+            precommit_a: a,
+            precommit_b: b,
+            reporter_reward_spk_payload: [0xab; 64],
+        };
+        let good = ev(pcp(11, 0xa1, 500, (10, 0xb0)), pcp(12, 0xa2, 600, (10, 0xc0)));
+        assert!(validate_precommit_evidence_tx(&borsh::to_vec(&good).unwrap(), &[]).is_ok());
+
+        // An output would collide with the reporter mint.
+        let out = TransactionOutput::new(1, p2pkh_mldsa87_spk(&[0xab; 64]));
+        assert_eq!(
+            validate_precommit_evidence_tx(&borsh::to_vec(&good).unwrap(), &[out]),
+            Err(DnsTxError::PrecommitEvidenceHasOutputs(1))
+        );
+
+        // A compatible pair proves nothing and must not reach the bond.
+        let benign = ev(pcp(11, 0xa1, 500, (10, 0xb0)), pcp(12, 0xa2, 600, (11, 0xa1)));
+        assert_eq!(
+            validate_precommit_evidence_payload(&borsh::to_vec(&benign).unwrap()),
+            Err(DnsTxError::PrecommitEvidenceNotContradictory)
+        );
+
+        // A precommit not bound to the bond the evidence names would let evidence be re-pointed.
+        let elsewhere = StakePrecommitPayload {
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([9; 64]), 0),
+            ..pcp(12, 0xa2, 600, (10, 0xc0))
+        };
+        assert_eq!(
+            validate_precommit_evidence_payload(&borsh::to_vec(&ev(pcp(11, 0xa1, 500, (10, 0xb0)), elsewhere)).unwrap()),
+            Err(DnsTxError::PrecommitEvidenceBondMismatch)
+        );
+    }
+
+    /// Accepted precommit evidence burns the bond and pays the reporter, exactly as round 1's
+    /// does. Same offence, one round later — and a lock nobody can be burned for breaking is not
+    /// a lock.
+    #[test]
+    fn precommit_evidence_slashes_the_bond_and_pays_the_reporter() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
+        let a = StakePrecommitPayload { bond_outpoint: op, ..pcp(11, 0xa1, 500, (10, 0xb0)) };
+        let b = StakePrecommitPayload { bond_outpoint: op, ..pcp(12, 0xa2, 600, (10, 0xc0)) };
+        let tx = precommit_evidence_tx(&PrecommitEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: op,
+            precommit_a: a,
+            precommit_b: b,
+            reporter_reward_spk_payload: [0xab; 64],
+        });
+
+        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&tx), RESOLVE_DAA, 0, 0);
+        assert_eq!(muts, vec![BondMutation::Slash(op, RESOLVE_DAA)], "the bond is slashed at acceptance");
+
+        let effects = resolve_slashing_side_effects(std::slice::from_ref(&tx), &view, RESOLVE_DAA, 1000, 0, 0);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].bond_outpoint, op);
+        assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 10_000_000_000, "10% to the reporter, as in round 1");
+        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa87_spk(&[0xab; 64]));
+        assert_eq!(effects[0].burned_sompi, 90_000_000_000);
     }
 
     /// The fence is the whole safety story for existing networks: below it, nothing about the

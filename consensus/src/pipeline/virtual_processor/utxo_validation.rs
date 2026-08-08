@@ -5,8 +5,8 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
             InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock, NonReleasableBondSpendInBlock,
-            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -32,13 +32,13 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
-        OverlaySnapshot, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
+        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
         decode_attestation_shard, effective_bond_status, epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at,
-        mandatory_attestation_mass_capacity, recompute_epoch_tallies, resolve_slashing_side_effects,
-        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message, unbond_request_message,
-        unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_participation_reward_outputs,
-        validator_quality_bonus_outputs, victim_compensation_outputs,
+        mandatory_attestation_mass_capacity, precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies,
+        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -666,6 +666,11 @@ impl VirtualStateProcessor {
         // block whose slashing evidence is not genuine, so a forged evidence
         // can never mutate a bond to `Slashed`. Inert below activation.
         self.check_slashing_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
+
+        // MISAKA §5 round 2: the same rule for the same reason, one round later. The stateless
+        // layer only checks that the two precommits *would* contradict each other — which anyone
+        // can author — so without this a well-formed forgery would burn any validator's bond.
+        self.check_precommit_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the legacy bond-UTXO spend-gate. Rejects a block
         // whose OWN BODY spends a known non-releasable bond outpoint, against the selected-parent bond
@@ -1374,6 +1379,33 @@ impl VirtualStateProcessor {
         .map_err(UnverifiableSlashingEvidenceInBlock)
     }
 
+    /// MISAKA §5 round 2: rejects a block carrying precommit evidence that is not genuine — the
+    /// round-2 sibling of [`Self::check_slashing_evidence_genuine`].
+    ///
+    /// Gated on `dns_activation_daa_score`, not on the VLT fences, for the same reason the round-1
+    /// rule is: it guards a transaction that is *accepted* now. A precommit only counts toward
+    /// finality above the weight fence, but the payload is relayable and includable from the day
+    /// the subnet exists, so the rule that stops a forged one burning a bond has to exist from the
+    /// same day.
+    fn check_precommit_evidence_genuine(
+        &self,
+        txs: &[Transaction],
+        selected_parent_bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
+        let activated = daa_score >= params.dns_activation_daa_score;
+        precommit_evidence_genuine(
+            txs,
+            selected_parent_bond_view,
+            self.genesis.hash,
+            daa_score,
+            params.evidence_window_blocks,
+            activated,
+        )
+        .map_err(UnverifiablePrecommitEvidenceInBlock)
+    }
+
     /// MISAKA Verified LLM Token-Weighted BFT (§7): rejects a block carrying a compute fraud proof
     /// that is not genuine — the sibling of [`Self::check_slashing_evidence_genuine`], and for the
     /// same reason. A `ComputeChallenge` both denies a certificate its credit and (for the one
@@ -1841,6 +1873,76 @@ fn slashing_evidence_genuine(
             .as_bytes();
             if !matches!(
                 verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
+                Ok(true)
+            ) {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pure core of the MISAKA §5 round-2 precommit-evidence genuineness rule.
+///
+/// The stateless layer has already established that the two payloads contradict each other and are
+/// bound to one bond and one validator id. What it cannot establish is that the *validator signed
+/// them* — anyone can author two contradictory payloads and name someone else's bond. So this
+/// requires, for both precommits:
+///
+/// * the bond resolves in the block's selected-parent view, and `validator_id` is that bond's own
+///   `validator_pubkey_hash` (the id is not inside the signed digest, so without this the evidence
+///   could be re-pointed at a different bond);
+/// * the bond held slashable stake (`Active`/`Unbonding`) at the precommit's own target, since an
+///   offence by a bond with nothing at risk is not slashable;
+/// * the ML-DSA-87 signature verifies over the canonical [`stake_precommit_message`] digest — the
+///   one that covers the declared lock, which is what makes the contradiction attributable at all.
+///
+/// Freshness mirrors round 1: within `evidence_window_blocks` of the newer precommit's target, so
+/// slashing cannot reach back past the bond's still-locked window and a long-settled fork cannot
+/// be dredged up to grief a since-honest validator.
+fn precommit_evidence_genuine(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    including_daa: u64,
+    evidence_window_blocks: u64,
+    activated: bool,
+) -> Result<(), TransactionId> {
+    if !activated {
+        return Ok(());
+    }
+    for ev in precommit_evidence_from_accepted_txs(txs) {
+        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
+            return Err(ev.bond_outpoint.transaction_id);
+        };
+        let newest_target = ev.precommit_a.target_daa_score.max(ev.precommit_b.target_daa_score);
+        if including_daa.saturating_sub(newest_target) > evidence_window_blocks {
+            return Err(ev.bond_outpoint.transaction_id);
+        }
+        // Re-derived here rather than trusted from the stateless pass: this rule is the one that
+        // burns a bond, so it must not depend on a check running earlier in a different layer.
+        if precommit_fault(&ev.precommit_a, &ev.precommit_b).is_none() {
+            return Err(ev.bond_outpoint.transaction_id);
+        }
+        for p in [&ev.precommit_a, &ev.precommit_b] {
+            if p.bond_outpoint != ev.bond_outpoint || p.validator_id != bond.validator_pubkey_hash {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
+            if !matches!(effective_bond_status(bond, p.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
+                return Err(ev.bond_outpoint.transaction_id);
+            }
+            let digest = stake_precommit_message(
+                net_id.as_byte_slice(),
+                p.epoch,
+                p.target_hash,
+                p.target_daa_score,
+                p.locked_epoch,
+                p.locked_hash,
+                p.bond_outpoint,
+            )
+            .as_bytes();
+            if !matches!(
+                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);
@@ -2689,6 +2791,132 @@ mod tests {
 
         #[test]
         fn ok_when_no_slashing_evidence() {
+            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
+        }
+    }
+
+    // MISAKA §5 round 2: the precommit-evidence genuineness rule's pure core. Round 1's tests, one
+    // round later, because it is the same attack: the stateless layer only establishes that two
+    // payloads *would* contradict each other, and anyone can author that pair naming someone
+    // else's bond.
+    mod precommit_evidence_genuine {
+        use super::super::precommit_evidence_genuine as genuine;
+        use kaspa_consensus_core::{
+            BlockHash,
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, STAKE_ATTESTATION_SIG_LEN,
+                STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakePrecommitPayload,
+            },
+            subnets::SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+
+        fn outpoint(b: u8) -> TransactionOutpoint {
+            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
+        }
+
+        fn precommit(bond_outpoint: TransactionOutpoint, epoch: u64, anchor: u8, lock_anchor: u8) -> StakePrecommitPayload {
+            StakePrecommitPayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                validator_id: Hash64::from_bytes([0xa1; 64]),
+                bond_outpoint,
+                epoch,
+                target_hash: Hash64::from_bytes([anchor; 64]),
+                target_daa_score: 10_000,
+                locked_epoch: 1,
+                locked_hash: Hash64::from_bytes([lock_anchor; 64]),
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+            }
+        }
+
+        fn active_bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                validator_pubkey_hash: Hash64::from_bytes([0xa1; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 1_000,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        /// Two locks at one `locked_epoch` — the cross-branch fault.
+        fn evidence_tx(op: TransactionOutpoint) -> Transaction {
+            let ev = PrecommitEvidencePayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                precommit_a: precommit(op, 2, 0x55, 0xb0),
+                precommit_b: precommit(op, 3, 0x99, 0xc0),
+                reporter_reward_spk_payload: [0xee; 64],
+            };
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+        }
+
+        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
+        const FRESH_DAA: u64 = 10_000;
+        const WINDOW: u64 = 200_000;
+
+        #[test]
+        fn noop_when_not_activated() {
+            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, false), Ok(()));
+        }
+
+        #[test]
+        fn rejects_evidence_with_unknown_bond() {
+            assert_eq!(
+                genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([1; 64]))
+            );
+        }
+
+        #[test]
+        fn rejects_evidence_with_invalid_signatures() {
+            // The attack this rule exists for: a well-formed, genuinely contradictory pair that
+            // the accused validator never signed. Without the signature check it would burn any
+            // bond for the price of one transaction.
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, active_bond(op))]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn rejects_evidence_re_pointed_at_another_bond() {
+            // `validator_id` is not inside the signed digest, so without the bond binding a real
+            // pair of signatures could be aimed at a different validator's stake.
+            let op = outpoint(2);
+            let mut bond = active_bond(op);
+            bond.validator_pubkey_hash = Hash64::from_bytes([0xff; 64]);
+            let view = ActiveBondView::from_records([(op, bond)]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn rejects_stale_evidence_outside_the_window() {
+            let op = outpoint(2);
+            let view = ActiveBondView::from_records([(op, active_bond(op))]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), 10_000 + WINDOW + 1, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn rejects_evidence_when_bond_had_no_stake_at_risk() {
+            let op = outpoint(2);
+            let mut bond = active_bond(op);
+            bond.activation_daa_score = 50_000; // still Pending at the precommits' target
+            let view = ActiveBondView::from_records([(op, bond)]);
+            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+        }
+
+        #[test]
+        fn ok_when_no_precommit_evidence() {
             assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
         }
     }

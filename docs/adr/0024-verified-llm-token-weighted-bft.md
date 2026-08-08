@@ -38,7 +38,7 @@ W(E)    = Σ_i W_i(E),   Q(E) = ⌊2W(E)/3⌋ + 1                               
 | Voting weight | `bond.amount` (sompi) | `W_i(E) = min{C_i(E), λ·B_i(E)}` (µRTE) |
 | Epoch credit | graded, `(f − φS)/(1 − φS)` | **binary** on `Q(E) = ⌊2W(E)/3⌋ + 1` |
 | Bond's role | *is* the voting power | participation floor + slashable collateral cap |
-| Slashable offences | equivocation | \+ forged receipt, invalid certificate, contradictory verification, failed challenge |
+| Slashable offences | equivocation | \+ forged receipt, invalid certificate, contradictory verification, failed challenge, broken precommit lock |
 
 ### What deliberately did **not** change
 
@@ -174,7 +174,7 @@ model. Populating `model_cost_table` is a governance action and part of any acti
 | Snapshot walk + its pin, weight-source switch, per-branch scoring | `consensus/src/pipeline/virtual_processor/processor.rs` |
 | Prevote/precommit rounds, the lock chain, `PrecommitDuty` | `consensus/core/src/dns_finality.rs` + `processor.rs` |
 | Stateless payload validation | `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs` |
-| Subnetwork ids `0x14`–`0x19` | `consensus/core/src/subnets.rs` |
+| Subnetwork ids `0x14`–`0x1a` | `consensus/core/src/subnets.rs` |
 
 The switch itself is one call — `DnsParams::epoch_credit_rule(daa_score)` — plus the matching
 `ContributionWeight` selector, which is an explicit argument so every call site declares whether
@@ -218,9 +218,23 @@ is the single-round rule every current network runs today. Above the shadow fenc
 weight fence the round is inert — validators have no lock to carry until their votes are
 compute-weighted.
 
-Not yet built: the lock-violation **slashing** path. The evidence is self-contained by
-construction, but burning a bond for it needs its own evidence payload and reward, so today a
-misdeclaring validator stops accumulating round-2 weight rather than losing its bond.
+Breaking a lock costs the bond (`SUBNETWORK_ID_PRECOMMIT_EVIDENCE`, 0x1a). A lock nobody can be
+burned for breaking is not a lock, so round 2 gets round 1's slashing path: an output-less
+evidence tx carrying the two precommits, the same 10% reporter reward minted at
+`(evidence_tx_id, 0)`, the same freshness window, the same block-validity rule that the accused
+validator's own signatures verify — without which anyone could author a contradiction naming
+someone else's bond and burn it for the price of a transaction. `precommit_fault` decides:
+
+- **Equivocation** — two precommits for one epoch disagreeing about the anchor, or about the lock
+  held while signing.
+- **ContradictoryLock** — two precommits declaring different anchors at one `locked_epoch`. Only
+  possible across branches: on a single chain each declaration names its predecessor, and there is
+  only one.
+
+Deliberately narrower than "anything the walk rejects". A precommit that re-declares a lock the
+validator has already moved past earns no credit, but the two payloads alone cannot say which came
+first on chain, so it is not proof of two histories and must not burn a bond. Slashing is for what
+the evidence itself proves; everything else is denied credit and left alone.
 
 ### The denominator is pinned, not per-branch
 

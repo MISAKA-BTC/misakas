@@ -255,6 +255,16 @@ pub enum RuleError {
     #[error("block includes an unverifiable compute fraud proof in transaction {0}")]
     UnverifiableComputeChallengeInBlock(TransactionId),
 
+    // MISAKA §5 round 2: a block carrying precommit evidence whose bond is unknown, whose
+    // precommits are not bound to that bond's validator key, whose bond held no slashable stake
+    // when it signed, or either of whose ML-DSA signatures does not verify, is rejected. The
+    // stateless layer only checks that the two payloads *would* contradict each other; without
+    // this rule anyone could author that contradiction and burn any validator's bond for the
+    // price of one transaction. Arg: the referenced bond's transaction id. Inert below
+    // dns_activation_daa_score.
+    #[error("block includes unverifiable precommit evidence against bond {0}")]
+    UnverifiablePrecommitEvidenceInBlock(TransactionId),
+
     // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate. A block
     // containing a transaction whose input spends a known bond outpoint (present
     // in the block's selected-parent active-bond view) whose bond is not
