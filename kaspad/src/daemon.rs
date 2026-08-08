@@ -824,7 +824,6 @@ Do you confirm? (y/n)";
     // Restored from the meta DB before anyone can consult it: a quarantine that a restart clears is
     // not a quarantine, and this is the one object every signer asks for permission.
     let chain_participation_store = Arc::new(ChainParticipationStore::new(meta_db.clone()));
-    let restored_participation = chain_participation_store.load();
     let chain_participation = Arc::new(
         ChainParticipationGate::new(
             matches!(
@@ -832,7 +831,7 @@ Do you confirm? (y/n)";
                 kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
             ) || args.enforce_chain_participation,
         )
-        .with_persistence(chain_participation_store, restored_participation),
+        .with_persistence(chain_participation_store),
     );
     match chain_participation.state() {
         kaspa_core::chain_participation::ChainParticipation::Ready => {}

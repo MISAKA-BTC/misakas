@@ -19,7 +19,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
 };
 
 use crate::time::unix_now;
@@ -58,20 +58,32 @@ impl ChainParticipation {
 ///
 /// Defined as a trait rather than a store because this crate sits below the database layer. The
 /// implementation lives next to the node's meta DB; the gate only needs somewhere to put the fact.
+/// Everything about this node's relationship to its chain that a restart must not reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainParticipationSnapshot {
+    pub state: ChainParticipation,
+    /// Absolute unix-ms deadline of a review floor, so a restart neither extends nor escapes it.
+    pub review_until_ms: u64,
+    /// Whether this node has ever finished a review and started participating.
+    ///
+    /// A one-way door. Before it, the chain held is provisional and may be replaced by a
+    /// verified-better one; after it, the node has mined on that chain, attested it and told peers
+    /// it was synced, so withdrawing is a reorg rather than a correction.
+    pub ever_ready: bool,
+    /// Increments each time a chain is provisionally adopted, binding a recovery permit to the
+    /// situation that issued it.
+    pub adoption_generation: u64,
+    /// Syncs abandoned for a verified-better chain. A cap a restart resets is not a cap.
+    pub switches: u32,
+}
+
 pub trait ChainParticipationPersistence: Send + Sync + std::fmt::Debug {
     /// Called on every transition. Implementations must be non-panicking: a node that cannot write
     /// this should keep running with an in-memory gate, not die.
-    fn persist(&self, state: ChainParticipation, review_until_ms: u64);
+    fn persist(&self, snapshot: ChainParticipationSnapshot);
 
-    /// Record how many times this node has abandoned a sync for a verified-better chain.
-    ///
-    /// Kept with the participation state because it bounds the same thing: a switch cap that a
-    /// restart resets is not a cap, and restarting is exactly what an operator does when a node
-    /// looks stuck flipping between branches.
-    fn persist_switches(&self, switches: u32);
-
-    /// The switch count from the previous run, or 0 on a fresh node.
-    fn restore_switches(&self) -> u32;
+    /// The snapshot from the previous run, if any.
+    fn restore(&self) -> Option<ChainParticipationSnapshot>;
 }
 
 const READY: u8 = 0;
@@ -85,6 +97,10 @@ pub struct ChainParticipationGate {
     state: AtomicU8,
     /// Unix-ms floor for [`ChainParticipation::CandidateReview`]. Only meaningful in that state.
     review_until_ms: AtomicU64,
+    /// See [`ChainParticipationSnapshot::ever_ready`].
+    ever_ready: AtomicBool,
+    adoption_generation: AtomicU64,
+    switches: AtomicU32,
     /// Whether the gate constrains anything on this network. Peerless devnet/simnet nodes have no
     /// competing branch to overlook and no peers to wait for, so holding them back only stalls
     /// tests; this mirrors the carve-out `has_sufficient_peer_connectivity` already makes.
@@ -96,7 +112,15 @@ pub struct ChainParticipationGate {
 
 impl ChainParticipationGate {
     pub fn new(enabled: bool) -> Self {
-        Self { state: AtomicU8::new(READY), review_until_ms: AtomicU64::new(0), enabled, persistence: None }
+        Self {
+            state: AtomicU8::new(READY),
+            review_until_ms: AtomicU64::new(0),
+            ever_ready: AtomicBool::new(false),
+            adoption_generation: AtomicU64::new(0),
+            switches: AtomicU32::new(0),
+            enabled,
+            persistence: None,
+        }
     }
 
     /// Attach durable storage and adopt whatever was last written.
@@ -105,14 +129,13 @@ impl ChainParticipationGate {
     /// the chain it is running, and nothing about restarting the process makes that untrue. A
     /// `CandidateReview` floor is restored as an absolute deadline, so a restart neither extends
     /// nor escapes it.
-    pub fn with_persistence(
-        mut self,
-        persistence: Arc<dyn ChainParticipationPersistence>,
-        restored: Option<(ChainParticipation, u64)>,
-    ) -> Self {
-        if let Some((state, review_until_ms)) = restored {
+    pub fn with_persistence(mut self, persistence: Arc<dyn ChainParticipationPersistence>) -> Self {
+        if let Some(restored) = persistence.restore() {
+            self.ever_ready.store(restored.ever_ready, Ordering::SeqCst);
+            self.adoption_generation.store(restored.adoption_generation, Ordering::SeqCst);
+            self.switches.store(restored.switches, Ordering::SeqCst);
             self.state.store(
-                match state {
+                match restored.state {
                     ChainParticipation::Ready => READY,
                     // An IBD that was running when the process died did not finish, and whatever it
                     // was doing to the active consensus is now in an unknown state. That is the
@@ -122,7 +145,7 @@ impl ChainParticipationGate {
                 },
                 Ordering::SeqCst,
             );
-            self.review_until_ms.store(review_until_ms, Ordering::SeqCst);
+            self.review_until_ms.store(restored.review_until_ms, Ordering::SeqCst);
         }
         self.persistence = Some(persistence);
         self
@@ -130,21 +153,37 @@ impl ChainParticipationGate {
 
     fn persist(&self) {
         if let Some(p) = self.persistence.as_ref() {
-            p.persist(self.peek(), self.review_until_ms.load(Ordering::SeqCst));
+            p.persist(self.snapshot());
         }
     }
 
-    /// Record a chain switch durably. Bounded by the same reasoning as the gate itself: a cap a
-    /// restart resets is not a cap.
+    pub fn snapshot(&self) -> ChainParticipationSnapshot {
+        ChainParticipationSnapshot {
+            state: self.peek(),
+            review_until_ms: self.review_until_ms.load(Ordering::SeqCst),
+            ever_ready: self.ever_ready.load(Ordering::SeqCst),
+            adoption_generation: self.adoption_generation.load(Ordering::SeqCst),
+            switches: self.switches.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Record a chain switch durably. A cap a restart resets is not a cap.
     pub fn record_switch(&self, switches: u32) {
-        if let Some(p) = self.persistence.as_ref() {
-            p.persist_switches(switches);
-        }
+        self.switches.fetch_max(switches, Ordering::SeqCst);
+        self.persist();
     }
 
-    /// Switches carried over from previous runs.
     pub fn restored_switches(&self) -> u32 {
-        self.persistence.as_ref().map(|p| p.restore_switches()).unwrap_or(0)
+        self.switches.load(Ordering::SeqCst)
+    }
+
+    /// Whether this node has ever participated. See [`ChainParticipationSnapshot::ever_ready`].
+    pub fn ever_ready(&self) -> bool {
+        self.ever_ready.load(Ordering::SeqCst)
+    }
+
+    pub fn adoption_generation(&self) -> u64 {
+        self.adoption_generation.load(Ordering::SeqCst)
     }
 
     /// State without the elapsed-review promotion, for persisting and for internal checks.
@@ -189,6 +228,9 @@ impl ChainParticipationGate {
             return;
         }
         self.review_until_ms.fetch_max(unix_now().saturating_add(min_review_ms), Ordering::SeqCst);
+        // A chain was just provisionally adopted. The generation binds any recovery permit to this
+        // adoption, so one issued for an earlier situation cannot be redeemed against this one.
+        self.adoption_generation.fetch_add(1, Ordering::SeqCst);
         let _ = self.state.compare_exchange(IBD_RUNNING, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
         let _ = self.state.compare_exchange(READY, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
         self.persist();
@@ -232,6 +274,8 @@ impl ChainParticipationGate {
                     ChainParticipation::CandidateReview
                 } else {
                     if self.state.compare_exchange(CANDIDATE_REVIEW, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                        // The one-way door closes here: the node is about to act on this chain.
+                        self.ever_ready.store(true, Ordering::SeqCst);
                         self.persist();
                     }
                     ChainParticipation::Ready
@@ -275,24 +319,14 @@ mod tests {
     /// Stands in for the meta-DB row, so a "restart" is just building a new gate from what the
     /// previous one wrote.
     #[derive(Debug, Default)]
-    struct Recorder(Mutex<Option<(ChainParticipation, u64)>>, Mutex<u32>);
+    struct Recorder(Mutex<Option<ChainParticipationSnapshot>>);
 
     impl ChainParticipationPersistence for Recorder {
-        fn persist(&self, state: ChainParticipation, review_until_ms: u64) {
-            *self.0.lock().unwrap() = Some((state, review_until_ms));
+        fn persist(&self, snapshot: ChainParticipationSnapshot) {
+            *self.0.lock().unwrap() = Some(snapshot);
         }
 
-        fn persist_switches(&self, switches: u32) {
-            *self.1.lock().unwrap() = switches;
-        }
-
-        fn restore_switches(&self) -> u32 {
-            *self.1.lock().unwrap()
-        }
-    }
-
-    impl Recorder {
-        fn last(&self) -> Option<(ChainParticipation, u64)> {
+        fn restore(&self) -> Option<ChainParticipationSnapshot> {
             *self.0.lock().unwrap()
         }
     }
@@ -370,8 +404,45 @@ mod tests {
         // A cap that a restart resets is not a cap — and restarting is exactly what an operator does
         // when a node looks stuck flipping between branches.
         let recorder = Arc::new(Recorder::default());
-        recorder.persist_switches(4);
-        assert_eq!(recorder.restore_switches(), 4);
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        gate.record_switch(4);
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        assert_eq!(restarted.restored_switches(), 4);
+    }
+
+    #[test]
+    fn the_one_way_door_survives_a_restart() {
+        // Once a node has participated, its chain stops being provisional — and a restart must not
+        // make it provisional again, or bootstrap recovery would become a general finality bypass
+        // available to anyone who can make a node restart.
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        assert!(!gate.ever_ready());
+
+        gate.enter_ibd();
+        gate.enter_candidate_review(0);
+        assert_eq!(gate.state(), ChainParticipation::Ready, "an elapsed floor releases");
+        assert!(gate.ever_ready(), "and that is the door closing");
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        assert!(restarted.ever_ready(), "a restart must not reopen it");
+    }
+
+    #[test]
+    fn each_provisional_adoption_gets_its_own_generation() {
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        gate.enter_ibd();
+        gate.enter_candidate_review(60_000);
+        let first = gate.adoption_generation();
+
+        gate.enter_ibd();
+        gate.enter_candidate_review(60_000);
+        assert!(gate.adoption_generation() > first, "a permit for the previous adoption must not apply to this one");
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        assert_eq!(restarted.adoption_generation(), gate.adoption_generation());
     }
 
     #[test]
@@ -379,11 +450,11 @@ mod tests {
         // Restarting the process does not compare the chain, so it must not clear the refusal to
         // act on it. Before persistence, `kaspad` restart was a working bypass.
         let recorder = Arc::new(Recorder::default());
-        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         gate.quarantine();
-        assert_eq!(recorder.last().map(|(s, _)| s), Some(ChainParticipation::Quarantined));
+        assert_eq!(recorder.restore().map(|s| s.state), Some(ChainParticipation::Quarantined));
 
-        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert!(restarted.is_quarantined());
         assert!(!restarted.allows_participation());
     }
@@ -391,12 +462,12 @@ mod tests {
     #[test]
     fn a_review_floor_survives_a_restart_without_being_extended() {
         let recorder = Arc::new(Recorder::default());
-        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         gate.enter_ibd();
         gate.enter_candidate_review(60_000);
-        let (_, deadline) = recorder.last().unwrap();
+        let deadline = recorder.restore().unwrap().review_until_ms;
 
-        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert_eq!(restarted.state(), ChainParticipation::CandidateReview);
         // Absolute deadline, so restarting neither escapes the floor nor restarts the clock.
         assert_eq!(restarted.review_until_ms.load(Ordering::SeqCst), deadline);
@@ -408,22 +479,22 @@ mod tests {
         // already swapped the active consensus, and nothing recorded whether it did — so the node
         // cannot vouch for what it is now running.
         let recorder = Arc::new(Recorder::default());
-        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         gate.enter_ibd();
-        assert_eq!(recorder.last().map(|(s, _)| s), Some(ChainParticipation::IbdRunning));
+        assert_eq!(recorder.restore().map(|s| s.state), Some(ChainParticipation::IbdRunning));
 
-        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert!(restarted.is_quarantined());
     }
 
     #[test]
     fn a_ready_node_restarts_ready() {
         let recorder = Arc::new(Recorder::default());
-        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         gate.enter_ibd();
         gate.release_after_noop_ibd();
 
-        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert!(restarted.allows_participation());
     }
 }

@@ -22,6 +22,7 @@ use std::{
 };
 
 use kaspa_consensus_core::{BlockHash, BlueWorkType, header::Header};
+use kaspa_hashes::Hash;
 use kaspa_p2p_lib::PeerKey;
 use std::sync::Arc;
 
@@ -164,6 +165,9 @@ pub struct IbdCandidate {
     /// to — and **not** a vote: N peers is N sybils just as easily.
     pub sources: Vec<PeerKey>,
     pub validation: CandidateValidation,
+    /// Digest of the pruning proof that verified this candidate, so a recovery permit is bound to
+    /// the evidence that justified it and cannot be redeemed against a different proof.
+    pub proof_hash: Option<Hash>,
     pub first_seen: Instant,
     pub last_seen: Instant,
 }
@@ -255,6 +259,7 @@ impl IbdCandidateRegistry {
                 header: Arc::new(header.clone()),
                 sources: vec![peer],
                 validation: CandidateValidation::SummaryReceived { claimed_blue_work: claimed },
+                proof_hash: None,
                 first_seen: now,
                 last_seen: now,
             },
@@ -265,6 +270,14 @@ impl IbdCandidateRegistry {
     pub fn set_validation(&mut self, id: CandidateId, validation: CandidateValidation) {
         if let Some(c) = self.candidates.get_mut(&id) {
             c.validation = validation;
+        }
+    }
+
+    /// Record which proof established a candidate, alongside the verdict it produced.
+    pub fn set_validated(&mut self, id: CandidateId, verified_blue_work: BlueWorkType, proof_hash: Hash) {
+        if let Some(c) = self.candidates.get_mut(&id) {
+            c.validation = CandidateValidation::ProofValidated { verified_blue_work };
+            c.proof_hash = Some(proof_hash);
         }
     }
 

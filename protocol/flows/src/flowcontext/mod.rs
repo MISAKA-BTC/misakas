@@ -1,3 +1,4 @@
+pub mod bootstrap_recovery;
 pub mod evm_deposit_claims;
 pub mod evm_transactions;
 pub mod ibd_candidates;

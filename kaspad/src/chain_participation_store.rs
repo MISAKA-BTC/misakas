@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use kaspa_core::{
-    chain_participation::{ChainParticipation, ChainParticipationPersistence},
+    chain_participation::{ChainParticipation, ChainParticipationPersistence, ChainParticipationSnapshot},
     warn,
 };
 use kaspa_database::{
@@ -28,13 +28,18 @@ use std::sync::Mutex;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PersistedChainParticipation {
     state: String,
-    /// Syncs abandoned for a verified-better chain. `Option` so rows written before this field
-    /// existed still decode — absent reads as zero, which is the fresh-node value.
-    #[serde(default)]
-    switches: u32,
     /// Absolute unix-ms deadline of a `CandidateReview` floor. Absolute, not a duration, so a
     /// restart neither extends the floor nor escapes it.
     review_until_ms: u64,
+    /// Fields added after the first release. `serde(default)` so rows written before they existed
+    /// still decode, and their defaults are the safe ones: a node that has never been recorded as
+    /// having participated is treated as never having done so.
+    #[serde(default)]
+    ever_ready: bool,
+    #[serde(default)]
+    adoption_generation: u64,
+    #[serde(default)]
+    switches: u32,
 }
 
 pub struct ChainParticipationStore {
@@ -54,25 +59,47 @@ impl ChainParticipationStore {
         let item = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::ChainParticipation.into());
         Self { item: Mutex::new(item), db }
     }
+}
 
-    /// What was last written, if anything. `None` on a fresh node or an unreadable row.
+impl ChainParticipationPersistence for ChainParticipationStore {
+    fn persist(&self, snapshot: ChainParticipationSnapshot) {
+        let persisted = PersistedChainParticipation {
+            state: snapshot.state.as_str().to_owned(),
+            review_until_ms: snapshot.review_until_ms,
+            ever_ready: snapshot.ever_ready,
+            adoption_generation: snapshot.adoption_generation,
+            switches: snapshot.switches,
+        };
+        // Non-fatal by contract: a node that cannot write this must keep running with an in-memory
+        // gate rather than abort. Louder than a debug line because the consequence is that a restart
+        // would silently resume participation.
+        if let Err(e) = self.item.lock().unwrap().write(DirectDbWriter::new(&self.db), &persisted) {
+            warn!("Could not persist chain-participation state {}: {}. A restart will not preserve it.", snapshot.state.as_str(), e);
+        }
+    }
+
+    /// What was last written, if anything. `None` on a fresh node.
     ///
-    /// A row that fails to decode is reported as a quarantine rather than as absence: something
-    /// wrote a participation state and we cannot tell what it said, and guessing `Ready` is the one
-    /// answer that could put a compromised node back to signing.
-    pub fn load(&self) -> Option<(ChainParticipation, u64)> {
+    /// A row that cannot be read or understood is reported as a quarantine rather than as absence:
+    /// something wrote a participation state and we cannot tell what it said, and `Ready` is the one
+    /// answer that could put a node back to signing on a chain it had already refused to vouch for.
+    fn restore(&self) -> Option<ChainParticipationSnapshot> {
         let read = self.item.lock().unwrap().read().optional();
+        let quarantined = |generation, switches| ChainParticipationSnapshot {
+            state: ChainParticipation::Quarantined,
+            review_until_ms: 0,
+            ever_ready: false,
+            adoption_generation: generation,
+            switches,
+        };
         match read {
             Ok(None) => None,
-            // Unreadable is not the same as absent. Something wrote a state and we cannot tell what
-            // it said; `Ready` is the one answer that could put a node back to signing on a chain it
-            // had already refused to vouch for.
             Err(e) => {
                 warn!("Could not read the stored chain-participation state ({e}); treating this node as quarantined.");
-                Some((ChainParticipation::Quarantined, 0))
+                Some(quarantined(0, 0))
             }
-            Ok(Some(persisted)) => {
-                let state = match persisted.state.as_str() {
+            Ok(Some(p)) => {
+                let state = match p.state.as_str() {
                     "ready" => ChainParticipation::Ready,
                     "ibd-running" => ChainParticipation::IbdRunning,
                     "candidate-review" => ChainParticipation::CandidateReview,
@@ -83,36 +110,17 @@ impl ChainParticipationStore {
                              Resolve which chain this node is on before clearing it.",
                             unknown
                         );
-                        ChainParticipation::Quarantined
+                        return Some(quarantined(p.adoption_generation, p.switches));
                     }
                 };
-                Some((state, persisted.review_until_ms))
+                Some(ChainParticipationSnapshot {
+                    state,
+                    review_until_ms: p.review_until_ms,
+                    ever_ready: p.ever_ready,
+                    adoption_generation: p.adoption_generation,
+                    switches: p.switches,
+                })
             }
-        }
-    }
-}
-
-impl ChainParticipationPersistence for ChainParticipationStore {
-    fn persist_switches(&self, switches: u32) {
-        let (state, review_until_ms) = self.load().map(|(s, r)| (s.as_str().to_owned(), r)).unwrap_or(("ready".to_owned(), 0));
-        let persisted = PersistedChainParticipation { state, review_until_ms, switches };
-        if let Err(e) = self.item.lock().unwrap().write(DirectDbWriter::new(&self.db), &persisted) {
-            warn!("Could not persist the chain-switch count ({switches}): {e}. A restart will not preserve it.");
-        }
-    }
-
-    fn restore_switches(&self) -> u32 {
-        self.item.lock().unwrap().read().optional().ok().flatten().map(|p| p.switches).unwrap_or(0)
-    }
-
-    fn persist(&self, state: ChainParticipation, review_until_ms: u64) {
-        let switches = self.restore_switches();
-        let persisted = PersistedChainParticipation { state: state.as_str().to_owned(), review_until_ms, switches };
-        // Non-fatal by contract: a node that cannot write this must keep running with an in-memory
-        // gate rather than abort. It is louder than a debug line because the consequence is that a
-        // restart would silently resume participation.
-        if let Err(e) = self.item.lock().unwrap().write(DirectDbWriter::new(&self.db), &persisted) {
-            warn!("Could not persist chain-participation state {}: {}. A restart will not preserve it.", state.as_str(), e);
         }
     }
 }

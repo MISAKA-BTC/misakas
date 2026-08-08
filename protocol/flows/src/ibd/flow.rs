@@ -1,6 +1,9 @@
 use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
+    flowcontext::bootstrap_recovery::{
+        BootstrapRecoveryPermit, ChainReviewState, RecoveryRequest, VerifiedCandidate, authorize_bootstrap_recovery,
+    },
     flowcontext::ibd_candidates::{
         CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
     },
@@ -259,12 +262,12 @@ impl IbdFlow {
 
         info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
         match self.fetch_and_validate_challenger_proof(id, claimed_blue_work).await {
-            Ok(verified_blue_work) => {
+            Ok((verified_blue_work, proof_hash)) => {
                 info!(
                     "Candidate {} from {} is backed by a valid pruning proof; verified blue work at its pruning point is {}",
                     id.virtual_selected_parent, self.router, verified_blue_work
                 );
-                self.ctx.set_ibd_candidate_validation(id, CandidateValidation::ProofValidated { verified_blue_work });
+                self.ctx.ibd_candidates().write().set_validated(id, verified_blue_work, proof_hash);
                 self.consider_post_ibd_switch(id, verified_blue_work).await;
             }
             Err(e) => {
@@ -276,6 +279,73 @@ impl IbdFlow {
                 );
                 self.ctx
                     .set_ibd_candidate_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+            }
+        }
+    }
+
+    /// A permit to cross this node's own pruning point for `syncer_pruning_point`, if one is due.
+    ///
+    /// Gathers the facts and lets `authorize_bootstrap_recovery` judge them, so the policy is
+    /// testable without a peer. Returns `None` on any refusal — including the ordinary case where
+    /// the node has participated and the boundary simply stands.
+    async fn bootstrap_recovery_permit_for(&self, syncer_pruning_point: BlockHash) -> Option<BootstrapRecoveryPermit> {
+        let gate = self.ctx.chain_participation();
+        let reserved = self.ctx.preferred_ibd_candidate()?;
+        if reserved.candidate_id.pruning_point != syncer_pruning_point {
+            return None;
+        }
+
+        let (verified_blue_work, proof_hash) = {
+            let registry = self.ctx.ibd_candidates().read();
+            let candidate = registry.get(&reserved.candidate_id)?;
+            match candidate.validation {
+                CandidateValidation::ProofValidated { verified_blue_work } => (verified_blue_work, candidate.proof_hash?),
+                _ => return None,
+            }
+        };
+
+        let session = self.ctx.consensus().session().await;
+        let provisional_pruning_point = session.async_pruning_point().await;
+        let provisional_blue_work = session.async_get_header(provisional_pruning_point).await.ok().map(|h| h.blue_work)?;
+        let descends_from_checkpoint = match self.ctx.config.trusted_checkpoint {
+            Some(cp) => Some(
+                session
+                    .async_is_chain_ancestor_of(cp.block_hash, reserved.candidate_id.virtual_selected_parent)
+                    .await
+                    .unwrap_or(false),
+            ),
+            None => None,
+        };
+        drop(session);
+
+        let state = ChainReviewState {
+            participation: gate.state(),
+            ever_ready: gate.ever_ready(),
+            adoption_generation: gate.adoption_generation(),
+            switch_count: gate.restored_switches(),
+        };
+        let candidate = VerifiedCandidate {
+            id: reserved.candidate_id,
+            verified_blue_work,
+            proof_hash,
+            genesis_hash: self.ctx.config.genesis.hash,
+            consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            descends_from_checkpoint,
+        };
+        match authorize_bootstrap_recovery(RecoveryRequest {
+            state,
+            candidate,
+            provisional_blue_work,
+            local_genesis: self.ctx.config.genesis.hash,
+            local_consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            checkpoint: self.ctx.config.trusted_checkpoint.as_ref(),
+            reserved_candidate: Some(reserved.candidate_id),
+            switch_limit: MAX_CHAIN_SWITCHES,
+        }) {
+            Ok(permit) => Some(permit),
+            Err(e) => {
+                debug!("No bootstrap-recovery permit for candidate {}: {:?}", reserved.candidate_id.virtual_selected_parent, e);
+                None
             }
         }
     }
@@ -331,7 +401,7 @@ impl IbdFlow {
         &mut self,
         id: CandidateId,
         claimed_blue_work: ClaimedBlueWork,
-    ) -> Result<BlueWorkType, ProtocolError> {
+    ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, CHALLENGER_PROOF_TIMEOUT)?;
         let proof: PruningPointProof = Versioned(self.header_format, msg).try_into()?;
@@ -352,7 +422,17 @@ impl IbdFlow {
         if pruning_point_header.hash != id.pruning_point {
             return Err(ProtocolError::Other("the challenger's proof is anchored at a different pruning point than it advertised"));
         }
-        Ok(pruning_point_header.blue_work)
+
+        // Digest the proof so a recovery permit is bound to the exact evidence that justified it.
+        // A permit that merely named a chain could be redeemed against a different, weaker proof for
+        // the same chain later.
+        let mut hasher = kaspa_hashes::ConsensusParamsId::new();
+        for level in proof.iter() {
+            for header in level.iter() {
+                hasher.write(header.hash.as_bytes());
+            }
+        }
+        Ok((pruning_point_header.blue_work, hasher.finalize()))
     }
 
     /// Say what was on offer that this node never got to the bottom of.
@@ -762,6 +842,25 @@ impl IbdFlow {
             //
             // TODO (relaxed): consider performing additional actions on finality conflicts in addition
             // to disconnecting from the peer (e.g., banning, rpc notification)
+            //
+            // Unless this node holds a permit to cross its own pruning point, which it can only do
+            // for a chain it has never acted on. See `bootstrap_recovery`: before the node reaches
+            // `Ready`, the chain under it was chosen by a race and is provisional, so treating it as
+            // a finality boundary is what makes the first peer's chain permanent. After `Ready` this
+            // is unreachable and the conflict stands — reorg policy belongs to the DNS gate.
+            if let Some(permit) = self.bootstrap_recovery_permit_for(syncer_pruning_point).await {
+                warn!(
+                    "Crossing this node's own pruning point to adopt candidate {} from {}: the chain currently held is \
+                     provisional (this node has never participated on it) and {} is verified-better. Permit is bound to \
+                     adoption generation {} and switch {}.",
+                    permit.candidate_id.virtual_selected_parent,
+                    self.router,
+                    permit.candidate_id.pruning_point,
+                    permit.adoption_generation,
+                    permit.switch_generation
+                );
+                return Ok(IbdType::DownloadHeadersProof);
+            }
             return Err(ProtocolError::Other("peer is in a finality conflict with the local pruning point"));
         }
 

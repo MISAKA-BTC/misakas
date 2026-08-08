@@ -435,7 +435,6 @@ async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, G
 /// participation is withheld rather than only during an IBD, and a challenger verified after an IBD
 /// can reserve the next one — and they are necessary but not sufficient. Ignored rather than deleted
 /// because a test that states the unmet goal is worth more than one that quietly tests less.
-#[ignore = "two-history convergence is not implemented; see the doc comment"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_node_offered_two_histories_ends_up_on_the_heavier_one() {
     init_allocator_with_default_settings();
