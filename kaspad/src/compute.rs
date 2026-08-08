@@ -77,11 +77,15 @@ pub struct ComputeConfig {
     pub max_tokens: u32,
     /// Whether to follow a refuting verdict with a `ForgedReceipt` fraud proof.
     ///
-    /// Off by default, and that default is the considered one. A refuting verdict already denies
-    /// the certificate its credit, so the challenge buys only the reporter reward — while staking
-    /// this node's own bond on the claim (§7(c) slashes a failed challenge). A divergence is not
-    /// yet proof of fraud: a mis-declared determinism class or a marginal hardware fault produces
-    /// the same observation, and in those cases the honest executor is the one who gets slashed.
+    /// Off by default, and that default is the considered one — more so now that §7(c) is real.
+    ///
+    /// A refuting verdict already denies the certificate its credit, so the challenge buys only the
+    /// reporter reward. What it costs is this node's entire bond if the certificate's committee
+    /// goes on to confirm the receipt: `adjudicate_compute_challenge` then rules the challenge
+    /// disproved and slashes the challenger. A divergence is not yet proof of fraud — a
+    /// mis-declared determinism class or a marginal hardware fault produces exactly the same
+    /// observation — so filing automatically means betting the bond on this node's own hardware
+    /// being the correct one.
     pub auto_challenge: bool,
 }
 

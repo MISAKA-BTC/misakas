@@ -95,10 +95,11 @@ use kaspa_consensus_core::{
         utxo_view::{UtxoView, UtxoViewComposition},
     },
     vlt::{
-        COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT,
-        ComputeCertificatePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits, compute_capability_message,
-        compute_certificate_message, compute_commitment_message, compute_receipt_hash, job_input_commitment, job_spec_id,
-        normalize_vlt, select_verifiers, verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
+        COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
+        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltEpochCredits,
+        adjudicate_compute_challenge, compute_capability_message, compute_certificate_message, compute_commitment_message,
+        compute_receipt_hash, job_input_commitment, job_spec_id, normalize_vlt, select_verifiers, verifier_verdict_message,
+        verify_compute_certificate, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -216,8 +217,11 @@ impl ContributionWeight<'_> {
 /// passing them as five separate arguments to every consumer invites a caller to walk one of them
 /// over a different range than the others.
 pub(crate) struct ComputeOverlayWalk {
-    /// Certificates a fraud proof on this chain has named.
-    challenged: HashSet<TransactionId>,
+    /// Fraud proofs accepted on this chain, with the certificate each names. Kept whole rather
+    /// than reduced to a set of accused certificates because a challenge is a claim that has to be
+    /// *adjudicated* against that certificate's verdicts before it does anything — see
+    /// [`adjudicate_compute_challenge`].
+    challenges: Vec<ComputeChallengePayload>,
     capabilities: Vec<ComputeCapabilityRecord>,
     commitments: HashMap<TransactionId, ComputeCommitmentRecord>,
     verdicts: Vec<ComputeVerdictRecord>,
@@ -886,7 +890,8 @@ impl VirtualStateProcessor {
                             // Advance the bond view by THIS block's mutations,
                             // derived from the in-memory acceptance data (its
                             // store entry is written by the commit just below).
-                            let bond_muts = self.dns_bond_mutations_from_acceptance(&ctx.mergeset_acceptance_data, pov_daa_score);
+                            let bond_muts =
+                                self.dns_bond_mutations_from_acceptance(current, &ctx.mergeset_acceptance_data, pov_daa_score);
                             bond_view.apply(&bond_muts);
                         }
                         // Commit UTXO data for current chain block
@@ -1956,7 +1961,113 @@ impl VirtualStateProcessor {
     fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
-        bond_mutations_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block), accepted_daa_score, min_bond, unbonding_floor)
+        let mut muts = bond_mutations_from_accepted_txs(
+            &self.accepted_txs_of_chain_block(chain_block),
+            accepted_daa_score,
+            min_bond,
+            unbonding_floor,
+        );
+        // §7(b)/(c): the mutations a challenge ADJUDICATION implies at this block. Appended after
+        // the transaction-derived ones so the order is deterministic, and derived from the same
+        // chain data on both apply and revert.
+        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, accepted_daa_score));
+        muts
+    }
+
+    /// §7(b)/(c): the bonds a settled challenge slashes, for the chain block where its certificate
+    /// leaves the challenge window.
+    ///
+    /// A compute fraud proof is a claim about a computation, and consensus cannot re-run the job to
+    /// test it. What it can do is wait for the certificate's own sortitioned committee, whose
+    /// confirmations each carry a [`ReplayResiduals`](kaspa_consensus_core::vlt::ReplayResiduals)
+    /// proof of independent execution, and read the answer off that:
+    ///
+    /// * a drawn verifier refuted ⇒ the challenge stands ⇒ the **executor** loses its bond (§7(b));
+    /// * the certificate cleared verification ⇒ the challenge is disproved ⇒ the **challenger**
+    ///   loses its bond (§7(c) — "Challenge に失敗した実行を正しいものとして claim すること");
+    /// * anything less ⇒ undecided, and nobody is slashed. A quiet committee is a reason to wait.
+    ///
+    /// The window crossing is the trigger because it happens exactly once per certificate per
+    /// chain, so the mutation applies once and reverts cleanly, with no dedup state.
+    ///
+    /// Inert below the VLT fence — every shipped network — where no verdict is ever counted. Above
+    /// it this walks the compute overlay per chain block, the same cost noted on
+    /// [`Self::compute_audit_fee_outputs`] and fixable the same way.
+    fn compute_challenge_adjudication_slashes(&self, chain_block: BlockHash, daa_score: u64) -> Vec<BondMutation> {
+        let Some(dns_params) = self.dns_params.as_ref() else {
+            return Vec::new();
+        };
+        if !dns_params.vlt_weighting_active_at(daa_score) {
+            return Vec::new();
+        }
+        let Ok(parent) = self.ghostdag_store.get_selected_parent(chain_block) else {
+            return Vec::new();
+        };
+        let (Ok(parent_daa), Ok(parent_blue)) = (self.headers_store.get_daa_score(parent), self.headers_store.get_blue_score(parent))
+        else {
+            return Vec::new();
+        };
+        let net_id_hash = self.genesis.hash;
+        let net_id = net_id_hash.as_byte_slice();
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        let window = dns_params.vlt.challenge_window_blocks;
+        let anchors = self.canonical_anchors_in_window(parent, dns_params, dns_params.vlt_credit_window_blue_score);
+        let oldest_blue = parent_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
+        let walk = self.walk_compute_overlay(parent, &bonds, net_id, dns_params, oldest_blue, parent_blue);
+
+        let mut crossing: Vec<&(TransactionId, ComputeCertificatePayload, u64)> = walk
+            .certificates
+            .iter()
+            .filter(|(_, _, accepted)| parent_daa.saturating_sub(*accepted) <= window && daa_score.saturating_sub(*accepted) > window)
+            .collect();
+        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
+
+        let mut muts = Vec::new();
+        for (cert_tx_id, cert, accepted) in crossing {
+            let mut challenges: Vec<&ComputeChallengePayload> =
+                walk.challenges.iter().filter(|c| c.certificate_tx_id == *cert_tx_id).collect();
+            if challenges.is_empty() {
+                continue;
+            }
+            challenges.sort_by_key(|c| (c.challenger_bond_outpoint.transaction_id, c.challenger_bond_outpoint.index, c.kind as u8));
+
+            let resolution = anchors.get(&cert.epoch).and_then(|anchor| {
+                self.resolve_certificate(cert, *accepted, anchor, &bonds, &walk, dns_params, net_id, &anchors).map(|resolved| {
+                    let attestations = verdicts_for_certificate(
+                        &walk.verdicts,
+                        *cert_tx_id,
+                        resolved.receipt_hash,
+                        cert.receipt.trace_commitment,
+                        *accepted,
+                        &resolved.committee,
+                    );
+                    (resolved.receipt_hash, attestations)
+                })
+            });
+            let (receipt_hash, attestations) = match &resolution {
+                Some((h, a)) => (*h, a.as_slice()),
+                None => (Hash64::default(), [].as_slice()),
+            };
+            for c in challenges {
+                match adjudicate_compute_challenge(
+                    c.kind,
+                    resolution.is_some(),
+                    receipt_hash,
+                    attestations,
+                    dns_params.vlt.min_verifier_confirmations,
+                ) {
+                    // The challenge stands: the bond it named — the executor's, pinned to this
+                    // certificate by the walk — is the one that loses.
+                    ChallengeOutcome::Succeeded => muts.push(BondMutation::Slash(cert.executor_bond_outpoint, daa_score)),
+                    // The challenge is disproved: the challenger staked its own collateral on the
+                    // claim, and that is what §7(c) takes.
+                    ChallengeOutcome::Failed => muts.push(BondMutation::Slash(c.challenger_bond_outpoint, daa_score)),
+                    ChallengeOutcome::Undecided => {}
+                }
+            }
+        }
+        muts
     }
 
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
@@ -2033,14 +2144,24 @@ impl VirtualStateProcessor {
     /// its `acceptance_data_store` entry is committed). Mirrors
     /// [`Self::dns_bond_mutations_for_chain_block`] but sources the accepted
     /// txs from the provided acceptance data instead of the store.
-    fn dns_bond_mutations_from_acceptance(&self, acceptance_data: &AcceptanceData, accepted_daa_score: u64) -> Vec<BondMutation> {
+    fn dns_bond_mutations_from_acceptance(
+        &self,
+        chain_block: BlockHash,
+        acceptance_data: &AcceptanceData,
+        accepted_daa_score: u64,
+    ) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
-        bond_mutations_from_accepted_txs(
+        let mut muts = bond_mutations_from_accepted_txs(
             &self.accepted_txs_from_acceptance_data(acceptance_data),
             accepted_daa_score,
             min_bond,
             unbonding_floor,
-        )
+        );
+        // The adjudication reads only the SELECTED PARENT's chain, never this block's own
+        // acceptance data, so it produces the same mutations here as it does from the store — which
+        // it must, or the in-memory bond view and the persisted one would drift apart.
+        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, accepted_daa_score));
+        muts
     }
 
     /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore
@@ -2639,12 +2760,19 @@ impl VirtualStateProcessor {
         let walk = self.walk_compute_overlay(tip, bonds, net_id, dns_params, oldest_uncached_blue, tip_blue);
 
         let mut contributions: Vec<ComputeCreditContribution> = Vec::new();
+        // Certificates whose challenge was ADJUDICATED as standing. §6 zeroes the credit of a
+        // receipt whose fraud proof 成立した — not of every receipt somebody pointed at.
+        let mut refuted: HashSet<TransactionId> = HashSet::new();
         for (cert_tx_id, cert, block_daa) in walk.certificates.iter() {
             let (cert_tx_id, block_daa) = (*cert_tx_id, *block_daa);
             let Some(anchor) = anchors.get(&cert.epoch) else {
                 continue;
             };
             let Some(resolved) = self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
+                // A certificate that does not resolve credits nothing anyway, but an
+                // `InvalidCertificate` challenge against it is thereby proved — recorded so the
+                // challenger is not slashed for a claim that turned out to be right.
+                refuted.insert(cert_tx_id);
                 continue;
             };
             // Gather THIS certificate's verdicts from the chain and apply Verify(S,R,C). A verdict
@@ -2658,6 +2786,20 @@ impl VirtualStateProcessor {
                 block_daa,
                 &resolved.committee,
             );
+            // Adjudicate this certificate's challenges against its own settled evidence, and let
+            // only a challenge that STANDS deny the credit.
+            for c in walk.challenges.iter().filter(|c| c.certificate_tx_id == cert_tx_id) {
+                if adjudicate_compute_challenge(
+                    c.kind,
+                    true,
+                    resolved.receipt_hash,
+                    &attestations,
+                    dns_params.vlt.min_verifier_confirmations,
+                ) == ChallengeOutcome::Succeeded
+                {
+                    refuted.insert(cert_tx_id);
+                }
+            }
             let verified = verify_compute_certificate(resolved.receipt_hash, &attestations, dns_params.vlt.min_verifier_confirmations);
             let Ok(vlt) = normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) else {
                 continue;
@@ -2677,8 +2819,7 @@ impl VirtualStateProcessor {
         }
         // Drop anything the store already answered for, so a certificate straddling the boundary
         // cannot be counted twice, then merge the freshly-derived tail onto the cached rows.
-        let walked =
-            aggregate_compute_credits(&contributions, &walk.challenged, pov_daa_score, dns_params.vlt.challenge_window_blocks);
+        let walked = aggregate_compute_credits(&contributions, &refuted, pov_daa_score, dns_params.vlt.challenge_window_blocks);
         for (validator_id, per_epoch) in walked {
             let slot = credited.entry(validator_id).or_default();
             for (epoch, x) in per_epoch {
@@ -2710,7 +2851,7 @@ impl VirtualStateProcessor {
         oldest_blue: u64,
         tip_blue: u64,
     ) -> ComputeOverlayWalk {
-        let mut challenged: HashSet<TransactionId> = HashSet::new();
+        let mut challenges: Vec<ComputeChallengePayload> = Vec::new();
         let mut capabilities: Vec<ComputeCapabilityRecord> = Vec::new();
         let mut commitments: HashMap<TransactionId, ComputeCommitmentRecord> = HashMap::new();
         let mut verdicts: Vec<ComputeVerdictRecord> = Vec::new();
@@ -2730,9 +2871,7 @@ impl VirtualStateProcessor {
             };
             let txs = self.accepted_txs_of_chain_block(chain_block);
 
-            for c in compute_challenges_from_accepted_txs(&txs) {
-                challenged.insert(c.certificate_tx_id);
-            }
+            challenges.extend(compute_challenges_from_accepted_txs(&txs));
 
             // Standalone verdicts. Signature-checked here against the verifier's own bond; the
             // committee-membership and ordering rules are applied per certificate below, since
@@ -2862,7 +3001,7 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        ComputeOverlayWalk { challenged, capabilities, commitments, verdicts, certificates: pending }
+        ComputeOverlayWalk { challenges, capabilities, commitments, verdicts, certificates: pending }
     }
 
     /// Resolve one accepted certificate against the chain: check the executor's claim, find its
@@ -3012,7 +3151,7 @@ impl VirtualStateProcessor {
             }
             // A certificate a fraud proof already named is settled; re-auditing it spends a fee on
             // a job that credits nothing either way.
-            if walk.challenged.contains(&cert_tx_id) {
+            if walk.challenges.iter().any(|c| c.certificate_tx_id == cert_tx_id) {
                 continue;
             }
             let Some(anchor) = anchors.get(&cert.epoch) else {

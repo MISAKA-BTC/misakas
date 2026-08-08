@@ -5157,22 +5157,25 @@ pub struct ComputeCreditContribution {
 ///   初めて X_i(E) へ加算される"). Without it an executor could mint credit and spend it as voting
 ///   weight before anyone could re-execute the job and refute it — and, per §8.3, credit created on
 ///   a fork could be used to defend that fork immediately.
-/// * **Challenged certificates earn nothing.** A certificate named by any accepted challenge in
-///   `challenged` is dropped, whatever its verdicts said (§6: "不正証明が成立した Receipt は credit
-///   をゼロにし").
+/// * **Successfully challenged certificates earn nothing.** §6 says "不正証明が**成立した** Receipt
+///   は credit をゼロにし" — the proof must *stand*, not merely be filed. `refuted` therefore holds
+///   the certificates whose challenges [`crate::vlt::adjudicate_compute_challenge`] resolved as
+///   [`crate::vlt::ChallengeOutcome::Succeeded`], not every certificate somebody pointed at.
+///   Dropping on the mere existence of a challenge would let one bonded party zero any executor's
+///   credit for a transaction fee, with no evidence and no recourse.
 ///
 /// `(executor, job_id)` is deduplicated so resubmitting the same job — the cheapest possible
 /// inflation attack, since a replayed certificate carries valid signatures — credits once.
 pub fn aggregate_compute_credits(
     contributions: &[ComputeCreditContribution],
-    challenged: &HashSet<TransactionId>,
+    refuted: &HashSet<TransactionId>,
     pov_daa_score: u64,
     challenge_window_blocks: u64,
 ) -> HashMap<Hash64, BTreeMap<u64, u128>> {
     let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
     let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
     for c in contributions {
-        if challenged.contains(&c.certificate_tx_id) {
+        if refuted.contains(&c.certificate_tx_id) {
             continue;
         }
         if pov_daa_score.saturating_sub(c.accepted_daa_score) < challenge_window_blocks {

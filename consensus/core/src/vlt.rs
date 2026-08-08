@@ -414,9 +414,82 @@ pub enum ComputeFraudKind {
     /// §7(b) 矛盾する verification result — one verifier signed two contradictory
     /// verdicts over the same `job_id`. Slashes the **verifier**.
     ContradictoryVerification = 2,
-    /// §7(c) Challenge に失敗した実行を正しいものとして claim — a party that lost a
-    /// challenge re-asserted the same execution. Slashes the **claimant**.
+    /// §7(c) Challenge に失敗した実行を正しいものとして claim.
+    ///
+    /// **Superseded, retained for borsh stability.** Nobody has to report a failed challenge any
+    /// more: [`adjudicate_compute_challenge`] settles every challenge against its certificate's own
+    /// verdicts when the challenge window closes, and slashes the losing side automatically. A
+    /// challenge of this kind decides nothing and slashes nobody.
     FailedChallenge = 3,
+}
+
+/// How a challenge resolved once its certificate's verdicts settled (§7(b)/(c)).
+///
+/// A challenge is a *claim* about a computation, and nothing in its own payload can settle it —
+/// consensus cannot re-run the job. What can settle it is the evidence the protocol already
+/// gathers: the sortitioned committee's verdicts over that same certificate, each confirmation
+/// carrying a [`ReplayResiduals`] proof that its author actually executed it.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum ChallengeOutcome {
+    /// The committee has not said enough yet — too few verdicts to decide either way. Neither
+    /// party is slashed, and the certificate mints nothing meanwhile.
+    #[default]
+    Undecided,
+    /// The challenge stands: the certificate's own committee refuted it, or it was structurally
+    /// invalid. Slashes the executor (§7(b)) and denies the credit.
+    Succeeded,
+    /// The challenge is disproved: enough sortitioned verifiers independently reproduced the
+    /// executor's projection, each proving it. Slashes the **challenger** (§7(c)) and leaves the
+    /// credit intact.
+    Failed,
+}
+
+/// Decide a challenge from its certificate's settled verdict set (§7(c)).
+///
+/// `resolved` is whether the certificate resolved against the chain at all (executor bond and
+/// signature good, commitment present, beacon drawn); `attestations` are the verdicts consensus
+/// counted for it, already filtered to committee members with valid replay proofs.
+///
+/// The asymmetry is deliberate. Slashing an executor needs a positive refutation by a drawn
+/// verifier; slashing a challenger needs the certificate to have actually cleared verification.
+/// Anything short of either is [`ChallengeOutcome::Undecided`] — a committee that has not
+/// published enough is a reason to wait, never a reason to burn somebody's bond.
+pub fn adjudicate_compute_challenge(
+    kind: ComputeFraudKind,
+    resolved: bool,
+    executor_receipt_hash: Hash64,
+    attestations: &[VerifierAttestation],
+    min_confirmations: u8,
+) -> ChallengeOutcome {
+    match kind {
+        // Objectively decided from the payload alone at acceptance; nothing to re-decide here.
+        ComputeFraudKind::ContradictoryVerification => ChallengeOutcome::Undecided,
+        ComputeFraudKind::InvalidCertificate => {
+            if !resolved {
+                ChallengeOutcome::Succeeded
+            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations) {
+                ChallengeOutcome::Failed
+            } else {
+                ChallengeOutcome::Undecided
+            }
+        }
+        ComputeFraudKind::ForgedReceipt => {
+            if !resolved {
+                // The certificate credits nothing regardless, and its committee was never drawn, so
+                // there is no evidence either way. Not an occasion to slash anyone.
+                ChallengeOutcome::Undecided
+            } else if attestations.iter().any(|a| a.verdict == VerificationVerdict::Refuted) {
+                ChallengeOutcome::Succeeded
+            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations) {
+                ChallengeOutcome::Failed
+            } else {
+                ChallengeOutcome::Undecided
+            }
+        }
+        // Superseded: adjudication is automatic, so a failed challenge no longer has to be reported
+        // by anyone. Retained for borsh stability; it decides nothing.
+        ComputeFraudKind::FailedChallenge => ChallengeOutcome::Undecided,
+    }
 }
 
 /// A fraud proof against an accepted certificate, on
@@ -447,17 +520,14 @@ pub struct ComputeChallengePayload {
     /// The challenger's own bond. A challenger stakes its own collateral, which is
     /// what makes §7(c) — slashing a *failed* challenge — enforceable.
     pub challenger_bond_outpoint: TransactionOutpoint,
-    /// The bond a successful challenge slashes. **Who** that is depends on [`Self::kind`]:
-    /// the executor for [`ComputeFraudKind::ForgedReceipt`] / [`ComputeFraudKind::InvalidCertificate`],
-    /// the contradicting verifier for [`ComputeFraudKind::ContradictoryVerification`], and the
-    /// losing claimant for [`ComputeFraudKind::FailedChallenge`].
+    /// The bond a [`ComputeFraudKind::ContradictoryVerification`] proof slashes — pinned by the
+    /// stateless check to the contradicting verifier's own bond, so a contradiction proof can never
+    /// be aimed at a third party.
     ///
-    /// Carried explicitly rather than derived, so the bond mutation is decidable from the
-    /// challenge transaction alone — the same shape as
-    /// [`crate::dns_finality::SlashingEvidencePayload::bond_outpoint`]. For
-    /// `ContradictoryVerification` the stateless check pins it to the verdicts' own bond; for the
-    /// other kinds, matching it against the named certificate's executor is a stateful
-    /// block-validity rule, since it needs the certificate transaction.
+    /// Read for that kind only. The other kinds are claims about a computation rather than proofs,
+    /// so they slash nobody at acceptance; who loses is decided later by
+    /// [`adjudicate_compute_challenge`], from the certificate's own executor bond or the
+    /// challenger's, never from a field the filer chose.
     pub target_bond_outpoint: TransactionOutpoint,
     /// `R_j` as recomputed by the challenger. For
     /// [`ComputeFraudKind::ForgedReceipt`] this must differ from the certificate's.
@@ -1813,6 +1883,73 @@ mod tests {
     /// or below the verdict transaction's own relay fee would leave the GPU time unpaid, which is
     /// the same as not paying at all — and once a fee exists at all, the thing it must not do is
     /// pay more for one verdict than the other, or the fraud-detection role becomes the costly one.
+    /// §7(c): a challenge is a claim, and the certificate's own committee is what settles it.
+    ///
+    /// The two failure modes this rule has to avoid pull in opposite directions. Slashing on a
+    /// mere accusation lets one bonded party burn any executor's stake for a transaction fee.
+    /// Never slashing the accuser makes a baseless challenge free, and a free challenge denies
+    /// credit. The resolution is that both sides need positive evidence, and silence buys neither.
+    #[test]
+    fn a_challenge_is_settled_by_the_certificates_own_verdicts() {
+        use ComputeFraudKind::{ContradictoryVerification, FailedChallenge, ForgedReceipt, InvalidCertificate};
+        let r = h64(50);
+        let confirm = |id| verdict(id, VerificationVerdict::Confirmed, r);
+        let refute = |id| verdict(id, VerificationVerdict::Refuted, h64(51));
+        let judge = |kind, resolved, atts: &[VerifierAttestation]| adjudicate_compute_challenge(kind, resolved, r, atts, 2);
+
+        // A drawn verifier refuted: the accusation is corroborated by someone who ran the job.
+        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), refute(2)]), ChallengeOutcome::Succeeded);
+        // The certificate cleared verification: the accusation is disproved, and §7(c) takes the
+        // accuser's bond.
+        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Failed);
+        // One confirmation is not the threshold. A committee that has not finished speaking is a
+        // reason to wait, never a reason to slash either side.
+        assert_eq!(judge(ForgedReceipt, true, &[confirm(1)]), ChallengeOutcome::Undecided);
+        assert_eq!(judge(ForgedReceipt, true, &[]), ChallengeOutcome::Undecided);
+        // A certificate that never resolved has no committee and credits nothing; a forgery claim
+        // against it is neither proved nor disproved.
+        assert_eq!(judge(ForgedReceipt, false, &[]), ChallengeOutcome::Undecided);
+
+        // `InvalidCertificate` is about the certificate's structure, so failing to resolve IS the
+        // proof — and resolving plus verifying is the disproof.
+        assert_eq!(judge(InvalidCertificate, false, &[]), ChallengeOutcome::Succeeded);
+        assert_eq!(judge(InvalidCertificate, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Failed);
+        assert_eq!(judge(InvalidCertificate, true, &[confirm(1)]), ChallengeOutcome::Undecided);
+
+        // A contradiction proof was already decided from its own payload at acceptance, and a
+        // failed-challenge report is superseded by this rule existing. Neither is re-decided.
+        for superseded in [ContradictoryVerification, FailedChallenge] {
+            assert_eq!(judge(superseded, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Undecided);
+            assert_eq!(judge(superseded, false, &[]), ChallengeOutcome::Undecided);
+        }
+    }
+
+    /// A challenge that was merely filed must not deny credit — only one that stands. Otherwise
+    /// the cheapest attack on the whole compute overlay is one transaction per certificate.
+    #[test]
+    fn only_an_adjudicated_challenge_zeroes_the_credit() {
+        let cert_tx = TransactionId::from_bytes([7u8; 64]);
+        let contribution = crate::dns_finality::ComputeCreditContribution {
+            validator_id: h64(1),
+            bond_outpoint: outpoint(1),
+            epoch: 4,
+            certificate_tx_id: cert_tx,
+            job_id: h64(2),
+            vlt: 1_000,
+            accepted_daa_score: 100,
+        };
+        let credited = |refuted: std::collections::HashSet<TransactionId>| {
+            crate::dns_finality::aggregate_compute_credits(std::slice::from_ref(&contribution), &refuted, 1_000, 300)
+        };
+        assert_eq!(credited(std::collections::HashSet::new()).get(&h64(1)).and_then(|e| e.get(&4)).copied(), Some(1_000));
+        assert!(credited([cert_tx].into_iter().collect()).is_empty(), "a challenge that STOOD zeroes the credit");
+        // A challenge against some other certificate is irrelevant to this one.
+        assert_eq!(
+            credited([TransactionId::from_bytes([8u8; 64])].into_iter().collect()).get(&h64(1)).and_then(|e| e.get(&4)).copied(),
+            Some(1_000)
+        );
+    }
+
     #[test]
     fn the_audit_fee_is_verdict_blind_and_covers_more_than_the_transaction() {
         // `ATTESTATION_TX_FEE_FLOOR_SOMPI` in kaspa-pq-validator-core; restated rather than
