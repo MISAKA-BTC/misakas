@@ -81,10 +81,23 @@ pub enum CandidateValidation {
     Observed,
     /// A summary arrived: we know what the peer says its chain is worth.
     SummaryReceived { claimed_blue_work: ClaimedBlueWork },
-    /// A pruning proof is being fetched and validated for this candidate.
-    ProofValidating,
-    /// A pruning proof validated in the context of current consensus. `verified_blue_work` is the
-    /// first number about this candidate that this node computed rather than received.
+    /// Nominated for verification; a source peer has been asked for its pruning proof.
+    ///
+    /// `since` bounds the wait. A peer that never answers must not be able to hold up a commit
+    /// forever — that would make "advertise a chain and go quiet" a denial of service.
+    ///
+    /// The claim is carried through because proof validation needs it: a pruning proof is checked
+    /// against the tip work its prover asserted, so the assertion has to survive the transition out
+    /// of `SummaryReceived`. It is still a claim here, and still decides nothing on its own.
+    ProofRequested { since: Instant, claimed_blue_work: ClaimedBlueWork },
+    /// A pruning proof validated in the context of current consensus.
+    ///
+    /// `verified_blue_work` is the **pruning point header's** accumulated work, which the proof's
+    /// header chain and PoW actually establish. Deliberately NOT the claimed tip work: proof
+    /// validation takes the pruning-period work (`relay_blue_work - pp_header.blue_work`) from the
+    /// prover on trust, to be checked only if the proof is accepted and the chain synced. Comparing
+    /// on the tip claim would hand a liar exactly the preemption this type exists to prevent, so
+    /// the figure kept here is the part that is genuinely backed.
     ProofValidated { verified_blue_work: BlueWorkType },
     /// Checked and refused. Kept rather than dropped so the same chain is not re-fetched on the
     /// next advertisement.
@@ -101,6 +114,11 @@ pub enum CandidateRejectReason {
     CheckpointIncompatible,
     /// Its pruning proof failed validation — the claim was not backed.
     InvalidProof,
+    /// A source was asked for a proof and did not deliver one in time. Refused rather than left
+    /// pending, so going quiet cannot stall a commit.
+    ProofTimeout,
+    /// No connected peer could supply the proof (every source disconnected).
+    NoSource,
 }
 
 /// Identity of a chain being offered.
@@ -133,7 +151,7 @@ impl IbdCandidate {
         match self.validation {
             CandidateValidation::ProofValidated { verified_blue_work } => Some((2, verified_blue_work)),
             CandidateValidation::SummaryReceived { claimed_blue_work } => Some((1, claimed_blue_work.for_priority_only())),
-            CandidateValidation::Observed | CandidateValidation::ProofValidating => Some((0, BlueWorkType::from_u64(0))),
+            CandidateValidation::Observed | CandidateValidation::ProofRequested { .. } => Some((0, BlueWorkType::from_u64(0))),
             CandidateValidation::Rejected { .. } => None,
         }
     }
@@ -255,10 +273,49 @@ impl IbdCandidateRegistry {
             .filter(|c| {
                 matches!(
                     c.validation,
-                    CandidateValidation::Observed | CandidateValidation::SummaryReceived { .. } | CandidateValidation::ProofValidating
+                    CandidateValidation::Observed
+                        | CandidateValidation::SummaryReceived { .. }
+                        | CandidateValidation::ProofRequested { .. }
                 )
             })
             .collect()
+    }
+
+    /// The most promising chain nobody has checked yet, or `None` when there is nothing to do.
+    ///
+    /// Ordered by claimed work — the one decision a claim is allowed to make. A peer shouting the
+    /// maximum gets checked first and fails there; it does not get a chain.
+    pub fn strongest_unverified(&self) -> Option<&IbdCandidate> {
+        self.candidates.values().filter(|c| matches!(c.validation, CandidateValidation::SummaryReceived { .. })).max_by_key(
+            |c| match c.validation {
+                CandidateValidation::SummaryReceived { claimed_blue_work } => claimed_blue_work.for_priority_only(),
+                _ => BlueWorkType::from_u64(0),
+            },
+        )
+    }
+
+    /// Refuse candidates whose source never delivered a proof, so they stop blocking a commit.
+    ///
+    /// Returns what was timed out, for logging and peer penalties. Being unable to back a claim is
+    /// the peer's failure, not a reason for this node to wait indefinitely.
+    pub fn expire_proof_requests(&mut self, now: Instant, deadline: Duration) -> Vec<CandidateId> {
+        let stale: Vec<_> = self
+            .candidates
+            .values()
+            .filter(
+                |c| matches!(c.validation, CandidateValidation::ProofRequested { since, .. } if now.duration_since(since) >= deadline),
+            )
+            .map(|c| c.id)
+            .collect();
+        for id in &stale {
+            self.set_validation(*id, CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout });
+        }
+        stale
+    }
+
+    /// Peers currently offering this candidate, for asking one of them for a proof.
+    pub fn sources_of(&self, id: &CandidateId) -> Vec<PeerKey> {
+        self.candidates.get(id).map(|c| c.sources.clone()).unwrap_or_default()
     }
 
     /// Drop a peer as a source. The candidate itself survives while another peer offers it — the
@@ -308,6 +365,7 @@ impl IbdCandidateRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flowcontext::ibd_candidates::{CommitInputs, CommitVerdict, decide_commit};
     use kaspa_consensus_core::{blockhash::ORIGIN, header::Header};
     use kaspa_utils::networking::{IpAddress, PeerId};
     use std::net::IpAddr;
@@ -474,6 +532,82 @@ mod tests {
         assert_eq!(r.len(), 1);
         r.expire(now + CANDIDATE_TTL);
         assert!(r.is_empty(), "an offer nobody has repeated describes a state that may not exist");
+    }
+
+    #[test]
+    fn the_loudest_unverified_claim_is_what_gets_checked() {
+        // Claims order the queue and nothing else. A peer shouting u64::MAX buys the privilege of
+        // being asked for a proof first, which is exactly where the shouting stops working.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        r.observe_summary(peer(1), &header(1, 10), pp(1), now);
+        let loud = r.observe_summary(peer(2), &header(2, u64::MAX), pp(2), now);
+        r.observe_summary(peer(3), &header(3, 500), pp(3), now);
+
+        assert_eq!(r.strongest_unverified().unwrap().id, loud);
+    }
+
+    #[test]
+    fn candidates_already_being_verified_are_not_nominated_again() {
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 10), pp(1), now);
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(10)) },
+        );
+
+        assert!(r.strongest_unverified().is_none(), "one proof fetch in flight per candidate, not one per nomination");
+    }
+
+    #[test]
+    fn a_source_that_never_delivers_a_proof_stops_blocking() {
+        // "Advertise a chain and go quiet" must not be a way to stall every node's commit. Fail
+        // closed needs a deadline or it is just a denial of service with better intentions.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 10), pp(1), now);
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(10)) },
+        );
+        assert_eq!(r.unresolved().len(), 1);
+
+        let deadline = Duration::from_secs(600);
+        assert!(r.expire_proof_requests(now + deadline - Duration::from_secs(1), deadline).is_empty(), "not yet");
+        assert_eq!(r.expire_proof_requests(now + deadline, deadline), vec![id]);
+
+        assert!(r.unresolved().is_empty(), "a refused candidate no longer holds up a commit");
+        assert!(matches!(
+            r.get(&id).unwrap().validation,
+            CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout }
+        ));
+    }
+
+    #[test]
+    fn a_verified_challenger_ends_the_standoff() {
+        // The whole point of verification: the barrier stops being able only to refuse.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        assert_eq!(decide_commit(inputs_competing(100, &r, 1)), CommitVerdict::RefuseUnresolved { count: 1 });
+
+        r.set_validation(id, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(900) });
+        assert_eq!(
+            decide_commit(inputs_competing(100, &r, 0)),
+            CommitVerdict::RefuseVerifiedSuperior { candidate: id, verified_blue_work: BlueWorkType::from_u64(900) },
+            "now it refuses for a reason it can defend, not for lack of information"
+        );
+    }
+
+    fn inputs_competing(staged: u64, registry: &IbdCandidateRegistry, competing: usize) -> CommitInputs<'_> {
+        CommitInputs {
+            staged_blue_work: BlueWorkType::from_u64(staged),
+            descends_from_checkpoint: None,
+            checkpoint_params_match: None,
+            unresolved_competing: competing,
+            registry,
+        }
     }
 
     #[test]

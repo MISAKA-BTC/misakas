@@ -1,14 +1,16 @@
 use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
-    flowcontext::ibd_candidates::{CommitInputs, CommitVerdict, decide_commit},
+    flowcontext::ibd_candidates::{
+        CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
+    },
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
 use futures::future::{Either, join_all, select, try_join_all};
 use itertools::Itertools;
 use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
-    BlockHashSet,
+    BlockHashSet, BlueWorkType,
     api::BlockValidationFuture,
     block::Block,
     header::Header,
@@ -38,7 +40,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::time::sleep;
+use tokio::{sync::broadcast, time::sleep};
 
 use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
@@ -55,6 +57,13 @@ type BlockBody = Vec<Transaction>;
 /// orphan, and orphan resolution starts a fresh IBD.
 const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
 
+/// How long a nominated challenger has to produce its pruning proof.
+///
+/// Generous, because generating one genuinely takes minutes on a large DAG — but finite, because
+/// "advertise a chain and go quiet" must not be a way to stall every node's commit. A source that
+/// misses this has its candidate refused, not left pending.
+const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Flow for managing IBD - Initial Block Download
 pub struct IbdFlow {
     pub(super) ctx: FlowContext,
@@ -65,6 +74,11 @@ pub struct IbdFlow {
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
+
+    /// Nominations of chains worth verifying. An IBD flow whose peer is not the syncer is otherwise
+    /// idle, and it is the only flow that can fetch that peer's pruning proof — `PruningPointProof`
+    /// is routed here. So this is where a challenger gets checked.
+    challenger_receiver: broadcast::Receiver<CandidateId>,
 }
 
 #[async_trait::async_trait]
@@ -100,11 +114,34 @@ impl IbdFlow {
         body_only_ibd_permitted: bool,
         header_format: HeaderFormat,
     ) -> Self {
-        Self { ctx, router, incoming_route, relay_receiver, body_only_ibd_permitted, header_format }
+        let challenger_receiver = ctx.subscribe_challenger_nominations();
+        Self { ctx, router, incoming_route, relay_receiver, body_only_ibd_permitted, header_format, challenger_receiver }
     }
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
-        while let Ok(relay_block) = self.relay_receiver.recv().await {
+        loop {
+            // Two things can wake this flow. Its peer offering a chain to sync from, or a
+            // nomination to go check what some peer is claiming. Only one IBD runs at a time, but
+            // every other peer's flow is idle meanwhile — and idle is what let the node adopt a
+            // branch without ever asking anyone else for evidence.
+            let relay_block = tokio::select! {
+                block = self.relay_receiver.recv() => match block {
+                    Ok(block) => block,
+                    Err(_) => return Ok(()),
+                },
+                nomination = self.challenger_receiver.recv() => {
+                    match nomination {
+                        Ok(id) => {
+                            self.verify_challenger(id).await;
+                            continue;
+                        }
+                        // Lagged: nominations are hints, and a missed one is re-sent on the next
+                        // summary. Closed: nobody nominates any more, so just serve relay blocks.
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                }
+            };
             if let Some(_guard) =
                 self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score, relay_block.header.blue_work)
             {
@@ -134,8 +171,82 @@ impl IbdFlow {
                 }
             }
         }
+    }
 
-        Ok(())
+    /// Ask this peer to back the chain it advertised, and record what comes of it.
+    ///
+    /// This is the step that turns "someone claimed a heavier chain" into evidence the commit
+    /// barrier can act on. Without it the barrier can only ever refuse, which is safe but means an
+    /// operator has to adjudicate every partition by hand — testnet-22's problem, automated only up
+    /// to the point of stopping.
+    ///
+    /// The work recorded is the proof's **pruning point** work, not the tip the peer claims. Proof
+    /// validation takes the pruning-period work from the prover on trust (see `compare_proofs_inner`:
+    /// "this work will eventually be verified if the proof is accepted"), so treating the tip claim
+    /// as verified would let a peer preempt an honest sync with a number it made up — the very
+    /// thing this whole path exists to prevent. What the proof genuinely establishes is the header
+    /// chain down to the pruning point, so that is what gets compared.
+    async fn verify_challenger(&mut self, id: CandidateId) {
+        // Only a peer that actually offers this chain can be asked for its proof.
+        if !self.ctx.ibd_candidates().read().sources_of(&id).contains(&self.router.key()) {
+            return;
+        }
+        // The claim the peer must now back. Read here rather than inside the fetch so a candidate
+        // already settled by another source's flow is skipped instead of re-verified.
+        let claimed_blue_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
+            Some(CandidateValidation::ProofRequested { claimed_blue_work, .. })
+            | Some(CandidateValidation::SummaryReceived { claimed_blue_work }) => claimed_blue_work,
+            _ => return,
+        };
+
+        info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
+        match self.fetch_and_validate_challenger_proof(id, claimed_blue_work).await {
+            Ok(verified_blue_work) => {
+                info!(
+                    "Candidate {} from {} is backed by a valid pruning proof; verified blue work at its pruning point is {}",
+                    id.virtual_selected_parent, self.router, verified_blue_work
+                );
+                self.ctx.set_ibd_candidate_validation(id, CandidateValidation::ProofValidated { verified_blue_work });
+            }
+            Err(e) => {
+                // Failing to back a claim is the peer's failure. Recording the refusal is what stops
+                // an unbackable claim from holding up a commit indefinitely.
+                warn!(
+                    "Candidate {} from {} could not be backed by a valid pruning proof: {}",
+                    id.virtual_selected_parent, self.router, e
+                );
+                self.ctx
+                    .set_ibd_candidate_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+            }
+        }
+    }
+
+    async fn fetch_and_validate_challenger_proof(
+        &mut self,
+        id: CandidateId,
+        claimed_blue_work: ClaimedBlueWork,
+    ) -> Result<BlueWorkType, ProtocolError> {
+        self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, CHALLENGER_PROOF_TIMEOUT)?;
+        let proof: PruningPointProof = Versioned(self.header_format, msg).try_into()?;
+
+        // Validated against CURRENT consensus, exactly as a real IBD would: same rules, same
+        // finality checks, no staging consensus spun up for a chain that may be refused anyway.
+        //
+        // The peer's own claim is what the proof is checked against — that is the point. It has to
+        // produce a proof consistent with the number it asserted, so asserting a large one makes
+        // the proof harder to supply, not easier.
+        let proof_metadata = PruningProofMetadata::new(claimed_blue_work.for_priority_only());
+        let consensus = self.ctx.consensus().session().await;
+        let proof =
+            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)).await?;
+        drop(consensus);
+
+        let pruning_point_header = proof[0].last().ok_or(ProtocolError::Other("the challenger's proof has no level-0 headers"))?;
+        if pruning_point_header.hash != id.pruning_point {
+            return Err(ProtocolError::Other("the challenger's proof is anchored at a different pruning point than it advertised"));
+        }
+        Ok(pruning_point_header.blue_work)
     }
 
     /// Say what was on offer that this node never got to the bottom of.
@@ -208,6 +319,19 @@ impl IbdFlow {
         // tolerance `determine_ibd_type` already applies — is the same history whatever its tip. A
         // candidate rooted somewhere staging has never heard of is a genuinely different history,
         // and that is what must not be committed past.
+        // Refuse candidates whose source never delivered a proof, before counting what is still
+        // unresolved. Otherwise "advertise a chain and go quiet" would hold up every commit — the
+        // denial of service that fail-closed invites if it has no deadline.
+        let timed_out = self.ctx.ibd_candidates().write().expire_proof_requests(Instant::now(), CHALLENGER_PROOF_TIMEOUT);
+        for id in &timed_out {
+            warn!(
+                "Chain candidate {} was nominated for verification but no source produced a pruning proof within {}s; \
+                 refusing it rather than letting it hold up the commit.",
+                id.virtual_selected_parent,
+                CHALLENGER_PROOF_TIMEOUT.as_secs()
+            );
+        }
+
         let staged_pruning_point = staging.async_pruning_point().await;
         let recent_pruning_points = staging.async_get_n_last_pruning_points(4).await;
         let unresolved_ids: Vec<_> = self.ctx.ibd_candidates().read().unresolved().iter().map(|c| c.id).collect();

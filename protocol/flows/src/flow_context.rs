@@ -63,7 +63,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{
-    RwLock as AsyncRwLock,
+    RwLock as AsyncRwLock, broadcast,
     mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 };
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
@@ -99,6 +99,12 @@ const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
 
 /// Orphans are kept as full blocks so we cannot hold too much of them in memory
 const MAX_ORPHANS_UPPER_BOUND: usize = 1024;
+
+/// How many challenger nominations may queue before the oldest is dropped.
+///
+/// Small on purpose: a nomination is a hint about what is worth checking right now, and a stale one
+/// is worse than none. A flow that misses one will be nominated again on the next summary.
+const CHALLENGER_NOMINATION_BACKLOG: usize = 16;
 
 /// The min time to wait before allowing another parallel request
 const REQUEST_SCOPE_WAIT_TIME: Duration = Duration::from_secs(1);
@@ -285,6 +291,10 @@ pub struct FlowContextInner {
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     /// Chains peers advertised while an IBD held the latch, keyed by chain rather than by peer.
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
+    /// Nominates a candidate for proof verification. Broadcast because only the IBD flow of a peer
+    /// that actually offers the chain can fetch its proof — `PruningPointProof` is routed to that
+    /// flow — and every idle IBD flow listens to see whether the nomination is theirs to serve.
+    challenger_tx: broadcast::Sender<CandidateId>,
     /// Set once `staging.commit()` has swapped in a new active consensus during the running IBD.
     /// A failure after this point is not a no-op — see `finish_ibd_after_failure`.
     active_consensus_replaced: Arc<AtomicBool>,
@@ -418,6 +428,7 @@ impl FlowContext {
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
                 ibd_candidates: Default::default(),
+                challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 active_consensus_replaced: Default::default(),
                 hub,
                 address_manager,
@@ -517,6 +528,32 @@ impl FlowContext {
 
     pub fn set_ibd_candidate_validation(&self, id: CandidateId, validation: CandidateValidation) {
         self.ibd_candidates.write().set_validation(id, validation);
+    }
+
+    /// Ask whoever can to verify the strongest chain nobody has checked yet.
+    ///
+    /// A no-op when there is nothing worth checking. Verified candidates are never re-nominated,
+    /// and a candidate already being verified is not nominated again, so this is safe to call on
+    /// every summary that arrives.
+    pub fn nominate_challenger(&self) {
+        let nominee = {
+            let registry = self.ibd_candidates.read();
+            registry.strongest_unverified().and_then(|c| match c.validation {
+                CandidateValidation::SummaryReceived { claimed_blue_work } => Some((c.id, claimed_blue_work)),
+                _ => None,
+            })
+        };
+        if let Some((id, claimed_blue_work)) = nominee {
+            self.ibd_candidates
+                .write()
+                .set_validation(id, CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work });
+            // Failure means no IBD flow is listening, which simply means nobody can serve it.
+            let _ = self.challenger_tx.send(id);
+        }
+    }
+
+    pub fn subscribe_challenger_nominations(&self) -> broadcast::Receiver<CandidateId> {
+        self.challenger_tx.subscribe()
     }
 
     /// The candidate registry, for the commit barrier and for reporting.

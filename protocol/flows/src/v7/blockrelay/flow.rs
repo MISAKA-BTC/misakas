@@ -303,6 +303,9 @@ impl HandleRelayInvsFlow {
             "Candidate {} from {}: pruning point {}, claimed blue work {}",
             id.virtual_selected_parent, self.router, id.pruning_point, summary.virtual_selected_parent.blue_work
         );
+        // Learning about a chain is only useful if somebody then checks it. Ask for the strongest
+        // unverified candidate to be verified — which may or may not be the one just recorded.
+        self.ctx.nominate_challenger();
         Ok(())
     }
 
