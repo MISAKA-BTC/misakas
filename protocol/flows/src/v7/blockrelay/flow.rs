@@ -133,12 +133,31 @@ impl HandleRelayInvsFlow {
                 // happened to relay first (incident 2026-08-08: 86 minutes on a lower-blue-work
                 // branch with a heavier peer connected throughout, zero retry attempts).
                 //
-                // Record the offer instead. One entry per peer, no fetch, no validation — just
-                // "this peer had something we could not look at", so the IBD path can come back and
-                // ASK. It must not be read as a claim about which chain is better; that is decided
-                // by the pruning-proof comparison, on data this node verifies itself.
+                // Record the offer instead, so the IBD path can come back and ASK.
                 self.ctx.observe_ibd_candidate_hint(self.router.key(), inv.hash);
-                debug!("Got relay block {} while in IBD and the node is out of sync, recorded as an IBD candidate hint", inv.hash);
+
+                // A bare hash says a peer had something; it does not say whether that something was
+                // heavier than what we are syncing. Ranking candidates needs a header, and a header
+                // needs the block, so spend a strictly rationed fetch to get one — once per peer per
+                // IBD, under a global ceiling, riding the existing request dedup so peers offering
+                // the same hash cost one block between them.
+                //
+                // The block is read and dropped. It is NOT handed to consensus, so none of the
+                // validation cost this guard exists to avoid is incurred, and the figures it yields
+                // stay claims (see `IbdCandidateHeader`) — bounded not here but at the pruning-proof
+                // check that any winning claim must survive.
+                if self.ctx.should_probe_ibd_candidate(self.router.key())
+                    && let Some((block, request_scope)) = self.request_block(inv.hash, self.msg_route.id(), self.header_format).await?
+                {
+                    request_scope.report_obtained();
+                    self.ctx.observe_ibd_candidate_header(self.router.key(), &block.header);
+                    debug!(
+                        "Probed IBD candidate {} from {}: claims blue work {}, blue score {}",
+                        inv.hash, self.router, block.header.blue_work, block.header.blue_score
+                    );
+                } else {
+                    debug!("Got relay block {} while in IBD and the node is out of sync, recorded as an IBD candidate hint", inv.hash);
+                }
                 continue;
             }
 

@@ -10,12 +10,13 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use kaspa_addressmanager::AddressManager;
 use kaspa_connectionmanager::ConnectionManager;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::api::{BlockValidationFuture, BlockValidationFutures};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::evm::DepositClaim;
+use kaspa_consensus_core::header::Header;
+use kaspa_consensus_core::{BlockHash, BlueWorkType}; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
     subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
     tx::{Transaction, TransactionId, TransactionOutpoint},
@@ -255,6 +256,80 @@ mod tests {
         assert!(!rpc_transaction_should_throttle_broadcast(Priority::High));
         assert!(rpc_transaction_should_throttle_broadcast(Priority::Low));
     }
+
+    fn peer(n: u8) -> PeerKey {
+        PeerKey::new(PeerId::new(Uuid::from_u128(n as u128)), std::net::IpAddr::from([10, 0, 0, n]).into())
+    }
+
+    fn claimed(blue_work: u64) -> IbdCandidateHeader {
+        IbdCandidateHeader {
+            hash: BlockHash::from_u64_word(blue_work),
+            blue_work: BlueWorkType::from_u64(blue_work),
+            blue_score: blue_work,
+            daa_score: blue_work,
+        }
+    }
+
+    #[test]
+    fn a_chatty_peer_is_counted_not_refetched() {
+        // The relay guard runs per inv. A peer that re-advertises must not turn each offer into
+        // another block fetch — that amplification is exactly what the guard exists to prevent.
+        let mut registry = IbdCandidateRegistry::default();
+        let now = Instant::now();
+
+        registry.observe(peer(1), BlockHash::from_u64_word(7), now);
+        assert!(registry.claim_probe(peer(1)), "first offer from a peer is worth weighing");
+        registry.attach_header(peer(1), claimed(100));
+
+        for _ in 0..50 {
+            registry.observe(peer(1), BlockHash::from_u64_word(8), now);
+            assert!(!registry.claim_probe(peer(1)), "already weighed this peer during this IBD");
+        }
+        assert_eq!(registry.probes_spent, 1);
+        assert_eq!(registry.hints[&peer(1)].passed_over, 51, "still counted, just not refetched");
+    }
+
+    #[test]
+    fn probes_are_capped_across_all_peers() {
+        // Reconnecting yields a fresh key, which is the one way the per-peer rule can be replayed.
+        // The global ceiling is what holds in that case.
+        let mut registry = IbdCandidateRegistry::default();
+        let now = Instant::now();
+
+        for n in 0..=u8::MAX {
+            registry.observe(peer(n), BlockHash::from_u64_word(n as u64), now);
+            if registry.claim_probe(peer(n)) {
+                registry.attach_header(peer(n), claimed(n as u64));
+            }
+        }
+        assert_eq!(registry.probes_spent, MAX_IBD_CANDIDATE_PROBES);
+        assert_eq!(registry.hints.values().filter(|h| h.header.is_some()).count(), MAX_IBD_CANDIDATE_PROBES);
+    }
+
+    #[test]
+    fn budget_is_spent_per_header_obtained_not_per_attempt() {
+        let mut registry = IbdCandidateRegistry::default();
+        let now = Instant::now();
+
+        // An offer whose fetch was deduped against another peer's in-flight request yields no
+        // header, so the peer stays eligible — otherwise a peer could be silently skipped forever.
+        registry.observe(peer(1), BlockHash::from_u64_word(1), now);
+        assert!(registry.claim_probe(peer(1)));
+        assert!(registry.claim_probe(peer(1)), "no header attached yet, so still worth weighing");
+        registry.attach_header(peer(1), claimed(1));
+        assert!(!registry.claim_probe(peer(1)));
+    }
+
+    #[test]
+    fn taking_hints_clears_them_for_the_next_ibd() {
+        let mut registry = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        registry.observe(peer(1), BlockHash::from_u64_word(1), now);
+        registry.observe(peer(2), BlockHash::from_u64_word(2), now);
+
+        assert_eq!(registry.take().len(), 2);
+        assert!(registry.take().is_empty());
+    }
 }
 
 pub struct FlowContextInner {
@@ -278,8 +353,7 @@ pub struct FlowContextInner {
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
     /// Chains advertised by peers that were passed over because another IBD held the latch.
-    /// One entry per peer (the newest hash wins), so a chatty peer cannot flood it.
-    ibd_candidate_hints: Arc<RwLock<HashMap<PeerKey, IbdCandidateHint>>>,
+    ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -315,6 +389,13 @@ impl Drop for IbdRunningGuard {
     }
 }
 
+/// Ceiling on competing offers fetched during a single IBD, across all peers.
+///
+/// Sized against the default peer target rather than against nothing: it lets every peer of a
+/// normally-connected node be weighed once, and stops there. Reaching it means peers are churning
+/// through reconnects faster than an IBD runs, which is not a case worth spending fetches on.
+const MAX_IBD_CANDIDATE_PROBES: usize = 64;
+
 /// A chain a peer advertised while this node could not even look at it.
 ///
 /// While `is_ibd_running` is set and the node is out of sync, `blockrelay` returns early before
@@ -326,16 +407,18 @@ impl Drop for IbdRunningGuard {
 /// connected the whole time — zero retries, because every one of that peer's offers had been
 /// dropped at the relay guard.
 ///
-/// **This is a hint, never evidence.** All that is known here is a hash an unauthenticated peer
-/// mentioned: the block was never fetched, so there is no header, no blue work, no DAA score, and
-/// nothing verified. It may only be used to decide *whom to ask*. Which chain is canonical stays
-/// where it can be proven — the pruning-proof comparison.
+/// **This is a hint, never evidence.** It may only be used to decide *whom to ask*, and — once
+/// [`IbdCandidateHeader`] is attached — which peer to ask *first*. Which chain is canonical stays
+/// where it can be proven: the pruning-proof comparison.
 #[derive(Clone, Copy, Debug)]
 pub struct IbdCandidateHint {
     /// The peer that advertised it, i.e. who to ask.
     pub peer: PeerKey,
     /// The most recent hash this peer advertised while we were latched out.
     pub relay_hash: BlockHash,
+    /// What this peer says its chain is worth, once probed. `None` while the offer is still a
+    /// bare hash — see [`FlowContext::should_probe_ibd_candidate`] for why probing is rationed.
+    pub header: Option<IbdCandidateHeader>,
     /// When this peer first offered something we could not consider.
     pub first_seen: Instant,
     /// When it last did.
@@ -344,12 +427,89 @@ pub struct IbdCandidateHint {
     pub passed_over: u32,
 }
 
+/// What a probed candidate claims about itself.
+///
+/// **Every field here is the peer's word.** The block was fetched but not validated: it was never
+/// given to consensus, its PoW was not checked, and `blue_work` is a cumulative figure that no
+/// single header can attest to anyway — a peer that mines one valid block can write any number in
+/// it. Nothing bounds these values at the moment they are recorded.
+///
+/// What bounds them is what happens next. A peer whose claim wins the latch must then produce a
+/// pruning proof consistent with that exact `blue_work` (`PruningProofMetadata::new`), validated
+/// against real headers in the context of current consensus. A lie fails there, and failing an IBD
+/// returns `Err` from the flow, which drops the peer. So an inflated claim buys one wasted IBD
+/// attempt and costs a connection — it cannot buy a chain.
+///
+/// The honest reading: this is good enough to rank *whom to try first*, which is a strict
+/// improvement over ranking by who spoke first. It is not evidence of anything and must never
+/// reach a decision that outlives the IBD attempt it ordered.
+#[derive(Clone, Copy, Debug)]
+pub struct IbdCandidateHeader {
+    /// Hash of the block that was fetched to obtain the figures below.
+    pub hash: BlockHash,
+    /// Claimed accumulated blue work. Unverifiable here; see the type docs.
+    pub blue_work: BlueWorkType,
+    /// Claimed blue score.
+    pub blue_score: u64,
+    /// Claimed DAA score.
+    pub daa_score: u64,
+}
+
+/// Offers seen while the IBD latch was held by someone else, plus the probe budget for weighing
+/// them. Both live here so that "have I already probed this peer?" and "how many probes are left?"
+/// are answered under one lock and cannot drift apart.
+#[derive(Debug, Default)]
+struct IbdCandidateRegistry {
+    /// One entry per peer (the newest hash wins), so a chatty peer cannot flood it.
+    hints: HashMap<PeerKey, IbdCandidateHint>,
+    /// Probes spent during the current IBD, zeroed when the latch is taken.
+    probes_spent: usize,
+}
+
+impl IbdCandidateRegistry {
+    fn observe(&mut self, peer: PeerKey, relay_hash: BlockHash, now: Instant) {
+        self.hints
+            .entry(peer)
+            .and_modify(|h| {
+                h.relay_hash = relay_hash;
+                h.last_seen = now;
+                h.passed_over = h.passed_over.saturating_add(1);
+            })
+            .or_insert(IbdCandidateHint { peer, relay_hash, header: None, first_seen: now, last_seen: now, passed_over: 1 });
+    }
+
+    /// Claim one unit of probe budget for `peer`. See [`FlowContext::should_probe_ibd_candidate`].
+    fn claim_probe(&mut self, peer: PeerKey) -> bool {
+        if self.hints.get(&peer).is_some_and(|h| h.header.is_some()) {
+            return false;
+        }
+        if self.probes_spent >= MAX_IBD_CANDIDATE_PROBES {
+            return false;
+        }
+        self.probes_spent += 1;
+        true
+    }
+
+    fn attach_header(&mut self, peer: PeerKey, header: IbdCandidateHeader) {
+        if let Some(hint) = self.hints.get_mut(&peer) {
+            hint.header = Some(header);
+        }
+    }
+
+    fn take(&mut self) -> Vec<IbdCandidateHint> {
+        self.hints.drain().map(|(_, h)| h).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct IbdMetadata {
     /// The peer from which current IBD is syncing from
     peer: PeerKey,
     /// The DAA score of the relay block which triggered the current IBD
     daa_score: u64,
+    /// The blue work the relay block which triggered the current IBD claimed. Recorded so that
+    /// completion can say what was adopted, next to what was passed over.
+    blue_work: BlueWorkType,
 }
 
 pub struct RequestScopeMetadata {
@@ -429,7 +589,7 @@ impl FlowContext {
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
-                ibd_candidate_hints: Default::default(),
+                ibd_candidates: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -488,13 +648,53 @@ impl FlowContext {
         &self.mining_manager
     }
 
-    pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64) -> Option<IbdRunningGuard> {
+    pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64, relay_blue_work: BlueWorkType) -> Option<IbdRunningGuard> {
         if self.is_ibd_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score });
+            self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score, blue_work: relay_blue_work });
+            // Fresh budget for the IBD that is starting now — see `should_probe_ibd_candidate`.
+            self.ibd_candidates.write().probes_spent = 0;
             Some(IbdRunningGuard { indicator: self.is_ibd_running.clone() })
         } else {
             None
         }
+    }
+
+    /// Claim budget to fetch one competing offer from `peer` so its chain can be weighed instead of
+    /// merely counted. Returns `false` when the offer should stay a bare hash.
+    ///
+    /// The relay guard returns early during IBD for a good reason: fetching and validating every
+    /// relayed block mid-IBD is a DoS. Probing spends part of that budget back, so it is rationed
+    /// to the smallest amount that still answers "is anyone offering something heavier?":
+    ///
+    /// - **once per peer per IBD** — a peer that re-advertises gets counted, not re-fetched, so a
+    ///   chatty or malicious peer cannot amplify;
+    /// - **[`MAX_IBD_CANDIDATE_PROBES`] in total per IBD** — a hard ceiling that holds even if peers
+    ///   churn through reconnects, which is the one way the per-peer rule can be replayed.
+    ///
+    /// The fetch itself rides the existing request-scope dedup, so N peers advertising the same
+    /// hash still cost one block. Total worst case per IBD is therefore a few dozen blocks fetched
+    /// and dropped, against an IBD that transfers a pruning proof and a UTXO set.
+    pub fn should_probe_ibd_candidate(&self, peer: PeerKey) -> bool {
+        self.ibd_candidates.write().claim_probe(peer)
+    }
+
+    /// Attach what a probed peer claims its chain is worth. See [`IbdCandidateHeader`] — these are
+    /// claims, and recording them here is not believing them.
+    pub fn observe_ibd_candidate_header(&self, peer: PeerKey, header: &Header) {
+        self.ibd_candidates.write().attach_header(
+            peer,
+            IbdCandidateHeader {
+                hash: header.hash,
+                blue_work: header.blue_work,
+                blue_score: header.blue_score,
+                daa_score: header.daa_score,
+            },
+        );
+    }
+
+    /// What the currently running IBD's syncer claimed, for comparison against passed-over offers.
+    pub fn ibd_relay_blue_work(&self) -> Option<BlueWorkType> {
+        self.ibd_metadata.read().map(|md| md.blue_work)
     }
 
     /// Remember that `peer` advertised `relay_hash` at a moment when this node could not act on
@@ -504,28 +704,19 @@ impl FlowContext {
     /// validation. It records only that a peer had something to offer — see [`IbdCandidateHint`]
     /// for why nothing here may influence which chain is chosen.
     pub fn observe_ibd_candidate_hint(&self, peer: PeerKey, relay_hash: BlockHash) {
-        let now = Instant::now();
-        let mut hints = self.ibd_candidate_hints.write();
-        hints
-            .entry(peer)
-            .and_modify(|h| {
-                h.relay_hash = relay_hash;
-                h.last_seen = now;
-                h.passed_over = h.passed_over.saturating_add(1);
-            })
-            .or_insert(IbdCandidateHint { peer, relay_hash, first_seen: now, last_seen: now, passed_over: 1 });
+        self.ibd_candidates.write().observe(peer, relay_hash, Instant::now());
     }
 
     /// Take every hint gathered while the latch was held, clearing the registry.
     ///
     /// Callers must treat the result as a list of peers worth asking, in no authoritative order.
     pub fn take_ibd_candidate_hints(&self) -> Vec<IbdCandidateHint> {
-        self.ibd_candidate_hints.write().drain().map(|(_, h)| h).collect()
+        self.ibd_candidates.write().take()
     }
 
     /// Forget a disconnected peer's hint so the registry cannot grow without bound.
     pub fn forget_ibd_candidate_hint(&self, peer: &PeerKey) {
-        self.ibd_candidate_hints.write().remove(peer);
+        self.ibd_candidates.write().hints.remove(peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {

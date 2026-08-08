@@ -1,5 +1,5 @@
 use crate::{
-    flow_context::FlowContext,
+    flow_context::{FlowContext, IbdCandidateHint},
     flow_trait::Flow,
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
@@ -92,7 +92,9 @@ impl IbdFlow {
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
         while let Ok(relay_block) = self.relay_receiver.recv().await {
-            if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score) {
+            if let Some(_guard) =
+                self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score, relay_block.header.blue_work)
+            {
                 info!("IBD started with peer {}", self.router);
 
                 match self.ibd(relay_block).await {
@@ -117,29 +119,52 @@ impl IbdFlow {
                             );
                         }
 
-                        // Say out loud which peers were passed over while this IBD held the latch.
+                        // Say out loud which peers were passed over while this IBD held the latch,
+                        // and how their offers measured up against the one that was taken.
                         //
-                        // Their chains were never fetched, let alone compared: the relay guard
-                        // returns before requesting the block. So this node has just adopted one
-                        // peer's chain without ever having looked at the alternatives, and until
-                        // the pre-commit candidate comparison lands that is a decision made by
-                        // arrival order. The incident that motivated this ran for 86 minutes with
-                        // a heavier peer connected and produced no log line at all; an operator
-                        // had no way to know a choice had even been made.
+                        // The latch is still awarded by arrival order, so this is a report on a
+                        // decision already made rather than an input to it. It exists because the
+                        // incident that motivated this work ran for 86 minutes on a lower-blue-work
+                        // branch with a heavier peer connected throughout and produced no log line
+                        // at all: an operator had no way to know a choice had even been made, let
+                        // alone that it had gone the wrong way.
                         let passed_over = self.ctx.take_ibd_candidate_hints();
                         if !passed_over.is_empty() {
-                            warn!(
-                                "IBD with {} finished, but {} other peer(s) advertised chains that were never fetched or compared: {}. \
-                                 This node's chain was chosen by which peer relayed first, not by comparing candidates — verify the \
-                                 resulting chain against another node before trusting it.",
-                                self.router,
-                                passed_over.len(),
-                                passed_over
-                                    .iter()
-                                    .map(|h| format!("{} (offered {}x, latest {})", h.peer, h.passed_over, h.relay_hash))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            );
+                            let adopted = self.ctx.ibd_relay_blue_work();
+                            let describe = |h: &IbdCandidateHint| match h.header {
+                                Some(c) => format!("{} (offered {}x, blue work {}, {})", h.peer, h.passed_over, c.blue_work, c.hash),
+                                None => format!("{} (offered {}x, never probed, latest {})", h.peer, h.passed_over, h.relay_hash),
+                            };
+
+                            // The signature of the incident: something heavier was on offer the
+                            // whole time. Only claims — these peers were never asked for a proof —
+                            // but a claim that beats what we took is exactly what warrants a look.
+                            let heavier: Vec<_> = passed_over
+                                .iter()
+                                .filter(|h| matches!((h.header, adopted), (Some(c), Some(a)) if c.blue_work > a))
+                                .collect();
+
+                            if heavier.is_empty() {
+                                warn!(
+                                    "IBD with {} finished, but {} other peer(s) advertised chains that were never compared: {}. \
+                                     This node's chain was chosen by which peer relayed first — none of the offers seen claimed \
+                                     to beat it, but nothing here was verified either.",
+                                    self.router,
+                                    passed_over.len(),
+                                    passed_over.iter().map(describe).collect::<Vec<_>>().join(", ")
+                                );
+                            } else {
+                                warn!(
+                                    "IBD with {} finished on a chain claiming blue work {}, but {} peer(s) were offering MORE the \
+                                     whole time and were passed over because that peer relayed first: {}. The heavier claims are \
+                                     unverified, but this node may well be on the wrong branch — compare its sink against another \
+                                     node before letting it mine or attest.",
+                                    self.router,
+                                    adopted.map(|w| w.to_string()).unwrap_or_else(|| "unknown".to_owned()),
+                                    heavier.len(),
+                                    heavier.into_iter().map(describe).collect::<Vec<_>>().join(", ")
+                                );
+                            }
                         }
                     }
                     Err(e) => {
