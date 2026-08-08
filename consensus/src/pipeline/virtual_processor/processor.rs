@@ -80,7 +80,7 @@ use kaspa_consensus_core::{
         check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_certificates_from_accepted_txs,
         compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs, compute_stake_score,
         compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge, effective_bond_status,
-        epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed, mandatory_attestation_mass_capacity,
+        epoch_meets_quality_floor, is_bond_active_at, is_dns_confirmed, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
         ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
         required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, total_active_stake_by_epoch,
         total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
@@ -89,7 +89,7 @@ use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
-    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint},
+    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
     utxo::{
         utxo_diff::UtxoDiff,
         utxo_view::{UtxoView, UtxoViewComposition},
@@ -2650,8 +2650,14 @@ impl VirtualStateProcessor {
             // Gather THIS certificate's verdicts from the chain and apply Verify(S,R,C). A verdict
             // set below the confirmation threshold — including the common case of verifiers simply
             // not having published yet — mints nothing, and will mint once they do.
-            let attestations =
-                verdicts_for_certificate(&walk.verdicts, cert_tx_id, resolved.receipt_hash, block_daa, &resolved.committee);
+            let attestations = verdicts_for_certificate(
+                &walk.verdicts,
+                cert_tx_id,
+                resolved.receipt_hash,
+                cert.receipt.trace_commitment,
+                block_daa,
+                &resolved.committee,
+            );
             let verified = verify_compute_certificate(resolved.receipt_hash, &attestations, dns_params.vlt.min_verifier_confirmations);
             let Ok(vlt) = normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) else {
                 continue;
@@ -3038,6 +3044,100 @@ impl VirtualStateProcessor {
             });
         }
         out
+    }
+
+    /// §6 audit fee: the coinbase outputs paying each verifier whose verdict was counted for a
+    /// certificate that leaves its challenge window **at this block**, and their total.
+    ///
+    /// # Why the challenge-window crossing is the trigger
+    ///
+    /// It is the one moment in a certificate's life that happens exactly once per chain, is
+    /// determined by data every node already has, and is late enough that the verdict set is
+    /// settled. Paying at verdict-inclusion time is not an option: the verdict names a certificate
+    /// the coinbase path cannot resolve, so a fabricated verdict against a fabricated certificate
+    /// would be indistinguishable from real work and the fee would fund spam. Paying up front, on
+    /// the certificate, is worse still — a committee member paid before it audits is paid *not* to,
+    /// since publishing then only costs it a transaction fee.
+    ///
+    /// Both verdicts are paid. A refutation is the same work as a confirmation and reports it
+    /// honestly; charging for it would make the fraud-detection role the expensive one.
+    ///
+    /// # Cost
+    ///
+    /// This runs the full compute-overlay walk on every block once VLT weighting is live, because
+    /// committee membership is only decidable against the capability declarations in the credit
+    /// window. Below the fence — every shipped network — it returns immediately and costs nothing.
+    /// Activating VLT weighting should be preceded by giving this the same treatment
+    /// [`collect_compute_credits`] got: a store that serves settled epochs so the walk only covers
+    /// the unfinalized tail.
+    pub(super) fn compute_audit_fee_outputs(
+        &self,
+        dns_params: &DnsParams,
+        daa_score: u64,
+        selected_parent: BlockHash,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        budget: u64,
+    ) -> (Vec<TransactionOutput>, u64) {
+        let fee = dns_params.vlt.audit_fee_sompi;
+        if fee == 0 || budget < fee || !dns_params.vlt_weighting_active_at(daa_score) {
+            return (Vec::new(), 0);
+        }
+        let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
+            return (Vec::new(), 0);
+        };
+        let Ok(parent_blue) = self.headers_store.get_blue_score(selected_parent) else {
+            return (Vec::new(), 0);
+        };
+        let window = dns_params.vlt.challenge_window_blocks;
+        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.vlt_credit_window_blue_score);
+        let oldest_blue = parent_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
+        let walk = self.walk_compute_overlay(selected_parent, bonds, net_id, dns_params, oldest_blue, parent_blue);
+
+        // A certificate crosses its window at this block iff the parent had not yet passed it and
+        // this block has. Each certificate therefore pays out exactly once per chain, with no
+        // cross-block dedup state to keep.
+        let mut crossing: Vec<&(TransactionId, ComputeCertificatePayload, u64)> = walk
+            .certificates
+            .iter()
+            .filter(|(_, _, accepted)| parent_daa.saturating_sub(*accepted) <= window && daa_score.saturating_sub(*accepted) > window)
+            .collect();
+        // The walk yields newest-first; pin a total order so construction and validation build
+        // byte-identical outputs when the budget truncates the tail.
+        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
+
+        let mut outputs = Vec::new();
+        let mut spent = 0u64;
+        for (cert_tx_id, cert, accepted) in crossing {
+            let Some(anchor) = anchors.get(&cert.epoch) else {
+                continue;
+            };
+            let Some(resolved) = self.resolve_certificate(cert, *accepted, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
+                continue;
+            };
+            for att in verdicts_for_certificate(
+                &walk.verdicts,
+                *cert_tx_id,
+                resolved.receipt_hash,
+                cert.receipt.trace_commitment,
+                *accepted,
+                &resolved.committee,
+            ) {
+                // Pay the verifier's bond owner, the same payee the attestation rewards use.
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
+                    continue;
+                };
+                // Whole-output budget cap, value-conserving: stop at the first payment that would
+                // overrun the validator pool and leave the ordered tail unpaid rather than mint
+                // past it.
+                if spent.saturating_add(fee) > budget {
+                    return (outputs, spent);
+                }
+                spent = spent.saturating_add(fee);
+                outputs.push(TransactionOutput::new(fee, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload)));
+            }
+        }
+        (outputs, spent)
     }
 
     /// This validator's own standing in the compute overlay. Backs
@@ -4647,6 +4747,17 @@ impl VirtualStateProcessor {
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
+            // MISAKA VLT §6 audit fee, from the unspent remainder of the §E validator pool. Placed
+            // before the drip so both paths append in one order. Inert below the VLT fence.
+            let (audit_outputs, _) = self.compute_audit_fee_outputs(
+                dns_params,
+                virtual_state.daa_score,
+                virtual_state.ghostdag_data.selected_parent,
+                &template_bond_view.records(),
+                self.genesis.hash.as_byte_slice(),
+                validator_pool.saturating_sub(validator_reward_outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value))),
+            );
+            validator_reward_outputs.extend(audit_outputs);
             let parent_balance = self.reserve_balance_store.get(virtual_state.ghostdag_data.selected_parent).unwrap_or(0);
             let (drip_outputs, _) = self.reserve_drip_outputs(
                 dns_params,

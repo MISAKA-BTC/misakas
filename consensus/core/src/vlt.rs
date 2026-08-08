@@ -605,6 +605,76 @@ pub fn compute_commitment_message(
     Hash::from_bytes(out)
 }
 
+/// Keyed-BLAKE2b-512 domain for [`residual_commitment`].
+///
+/// This is PALW's own `MatchProjectionV1` residual domain, and it must stay byte-identical to it:
+/// the value it produces is what a runtime writes into [`ComputeReceipt::trace_commitment`], so a
+/// consensus fold that disagreed with the runtime's would reject every honest replay proof.
+/// `misaka_palw` re-exports this constant rather than defining its own.
+pub const REPLAY_RESIDUAL_COMMITMENT_KEY: &[u8] = b"misaka-vlt-palw-residual-v1";
+
+/// The execution-derived values a [`ComputeReceipt`] folds into its `trace_commitment` — the
+/// preimage of that digest.
+///
+/// # Why a verdict has to reveal these
+///
+/// Without them a `Confirmed` verdict says only `replay_receipt_hash == executor_receipt_hash`,
+/// and the executor **published** `executor_receipt_hash` in its certificate. Copying one field
+/// produces a verdict that is self-consistent, signature-valid, and counted — with no job run.
+/// Once auditing pays, copying strictly dominates auditing, so paying for verdicts in that shape
+/// would fund rubber-stamping and make a forged receipt reliably confirmable.
+///
+/// These fields are the fold's *preimage*, and [`residual_commitment`] is one-way, so a verifier
+/// that only saw the certificate cannot produce them. A verifier that ran the job has them for
+/// free. That asymmetry is the whole proof.
+///
+/// # What it does not prove
+///
+/// A later committee member can copy them from an earlier verdict already on chain, so this
+/// establishes that *someone* replayed independently, not that every confirmer did. It removes
+/// the case that matters — a whole committee confirming from the certificate alone, with nobody
+/// executing — and leaves a weaker one where the first honest replay still gates the rest.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ReplayResiduals {
+    pub job_nullifier: Hash64,
+    pub request_commitment: Hash64,
+    pub model_profile_id: Hash64,
+    pub runtime_class_id: Hash64,
+    pub runtime_manifest_hash: Hash64,
+    pub shape_profile_id: Hash64,
+    pub cu_ruleset_id: Hash64,
+    pub canonical_compute_units: u64,
+    pub operation_schedule_commitment: Hash64,
+    pub schedule_event_count: u64,
+    pub trace_scheme_id: Hash64,
+    pub gemm_trace_root: Hash64,
+    pub trace_event_count: u64,
+}
+
+/// Fold [`ReplayResiduals`] into the `trace_commitment` a [`ComputeReceipt`] carries.
+///
+/// Fixed-width little-endian scalars in a fixed field order, exactly as the runtime bridge writes
+/// them — a consensus identity must not move if a serializer's layout changes.
+pub fn residual_commitment(r: &ReplayResiduals) -> Hash64 {
+    let mut h = Blake2bParams::new().hash_length(64).key(REPLAY_RESIDUAL_COMMITMENT_KEY).to_state();
+    h.update(r.job_nullifier.as_byte_slice());
+    h.update(r.request_commitment.as_byte_slice());
+    h.update(r.model_profile_id.as_byte_slice());
+    h.update(r.runtime_class_id.as_byte_slice());
+    h.update(r.runtime_manifest_hash.as_byte_slice());
+    h.update(r.shape_profile_id.as_byte_slice());
+    h.update(r.cu_ruleset_id.as_byte_slice());
+    h.update(&r.canonical_compute_units.to_le_bytes());
+    h.update(r.operation_schedule_commitment.as_byte_slice());
+    h.update(&r.schedule_event_count.to_le_bytes());
+    h.update(r.trace_scheme_id.as_byte_slice());
+    h.update(r.gemm_trace_root.as_byte_slice());
+    h.update(&r.trace_event_count.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 /// A sortitioned verifier's standalone verdict transaction — phase 3 of a job's life.
 ///
 /// The verifier discovers it was drawn for a job by re-deriving the committee from the chain
@@ -632,6 +702,20 @@ pub struct ComputeVerdictPayload {
     pub verdict: VerificationVerdict,
     /// `R_j` as this verifier independently recomputed it.
     pub replay_receipt_hash: Hash64,
+    /// Proof that this verifier actually executed the job — required for
+    /// [`VerificationVerdict::Confirmed`], absent for [`VerificationVerdict::Refuted`].
+    ///
+    /// A confirmation is the claim that this verifier reproduced the executor's `R_j`, and the
+    /// credit walk only counts it if these residuals fold to the certificate's own
+    /// `trace_commitment`. Since that digest is one-way, a verifier holding only the certificate
+    /// cannot construct them — which is what stops a confirmation from being a copied field.
+    ///
+    /// `None` for a refutation, because there is nothing to check against: the refuting verifier's
+    /// receipt is by definition not the certificate's, and consensus never learns that receipt in
+    /// full, so any bytes would "prove" a refutation. Carrying them would be dead weight and a
+    /// second encoding of the same verdict. Deterring a *dishonest* refutation is the §7(c)
+    /// challenge path's job, not this field's.
+    pub replay_proof: Option<ReplayResiduals>,
     /// ML-DSA-87 signature over [`verifier_verdict_message`] under
     /// [`VERIFIER_VERDICT_MLDSA87_CONTEXT`].
     pub signature: Vec<u8>,
@@ -655,10 +739,26 @@ impl ComputeVerdictPayload {
     ///
     /// A "Confirmed" over a hash the verifier did not reproduce, or a "Refuted" over one it did,
     /// is a lie on its face — rejected here rather than silently counted.
+    /// Whether this verdict is self-consistent: the declared verdict must be what comparing the
+    /// two receipt hashes implies, and the replay proof must be present exactly when it is
+    /// meaningful.
     pub fn is_self_consistent(&self) -> bool {
         match self.verdict {
-            VerificationVerdict::Confirmed => self.replay_receipt_hash == self.executor_receipt_hash,
-            VerificationVerdict::Refuted => self.replay_receipt_hash != self.executor_receipt_hash,
+            VerificationVerdict::Confirmed => self.replay_receipt_hash == self.executor_receipt_hash && self.replay_proof.is_some(),
+            VerificationVerdict::Refuted => self.replay_receipt_hash != self.executor_receipt_hash && self.replay_proof.is_none(),
+        }
+    }
+
+    /// Whether this verdict's replay proof folds to `trace_commitment` — the certificate's own.
+    ///
+    /// A refutation carries no proof and is never gated on one; the credit walk still counts it,
+    /// because a refutation's cost is that it is *checkable against the executor* later, not that
+    /// it is proved now.
+    pub fn proves_replay_of(&self, certificate_trace_commitment: Hash64) -> bool {
+        match (&self.verdict, &self.replay_proof) {
+            (VerificationVerdict::Confirmed, Some(p)) => residual_commitment(p) == certificate_trace_commitment,
+            (VerificationVerdict::Confirmed, None) => false,
+            (VerificationVerdict::Refuted, _) => true,
         }
     }
 }
@@ -1118,6 +1218,26 @@ pub struct VltParams {
     /// of verifier committees instead of sinking every job it is sampled for.
     pub max_capability_validity_blocks: u64,
 
+    /// §6 audit fee: sompi minted to each verifier whose verdict was counted for a certificate,
+    /// paid once, at the block where that certificate leaves its challenge window.
+    ///
+    /// # Why this exists
+    ///
+    /// §6 says "Verifier は audit fee を受け取る", and without it verification is unpaid work:
+    /// a verifier spends a full re-execution plus a transaction fee and receives nothing, while
+    /// the executor it audits collects the VLT. Under refutation-dominant acceptance an absent
+    /// verifier does not merely abstain — it denies an honest executor its credit — so a network
+    /// that does not pay for auditing does not get audited, and then does not mint.
+    ///
+    /// # Why it is paid for refutations too
+    ///
+    /// Both verdicts are paid identically. Paying only confirmations would make refusing to
+    /// confirm cost money, which is precisely the bias a fraud-detection role must not have.
+    ///
+    /// `0` disables the payment. Meaningful only above [`Self::vlt_activation_daa_score`]; below
+    /// the fence no verdict is ever counted, so nothing is paid regardless of this value.
+    pub audit_fee_sompi: u64,
+
     /// The consensus-registered model set (§3.2).
     pub model_cost_table: ModelCostTable,
 }
@@ -1163,6 +1283,13 @@ impl VltParams {
         // ~1 day at 10 bps. Long enough that renewal is routine, short enough that a departed
         // operator leaves the committee pool within a day.
         max_capability_validity_blocks: 864_000,
+        // 50 000 000 sompi (0.5 KAS) per counted verdict. Calibrated against the cost it has to
+        // beat: a full replay at the registered profile's 4096-token ceiling, plus the overlay
+        // transaction that carries the verdict (whose own mass-based fee is ~250 000 sompi). Two
+        // orders of magnitude above that fee leaves the margin an operator is actually paid for
+        // the GPU time, which is the scarce input. It is a per-verdict constant rather than a
+        // share of a pool because the work is per-verdict and does not vary with stake.
+        audit_fee_sompi: 50_000_000,
         model_cost_table: ModelCostTable::EMPTY,
     };
 
@@ -1564,6 +1691,112 @@ mod tests {
         assert_ne!(job_spec_id(&a), job_spec_id(&b));
     }
 
+    /// The property the replay proof exists for: a verifier holding only the certificate can
+    /// produce a self-consistent, signable `Confirmed` verdict — it copies `executor_receipt_hash`
+    /// — but it cannot produce the preimage of the certificate's `trace_commitment`. Once auditing
+    /// pays, that gap is the only thing separating a paid auditor from a paid rubber stamp.
+    #[test]
+    fn a_confirmation_copied_from_the_certificate_cannot_prove_replay() {
+        let residuals = ReplayResiduals {
+            job_nullifier: h64(11),
+            request_commitment: h64(12),
+            model_profile_id: h64(13),
+            runtime_class_id: h64(14),
+            runtime_manifest_hash: h64(15),
+            shape_profile_id: h64(16),
+            cu_ruleset_id: h64(17),
+            canonical_compute_units: 41_692,
+            operation_schedule_commitment: h64(18),
+            schedule_event_count: 80,
+            trace_scheme_id: h64(19),
+            gemm_trace_root: h64(20),
+            trace_event_count: 2_466,
+        };
+        let trace_commitment = residual_commitment(&residuals);
+        let executor_hash = h64(99);
+        let verdict = |proof: Option<ReplayResiduals>, v, replay| ComputeVerdictPayload {
+            version: VLT_PAYLOAD_VERSION_V1,
+            certificate_tx_id: TransactionId::from_bytes([5u8; 64]),
+            job_id: h64(6),
+            executor_receipt_hash: executor_hash,
+            verifier_id: h64(21),
+            bond_outpoint: outpoint(21),
+            verdict: v,
+            replay_receipt_hash: replay,
+            replay_proof: proof,
+            signature: vec![0u8; 4],
+        };
+
+        // The honest replay has the preimage and proves it.
+        let honest = verdict(Some(residuals.clone()), VerificationVerdict::Confirmed, executor_hash);
+        assert!(honest.is_self_consistent());
+        assert!(honest.proves_replay_of(trace_commitment));
+
+        // The copier has everything the certificate published — and that is not enough. A verdict
+        // with no proof is refused at the stateless layer; one with invented residuals folds to
+        // something else.
+        let bare = verdict(None, VerificationVerdict::Confirmed, executor_hash);
+        assert!(!bare.is_self_consistent(), "a confirmation without a proof is not well-formed");
+        assert!(!bare.proves_replay_of(trace_commitment));
+        let invented = verdict(
+            Some(ReplayResiduals { gemm_trace_root: h64(21), ..residuals.clone() }),
+            VerificationVerdict::Confirmed,
+            executor_hash,
+        );
+        assert!(invented.is_self_consistent(), "well-formed on its face…");
+        assert!(!invented.proves_replay_of(trace_commitment), "…but it does not fold to the certificate");
+
+        // A refutation carries no proof and is never gated on one.
+        let refutes = verdict(None, VerificationVerdict::Refuted, h64(98));
+        assert!(refutes.is_self_consistent());
+        assert!(refutes.proves_replay_of(trace_commitment));
+        // Attaching a proof to a refutation is not a canonical encoding.
+        assert!(!verdict(Some(residuals), VerificationVerdict::Refuted, h64(98)).is_self_consistent());
+    }
+
+    /// Every residual field must be load-bearing, or two different executions could fold to one
+    /// commitment and a proof of the wrong job would pass.
+    #[test]
+    fn every_residual_field_moves_the_commitment() {
+        let base = ReplayResiduals {
+            job_nullifier: h64(1),
+            request_commitment: h64(2),
+            model_profile_id: h64(3),
+            runtime_class_id: h64(4),
+            runtime_manifest_hash: h64(5),
+            shape_profile_id: h64(6),
+            cu_ruleset_id: h64(7),
+            canonical_compute_units: 10,
+            operation_schedule_commitment: h64(8),
+            schedule_event_count: 11,
+            trace_scheme_id: h64(9),
+            gemm_trace_root: h64(10),
+            trace_event_count: 12,
+        };
+        let root = residual_commitment(&base);
+        let mutations: Vec<Box<dyn Fn(&mut ReplayResiduals)>> = vec![
+            Box::new(|r: &mut ReplayResiduals| r.job_nullifier = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.request_commitment = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.model_profile_id = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.runtime_class_id = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.runtime_manifest_hash = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.shape_profile_id = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.cu_ruleset_id = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.canonical_compute_units += 1),
+            Box::new(|r: &mut ReplayResiduals| r.operation_schedule_commitment = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.schedule_event_count += 1),
+            Box::new(|r: &mut ReplayResiduals| r.trace_scheme_id = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.gemm_trace_root = h64(90)),
+            Box::new(|r: &mut ReplayResiduals| r.trace_event_count += 1),
+        ];
+        assert_eq!(mutations.len(), 13, "all residual fields must be covered");
+        for mutate in mutations {
+            let mut m = base.clone();
+            mutate(&mut m);
+            assert_ne!(residual_commitment(&m), root);
+        }
+    }
+
     #[test]
     fn inert_params_are_dormant_but_coherent() {
         assert_eq!(VltParams::INERT.vlt_activation_daa_score, u64::MAX);
@@ -1574,6 +1807,25 @@ mod tests {
         // No registered model => every job mints zero, so a fence moved by accident
         // cannot silently start crediting.
         assert!(VltParams::INERT.model_cost_table.live().is_empty());
+    }
+
+    /// §6 pays the auditor, and the calibration has one job: beat the cost of auditing. A fee at
+    /// or below the verdict transaction's own relay fee would leave the GPU time unpaid, which is
+    /// the same as not paying at all — and once a fee exists at all, the thing it must not do is
+    /// pay more for one verdict than the other, or the fraud-detection role becomes the costly one.
+    #[test]
+    fn the_audit_fee_is_verdict_blind_and_covers_more_than_the_transaction() {
+        // `ATTESTATION_TX_FEE_FLOOR_SOMPI` in kaspa-pq-validator-core; restated rather than
+        // depended on (consensus-core must not depend on the validator crate).
+        const OVERLAY_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
+        assert!(
+            VltParams::INERT.audit_fee_sompi > OVERLAY_TX_FEE_FLOOR_SOMPI,
+            "an audit fee below the verdict's own transaction fee pays nothing for the replay"
+        );
+        // The fee is a single per-verdict constant with no verdict term anywhere near it: there is
+        // deliberately no confirm/refute split to calibrate, because paying them differently is
+        // what would bias an auditor.
+        assert_eq!(VltParams::INERT.audit_fee_sompi, 50_000_000);
     }
 
     #[test]

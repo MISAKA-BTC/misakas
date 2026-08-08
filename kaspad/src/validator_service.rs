@@ -963,12 +963,16 @@ impl ValidatorService {
             return;
         };
         let replay_receipt_hash = compute_receipt_hash(&job.spec, &projection.to_compute_receipt());
+        // The residuals come from THIS node's own projection. They are the preimage of the receipt's
+        // `trace_commitment`, so publishing them is what makes a confirmation a statement about work
+        // this node did rather than a hash it read off the certificate.
         let verdict = key.sign_verifier_verdict(
             &self.config.network_id,
             job.certificate_tx_id,
             job.job_id,
             job.executor_receipt_hash,
             replay_receipt_hash,
+            projection.residuals(),
             bond_outpoint,
         );
         let refuted = verdict.verdict == VerificationVerdict::Refuted;

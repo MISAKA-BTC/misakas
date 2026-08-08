@@ -49,13 +49,19 @@ use std::time::Duration;
 
 use blake2b_simd::Params as Blake2bParams;
 use kaspa_consensus_core::vlt::{
-    ComputeReceipt, LlmJobSpec, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
+    ComputeReceipt, LlmJobSpec, ReplayResiduals, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
+    residual_commitment,
 };
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 
 /// Keyed-BLAKE2b-512 domain for [`MatchProjection::residual_commitment`].
-pub const PALW_RESIDUAL_COMMITMENT_KEY: &[u8] = b"misaka-vlt-palw-residual-v1";
+///
+/// Re-exported from consensus rather than restated: the fold's output is what a receipt carries as
+/// `trace_commitment` and what a verdict's replay proof is checked against, so a second definition
+/// here would be a second thing to keep in sync — and the failure mode of them drifting is that
+/// every honest proof is rejected.
+pub use kaspa_consensus_core::vlt::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDUAL_COMMITMENT_KEY;
 
 /// The submission schema this bridge understands.
 pub const PALW_SUBMISSION_SCHEMA_V3: &str = "misaka.palw.testnet-submission.v3";
@@ -122,23 +128,29 @@ impl MatchProjection {
     /// Fixed-width little-endian scalars, fixed field order — a consensus identity must not move
     /// if a serializer's layout ever changes.
     pub fn residual_commitment(&self) -> Hash64 {
-        let mut h = Blake2bParams::new().hash_length(64).key(PALW_RESIDUAL_COMMITMENT_KEY).to_state();
-        h.update(self.job_nullifier.as_byte_slice());
-        h.update(self.request_commitment.as_byte_slice());
-        h.update(self.model_profile_id.as_byte_slice());
-        h.update(self.runtime_class_id.as_byte_slice());
-        h.update(self.runtime_manifest_hash.as_byte_slice());
-        h.update(self.shape_profile_id.as_byte_slice());
-        h.update(self.cu_ruleset_id.as_byte_slice());
-        h.update(&self.canonical_compute_units.to_le_bytes());
-        h.update(self.operation_schedule_commitment.as_byte_slice());
-        h.update(&self.schedule_event_count.to_le_bytes());
-        h.update(self.trace_scheme_id.as_byte_slice());
-        h.update(self.gemm_trace_root.as_byte_slice());
-        h.update(&self.trace_event_count.to_le_bytes());
-        let mut out = [0u8; 64];
-        out.copy_from_slice(h.finalize().as_bytes());
-        Hash64::from_bytes(out)
+        residual_commitment(&self.residuals())
+    }
+
+    /// This projection's residual fields, as a verdict publishes them.
+    ///
+    /// A verifier reveals exactly this to prove it executed the job: the fold below is one-way, so
+    /// a node holding only the certificate has the digest and cannot produce the preimage.
+    pub fn residuals(&self) -> ReplayResiduals {
+        ReplayResiduals {
+            job_nullifier: self.job_nullifier,
+            request_commitment: self.request_commitment,
+            model_profile_id: self.model_profile_id,
+            runtime_class_id: self.runtime_class_id,
+            runtime_manifest_hash: self.runtime_manifest_hash,
+            shape_profile_id: self.shape_profile_id,
+            cu_ruleset_id: self.cu_ruleset_id,
+            canonical_compute_units: self.canonical_compute_units,
+            operation_schedule_commitment: self.operation_schedule_commitment,
+            schedule_event_count: self.schedule_event_count,
+            trace_scheme_id: self.trace_scheme_id,
+            gemm_trace_root: self.gemm_trace_root,
+            trace_event_count: self.trace_event_count,
+        }
     }
 
     /// Fold this projection into the consensus [`ComputeReceipt`].
@@ -531,6 +543,22 @@ mod tests {
             mutate(&mut m);
             assert_ne!(compute_receipt_hash(&s, &m.to_compute_receipt()), base, "field {name} does not affect the receipt hash");
         }
+    }
+
+    /// A verifier proves it executed the job by revealing the preimage of the receipt's
+    /// `trace_commitment`. The bridge's projection must therefore produce residuals that fold back
+    /// to exactly the value it put in the receipt — if the two ever disagreed, every honest
+    /// confirmation would be rejected as a rubber stamp and no job could ever mint.
+    #[test]
+    fn residuals_fold_back_to_the_receipts_own_trace_commitment() {
+        let p = projection();
+        let receipt = p.to_compute_receipt();
+        assert_eq!(residual_commitment(&p.residuals()), receipt.trace_commitment);
+
+        // The certificate publishes only the fold, so a party holding the receipt cannot recover
+        // the residuals; a different execution folds elsewhere.
+        let other = MockRuntime { divergent: true, ..Default::default() }.project(&spec(), b"the capital of France is");
+        assert_ne!(residual_commitment(&other.residuals()), receipt.trace_commitment);
     }
 
     /// Two honest replicas of one job agree; a divergent one does not. This is the k=2 test,

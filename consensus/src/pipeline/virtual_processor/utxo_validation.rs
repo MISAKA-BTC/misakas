@@ -743,6 +743,19 @@ impl VirtualStateProcessor {
         // construction (template) and validation paths agree byte-for-byte). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
+            // MISAKA VLT §6 audit fee: pay every verifier whose verdict was counted for a
+            // certificate that leaves its challenge window at this block, from the unspent
+            // remainder of the §E validator pool. Appended before the drip so this path and the
+            // template path build the identical output list. Inert below the VLT fence.
+            let (audit_outputs, _) = self.compute_audit_fee_outputs(
+                dns_params,
+                header.daa_score,
+                ctx.selected_parent(),
+                &selected_parent_bond_view.records(),
+                self.genesis.hash.as_byte_slice(),
+                validator_pool.saturating_sub(validator_reward_outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value))),
+            );
+            validator_reward_outputs.extend(audit_outputs);
             let parent_balance = self.reserve_balance_store.get(ctx.selected_parent()).unwrap_or(0);
             let (drip_outputs, drip_total) = self.reserve_drip_outputs(
                 dns_params,
