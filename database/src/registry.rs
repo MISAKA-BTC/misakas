@@ -226,6 +226,16 @@ pub enum DatabaseStorePrefixes {
     /// per-block O(state × blocks) snapshot. Code is content-addressed (222). State data.
     EvmFlatAccount = 234,
 
+    /// Singleton `PersistedChainParticipation`: whether this node is entitled to mine, attest, or
+    /// call itself synced, and why not.
+    ///
+    /// Lives in the node-level **meta** DB rather than a consensus DB on purpose. The state it
+    /// records is precisely "an IBD may have replaced my consensus and I have not settled whether
+    /// that was right", so storing it inside a consensus that a `staging.commit()` can swap out
+    /// would lose it exactly when it matters. Held across restarts because a quarantine that a
+    /// process restart clears is not a quarantine.
+    ChainParticipation = 236,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

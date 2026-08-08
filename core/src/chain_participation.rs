@@ -17,7 +17,10 @@
 //! It deliberately says nothing about *which* chain is right. It only tracks whether this node has
 //! finished deciding.
 
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, AtomicU64, Ordering},
+};
 
 use crate::time::unix_now;
 
@@ -51,6 +54,16 @@ impl ChainParticipation {
     }
 }
 
+/// Where the gate writes its state so a restart cannot clear it.
+///
+/// Defined as a trait rather than a store because this crate sits below the database layer. The
+/// implementation lives next to the node's meta DB; the gate only needs somewhere to put the fact.
+pub trait ChainParticipationPersistence: Send + Sync + std::fmt::Debug {
+    /// Called on every transition. Implementations must be non-panicking: a node that cannot write
+    /// this should keep running with an in-memory gate, not die.
+    fn persist(&self, state: ChainParticipation, review_until_ms: u64);
+}
+
 const READY: u8 = 0;
 const IBD_RUNNING: u8 = 1;
 const CANDIDATE_REVIEW: u8 = 2;
@@ -66,11 +79,59 @@ pub struct ChainParticipationGate {
     /// competing branch to overlook and no peers to wait for, so holding them back only stalls
     /// tests; this mirrors the carve-out `has_sufficient_peer_connectivity` already makes.
     enabled: bool,
+    /// Where transitions are recorded so they survive a restart. `None` keeps the gate purely
+    /// in-memory, which is what tests and disabled networks use.
+    persistence: Option<Arc<dyn ChainParticipationPersistence>>,
 }
 
 impl ChainParticipationGate {
     pub fn new(enabled: bool) -> Self {
-        Self { state: AtomicU8::new(READY), review_until_ms: AtomicU64::new(0), enabled }
+        Self { state: AtomicU8::new(READY), review_until_ms: AtomicU64::new(0), enabled, persistence: None }
+    }
+
+    /// Attach durable storage and adopt whatever was last written.
+    ///
+    /// Restoring matters most for `Quarantined`: it is entered because the node cannot vouch for
+    /// the chain it is running, and nothing about restarting the process makes that untrue. A
+    /// `CandidateReview` floor is restored as an absolute deadline, so a restart neither extends
+    /// nor escapes it.
+    pub fn with_persistence(
+        mut self,
+        persistence: Arc<dyn ChainParticipationPersistence>,
+        restored: Option<(ChainParticipation, u64)>,
+    ) -> Self {
+        if let Some((state, review_until_ms)) = restored {
+            self.state.store(
+                match state {
+                    ChainParticipation::Ready => READY,
+                    // An IBD that was running when the process died did not finish, and whatever it
+                    // was doing to the active consensus is now in an unknown state. That is the
+                    // quarantine case, not a reason to start clean.
+                    ChainParticipation::IbdRunning | ChainParticipation::Quarantined => QUARANTINED,
+                    ChainParticipation::CandidateReview => CANDIDATE_REVIEW,
+                },
+                Ordering::SeqCst,
+            );
+            self.review_until_ms.store(review_until_ms, Ordering::SeqCst);
+        }
+        self.persistence = Some(persistence);
+        self
+    }
+
+    fn persist(&self) {
+        if let Some(p) = self.persistence.as_ref() {
+            p.persist(self.peek(), self.review_until_ms.load(Ordering::SeqCst));
+        }
+    }
+
+    /// State without the elapsed-review promotion, for persisting and for internal checks.
+    fn peek(&self) -> ChainParticipation {
+        match self.state.load(Ordering::SeqCst) {
+            IBD_RUNNING => ChainParticipation::IbdRunning,
+            CANDIDATE_REVIEW => ChainParticipation::CandidateReview,
+            QUARANTINED => ChainParticipation::Quarantined,
+            _ => ChainParticipation::Ready,
+        }
     }
 
     /// A gate that never holds anything back, for tests and single-node networks.
@@ -90,6 +151,7 @@ impl ChainParticipationGate {
         }
         let _ = self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst);
         let _ = self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst);
+        self.persist();
     }
 
     /// An IBD finished and produced a chain that nothing has yet been compared against. Hold
@@ -106,6 +168,7 @@ impl ChainParticipationGate {
         self.review_until_ms.fetch_max(unix_now().saturating_add(min_review_ms), Ordering::SeqCst);
         let _ = self.state.compare_exchange(IBD_RUNNING, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
         let _ = self.state.compare_exchange(READY, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
+        self.persist();
     }
 
     /// Stop participating until an operator intervenes. Irreversible within the process.
@@ -120,6 +183,7 @@ impl ChainParticipationGate {
             return;
         }
         self.state.store(QUARANTINED, Ordering::SeqCst);
+        self.persist();
     }
 
     /// The IBD ended without having replaced anything, so there is nothing to review.
@@ -128,6 +192,7 @@ impl ChainParticipationGate {
             return;
         }
         let _ = self.state.compare_exchange(IBD_RUNNING, READY, Ordering::SeqCst, Ordering::SeqCst);
+        self.persist();
     }
 
     pub fn is_quarantined(&self) -> bool {
@@ -143,7 +208,9 @@ impl ChainParticipationGate {
                 if unix_now() < self.review_until_ms.load(Ordering::SeqCst) {
                     ChainParticipation::CandidateReview
                 } else {
-                    let _ = self.state.compare_exchange(CANDIDATE_REVIEW, READY, Ordering::SeqCst, Ordering::SeqCst);
+                    if self.state.compare_exchange(CANDIDATE_REVIEW, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                        self.persist();
+                    }
                     ChainParticipation::Ready
                 }
             }
@@ -180,6 +247,24 @@ impl Default for ChainParticipationGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Stands in for the meta-DB row, so a "restart" is just building a new gate from what the
+    /// previous one wrote.
+    #[derive(Debug, Default)]
+    struct Recorder(Mutex<Option<(ChainParticipation, u64)>>);
+
+    impl ChainParticipationPersistence for Recorder {
+        fn persist(&self, state: ChainParticipation, review_until_ms: u64) {
+            *self.0.lock().unwrap() = Some((state, review_until_ms));
+        }
+    }
+
+    impl Recorder {
+        fn last(&self) -> Option<(ChainParticipation, u64)> {
+            *self.0.lock().unwrap()
+        }
+    }
 
     #[test]
     fn a_disabled_gate_permits_everything() {
@@ -247,5 +332,58 @@ mod tests {
         gate.enter_ibd();
         gate.release_after_noop_ibd();
         assert!(gate.allows_participation());
+    }
+
+    #[test]
+    fn a_quarantine_survives_a_restart() {
+        // Restarting the process does not compare the chain, so it must not clear the refusal to
+        // act on it. Before persistence, `kaspad` restart was a working bypass.
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        gate.quarantine();
+        assert_eq!(recorder.last().map(|(s, _)| s), Some(ChainParticipation::Quarantined));
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        assert!(restarted.is_quarantined());
+        assert!(!restarted.allows_participation());
+    }
+
+    #[test]
+    fn a_review_floor_survives_a_restart_without_being_extended() {
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        gate.enter_ibd();
+        gate.enter_candidate_review(60_000);
+        let (_, deadline) = recorder.last().unwrap();
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        assert_eq!(restarted.state(), ChainParticipation::CandidateReview);
+        // Absolute deadline, so restarting neither escapes the floor nor restarts the clock.
+        assert_eq!(restarted.review_until_ms.load(Ordering::SeqCst), deadline);
+    }
+
+    #[test]
+    fn dying_mid_ibd_comes_back_quarantined() {
+        // An IBD that was running when the process died did not finish. `staging.commit()` may have
+        // already swapped the active consensus, and nothing recorded whether it did — so the node
+        // cannot vouch for what it is now running.
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        gate.enter_ibd();
+        assert_eq!(recorder.last().map(|(s, _)| s), Some(ChainParticipation::IbdRunning));
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        assert!(restarted.is_quarantined());
+    }
+
+    #[test]
+    fn a_ready_node_restarts_ready() {
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone(), None);
+        gate.enter_ibd();
+        gate.release_after_noop_ibd();
+
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone(), recorder.last());
+        assert!(restarted.allows_participation());
     }
 }

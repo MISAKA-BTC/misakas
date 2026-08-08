@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use crate::chain_participation_store::ChainParticipationStore;
 use async_channel::unbounded;
 use kaspa_consensus_core::{
     config::ConfigBuilder,
@@ -780,7 +781,7 @@ Do you confirm? (y/n)";
         None
     };
 
-    let (address_manager, port_mapping_extender_svc) = AddressManager::new(config.clone(), meta_db, tick_service.clone());
+    let (address_manager, port_mapping_extender_svc) = AddressManager::new(config.clone(), meta_db.clone(), tick_service.clone());
 
     // kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's declared EVM coinbase.
     // A malformed value is a startup error (silently burning a miner's priority
@@ -820,10 +821,25 @@ Do you confirm? (y/n)";
     // One gate, consulted by mining, both validator paths, and compute. Scoped to the networks that
     // have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a peerless
     // devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
-    let chain_participation = Arc::new(ChainParticipationGate::new(matches!(
-        config.net.network_type,
-        kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
-    )));
+    // Restored from the meta DB before anyone can consult it: a quarantine that a restart clears is
+    // not a quarantine, and this is the one object every signer asks for permission.
+    let chain_participation_store = Arc::new(ChainParticipationStore::new(meta_db.clone()));
+    let restored_participation = chain_participation_store.load();
+    let chain_participation = Arc::new(
+        ChainParticipationGate::new(matches!(
+            config.net.network_type,
+            kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
+        ))
+        .with_persistence(chain_participation_store, restored_participation),
+    );
+    match chain_participation.state() {
+        kaspa_core::chain_participation::ChainParticipation::Ready => {}
+        state => warn!(
+            "Chain participation restored as {} from the previous run: this node will NOT mine, attest, or report itself \
+             synced until that resolves. It stopped because an IBD left it on a chain it could not vouch for.",
+            state.as_str()
+        ),
+    }
     let mining_rule_engine = Arc::new(MiningRuleEngine::new(
         consensus_manager.clone(),
         config.clone(),
