@@ -1753,6 +1753,10 @@ impl ConsensusApi for Consensus {
         calc_hash_merkle_root(txs.iter())
     }
 
+    fn validate_pruning_proof_standalone(&self, proof: &PruningPointProof) -> Result<(), PruningImportError> {
+        self.services.pruning_proof_manager.validate_pruning_point_proof_standalone(proof)
+    }
+
     fn validate_pruning_proof(
         &self,
         proof: &PruningPointProof,

@@ -87,6 +87,11 @@ pub struct IbdFlow {
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
 
+    /// The permit authorising THIS IBD to cross the node's own provisional pruning point, if it
+    /// holds one. Set when `determine_ibd_type` grants one and cleared when the IBD ends, so the
+    /// authority lasts exactly as long as the attempt it was issued for.
+    active_recovery_permit: Option<BootstrapRecoveryPermit>,
+
     /// Handoffs: a chain this node has decided to sync next. Consumed by whichever flow serves it,
     /// so a switch does not depend on the winning peer happening to relay something.
     handoff_receiver: broadcast::Receiver<CandidateId>,
@@ -139,6 +144,7 @@ impl IbdFlow {
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
+            active_recovery_permit: None,
             challenger_receiver,
             handoff_receiver,
         }
@@ -203,7 +209,13 @@ impl IbdFlow {
                     self.ctx.preferred_ibd_candidate().is_some_and(|p| p.preferred_sources.contains(&self.router.key()));
 
                 let outcome = self.ibd(relay_header).await;
-                if served_reservation {
+                // The permit covered exactly this attempt.
+                self.active_recovery_permit = None;
+                // Release the reservation only when the attempt it authorised actually finished.
+                // Clearing it on failure spends the handoff on one stumble and drops the node back
+                // to the branch it had already decided against — measured: after the first permitted
+                // attempt failed, every retry ran unpermitted.
+                if served_reservation && outcome.is_ok() {
                     self.ctx.clear_preferred_ibd_candidate();
                 }
                 match outcome {
@@ -595,20 +607,27 @@ impl IbdFlow {
             self.ctx.chain_participation().state().as_str(),
             format!("validating proof: levels={} claimed_blue_work={}", proof.len(), claimed_blue_work.for_priority_only()),
         );
-        let proof = consensus
-            .clone()
-            .spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof))
-            .await
-            .inspect_err(|e| {
-                record_stage(
-                    RecoveryStage::Rejected,
-                    Some(attempt),
-                    Some(id),
-                    None,
-                    "",
-                    format!("validate_pruning_proof returned an error: {e}"),
-                )
-            })?;
+        // Standalone: soundness only, no comparison against the chain this node is holding.
+        //
+        // The comparative form refuses an unrelated history outright ("no shared blocks with the
+        // known level DAGs") before reporting whether it is valid, so it could never establish the
+        // verified work that `decide_commit` and `authorize_bootstrap_recovery` then judge. Those
+        // two ask the superiority question explicitly, on figures derived here — the check is not
+        // skipped, it is moved to where it can be answered.
+        let _ = &proof_metadata;
+        let proof =
+            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof_standalone(&proof).map(|()| proof)).await.inspect_err(
+                |e| {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        Some(attempt),
+                        Some(id),
+                        None,
+                        "",
+                        format!("validate_pruning_proof returned an error: {e}"),
+                    )
+                },
+            )?;
         drop(consensus);
 
         let pruning_point_header = proof[0].last().ok_or(ProtocolError::Other("the challenger's proof has no level-0 headers"))?;
@@ -857,6 +876,23 @@ impl IbdFlow {
     async fn ibd(&mut self, relay_header: Arc<Header>) -> Result<(), ProtocolError> {
         let mut session = self.ctx.consensus().session().await;
 
+        // Claim a recovery permit up front when this peer serves the chain this node has reserved.
+        //
+        // It used to be requested only on the finality-conflict branch of `determine_ibd_type`, but
+        // that branch is not the only way in: two histories sharing nothing but genesis can leave
+        // `highest_known_syncer_chain_hash` empty, in which case the IBD takes the ordinary
+        // headers-proof route, holds no permit, and then fails proof validation comparatively —
+        // against the very provisional chain the permit exists to replace. Measured: E2E-B reached
+        // ProofValidated and PreferredCandidateReserved with FinalityConflictDetected=0.
+        //
+        // The permit governs the chain, so it is claimed for the attempt, not for one code path.
+        if let Some(reserved) = self.ctx.preferred_ibd_candidate()
+            && reserved.preferred_sources.contains(&self.router.key())
+            && self.active_recovery_permit.is_none()
+        {
+            self.active_recovery_permit = self.bootstrap_recovery_permit_for(reserved.candidate_id.pruning_point).await;
+        }
+
         let negotiation_output = self.negotiate_missing_syncer_chain_segment(&session).await?;
         let ibd_type = self
             .determine_ibd_type(
@@ -866,6 +902,22 @@ impl IbdFlow {
                 negotiation_output.syncer_pruning_point,
             )
             .await?;
+        record_stage(
+            RecoveryStage::Rejected,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!(
+                "ibd_type={} recovery_permit={}",
+                match &ibd_type {
+                    IbdType::Sync { .. } => "Sync",
+                    IbdType::DownloadHeadersProof => "DownloadHeadersProof",
+                    IbdType::PruningCatchUp { .. } => "PruningCatchUp",
+                },
+                self.active_recovery_permit.is_some()
+            ),
+        );
         match ibd_type {
             IbdType::Sync { highest_known_syncer_chain_hash, is_utxo_stable, is_pp_anticone_synced } => {
                 let pruning_point = session.async_pruning_point().await;
@@ -999,7 +1051,7 @@ impl IbdFlow {
     }
 
     async fn determine_ibd_type(
-        &self,
+        &mut self,
         consensus: &ConsensusProxy,
         relay_header: &Header,
         highest_known_syncer_chain_hash: Option<BlockHash>,
@@ -1088,6 +1140,7 @@ impl IbdFlow {
                     permit.adoption_generation,
                     permit.switch_generation
                 );
+                self.active_recovery_permit = Some(permit);
                 return Ok(IbdType::DownloadHeadersProof);
             }
             return Err(ProtocolError::Other("peer is in a finality conflict with the local pruning point"));
@@ -1161,7 +1214,16 @@ impl IbdFlow {
         let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_header).await?;
         self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_header).await?;
         staging_session.async_validate_pruning_points(syncer_virtual_selected_parent).await?;
-        self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
+        // The third guard of the same family, and the same exception applies.
+        //
+        // It requires the incoming chain's tip to be at least ten minutes newer than the local one —
+        // a sanity check that a peer is not selling an old chain. Against a PROVISIONAL local chain
+        // it asks the wrong question: a genuinely heavier branch mined in parallel is the same age,
+        // not newer, and here it is the heavier one by verified work. Measured: the permitted
+        // attempt cleared both finality gates and died here.
+        if self.active_recovery_permit.is_none() {
+            self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
+        }
         Ok(())
     }
 
@@ -1186,9 +1248,25 @@ impl IbdFlow {
         // Get a new session for current consensus (non staging)
         let consensus = self.ctx.consensus().session().await;
 
-        // The proof is validated in the context of current consensus
-        let proof =
-            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)).await?;
+        // The proof is validated in the context of current consensus — comparatively, so a peer
+        // cannot hand this node a worse chain than the one it already has.
+        //
+        // Unless this IBD holds a bootstrap-recovery permit, in which case the chain it is being
+        // compared against is provisional: adopted by a race, never acted upon, and precisely what
+        // the permit authorises replacing. Comparing against it would refuse an unrelated history
+        // before reporting whether it is sound, which is the same wall the challenger check hit.
+        // Superiority was already established on verified figures when the permit was issued.
+        let recovering = self.active_recovery_permit.is_some();
+        let proof = consensus
+            .clone()
+            .spawn_blocking(move |c| {
+                if recovering {
+                    c.validate_pruning_proof_standalone(&proof).map(|()| proof)
+                } else {
+                    c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)
+                }
+            })
+            .await?;
 
         let proof_pruning_point = proof[0].last().expect("was just ensured by validation").hash;
 
@@ -1217,7 +1295,18 @@ impl IbdFlow {
         }
 
         // Check if past pruning points violate finality of current consensus
-        if self.ctx.consensus().session().await.async_are_pruning_points_violating_finality(pruning_points.clone()).await {
+        //
+        // The second finality gate, and it asks the same question as the first about the same
+        // provisional chain: are this peer's pruning points compatible with mine? For two histories
+        // that share only genesis the answer is no, and a permitted recovery has to be able to say
+        // "that is the point" — otherwise the permit lets the IBD start and this stops it three
+        // steps later. Measured: the first permitted attempt died exactly here with "pruning points
+        // are violating finality".
+        //
+        // Without a permit this is untouched. The distinction it draws is real everywhere else.
+        if !recovering
+            && self.ctx.consensus().session().await.async_are_pruning_points_violating_finality(pruning_points.clone()).await
+        {
             // TODO (relaxed): consider performing additional actions on finality conflicts in addition to disconnecting from the peer (e.g., banning, rpc notification)
             return Err(ProtocolError::Other("pruning points are violating finality"));
         }

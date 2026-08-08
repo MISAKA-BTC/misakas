@@ -326,6 +326,27 @@ impl PruningProofManager {
     ///
     /// Returns `Ok(())` if the proof is valid and superior, or an appropriate
     /// `PruningImportError` otherwise.
+    /// Validates an incoming proof's own soundness, WITHOUT comparing it to the local chain.
+    ///
+    /// Same structural work as [`Self::validate_pruning_point_proof`] — level DAGs rebuilt, headers
+    /// and PoW checked, selected tips validated — minus `compare_proofs_inner`.
+    ///
+    /// That comparison asks "is this better than what I already have?", and answering it requires
+    /// the local chain to be authoritative. During bootstrap recovery it is not: the chain held is
+    /// provisional, adopted by a race and not yet acted upon, and the whole point is to weigh a
+    /// stranger's chain against it. Asked comparatively, an unrelated history is rejected with
+    /// "no shared blocks with the known level DAGs" before its own validity is ever reported —
+    /// which made a validated proof an unreachable precondition for the permit that needed one.
+    ///
+    /// So soundness is established here and superiority is judged separately, on figures this node
+    /// derived, by `decide_commit` and `authorize_bootstrap_recovery`. Nothing is skipped; the two
+    /// questions are simply asked one at a time. Callers syncing normally must keep using the
+    /// comparative form — being handed a worse chain is exactly what it protects them from.
+    pub fn validate_pruning_point_proof_standalone(&self, proof: &PruningPointProof) -> PruningImportResult<()> {
+        ProofContext::from_proof(self, proof, true)?.continue_value().ok_or(PruningImportError::PruningValidationInterrupted)?;
+        Ok(())
+    }
+
     pub fn validate_pruning_point_proof(
         &self,
         proof: &PruningPointProof,
