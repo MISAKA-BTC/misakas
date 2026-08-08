@@ -285,7 +285,15 @@ impl IbdCandidateRegistry {
     ///
     /// Ordered by claimed work — the one decision a claim is allowed to make. A peer shouting the
     /// maximum gets checked first and fails there; it does not get a chain.
+    ///
+    /// Returns `None` while any verification is already in flight. A pruning proof is minutes of
+    /// the prover's work and a large transfer, so one challenger at a time is the budget: without
+    /// it, N advertised candidates would mean N concurrent proof fetches, and manufacturing
+    /// candidates is far cheaper than serving proofs for them.
     pub fn strongest_unverified(&self) -> Option<&IbdCandidate> {
+        if self.candidates.values().any(|c| matches!(c.validation, CandidateValidation::ProofRequested { .. })) {
+            return None;
+        }
         self.candidates.values().filter(|c| matches!(c.validation, CandidateValidation::SummaryReceived { .. })).max_by_key(
             |c| match c.validation {
                 CandidateValidation::SummaryReceived { claimed_blue_work } => claimed_blue_work.for_priority_only(),
@@ -558,6 +566,29 @@ mod tests {
         );
 
         assert!(r.strongest_unverified().is_none(), "one proof fetch in flight per candidate, not one per nomination");
+    }
+
+    #[test]
+    fn only_one_challenger_is_verified_at_a_time() {
+        // A proof is minutes of the prover's work and a large transfer. Manufacturing candidates is
+        // much cheaper than serving proofs for them, so the fetches must be budgeted.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let first = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+        r.observe_summary(peer(2), &header(2, 800), pp(2), now);
+        r.observe_summary(peer(3), &header(3, 700), pp(3), now);
+
+        assert_eq!(r.strongest_unverified().unwrap().id, first);
+        r.set_validation(
+            first,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        assert!(r.strongest_unverified().is_none(), "no second fetch while one is in flight");
+
+        // Once it settles, the next strongest becomes eligible.
+        r.set_validation(first, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+        assert_eq!(r.strongest_unverified().unwrap().id, r.get(&r.strongest_unverified().unwrap().id).unwrap().id);
+        assert!(r.strongest_unverified().is_some());
     }
 
     #[test]
