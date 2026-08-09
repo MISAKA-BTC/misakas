@@ -139,6 +139,7 @@ pub mod network;
 pub mod pow_layer0;
 pub mod pruning;
 pub mod sign;
+pub mod sortable_block;
 pub mod subnets;
 pub mod trusted;
 pub mod tx;

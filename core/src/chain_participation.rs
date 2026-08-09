@@ -326,16 +326,27 @@ impl ChainParticipationGate {
         !self.enabled || self.state() == ChainParticipation::Ready
     }
 
+    /// Whether the review's time floor has passed. **Not** the same question as whether the review
+    /// may end.
+    ///
+    /// Keeping these two apart is the whole point. The floor is a minimum duration; a pending
+    /// decision is an open question. A review ends only when both say so, and conflating them —
+    /// `saturating_sub` reaching zero and being read as "done" — would turn a panic into a silent
+    /// state-machine bug, which is strictly worse: the node would go Ready while still weighing
+    /// proof-backed evidence against the chain it is running.
+    pub fn review_floor_elapsed(&self) -> bool {
+        unix_now() >= self.review_until_ms.load(Ordering::SeqCst)
+    }
+
     /// Milliseconds left on a review floor, for operator-facing reporting.
     ///
-    /// `None` also means "held open past its floor": a review stays in
-    /// [`ChainParticipation::CandidateReview`] while a decision is pending, however long the floor
-    /// said, because going Ready while weighing proof-backed evidence against the current chain is
-    /// the failure this whole path exists to prevent.
+    /// `None` means the floor has passed. That does NOT mean the review is over — see
+    /// [`Self::review_floor_elapsed`] and [`Self::decision_pending`]; `state()` is the only
+    /// authority on whether the node may participate.
     ///
     /// `checked_sub` rather than a comparison and a subtraction. `(until > now).then_some(until -
-    /// now)` reads as a guard and is not one — `then_some` takes a value, so the subtraction runs
-    /// whether or not the condition held. That underflowed and panicked the node, in this exact
+    /// now)` reads as a guard and is not one: `then_some` takes a value, so the subtraction runs
+    /// whether or not the condition held. That underflowed and killed the node, in exactly this
     /// state, on a link slow enough for a decision to outlive its floor.
     pub fn review_remaining_ms(&self) -> Option<u64> {
         if self.state() != ChainParticipation::CandidateReview {
@@ -355,6 +366,82 @@ impl Default for ChainParticipationGate {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// Put a gate in CandidateReview with its floor a chosen distance from now.
+    ///
+    /// `floor_offset_ms` is signed: negative puts the floor in the past, which is the case that
+    /// underflowed. Set directly rather than by sleeping, so the far-past case is reachable without
+    /// the test taking a week.
+    fn gate_in_review(floor_offset_ms: i64, decision_pending: bool) -> ChainParticipationGate {
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(0);
+        gate.review_until_ms.store(unix_now().saturating_add_signed(floor_offset_ms), Ordering::SeqCst);
+        if decision_pending {
+            gate.begin_decision();
+        }
+        gate
+    }
+
+    #[test]
+    fn the_review_floor_and_the_pending_decision_are_separate_questions() {
+        // The matrix that has to hold, at every position of the clock relative to the floor. The
+        // failure mode being pinned is not only the panic: it is a fix that makes the panic go away
+        // by treating "floor elapsed" as "review over", which would let the node participate while
+        // still weighing evidence against its own chain. That is the original incident.
+        const HUGE: i64 = 1_000_000_000_000; // far past / far future, well beyond any real floor
+
+        for (offset, pending, expect_review, label) in [
+            (60_000i64, true, true, "floor ahead, decision pending"),
+            (60_000, false, true, "floor ahead, nothing pending"),
+            (0, true, true, "floor exactly now, decision pending"),
+            (-1, true, true, "floor just passed, decision pending"),
+            (-HUGE, true, true, "floor long passed, decision pending"),
+            (-1, false, false, "floor passed, nothing pending"),
+            (-HUGE, false, false, "floor long passed, nothing pending"),
+            (HUGE, false, true, "floor absurdly far ahead"),
+        ] {
+            let gate = gate_in_review(offset, pending);
+            // Reading it must never panic, whatever the clock says.
+            let remaining = gate.review_remaining_ms();
+            let elapsed = gate.review_floor_elapsed();
+
+            if expect_review {
+                assert_eq!(gate.state(), ChainParticipation::CandidateReview, "{label}");
+                assert!(!gate.allows_participation(), "{label}: must not participate while under review");
+            } else {
+                assert_eq!(gate.state(), ChainParticipation::Ready, "{label}");
+            }
+            // A decision pending past its floor is exactly the state that underflowed: reported as
+            // no time left, still under review.
+            if pending && elapsed {
+                // "No time left" is Some(0) exactly on the boundary and None past it. Both are
+                // right; what must never happen is a panic, or a number that grew by wrapping.
+                assert_eq!(remaining.unwrap_or(0), 0, "{label}");
+                assert_eq!(gate.state(), ChainParticipation::CandidateReview, "{label}: a pending decision outranks the floor");
+            }
+        }
+    }
+
+    #[test]
+    fn a_floor_restored_already_elapsed_does_not_panic_or_leak_participation() {
+        // Restart with a review floor that expired while the process was down — the absolute
+        // deadline is deliberately preserved across restarts, so this is ordinary, not exotic.
+        let recorder = Arc::new(Recorder(Mutex::new(Some(ChainParticipationSnapshot {
+            state: ChainParticipation::CandidateReview,
+            review_until_ms: 1, // unix epoch + 1ms: long gone
+            ever_ready: false,
+            adoption_generation: 3,
+            switches: 1,
+        }))));
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder);
+
+        assert!(gate.review_floor_elapsed());
+        assert_eq!(gate.review_remaining_ms(), None, "no panic reading a floor from 1970");
+        // Nothing is pending after a restart — the decision died with the process — so the review
+        // is genuinely over and the node may proceed to review its chain afresh.
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+    }
 
     #[test]
     fn reporting_a_review_that_outlived_its_floor_does_not_kill_the_node() {

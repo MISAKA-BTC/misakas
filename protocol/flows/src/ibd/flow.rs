@@ -293,6 +293,33 @@ impl IbdFlow {
                                  chain whose sync never completed; participation is QUARANTINED until an operator intervenes.",
                                 self.router
                             );
+                            return Err(e);
+                        }
+                        // While the chain is still under review, a failed IBD does not cost the peer
+                        // its connection.
+                        //
+                        // Returning Err here disconnects it, and the disconnect takes the candidate
+                        // registry entry with it — `forget_peer` drops a candidate whose last source
+                        // is gone. Measured, soak round 7: the peer offering the heavier chain
+                        // connected, relayed, was handed the latch, failed at the pruning-proof
+                        // comparison, and was dropped. The summary that arrived DURING that IBD had
+                        // nominated its chain for verification; the disconnect deleted the
+                        // nomination. Four nominations, one proof request ever sent, seven minutes
+                        // on the lighter branch. The node kept destroying the evidence it needed.
+                        //
+                        // "Your proof does not compare against mine" is not misbehaviour. It is the
+                        // exact situation the candidate machinery exists to resolve, and it cannot
+                        // be resolved without the peer. The DoS argument is weaker here too: a node
+                        // withholding participation is not mining or attesting, and every path this
+                        // keeps open is separately rate-limited — summary cooldown, verification
+                        // lease, per-peer failure count.
+                        if !self.ctx.is_consensus_participation_allowed() {
+                            info!(
+                                "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
+                                 a peer offering a different one is evidence rather than an offence.",
+                                self.router
+                            );
+                            continue;
                         }
                         return Err(e);
                     }

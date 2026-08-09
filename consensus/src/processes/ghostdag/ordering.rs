@@ -1,8 +1,4 @@
-use std::cmp::Ordering;
-
 use kaspa_consensus_core::BlockHash;
-use kaspa_consensus_core::BlueWorkType;
-use serde::{Deserialize, Serialize};
 
 use crate::model::{
     services::reachability::ReachabilityService,
@@ -11,35 +7,11 @@ use crate::model::{
 
 use super::protocol::GhostdagManager;
 
-#[derive(Eq, Clone, Serialize, Deserialize)]
-pub struct SortableBlock {
-    pub hash: BlockHash,
-    pub blue_work: BlueWorkType,
-}
-
-impl SortableBlock {
-    pub fn new(hash: BlockHash, blue_work: BlueWorkType) -> Self {
-        Self { hash, blue_work }
-    }
-}
-
-impl PartialEq for SortableBlock {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash
-    }
-}
-
-impl PartialOrd for SortableBlock {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SortableBlock {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.blue_work.cmp(&other.blue_work).then_with(|| self.hash.cmp(&other.hash))
-    }
-}
+// The definition moved to `kaspa_consensus_core::sortable_block` so that chain selection outside
+// the consensus crate — deciding whether a verified IBD candidate beats the chain already held —
+// uses this exact order rather than a second implementation of it. Re-exported here because this is
+// where GHOSTDAG readers expect to find it.
+pub use kaspa_consensus_core::sortable_block::SortableBlock;
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
     pub fn sort_blocks(&self, blocks: impl IntoIterator<Item = BlockHash>) -> Vec<BlockHash> {

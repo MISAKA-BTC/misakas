@@ -23,7 +23,7 @@
 //! alternative. During review the operator's trusted checkpoint is the only authority; imported DNS
 //! state is an observation.
 
-use kaspa_consensus_core::{BlockHash, BlueWorkType, config::trusted_checkpoint::TrustedCheckpoint};
+use kaspa_consensus_core::{BlockHash, BlueWorkType, config::trusted_checkpoint::TrustedCheckpoint, sortable_block::SortableBlock};
 use kaspa_core::chain_participation::ChainParticipation;
 use kaspa_hashes::Hash;
 
@@ -269,18 +269,22 @@ pub fn authorize_candidate_adoption(
     {
         return Err(AdoptionError::PermitDoesNotMatch);
     }
-    // The canonical fork choice, not a private rule invented here.
+    // The canonical fork choice — GHOSTDAG's own comparator, not a rule invented here.
     //
-    // GHOSTDAG's `SortableBlock` orders by blue work and breaks ties on the block hash
-    // (`consensus/src/processes/ghostdag/ordering.rs`). Comparing raw blue work alone threw that
-    // deterministic tie-break away and turned every work tie into an impasse — which is not
+    // `SortableBlock` orders by blue work and breaks ties on the block hash. Comparing raw blue
+    // work alone threw that tie-break away and turned every work tie into an impasse, which is not
     // hypothetical: two real branches measured identical work, and a node that should have had a
     // decisive answer quarantined instead.
     //
-    // With the tie-break, `Equal` means same work AND same hash: the same chain, so there is
-    // nothing to choose between. A genuine fork always resolves.
-    let challenger = (validated.verified_blue_work, validated.verified_tip);
-    let incumbent = (defender.blue_work, defender.tip);
+    // Calling the type rather than restating `(blue_work, hash)` here is the point. Two
+    // implementations of a fork-choice rule do not stay equal — a change to the tie-break, or to
+    // the hash ordering underneath it, would silently make this path prefer a chain the DAG
+    // rejects. So the type moved down into consensus-core and both callers use it.
+    //
+    // `Equal` therefore means same work AND same hash: the same chain, nothing to choose between.
+    // A genuine fork always resolves.
+    let challenger = SortableBlock::new(validated.verified_tip, validated.verified_blue_work);
+    let incumbent = SortableBlock::new(defender.tip, defender.blue_work);
     match challenger.cmp(&incumbent) {
         std::cmp::Ordering::Greater => Ok(CandidateAdoptionPermit {
             candidate_id: validated.id,
