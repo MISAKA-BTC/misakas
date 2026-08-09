@@ -108,6 +108,16 @@ pub struct ChainParticipationGate {
     /// Where transitions are recorded so they survive a restart. `None` keeps the gate purely
     /// in-memory, which is what tests and disabled networks use.
     persistence: Option<Arc<dyn ChainParticipationPersistence>>,
+    /// Set while a candidate that HAS produced a valid pruning proof is still being weighed.
+    ///
+    /// The review floor and this are different deadlines and were conflated. The floor answers "has
+    /// anything turned up?", and it must expire or a quiet node could never participate. This
+    /// answers "is something in the middle of being decided?", and letting the floor expire through
+    /// it would mean going Ready while holding evidence that the chain might be wrong.
+    ///
+    /// Only a candidate backed by a valid proof may hold it. A peer that cannot produce one has no
+    /// claim on this node's time — that is the difference between fail-closed and hostage.
+    decision_pending: AtomicBool,
 }
 
 impl ChainParticipationGate {
@@ -116,6 +126,7 @@ impl ChainParticipationGate {
             state: AtomicU8::new(READY),
             review_until_ms: AtomicU64::new(0),
             ever_ready: AtomicBool::new(false),
+            decision_pending: AtomicBool::new(false),
             adoption_generation: AtomicU64::new(0),
             switches: AtomicU32::new(0),
             enabled,
@@ -175,6 +186,25 @@ impl ChainParticipationGate {
 
     pub fn restored_switches(&self) -> u32 {
         self.switches.load(Ordering::SeqCst)
+    }
+
+    /// Hold the review open: a candidate with a valid pruning proof is being weighed.
+    ///
+    /// Reserved for proof-backed candidates. A peer that merely claims something must not be able
+    /// to keep a node from participating by claiming it repeatedly.
+    pub fn begin_decision(&self) {
+        if self.enabled {
+            self.decision_pending.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The candidate has been decided — adopted, refused, or timed out. Release the hold.
+    pub fn end_decision(&self) {
+        self.decision_pending.store(false, Ordering::SeqCst);
+    }
+
+    pub fn decision_pending(&self) -> bool {
+        self.decision_pending.load(Ordering::SeqCst)
     }
 
     /// Whether this node has ever participated. See [`ChainParticipationSnapshot::ever_ready`].
@@ -270,7 +300,9 @@ impl ChainParticipationGate {
             IBD_RUNNING => ChainParticipation::IbdRunning,
             QUARANTINED => ChainParticipation::Quarantined,
             CANDIDATE_REVIEW => {
-                if unix_now() < self.review_until_ms.load(Ordering::SeqCst) {
+                // The floor holding, or a proof-backed candidate still being decided. Either keeps
+                // the node out of Ready; only the first of them expires on its own.
+                if unix_now() < self.review_until_ms.load(Ordering::SeqCst) || self.decision_pending.load(Ordering::SeqCst) {
                     ChainParticipation::CandidateReview
                 } else {
                     if self.state.compare_exchange(CANDIDATE_REVIEW, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
@@ -364,6 +396,39 @@ mod tests {
         gate.enter_candidate_review(0);
         // fetch_max keeps the longer floor, so a zero-length review cannot cut one short.
         assert!(!gate.allows_participation(), "a later shorter review must not release the node early");
+    }
+
+    #[test]
+    fn a_proof_backed_candidate_holds_the_review_past_its_floor() {
+        // The two deadlines are different questions. The floor asks "has anything turned up?" and
+        // must expire, or a quiet node could never participate. The hold asks "is something being
+        // decided?" — and letting the floor expire through it would mean going Ready while holding
+        // evidence that the chain might be wrong.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(0);
+        gate.begin_decision();
+
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview, "the floor elapsed but a decision is in flight");
+        assert!(!gate.allows_participation());
+
+        gate.end_decision();
+        assert_eq!(gate.state(), ChainParticipation::Ready, "and it releases once the candidate is settled");
+    }
+
+    #[test]
+    fn a_hold_cannot_outlive_the_candidate_that_earned_it() {
+        // Only a proof-backed candidate may hold the review, and only until it is settled. Otherwise
+        // a peer that never delivers would keep a node out of participation indefinitely — hostage,
+        // not fail-closed.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(0);
+        gate.begin_decision();
+        assert!(gate.decision_pending());
+        gate.end_decision();
+        assert!(!gate.decision_pending());
+        assert!(gate.allows_participation());
     }
 
     #[test]

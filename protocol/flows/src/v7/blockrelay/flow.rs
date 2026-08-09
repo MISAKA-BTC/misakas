@@ -366,14 +366,19 @@ impl HandleRelayInvsFlow {
         // arrived, so an attempt blocked at that instant was never retried.
         //
         // Both now run on this poll, which ticks exactly while participation is withheld.
-        for id in self.ctx.expire_stale_verifications() {
+        let expired = self.ctx.expire_stale_verifications();
+        if !expired.is_empty() {
+            // Nothing proof-backed is being weighed any more; stop holding the review open.
+            self.ctx.chain_participation().end_decision();
+        }
+        for id in expired {
             record_stage(
                 RecoveryStage::Rejected,
                 None,
                 Some(id),
                 None,
                 self.ctx.chain_participation().state().as_str(),
-                "verification lease expired; releasing the nomination slot",
+                "verification lease expired; releasing the nomination slot and the review hold",
             );
         }
         self.ctx.nominate_challenger();

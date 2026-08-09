@@ -210,7 +210,10 @@ impl IbdFlow {
                     self.ctx.preferred_ibd_candidate().is_some_and(|p| p.preferred_sources.contains(&self.router.key()));
 
                 let outcome = self.ibd(relay_header).await;
-                // The permit covered exactly this attempt.
+                // The permit covered exactly this attempt, and so did the hold on the review.
+                if self.active_recovery_permit.is_some() {
+                    self.ctx.chain_participation().end_decision();
+                }
                 self.active_recovery_permit = None;
                 // Release the reservation only when the attempt it authorised actually finished.
                 // Clearing it on failure spends the handoff on one stumble and drops the node back
@@ -358,6 +361,10 @@ impl IbdFlow {
                     id.virtual_selected_parent, self.router, verified_blue_work
                 );
                 self.ctx.ibd_candidates().write().set_validated(id, verified_blue_work, proof_hash);
+                // A proof-backed candidate is now in play. Hold the review open past its floor: going
+                // Ready while holding evidence that the chain might be wrong is the failure this
+                // whole path exists to avoid. Released when the candidate is settled either way.
+                self.ctx.chain_participation().begin_decision();
                 self.consider_post_ibd_switch(id, verified_blue_work).await;
             }
             Err(e) => {
@@ -369,6 +376,8 @@ impl IbdFlow {
                 );
                 self.ctx
                     .set_ibd_candidate_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+                // A candidate that cannot back its claim has no hold on this node's time.
+                self.ctx.chain_participation().end_decision();
             }
         }
     }
@@ -848,6 +857,9 @@ impl IbdFlow {
         // unresolved. Otherwise "advertise a chain and go quiet" would hold up every commit — the
         // denial of service that fail-closed invites if it has no deadline.
         let timed_out = self.ctx.expire_stale_verifications();
+        if !timed_out.is_empty() {
+            self.ctx.chain_participation().end_decision();
+        }
         for id in &timed_out {
             warn!(
                 "Chain candidate {} was nominated for verification but no source produced a pruning proof within its lease; \
