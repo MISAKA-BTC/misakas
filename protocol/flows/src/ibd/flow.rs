@@ -28,7 +28,6 @@ use kaspa_consensus_core::{
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
 use kaspa_core::{debug, info, time::unix_now, warn};
 use kaspa_muhash::MuHash;
-use kaspa_p2p_lib::unwrap_message;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
@@ -530,14 +529,34 @@ impl IbdFlow {
                 self.consider_post_ibd_switch(id, verified_blue_work).await;
             }
             Err(e) => {
-                // Failing to back a claim is the peer's failure. Recording the refusal is what stops
-                // an unbackable claim from holding up a commit indefinitely.
+                // A chain is condemned only for producing a bad proof — never for a failure of the
+                // conversation that was supposed to carry one.
+                //
+                // `InvalidProof` is permanent: the candidate is refused for the rest of its life in
+                // the registry. That is right for a proof that failed validation and wrong for
+                // everything else. A connection that closed, a deadline that ran out, a lease that
+                // was revoked, a route still carrying the previous IBD's replies — none of those
+                // say anything about the chain, and one of them (a leftover `TrustedData` read as
+                // the answer) is what permanently wrote off the heavier branch in a measured round.
+                //
+                // Transport failures leave the candidate where it was, so the ordinary retry and
+                // source-rotation machinery gets its turn. The lease bounds how long that can go on.
+                let proof_was_judged =
+                    !matches!(e, ProtocolError::ConnectionClosed | ProtocolError::Timeout(_) | ProtocolError::UnexpectedMessage(..))
+                        && !matches!(&e, ProtocolError::Other(m) if m.contains("lease was revoked"));
                 warn!(
-                    "Candidate {} from {} could not be backed by a valid pruning proof: {}",
-                    id.virtual_selected_parent, self.router, e
+                    "Candidate {} from {} could not be backed by a valid pruning proof: {} ({})",
+                    id.virtual_selected_parent,
+                    self.router,
+                    e,
+                    if proof_was_judged { "refusing the chain" } else { "transport failure — the chain keeps its turn" }
                 );
-                self.ctx
-                    .set_ibd_candidate_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+                if proof_was_judged {
+                    self.ctx.set_ibd_candidate_validation(
+                        id,
+                        CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
+                    );
+                }
                 // A candidate that cannot back its claim has no hold on this node's time.
                 self.ctx.chain_participation().end_decision();
             }
@@ -844,6 +863,7 @@ impl IbdFlow {
         attempt_stamp: Option<Instant>,
     ) -> Result<kaspa_p2p_lib::pb::PruningPointProofMessage, ProtocolError> {
         let deadline = Instant::now() + budget;
+        let mut discarded = 0usize;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -851,7 +871,33 @@ impl IbdFlow {
             }
             let slice = remaining.min(LEASE_REVOKE_CHECK_INTERVAL);
             match tokio::time::timeout(slice, self.incoming_route.recv()).await {
-                Ok(op) => return unwrap_message!(op, Payload::PruningPointProof),
+                Ok(None) => return Err(ProtocolError::ConnectionClosed),
+                Ok(Some(msg)) => match msg.payload {
+                    Some(Payload::PruningPointProof(proof)) => {
+                        if discarded > 0 {
+                            debug!("discarded {discarded} leftover message(s) from {} before its pruning point proof", self.router);
+                        }
+                        return Ok(proof);
+                    }
+                    // Anything else is the wreckage of the IBD this flow just abandoned.
+                    //
+                    // The route carries every payload the IBD uses, and an aborted sync leaves
+                    // replies it will never read — `TrustedData`, chunks already in flight. Keeping
+                    // the connection after a refused IBD (which is what lets the challenger be
+                    // checked at all) means those arrive on the same route the proof does.
+                    //
+                    // Measured: a challenger dequeued a leftover `TrustedData`, the type mismatch
+                    // was reported as "could not be backed by a valid pruning proof", and the chain
+                    // was marked InvalidProof — PERMANENTLY. A statement about a dirty channel,
+                    // recorded as a verdict on a chain. The node then stayed on the lighter branch
+                    // with the heavier one written off.
+                    //
+                    // So leftovers are discarded rather than mistaken for an answer. The deadline
+                    // still bounds the wait, so a peer cannot stall by sending junk forever.
+                    _ => {
+                        discarded += 1;
+                    }
+                },
                 Err(_) => {
                     // Nothing arrived in this slice. Still our lease?
                     if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
