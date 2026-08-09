@@ -75,14 +75,30 @@ sleep "${SECOND_PEER_DELAY:-8}"
 RESULT=$(wait_for_score "$FOLLOWER_GRPC" "$HEAVY_SCORE" "$TIMEOUT")
 SETTLED=$?
 
+# Converging is half the property. A node that reaches the right chain and then never
+# participates has failed differently, not succeeded quietly — so wait out the review floor and
+# see it resume. Bounded: the floor is 180s and the whole verification budget fits inside it, so
+# anything beyond this is the node still holding back for a reason worth reporting.
+READY=false
+for _ in $(seq 1 ${READY_WAIT_TICKS:-52}); do
+  if [ "$("$RPC" "127.0.0.1:$FOLLOWER_GRPC" 2>/dev/null | sed -n 's/.*is_synced=\([a-z]*\).*/\1/p')" = "true" ]; then
+    READY=true
+    break
+  fi
+  sleep 5
+done
+RESULT=$("$RPC" "127.0.0.1:$FOLLOWER_GRPC" 2>/dev/null || echo "$RESULT")
+
 PP=$(sed -n 's/.*pruning_point=\([0-9a-f]*\).*/\1/p' <<<"$RESULT")
 SYNCED=$(sed -n 's/.*is_synced=\([a-z]*\).*/\1/p' <<<"$RESULT")
 ON_HEAVY=false; [ "$PP" = "$HEAVY_PP" ] && ON_HEAVY=true
 ON_LIGHT=false; [ "$PP" = "$LIGHT_PP" ] && ON_LIGHT=true
 
-echo "VPS-ROUND round=$ROUND settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED light=$LIGHT_ADDR heavy=$HEAVY_ADDR"
+echo "VPS-ROUND round=$ROUND settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED became_ready=$READY light=$LIGHT_ADDR heavy=$HEAVY_ADDR"
 echo "  probe: $RESULT"
 
 stop_regress_pid "$BASE/follower.pid" || true
+# Two ways to fail: acting on the wrong chain, or reaching the right one and never acting at all.
 [ "$ON_LIGHT" = true ] && [ "$SYNCED" = true ] && exit 1
-exit 0
+[ "$ON_HEAVY" = true ] && [ "$READY" = true ] && exit 0
+exit 1
