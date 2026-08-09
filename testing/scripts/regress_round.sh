@@ -37,7 +37,11 @@ FOLLOWER_GRPC=41241
 TIMEOUT=${TIMEOUT:-600}
 
 stop_regress_pid "$BASE/follower.pid" || exit 1
-rm -rf "$BASE/follower" "$BASE/follower.log"
+# Keep the previous round's log. Each round used to delete it, so by the time a verdict was read
+# the evidence for it had already been overwritten by the next round — which is how a diagnosis
+# came to be attempted against the wrong round's log.
+[ -f "$BASE/follower.log" ] && mv "$BASE/follower.log" "$BASE/follower-$(date -u +%H%M%S).log"
+rm -rf "$BASE/follower"
 mkdir -p "$BASE/follower"
 
 nohup "$BIN" --simnet \
@@ -112,7 +116,8 @@ SYNCED=$(sed -n 's/.*is_synced=\([a-z]*\).*/\1/p' <<<"$RESULT")
 ON_HEAVY=false; [ "$PP" = "$HEAVY_PP" ] && ON_HEAVY=true
 ON_LIGHT=false; [ "$PP" = "$LIGHT_PP" ] && ON_LIGHT=true
 
-echo "VPS-ROUND round=$ROUND settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED became_ready=$READY light=$LIGHT_ADDR heavy=$HEAVY_ADDR"
+FLOOR=$(grep -aoE "\\(([0-9]+)s floor remaining\\)" "$BASE/follower.log" 2>/dev/null | tail -1)
+echo "VPS-ROUND round=$ROUND floor_at_end=${FLOOR:-none} settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED became_ready=$READY light=$LIGHT_ADDR heavy=$HEAVY_ADDR"
 echo "  probe: $RESULT"
 
 stop_regress_pid "$BASE/follower.pid" || true
