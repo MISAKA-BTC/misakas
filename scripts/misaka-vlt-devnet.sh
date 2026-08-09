@@ -122,6 +122,46 @@ echo
 BASE_P2P=17111
 BASE_RPC=17110
 
+# EVERY refusal below this point must come BEFORE the running nodes are stopped. A check that
+# rejects the configuration after the kill loop leaves the devnet down as its side effect, and the
+# operator is left worse off than if the script had never run.
+#
+# The one devnet mistake a restart cannot undo: opening the weight fence on an empty credit table.
+#
+# Past the fence the vote is VLT-weighted, so W(E) = 0 means no epoch reaches quorum, no anchor is
+# DNS-confirmed, and the anchors that were confirmed before the fence slide out of the credit window
+# one by one. Credit needs an anchor, an anchor needs quorum, and quorum needs credit — the overlay
+# cannot climb out, and the only symptom is `[vlt-finality-inactive] reason=zero_total_weight` while
+# the chain keeps advancing perfectly well on PoW.
+#
+# It is easy to walk into, because bonding is what fills the soak: `misaka-vlt-devnet-bond.sh` mines
+# past a thousand-block coinbase maturity, and until it finishes no node has an Active bond, so no
+# node originates a job. Start the fence at the same DAA twice and the entire soak is spent bonding.
+#
+# Both numbers come from the previous run — the fence kaspad itself reported, and the `--vlt-devnet`
+# it was given — so the span is measured rather than restated here.
+if [ -f "$WORK_DIR/node-0/kaspad.log" ] && [ "$SHADOW_ONLY" -eq 0 ]; then
+  prior=$({ grep -oE '\[vlt-weight-fence-reached\] daa=[0-9]+ fence=[0-9]+' "$WORK_DIR/node-0/kaspad.log" || true; } | tail -1)
+  prior_shadow=$({ tr ' ' '\n' < "$WORK_DIR/node-0/run.args" 2>/dev/null | sed "s/^'//;s/'$//" |
+    { grep -oE '^--vlt-devnet=[0-9]+' || true; }; } | tail -1)
+  if [ -n "$prior" ] && [ -n "$prior_shadow" ]; then
+    seen_daa=${prior#*daa=}; seen_daa=${seen_daa%% *}
+    prior_fence=${prior##*fence=}
+    span=$((prior_fence - ${prior_shadow#--vlt-devnet=}))
+    if [ $((SHADOW_DAA + span)) -le "$seen_daa" ]; then
+      echo >&2
+      echo "refusing to start: --shadow-daa $SHADOW_DAA puts the weight fence at $((SHADOW_DAA + span)), and this" >&2
+      echo "chain is already at DAA $seen_daa. The vote would move onto verified compute with an empty" >&2
+      echo "credit table, and the overlay cannot recover from that — see the comment above this check." >&2
+      echo >&2
+      echo "Give the soak somewhere to happen:" >&2
+      echo "  $0 --shadow-daa $((seen_daa + 100))        # fence lands at $((seen_daa + 100 + span)), with compute running throughout" >&2
+      echo "  $0 --shadow-only                    # or keep the fence dormant and watch [vlt-shadow] first" >&2
+      exit 2
+    fi
+  fi
+fi
+
 # Stop anything this script started before, so it can be re-run to change flags. Without it the new
 # nodes lose the port race, die on bind, and the script reports five exits with no hint that the
 # old mesh is still up and holding the ports.
