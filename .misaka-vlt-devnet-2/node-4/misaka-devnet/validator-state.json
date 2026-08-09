@@ -71,6 +71,18 @@
       "target_hash": "fa0e15c2e59580b8f54778226dafc1f485a5f5c9149eda2baddd2c74ca91a8be3593b6447d8b3bbe49f8cc0a492afbada5ed63547e606fa20595798152867d2c",
       "target_daa_score": 2388,
       "signature_fingerprint": "29ef0b118492a43ae092fc6fa8487f3194e017956893836c9f5b519cff86377e30d27b0ab04f35f6ce090c5964319c179fe6ec14cbbbd9b21a93761a779493b7"
+    },
+    "24": {
+      "epoch": 24,
+      "target_hash": "3f9cc0adee98eb248450f22dffc09f6069d5c1bb39da939430eecd6f22b47c20457181d8812ef92dcef049deb67594c29af1d452e6cad37a379bf59ca41a0155",
+      "target_daa_score": 2488,
+      "signature_fingerprint": "5ee9dc7601971a3335d647f52ce03618db5fe0f20990fabc66e47598fb6b7c75a87872cce539540220744c73fda4dd02e50816ad75e6c9bad9002ebea8fc51dd"
+    },
+    "25": {
+      "epoch": 25,
+      "target_hash": "ebbb30dc95395ba4a6be74c11b5dfbd5594761f2ae001268bfcbbc5bbf87f5be75d2e39df931fa31435524d6df5ac8be1c0e076222c98751d09ec6ac87e868b8",
+      "target_daa_score": 2588,
+      "signature_fingerprint": "799b29da06d36dfc20e7dac2534a7b8eaeda5ca8f0c49b148a4952e9e68fac94aef2aad8c7357787d99c946ca31d697313f7154693ad4c00248602e62bf22d46"
     }
   }
 }

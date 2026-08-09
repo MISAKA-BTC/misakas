@@ -48,7 +48,16 @@ use super::U64Key;
 ///   rather than by its own dependency horizon, so in the steady state every certificate resolved
 ///   to "commitment missing" and the epochs were sealed as empty. Rows written under rule 1 record
 ///   a walk that could not see what it was judging.
-pub const VLT_CREDITS_SCHEMA_VERSION: u32 = 2;
+/// * 3 — the verifier committee's candidate pool moved from the credit walk to the capability
+///   store, and is now bound to the beacon anchor's own chain history. Rows written under rule 2
+///   drew that pool from whatever declarations the walk happened to hold, which empties as the walk
+///   floor rises past a declaration that is still in force — so they record certificates as
+///   unverified that a committee-aware walk credits.
+///
+/// The rule is the *resolution* semantics, not the row layout: bump this whenever a change alters
+/// what the walk would decide about an epoch it has already recorded, because write-once means the
+/// old decision outlives the code that made it.
+pub const VLT_CREDITS_SCHEMA_VERSION: u32 = 3;
 
 /// Per-epoch verified-compute credit store, keyed by `u64` epoch. Write-once per epoch: a row
 /// appears only after the epoch is finalized, and a finalized epoch never changes.
