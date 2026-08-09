@@ -2,8 +2,8 @@ use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
     flowcontext::bootstrap_recovery::{
-        AdoptionError, CandidateValidationPermit, ChainReviewState, ChainTip, RecoveryRequest, ValidatedCandidate, VerifiedCandidate,
-        authorize_candidate_adoption, authorize_candidate_validation,
+        AdoptionError, CandidateAdoptionPermit, CandidateValidationPermit, ChainReviewState, ChainTip, RecoveryRequest,
+        ValidatedCandidate, VerifiedCandidate, authorize_candidate_adoption, authorize_candidate_validation,
     },
     flowcontext::ibd_candidates::{
         CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
@@ -41,6 +41,7 @@ use kaspa_p2p_lib::{
     },
 };
 use kaspa_utils::channel::JobReceiver;
+use parking_lot::Mutex;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -99,6 +100,11 @@ pub struct IbdFlow {
     /// authority lasts exactly as long as the attempt it was issued for.
     active_recovery_permit: Option<CandidateValidationPermit>,
 
+    /// The adoption permit earned at the commit barrier, carried the few steps to `commit_if` so
+    /// the defender it was judged against can be re-checked under the lock that performs the swap.
+    /// `authorize_commit` takes `&self`, so this is a cell rather than a return value.
+    earned_adoption_permit: Mutex<Option<CandidateAdoptionPermit>>,
+
     /// Handoffs: a chain this node has decided to sync next. Consumed by whichever flow serves it,
     /// so a switch does not depend on the winning peer happening to relay something.
     handoff_receiver: broadcast::Receiver<CandidateId>,
@@ -152,6 +158,7 @@ impl IbdFlow {
             body_only_ibd_permitted,
             header_format,
             active_recovery_permit: None,
+            earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
             handoff_receiver,
         }
@@ -946,6 +953,7 @@ impl IbdFlow {
                     if !adoption.still_applies(&state, &incumbent) {
                         return Err(ProtocolError::Other("the incumbent chain moved while this candidate was being validated"));
                     }
+                    *self.earned_adoption_permit.lock() = Some(adoption);
                     record_stage(
                         RecoveryStage::RecoveryPermitGranted,
                         None,
@@ -1244,7 +1252,54 @@ impl IbdFlow {
                             self.ctx.chain_participation().state().as_str(),
                             "staging committed",
                         );
-                        spawn_blocking(|| staging.commit()).await.unwrap();
+                        // The swap, with the adoption decision re-checked against the defender
+                        // under the same lock that performs it.
+                        //
+                        // The permit was earned from a reading of the active consensus, and the
+                        // active consensus kept taking blocks from its own peers for every step
+                        // between that reading and here — expiring stale verifications, reading
+                        // pruning points, counting unresolved candidates, returning through two
+                        // stack frames. Checking before calling `commit` leaves all of that inside
+                        // the window, and whatever happens in it, the swap goes through anyway.
+                        //
+                        // `commit_if` closes the window rather than narrowing it: the predicate runs
+                        // while the manager is held for writing, so nothing can move the defender
+                        // between the check and the replacement.
+                        let permit = self.earned_adoption_permit.lock().take();
+                        let gate = self.ctx.chain_participation();
+                        let state_now = ChainReviewState {
+                            participation: gate.state(),
+                            ever_ready: gate.ever_ready(),
+                            adoption_generation: gate.adoption_generation(),
+                            switch_count: gate.restored_switches(),
+                        };
+                        let committed = spawn_blocking(move || {
+                            staging.commit_if(|active| {
+                                let Some(permit) = permit else {
+                                    return true; // no adoption decision rode on the defender
+                                };
+                                // Blocking session: this runs inside spawn_blocking, under the
+                                // manager's write lock, so it must not await.
+                                let session = active.unguarded_session_blocking();
+                                let tip = session.get_headers_selected_tip();
+                                match session.get_header(tip) {
+                                    Ok(h) => permit.still_applies(&state_now, &ChainTip { tip, blue_work: h.blue_work }),
+                                    // Unreadable defender: refuse. Committing on a reading that
+                                    // failed is how a permit gets applied to a chain nobody checked.
+                                    Err(_) => false,
+                                }
+                            })
+                        })
+                        .await
+                        .unwrap();
+                        if let Err(staging) = committed {
+                            staging.cancel();
+                            self.ctx.chain_participation().end_decision();
+                            return Err(ProtocolError::Other(
+                                "the incumbent chain moved between earning the adoption permit and the swap; refusing to \
+                                 replace it on a stale comparison",
+                            ));
+                        }
                         // From here the node runs the new chain regardless of what the rest of the
                         // IBD does, so a later failure must not be reported and forgotten.
                         self.ctx.mark_active_consensus_replaced();

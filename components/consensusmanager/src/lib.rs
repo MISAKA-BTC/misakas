@@ -212,8 +212,26 @@ impl StagingConsensus {
         Self { manager, staging, handles }
     }
 
-    pub fn commit(self) {
+    /// Commit only if the active consensus still satisfies `still_valid`, decided under the same
+    /// exclusive lock that performs the swap. Returns the staging consensus back on refusal so the
+    /// caller can cancel it.
+    ///
+    /// This exists because a decision to replace the active consensus is made from a reading of it,
+    /// and the active consensus keeps taking blocks from its own peers the whole time. Checking
+    /// before calling `commit` leaves a window between the check and the swap; whatever happens in
+    /// that window, the swap goes through. The window is small and the consequence is not: adopting
+    /// a chain that is no longer the better one is the exact failure IBD candidate selection exists
+    /// to prevent.
+    ///
+    /// `still_valid` runs while `inner` is held for writing, so it must not touch the manager —
+    /// reading the consensus it is handed is fine, since that is a DB read and takes no manager
+    /// lock.
+    pub fn commit_if(self, still_valid: impl FnOnce(&ConsensusInstance) -> bool) -> Result<(), Self> {
         let mut g = self.manager.inner.write();
+        if !still_valid(&g.current.consensus) {
+            drop(g);
+            return Err(self);
+        }
         let prev = std::mem::replace(&mut g.current, self.staging);
         g.handles.extend(self.handles);
         prev.ctl.stop();
@@ -225,6 +243,13 @@ impl StagingConsensus {
         // Staging was committed and is now the active consensus so we can delete
         // any previous, now inactive, consensus entries
         self.manager.delete_inactive_consensus_entries();
+        Ok(())
+    }
+
+    /// Commit unconditionally. The ordinary path, where nothing about the active consensus was part
+    /// of the decision to replace it.
+    pub fn commit(self) {
+        let _ = self.commit_if(|_| true);
     }
 
     pub fn cancel(self) {
