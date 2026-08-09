@@ -18,7 +18,7 @@ LIGHT_PP=$3
 HEAVY_PP=$4
 HEAVY_SCORE=$5
 
-BASE=${BASE:-/tmp/misaka-regress}
+BASE=${BASE:-/var/lib/misaka-regression}
 # shellcheck source=regress_lib.sh
 source "$BASE/regress_lib.sh"
 

@@ -4,7 +4,11 @@
 # These run on hosts that also run production testnet-10. Everything here is written on the
 # assumption that a mistake costs the network, not the test.
 
-BASE=${BASE:-/tmp/misaka-regress}
+# NOT /tmp. These fixtures are two independently mined chains that cost hours to produce, and /tmp
+# is cleared on reboot and by tmpfiles cleanup — a fixture that can evaporate is one you will
+# rebuild at the worst moment, or worse, silently re-mine into something that is no longer the same
+# experiment.
+BASE=${BASE:-/var/lib/misaka-regression}
 BIN=$BASE/src/target/release/kaspad
 RPC=$BASE/src/target/release/regress-rpc
 
