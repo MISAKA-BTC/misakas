@@ -221,6 +221,20 @@ impl IbdFlow {
                     }
                 }
             };
+
+            // Answer any outstanding proof request naming this peer BEFORE syncing from it.
+            //
+            // This is the only moment this flow is reliably idle. A peer relays its tip within a
+            // second of connecting, so the flow goes select → relay → ibd() → fail → disconnect,
+            // and the idle tick below never fires for it. Measured, soak round 7: two candidates
+            // nominated, one proof request ever sent, and thirty-three "nothing to nominate" while
+            // the unserved request held the single verification slot. The peer that owed the proof
+            // spent every one of those seconds inside an IBD that could not succeed.
+            //
+            // Narrow by construction: it does nothing unless participation is withheld and this
+            // node has already decided it wants this peer's proof.
+            self.serve_pending_nomination().await;
+
             if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_header.daa_score, relay_header.blue_work) {
                 info!("IBD started with peer {}", self.router);
 
