@@ -1922,6 +1922,11 @@ pub struct VltMetrics {
     /// The sink DAA the gauges were last written at, so a scraper can tell a stalled recompute
     /// from a steady state.
     sink_daa_score: AtomicU64,
+    /// Last recompute's credit walk: candidates seen, candidates credited, and the per-reason
+    /// skips indexed by [`VltCreditSkipReason::index`].
+    credit_candidates: AtomicU64,
+    credit_accepted: AtomicU64,
+    credit_skipped: [AtomicU64; 15],
 }
 
 impl VltMetrics {
@@ -1944,6 +1949,29 @@ impl VltMetrics {
         self.sink_daa_score.store(sink_daa_score, AtomicOrdering::Relaxed);
     }
 
+    /// Publish the latest credit-walk tally. Gauges, not counters: they are overwritten each
+    /// recompute rather than accumulated, so a scraper reads "why is credit not forming right now"
+    /// instead of a total that never comes down after one bad epoch.
+    pub fn record_credit(&self, tally: &VltCreditTally) {
+        self.credit_candidates.store(tally.candidates, AtomicOrdering::Relaxed);
+        self.credit_accepted.store(tally.accepted, AtomicOrdering::Relaxed);
+        for (slot, n) in self.credit_skipped.iter().zip(tally.skipped.iter()) {
+            slot.store(*n, AtomicOrdering::Relaxed);
+        }
+    }
+
+    pub fn read_credit(&self) -> VltCreditTally {
+        let mut skipped = [0u64; 15];
+        for (out, slot) in skipped.iter_mut().zip(self.credit_skipped.iter()) {
+            *out = slot.load(AtomicOrdering::Relaxed);
+        }
+        VltCreditTally {
+            candidates: self.credit_candidates.load(AtomicOrdering::Relaxed),
+            accepted: self.credit_accepted.load(AtomicOrdering::Relaxed),
+            skipped,
+        }
+    }
+
     pub fn read(&self) -> (VltGauges, u64) {
         let mut root = [0u8; 64];
         for (i, slot) in self.snapshot_root.iter().enumerate() {
@@ -1964,6 +1992,150 @@ impl VltMetrics {
             },
             self.sink_daa_score.load(AtomicOrdering::Relaxed),
         )
+    }
+}
+
+/// Why a certificate in the credit window credited nothing.
+///
+/// The credit walk drops a certificate in a dozen places, and every one of them used to be a bare
+/// `continue`. The only outward sign was `0 validator(s) with credit` — which is also exactly what
+/// a network running no compute at all looks like, so "nobody is executing" and "everybody is, and
+/// none of it counts" were indistinguishable from outside the node.
+///
+/// The variants are the *code paths*, not a tidy taxonomy: a reason that lumps two branches
+/// together sends the reader to the wrong half of the walk, which is the failure this enum exists
+/// to end. Several are transient by design — [`Self::BeaconNotReady`] and
+/// [`Self::ChallengeNotMature`] mean "not yet", not "never".
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum VltCreditSkipReason {
+    /// The certificate's own epoch has no canonical anchor in the credit window. Permanent: an
+    /// epoch that never anchored never will, and rescuing it later would rewrite consensus history.
+    MissingEpochAnchor,
+    /// No bond record for the outpoint the certificate names.
+    BondMissing,
+    /// The bond exists but is not this executor's, or was not Active at the epoch anchor.
+    BondInactive,
+    /// The executor's ML-DSA-87 signature over its own receipt does not verify.
+    ExecutorSignatureInvalid,
+    /// The phase-1 commitment is not on this chain (or not within the walked span).
+    CommitmentMissing,
+    /// The commitment is there but names a different job, executor, bond, or input.
+    CommitmentMismatch,
+    /// The certificate predates its commitment, or the commitment is older than
+    /// `max_commitment_age_blocks`.
+    CommitmentOutOfRange,
+    /// The sortition beacon's epoch has not anchored yet. Transient: not creditable *yet*.
+    BeaconNotReady,
+    /// The certificate was accepted before its own beacon — it revealed before the randomness that
+    /// picks its auditors was fixed.
+    CertificatePredatesBeacon,
+    /// `(h_M, h_R)` is not in the network's model cost table, so the job normalizes to zero.
+    UnregisteredProfile,
+    /// The verifier committee has not reached `min_verifier_confirmations`, or reached
+    /// `min_verifier_refutations`. Transient while verdicts are still landing.
+    NotVerified,
+    /// Verified, but `normalize_vlt` priced it at zero.
+    ZeroValued,
+    /// Still inside its challenge window. Transient by construction.
+    ChallengeNotMature,
+    /// A fraud proof against it was adjudicated as standing (§6), or it failed to resolve — which
+    /// is itself proof for an `InvalidCertificate` challenge.
+    CertificateRefuted,
+    /// This executor was already credited for this `job_id`.
+    AlreadyCredited,
+}
+
+impl VltCreditSkipReason {
+    /// Every variant, for metric registration and exhaustive reporting. Adding a variant without
+    /// adding it here is caught by `every_skip_reason_is_registered`.
+    pub const ALL: [Self; 15] = [
+        Self::MissingEpochAnchor,
+        Self::BondMissing,
+        Self::BondInactive,
+        Self::ExecutorSignatureInvalid,
+        Self::CommitmentMissing,
+        Self::CommitmentMismatch,
+        Self::CommitmentOutOfRange,
+        Self::BeaconNotReady,
+        Self::CertificatePredatesBeacon,
+        Self::UnregisteredProfile,
+        Self::NotVerified,
+        Self::ZeroValued,
+        Self::ChallengeNotMature,
+        Self::CertificateRefuted,
+        Self::AlreadyCredited,
+    ];
+
+    /// Stable snake_case label for logs and the `reason=` metric dimension. Treat these as an API:
+    /// an operator's alert rule matches on the string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingEpochAnchor => "missing_epoch_anchor",
+            Self::BondMissing => "bond_missing",
+            Self::BondInactive => "bond_inactive",
+            Self::ExecutorSignatureInvalid => "executor_signature_invalid",
+            Self::CommitmentMissing => "commitment_missing",
+            Self::CommitmentMismatch => "commitment_mismatch",
+            Self::CommitmentOutOfRange => "commitment_out_of_range",
+            Self::BeaconNotReady => "beacon_not_ready",
+            Self::CertificatePredatesBeacon => "certificate_predates_beacon",
+            Self::UnregisteredProfile => "unregistered_profile",
+            Self::NotVerified => "not_verified",
+            Self::ZeroValued => "zero_valued",
+            Self::ChallengeNotMature => "challenge_not_mature",
+            Self::CertificateRefuted => "certificate_refuted",
+            Self::AlreadyCredited => "already_credited",
+        }
+    }
+
+    /// Index into the metric array. Position in [`Self::ALL`], so the two cannot drift.
+    pub fn index(&self) -> usize {
+        Self::ALL.iter().position(|r| r == self).expect("every variant is in ALL")
+    }
+
+    /// Whether this is a "not yet" rather than a "never". An operator watching a healthy network
+    /// come up sees only these; anything else is a real fault.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::BeaconNotReady | Self::NotVerified | Self::ChallengeNotMature)
+    }
+}
+
+/// One recompute's credit-walk tally: how many certificates were candidates, how many credited,
+/// and why the rest did not.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VltCreditTally {
+    pub candidates: u64,
+    pub accepted: u64,
+    /// Indexed by [`VltCreditSkipReason::index`].
+    pub skipped: [u64; 15],
+}
+
+impl VltCreditTally {
+    pub fn note_candidate(&mut self) {
+        self.candidates += 1;
+    }
+
+    pub fn note_accepted(&mut self) {
+        self.accepted += 1;
+    }
+
+    pub fn note_skipped(&mut self, reason: VltCreditSkipReason) {
+        self.skipped[reason.index()] += 1;
+    }
+
+    pub fn count(&self, reason: VltCreditSkipReason) -> u64 {
+        self.skipped[reason.index()]
+    }
+
+    /// `reason=count` for every reason that fired, in [`VltCreditSkipReason::ALL`] order. Empty
+    /// when nothing was skipped.
+    pub fn summary(&self) -> String {
+        VltCreditSkipReason::ALL
+            .iter()
+            .filter(|r| self.count(**r) > 0)
+            .map(|r| format!("{}={}", r.as_str(), self.count(*r)))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -2667,6 +2839,45 @@ mod tests {
         // `normalize_vlt` performs — a second definition that drifted would move the activation
         // threshold without moving anything that mints.
         assert_eq!(devnet_fixture_job_vlt(params.prefill_cost_micro, params.decode_cost_micro), one_job);
+    }
+
+    /// The skip reasons are an operator-facing API: a label is what an alert rule matches on and
+    /// what a metric dimension carries. A variant missing from `ALL` silently stops being counted,
+    /// and a duplicated label silently merges two different faults into one number.
+    #[test]
+    fn every_skip_reason_is_registered_and_uniquely_labelled() {
+        let mut labels: Vec<&str> = VltCreditSkipReason::ALL.iter().map(|r| r.as_str()).collect();
+        labels.sort_unstable();
+        let before = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), before, "two skip reasons share a label");
+
+        for (i, r) in VltCreditSkipReason::ALL.iter().enumerate() {
+            assert_eq!(r.index(), i, "{} indexes outside its position in ALL", r.as_str());
+            assert!(!r.as_str().is_empty());
+        }
+
+        // The tally is indexed by `index()`, so the array must be exactly as long as ALL — a
+        // mismatch would panic in the credit walk rather than in a test.
+        let mut tally = VltCreditTally::default();
+        assert_eq!(tally.skipped.len(), VltCreditSkipReason::ALL.len());
+        for r in VltCreditSkipReason::ALL {
+            tally.note_skipped(r);
+        }
+        for r in VltCreditSkipReason::ALL {
+            assert_eq!(tally.count(r), 1, "{} was not counted in its own slot", r.as_str());
+        }
+        assert!(tally.summary().contains("missing_epoch_anchor=1"));
+
+        // "Not yet" and "never" have to stay distinguishable: an operator watching a network come
+        // up should see only the transient ones, and anything else is a real fault.
+        assert!(VltCreditSkipReason::ChallengeNotMature.is_transient());
+        assert!(VltCreditSkipReason::BeaconNotReady.is_transient());
+        assert!(!VltCreditSkipReason::MissingEpochAnchor.is_transient(), "an epoch that never anchored never will");
+        assert!(!VltCreditSkipReason::ExecutorSignatureInvalid.is_transient());
+
+        // An empty walk says nothing rather than saying "no skips".
+        assert!(VltCreditTally::default().summary().is_empty());
     }
 
     /// The shipped presets never carry the fixture, feature or no feature. This is the assertion

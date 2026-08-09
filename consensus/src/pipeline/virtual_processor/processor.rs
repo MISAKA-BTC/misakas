@@ -98,10 +98,11 @@ use kaspa_consensus_core::{
     },
     vlt::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
-        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltActivationState, VltEpochCredits,
-        VltEpochSnapshot, VltMetrics, adjudicate_compute_challenge, compute_capability_message, compute_certificate_message,
-        compute_commitment_message, compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt,
-        select_verifiers, verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
+        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltActivationState, VltCreditSkipReason,
+        VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, adjudicate_compute_challenge,
+        compute_capability_message, compute_certificate_message, compute_commitment_message, compute_receipt_hash,
+        job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers, verifier_verdict_message,
+        verify_compute_certificate, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -2070,7 +2071,7 @@ impl VirtualStateProcessor {
             challenges.sort_by_key(|c| (c.challenger_bond_outpoint.transaction_id, c.challenger_bond_outpoint.index, c.kind as u8));
 
             let resolution = anchors.get(&cert.epoch).and_then(|anchor| {
-                self.resolve_certificate(cert, *accepted, anchor, &bonds, &walk, dns_params, net_id, &anchors).map(|resolved| {
+                self.resolve_certificate(cert, *accepted, anchor, &bonds, &walk, dns_params, net_id, &anchors).ok().map(|resolved| {
                     let attestations = verdicts_for_certificate(
                         &walk.verdicts,
                         *cert_tx_id,
@@ -2341,6 +2342,9 @@ impl VirtualStateProcessor {
             net_id.as_byte_slice(),
             dns_params,
             dns_params.vlt_shadow_active_at(sink_daa),
+            // The reporting caller: this is the per-epoch state recompute, and the one place a
+            // credit diagnostic belongs.
+            true,
         );
         let credit_rule = dns_params.epoch_credit_rule(sink_daa);
         let weight = if dns_params.vlt_weighting_active_at(sink_daa) {
@@ -2913,7 +2917,8 @@ impl VirtualStateProcessor {
         if !duty.round_active {
             return duty;
         }
-        let snapshot = self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa));
+        let snapshot =
+            self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa), false);
         let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
         let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
         let totals = self.total_weight_by_epoch(bonds, &epoch_anchor_daa, weight);
@@ -3040,6 +3045,9 @@ impl VirtualStateProcessor {
     /// **after** the one that accepted the commitment, so it did not exist when the executor fixed
     /// `sampling_seed` and therefore `job_id`. Grinding at commitment time is grinding against
     /// randomness that has not been drawn.
+    /// `diag` selects the ONE caller that reports — the per-epoch state recompute. The other three
+    /// call sites run per block (and one of them per candidate branch), so a line emitted from here
+    /// unconditionally is a line several times a second for as long as the condition holds.
     fn vlt_epoch_snapshot(
         &self,
         pin: BlockHash,
@@ -3048,6 +3056,7 @@ impl VirtualStateProcessor {
         net_id: &[u8],
         dns_params: &DnsParams,
         active: bool,
+        diag: bool,
     ) -> VltEpochSnapshot {
         if !active {
             return VltEpochSnapshot::inert();
@@ -3116,17 +3125,42 @@ impl VirtualStateProcessor {
         // Certificates whose challenge was ADJUDICATED as standing. §6 zeroes the credit of a
         // receipt whose fraud proof 成立した — not of every receipt somebody pointed at.
         let mut refuted: HashSet<TransactionId> = HashSet::new();
+        // Why each certificate credited nothing. Every `continue` below was a bare one, and the
+        // only outward sign was `0 validator(s) with credit` — which is also exactly what a network
+        // running no compute at all looks like. `skips` carries the per-certificate detail so an
+        // operator can tell "not yet" from "never" without reading this function.
+        let mut tally = VltCreditTally::default();
+        let mut skips: Vec<(TransactionId, Hash64, u64, VltCreditSkipReason)> = Vec::new();
+        let note = |tally: &mut VltCreditTally,
+                    skips: &mut Vec<(TransactionId, Hash64, u64, VltCreditSkipReason)>,
+                    tx: TransactionId,
+                    who: Hash64,
+                    epoch: u64,
+                    reason: VltCreditSkipReason| {
+            tally.note_skipped(reason);
+            // Bounded: a wide credit window on a busy network holds a lot of certificates, and a
+            // diagnostic that can print all of them is a diagnostic that can fill a disk.
+            if skips.len() < MAX_REPORTED_CREDIT_SKIPS {
+                skips.push((tx, who, epoch, reason));
+            }
+        };
         for (cert_tx_id, cert, block_daa) in walk.certificates.iter() {
             let (cert_tx_id, block_daa) = (*cert_tx_id, *block_daa);
+            tally.note_candidate();
             let Some(anchor) = anchors.get(&cert.epoch) else {
+                note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::MissingEpochAnchor);
                 continue;
             };
-            let Some(resolved) = self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
-                // A certificate that does not resolve credits nothing anyway, but an
-                // `InvalidCertificate` challenge against it is thereby proved — recorded so the
-                // challenger is not slashed for a claim that turned out to be right.
-                refuted.insert(cert_tx_id);
-                continue;
+            let resolved = match self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) {
+                Ok(resolved) => resolved,
+                Err(reason) => {
+                    // A certificate that does not resolve credits nothing anyway, but an
+                    // `InvalidCertificate` challenge against it is thereby proved — recorded so the
+                    // challenger is not slashed for a claim that turned out to be right.
+                    refuted.insert(cert_tx_id);
+                    note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, reason);
+                    continue;
+                }
             };
             // Gather THIS certificate's verdicts from the chain and apply Verify(S,R,C). A verdict
             // set below the confirmation threshold — including the common case of verifiers simply
@@ -3160,10 +3194,25 @@ impl VirtualStateProcessor {
                 dns_params.vlt.min_verifier_confirmations,
                 dns_params.vlt.min_verifier_refutations,
             );
-            let Ok(vlt) = normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) else {
-                continue;
+            let vlt = match normalize_vlt(&cert.spec, &cert.receipt, &dns_params.vlt, verified) {
+                Ok(vlt) => vlt,
+                // `VerificationFailed` is the committee not having spoken yet — the ordinary case
+                // while verdicts land — and everything else is a spec consensus never accepted.
+                Err(VltRejection::VerificationFailed) => {
+                    note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::NotVerified);
+                    continue;
+                }
+                Err(VltRejection::UnregisteredModel) => {
+                    note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::UnregisteredProfile);
+                    continue;
+                }
+                Err(_) => {
+                    note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::ZeroValued);
+                    continue;
+                }
             };
             if vlt == 0 {
+                note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::ZeroValued);
                 continue;
             }
             contributions.push(ComputeCreditContribution {
@@ -3176,6 +3225,26 @@ impl VirtualStateProcessor {
                 accepted_daa_score: block_daa,
             });
         }
+        // The three tests `aggregate_compute_credits` applies, re-run here ONLY to attribute a
+        // reason to each contribution it drops — it returns the survivors, not the verdicts. Kept
+        // in the same order as the real thing, which is the property that makes the attribution
+        // true rather than plausible.
+        {
+            let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
+            for c in contributions.iter() {
+                let reason = if refuted.contains(&c.certificate_tx_id) {
+                    VltCreditSkipReason::CertificateRefuted
+                } else if pin_daa_score.saturating_sub(c.accepted_daa_score) < dns_params.vlt.challenge_window_blocks {
+                    VltCreditSkipReason::ChallengeNotMature
+                } else if !seen.insert((c.validator_id, c.job_id)) {
+                    VltCreditSkipReason::AlreadyCredited
+                } else {
+                    tally.note_accepted();
+                    continue;
+                };
+                note(&mut tally, &mut skips, c.certificate_tx_id, c.validator_id, c.epoch, reason);
+            }
+        }
         // Drop anything the store already answered for, so a certificate straddling the boundary
         // cannot be counted twice, then merge the freshly-derived tail onto the cached rows.
         let walked = aggregate_compute_credits(&contributions, &refuted, pin_daa_score, dns_params.vlt.challenge_window_blocks);
@@ -3184,6 +3253,29 @@ impl VirtualStateProcessor {
             for (epoch, x) in per_epoch {
                 if !cached_epochs.contains(&epoch) {
                     slot.insert(epoch, x);
+                }
+            }
+        }
+        // Only from the per-epoch caller: the other three call sites run per block (one per
+        // candidate branch), so an unconditional line here is several a second for as long as the
+        // condition holds.
+        if diag {
+            self.vlt_metrics.record_credit(&tally);
+            // Certificates exist and not one of them credited: the condition an operator has to act
+            // on, and the one the overlay used to report only as `0 validator(s) with credit` —
+            // indistinguishable from a network running no compute at all. A healthy network never
+            // reaches this branch, and one that is merely early names only transient reasons.
+            if tally.candidates > 0 && tally.accepted == 0 {
+                info!("[vlt-credit] {} certificate(s) in the window, none credited: {}", tally.candidates, tally.summary());
+                for (tx, who, epoch, reason) in skips.iter() {
+                    info!(
+                        "[vlt-credit-skipped] certificate={tx} executor={who} certificate_epoch={epoch} reason={} ({})",
+                        reason.as_str(),
+                        if reason.is_transient() { "not yet" } else { "permanent" }
+                    );
+                }
+                if tally.candidates as usize > skips.len() {
+                    info!("[vlt-credit-skipped] … and {} more not listed", tally.candidates as usize - skips.len());
                 }
             }
         }
@@ -3387,11 +3479,13 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         net_id: &[u8],
         anchors: &BTreeMap<u64, CanonicalLaggedEpochAnchor>,
-    ) -> Option<ResolvedCertificate> {
+    ) -> Result<ResolvedCertificate, VltCreditSkipReason> {
         // (2) Executor bond: exists, bound to the declared id, Active at the anchor.
-        let bond = bonds.iter().find(|b| b.bond_outpoint == cert.executor_bond_outpoint)?;
+        let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == cert.executor_bond_outpoint) else {
+            return Err(VltCreditSkipReason::BondMissing);
+        };
         if cert.executor_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
-            return None;
+            return Err(VltCreditSkipReason::BondInactive);
         }
         // (3) Executor signature over the receipt it is claiming.
         let job_id = job_spec_id(&cert.spec);
@@ -3401,28 +3495,30 @@ impl VirtualStateProcessor {
             verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &cert.executor_signature, COMPUTE_CERT_MLDSA87_CONTEXT),
             Ok(true)
         ) {
-            return None;
+            return Err(VltCreditSkipReason::ExecutorSignatureInvalid);
         }
         // (4a) Phase-1 commitment: must exist on THIS chain, name the same executor and the
         // same job, and lie within `max_commitment_age_blocks` behind the certificate.
-        let commitment = walk.commitments.get(&cert.commitment_tx_id)?;
+        let Some(commitment) = walk.commitments.get(&cert.commitment_tx_id) else {
+            return Err(VltCreditSkipReason::CommitmentMissing);
+        };
         if commitment.job_id != job_id
             || commitment.executor_id != cert.executor_id
             || commitment.bond_outpoint != cert.executor_bond_outpoint
         {
-            return None;
+            return Err(VltCreditSkipReason::CommitmentMismatch);
         }
         // The published input must be the one this spec commits to. `job_id` already covers
         // `p_j`, so this is what ties the *bytes* on chain to the digest in the spec — without
         // it an executor could commit to an input nobody can use and certify against a
         // different one, leaving its committee unable to replay the job it is auditing.
         if job_input_commitment(&commitment.input) != cert.spec.input_commitment {
-            return None;
+            return Err(VltCreditSkipReason::CommitmentMismatch);
         }
         if block_daa < commitment.accepted_daa_score
             || block_daa.saturating_sub(commitment.accepted_daa_score) > dns_params.vlt.max_commitment_age_blocks
         {
-            return None;
+            return Err(VltCreditSkipReason::CommitmentOutOfRange);
         }
 
         // (4b) The sortition BEACON is the canonical anchor of the epoch AFTER the one that
@@ -3431,11 +3527,13 @@ impl VirtualStateProcessor {
         // commitment time is grinding against randomness that has not been drawn yet.
         let beacon_epoch = commitment_beacon_epoch(commitment.accepted_blue_score, dns_params.attestation_epoch_length_blue_score);
         // Beacon epoch not ready yet ⇒ not creditable YET, rather than invalid.
-        let beacon_anchor = anchors.get(&beacon_epoch)?;
+        let Some(beacon_anchor) = anchors.get(&beacon_epoch) else {
+            return Err(VltCreditSkipReason::BeaconNotReady);
+        };
         // A certificate may not predate its own beacon, or the executor would have revealed
         // before the randomness that picks its auditors was fixed.
         if block_daa < beacon_anchor.anchor_daa_score {
-            return None;
+            return Err(VltCreditSkipReason::CertificatePredatesBeacon);
         }
 
         // (4c) Verifier committee: sortitioned from validators that declared THIS job's
@@ -3444,7 +3542,9 @@ impl VirtualStateProcessor {
         // doc comment on PALW's fp-per-vendor determinism.
         //
         // Unregistered profile ⇒ mints nothing anyway.
-        let entry = dns_params.vlt.model_cost_table.lookup(cert.spec.model_weights_hash, cert.spec.runtime_hash)?;
+        let Some(entry) = dns_params.vlt.model_cost_table.lookup(cert.spec.model_weights_hash, cert.spec.runtime_hash) else {
+            return Err(VltCreditSkipReason::UnregisteredProfile);
+        };
         // The pool is taken AT THE BEACON, not at the certificate. The beacon is the moment the
         // randomness is fixed, so measuring the candidates there is what makes the committee a
         // function of that draw alone. Measured at the certificate instead, the executor picks the
@@ -3470,7 +3570,7 @@ impl VirtualStateProcessor {
         )
         .into_iter()
         .collect();
-        Some(ResolvedCertificate { job_id, receipt_hash, committee, commitment_tx_id: cert.commitment_tx_id })
+        Ok(ResolvedCertificate { job_id, receipt_hash, committee, commitment_tx_id: cert.commitment_tx_id })
     }
 
     /// The accepted certificates `validator_id` was sortitioned to audit and has not yet judged,
@@ -3529,7 +3629,7 @@ impl VirtualStateProcessor {
             let Some(anchor) = anchors.get(&cert.epoch) else {
                 continue;
             };
-            let Some(resolved) = self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
+            let Ok(resolved) = self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
                 continue;
             };
             if !resolved.committee.contains(&validator_id) {
@@ -3623,7 +3723,7 @@ impl VirtualStateProcessor {
             let Some(anchor) = anchors.get(&cert.epoch) else {
                 continue;
             };
-            let Some(resolved) = self.resolve_certificate(cert, *accepted, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
+            let Ok(resolved) = self.resolve_certificate(cert, *accepted, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
                 continue;
             };
             for att in verdicts_for_certificate(
@@ -3770,7 +3870,7 @@ impl VirtualStateProcessor {
         // Pinned at the sink, and only finalized epochs are read out of it below — past both the
         // challenge window and the reorg horizon, where every branch already agrees, so the rows
         // this writes are the same rows a branch-pinned snapshot would later serve.
-        let snapshot = self.vlt_epoch_snapshot(sink, sink_daa, &bonds, net_id_hash.as_byte_slice(), dns_params, true);
+        let snapshot = self.vlt_epoch_snapshot(sink, sink_daa, &bonds, net_id_hash.as_byte_slice(), dns_params, true, false);
         let credits = snapshot.credits();
         let anchors = self.canonical_anchors_in_window(sink, dns_params, dns_params.vlt_credit_window_blue_score);
         for (&epoch, anchor) in anchors.iter() {
@@ -4284,7 +4384,7 @@ impl VirtualStateProcessor {
                 // `candidate_bonds` would produce the same table.
                 let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap_or_default();
                 let vlt_live = dns_params.vlt_weighting_active_at(candidate_daa) || dns_params.vlt_weighting_active_at(canonical_daa);
-                let snapshot = self.vlt_epoch_snapshot(ancestor, ancestor_daa, &canonical_bonds, net_id, dns_params, vlt_live);
+                let snapshot = self.vlt_epoch_snapshot(ancestor, ancestor_daa, &canonical_bonds, net_id, dns_params, vlt_live, false);
                 (
                     self.stake_score_since_ancestor(
                         candidate,
@@ -5825,3 +5925,8 @@ enum MergesetIncreaseResult {
     Accepted { increase_size: u64 },
     Rejected { new_candidate: BlockHash },
 }
+
+/// How many per-certificate credit skips one recompute may name before the diagnostic stops
+/// listing them. A wide credit window on a busy network holds a lot of certificates, and a
+/// diagnostic that can print all of them is one that can fill a disk.
+const MAX_REPORTED_CREDIT_SKIPS: usize = 16;
