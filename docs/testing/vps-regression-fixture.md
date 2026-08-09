@@ -51,26 +51,41 @@ regress_mine.sh      8ce6c0d0c5d133266ce6b3d332be0c63913263aaf43ef11d75695985cf0
 fixture-metadata.txt 27641079b42812b14d7309fab265106e7805f8b64679e14acec131e94b76d320
 ```
 
-Chain data, as a rollup of the per-file digests (`find … | sort | xargs sha256sum | sha256sum`):
+Both preset hashes match, so the two branches were mined under identical rules — the precondition
+for the comparison meaning anything.
+
+Chain data, as a rollup of the per-file digests, at 2026-08-09T12:11Z:
 
 ```
 light + follower (VPS1)  16792b1effc156ecad404ee83bfd189cf97e9d1b6039290d61c898bb74e20b69
 heavy (VPS2)             67637b95b9546baf3b35bd5a90d0ec683f7cb6fbe10d782d9822d35d1843a999
 ```
 
-Sizes at capture: light 18 files / 34,172,945 B; follower 15 files / 21,004,018 B; heavy 20 files /
-57,534,774 B. Both preset hashes match, so the two branches were mined under identical rules — the
-precondition for the comparison meaning anything.
+**That digest is provenance, not an invariant, and an earlier version of this file said otherwise.**
+Merely starting a node rewrites its RocksDB — compaction, WAL, manifest — so the digest changes
+without a single block changing. Checking it before a run would fail every time and teach whoever
+runs this to ignore it.
 
-The follower directory is *expected* to change between rounds; it is the node under test. The light
-and heavy digests are the ones that must hold. Re-run the capture command in the next section and
-compare before trusting a regression result.
-
-## Re-capturing
+What identifies a branch is what the chain says about itself, and it is what the round script
+compares anyway:
 
 ```bash
-ssh -i ~/.ssh/claude_key root@95.111.236.186 'cd /tmp/misaka-regress && sha256sum shallow_preset.json regress_node.sh regress_mine.sh && find light -type f | sort | xargs sha256sum | sha256sum'
+ssh -i ~/.ssh/claude_key root@95.111.236.186 '/tmp/misaka-regress/src/target/release/regress-rpc 127.0.0.1:41610'
+ssh -i ~/.ssh/claude_key ubuntu@160.16.131.119 '/tmp/misaka-regress/src/target/release/regress-rpc 127.0.0.1:41610'
 ```
+
+At the time of the runs recorded here:
+
+| | pruning point | virtual DAA score |
+|---|---|---|
+| light (VPS1) | `9d9d9940db34b378…021b7b96` | 7000 |
+| heavy (VPS2) | `466a060561bff43e…bfcc76f5` | 8302 |
+
+Distinct pruning points and the heavy branch ahead: if either stops being true, the fixture has
+drifted and a green round means nothing. Check these, not the file digests.
+
+The file digests remain useful for the one thing they do describe: whether the fixture *inputs* —
+preset and scripts — are the ones these results were produced with.
 
 ## Known property of this fixture
 
