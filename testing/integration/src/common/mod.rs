@@ -1,3 +1,4 @@
+pub mod laggy_link;
 pub mod shallow_pruning;
 use std::{
     fs::{self, File, ReadDir},

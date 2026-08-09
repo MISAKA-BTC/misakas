@@ -24,6 +24,7 @@
 
 use crate::common::{
     daemon::Daemon,
+    laggy_link::{LaggyLink, WAN_DELAY},
     shallow_pruning::{BLOCKS_TO_PRUNE, write_shallow_pruning_params},
     utils::wait_for,
 };
@@ -553,4 +554,145 @@ async fn e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point() {
     let _ = std::fs::remove_file(&overrides);
 
     assert_eq!(info.pruning_point_hash, heavy_pp, "bootstrap recovery did not adopt the heavier chain");
+}
+
+/// How many times a mainnet-qualifying scenario must hold. One green run of a concurrent system is
+/// an anecdote; the interesting failures are the ones that need a particular interleaving.
+const QUALIFYING_REPETITIONS: usize = 3;
+
+/// Run E2E-A's scenario once over a delayed link, returning whether the node landed on the heavier
+/// chain. Shared by the repetition harness so each round is genuinely independent — fresh daemons,
+/// fresh data directories, fresh link.
+async fn handoff_round_over_wan(tag: &str) -> bool {
+    let overrides = write_shallow_pruning_params(tag);
+    let (mut light, light_client, _l, _ls) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+
+    // Both peers are reached through delayed links, so neither is privileged by being closer.
+    let light_link = LaggyLink::spawn(light.p2p_port, WAN_DELAY).await;
+    let heavy_link = LaggyLink::spawn(heavy.p2p_port, WAN_DELAY).await;
+
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let follower_client = follower.start().await;
+    follower_client.add_peer(format!("127.0.0.1:{}", light_link.local_port).try_into().unwrap(), true).await.unwrap();
+    follower_client.add_peer(format!("127.0.0.1:{}", heavy_link.local_port).try_into().unwrap(), true).await.unwrap();
+
+    let check = follower_client.clone();
+    let _ = tokio::time::timeout(Duration::from_secs(600), async move {
+        loop {
+            if check.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_score {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await;
+
+    let landed = follower_client.get_block_dag_info().await.unwrap().pruning_point_hash == heavy_pp;
+    follower.shutdown();
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+    landed
+}
+
+/// Run E2E-B's scenario once over a delayed link: adopt the lighter chain first, then meet the
+/// heavier one. Returns whether recovery replaced it.
+async fn recovery_round_over_wan(tag: &str) -> bool {
+    let overrides = write_shallow_pruning_params(tag);
+    let (mut light, light_client, _l, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+
+    let light_link = LaggyLink::spawn(light.p2p_port, WAN_DELAY).await;
+    let heavy_link = LaggyLink::spawn(heavy.p2p_port, WAN_DELAY).await;
+
+    let mut args = gated_args();
+    args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+    let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+    let follower_client = follower.start().await;
+    follower_client.add_peer(format!("127.0.0.1:{}", light_link.local_port).try_into().unwrap(), true).await.unwrap();
+
+    let check = follower_client.clone();
+    let adopted = tokio::time::timeout(Duration::from_secs(600), async move {
+        loop {
+            if check.get_block_dag_info().await.unwrap().virtual_daa_score >= light_score {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(adopted, "the follower never adopted the lighter chain over a delayed link");
+    assert_eq!(follower_client.get_block_dag_info().await.unwrap().pruning_point_hash, light_pp);
+    assert!(!follower_client.get_sync_status().await.unwrap(), "should still be withholding participation");
+
+    follower_client.add_peer(format!("127.0.0.1:{}", heavy_link.local_port).try_into().unwrap(), true).await.unwrap();
+    let check = follower_client.clone();
+    let _ = tokio::time::timeout(Duration::from_secs(600), async move {
+        loop {
+            if check.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_score {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await;
+
+    let recovered = follower_client.get_block_dag_info().await.unwrap().pruning_point_hash == heavy_pp;
+    follower.shutdown();
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+    recovered
+}
+
+/// Mainnet gate: the pre-commit handoff must hold repeatedly, over a delayed link.
+///
+/// Reports every round rather than stopping at the first failure — "two of three" and "none of
+/// three" are different diagnoses, and stopping early throws that away.
+#[ignore = "mainnet qualification: ~30 minutes"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mainnet_gate_handoff_holds_repeatedly_over_a_delayed_link() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let mut results = Vec::new();
+    for round in 0..QUALIFYING_REPETITIONS {
+        recovery_trace::clear();
+        let landed = handoff_round_over_wan(&format!("wan-handoff-{round}")).await;
+        println!("MAINNET-GATE handoff round={round} landed_on_heavy={landed}");
+        if !landed {
+            println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::CandidateCommitted));
+        }
+        results.push(landed);
+    }
+    println!("MAINNET-GATE handoff results={results:?}");
+    assert!(results.iter().all(|r| *r), "the pre-commit handoff did not hold in every round: {results:?}");
+}
+
+/// Mainnet gate: bootstrap recovery must hold repeatedly, over a delayed link.
+#[ignore = "mainnet qualification: ~40 minutes"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mainnet_gate_recovery_holds_repeatedly_over_a_delayed_link() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let mut results = Vec::new();
+    for round in 0..QUALIFYING_REPETITIONS {
+        recovery_trace::clear();
+        let recovered = recovery_round_over_wan(&format!("wan-recovery-{round}")).await;
+        println!("MAINNET-GATE recovery round={round} recovered={recovered}");
+        if !recovered {
+            println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::RecoveryPermitGranted));
+        }
+        results.push(recovered);
+    }
+    println!("MAINNET-GATE recovery results={results:?}");
+    assert!(results.iter().all(|r| *r), "bootstrap recovery did not hold in every round: {results:?}");
 }
