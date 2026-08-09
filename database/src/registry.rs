@@ -202,6 +202,15 @@ pub enum DatabaseStorePrefixes {
     /// preset.
     VltCredits = 235,
 
+    /// Singleton `u32`: the derivation rules the [`Self::VltCredits`] rows were produced under.
+    ///
+    /// Those rows are write-once and derived, which is a dangerous pair — a bug in the derivation
+    /// is not corrected by fixing the bug, because the wrong answer has already been recorded as
+    /// final. This is the escape: bump the version and every row from the old rules is dropped and
+    /// re-derived, while the chain, bonds, commitments, certificates, verdicts and challenges they
+    /// came from are untouched.
+    VltCreditsSchemaVersion = 236,
+
     /// kaspa-pq EVM Lane (§12 archive) — keyed by canonical `BlockHash`: the forward
     /// state DIFF ([`EvmStateDiffV2`]) of the block over its selected parent. The
     /// long-term retention form (the per-block full snapshot at prefix 206 is the

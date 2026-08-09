@@ -313,7 +313,20 @@ impl ConsensusStorage {
         // Sized to comfortably hold a whole `credit_window_epochs + credit_delay_epochs` span so
         // a full `C_i(E)` sum is served from cache. Untracked (`Count`) like the accumulator —
         // `tracked_bytes` would call `estimate_mem_bytes` and panic.
-        let vlt_credit_store = Arc::new(DbVltCreditStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        let vlt_credit_store = {
+            let mut store = DbVltCreditStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
+            // Before anything can read a row. These rows are write-once, so a row derived under
+            // superseded rules is not merely stale — it is the answer forever, and every later
+            // read prefers it to the truth. Discarding them here costs a recomputation from the
+            // chain, which is exactly what the store exists to avoid doing repeatedly and exactly
+            // what it must do once after the rules change.
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!(
+                    "[vlt-credit] could not check the accumulator schema version: {err}; leaving existing rows in place"
+                );
+            }
+            Arc::new(store)
+        };
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),

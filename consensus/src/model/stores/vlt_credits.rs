@@ -26,14 +26,29 @@
 use std::sync::Arc;
 
 use kaspa_consensus_core::vlt::VltEpochCredits;
+use kaspa_core::info;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
-use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
+use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use rocksdb::WriteBatch;
 
 use super::U64Key;
+
+/// The derivation rules the rows in this store were produced under.
+///
+/// Bump this whenever a change alters what the credit walk would produce for an epoch it has
+/// already recorded. Write-once and derived is a dangerous pair: a bug in the derivation is not
+/// corrected by fixing the bug, because the wrong answer is already on disk and marked final, and
+/// every later read prefers it to the truth. The version is the only way back.
+///
+/// * 1 — original.
+/// * 2 — the credit walk bounded a certificate's phase-1 commitment by the certificate floor
+///   rather than by its own dependency horizon, so in the steady state every certificate resolved
+///   to "commitment missing" and the epochs were sealed as empty. Rows written under rule 1 record
+///   a walk that could not see what it was judging.
+pub const VLT_CREDITS_SCHEMA_VERSION: u32 = 2;
 
 /// Per-epoch verified-compute credit store, keyed by `u64` epoch. Write-once per epoch: a row
 /// appears only after the epoch is finalized, and a finalized epoch never changes.
@@ -41,15 +56,50 @@ use super::U64Key;
 pub struct DbVltCreditStore {
     db: Arc<DB>,
     access: CachedDbAccess<U64Key, VltEpochCredits>,
+    version: CachedDbItem<u32>,
 }
 
 impl DbVltCreditStore {
     pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
-        Self { db: Arc::clone(&db), access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::VltCredits.into()) }
+        Self {
+            db: Arc::clone(&db),
+            access: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::VltCredits.into()),
+            version: CachedDbItem::new(db, DatabaseStorePrefixes::VltCreditsSchemaVersion.into()),
+        }
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
         Self::new(Arc::clone(&self.db), cache_policy)
+    }
+
+    /// Drop every row not derived under the current rules, so they are rebuilt from the chain.
+    ///
+    /// Called once at startup. Only the *derived* accumulator is discarded — the blocks, bonds,
+    /// commitments, certificates, verdicts and challenges every row is computed from stay exactly
+    /// where they are, so this is a recomputation, not a resync.
+    ///
+    /// An absent version marker with rows present means a database written before versioning
+    /// existed, which is version 1 by definition. An absent marker with no rows is a fresh
+    /// database and simply gets stamped.
+    pub fn reindex_if_stale(&mut self) -> Result<(), StoreError> {
+        let stored = match self.version.read() {
+            Ok(v) => Some(v),
+            Err(StoreError::KeyNotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if stored == Some(VLT_CREDITS_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        let had_rows = self.access.iterator().next().is_some();
+        if had_rows {
+            info!(
+                "[vlt-credit] accumulator rows were derived under rules v{} and this build derives v{VLT_CREDITS_SCHEMA_VERSION}; \
+                 discarding them so they are recomputed from the chain (no blocks or overlay transactions are affected)",
+                stored.unwrap_or(1)
+            );
+            self.access.delete_all(DirectDbWriter::new(&self.db))?;
+        }
+        self.version.write(DirectDbWriter::new(&self.db), &VLT_CREDITS_SCHEMA_VERSION)
     }
 
     /// `epoch`'s finalized credits, or `StoreError::KeyNotFound` if it is not finalized yet
@@ -76,5 +126,61 @@ impl DbVltCreditStore {
     /// Direct (non-batched) write — tests / diagnostics only.
     pub fn set(&self, epoch: u64, credits: VltEpochCredits) -> Result<(), StoreError> {
         self.access.write(DirectDbWriter::new(&self.db), epoch.into(), credits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::ConnBuilder;
+    use kaspa_hashes::Hash64;
+
+    fn row(validator: u8, x: u128) -> VltEpochCredits {
+        VltEpochCredits::from_unordered([(Hash64::from_bytes([validator; 64]), x)])
+    }
+
+    /// The rows are derived AND write-once, which is the pair that makes a derivation bug
+    /// permanent: fixing the walk does not fix the answer already recorded as final. The version
+    /// is the only way back, so it has to actually drop the old rows — and it must not drop
+    /// anything on an ordinary restart, or every startup would pay a full re-walk.
+    #[test]
+    fn a_rules_change_discards_rows_derived_under_the_old_ones() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbVltCreditStore::new(db.clone(), CachePolicy::Count(16));
+
+        // A fresh database is stamped without discarding anything.
+        store.reindex_if_stale().unwrap();
+        store.set(7, row(1, 500)).unwrap();
+        assert!(store.has(7).unwrap());
+
+        // Same rules ⇒ untouched. A restart must not throw away the work the store exists to save.
+        store.reindex_if_stale().unwrap();
+        assert_eq!(store.get(7).unwrap(), row(1, 500));
+
+        // Now simulate a database written under the previous rules.
+        store.version.write(DirectDbWriter::new(&db), &(VLT_CREDITS_SCHEMA_VERSION - 1)).unwrap();
+        let mut reopened = DbVltCreditStore::new(db.clone(), CachePolicy::Count(16));
+        reopened.reindex_if_stale().unwrap();
+        assert!(!reopened.has(7).unwrap(), "a row derived under superseded rules must not survive to be read as final");
+        // And the marker is advanced, so the next start is a no-op rather than a second wipe.
+        assert_eq!(reopened.version.read().unwrap(), VLT_CREDITS_SCHEMA_VERSION);
+        reopened.set(7, row(2, 900)).unwrap();
+        reopened.reindex_if_stale().unwrap();
+        assert_eq!(reopened.get(7).unwrap(), row(2, 900));
+    }
+
+    /// A database written before versioning existed has rows and no marker. That is version 1 by
+    /// definition, not a fresh database — treating it as fresh would keep exactly the rows the
+    /// version exists to discard.
+    #[test]
+    fn rows_without_a_version_marker_are_treated_as_the_original_rules() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbVltCreditStore::new(db.clone(), CachePolicy::Count(16));
+        store.set(3, row(1, 100)).unwrap();
+
+        let mut reopened = DbVltCreditStore::new(db.clone(), CachePolicy::Count(16));
+        reopened.reindex_if_stale().unwrap();
+        assert!(!reopened.has(3).unwrap());
     }
 }
