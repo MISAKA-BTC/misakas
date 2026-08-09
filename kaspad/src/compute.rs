@@ -41,7 +41,7 @@
 //! so a node without a real worker binary is inert by construction rather than by configuration.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kaspa_consensus_core::vlt::{
@@ -103,6 +103,12 @@ pub struct ComputeConfig {
     /// observation — so filing automatically means betting the bond on this node's own hardware
     /// being the correct one.
     pub auto_challenge: bool,
+    /// MISAKA devnet fixture: originate at most this many jobs, ever. `None` = unbounded, which is
+    /// what a real executor wants and what an asymmetric-weight experiment must not have.
+    pub fixture_job_limit: Option<u32>,
+    /// Where the quota's count is persisted. Without it a restart resets the count and the
+    /// experiment's weights grow every time a node bounces.
+    pub fixture_state_path: Option<PathBuf>,
 }
 
 impl Default for ComputeConfig {
@@ -115,6 +121,8 @@ impl Default for ComputeConfig {
             prompt_path: None,
             max_tokens: 512,
             auto_challenge: false,
+            fixture_job_limit: None,
+            fixture_state_path: None,
         }
     }
 }
@@ -133,9 +141,38 @@ pub struct ComputeRole {
     pub prompt: Option<Vec<u8>>,
     pub max_tokens: u32,
     pub auto_challenge: bool,
+    /// MISAKA devnet fixture: the job quota and its persisted count, or `None` for an unbounded
+    /// (production) executor.
+    pub fixture_quota: Option<Mutex<FixtureExecutionState>>,
+    pub fixture_state_path: Option<PathBuf>,
 }
 
 impl ComputeRole {
+    /// Whether this node may originate another job.
+    ///
+    /// Always true without a quota. With one, false once the target is met — and it stays false
+    /// across restarts, because the count is on disk. A node that kept originating would push its
+    /// own weight past the plan on every epoch, which is the difference between a fixed experiment
+    /// and a drifting one.
+    pub fn may_originate(&self) -> bool {
+        match &self.fixture_quota {
+            None => true,
+            Some(q) => q.lock().unwrap().remaining() > 0,
+        }
+    }
+
+    /// Record that one job reached a submitted certificate, and flush the count.
+    ///
+    /// A certificate is the right thing to count: it is the last step this node controls, and the
+    /// only one whose VLT will actually land. Counting commitments instead would spend quota on a
+    /// job that expired before it could be certified, and the validator would silently finish
+    /// under its target.
+    pub fn note_job_certified(&self) {
+        let (Some(q), Some(path)) = (&self.fixture_quota, &self.fixture_state_path) else { return };
+        let mut st = q.lock().unwrap();
+        st.record_completed(path);
+        info!("[{COMPUTE}] fixture quota: {}/{} job(s) certified", st.completed_jobs, st.target_jobs);
+    }
     /// Resolve the compute role, or `None` with a logged reason.
     ///
     /// `vlt` is the network's VLT parameters; the model table is what decides whether the runtime
@@ -239,7 +276,19 @@ impl ComputeRole {
             cfg.max_tokens.min(entry.max_tokens),
             cfg.auto_challenge
         );
-        Some(Self { runtime, entry, prompt, max_tokens: cfg.max_tokens.min(entry.max_tokens), auto_challenge: cfg.auto_challenge })
+        // The plan id binds the count to what it counted: a different validator, target or job
+        // shape is a different experiment, and the old count is not evidence about it.
+        let max_tokens = cfg.max_tokens.min(entry.max_tokens);
+        let fixture_quota = cfg.fixture_job_limit.map(|target| {
+            let plan_id = format!("{}:{}:{}:{}", identity.runtime_hash, target, max_tokens, prompt.as_ref().map_or(0, |p| p.len()));
+            let path = cfg.fixture_state_path.clone().unwrap_or_else(|| cfg.work_dir.join("fixture-quota.json"));
+            let st = FixtureExecutionState::load(&path, &plan_id, target);
+            info!("[{COMPUTE}] fixture quota: {}/{} job(s) already certified (plan {plan_id})", st.completed_jobs, st.target_jobs);
+            Mutex::new(st)
+        });
+        let fixture_state_path =
+            fixture_quota.as_ref().map(|_| cfg.fixture_state_path.clone().unwrap_or_else(|| cfg.work_dir.join("fixture-quota.json")));
+        Some(Self { runtime, entry, prompt, max_tokens, auto_challenge: cfg.auto_challenge, fixture_quota, fixture_state_path })
     }
 
     /// The spec for a job over `input`, as a pure function of the input and the registered profile.
@@ -320,6 +369,68 @@ fn load_prompt(path: &PathBuf) -> Result<Vec<u8>, String> {
 /// Every decision the cycle makes is read back off the chain, so a submitted-but-unmined
 /// transaction is indistinguishable from one that was never sent. Without this the heartbeat would
 /// re-send the same declaration or commitment on every tick, paying a fee each time.
+/// MISAKA devnet fixture: how many jobs this validator is allowed to originate, and how many it
+/// already has.
+///
+/// The quota is what makes an *asymmetric* weight test possible: five validators running the same
+/// fixed job differ only in how many they complete, so the resulting `W_i(E)` differ only by
+/// supplied compute. Without it the compute role keeps originating jobs forever and every
+/// validator converges on the same weight — a test of nothing.
+///
+/// **Persisted, deliberately.** Held only in memory, a restart resets the counter and the quota
+/// starts again; the weights then keep growing every time a node bounces, and the expected
+/// 400/250/150/100/100 quietly becomes 450/300/… A file is the difference between a fixed
+/// experiment and a drifting one.
+///
+/// `plan_id` binds the count to the plan it was counted under — the validator, the target, and the
+/// job shape. Change any of them and the old count is not evidence about the new plan, so it is
+/// discarded rather than carried over.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct FixtureExecutionState {
+    pub plan_id: String,
+    pub target_jobs: u32,
+    pub completed_jobs: u32,
+}
+
+impl FixtureExecutionState {
+    /// Load the state for `plan_id`, or a fresh one if the file is absent, unreadable, or records
+    /// a different plan.
+    pub fn load(path: &std::path::Path, plan_id: &str, target_jobs: u32) -> Self {
+        let fresh = Self { plan_id: plan_id.to_string(), target_jobs, completed_jobs: 0 };
+        let Ok(raw) = std::fs::read_to_string(path) else { return fresh };
+        match serde_json::from_str::<Self>(&raw) {
+            Ok(saved) if saved.plan_id == plan_id => saved,
+            Ok(saved) => {
+                warn!(
+                    "[{COMPUTE}] fixture plan changed ({} -> {plan_id}); discarding the previous count of {} job(s)",
+                    saved.plan_id, saved.completed_jobs
+                );
+                fresh
+            }
+            Err(err) => {
+                warn!("[{COMPUTE}] could not parse {}: {err}; starting the fixture quota from zero", path.display());
+                fresh
+            }
+        }
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.target_jobs.saturating_sub(self.completed_jobs)
+    }
+
+    /// Record one more completed job and flush.
+    ///
+    /// Flushed immediately rather than at shutdown: a node killed between the certificate and the
+    /// flush would re-originate that job on restart and overshoot its quota, which is precisely
+    /// the drift this state exists to prevent.
+    pub fn record_completed(&mut self, path: &std::path::Path) {
+        self.completed_jobs = self.completed_jobs.saturating_add(1);
+        if let Err(err) = std::fs::write(path, serde_json::to_string(self).unwrap_or_default()) {
+            warn!("[{COMPUTE}] could not persist the fixture quota to {}: {err}", path.display());
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ComputeInflight {
     capability_daa: Option<u64>,

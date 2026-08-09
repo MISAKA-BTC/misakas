@@ -862,6 +862,10 @@ Do you confirm? (y/n)";
             prompt_path: args.compute_prompt.as_ref().map(PathBuf::from),
             max_tokens: args.compute_max_tokens.unwrap_or(DEFAULT_COMPUTE_MAX_TOKENS),
             auto_challenge: args.compute_auto_challenge,
+            fixture_job_limit: args.compute_fixture_job_limit,
+            // Beside the app dir, not the compute work dir: the work dir defaults to the system
+            // temp directory, and a quota that evaporates on reboot is not a quota.
+            fixture_state_path: Some(app_dir.join("fixture-quota.json")),
         };
         let validator_config = ValidatorConfig {
             mode,

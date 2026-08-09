@@ -895,9 +895,16 @@ impl ValidatorService {
             return; // one job per pass
         }
 
-        // Nothing in progress — commit to a new job, unless one is already in flight.
+        // Nothing in progress — commit to a new job, unless one is already in flight or this node
+        // has finished its fixture quota. Auditing continues either way: a validator that has met
+        // its own target is still drawn onto other validators' committees, and refusing to serve
+        // there would stall THEIR jobs and change the very weights the experiment is measuring.
         if live.is_empty() && !self.compute_inflight.lock().unwrap().commitment_recent(now_daa) {
-            self.submit_commitment(key, bond_outpoint, role, &prompt, now_daa).await;
+            if role.may_originate() {
+                self.submit_commitment(key, bond_outpoint, role, &prompt, now_daa).await;
+            } else {
+                trace!("[{VALIDATOR}] compute: fixture quota met; originating no further jobs (still auditing peers)");
+            }
         }
     }
 
@@ -1001,6 +1008,10 @@ impl ValidatorService {
                 open.job_id,
                 compute_receipt_hash(&spec, &receipt)
             );
+            // Count it here — the last step this node controls, and the only one whose VLT will
+            // land. Counting the commitment instead would spend quota on a job that expired
+            // before it could be certified, leaving the validator silently under its target.
+            role.note_job_certified();
         }
     }
 

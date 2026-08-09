@@ -185,6 +185,8 @@ pub struct Args {
     pub compute_max_tokens: Option<u32>,
     pub compute_timeout_secs: Option<u64>,
     pub compute_auto_challenge: bool,
+    /// MISAKA devnet fixture: originate at most this many jobs, ever (persisted across restarts).
+    pub compute_fixture_job_limit: Option<u32>,
 
     // MISAKA VLT activation, for PRIVATE devnets only. These are consensus fences: on a public
     // network they belong to a release, not to whoever started the node, so `apply_to_config`
@@ -281,6 +283,7 @@ impl Default for Args {
             compute_max_tokens: None,
             compute_timeout_secs: None,
             compute_auto_challenge: false,
+            compute_fixture_job_limit: None,
             vlt_devnet_shadow_daa: None,
             vlt_devnet_credit_window_epochs: 8,
             vlt_shadow_only: false,
@@ -698,6 +701,21 @@ pub fn cli() -> Command {
                 .env("KASPAD_COMPUTE_AUTO_CHALLENGE"),
         )
         .arg(
+            Arg::new("compute-fixture-job-limit")
+                .long("compute-fixture-job-limit")
+                .value_name("N")
+                .value_parser(clap::value_parser!(u32))
+                .require_equals(false)
+                .help(
+                    "MISAKA devnet fixture: originate at most N jobs, ever — then stop. The count is persisted next to \
+                     the compute work dir, so a restart does not reset it. This is what makes an ASYMMETRIC weight \
+                     experiment possible: five validators running the same fixed job differ only in how many they \
+                     complete. Without it an executor keeps originating forever and every validator converges on the \
+                     same weight.",
+                )
+                .env("KASPAD_COMPUTE_FIXTURE_JOB_LIMIT"),
+        )
+        .arg(
             Arg::new("vlt-devnet")
                 .long("vlt-devnet")
                 .value_name("shadow-daa-score")
@@ -962,6 +980,7 @@ impl Args {
             compute_max_tokens: m.get_one::<u32>("compute-max-tokens").copied().or(defaults.compute_max_tokens),
             compute_timeout_secs: m.get_one::<u64>("compute-timeout-secs").copied().or(defaults.compute_timeout_secs),
             compute_auto_challenge: arg_match_unwrap_or::<bool>(&m, "compute-auto-challenge", defaults.compute_auto_challenge),
+            compute_fixture_job_limit: m.get_one::<u32>("compute-fixture-job-limit").copied(),
             vlt_devnet_shadow_daa: m.get_one::<u64>("vlt-devnet").copied(),
             vlt_devnet_credit_window_epochs: arg_match_unwrap_or::<u32>(
                 &m,

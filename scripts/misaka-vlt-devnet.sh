@@ -126,6 +126,9 @@ for i in $(seq 0 $((NODES - 1))); do
     --appdir="$node_dir"
     --listen="127.0.0.1:$p2p"
     --rpclisten="127.0.0.1:$rpc"
+    # wRPC (borsh) as well as gRPC: the miner speaks gRPC, but `kaspa-pq-validator` and
+    # `misaka validator status` — the bond bootstrap and the VLT gauge read — speak wRPC.
+    --rpclisten-borsh="127.0.0.1:$((rpc + 2))"
     --utxoindex
     --unsaferpc
     # A fresh private devnet has nothing to sync from, so every node considers itself in IBD and
@@ -144,7 +147,7 @@ for i in $(seq 0 $((NODES - 1))); do
   fi
   args+=("${peers[@]}")
 
-  echo "node-$i  p2p=$p2p  rpc=$rpc"
+  echo "node-$i  p2p=$p2p  grpc=$rpc  wrpc=$((rpc + 2))"
   printf '  %q' "$KASPAD_BIN" "${args[@]}" > "$node_dir/run.args"
   ( "$KASPAD_BIN" "${args[@]}" >"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
 done
