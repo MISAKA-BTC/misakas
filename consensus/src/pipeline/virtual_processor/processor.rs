@@ -100,9 +100,9 @@ use kaspa_consensus_core::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
         ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltActivationState, VltCreditSkipReason,
         VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, adjudicate_compute_challenge,
-        compute_capability_message, compute_certificate_message, compute_commitment_message, compute_receipt_hash,
-        job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers, verifier_verdict_message,
-        verify_compute_certificate, vlt_epoch_finalized,
+        commitment_dependency_horizon, compute_capability_message, compute_certificate_message, compute_commitment_message,
+        compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
+        verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -232,6 +232,14 @@ pub(crate) struct ComputeOverlayWalk {
     /// `(certificate_tx_id, payload, accepted_daa_score)` for certificates whose declared epoch is
     /// their own accepting block's epoch.
     certificates: Vec<(TransactionId, ComputeCertificatePayload, u64)>,
+    /// Whether the dependency search below the certificate floor covered its whole range.
+    ///
+    /// `true` ⇒ a commitment still missing from [`Self::commitments`] is genuinely absent from the
+    /// canonical history under the pin. `false` ⇒ the search stopped early (a header would not
+    /// read), so a missing commitment says nothing about the chain and everything about this
+    /// node's storage. The two lead to `CommitmentAbsentFromCanonicalHistory` and
+    /// `CommitmentNotLoaded` respectively, and only the first may be cached as a permanent zero.
+    dependency_scan_complete: bool,
 }
 
 /// A certificate whose verifier committee has been drawn — the output of
@@ -3078,7 +3086,9 @@ impl VirtualStateProcessor {
         // would fail on and that would make weight depend on an unrelated parameter.
         let anchors = self.canonical_anchors_in_window(pin, dns_params, dns_params.vlt_credit_window_blue_score);
         let Ok(pin_blue) = self.headers_store.get_blue_score(pin) else {
-            return VltEpochSnapshot::inert();
+            // Could not read the pin's own blue score: an empty table, but NOT an answer. Returning
+            // `inert()` here would licence the caller to cache a zero it never actually computed.
+            return VltEpochSnapshot::unresolved();
         };
 
         // Finalized epochs come from the accumulator store instead of being re-derived. An epoch
@@ -3279,6 +3289,13 @@ impl VirtualStateProcessor {
                 }
             }
         }
+        // An unloaded dependency makes this table an unknown answer rather than a smaller one.
+        // `stage_vlt_credits` refuses to cache such a table, and (from step 5) the activation guard
+        // refuses to act on one — the two places where "this node has not got it yet" would
+        // otherwise become "nobody ever will".
+        if tally.is_incomplete() {
+            return VltEpochSnapshot::pinned_incomplete(pin, pin_daa_score, credited);
+        }
         VltEpochSnapshot::pinned(pin, pin_daa_score, credited)
     }
 
@@ -3363,37 +3380,9 @@ impl VirtualStateProcessor {
             // Phase-1 commitments. Recorded with the blue_score that accepted them, because that
             // is what fixes the beacon epoch and hence the committee.
             for (commit_tx_id, commit) in compute_commitments_from_accepted_txs(&txs) {
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == commit.executor_bond_outpoint) else {
-                    continue;
-                };
-                if commit.executor_id != bond.validator_pubkey_hash {
-                    continue;
+                if let Some(record) = verified_commitment(commit, bonds, net_id, bs, block_daa) {
+                    commitments.insert(commit_tx_id, record);
                 }
-                let input_commitment = job_input_commitment(&commit.input);
-                let digest =
-                    compute_commitment_message(net_id, commit.job_id, input_commitment, commit.executor_bond_outpoint).as_bytes();
-                if !matches!(
-                    verify_mldsa87_with_context(
-                        &bond.validator_pubkey,
-                        &digest,
-                        &commit.signature,
-                        COMPUTE_COMMITMENT_MLDSA87_CONTEXT
-                    ),
-                    Ok(true)
-                ) {
-                    continue;
-                }
-                commitments.insert(
-                    commit_tx_id,
-                    ComputeCommitmentRecord {
-                        job_id: commit.job_id,
-                        executor_id: commit.executor_id,
-                        bond_outpoint: commit.executor_bond_outpoint,
-                        input: commit.input,
-                        accepted_blue_score: bs,
-                        accepted_daa_score: block_daa,
-                    },
-                );
             }
 
             // Capability declarations: bond-bound, signature-verified, expiry capped at
@@ -3453,7 +3442,67 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        ComputeOverlayWalk { challenges, capabilities, commitments, verdicts, certificates: pending }
+
+        // ---- dependency horizon -------------------------------------------------------------
+        //
+        // A certificate's phase-1 commitment legitimately sits BELOW the floor that bounds
+        // certificates: by at least one full epoch, because the certificate cannot be built until
+        // the beacon — the anchor of the epoch AFTER the commitment's — exists, and by up to
+        // `max_commitment_age_blocks` in general. `oldest_blue` is raised to the oldest epoch the
+        // caller still needs re-derived, which in the steady state is one epoch back, so bounding
+        // dependencies by it made every certificate unresolvable. That is the 2026-08-09 failure:
+        // twenty jobs executed, certified and confirmed, and not one credited.
+        //
+        // So the floor applies to certificates and the horizon applies to their dependencies. The
+        // second pass is conditional and stops the moment the last wanted commitment is found, so
+        // a healthy chain — where commitments are a couple of epochs down and inside the first
+        // pass anyway — pays nothing for it.
+        let mut wanted: HashSet<TransactionId> =
+            pending.iter().map(|(_, cert, _)| cert.commitment_tx_id).filter(|id| !commitments.contains_key(id)).collect();
+        let mut dependency_scan_complete = true;
+        if !wanted.is_empty() {
+            // Blue score here against a DAA-denominated parameter: `resolve_certificate` applies
+            // the authoritative DAA test, so this only has to be no *shallower* than the real
+            // bound. Blue score advances no faster than DAA, which makes the budget generous in
+            // the safe direction.
+            let horizon = commitment_dependency_horizon(oldest_blue, dns_params.vlt.max_commitment_age_blocks);
+            for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
+                if wanted.is_empty() {
+                    break;
+                }
+                let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
+                    dependency_scan_complete = false;
+                    break;
+                };
+                if bs >= oldest_blue {
+                    continue; // the first pass already read this block
+                }
+                if bs < horizon {
+                    break; // searched the whole range a commitment could legally occupy
+                }
+                let Ok(block_daa) = self.headers_store.get_daa_score(chain_block) else {
+                    dependency_scan_complete = false;
+                    break;
+                };
+                // Dependencies only. Certificates, verdicts, challenges and capabilities down here
+                // are outside the credit window and must NOT re-enter the tally through this pass.
+                for (commit_tx_id, commit) in compute_commitments_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block)) {
+                    if !wanted.contains(&commit_tx_id) {
+                        continue;
+                    }
+                    // Same verification as the first pass, and the walk is along the selected chain
+                    // from the pin, so anything found here is an ancestor of the pin by
+                    // construction. A commitment with a matching id on a competing branch is not
+                    // reachable from this iterator at all.
+                    if let Some(record) = verified_commitment(commit, bonds, net_id, bs, block_daa) {
+                        commitments.insert(commit_tx_id, record);
+                        wanted.remove(&commit_tx_id);
+                    }
+                }
+            }
+        }
+
+        ComputeOverlayWalk { challenges, capabilities, commitments, verdicts, certificates: pending, dependency_scan_complete }
     }
 
     /// Resolve one accepted certificate against the chain: check the executor's claim, find its
@@ -3500,7 +3549,14 @@ impl VirtualStateProcessor {
         // (4a) Phase-1 commitment: must exist on THIS chain, name the same executor and the
         // same job, and lie within `max_commitment_age_blocks` behind the certificate.
         let Some(commitment) = walk.commitments.get(&cert.commitment_tx_id) else {
-            return Err(VltCreditSkipReason::CommitmentMissing);
+            // Absent only if the dependency pass actually searched the whole range it could
+            // occupy. Otherwise this node simply has not loaded it, which is not a fact about the
+            // chain and must never be cached as one.
+            return Err(if walk.dependency_scan_complete {
+                VltCreditSkipReason::CommitmentAbsentFromCanonicalHistory
+            } else {
+                VltCreditSkipReason::CommitmentNotLoaded
+            });
         };
         if commitment.job_id != job_id
             || commitment.executor_id != cert.executor_id
@@ -3871,6 +3927,14 @@ impl VirtualStateProcessor {
         // challenge window and the reorg horizon, where every branch already agrees, so the rows
         // this writes are the same rows a branch-pinned snapshot would later serve.
         let snapshot = self.vlt_epoch_snapshot(sink, sink_daa, &bonds, net_id_hash.as_byte_slice(), dns_params, true, false);
+        // Write-once means a row written now is the answer forever. A table with a dependency this
+        // node could not load is not an answer, and caching it seals a local storage limit into
+        // consensus history as a permanent zero — which is precisely how twenty executed,
+        // certified and confirmed jobs came to be worth nothing on 2026-08-09. Skip the write and
+        // try again on a later commit, when the walk can see what it needs.
+        if !snapshot.resolution_complete() {
+            return;
+        }
         let credits = snapshot.credits();
         let anchors = self.canonical_anchors_in_window(sink, dns_params, dns_params.vlt_credit_window_blue_score);
         for (&epoch, anchor) in anchors.iter() {
@@ -5930,3 +5994,39 @@ enum MergesetIncreaseResult {
 /// listing them. A wide credit window on a busy network holds a lot of certificates, and a
 /// diagnostic that can print all of them is one that can fill a disk.
 const MAX_REPORTED_CREDIT_SKIPS: usize = 16;
+
+/// One phase-1 commitment, accepted only if it is bond-bound and its executor's ML-DSA-87 signature
+/// verifies.
+///
+/// Shared by both passes of `walk_compute_overlay`. Two copies of these checks would eventually
+/// differ, and the direction that matters is the lenient one: a commitment admitted by the
+/// dependency pass but rejected by the primary pass would let a certificate resolve against
+/// evidence the main walk does not accept.
+fn verified_commitment(
+    commit: kaspa_consensus_core::vlt::ComputeCommitmentPayload,
+    bonds: &[StakeBondRecord],
+    net_id: &[u8],
+    accepted_blue_score: u64,
+    accepted_daa_score: u64,
+) -> Option<ComputeCommitmentRecord> {
+    let bond = bonds.iter().find(|b| b.bond_outpoint == commit.executor_bond_outpoint)?;
+    if commit.executor_id != bond.validator_pubkey_hash {
+        return None;
+    }
+    let input_commitment = job_input_commitment(&commit.input);
+    let digest = compute_commitment_message(net_id, commit.job_id, input_commitment, commit.executor_bond_outpoint).as_bytes();
+    if !matches!(
+        verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &commit.signature, COMPUTE_COMMITMENT_MLDSA87_CONTEXT),
+        Ok(true)
+    ) {
+        return None;
+    }
+    Some(ComputeCommitmentRecord {
+        job_id: commit.job_id,
+        executor_id: commit.executor_id,
+        bond_outpoint: commit.executor_bond_outpoint,
+        input: commit.input,
+        accepted_blue_score,
+        accepted_daa_score,
+    })
+}

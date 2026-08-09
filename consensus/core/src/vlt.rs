@@ -1780,6 +1780,15 @@ pub struct VltEpochSnapshot {
     pin: BlockHash,
     pin_daa_score: u64,
     credits: HashMap<Hash64, BTreeMap<u64, u128>>,
+    /// Whether every certificate in the window reached a verdict — credited, `Pending` or
+    /// `Invalid` — rather than one this node could not load a dependency for.
+    ///
+    /// Deliberately **outside** [`Self::commitment_root`]. "I could not load it" is a fact about
+    /// this node's storage, not about the chain, so two honest nodes may disagree about it while
+    /// agreeing byte-for-byte on the table itself — which is exactly what the root has to mean.
+    /// It is a local licence to act, not a consensus value: a node with an incomplete table refuses
+    /// to cache it and refuses to activate on it, and simply waits until it can do better.
+    resolution_complete: bool,
 }
 
 impl VltEpochSnapshot {
@@ -1788,7 +1797,17 @@ impl VltEpochSnapshot {
     /// that moved its fence before the active set could produce compute would get, which is the
     /// ADR-0024 "Activation" caveat expressed as a value.
     pub fn inert() -> Self {
-        Self::default()
+        // Complete, not incomplete: a dormant overlay has nothing to resolve, and "empty because
+        // the fence has not opened" is a final answer. Only a node that tried and could not finish
+        // is incomplete — see [`Self::unresolved`].
+        Self { resolution_complete: true, ..Self::default() }
+    }
+
+    /// The empty table from a walk that could not be performed — a header that would not read, a
+    /// pin whose blue score is unavailable. Empty like [`Self::inert`] and, unlike it, **not** a
+    /// licence to cache or activate.
+    pub fn unresolved() -> Self {
+        Self { resolution_complete: false, ..Self::default() }
     }
 
     /// Build a table pinned at `pin`.
@@ -1799,7 +1818,18 @@ impl VltEpochSnapshot {
     /// `pin_daa_score` or lower. A table built from a branch tip instead satisfies the type and
     /// none of its meaning.
     pub fn pinned(pin: BlockHash, pin_daa_score: u64, credits: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
-        Self { pin, pin_daa_score, credits }
+        Self { pin, pin_daa_score, credits, resolution_complete: true }
+    }
+
+    /// As [`Self::pinned`], but recording that at least one certificate's dependency could not be
+    /// loaded. See [`Self::resolution_complete`].
+    pub fn pinned_incomplete(pin: BlockHash, pin_daa_score: u64, credits: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
+        Self { pin, pin_daa_score, credits, resolution_complete: false }
+    }
+
+    /// Whether this table is an answer at all. `false` ⇒ do not cache it, do not activate on it.
+    pub fn resolution_complete(&self) -> bool {
+        self.resolution_complete
     }
 
     /// The block this table was read at. Every branch weighted by it must contain this block.
@@ -1926,7 +1956,7 @@ pub struct VltMetrics {
     /// skips indexed by [`VltCreditSkipReason::index`].
     credit_candidates: AtomicU64,
     credit_accepted: AtomicU64,
-    credit_skipped: [AtomicU64; 15],
+    credit_skipped: [AtomicU64; 16],
 }
 
 impl VltMetrics {
@@ -1961,7 +1991,7 @@ impl VltMetrics {
     }
 
     pub fn read_credit(&self) -> VltCreditTally {
-        let mut skipped = [0u64; 15];
+        let mut skipped = [0u64; 16];
         for (out, slot) in skipped.iter_mut().zip(self.credit_skipped.iter()) {
             *out = slot.load(AtomicOrdering::Relaxed);
         }
@@ -2017,8 +2047,21 @@ pub enum VltCreditSkipReason {
     BondInactive,
     /// The executor's ML-DSA-87 signature over its own receipt does not verify.
     ExecutorSignatureInvalid,
-    /// The phase-1 commitment is not on this chain (or not within the walked span).
-    CommitmentMissing,
+    /// The phase-1 commitment was not loaded — the walk did not reach it, an index lookup came
+    /// back empty, or a header could not be read. **Incomplete, not invalid**: it says nothing
+    /// about whether the commitment exists, only that this node has not got it yet, so a snapshot
+    /// carrying one is an unknown answer rather than a smaller one.
+    ///
+    /// This distinction is the whole of the 2026-08-09 failure. The walk stopped at the oldest
+    /// uncached epoch while commitments legitimately sit up to `max_commitment_age_blocks` below
+    /// their certificates, every certificate resolved to "missing", and the resulting empty
+    /// accumulator rows were then written write-once — sealing a local loading limit into consensus
+    /// history as a permanent zero.
+    CommitmentNotLoaded,
+    /// The commitment is genuinely absent from the canonical history under the pin: the walk read
+    /// every block down to the dependency horizon and it is not there. Permanent, and a certificate
+    /// naming it is invalid rather than early.
+    CommitmentAbsentFromCanonicalHistory,
     /// The commitment is there but names a different job, executor, bond, or input.
     CommitmentMismatch,
     /// The certificate predates its commitment, or the commitment is older than
@@ -2048,12 +2091,13 @@ pub enum VltCreditSkipReason {
 impl VltCreditSkipReason {
     /// Every variant, for metric registration and exhaustive reporting. Adding a variant without
     /// adding it here is caught by `every_skip_reason_is_registered`.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::MissingEpochAnchor,
         Self::BondMissing,
         Self::BondInactive,
         Self::ExecutorSignatureInvalid,
-        Self::CommitmentMissing,
+        Self::CommitmentNotLoaded,
+        Self::CommitmentAbsentFromCanonicalHistory,
         Self::CommitmentMismatch,
         Self::CommitmentOutOfRange,
         Self::BeaconNotReady,
@@ -2074,7 +2118,8 @@ impl VltCreditSkipReason {
             Self::BondMissing => "bond_missing",
             Self::BondInactive => "bond_inactive",
             Self::ExecutorSignatureInvalid => "executor_signature_invalid",
-            Self::CommitmentMissing => "commitment_missing",
+            Self::CommitmentNotLoaded => "commitment_not_loaded",
+            Self::CommitmentAbsentFromCanonicalHistory => "commitment_absent_from_canonical_history",
             Self::CommitmentMismatch => "commitment_mismatch",
             Self::CommitmentOutOfRange => "commitment_out_of_range",
             Self::BeaconNotReady => "beacon_not_ready",
@@ -2093,11 +2138,69 @@ impl VltCreditSkipReason {
         Self::ALL.iter().position(|r| r == self).expect("every variant is in ALL")
     }
 
-    /// Whether this is a "not yet" rather than a "never". An operator watching a healthy network
-    /// come up sees only these; anything else is a real fault.
-    pub fn is_transient(&self) -> bool {
-        matches!(self, Self::BeaconNotReady | Self::NotVerified | Self::ChallengeNotMature)
+    /// What kind of answer this is. The three differ in what the caller may DO with a snapshot
+    /// containing one, which is why they are not all just "skipped":
+    ///
+    /// * [`VltCreditSeverity::Pending`] — correct and final for now, will resolve itself. The
+    ///   snapshot is authoritative and may be cached.
+    /// * [`VltCreditSeverity::Invalid`] — correct and final forever. Also cacheable.
+    /// * [`VltCreditSeverity::Incomplete`] — **not an answer at all**. This node could not load
+    ///   what it needed. A snapshot containing one must never be written to the write-once
+    ///   accumulator and must never satisfy an activation check: caching it converts a local
+    ///   loading limit into permanent consensus history.
+    pub fn severity(&self) -> VltCreditSeverity {
+        match self {
+            Self::BeaconNotReady | Self::NotVerified | Self::ChallengeNotMature => VltCreditSeverity::Pending,
+            Self::CommitmentNotLoaded => VltCreditSeverity::Incomplete,
+            _ => VltCreditSeverity::Invalid,
+        }
     }
+
+    /// Whether this is a "not yet" rather than a "never" — for operator-facing text only. Use
+    /// [`Self::severity`] for anything that decides behaviour.
+    pub fn is_transient(&self) -> bool {
+        self.severity() == VltCreditSeverity::Pending
+    }
+}
+
+/// How far below the certificate floor a credit walk must search before it may call a phase-1
+/// commitment absent.
+///
+/// The two floors are **not** the same number, and conflating them is what made twenty executed,
+/// certified and verifier-confirmed jobs worth nothing on 2026-08-09. The certificate floor is
+/// raised to the oldest epoch the caller still needs re-derived — in the steady state, one epoch
+/// back. A commitment sits below its certificate by at least one full epoch, because the
+/// certificate cannot exist until the beacon (the anchor of the epoch *after* the commitment's)
+/// does, and legally by up to `max_commitment_age_blocks`. Bound the dependency by the certificate
+/// floor and every certificate becomes unresolvable in the steady state.
+pub fn commitment_dependency_horizon(certificate_floor_blue: u64, max_commitment_age_blocks: u64) -> u64 {
+    certificate_floor_blue.saturating_sub(max_commitment_age_blocks)
+}
+
+/// Whether a commitment accepted at `commitment_blue` is one a certificate accepted at
+/// `certificate_blue` may legally reference: at or below it, and no older than the age bound.
+///
+/// The DAA-denominated test in the credit walk is the authoritative one; this is the blue-score
+/// bound the *search* uses, and blue score advances no faster than DAA, so it errs by searching
+/// slightly too far rather than too little.
+pub fn commitment_within_dependency_horizon(commitment_blue: u64, certificate_blue: u64, max_commitment_age_blocks: u64) -> bool {
+    commitment_blue <= certificate_blue && certificate_blue.saturating_sub(commitment_blue) <= max_commitment_age_blocks
+}
+
+/// What a [`VltCreditSkipReason`] entitles the caller to do with the snapshot that produced it.
+///
+/// The distinction that matters is `Incomplete` against the other two. `Pending` and `Invalid` are
+/// *answers* — the certificate will credit later, or never — and a snapshot full of them is a
+/// correct snapshot. `Incomplete` is the absence of an answer, and a snapshot containing one is
+/// not a smaller table but an unknown one.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum VltCreditSeverity {
+    /// Not yet. Will resolve without intervention.
+    Pending,
+    /// Never. Settled against this certificate for good.
+    Invalid,
+    /// Unknown — this node could not load a dependency. Never cache, never activate on it.
+    Incomplete,
 }
 
 /// One recompute's credit-walk tally: how many certificates were candidates, how many credited,
@@ -2107,7 +2210,7 @@ pub struct VltCreditTally {
     pub candidates: u64,
     pub accepted: u64,
     /// Indexed by [`VltCreditSkipReason::index`].
-    pub skipped: [u64; 15],
+    pub skipped: [u64; 16],
 }
 
 impl VltCreditTally {
@@ -2125,6 +2228,13 @@ impl VltCreditTally {
 
     pub fn count(&self, reason: VltCreditSkipReason) -> u64 {
         self.skipped[reason.index()]
+    }
+
+    /// Whether any dependency could not be loaded. **The snapshot this tally came from must not be
+    /// written to the write-once accumulator, and must not satisfy an activation check.** Both
+    /// would turn "this node has not got it yet" into "nobody ever will".
+    pub fn is_incomplete(&self) -> bool {
+        VltCreditSkipReason::ALL.iter().any(|r| r.severity() == VltCreditSeverity::Incomplete && self.count(*r) > 0)
     }
 
     /// `reason=count` for every reason that fired, in [`VltCreditSkipReason::ALL`] order. Empty
@@ -2878,6 +2988,81 @@ mod tests {
 
         // An empty walk says nothing rather than saying "no skips".
         assert!(VltCreditTally::default().summary().is_empty());
+    }
+
+    /// A commitment below the cached-epoch floor but legal from its certificate must still be
+    /// searched for. This is the 2026-08-09 failure reduced to arithmetic: the walk stopped at the
+    /// certificate floor, every certificate resolved to "commitment missing", and the empty rows
+    /// were then sealed write-once.
+    #[test]
+    fn the_dependency_horizon_reaches_below_the_certificate_floor() {
+        const MAX_AGE: u64 = 6_000;
+        // The case the devnet actually hit: the certificate floor is the oldest uncached epoch, and
+        // the commitment is 4000 blue score below it — far outside the certificate range, and well
+        // inside what its own certificate may legally reference.
+        let certificate_floor = 10_000;
+        let horizon = commitment_dependency_horizon(certificate_floor, MAX_AGE);
+        assert_eq!(horizon, 4_000);
+        assert!(horizon < 6_000, "a commitment at 6000 must be inside the searched range");
+        assert!(commitment_within_dependency_horizon(6_000, 10_500, MAX_AGE));
+
+        // Exactly at the age bound is legal; one beyond it is not. `resolve_certificate` applies
+        // the same bound in DAA, and the two must agree about the boundary itself.
+        assert!(commitment_within_dependency_horizon(4_500, 10_500, MAX_AGE));
+        assert!(!commitment_within_dependency_horizon(4_499, 10_500, MAX_AGE));
+
+        // A commitment cannot come after the certificate that names it.
+        assert!(!commitment_within_dependency_horizon(10_501, 10_500, MAX_AGE));
+        assert!(commitment_within_dependency_horizon(10_500, 10_500, MAX_AGE));
+
+        // The horizon must never be *above* the certificate floor, or the search would skip the
+        // range the first pass already covers and call present commitments absent.
+        for floor in [0u64, 1, MAX_AGE - 1, MAX_AGE, MAX_AGE + 1, u64::MAX] {
+            assert!(commitment_dependency_horizon(floor, MAX_AGE) <= floor);
+        }
+        // And it saturates rather than wrapping under a shallow chain.
+        assert_eq!(commitment_dependency_horizon(100, MAX_AGE), 0);
+    }
+
+    /// "This node has not loaded it" and "the chain does not contain it" are different facts, and
+    /// only the second may be cached as a permanent zero. Collapsing them is what turned a walk
+    /// that stopped too early into twenty jobs' credit destroyed for good.
+    #[test]
+    fn an_unloaded_dependency_is_not_an_absent_one() {
+        assert_eq!(VltCreditSkipReason::CommitmentNotLoaded.severity(), VltCreditSeverity::Incomplete);
+        assert_eq!(VltCreditSkipReason::CommitmentAbsentFromCanonicalHistory.severity(), VltCreditSeverity::Invalid);
+        assert_eq!(VltCreditSkipReason::CommitmentOutOfRange.severity(), VltCreditSeverity::Invalid);
+        assert_eq!(VltCreditSkipReason::ChallengeNotMature.severity(), VltCreditSeverity::Pending);
+
+        // Only an Incomplete reason makes the whole tally unusable. A window full of "not yet" and
+        // "never" is a correct answer that happens to credit nothing.
+        let mut pending_only = VltCreditTally::default();
+        pending_only.note_skipped(VltCreditSkipReason::ChallengeNotMature);
+        pending_only.note_skipped(VltCreditSkipReason::CommitmentAbsentFromCanonicalHistory);
+        assert!(!pending_only.is_incomplete(), "pending and invalid are answers; the table stands");
+
+        let mut unloaded = VltCreditTally::default();
+        unloaded.note_skipped(VltCreditSkipReason::CommitmentNotLoaded);
+        assert!(unloaded.is_incomplete());
+
+        // And the snapshot carries it, because that is what `stage_vlt_credits` reads before
+        // writing a row it can never take back.
+        let pin = h64(7);
+        assert!(VltEpochSnapshot::pinned(pin, 100, Default::default()).resolution_complete());
+        assert!(!VltEpochSnapshot::pinned_incomplete(pin, 100, Default::default()).resolution_complete());
+        // A dormant overlay HAS resolved: empty is its final answer, and caching it is correct.
+        assert!(VltEpochSnapshot::inert().resolution_complete());
+        // A walk that could not run has not.
+        assert!(!VltEpochSnapshot::unresolved().resolution_complete());
+
+        // `resolution_complete` must stay out of the commitment root: two honest nodes may differ
+        // on what they could load while agreeing exactly on the table, and the root is the table.
+        let credits = HashMap::from([(h64(1), BTreeMap::from([(4u64, 1_000u128)]))]);
+        assert_eq!(
+            VltEpochSnapshot::pinned(pin, 100, credits.clone()).commitment_root(),
+            VltEpochSnapshot::pinned_incomplete(pin, 100, credits).commitment_root(),
+            "completeness is a local licence to act, never a consensus value"
+        );
     }
 
     /// The shipped presets never carry the fixture, feature or no feature. This is the assertion
