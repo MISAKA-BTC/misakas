@@ -1,0 +1,31 @@
+2026-08-09 22:47:38.414+09:00 [INFO ] kaspad v1.1.0-104a189
+2026-08-09 22:47:38.414+09:00 [INFO ] Application directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2
+2026-08-09 22:47:38.414+09:00 [INFO ] Data directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir
+2026-08-09 22:47:38.414+09:00 [INFO ] Logs directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/logs
+2026-08-09 22:47:38.414+09:00 [INFO ] Utxoindex Data directory /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir/utxoindex
+2026-08-09 22:47:38.419+09:00 [INFO ] P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager
+2026-08-09 22:47:38.424+09:00 [WARN ] [vlt-state] none -> pre_shadow at daa=0
+2026-08-09 22:47:38.424+09:00 [INFO ] Importing the UTXO set of the pruning point c31bfae8fc7a45010d6aab0e38ebdcce1e87b1444eb9aac6ed2d00de7f286aa6785eb88416b7e7b3c4b46750c2ae9e17bfa6e9f0312a4db82eb5652f17674f12
+2026-08-09 22:47:38.428+09:00 [INFO ] Resyncing the utxoindex...
+2026-08-09 22:47:38.428+09:00 [INFO ] [UPnP] Attempting to register upnp... (to disable run the node with --disable-upnp)
+2026-08-09 22:47:48.430+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 22:47:48.430+09:00 [INFO ] [validator-service] loaded validator signing key from /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/validator.key (validator_id=ac27106530bda8cfc3e8f5110d7ccad1f0660025baed7ff5e8f3acd3dc76d115f358f37db166198dc6407d808b28b41debf688589eb8b203ae51fa47535f4345)
+2026-08-09 22:47:48.430+09:00 [INFO ] [validator-service] funding address: misakadev:qf5dexzlkkphhntn2jdktpfuq5chdnu9cy2jyp4dykgtv98vrxgndhjqsxydzqsru5wtrc0kfy9z2ct2nmxc7ncfjqgvezgylk23ex85y6y5ftav — send UTXOs here to fund attestation-shard submission
+2026-08-09 22:47:48.431+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] executor job input: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/compute-prompt.txt (41 bytes)
+2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] devnet fixture: max_tokens pinned to the fixed job shape (15 = 10 prefill + 5 decode, 50 VLT/job); --compute-max-tokens=512 ignored
+2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] enabled: runtime=7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d class=8d416f720772b533f43006c4cbdc1effa7fc5d1e3fb7974dfecaa9589f1e2865a6144ef5d8d996e456d64429d6d42d9b32cc2fe98a97c5f08704d43c420c89ed max_tokens=15 auto_challenge=false
+2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] fixture quota: 0/1 job(s) certified, 0 slot(s) claimed (plan 7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d:1:15:41)
+2026-08-09 22:47:48.431+09:00 [INFO ] MISAKA node endpoints (network devnet):
+2026-08-09 22:47:48.431+09:00 [INFO ]   P2P:             127.0.0.1:17131   node-to-node only (not RPC)
+2026-08-09 22:47:48.431+09:00 [INFO ]   node-grpc:       127.0.0.1:17130   miner / low-level node RPC
+2026-08-09 22:47:48.431+09:00 [INFO ]   node-wrpc-borsh: 127.0.0.1:17132   validator / wallet / operator
+2026-08-09 22:47:48.431+09:00 [INFO ]   node-wrpc-json:  disabled   explorer / browser
+2026-08-09 22:47:48.431+09:00 [INFO ]   evm-rpc-http:    disabled   Ethereum JSON-RPC (EVM lane)
+2026-08-09 22:47:48.432+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-08-09 22:47:48.433+09:00 [INFO ] GRPC Server starting on: 127.0.0.1:17130
+2026-08-09 22:47:48.433+09:00 [INFO ] P2P Server starting on: 127.0.0.1:17131
+2026-08-09 22:47:48.434+09:00 [ERROR] thread 'tokio-runtime-worker' panicked at rpc/grpc/server/src/connection_handler.rs:164:29: GRPC Server 127.0.0.1:17130 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
+2026-08-09 22:47:48.435+09:00 [INFO ] [validator-service] starting (mode=active, validator_id=ac27106530bda8cfc3e8f5110d7ccad1f0660025baed7ff5e8f3acd3dc76d115f358f37db166198dc6407d808b28b41debf688589eb8b203ae51fa47535f4345, stake-bond=none)
+2026-08-09 22:47:48.435+09:00 [ERROR] thread 'tokio-runtime-worker' panicked at protocol/p2p/src/core/connection_handler.rs:90:29: P2P, Server 127.0.0.1:17131 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
+2026-08-09 22:47:48.435+09:00 [INFO ] WRPC Server starting on: 127.0.0.1:17132

@@ -1,0 +1,202 @@
+
+  misaminer v1.0.0  —  MISAKA (kaspa-pq) Layer-0 CPU miner
+  ---------------------------------------------------------
+  pool/node : 127.0.0.1:17110
+  network   : devnet
+  worker    : rig0
+  threads   : 2
+
+2026-08-09 22:48:01.314+09:00 [INFO ] payout wallet: misakadev:q29ycg56mh8774mqqexclechuenlu5mrqhm26dj9uuu5cmyly65q7kylx5c4l07r9mar7zep0eautnhm66wr8q387my3wywtnmeqp0gk523ce3j2
+2026-08-09 22:48:01.315+09:00 [INFO ] [rig0] connected to 127.0.0.1:17110; mining network_id=devnet to misakadev:q29ycg56mh8774mqqexclechuenlu5mrqhm26dj9uuu5cmyly65q7kylx5c4l07r9mar7zep0eautnhm66wr8q387my3wywtnmeqp0gk523ce3j2
+2026-08-09 22:48:01.855+09:00 [INFO ] [rig0] mined block #1 (nonce=9223372036855055515, daa_score=2829)
+2026-08-09 22:48:02.216+09:00 [INFO ] [rig0] mined block #2 (nonce=9223372036854962196, daa_score=2831)
+2026-08-09 22:48:02.841+09:00 [INFO ] [rig0] mined block #3 (nonce=9223372036855114615, daa_score=2832)
+2026-08-09 22:48:02.977+09:00 [INFO ] [rig0] mined block #4 (nonce=54655, daa_score=2833)
+2026-08-09 22:48:03.064+09:00 [INFO ] [rig0] mined block #5 (nonce=26598, daa_score=2834)
+2026-08-09 22:48:03.150+09:00 [INFO ] [rig0] mined block #6 (nonce=27569, daa_score=2836)
+2026-08-09 22:48:03.855+09:00 [INFO ] [rig0] mined block #7 (nonce=384238, daa_score=2837)
+2026-08-09 22:48:04.562+09:00 [INFO ] [rig0] mined block #8 (nonce=382100, daa_score=2838)
+2026-08-09 22:48:04.893+09:00 [INFO ] [rig0] mined block #9 (nonce=159169, daa_score=2839)
+2026-08-09 22:48:05.092+09:00 [INFO ] [rig0] mined block #10 (nonce=83424, daa_score=2840)
+2026-08-09 22:48:05.477+09:00 [INFO ] [rig0] mined block #11 (nonce=194502, daa_score=2841)
+2026-08-09 22:48:05.667+09:00 [INFO ] [rig0] mined block #12 (nonce=85566, daa_score=2843)
+2026-08-09 22:48:05.995+09:00 [INFO ] [rig0] mined block #13 (nonce=131416, daa_score=2844)
+2026-08-09 22:48:06.577+09:00 [INFO ] [rig0] mined block #14 (nonce=310637, daa_score=2845)
+2026-08-09 22:48:06.688+09:00 [INFO ] [rig0] mined block #15 (nonce=38115, daa_score=2846)
+2026-08-09 22:48:07.728+09:00 [INFO ] [rig0] mined block #16 (nonce=569778, daa_score=2847)
+2026-08-09 22:48:08.625+09:00 [INFO ] [rig0] mined block #17 (nonce=9223372036855260656, daa_score=2849)
+2026-08-09 22:48:08.700+09:00 [INFO ] [rig0] mined block #18 (nonce=9223372036854796131, daa_score=2851)
+2026-08-09 22:48:09.684+09:00 [INFO ] [rig0] mined block #19 (nonce=9223372036855334140, daa_score=2852)
+2026-08-09 22:48:09.942+09:00 [INFO ] [rig0] mined block #20 (nonce=126668, daa_score=2854)
+2026-08-09 22:48:12.090+09:00 [INFO ] [rig0] mined block #21 (nonce=9223372036856001001, daa_score=2855)
+2026-08-09 22:48:12.526+09:00 [INFO ] [rig0] mined block #22 (nonce=229022, daa_score=2857)
+2026-08-09 22:48:12.576+09:00 [INFO ] [rig0] mined block #23 (nonce=9223372036854781441, daa_score=2858)
+2026-08-09 22:48:13.274+09:00 [INFO ] [rig0] mined block #24 (nonce=381230, daa_score=2859)
+2026-08-09 22:48:13.448+09:00 [INFO ] [rig0] mined block #25 (nonce=9223372036854853714, daa_score=2861)
+2026-08-09 22:48:13.733+09:00 [INFO ] [rig0] mined block #26 (nonce=142743, daa_score=2862)
+2026-08-09 22:48:13.882+09:00 [INFO ] [rig0] mined block #27 (nonce=63423, daa_score=2863)
+2026-08-09 22:48:14.140+09:00 [INFO ] [rig0] mined block #28 (nonce=9223372036854902726, daa_score=2864)
+2026-08-09 22:48:14.510+09:00 [INFO ] [rig0] mined block #29 (nonce=9223372036854966804, daa_score=2865)
+2026-08-09 22:48:15.423+09:00 [INFO ] [rig0] mined block #30 (nonce=507393, daa_score=2867)
+2026-08-09 22:48:15.528+09:00 [INFO ] [rig0] mined block #31 (nonce=9223372036854814630, daa_score=2868)
+2026-08-09 22:48:15.766+09:00 [INFO ] [rig0] mined block #32 (nonce=115397, daa_score=2870)
+2026-08-09 22:48:16.094+09:00 [INFO ] [rig0] mined block #33 (nonce=166690, daa_score=2871)
+2026-08-09 22:48:16.314+09:00 [INFO ] [rig0] mined block #34 (nonce=9223372036854881196, daa_score=2872)
+2026-08-09 22:48:16.385+09:00 [INFO ] [rig0] mined block #35 (nonce=9223372036854792499, daa_score=2873)
+2026-08-09 22:48:17.362+09:00 [INFO ] [rig0] mined block #36 (nonce=557772, daa_score=2874)
+2026-08-09 22:48:17.560+09:00 [INFO ] [rig0] mined block #37 (nonce=89928, daa_score=2876)
+2026-08-09 22:48:18.315+09:00 [INFO ] [rig0] mined block #38 (nonce=9223372036855180537, daa_score=2877)
+2026-08-09 22:48:19.866+09:00 [INFO ] [rig0] mined block #39 (nonce=9223372036855639051, daa_score=2879)
+2026-08-09 22:48:20.054+09:00 [INFO ] [rig0] mined block #40 (nonce=9223372036854861972, daa_score=2881)
+2026-08-09 22:48:20.054+09:00 [INFO ] done: mined 40 blocks
+
+  misaminer v1.0.0  —  MISAKA (kaspa-pq) Layer-0 CPU miner
+  ---------------------------------------------------------
+  pool/node : 127.0.0.1:17110
+  network   : devnet
+  worker    : rig0
+  threads   : 2
+
+2026-08-09 22:48:20.059+09:00 [INFO ] payout wallet: misakadev:qgj7zpeuuyj52nnhps6t2n32xdnqhhq6hx84kskwcp8fgjwwvuw9fgr9h5x5c6pshmalmz2c7v302x97gyt622kvyl2gzhgzd86ewuf0ed8vm29v
+2026-08-09 22:48:20.060+09:00 [INFO ] [rig0] connected to 127.0.0.1:17110; mining network_id=devnet to misakadev:qgj7zpeuuyj52nnhps6t2n32xdnqhhq6hx84kskwcp8fgjwwvuw9fgr9h5x5c6pshmalmz2c7v302x97gyt622kvyl2gzhgzd86ewuf0ed8vm29v
+2026-08-09 22:48:20.213+09:00 [INFO ] [rig0] mined block #1 (nonce=9223372036854841355, daa_score=2882)
+2026-08-09 22:48:20.252+09:00 [INFO ] [rig0] mined block #2 (nonce=49, daa_score=2883)
+2026-08-09 22:48:20.322+09:00 [INFO ] [rig0] mined block #3 (nonce=9223372036854795226, daa_score=2884)
+2026-08-09 22:48:21.476+09:00 [INFO ] [rig0] mined block #4 (nonce=638183, daa_score=2885)
+2026-08-09 22:48:21.772+09:00 [INFO ] [rig0] mined block #5 (nonce=9223372036854900033, daa_score=2887)
+2026-08-09 22:48:23.073+09:00 [INFO ] [rig0] mined block #6 (nonce=720840, daa_score=2889)
+2026-08-09 22:48:23.121+09:00 [INFO ] [rig0] mined block #7 (nonce=5915, daa_score=2891)
+2026-08-09 22:48:23.581+09:00 [INFO ] [rig0] mined block #8 (nonce=9223372036855021354, daa_score=2892)
+2026-08-09 22:48:25.196+09:00 [INFO ] [rig0] mined block #9 (nonce=927555, daa_score=2893)
+2026-08-09 22:48:25.707+09:00 [INFO ] [rig0] mined block #10 (nonce=275231, daa_score=2896)
+2026-08-09 22:48:26.567+09:00 [INFO ] [rig0] mined block #11 (nonce=9223372036855253677, daa_score=2897)
+2026-08-09 22:48:26.812+09:00 [INFO ] [rig0] mined block #12 (nonce=9223372036854892215, daa_score=2898)
+2026-08-09 22:48:26.953+09:00 [INFO ] [rig0] mined block #13 (nonce=52474, daa_score=2899)
+2026-08-09 22:48:27.049+09:00 [INFO ] [rig0] mined block #14 (nonce=33023, daa_score=2900)
+2026-08-09 22:48:27.273+09:00 [INFO ] [rig0] mined block #15 (nonce=9223372036854885133, daa_score=2902)
+2026-08-09 22:48:28.087+09:00 [INFO ] [rig0] mined block #16 (nonce=441258, daa_score=2903)
+2026-08-09 22:48:28.317+09:00 [INFO ] [rig0] mined block #17 (nonce=112527, daa_score=2905)
+2026-08-09 22:48:30.540+09:00 [INFO ] [rig0] mined block #18 (nonce=9223372036856044516, daa_score=2906)
+2026-08-09 22:48:30.635+09:00 [INFO ] [rig0] mined block #19 (nonce=32859, daa_score=2909)
+2026-08-09 22:48:31.226+09:00 [INFO ] [rig0] mined block #20 (nonce=9223372036855095891, daa_score=2910)
+2026-08-09 22:48:31.789+09:00 [INFO ] [rig0] mined block #21 (nonce=275012, daa_score=2911)
+2026-08-09 22:48:32.455+09:00 [INFO ] [rig0] mined block #22 (nonce=9223372036855115659, daa_score=2912)
+2026-08-09 22:48:32.524+09:00 [INFO ] [rig0] mined block #23 (nonce=17245, daa_score=2914)
+2026-08-09 22:48:32.955+09:00 [INFO ] [rig0] mined block #24 (nonce=9223372036854970836, daa_score=2915)
+2026-08-09 22:48:33.322+09:00 [INFO ] [rig0] mined block #25 (nonce=9223372036854962203, daa_score=2916)
+2026-08-09 22:48:33.648+09:00 [INFO ] [rig0] mined block #26 (nonce=9223372036854934575, daa_score=2918)
+2026-08-09 22:48:33.943+09:00 [INFO ] [rig0] mined block #27 (nonce=146994, daa_score=2919)
+2026-08-09 22:48:34.001+09:00 [INFO ] [rig0] mined block #28 (nonce=9223372036854788245, daa_score=2920)
+2026-08-09 22:48:34.562+09:00 [INFO ] [rig0] mined block #29 (nonce=9223372036855056871, daa_score=2921)
+2026-08-09 22:48:35.230+09:00 [INFO ] [rig0] mined block #30 (nonce=9223372036855140171, daa_score=2923)
+2026-08-09 22:48:36.102+09:00 [INFO ] [rig0] mined block #31 (nonce=462399, daa_score=2924)
+2026-08-09 22:48:37.813+09:00 [INFO ] [rig0] mined block #32 (nonce=9223372036855688130, daa_score=2926)
+2026-08-09 22:48:38.946+09:00 [INFO ] [rig0] mined block #33 (nonce=9223372036855417561, daa_score=2928)
+2026-08-09 22:48:39.619+09:00 [INFO ] [rig0] mined block #34 (nonce=9223372036855134681, daa_score=2930)
+2026-08-09 22:48:39.692+09:00 [INFO ] [rig0] mined block #35 (nonce=9223372036854797288, daa_score=2932)
+2026-08-09 22:48:40.960+09:00 [INFO ] [rig0] mined block #36 (nonce=9223372036855494138, daa_score=2933)
+2026-08-09 22:48:41.162+09:00 [INFO ] [rig0] mined block #37 (nonce=9223372036854870740, daa_score=2935)
+2026-08-09 22:48:41.468+09:00 [INFO ] [rig0] mined block #38 (nonce=155483, daa_score=2936)
+2026-08-09 22:48:42.204+09:00 [INFO ] [rig0] mined block #39 (nonce=405852, daa_score=2937)
+2026-08-09 22:48:42.403+09:00 [INFO ] [rig0] mined block #40 (nonce=94174, daa_score=2938)
+2026-08-09 22:48:42.403+09:00 [INFO ] done: mined 40 blocks
+
+  misaminer v1.0.0  —  MISAKA (kaspa-pq) Layer-0 CPU miner
+  ---------------------------------------------------------
+  pool/node : 127.0.0.1:17110
+  network   : devnet
+  worker    : rig0
+  threads   : 2
+
+2026-08-09 22:48:42.411+09:00 [INFO ] payout wallet: misakadev:qf5dexzlkkphhntn2jdktpfuq5chdnu9cy2jyp4dykgtv98vrxgndhjqsxydzqsru5wtrc0kfy9z2ct2nmxc7ncfjqgvezgylk23ex85y6y5ftav
+2026-08-09 22:48:42.412+09:00 [INFO ] [rig0] connected to 127.0.0.1:17110; mining network_id=devnet to misakadev:qf5dexzlkkphhntn2jdktpfuq5chdnu9cy2jyp4dykgtv98vrxgndhjqsxydzqsru5wtrc0kfy9z2ct2nmxc7ncfjqgvezgylk23ex85y6y5ftav
+2026-08-09 22:48:42.492+09:00 [INFO ] [rig0] mined block #1 (nonce=23348, daa_score=2939)
+2026-08-09 22:48:42.682+09:00 [INFO ] [rig0] mined block #2 (nonce=89209, daa_score=2940)
+2026-08-09 22:48:42.793+09:00 [INFO ] [rig0] mined block #3 (nonce=44471, daa_score=2941)
+2026-08-09 22:48:43.011+09:00 [INFO ] [rig0] mined block #4 (nonce=9223372036854883252, daa_score=2942)
+2026-08-09 22:48:43.139+09:00 [INFO ] [rig0] mined block #5 (nonce=55150, daa_score=2944)
+2026-08-09 22:48:43.720+09:00 [INFO ] [rig0] mined block #6 (nonce=9223372036855093895, daa_score=2945)
+2026-08-09 22:48:44.873+09:00 [INFO ] [rig0] mined block #7 (nonce=637615, daa_score=2946)
+2026-08-09 22:48:45.335+09:00 [INFO ] [rig0] mined block #8 (nonce=245152, daa_score=2948)
+2026-08-09 22:48:46.071+09:00 [INFO ] [rig0] mined block #9 (nonce=9223372036855188638, daa_score=2949)
+2026-08-09 22:48:46.772+09:00 [INFO ] [rig0] mined block #10 (nonce=9223372036855172273, daa_score=2951)
+2026-08-09 22:48:47.097+09:00 [INFO ] [rig0] mined block #11 (nonce=165681, daa_score=2953)
+2026-08-09 22:48:47.849+09:00 [INFO ] [rig0] mined block #12 (nonce=406479, daa_score=2954)
+2026-08-09 22:48:48.672+09:00 [INFO ] [rig0] mined block #13 (nonce=448362, daa_score=2955)
+2026-08-09 22:48:49.090+09:00 [INFO ] [rig0] mined block #14 (nonce=222102, daa_score=2957)
+2026-08-09 22:48:49.163+09:00 [INFO ] [rig0] mined block #15 (nonce=9223372036854798048, daa_score=2958)
+2026-08-09 22:48:49.675+09:00 [INFO ] [rig0] mined block #16 (nonce=275168, daa_score=2959)
+2026-08-09 22:48:49.793+09:00 [INFO ] [rig0] mined block #17 (nonce=9223372036854822928, daa_score=2960)
+2026-08-09 22:48:50.185+09:00 [INFO ] [rig0] mined block #18 (nonce=9223372036854980367, daa_score=2961)
+2026-08-09 22:48:51.472+09:00 [INFO ] [rig0] mined block #19 (nonce=715997, daa_score=2963)
+2026-08-09 22:48:52.859+09:00 [INFO ] [rig0] mined block #20 (nonce=793896, daa_score=2965)
+2026-08-09 22:48:52.898+09:00 [INFO ] [rig0] mined block #21 (nonce=2939, daa_score=2967)
+2026-08-09 22:48:53.007+09:00 [INFO ] [rig0] mined block #22 (nonce=44748, daa_score=2968)
+2026-08-09 22:48:53.912+09:00 [INFO ] [rig0] mined block #23 (nonce=9223372036855289773, daa_score=2969)
+2026-08-09 22:48:54.188+09:00 [INFO ] [rig0] mined block #24 (nonce=136891, daa_score=2971)
+2026-08-09 22:48:54.291+09:00 [INFO ] [rig0] mined block #25 (nonce=9223372036854816899, daa_score=2972)
+2026-08-09 22:48:55.516+09:00 [INFO ] [rig0] mined block #26 (nonce=700561, daa_score=2973)
+2026-08-09 22:48:55.549+09:00 [INFO ] [rig0] mined block #27 (nonce=9223372036854776412, daa_score=2975)
+2026-08-09 22:48:56.141+09:00 [INFO ] [rig0] mined block #28 (nonce=9223372036855053426, daa_score=2976)
+2026-08-09 22:48:56.476+09:00 [INFO ] [rig0] mined block #29 (nonce=9223372036854946533, daa_score=2977)
+2026-08-09 22:48:57.450+09:00 [INFO ] [rig0] mined block #30 (nonce=9223372036855315597, daa_score=2978)
+2026-08-09 22:48:58.377+09:00 [INFO ] [rig0] mined block #31 (nonce=9223372036855291953, daa_score=2979)
+2026-08-09 22:48:58.699+09:00 [INFO ] [rig0] mined block #32 (nonce=9223372036854943772, daa_score=2981)
+2026-08-09 22:48:58.746+09:00 [INFO ] [rig0] mined block #33 (nonce=9223372036854784754, daa_score=2982)
+2026-08-09 22:48:58.899+09:00 [INFO ] [rig0] mined block #34 (nonce=9223372036854845612, daa_score=2983)
+2026-08-09 22:48:59.067+09:00 [INFO ] [rig0] mined block #35 (nonce=9223372036854854740, daa_score=2984)
+2026-08-09 22:48:59.148+09:00 [INFO ] [rig0] mined block #36 (nonce=28324, daa_score=2985)
+2026-08-09 22:48:59.723+09:00 [INFO ] [rig0] mined block #37 (nonce=313922, daa_score=2987)
+2026-08-09 22:49:00.550+09:00 [INFO ] [rig0] mined block #38 (nonce=9223372036855235890, daa_score=2988)
+2026-08-09 22:49:01.751+09:00 [INFO ] [rig0] mined block #39 (nonce=9223372036855448583, daa_score=2990)
+2026-08-09 22:49:02.280+09:00 [INFO ] [rig0] mined block #40 (nonce=270350, daa_score=2991)
+2026-08-09 22:49:02.280+09:00 [INFO ] done: mined 40 blocks
+
+  misaminer v1.0.0  —  MISAKA (kaspa-pq) Layer-0 CPU miner
+  ---------------------------------------------------------
+  pool/node : 127.0.0.1:17110
+  network   : devnet
+  worker    : rig0
+  threads   : 2
+
+2026-08-09 22:49:02.286+09:00 [INFO ] payout wallet: misakadev:q29p80qzxnpmqmmakjxayc47sakgldkd9nn39ja0uc2dkqqpqpymu7qtt8gtv44n3ymgscu96mczwfl3j447uqpeekwnu7874jwnuze8cvwmds34
+2026-08-09 22:49:02.287+09:00 [INFO ] [rig0] connected to 127.0.0.1:17110; mining network_id=devnet to misakadev:q29p80qzxnpmqmmakjxayc47sakgldkd9nn39ja0uc2dkqqpqpymu7qtt8gtv44n3ymgscu96mczwfl3j447uqpeekwnu7874jwnuze8cvwmds34
+2026-08-09 22:49:02.502+09:00 [INFO ] [rig0] mined block #1 (nonce=105033, daa_score=2993)
+2026-08-09 22:49:03.073+09:00 [INFO ] [rig0] mined block #2 (nonce=9223372036855089304, daa_score=2994)
+2026-08-09 22:49:03.326+09:00 [INFO ] [rig0] mined block #3 (nonce=9223372036854891396, daa_score=2995)
+2026-08-09 22:49:03.377+09:00 [INFO ] [rig0] mined block #4 (nonce=11065, daa_score=2997)
+2026-08-09 22:49:03.692+09:00 [INFO ] [rig0] mined block #5 (nonce=9223372036854940361, daa_score=2998)
+2026-08-09 22:49:03.765+09:00 [INFO ] [rig0] mined block #6 (nonce=9223372036854794566, daa_score=2999)
+2026-08-09 22:49:04.299+09:00 [INFO ] [rig0] mined block #7 (nonce=283051, daa_score=3000)
+2026-08-09 22:49:05.014+09:00 [INFO ] [rig0] mined block #8 (nonce=9223372036855172782, daa_score=3002)
+2026-08-09 22:49:05.333+09:00 [INFO ] [rig0] mined block #9 (nonce=9223372036854942107, daa_score=3003)
+2026-08-09 22:49:05.611+09:00 [INFO ] [rig0] mined block #10 (nonce=9223372036854907419, daa_score=3004)
+2026-08-09 22:49:05.821+09:00 [INFO ] [rig0] mined block #11 (nonce=9223372036854879896, daa_score=3006)
+2026-08-09 22:49:06.534+09:00 [INFO ] [rig0] mined block #12 (nonce=9223372036855170607, daa_score=3007)
+2026-08-09 22:49:06.705+09:00 [INFO ] [rig0] mined block #13 (nonce=9223372036854855717, daa_score=3008)
+2026-08-09 22:49:07.193+09:00 [INFO ] [rig0] mined block #14 (nonce=9223372036855038713, daa_score=3009)
+2026-08-09 22:49:08.084+09:00 [INFO ] [rig0] mined block #15 (nonce=9223372036855274656, daa_score=3010)
+2026-08-09 22:49:08.302+09:00 [INFO ] [rig0] mined block #16 (nonce=9223372036854885101, daa_score=3012)
+2026-08-09 22:49:09.120+09:00 [INFO ] [rig0] mined block #17 (nonce=448314, daa_score=3013)
+2026-08-09 22:49:10.001+09:00 [INFO ] [rig0] mined block #18 (nonce=9223372036855264071, daa_score=3015)
+2026-08-09 22:49:10.452+09:00 [INFO ] [rig0] mined block #19 (nonce=234781, daa_score=3016)
+2026-08-09 22:49:10.497+09:00 [INFO ] [rig0] mined block #20 (nonce=9223372036854785007, daa_score=3018)
+2026-08-09 22:49:10.972+09:00 [INFO ] [rig0] mined block #21 (nonce=9223372036855032825, daa_score=3019)
+2026-08-09 22:49:11.882+09:00 [INFO ] [rig0] mined block #22 (nonce=9223372036855297406, daa_score=3020)
+2026-08-09 22:49:12.249+09:00 [INFO ] [rig0] mined block #23 (nonce=9223372036854970943, daa_score=3022)
+2026-08-09 22:49:12.950+09:00 [INFO ] [rig0] mined block #24 (nonce=386214, daa_score=3023)
+2026-08-09 22:49:13.219+09:00 [INFO ] [rig0] mined block #25 (nonce=9223372036854915036, daa_score=3024)
+2026-08-09 22:49:13.443+09:00 [INFO ] [rig0] mined block #26 (nonce=9223372036854848469, daa_score=3025)
+2026-08-09 22:49:13.918+09:00 [INFO ] [rig0] mined block #27 (nonce=9223372036855033182, daa_score=3026)
+2026-08-09 22:49:14.228+09:00 [INFO ] [rig0] mined block #28 (nonce=9223372036854938754, daa_score=3028)
+2026-08-09 22:49:14.773+09:00 [INFO ] [rig0] mined block #29 (nonce=298664, daa_score=3029)
+2026-08-09 22:49:15.002+09:00 [INFO ] [rig0] mined block #30 (nonce=9223372036854890659, daa_score=3030)
+2026-08-09 22:49:15.251+09:00 [INFO ] [rig0] mined block #31 (nonce=9223372036854901546, daa_score=3031)
+2026-08-09 22:49:16.763+09:00 [INFO ] [rig0] mined block #32 (nonce=865709, daa_score=3033)
+2026-08-09 22:49:17.290+09:00 [INFO ] [rig0] mined block #33 (nonce=287269, daa_score=3035)
+2026-08-09 22:49:17.418+09:00 [INFO ] [rig0] mined block #34 (nonce=56118, daa_score=3036)
+2026-08-09 22:49:18.348+09:00 [INFO ] [rig0] mined block #35 (nonce=521254, daa_score=3037)
+2026-08-09 22:49:18.916+09:00 [INFO ] [rig0] mined block #36 (nonce=311341, daa_score=3038)
+2026-08-09 22:49:19.106+09:00 [INFO ] [rig0] mined block #37 (nonce=9223372036854867996, daa_score=3040)
+2026-08-09 22:49:19.884+09:00 [INFO ] [rig0] mined block #38 (nonce=9223372036855182145, daa_score=3041)
+2026-08-09 22:49:19.884+09:00 [WARN ] get_block_template failed: Not connected to server; retrying in 1s

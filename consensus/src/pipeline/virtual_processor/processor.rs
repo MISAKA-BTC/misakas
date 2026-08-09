@@ -2058,10 +2058,18 @@ impl VirtualStateProcessor {
             store.mark_backfilled_direct().unwrap();
         }
 
+        let mut reverted = 0usize;
         for removed in chain_path.removed.iter().rev() {
             for (tx_id, _) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed)) {
                 store.delete_batch(batch, tx_id).unwrap();
+                reverted += 1;
             }
+        }
+        // The revert path is the half of a new consensus store that never runs until it matters,
+        // and then runs during a reorg. Say so when it does: a declaration silently surviving a
+        // branch it is not in would put that branch's verifiers on another branch's committee.
+        if reverted > 0 {
+            info!("[capability-store] reverted {reverted} declaration(s) that left the selected chain");
         }
         for added in chain_path.added.iter() {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };

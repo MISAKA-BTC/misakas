@@ -119,8 +119,12 @@ fi
 echo "  work dir        : $WORK_DIR"
 echo
 
-BASE_P2P=17111
-BASE_RPC=17110
+# Overridable, because the ports are the only thing stopping two devnets from coexisting. A second
+# mesh started while the first holds 17110 dies on bind — every node, immediately — and the bond
+# script that follows it then runs against nothing. Both failures are loud in a log nobody is
+# tailing yet, so the run looks like it started.
+BASE_P2P="${MISAKA_DEVNET_BASE_P2P:-17111}"
+BASE_RPC="${MISAKA_DEVNET_BASE_RPC:-17110}"
 
 # EVERY refusal below this point must come BEFORE the running nodes are stopped. A check that
 # rejects the configuration after the kill loop leaves the devnet down as its side effect, and the

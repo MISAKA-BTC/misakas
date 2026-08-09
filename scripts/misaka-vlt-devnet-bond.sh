@@ -52,7 +52,7 @@ for bin in "$KASPAD_BIN" "$MISAMINER_BIN" "$VALIDATOR_BIN"; do
 done
 [ -d "$WORK_DIR/node-0" ] || { echo "no devnet at $WORK_DIR — run misaka-vlt-devnet.sh first" >&2; exit 1; }
 
-BASE_RPC=17110
+BASE_RPC="${MISAKA_DEVNET_BASE_RPC:-17110}"
 grpc_of() { echo $((BASE_RPC + $1 * 10)); }
 wrpc_of() { echo $((BASE_RPC + $1 * 10 + 2)); }
 
