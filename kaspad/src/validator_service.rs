@@ -891,7 +891,13 @@ impl ValidatorService {
                 trace!("[{VALIDATOR}] compute: commitment {} is waiting on beacon epoch {}", open.commitment_tx_id, open.beacon_epoch);
                 continue;
             }
-            self.certify_one(key, bond_outpoint, role, open, status.epoch).await;
+            // A commitment stays open until its certificate is ACCEPTED, so without this the
+            // certificate is rebuilt and re-submitted on every pass until it mines — a fee each
+            // time, and (before the quota was keyed by job) a quota increment each time.
+            if self.compute_inflight.lock().unwrap().certificate_recent(open.commitment_tx_id, now_daa) {
+                continue;
+            }
+            self.certify_one(key, bond_outpoint, role, open, status.epoch, now_daa).await;
             return; // one job per pass
         }
 
@@ -952,6 +958,12 @@ impl ValidatorService {
     ) {
         let input = new_job_input(prompt, now_daa);
         let job_id = job_spec_id(&role.job_spec(&input));
+        // Claim the quota slot BEFORE anything reaches the network, and persist it there. A slot
+        // taken only at certification does not count the job already in flight, which is half of
+        // how a target of 5 became 6.
+        if !role.reserve_job(job_id) {
+            return;
+        }
         let input_for_build = input.clone();
         let build = |funding_outpoint, funding: &UtxoEntry, fee| {
             key.build_commitment_tx(
@@ -967,6 +979,7 @@ impl ValidatorService {
         let payload_bytes = COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES + input.len();
         if self.build_and_submit_overlay_tx("commitment", payload_bytes, false, build).await.is_some() {
             self.compute_inflight.lock().unwrap().note_commitment(now_daa);
+            role.note_job_committed(job_id);
             info!("[{VALIDATOR}] compute: committed to job {job_id} ({} byte input); awaiting the sortition beacon", input.len());
         }
     }
@@ -984,6 +997,7 @@ impl ValidatorService {
         role: &ComputeRole,
         open: &OpenComputeCommitment,
         epoch: u64,
+        now_daa: u64,
     ) {
         let spec = role.job_spec(&open.input);
         if job_spec_id(&spec) != open.job_id {
@@ -1021,10 +1035,10 @@ impl ValidatorService {
                 open.job_id,
                 compute_receipt_hash(&spec, &receipt)
             );
-            // Count it here — the last step this node controls, and the only one whose VLT will
-            // land. Counting the commitment instead would spend quota on a job that expired
-            // before it could be certified, leaving the validator silently under its target.
-            role.note_job_certified();
+            self.compute_inflight.lock().unwrap().note_certificate(open.commitment_tx_id, now_daa);
+            // Keyed by the job, so a re-submitted certificate for the same commitment advances the
+            // same slot instead of claiming another.
+            role.note_job_certified(open.job_id);
         }
     }
 

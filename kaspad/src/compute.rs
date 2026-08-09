@@ -166,17 +166,42 @@ impl ComputeRole {
         }
     }
 
+    /// Claim a quota slot for `job_id` before its commitment is broadcast.
+    ///
+    /// `true` without a quota (a production executor is unbounded) and for a job already claimed —
+    /// re-committing after a lost transaction is a retry, not a second job.
+    pub fn reserve_job(&self, job_id: Hash64) -> bool {
+        let (Some(q), Some(path)) = (&self.fixture_quota, &self.fixture_state_path) else { return true };
+        let mut st = q.lock().unwrap();
+        let ok = st.reserve(&job_id.to_string(), path);
+        if !ok {
+            info!("[{COMPUTE}] fixture quota: {}/{} claimed; originating no further jobs", st.claimed(), st.target_jobs);
+        }
+        ok
+    }
+
+    /// Record that a claimed job's commitment reached the network.
+    pub fn note_job_committed(&self, job_id: Hash64) {
+        let (Some(q), Some(path)) = (&self.fixture_quota, &self.fixture_state_path) else { return };
+        q.lock().unwrap().advance(&job_id.to_string(), FixtureSlotState::Committed, path);
+    }
+
     /// Record that one job reached a submitted certificate, and flush the count.
     ///
     /// A certificate is the right thing to count: it is the last step this node controls, and the
     /// only one whose VLT will actually land. Counting commitments instead would spend quota on a
     /// job that expired before it could be certified, and the validator would silently finish
     /// under its target.
-    pub fn note_job_certified(&self) {
+    pub fn note_job_certified(&self, job_id: Hash64) {
         let (Some(q), Some(path)) = (&self.fixture_quota, &self.fixture_state_path) else { return };
         let mut st = q.lock().unwrap();
-        st.record_completed(path);
-        info!("[{COMPUTE}] fixture quota: {}/{} job(s) certified", st.completed_jobs, st.target_jobs);
+        let before = st.certified();
+        st.advance(&job_id.to_string(), FixtureSlotState::Certified, path);
+        // Only when it actually moved. A re-submitted certificate for a job already certified is
+        // the same job, and saying "certified" again is how the count reached 6 against 5.
+        if st.certified() != before {
+            info!("[{COMPUTE}] fixture quota: {}/{} job(s) certified ({} claimed)", st.certified(), st.target_jobs, st.claimed());
+        }
     }
     /// Resolve the compute role, or `None` with a logged reason.
     ///
@@ -307,7 +332,12 @@ impl ComputeRole {
             let plan_id = format!("{}:{}:{}:{}", identity.runtime_hash, target, max_tokens, prompt.as_ref().map_or(0, |p| p.len()));
             let path = cfg.fixture_state_path.clone().unwrap_or_else(|| cfg.work_dir.join("fixture-quota.json"));
             let st = FixtureExecutionState::load(&path, &plan_id, target);
-            info!("[{COMPUTE}] fixture quota: {}/{} job(s) already certified (plan {plan_id})", st.completed_jobs, st.target_jobs);
+            info!(
+                "[{COMPUTE}] fixture quota: {}/{} job(s) certified, {} slot(s) claimed (plan {plan_id})",
+                st.certified(),
+                st.target_jobs,
+                st.claimed()
+            );
             Mutex::new(st)
         });
         let fixture_state_path =
@@ -442,25 +472,70 @@ fn load_prompt(path: &PathBuf) -> Result<Vec<u8>, String> {
 /// `plan_id` binds the count to the plan it was counted under — the validator, the target, and the
 /// job shape. Change any of them and the old count is not evidence about the new plan, so it is
 /// discarded rather than carried over.
+/// How far one reserved job has got. A slot is consumed from [`Self::Reserved`] onward.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FixtureSlotState {
+    /// Written to disk BEFORE the commitment is broadcast. A crash here costs one slot and the
+    /// node finishes under target — visible, and the safe direction.
+    Reserved,
+    /// The commitment transaction was submitted.
+    Committed,
+    /// A certificate for it was submitted. Terminal.
+    Certified,
+}
+
+/// MISAKA devnet fixture: which jobs this validator has claimed against its quota, and how far
+/// each has got.
+///
+/// The quota is what makes an *asymmetric* weight test possible: five validators running the same
+/// fixed job differ only in how many they complete, so the resulting `W_i(E)` differ only by
+/// supplied compute. Without it the compute role keeps originating jobs forever and every
+/// validator converges on the same weight — a test of nothing.
+///
+/// # Keyed by job, not counted by submission
+///
+/// This was a counter, and the counter went to 6 against a target of 5. Two ways, both of which a
+/// count of *submissions* cannot see:
+///
+/// * a certificate is re-submitted until its transaction is accepted, and each submission
+///   incremented the count — one job, several increments;
+/// * a slot was only consumed at certification, so a commitment already in flight did not count
+///   against the target.
+///
+/// So the unit is the job, identified by the `job_id` consensus itself dedups on
+/// (`aggregate_compute_credits` keys `(validator_id, job_id)`), and the map is keyed by it. Two
+/// certificates for one job are one entry, a restart re-certifying an open commitment is one
+/// entry, and the quota is `slots.len()` — reserved-or-later, so work in flight counts.
+///
+/// **Persisted, deliberately.** Held only in memory, a restart resets the count and the quota
+/// starts again; the weights then grow every time a node bounces, and the expected
+/// 400/250/150/100/100 quietly becomes 450/300/…
+///
+/// `plan_id` binds the slots to the plan they were claimed under — the validator, the target, and
+/// the job shape. Change any of them and the old slots are not evidence about the new plan, so
+/// they are discarded rather than carried over.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct FixtureExecutionState {
     pub plan_id: String,
     pub target_jobs: u32,
-    pub completed_jobs: u32,
+    /// `job_id` (hex) → how far that job has got. `len()` is the quota consumed.
+    #[serde(default)]
+    pub slots: std::collections::BTreeMap<String, FixtureSlotState>,
 }
 
 impl FixtureExecutionState {
     /// Load the state for `plan_id`, or a fresh one if the file is absent, unreadable, or records
     /// a different plan.
     pub fn load(path: &std::path::Path, plan_id: &str, target_jobs: u32) -> Self {
-        let fresh = Self { plan_id: plan_id.to_string(), target_jobs, completed_jobs: 0 };
+        let fresh = Self { plan_id: plan_id.to_string(), target_jobs, slots: Default::default() };
         let Ok(raw) = std::fs::read_to_string(path) else { return fresh };
         match serde_json::from_str::<Self>(&raw) {
-            Ok(saved) if saved.plan_id == plan_id => saved,
+            Ok(saved) if saved.plan_id == plan_id && saved.target_jobs == target_jobs => saved,
             Ok(saved) => {
                 warn!(
-                    "[{COMPUTE}] fixture plan changed ({} -> {plan_id}); discarding the previous count of {} job(s)",
-                    saved.plan_id, saved.completed_jobs
+                    "[{COMPUTE}] fixture plan changed ({} -> {plan_id}); discarding {} slot(s) claimed under it",
+                    saved.plan_id,
+                    saved.slots.len()
                 );
                 fresh
             }
@@ -471,17 +546,64 @@ impl FixtureExecutionState {
         }
     }
 
-    pub fn remaining(&self) -> u32 {
-        self.target_jobs.saturating_sub(self.completed_jobs)
+    /// Jobs claimed against the target, in any state. This — not the number certified — is what
+    /// the quota is measured against, so a commitment in flight cannot be joined by another.
+    pub fn claimed(&self) -> u32 {
+        self.slots.len() as u32
     }
 
-    /// Record one more completed job and flush.
+    pub fn certified(&self) -> u32 {
+        self.slots.values().filter(|s| **s == FixtureSlotState::Certified).count() as u32
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.target_jobs.saturating_sub(self.claimed())
+    }
+
+    /// Claim a slot for `job_id`, flushing before the caller broadcasts anything.
     ///
-    /// Flushed immediately rather than at shutdown: a node killed between the certificate and the
-    /// flush would re-originate that job on restart and overshoot its quota, which is precisely
-    /// the drift this state exists to prevent.
-    pub fn record_completed(&mut self, path: &std::path::Path) {
-        self.completed_jobs = self.completed_jobs.saturating_add(1);
+    /// `false` means the quota is full. An already-claimed job returns `true` — re-committing the
+    /// same job after a lost transaction is a retry of that job, not a new one.
+    ///
+    /// The flush is deliberately *before* the broadcast, and a failed broadcast does **not**
+    /// release the slot. A released slot could be re-used by a second job while the first
+    /// transaction was in fact on the wire, which overshoots the target silently; a burnt slot
+    /// leaves the node under target, which is visible in its own quota log.
+    pub fn reserve(&mut self, job_id: &str, path: &std::path::Path) -> bool {
+        if self.slots.contains_key(job_id) {
+            return true;
+        }
+        if self.claimed() >= self.target_jobs {
+            return false;
+        }
+        self.slots.insert(job_id.to_owned(), FixtureSlotState::Reserved);
+        self.flush(path);
+        true
+    }
+
+    /// Advance a claimed job, never backwards. Idempotent: the second certificate for one job
+    /// finds it already `Certified` and changes nothing.
+    pub fn advance(&mut self, job_id: &str, to: FixtureSlotState, path: &std::path::Path) {
+        let rank = |s: FixtureSlotState| match s {
+            FixtureSlotState::Reserved => 0,
+            FixtureSlotState::Committed => 1,
+            FixtureSlotState::Certified => 2,
+        };
+        match self.slots.get(job_id) {
+            Some(current) if rank(*current) >= rank(to) => return,
+            // Not claimed: only possible if the state file was lost between reserve and here.
+            // Record it rather than drop it — the job exists on chain either way.
+            None => {}
+            Some(_) => {}
+        }
+        self.slots.insert(job_id.to_owned(), to);
+        self.flush(path);
+    }
+
+    /// Flushed immediately rather than at shutdown: a node killed between a state change and the
+    /// flush would re-claim the same job on restart, which is precisely the drift this exists to
+    /// prevent.
+    fn flush(&self, path: &std::path::Path) {
         if let Err(err) = std::fs::write(path, serde_json::to_string(self).unwrap_or_default()) {
             warn!("[{COMPUTE}] could not persist the fixture quota to {}: {err}", path.display());
         }
@@ -497,6 +619,9 @@ impl FixtureExecutionState {
 pub struct ComputeInflight {
     capability_daa: Option<u64>,
     commitment_daa: Option<u64>,
+    /// Keyed by the COMMITMENT a certificate certifies, because that is what stays open until the
+    /// certificate is accepted — and what the cycle would otherwise certify again every pass.
+    certificate_daa: std::collections::HashMap<kaspa_consensus_core::tx::TransactionId, u64>,
     /// Keyed by the certificate a verdict judges.
     verdict_daa: std::collections::HashMap<kaspa_consensus_core::tx::TransactionId, u64>,
 }
@@ -516,6 +641,10 @@ impl ComputeInflight {
         Self::is_recent(self.commitment_daa, now_daa)
     }
 
+    pub fn certificate_recent(&self, commitment_tx_id: kaspa_consensus_core::tx::TransactionId, now_daa: u64) -> bool {
+        Self::is_recent(self.certificate_daa.get(&commitment_tx_id).copied(), now_daa)
+    }
+
     pub fn verdict_recent(&self, certificate_tx_id: kaspa_consensus_core::tx::TransactionId, now_daa: u64) -> bool {
         Self::is_recent(self.verdict_daa.get(&certificate_tx_id).copied(), now_daa)
     }
@@ -526,6 +655,11 @@ impl ComputeInflight {
 
     pub fn note_commitment(&mut self, now_daa: u64) {
         self.commitment_daa = Some(now_daa);
+    }
+
+    pub fn note_certificate(&mut self, commitment_tx_id: kaspa_consensus_core::tx::TransactionId, now_daa: u64) {
+        self.certificate_daa.retain(|_, at| now_daa.saturating_sub(*at) < RESUBMIT_GRACE_BLOCKS);
+        self.certificate_daa.insert(commitment_tx_id, now_daa);
     }
 
     pub fn note_verdict(&mut self, certificate_tx_id: kaspa_consensus_core::tx::TransactionId, now_daa: u64) {
@@ -603,6 +737,83 @@ mod tests {
         // score — the check at startup is worth nothing if the commitment is refused later.
         let longest = vec![b'x'; MAX_JOB_INPUT_BYTES - JOB_NONCE_MAX_BYTES];
         assert!(new_job_input(&longest, u64::MAX).len() <= MAX_JOB_INPUT_BYTES);
+    }
+
+    /// The quota counts JOBS, and the two ways it stopped doing so both produced a real 6/5 on a
+    /// running devnet: a slot taken only at certification does not count the commitment already in
+    /// flight, and a certificate re-submitted until it mines incremented a counter each time.
+    #[test]
+    fn a_quota_slot_is_a_job_not_a_submission() {
+        let dir = std::env::temp_dir().join(format!("misaka-quota-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fixture-quota.json");
+        let _ = std::fs::remove_file(&path);
+        let mut st = FixtureExecutionState::load(&path, "plan-a", 2);
+
+        // Reserving consumes the slot immediately — before anything is broadcast — so a job in
+        // flight cannot be joined by another.
+        assert!(st.reserve("job-1", &path));
+        assert_eq!(st.claimed(), 1);
+        assert_eq!(st.certified(), 0, "a reserved job is not a certified one");
+        assert_eq!(st.remaining(), 1);
+
+        // Re-committing the SAME job after a lost transaction is a retry, not a second job.
+        assert!(st.reserve("job-1", &path));
+        assert_eq!(st.claimed(), 1);
+
+        assert!(st.reserve("job-2", &path));
+        assert_eq!(st.claimed(), 2);
+        // Full: an in-flight commitment counts against the target, which is the half a
+        // certification-time counter missed.
+        assert!(!st.reserve("job-3", &path));
+        assert_eq!(st.claimed(), 2);
+
+        // Certifying one job twice — the exact shape of the resubmission that made it 6/5 — is one
+        // job.
+        st.advance("job-1", FixtureSlotState::Certified, &path);
+        st.advance("job-1", FixtureSlotState::Certified, &path);
+        assert_eq!(st.certified(), 1);
+        assert_eq!(st.claimed(), 2);
+
+        // State never goes backwards: a late "committed" for an already-certified job is ignored,
+        // or a restart mid-certification would undo the record it just made.
+        st.advance("job-1", FixtureSlotState::Committed, &path);
+        assert_eq!(st.certified(), 1);
+
+        // And it survives a restart, keyed by job, so re-certifying an open commitment after a
+        // bounce claims nothing new.
+        let reloaded = FixtureExecutionState::load(&path, "plan-a", 2);
+        assert_eq!(reloaded.claimed(), 2);
+        assert_eq!(reloaded.certified(), 1);
+        assert!(!reloaded.clone().reserve("job-3", &path));
+
+        // A different plan is a different experiment: the old slots are not evidence about it.
+        let fresh = FixtureExecutionState::load(&path, "plan-b", 2);
+        assert_eq!(fresh.claimed(), 0);
+        // So is the same plan id at a different target — the count means something else.
+        let retargeted = FixtureExecutionState::load(&path, "plan-a", 5);
+        assert_eq!(retargeted.claimed(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A certificate is rebuilt from the chain every pass while its commitment is open, and a
+    /// commitment stays open until the certificate is ACCEPTED. Without a grace that is one
+    /// transaction fee per heartbeat for as long as the mempool takes.
+    #[test]
+    fn a_certificate_is_not_resubmitted_until_the_grace_expires() {
+        use kaspa_consensus_core::tx::TransactionId;
+        let commitment = TransactionId::from_bytes([9u8; 64]);
+        let mut inflight = ComputeInflight::default();
+        assert!(!inflight.certificate_recent(commitment, 1_000), "nothing sent yet");
+
+        inflight.note_certificate(commitment, 1_000);
+        assert!(inflight.certificate_recent(commitment, 1_000));
+        assert!(inflight.certificate_recent(commitment, 1_000 + RESUBMIT_GRACE_BLOCKS - 1));
+        // Past the grace it is a retry rather than a duplicate: the transaction plainly did not
+        // land, and the job is still uncertified.
+        assert!(!inflight.certificate_recent(commitment, 1_000 + RESUBMIT_GRACE_BLOCKS));
+        // Per commitment, not global — one job in flight must not silence another.
+        assert!(!inflight.certificate_recent(TransactionId::from_bytes([8u8; 64]), 1_000));
     }
 
     /// A spec above the registered ceiling normalizes to zero VLT, so the ceiling is a clamp on
