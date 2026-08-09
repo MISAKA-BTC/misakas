@@ -1,7 +1,7 @@
 use crate::flowcontext::{
     evm_deposit_claims::EvmDepositClaimsSpread,
     evm_transactions::EvmTransactionsSpread,
-    ibd_candidates::{CandidateId, CandidateValidation, IbdCandidateRegistry, PreferredIbdCandidate},
+    ibd_candidates::{CHALLENGER_VERIFICATION_LEASE, CandidateId, CandidateValidation, IbdCandidateRegistry, PreferredIbdCandidate},
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
     recovery_trace::{RecoveryStage, record_stage},
@@ -555,6 +555,16 @@ impl FlowContext {
     /// A no-op when there is nothing worth checking. Verified candidates are never re-nominated,
     /// and a candidate already being verified is not nominated again, so this is safe to call on
     /// every summary that arrives.
+    /// Write off verification attempts that have held the single slot too long.
+    ///
+    /// Called from the relay flow's idle poll rather than only at the commit barrier. The barrier
+    /// runs during an IBD; after one finishes there may be no further IBD at all, so a request whose
+    /// flow died would hold the nomination slot for as long as the lease and nothing would ever
+    /// clear it. That is not hypothetical — it is what a failing recovery round looked like.
+    pub fn expire_stale_verifications(&self) -> Vec<CandidateId> {
+        self.ibd_candidates.write().expire_proof_requests(Instant::now(), CHALLENGER_VERIFICATION_LEASE)
+    }
+
     pub fn nominate_challenger(&self) {
         let nominee = {
             let registry = self.ibd_candidates.read();

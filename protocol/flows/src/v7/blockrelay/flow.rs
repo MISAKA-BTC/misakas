@@ -356,6 +356,27 @@ impl HandleRelayInvsFlow {
         if self.ctx.is_consensus_participation_allowed() || self.ctx.ibd_peer_key() == Some(self.router.key()) {
             return;
         }
+        // Two things have to keep happening while the chain is unsettled, and neither had a driver
+        // once the first IBD finished.
+        //
+        // Expiry ran only at the commit barrier, which runs only during an IBD — so a verification
+        // request whose flow had died held the single nomination slot indefinitely, and nothing was
+        // ever nominated again. And nomination itself was attempted only right after a summary
+        // arrived, so an attempt blocked at that instant was never retried.
+        //
+        // Both now run on this poll, which ticks exactly while participation is withheld.
+        for id in self.ctx.expire_stale_verifications() {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                None,
+                self.ctx.chain_participation().state().as_str(),
+                "verification lease expired; releasing the nomination slot",
+            );
+        }
+        self.ctx.nominate_challenger();
+
         self.ctx.observe_ibd_candidate_peer(self.router.key());
         record_stage(
             RecoveryStage::CandidateObserved,

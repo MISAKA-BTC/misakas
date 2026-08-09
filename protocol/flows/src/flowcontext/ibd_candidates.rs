@@ -40,12 +40,27 @@ pub const CANDIDATE_TTL: Duration = Duration::from_secs(600);
 /// the least-recently-seen one, so a flood cannot pin the registry to junk it arrived with first.
 pub const MAX_CANDIDATES: usize = 16;
 
+/// How long a nominated candidate may hold the single verification slot before it is written off.
+///
+/// This is a LOCK deadline, not a transfer timeout. `strongest_unverified` yields nothing while any
+/// candidate sits in `ProofRequested`, so one request whose flow died — peer dropped, connection
+/// reset — silences nomination entirely until it expires. Measured: with this set to the same 600s
+/// as the fetch timeout, a recovery round could stall for the whole window and report
+/// `RecoveryPermitRequested=0`.
+///
+/// Long enough for a real proof to arrive over a slow link, short enough that a dead request does
+/// not cost a node its convergence.
+pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(120);
+
 /// Minimum gap between candidate-summary requests to the same peer.
 ///
 /// The summary is cheap to serve, but "cheap" times "as often as a peer likes" is still a DoS.
 /// This is the rate limit the goal requires; it is per peer, so one loud peer cannot spend another
 /// peer's budget.
-pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(30);
+///
+/// Sized against the verification lease rather than picked round: a peer must get several chances
+/// to be asked within one lease, or a single lost summary costs a whole verification slot.
+pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// Blue work as a peer stated it, which is not evidence that it is true.
 ///
@@ -691,6 +706,37 @@ mod tests {
         r.note_switch();
         r.note_switch();
         assert_eq!(r.switches(), 2, "a node cannot tell 'I keep finding better chains' from 'I am being played'");
+    }
+
+    #[test]
+    fn a_dead_verification_does_not_silence_nomination_forever() {
+        // The measured liveness failure. One request whose flow died holds the single verification
+        // slot, `strongest_unverified` yields nothing, and no other candidate is ever nominated. If
+        // the only thing that expires it runs during an IBD, and no further IBD happens, the node
+        // never converges — which is exactly what a failing recovery round reported.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let stuck = r.observe_summary(peer(1), &header(1, 10), pp(1), now);
+        let better = r.observe_summary(peer(2), &header(2, 900), pp(2), now);
+        r.set_validation(
+            stuck,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(10)) },
+        );
+        assert!(r.strongest_unverified().is_none(), "the slot is held while a request is in flight");
+
+        // Once the lease is up the slot is released, and the better candidate can be nominated.
+        assert_eq!(r.expire_proof_requests(now + CHALLENGER_VERIFICATION_LEASE, CHALLENGER_VERIFICATION_LEASE), vec![stuck]);
+        assert_eq!(r.strongest_unverified().map(|c| c.id), Some(better));
+    }
+
+    #[test]
+    fn a_peer_can_be_asked_several_times_within_one_lease() {
+        // A lost summary must not cost a whole verification slot: the cooldown has to give a peer
+        // several chances inside the window its verification would occupy.
+        assert!(
+            PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
+            "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
+        );
     }
 
     #[test]

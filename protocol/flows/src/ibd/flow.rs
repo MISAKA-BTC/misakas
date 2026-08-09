@@ -839,13 +839,12 @@ impl IbdFlow {
         // Refuse candidates whose source never delivered a proof, before counting what is still
         // unresolved. Otherwise "advertise a chain and go quiet" would hold up every commit — the
         // denial of service that fail-closed invites if it has no deadline.
-        let timed_out = self.ctx.ibd_candidates().write().expire_proof_requests(Instant::now(), CHALLENGER_PROOF_TIMEOUT);
+        let timed_out = self.ctx.expire_stale_verifications();
         for id in &timed_out {
             warn!(
-                "Chain candidate {} was nominated for verification but no source produced a pruning proof within {}s; \
+                "Chain candidate {} was nominated for verification but no source produced a pruning proof within its lease; \
                  refusing it rather than letting it hold up the commit.",
-                id.virtual_selected_parent,
-                CHALLENGER_PROOF_TIMEOUT.as_secs()
+                id.virtual_selected_parent
             );
         }
 
