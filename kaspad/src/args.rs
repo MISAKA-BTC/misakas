@@ -707,11 +707,12 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(u32))
                 .require_equals(false)
                 .help(
-                    "MISAKA devnet fixture: originate at most N jobs, ever — then stop. The count is persisted next to \
-                     the compute work dir, so a restart does not reset it. This is what makes an ASYMMETRIC weight \
-                     experiment possible: five validators running the same fixed job differ only in how many they \
-                     complete. Without it an executor keeps originating forever and every validator converges on the \
-                     same weight.",
+                    "MISAKA devnet fixture: originate at most N JOBS — not N VLT — ever, then stop. The fixture runs \
+                     one fixed job shape worth exactly 50 VLT, so a plan of 400/250/150/100/100 VLT is N = 8/5/3/2/2. \
+                     The count is persisted next to the compute work dir, so a restart does not reset it. This is what \
+                     makes an ASYMMETRIC weight experiment possible: five validators running the same fixed job differ \
+                     only in how many they complete. Without it an executor keeps originating forever and every \
+                     validator converges on the same weight.",
                 )
                 .env("KASPAD_COMPUTE_FIXTURE_JOB_LIMIT"),
         )

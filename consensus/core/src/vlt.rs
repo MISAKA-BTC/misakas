@@ -1065,9 +1065,38 @@ pub mod devnet_fixture {
     /// Cost per reference token. `1.0` — the fixture exists to make weights *predictable*, not to
     /// model a real model's economics.
     pub const RHO_MICRO: u64 = super::VLT_MICRO as u64;
-    /// Small enough that a job is instant and large enough that `normalize_vlt` mints a non-zero,
-    /// easily-reasoned-about amount.
+    /// The **profile's** ceiling: the largest `max_tokens` a fixture job may declare, checked by
+    /// `normalize_vlt` against every spec. Small enough that a job is instant. The job the fixture
+    /// actually runs is [`JOB_MAX_TOKENS`] — far smaller — and this leaves room to change that
+    /// shape without re-registering the profile.
     pub const MAX_TOKENS: u32 = 256;
+
+    /// The one job shape the fixture executes, in prefill and decode tokens.
+    ///
+    /// Fixed, and fixed *here*, because the asymmetric-weight experiment needs one job to be worth
+    /// the same on every node: five validators running the same job then differ only in how many
+    /// they complete, so their `W_i(E)` differ only by supplied compute. Measuring the operator's
+    /// `--compute-prompt` instead would make a validator's weight a function of the size of a file
+    /// on its disk — a difference nobody intends and nobody would notice.
+    ///
+    /// The pair is not arbitrary. Against this profile's `ρ = 1.0` and the preset's `a = 1.0`,
+    /// `b = 8.0`, [`super::normalize_vlt`] prices it at `1·10 + 8·5 = 50` RTE, so a quota of `N`
+    /// jobs is exactly `50·N` VLT and a plan written in VLT reads off in whole jobs
+    /// (400/250/150/100/100 VLT ⇒ 8/5/3/2/2 jobs). 50 is a *consequence* of `(ρ, a, b)` — nothing
+    /// configures it, and `one_fixture_job_is_worth_fifty_vlt` is what keeps it true when one of
+    /// the three moves.
+    pub const JOB_PREFILL_TOKENS: u32 = 10;
+    /// See [`JOB_PREFILL_TOKENS`]. Decode is priced at 8× prefill, so this is 40 of the 50.
+    pub const JOB_DECODE_TOKENS: u32 = 5;
+    /// The per-job ceiling the shape exactly fills.
+    ///
+    /// A fixture has no EOS to emit, so the honest reading of "it ran to completion" is that it
+    /// decoded until the spec's ceiling stopped it — and then the ceiling *is* the shape. Equal
+    /// rather than merely sufficient: `normalize_vlt` rejects a receipt that claims more work than
+    /// its spec allowed, so a ceiling below the shape would mint zero on every job, and one above
+    /// it would leave the executor free to decode more and mint more.
+    pub const JOB_MAX_TOKENS: u32 = JOB_PREFILL_TOKENS + JOB_DECODE_TOKENS;
+
     pub const MODEL_TAG: &str = "model";
     pub const RUNTIME_TAG: &str = "runtime";
     pub const CLASS_TAG: &str = "class";
@@ -2578,6 +2607,47 @@ mod tests {
         assert!(table.lookup(a.model_weights_hash, a.runtime_hash).is_some());
         // The other network's fixture is equally unregistered here.
         assert!(table.lookup(b.model_weights_hash, b.runtime_hash).is_none());
+    }
+
+    /// One fixture job is worth exactly 50 VLT — and 50 is *derived*, not declared anywhere.
+    ///
+    /// The quota in `kaspad::compute` counts jobs; the experiment's plan is written in VLT. This is
+    /// the conversion between the two, and it holds only because the registered fixture profile
+    /// prices at `ρ = 1.0` against the preset's `a = 1.0`, `b = 8.0`. Move any one of the three and
+    /// a plan of 400/250/150/100/100 quietly becomes something else while every log line still says
+    /// the quota was met — so the number is pinned here rather than recomputed by hand each time.
+    #[cfg(feature = "devnet-vlt-fixture")]
+    #[test]
+    fn one_fixture_job_is_worth_fifty_vlt() {
+        use devnet_fixture::{JOB_DECODE_TOKENS, JOB_MAX_TOKENS, JOB_PREFILL_TOKENS};
+        let genesis = h64(0x11);
+        let entry = devnet_fixture_entry(genesis);
+        let params = VltParams { model_cost_table: ModelCostTable::devnet_fixture(genesis), ..VltParams::INERT };
+        let job = LlmJobSpec {
+            version: VLT_PAYLOAD_VERSION_V1,
+            model_weights_hash: entry.model_weights_hash,
+            runtime_hash: entry.runtime_hash,
+            quantization: QuantizationProfile::Int4,
+            input_commitment: h64(3),
+            sampling_seed: [7u8; 32],
+            max_tokens: JOB_MAX_TOKENS,
+            verification_scheme: VerificationScheme::CanonicalFullReplay,
+        };
+        let r = receipt(JOB_PREFILL_TOKENS, JOB_DECODE_TOKENS);
+        let one_job = normalize_vlt(&job, &r, &params, true).expect("the devnet preset registers this profile");
+        assert_eq!(one_job, 50 * VLT_MICRO, "the fixture job's price is 1·prefill + 8·decode at rho = 1.0");
+
+        // The shape must fit its own ceiling exactly. Below it every job takes the
+        // `ReceiptExceedsSpecLimit` path and mints zero — which on a running devnet looks exactly
+        // like "the overlay isn't crediting" and not at all like a two-constant arithmetic slip.
+        assert_eq!(JOB_PREFILL_TOKENS + JOB_DECODE_TOKENS, JOB_MAX_TOKENS);
+        assert!(JOB_MAX_TOKENS <= entry.max_tokens, "a spec above the profile's ceiling mints nothing");
+
+        // And N jobs are exactly N × 50, with no rounding anywhere: the plan is written in VLT, the
+        // quota counts jobs, and these are the five targets it has to land on.
+        for (jobs, vlt) in [(8u128, 400u128), (5, 250), (3, 150), (2, 100), (2, 100)] {
+            assert_eq!(jobs * one_job, vlt * VLT_MICRO, "{jobs} jobs must be exactly {vlt} VLT");
+        }
     }
 
     /// The shipped presets never carry the fixture, feature or no feature. This is the assertion

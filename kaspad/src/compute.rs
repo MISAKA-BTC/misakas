@@ -44,6 +44,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(feature = "devnet-vlt-fixture")]
+use kaspa_consensus_core::vlt::devnet_fixture;
 use kaspa_consensus_core::vlt::{
     LlmJobSpec, MAX_JOB_INPUT_BYTES, ModelCostEntry, QuantizationProfile, VLT_PAYLOAD_VERSION_V1, VerificationScheme, VltParams,
     job_input_commitment,
@@ -103,8 +105,11 @@ pub struct ComputeConfig {
     /// observation — so filing automatically means betting the bond on this node's own hardware
     /// being the correct one.
     pub auto_challenge: bool,
-    /// MISAKA devnet fixture: originate at most this many jobs, ever. `None` = unbounded, which is
-    /// what a real executor wants and what an asymmetric-weight experiment must not have.
+    /// MISAKA devnet fixture: originate at most this many **jobs**, ever. `None` = unbounded, which
+    /// is what a real executor wants and what an asymmetric-weight experiment must not have.
+    ///
+    /// Jobs, not VLT. One fixture job is worth 50 VLT (`devnet_fixture::JOB_*`), so a plan of
+    /// 400/250/150/100/100 VLT is a limit of 8/5/3/2/2 here.
     pub fixture_job_limit: Option<u32>,
     /// Where the quota's count is persisted. Without it a restart resets the count and the
     /// experiment's weights grow every time a node bounces.
@@ -269,16 +274,35 @@ impl ComputeRole {
                 None
             }
         };
+        // The devnet fixture executes ONE job shape (`devnet_fixture::JOB_*`) and refuses any
+        // other, so on that profile the ceiling is the shape's rather than the operator's. Left to
+        // `--compute-max-tokens`, a default of 512 would clamp to the profile's 256 and every job
+        // would be worth 1 978 VLT instead of 50 — the plan off by 40× while every log line still
+        // read "quota met". The profile decides, not a flag: this is keyed on the registered entry
+        // being the fixture's, so a real worker on the same binary is untouched.
+        #[cfg(feature = "devnet-vlt-fixture")]
+        let max_tokens = if entry == kaspa_consensus_core::vlt::devnet_fixture_entry(genesis_hash) {
+            if cfg.max_tokens != devnet_fixture::JOB_MAX_TOKENS {
+                info!(
+                    "[{COMPUTE}] devnet fixture: max_tokens pinned to the fixed job shape ({} = {} prefill + {} decode, 50 VLT/job); --compute-max-tokens={} ignored",
+                    devnet_fixture::JOB_MAX_TOKENS,
+                    devnet_fixture::JOB_PREFILL_TOKENS,
+                    devnet_fixture::JOB_DECODE_TOKENS,
+                    cfg.max_tokens
+                );
+            }
+            devnet_fixture::JOB_MAX_TOKENS
+        } else {
+            cfg.max_tokens.min(entry.max_tokens)
+        };
+        #[cfg(not(feature = "devnet-vlt-fixture"))]
+        let max_tokens = cfg.max_tokens.min(entry.max_tokens);
         info!(
             "[{COMPUTE}] enabled: runtime={} class={} max_tokens={} auto_challenge={}",
-            identity.runtime_hash,
-            entry.runtime_class_id,
-            cfg.max_tokens.min(entry.max_tokens),
-            cfg.auto_challenge
+            identity.runtime_hash, entry.runtime_class_id, max_tokens, cfg.auto_challenge
         );
         // The plan id binds the count to what it counted: a different validator, target or job
         // shape is a different experiment, and the old count is not evidence about it.
-        let max_tokens = cfg.max_tokens.min(entry.max_tokens);
         let fixture_quota = cfg.fixture_job_limit.map(|target| {
             let plan_id = format!("{}:{}:{}:{}", identity.runtime_hash, target, max_tokens, prompt.as_ref().map_or(0, |p| p.len()));
             let path = cfg.fixture_state_path.clone().unwrap_or_else(|| cfg.work_dir.join("fixture-quota.json"));
@@ -364,11 +388,6 @@ fn load_prompt(path: &PathBuf) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Per-transaction-kind record of what this node has already sent and not yet seen on chain.
-///
-/// Every decision the cycle makes is read back off the chain, so a submitted-but-unmined
-/// transaction is indistinguishable from one that was never sent. Without this the heartbeat would
-/// re-send the same declaration or commitment on every tick, paying a fee each time.
 /// MISAKA devnet fixture: how many jobs this validator is allowed to originate, and how many it
 /// already has.
 ///
@@ -431,6 +450,11 @@ impl FixtureExecutionState {
     }
 }
 
+/// Per-transaction-kind record of what this node has already sent and not yet seen on chain.
+///
+/// Every decision the cycle makes is read back off the chain, so a submitted-but-unmined
+/// transaction is indistinguishable from one that was never sent. Without this the heartbeat would
+/// re-send the same declaration or commitment on every tick, paying a fee each time.
 #[derive(Default)]
 pub struct ComputeInflight {
     capability_daa: Option<u64>,
