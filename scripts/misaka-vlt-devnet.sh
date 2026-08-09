@@ -165,6 +165,12 @@ fi
 # Stop anything this script started before, so it can be re-run to change flags. Without it the new
 # nodes lose the port race, die on bind, and the script reports five exits with no hint that the
 # old mesh is still up and holding the ports.
+#
+# The MINER counts as "anything". Stopping only the nodes leaves the old miner attached to node-0's
+# port and starts a second one beside it, so every re-run adds a miner. Three of them raced a devnet
+# to DAA 30279 while its certificates sat at ~3000, putting every one of them outside the
+# 1250-blue-score credit window — the evidence for the bug under investigation, mined into
+# unreachability by the script meant to be investigating it.
 stopped=0
 for i in $(seq 0 $((NODES - 1))); do
   pidfile="$WORK_DIR/node-$i/kaspad.pid"
@@ -173,6 +179,13 @@ for i in $(seq 0 $((NODES - 1))); do
     stopped=$((stopped + 1))
   fi
 done
+if [ -f "$WORK_DIR/miner.pid" ] && kill -0 "$(cat "$WORK_DIR/miner.pid")" 2>/dev/null; then
+  kill "$(cat "$WORK_DIR/miner.pid")" 2>/dev/null || true
+  echo "stopped the miner from a previous run"
+fi
+# Belt and braces: a miner whose pid file was lost (an interrupted run, a hand-started one) is
+# invisible to the check above and would keep mining beside the new one.
+pkill -f "misaminer --rpc=127.0.0.1:$BASE_RPC " 2>/dev/null || true
 if [ "$stopped" -gt 0 ]; then
   echo "stopped $stopped node(s) from a previous run; restarting them with the current flags"
   sleep 5
@@ -276,7 +289,10 @@ for i in $(seq 0 $((NODES - 1))); do
     echo "node-$i  p2p=$p2p  grpc=$rpc  wrpc=$((rpc + 2))  quota=${QUOTAS[$i]} job(s) = $(( ${QUOTAS[$i]} * 50 )) VLT${bond:+  ${bond#--stake-bond=}}"
   fi
   printf '  %q' "$KASPAD_BIN" "${args[@]}" > "$node_dir/run.args"
-  ( "$KASPAD_BIN" "${args[@]}" >"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
+  # APPEND, never truncate. The log is the only record of which job ids a run produced, and a
+  # restart is exactly when an investigation most needs the run before it. Truncating here erased
+  # the certificate and commitment ids of twenty fixture jobs mid-diagnosis.
+  ( "$KASPAD_BIN" "${args[@]}" >>"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
 done
 
 # A devnet with no miner has a DAA score of zero forever, so no fence is ever crossed and the
@@ -295,7 +311,7 @@ if [ "$MINE" -eq 1 ]; then
       sleep 1
     done
     "$MISAMINER_BIN" --rpc="127.0.0.1:$BASE_RPC" --network-id=devnet --allow-burn --threads=2 \
-      >"$WORK_DIR/miner.log" 2>&1 &
+      >>"$WORK_DIR/miner.log" 2>&1 &
     echo $! > "$WORK_DIR/miner.pid"
     echo
     echo "miner       : pid $(cat "$WORK_DIR/miner.pid") against node-0 (coinbase burned)"
