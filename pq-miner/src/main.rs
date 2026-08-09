@@ -79,6 +79,14 @@ struct Args {
     /// genesis difficulty — at equilibrium the DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS.
     #[arg(long)]
     bench_secs: Option<u64>,
+    /// F3 (t10): mine even when the node reports `is_synced=false` on the template. By default the
+    /// miner REFUSES such templates: extending an unsynced node's chain at floored difficulty is how
+    /// an isolated node builds a divergent fork forever (and, via its own fresh sink, even reports
+    /// itself synced again ~11 minutes later). Opt in ONLY for bootstrapping an isolated devnet/simnet
+    /// (whose stale genesis timestamp keeps `is_synced=false` until the first block is mined) — never
+    /// on a public network.
+    #[arg(long, default_value_t = false)]
+    mine_when_not_synced: bool,
 }
 
 /// Whether the unsafe raw-secret CLI override (MISAKA_ALLOW_UNSAFE_CLI_SECRETS=1)
@@ -273,6 +281,7 @@ async fn main() {
     let mut last_attestation_wait_log = Instant::now().checked_sub(Duration::from_secs(30)).unwrap_or_else(Instant::now);
 
     let mut mined = 0u64;
+    let mut last_unsynced_log = Instant::now().checked_sub(Duration::from_secs(30)).unwrap_or_else(Instant::now);
     loop {
         // Pace block production: a block interval far below the cross-DC
         // propagation delay splits the DAG (GHOSTDAG cannot converge).
@@ -304,6 +313,22 @@ async fn main() {
                 continue;
             }
         };
+
+        // F3 (t10): refuse to extend an unsynced node's chain. An isolated node at
+        // floored difficulty that keeps mining builds a divergent fork forever and
+        // even self-reports synced again once its own sink is fresh — the exact
+        // testnet-10 runaway. Devnet bootstrap (stale genesis ⇒ is_synced=false
+        // until the first block) opts in explicitly with --mine-when-not-synced.
+        if !template.is_synced && !args.mine_when_not_synced {
+            if last_unsynced_log.elapsed() >= Duration::from_secs(30) {
+                log::warn!(
+                    "node reports is_synced=false — refusing to mine on an unsynced template (devnet bootstrap: pass --mine-when-not-synced)"
+                );
+                last_unsynced_log = Instant::now();
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
 
         // Convert the template header to a consensus Header to drive the Layer 0 grind.
         let header: Header = match (&template.block.header).try_into() {
