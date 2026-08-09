@@ -82,3 +82,19 @@ pub fn write_shallow_pruning_params(tag: &str) -> PathBuf {
     std::fs::write(&path, serde_json::to_string_pretty(&shallow_pruning_params()).unwrap()).unwrap();
     path
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Emits the preset so it can be handed to real nodes via `--override-params-file`.
+    ///
+    /// The same values the in-process tests use, so a regression run on real hosts is testing the
+    /// same rules rather than a hand-transcribed approximation of them.
+    #[test]
+    fn print_shallow_pruning_params_json() {
+        println!("SHALLOW-PRESET-JSON-BEGIN");
+        println!("{}", serde_json::to_string(&shallow_pruning_params()).unwrap());
+        println!("SHALLOW-PRESET-JSON-END");
+    }
+}
