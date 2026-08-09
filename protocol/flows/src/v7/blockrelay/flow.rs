@@ -354,9 +354,21 @@ impl HandleRelayInvsFlow {
     /// construction: it returns immediately unless participation is withheld, and the per-peer
     /// cooldown bounds how often a peer is actually asked.
     async fn poll_for_candidate_summary(&mut self) {
-        if self.ctx.is_consensus_participation_allowed() || self.ctx.ibd_peer_key() == Some(self.router.key()) {
+        if self.ctx.is_consensus_participation_allowed() {
             return;
         }
+        // This used to skip the peer whose IBD is running — don't pester the peer we are already
+        // syncing from, since the IBD will tell us its chain anyway.
+        //
+        // It only tells us if it succeeds. Measured, at seed 2: the heavy peer connected, was
+        // handed the latch within a second, ran an IBD that was refused at the pruning-proof
+        // comparison, and was disconnected — taking its relay flow with it. Thirty seconds later it
+        // reconnected and did the same thing, for seven minutes. It was the IBD peer for almost
+        // every moment it was connected, so it was never once asked which chain it was on, and the
+        // node sat on the lighter branch holding a registry with one candidate in it: its own.
+        //
+        // The peer running a doomed IBD is precisely the peer whose chain most needs describing
+        // independently. Asking costs one small message per peer per cooldown.
         // Two things have to keep happening while the chain is unsettled, and neither had a driver
         // once the first IBD finished.
         //

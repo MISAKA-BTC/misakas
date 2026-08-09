@@ -87,6 +87,14 @@ pub const PREFERRED_CANDIDATE_MAX_LIFETIME: Duration = Duration::from_secs(1800)
 /// the peer work. Per peer, so one loud peer cannot spend another's budget.
 pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(10);
 
+/// How many times a chain may have its proof requested and time out before it is written off.
+///
+/// Bounded because a peer that keeps promising a proof and never sending one is a way to keep this
+/// node's single verification slot busy for free. Three attempts across three different moments —
+/// and, usually, three different connections — is enough to distinguish a peer that keeps getting
+/// cut off from one that is stalling on purpose.
+pub const MAX_PROOF_ATTEMPTS: u32 = 3;
+
 /// Blue work as a peer stated it, which is not evidence that it is true.
 ///
 /// A header commits to its `blue_work` through PoW, so the value cannot be edited after mining —
@@ -233,6 +241,9 @@ pub struct IbdCandidate {
     pub proof_hash: Option<Hash>,
     pub first_seen: Instant,
     pub last_seen: Instant,
+    /// Proof requests for this chain that ran out of lease. Bounds retries — see
+    /// [`MAX_PROOF_ATTEMPTS`].
+    pub proof_attempts: u32,
 }
 
 impl IbdCandidate {
@@ -353,6 +364,7 @@ impl IbdCandidateRegistry {
                 proof_hash: None,
                 first_seen: now,
                 last_seen: now,
+                proof_attempts: 0,
             },
         );
         id
@@ -432,12 +444,18 @@ impl IbdCandidateRegistry {
         self.candidates
             .values()
             .filter(|c| {
-                matches!(
-                    c.validation,
-                    CandidateValidation::Observed
-                        | CandidateValidation::SummaryReceived { .. }
-                        | CandidateValidation::ProofRequested { .. }
-                )
+                // A chain that has already had a proof request run out of lease does not get to
+                // hold up a commit again while it waits for another turn. It stays nominatable —
+                // being disconnected is not evidence against a chain — but blocking is a privilege
+                // it has spent. Otherwise "advertise a chain and go quiet" would simply stall for
+                // three leases instead of one.
+                c.proof_attempts == 0
+                    && matches!(
+                        c.validation,
+                        CandidateValidation::Observed
+                            | CandidateValidation::SummaryReceived { .. }
+                            | CandidateValidation::ProofRequested { .. }
+                    )
             })
             .collect()
     }
@@ -463,10 +481,17 @@ impl IbdCandidateRegistry {
         )
     }
 
-    /// Refuse candidates whose source never delivered a proof, so they stop blocking a commit.
+    /// Release candidates whose source never delivered a proof, so they stop blocking a commit.
     ///
     /// Returns what was timed out, for logging and peer penalties. Being unable to back a claim is
     /// the peer's failure, not a reason for this node to wait indefinitely.
+    ///
+    /// A timeout is a fact about ONE attempt against ONE source, not a verdict on the chain. A peer
+    /// that was disconnected halfway through sending a proof has said nothing about whether that
+    /// chain is real — and a peer running a failing IBD gets disconnected constantly, which is
+    /// exactly when its chain most needs checking. So a timed-out candidate goes back to being
+    /// nominatable, up to a few attempts, and only then is written off. An invalid proof is
+    /// different: that IS a statement about the chain, and it stays permanent.
     pub fn expire_proof_requests(&mut self, now: Instant, deadline: Duration) -> Vec<CandidateId> {
         let stale: Vec<_> = self
             .candidates
@@ -477,7 +502,14 @@ impl IbdCandidateRegistry {
             .map(|c| c.id)
             .collect();
         for id in &stale {
-            self.set_validation(*id, CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout });
+            let Some(c) = self.candidates.get_mut(id) else { continue };
+            let CandidateValidation::ProofRequested { claimed_blue_work, .. } = c.validation else { continue };
+            c.proof_attempts += 1;
+            c.validation = if c.proof_attempts < MAX_PROOF_ATTEMPTS {
+                CandidateValidation::SummaryReceived { claimed_blue_work }
+            } else {
+                CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout }
+            };
         }
         stale
     }
@@ -807,11 +839,10 @@ mod tests {
         assert!(r.expire_proof_requests(now + deadline - Duration::from_secs(1), deadline).is_empty(), "not yet");
         assert_eq!(r.expire_proof_requests(now + deadline, deadline), vec![id]);
 
-        assert!(r.unresolved().is_empty(), "a refused candidate no longer holds up a commit");
-        assert!(matches!(
-            r.get(&id).unwrap().validation,
-            CandidateValidation::Rejected { reason: CandidateRejectReason::ProofTimeout }
-        ));
+        assert!(r.unresolved().is_empty(), "a candidate that missed its lease no longer holds up a commit");
+        // It may still be checked again — a source can be cut off mid-proof — but it has spent the
+        // right to block. The two are separate on purpose; see `unresolved`.
+        assert!(matches!(r.get(&id).unwrap().validation, CandidateValidation::SummaryReceived { .. }));
     }
 
     #[test]
@@ -852,6 +883,39 @@ mod tests {
             PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
             "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
         );
+    }
+
+    #[test]
+    fn a_prover_that_gets_cut_off_does_not_cost_its_chain_the_benefit_of_the_doubt() {
+        // Measured at seed 2: the peer offering the heavier chain ran a doomed IBD, was disconnected
+        // when it failed, and reconnected thirty seconds later to do it again. Any proof request in
+        // flight died with the connection. Writing the chain off on the first timeout would mean the
+        // node decided against the heavier branch on the strength of a dropped TCP connection.
+        let mut r = IbdCandidateRegistry::default();
+        let mut now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+
+        for attempt in 1..MAX_PROOF_ATTEMPTS {
+            assert_eq!(r.strongest_unverified().map(|c| c.id), Some(id), "attempt {attempt} should still be nominatable");
+            r.set_validation(
+                id,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)),
+                },
+            );
+            now += CHALLENGER_VERIFICATION_LEASE;
+            assert_eq!(r.expire_proof_requests(now, CHALLENGER_VERIFICATION_LEASE), vec![id]);
+        }
+
+        // Last one. Now it is a peer that will not answer, not a peer that keeps getting cut off.
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        now += CHALLENGER_VERIFICATION_LEASE;
+        r.expire_proof_requests(now, CHALLENGER_VERIFICATION_LEASE);
+        assert!(r.strongest_unverified().is_none(), "a chain that never produces a proof must stop consuming the slot");
     }
 
     fn reservation(reserved_at: Instant, unclaimed_since: Instant) -> PreferredIbdCandidate {
