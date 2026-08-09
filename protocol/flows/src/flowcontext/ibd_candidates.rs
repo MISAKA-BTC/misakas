@@ -95,6 +95,20 @@ pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(10);
 /// cut off from one that is stalling on purpose.
 pub const MAX_PROOF_ATTEMPTS: u32 = 3;
 
+/// How many proof requests a PEER may leave unanswered before it stops being asked.
+///
+/// `MAX_PROOF_ATTEMPTS` bounds a chain's retries, but it is stored on the candidate — and a
+/// candidate is deleted the moment its last source disconnects. So a peer that advertises a heavy
+/// chain, accepts the nomination, goes quiet, disconnects and reconnects starts again from zero
+/// every time, and can hold this node's single verification slot for a lease out of every cycle
+/// indefinitely. Nothing wrong is ever adopted — the node simply stays held back, which for a
+/// validator means never attesting.
+///
+/// Counted per peer and kept outside the candidates, so dropping the connection does not launder
+/// it. Decays on the same TTL as everything else here: an honest peer that had a bad hour is not
+/// banned for the life of the process.
+pub const MAX_PEER_PROOF_FAILURES: u32 = 3;
+
 /// Blue work as a peer stated it, which is not evidence that it is true.
 ///
 /// A header commits to its `blue_work` through PoW, so the value cannot be edited after mining —
@@ -284,6 +298,10 @@ pub struct IbdCandidateRegistry {
     /// the same event: one should be retried quickly, the other should not be repeated at all for a
     /// while, and a single cooldown for both means a request lost to a hiccup costs a full window.
     next_ask: HashMap<PeerKey, (Instant, u32)>,
+    /// Proof requests each peer has left unanswered, and when it last did. Held here rather than on
+    /// the candidate because candidates are deleted when their last source disconnects, which would
+    /// otherwise let a peer launder its record by reconnecting. See [`MAX_PEER_PROOF_FAILURES`].
+    peer_proof_failures: HashMap<PeerKey, (u32, Instant)>,
     /// Syncs abandoned in favour of a verified-better candidate, since the node started.
     switches: u32,
 }
@@ -488,12 +506,16 @@ impl IbdCandidateRegistry {
         if self.candidates.values().any(|c| matches!(c.validation, CandidateValidation::ProofRequested { .. })) {
             return None;
         }
-        self.candidates.values().filter(|c| matches!(c.validation, CandidateValidation::SummaryReceived { .. })).max_by_key(
-            |c| match c.validation {
+        // A candidate whose every source has stopped answering must not be nominated: it would take
+        // the single verification slot and hold it for a lease with nobody able to fill the request.
+        self.candidates
+            .values()
+            .filter(|c| matches!(c.validation, CandidateValidation::SummaryReceived { .. }))
+            .filter(|c| self.designated_prover(&c.id).is_some())
+            .max_by_key(|c| match c.validation {
                 CandidateValidation::SummaryReceived { claimed_blue_work } => claimed_blue_work.for_priority_only(),
                 _ => BlueWorkType::from_u64(0),
-            },
-        )
+            })
     }
 
     /// Release candidates whose source never delivered a proof, so they stop blocking a commit.
@@ -516,6 +538,13 @@ impl IbdCandidateRegistry {
             )
             .map(|c| c.id)
             .collect();
+        // Charge the peer that was asked, before proof_attempts moves and changes who that was.
+        let charged: Vec<_> = stale.iter().filter_map(|id| self.designated_prover(id)).collect();
+        for peer in charged {
+            let entry = self.peer_proof_failures.entry(peer).or_insert((0, now));
+            entry.0 = entry.0.saturating_add(1);
+            entry.1 = now;
+        }
         for id in &stale {
             let Some(c) = self.candidates.get_mut(id) else { continue };
             let CandidateValidation::ProofRequested { claimed_blue_work, .. } = c.validation else { continue };
@@ -553,10 +582,16 @@ impl IbdCandidateRegistry {
     /// one. Sources are pruned when a peer disconnects, so this only ever names a live peer.
     pub fn designated_prover(&self, id: &CandidateId) -> Option<PeerKey> {
         let c = self.candidates.get(id)?;
-        if c.sources.is_empty() {
+        let eligible: Vec<_> = c.sources.iter().copied().filter(|p| !self.peer_has_stopped_answering(p)).collect();
+        if eligible.is_empty() {
             return None;
         }
-        Some(c.sources[c.proof_attempts as usize % c.sources.len()])
+        Some(eligible[c.proof_attempts as usize % eligible.len()])
+    }
+
+    /// Whether this peer has left too many proof requests unanswered to be worth asking again.
+    pub fn peer_has_stopped_answering(&self, peer: &PeerKey) -> bool {
+        self.peer_proof_failures.get(peer).is_some_and(|(n, _)| *n >= MAX_PEER_PROOF_FAILURES)
     }
 
     /// Peers currently offering this candidate, for asking one of them for a proof.
@@ -566,6 +601,8 @@ impl IbdCandidateRegistry {
 
     /// Drop a peer as a source. The candidate itself survives while another peer offers it — the
     /// chain did not become wrong because one connection dropped.
+    /// `peer_proof_failures` is deliberately NOT cleared here: a peer that drops the connection
+    /// rather than answer is exactly the case the count exists for.
     pub fn forget_peer(&mut self, peer: &PeerKey) {
         self.next_ask.remove(peer);
         for candidate in self.candidates.values_mut() {
@@ -577,6 +614,8 @@ impl IbdCandidateRegistry {
     pub fn expire(&mut self, now: Instant) {
         self.candidates.retain(|_, c| now.duration_since(c.last_seen) < CANDIDATE_TTL);
         self.next_ask.retain(|_, (t, _)| *t + CANDIDATE_TTL > now);
+        // An honest peer that had a bad hour is not written off for the life of the process.
+        self.peer_proof_failures.retain(|_, (_, t)| *t + CANDIDATE_TTL > now);
     }
 
     pub fn len(&self) -> usize {
@@ -928,6 +967,51 @@ mod tests {
             PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
             "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
         );
+    }
+
+    #[test]
+    fn a_peer_cannot_launder_its_record_by_reconnecting() {
+        // The attack: advertise a heavy chain, accept the nomination, go quiet, disconnect,
+        // reconnect. Candidate deletion on last-source-loss resets everything stored on the
+        // candidate, so the peer starts from zero each cycle and can hold this node's single
+        // verification slot for a lease out of every cycle, forever. Nothing wrong gets adopted —
+        // the node just never finishes reviewing, which for a validator means never attesting.
+        let mut r = IbdCandidateRegistry::default();
+        let mut now = Instant::now();
+        let attacker = peer(9);
+
+        for _ in 0..MAX_PEER_PROOF_FAILURES {
+            let id = r.observe_summary(attacker, &header(1, 9_000), pp(1), now);
+            assert_eq!(r.designated_prover(&id), Some(attacker), "still worth asking");
+            r.set_validation(
+                id,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(9_000)),
+                },
+            );
+            now += CHALLENGER_VERIFICATION_LEASE;
+            r.expire_proof_requests(now, CHALLENGER_VERIFICATION_LEASE);
+            // The disconnect that used to wipe the evidence.
+            r.forget_peer(&attacker);
+            assert!(r.get(&CandidateId { pruning_point: pp(1), virtual_selected_parent: header(1, 9_000).hash }).is_none());
+        }
+
+        // Same trick, once more. The candidate is fresh; the peer's record is not.
+        let id = r.observe_summary(attacker, &header(1, 9_000), pp(1), now);
+        assert!(r.peer_has_stopped_answering(&attacker));
+        assert_eq!(r.designated_prover(&id), None, "nobody left to ask");
+        assert!(r.strongest_unverified().is_none(), "so it must not take the verification slot either");
+
+        // An honest peer offering the same chain is unaffected — the record is per peer, not a
+        // judgement on the chain.
+        r.observe_summary(peer(1), &header(1, 9_000), pp(1), now);
+        assert_eq!(r.designated_prover(&id), Some(peer(1)));
+        assert!(r.strongest_unverified().is_some());
+
+        // And the record decays, or one bad hour would cost a peer the rest of the process.
+        r.expire(now + CANDIDATE_TTL + Duration::from_secs(1));
+        assert!(!r.peer_has_stopped_answering(&attacker));
     }
 
     #[test]
