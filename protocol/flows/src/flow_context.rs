@@ -540,6 +540,16 @@ impl FlowContext {
         self.ibd_candidates.write().claim_summary_request(peer, Instant::now())
     }
 
+    /// A summary arrived from `peer`; leave it alone for a while.
+    pub fn note_ibd_summary_success(&self, peer: PeerKey) {
+        self.ibd_candidates.write().note_summary_success(peer, Instant::now());
+    }
+
+    /// Asking `peer` failed; retry soon, backing off.
+    pub fn note_ibd_summary_failure(&self, peer: PeerKey) {
+        self.ibd_candidates.write().note_summary_failure(peer, Instant::now());
+    }
+
     /// Record what a peer says it is on. Merges into an existing candidate when the chain matches,
     /// so peers on the same branch become sources of one candidate rather than rivals.
     pub fn observe_ibd_candidate_summary(&self, peer: PeerKey, header: &Header, pruning_point: BlockHash) -> CandidateId {

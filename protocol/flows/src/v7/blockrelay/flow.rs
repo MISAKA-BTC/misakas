@@ -186,6 +186,7 @@ impl HandleRelayInvsFlow {
                 );
                 if self.ctx.claim_ibd_summary_request(self.router.key()) {
                     if let Err(e) = self.request_ibd_candidate_summary().await {
+                        self.ctx.note_ibd_summary_failure(self.router.key());
                         record_stage(
                             RecoveryStage::Rejected,
                             None,
@@ -389,13 +390,14 @@ impl HandleRelayInvsFlow {
         if self.ctx.claim_ibd_summary_request(self.router.key())
             && let Err(e) = self.request_ibd_candidate_summary().await
         {
+            self.ctx.note_ibd_summary_failure(self.router.key());
             record_stage(
                 RecoveryStage::Rejected,
                 None,
                 None,
                 Some(self.router.to_string()),
                 self.ctx.chain_participation().state().as_str(),
-                format!("polled summary request failed: {e}"),
+                format!("polled summary request failed: {e} (retrying with backoff)"),
             );
             debug!("Could not get a candidate summary from {}: {}", self.router, e);
         }
@@ -453,6 +455,7 @@ impl HandleRelayInvsFlow {
             "Candidate {} from {}: pruning point {}, claimed blue work {}",
             id.virtual_selected_parent, self.router, id.pruning_point, summary.virtual_selected_parent.blue_work
         );
+        self.ctx.note_ibd_summary_success(self.router.key());
         record_stage(
             RecoveryStage::SummaryReceived,
             None,

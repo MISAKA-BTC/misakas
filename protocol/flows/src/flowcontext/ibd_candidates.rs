@@ -52,14 +52,19 @@ pub const MAX_CANDIDATES: usize = 16;
 /// not cost a node its convergence.
 pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(120);
 
-/// Minimum gap between candidate-summary requests to the same peer.
+/// Retry delay after a failed summary request: 1s, 2s, 4s, 8s, then held there.
 ///
-/// The summary is cheap to serve, but "cheap" times "as often as a peer likes" is still a DoS.
-/// This is the rate limit the goal requires; it is per peer, so one loud peer cannot spend another
-/// peer's budget.
+/// A request lost to a hiccup must not cost what a delivered summary costs. The two used to share
+/// one cooldown, which meant a single dropped reply put a peer out of reach for the whole window —
+/// on a link that is merely slow, that is the difference between converging and not.
+fn backoff_for(failures: u32) -> Duration {
+    Duration::from_secs(1 << failures.min(3))
+}
+
+/// How long to leave a peer alone AFTER it has answered.
 ///
-/// Sized against the verification lease rather than picked round: a peer must get several chances
-/// to be asked within one lease, or a single lost summary costs a whole verification slot.
+/// Its answer does not change quickly, so re-asking immediately learns nothing while still costing
+/// the peer work. Per peer, so one loud peer cannot spend another's budget.
 pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// Blue work as a peer stated it, which is not evidence that it is true.
@@ -223,8 +228,11 @@ impl IbdCandidate {
 #[derive(Debug, Default)]
 pub struct IbdCandidateRegistry {
     candidates: HashMap<CandidateId, IbdCandidate>,
-    /// Last time each peer was asked for a summary, for the per-peer rate limit.
-    last_asked: HashMap<PeerKey, Instant>,
+    /// When each peer next becomes eligible to be asked for a summary, and how many times asking
+    /// it has failed in a row. Separated because a failed request and a delivered summary are not
+    /// the same event: one should be retried quickly, the other should not be repeated at all for a
+    /// while, and a single cooldown for both means a request lost to a hiccup costs a full window.
+    next_ask: HashMap<PeerKey, (Instant, u32)>,
     /// Syncs abandoned in favour of a verified-better candidate, since the node started.
     switches: u32,
 }
@@ -235,24 +243,42 @@ impl IbdCandidateRegistry {
     /// An inv hash is not a chain: it may be a side block, a merge block, or a newer block on the
     /// chain already being synced. All this records is that the peer is worth asking.
     pub fn observe_peer(&mut self, peer: PeerKey, now: Instant) {
-        self.last_asked.entry(peer).or_insert(now - PEER_SUMMARY_COOLDOWN);
+        // A peer just seen is eligible immediately: the first question should not wait out a
+        // cooldown that exists to stop repetition.
+        self.next_ask.entry(peer).or_insert((now, 0));
     }
 
     /// Whether `peer` may be asked for a summary now, claiming the budget if so.
     pub fn claim_summary_request(&mut self, peer: PeerKey, now: Instant) -> bool {
-        match self.last_asked.entry(peer) {
+        match self.next_ask.entry(peer) {
             Entry::Occupied(mut e) => {
-                if now.duration_since(*e.get()) < PEER_SUMMARY_COOLDOWN {
+                let (eligible_at, failures) = *e.get();
+                if now < eligible_at {
                     return false;
                 }
-                e.insert(now);
+                // Provisionally hold the peer off for a backoff step; the outcome then either
+                // resets it or lets it grow.
+                e.insert((now + backoff_for(failures), failures));
                 true
             }
             Entry::Vacant(e) => {
-                e.insert(now);
+                e.insert((now + backoff_for(0), 0));
                 true
             }
         }
+    }
+
+    /// A summary arrived. Stop asking this peer for a while — there is nothing more to learn from
+    /// it until something changes.
+    pub fn note_summary_success(&mut self, peer: PeerKey, now: Instant) {
+        self.next_ask.insert(peer, (now + PEER_SUMMARY_COOLDOWN, 0));
+    }
+
+    /// The request failed. Retry soon, backing off so a peer that is simply unreachable does not get
+    /// hammered — but nothing like the cooldown a delivered summary earns.
+    pub fn note_summary_failure(&mut self, peer: PeerKey, now: Instant) {
+        let failures = self.next_ask.get(&peer).map(|(_, f)| f.saturating_add(1)).unwrap_or(1);
+        self.next_ask.insert(peer, (now + backoff_for(failures), failures));
     }
 
     /// Record what a peer says it is on. Returns the candidate's id.
@@ -413,7 +439,7 @@ impl IbdCandidateRegistry {
     /// Drop a peer as a source. The candidate itself survives while another peer offers it — the
     /// chain did not become wrong because one connection dropped.
     pub fn forget_peer(&mut self, peer: &PeerKey) {
-        self.last_asked.remove(peer);
+        self.next_ask.remove(peer);
         for candidate in self.candidates.values_mut() {
             candidate.sources.retain(|p| p != peer);
         }
@@ -422,7 +448,7 @@ impl IbdCandidateRegistry {
 
     pub fn expire(&mut self, now: Instant) {
         self.candidates.retain(|_, c| now.duration_since(c.last_seen) < CANDIDATE_TTL);
-        self.last_asked.retain(|_, t| now.duration_since(*t) < CANDIDATE_TTL);
+        self.next_ask.retain(|_, (t, _)| *t + CANDIDATE_TTL > now);
     }
 
     pub fn len(&self) -> usize {
@@ -435,7 +461,7 @@ impl IbdCandidateRegistry {
 
     pub fn clear(&mut self) {
         self.candidates.clear();
-        self.last_asked.clear();
+        self.next_ask.clear();
     }
 
     /// Make space for a new candidate: expire first, then evict the least-recently-seen. Verified
@@ -581,14 +607,52 @@ mod tests {
     }
 
     #[test]
-    fn a_peer_cannot_be_asked_again_before_the_cooldown() {
+    fn a_delivered_summary_earns_a_full_cooldown() {
+        // Its answer does not change quickly, so re-asking learns nothing.
         let mut r = IbdCandidateRegistry::default();
         let now = Instant::now();
         assert!(r.claim_summary_request(peer(1), now));
-        assert!(!r.claim_summary_request(peer(1), now + Duration::from_secs(1)));
+        r.note_summary_success(peer(1), now);
+        assert!(!r.claim_summary_request(peer(1), now + PEER_SUMMARY_COOLDOWN - Duration::from_secs(1)));
         assert!(r.claim_summary_request(peer(1), now + PEER_SUMMARY_COOLDOWN));
+
         // Per peer: one loud peer must not spend another's budget.
-        assert!(r.claim_summary_request(peer(2), now + Duration::from_secs(1)));
+        assert!(r.claim_summary_request(peer(2), now));
+    }
+
+    #[test]
+    fn a_failed_request_retries_far_sooner_than_a_delivered_one() {
+        // The distinction that matters on a slow link: a request lost to a hiccup must not cost what
+        // an answered one costs. Sharing a cooldown put a peer out of reach for a whole window over
+        // a single dropped reply.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        assert!(r.claim_summary_request(peer(1), now));
+        r.note_summary_failure(peer(1), now);
+
+        assert!(r.claim_summary_request(peer(1), now + Duration::from_secs(2)), "a failure retries in seconds");
+        assert!(
+            Duration::from_secs(2) < PEER_SUMMARY_COOLDOWN,
+            "the retry must be materially quicker than the success cooldown or the split buys nothing"
+        );
+    }
+
+    #[test]
+    fn repeated_failures_back_off_but_do_not_give_up() {
+        // A peer that is simply unreachable should not be hammered, and should not be written off
+        // either — it may be the one holding the better chain.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let mut delays = Vec::new();
+        for step in 0..5u32 {
+            r.note_summary_failure(peer(1), now);
+            // Find the smallest whole-second wait that lets the next attempt through.
+            let waited = (1..=16).find(|s| r.claim_summary_request(peer(1), now + Duration::from_secs(*s))).unwrap();
+            delays.push(waited);
+            let _ = step;
+        }
+        assert!(delays.windows(2).all(|w| w[1] >= w[0]), "backoff must not shrink: {delays:?}");
+        assert!(*delays.last().unwrap() <= 8, "and must stay bounded: {delays:?}");
     }
 
     #[test]
