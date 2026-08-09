@@ -31,6 +31,13 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 /// again after the cooldown. Waiting longer would let a silent peer stall the relay loop.
 const IBD_CANDIDATE_SUMMARY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How often an idle relay flow checks whether its peer is worth asking about.
+///
+/// Only does anything while participation is withheld, and the per-peer cooldown still governs how
+/// often a peer is actually asked — this just stops collection from depending on gossip that a
+/// quiet network never produces.
+const IDLE_CANDIDATE_POLL: Duration = Duration::from_secs(5);
+
 pub struct RelayInvMessage {
     hash: BlockHash,
 
@@ -112,8 +119,23 @@ impl HandleRelayInvsFlow {
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
         loop {
-            // Loop over incoming block inv messages
-            let inv = self.invs_route.dequeue().await?;
+            // Loop over incoming block inv messages — but do not depend on one arriving.
+            //
+            // Candidate collection used to happen only when a peer relayed something. On a quiet
+            // network that never comes: a peer with nothing new to gossip announces its tip once, and
+            // if that single inv is missed or arrives before this node started withholding
+            // participation, the peer is never examined at all. Measured over a delayed link, a
+            // follower offered two chains observed neither — CandidateObserved=0 — and simply kept
+            // whichever it had raced onto.
+            //
+            // So while participation is withheld, ask on a timer as well. A node that is unsure which
+            // chain it is on should be the one doing the asking, not waiting to be told.
+            let inv = loop {
+                match tokio::time::timeout(IDLE_CANDIDATE_POLL, self.invs_route.dequeue()).await {
+                    Ok(inv) => break inv?,
+                    Err(_) => self.poll_for_candidate_summary().await,
+                }
+            };
             let session = self.ctx.consensus().unguarded_session();
             let is_ibd_in_transitional_state = session.async_is_consensus_in_transitional_ibd_state().await;
 
@@ -323,6 +345,39 @@ impl HandleRelayInvsFlow {
 
     fn enqueue_orphan_roots(&mut self, _orphan: BlockHash, roots: Vec<BlockHash>, known_within_range: bool) {
         self.invs_route.enqueue_indirect_invs(roots, known_within_range)
+    }
+
+    /// Ask an otherwise-silent peer which chain it is on, if this node is in a position to care.
+    ///
+    /// The same work the relay guard does when an inv arrives, on a timer instead. Cheap by
+    /// construction: it returns immediately unless participation is withheld, and the per-peer
+    /// cooldown bounds how often a peer is actually asked.
+    async fn poll_for_candidate_summary(&mut self) {
+        if self.ctx.is_consensus_participation_allowed() || self.ctx.ibd_peer_key() == Some(self.router.key()) {
+            return;
+        }
+        self.ctx.observe_ibd_candidate_peer(self.router.key());
+        record_stage(
+            RecoveryStage::CandidateObserved,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "participation withheld; asking this peer directly rather than waiting for gossip",
+        );
+        if self.ctx.claim_ibd_summary_request(self.router.key())
+            && let Err(e) = self.request_ibd_candidate_summary().await
+        {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("polled summary request failed: {e}"),
+            );
+            debug!("Could not get a candidate summary from {}: {}", self.router, e);
+        }
     }
 
     /// Ask this peer which chain it is on, and file the answer as a candidate.
