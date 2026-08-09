@@ -6,3 +6,4 @@ pub mod orphans;
 pub(crate) mod process_queue;
 pub mod recovery_trace;
 pub mod transactions;
+pub mod verification_trace;

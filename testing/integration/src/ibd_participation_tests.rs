@@ -32,7 +32,7 @@ use kaspa_addresses::Address;
 use kaspa_alloc::init_allocator_with_default_settings;
 use kaspa_consensus::params::SIMNET_PARAMS;
 use kaspa_grpc_client::GrpcClient;
-use kaspa_p2p_flows::flowcontext::recovery_trace;
+use kaspa_p2p_flows::flowcontext::{recovery_trace, verification_trace};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspad_lib::args::Args;
 use std::time::Duration;
@@ -750,6 +750,7 @@ async fn mainnet_soak_randomized_fault_injection() {
         let cut_link: bool = rng.gen_bool(0.3);
 
         recovery_trace::clear();
+        verification_trace::clear();
         let light_link = LaggyLink::spawn(light.p2p_port, delay.clone()).await;
         let heavy_link = LaggyLink::spawn(heavy.p2p_port, delay.clone()).await;
 
@@ -798,6 +799,10 @@ async fn mainnet_soak_randomized_fault_injection() {
         if on_light {
             failures.push(format!("round {round}: settled on the LIGHTER branch (seed={round})"));
             println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::CandidateCommitted));
+            // Why verification never happened, from the ring that costs nothing to fill. The stage
+            // counts say a nomination did not become a proof request; this says which of the seven
+            // ways that can happen actually happened.
+            println!("{}", verification_trace::dump());
         } else if !on_heavy {
             failures.push(format!("round {round}: settled on neither branch (seed={round})"));
         }

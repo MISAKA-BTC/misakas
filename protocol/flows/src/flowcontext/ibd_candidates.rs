@@ -260,6 +260,19 @@ pub struct IbdCandidate {
     pub proof_attempts: u32,
 }
 
+impl CandidateValidation {
+    /// A short static name, for diagnostics that must not allocate on the path being measured.
+    pub fn name(&self) -> &'static str {
+        match self {
+            CandidateValidation::Observed => "Observed",
+            CandidateValidation::SummaryReceived { .. } => "SummaryReceived",
+            CandidateValidation::ProofRequested { .. } => "ProofRequested",
+            CandidateValidation::ProofValidated { .. } => "ProofValidated",
+            CandidateValidation::Rejected { .. } => "Rejected",
+        }
+    }
+}
+
 impl IbdCandidate {
     /// Ordering key for which candidate to verify next. `None` for candidates already refused.
     ///

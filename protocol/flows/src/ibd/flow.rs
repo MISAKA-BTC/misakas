@@ -9,6 +9,7 @@ use crate::{
         CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
     },
     flowcontext::recovery_trace::{RecoveryAttemptId, RecoveryStage, describe_comparison, record_stage},
+    flowcontext::verification_trace::{self, SkipReason, VerificationSkip},
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
 use futures::future::{Either, join_all, select, try_join_all};
@@ -100,6 +101,12 @@ pub struct IbdFlow {
     /// authority lasts exactly as long as the attempt it was issued for.
     active_recovery_permit: Option<CandidateValidationPermit>,
 
+    /// Which connection this flow belongs to. A `PeerKey` is identical across a reconnect, so
+    /// without this a decision made by a flow that has since died is indistinguishable from one
+    /// made by the flow that replaced it — and the peer under diagnosis reconnects every thirty
+    /// seconds.
+    connection_generation: u64,
+
     /// The adoption permit earned at the commit barrier, carried the few steps to `commit_if` so
     /// the defender it was judged against can be re-checked under the lock that performs the swap.
     /// `authorize_commit` takes `&self`, so this is a cell rather than a return value.
@@ -157,6 +164,7 @@ impl IbdFlow {
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
+            connection_generation: verification_trace::next_connection_generation(),
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -418,19 +426,32 @@ impl IbdFlow {
         // wrong because this step declining was invisible: the trace showed nominations rising and
         // proof requests not, and every explanation for the gap had to be inferred. A step that can
         // refuse silently will be blamed for someone else's bug, or excused for its own.
-        let designated = self.ctx.ibd_candidates().read().designated_prover(&id);
+        let (designated, sources, state_name) = {
+            let registry = self.ctx.ibd_candidates().read();
+            (registry.designated_prover(&id), registry.sources_of(&id), registry.get(&id).map(|c| c.validation.name()))
+        };
+        let skip = |reason| {
+            verification_trace::record_skip(VerificationSkip {
+                reason,
+                candidate_id: id,
+                connection_generation: self.connection_generation,
+                executing_peer: self.router.key(),
+                designated_peer: designated,
+                candidate_state: state_name.unwrap_or("<gone>"),
+                live_sources: sources.len(),
+                participation_state: self.ctx.chain_participation().state().as_str(),
+            })
+        };
+        if state_name.is_none() {
+            skip(SkipReason::CandidateNotFound);
+            return;
+        }
+        if !sources.contains(&self.router.key()) {
+            skip(SkipReason::PeerNoLongerSource);
+            return;
+        }
         if designated != Some(self.router.key()) {
-            record_stage(
-                RecoveryStage::Rejected,
-                None,
-                Some(id),
-                Some(self.router.to_string()),
-                self.ctx.chain_participation().state().as_str(),
-                match designated {
-                    Some(other) => format!("not this flow's job: {other} is the designated prover"),
-                    None => "nobody is eligible to prove this candidate (every source has stopped answering)".to_owned(),
-                },
-            );
+            skip(if designated.is_none() { SkipReason::NoEligibleProver } else { SkipReason::NotDesignatedProver });
             return;
         }
         // The claim the peer must now back. Read here rather than inside the fetch so a candidate
@@ -439,15 +460,8 @@ impl IbdFlow {
         let claimed_blue_work = match validation {
             Some(CandidateValidation::ProofRequested { claimed_blue_work, .. })
             | Some(CandidateValidation::SummaryReceived { claimed_blue_work }) => claimed_blue_work,
-            other => {
-                record_stage(
-                    RecoveryStage::Rejected,
-                    None,
-                    Some(id),
-                    Some(self.router.to_string()),
-                    self.ctx.chain_participation().state().as_str(),
-                    format!("not in a state that wants a proof: {other:?}"),
-                );
+            _ => {
+                skip(SkipReason::CandidateStateChanged);
                 return;
             }
         };
