@@ -22,7 +22,7 @@ series history — every RC superseded by a defect found, none by a green run:
                   heavy 267ms — the worse chain is the nearer one):
                   10/10, every round on_heavy + review completed + resumed
                 VPS control (follower near the heavy host: heavy 1.9ms,
-                  light 251ms): running
+                  light 251ms): 10/10, same
                 linux series pending
 
 VPS fixture re-mined from genesis, both branches, same preset:
@@ -44,3 +44,17 @@ VPS-ROUND round=adversarial-8 floor_at_end=(8s floor remaining) settled=true on_
 VPS-ROUND round=adversarial-9 floor_at_end=(1s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
 VPS-ROUND round=adversarial-10 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
 SERIES adversarial complete: 10 passed, 0 failed, out of 10
+
+=== VPS control series, verbatim ===
+(follower near the heavy host: heavy 1.9ms, light 251ms)
+VPS-ROUND round=control-1 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-2 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-3 floor_at_end=(3s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-4 floor_at_end=(3s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-5 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-6 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-7 floor_at_end=(7s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-8 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-9 floor_at_end=(0s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-10 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+SERIES control complete: 10 passed, 0 failed, out of 10
