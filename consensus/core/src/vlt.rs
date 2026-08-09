@@ -1956,7 +1956,7 @@ pub struct VltMetrics {
     /// skips indexed by [`VltCreditSkipReason::index`].
     credit_candidates: AtomicU64,
     credit_accepted: AtomicU64,
-    credit_skipped: [AtomicU64; 16],
+    credit_skipped: [AtomicU64; 17],
 }
 
 impl VltMetrics {
@@ -1991,7 +1991,7 @@ impl VltMetrics {
     }
 
     pub fn read_credit(&self) -> VltCreditTally {
-        let mut skipped = [0u64; 16];
+        let mut skipped = [0u64; 17];
         for (out, slot) in skipped.iter_mut().zip(self.credit_skipped.iter()) {
             *out = slot.load(AtomicOrdering::Relaxed);
         }
@@ -2038,9 +2038,14 @@ impl VltMetrics {
 /// [`Self::ChallengeNotMature`] mean "not yet", not "never".
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VltCreditSkipReason {
-    /// The certificate's own epoch has no canonical anchor in the credit window. Permanent: an
-    /// epoch that never anchored never will, and rescuing it later would rewrite consensus history.
-    MissingEpochAnchor,
+    /// The certificate's own epoch has no canonical anchor **yet**. An epoch anchor is only ready
+    /// once buried by `attestation_lag_blue_score` past the epoch's end, so every certificate is
+    /// briefly in this state immediately after it lands. Transient by construction.
+    EpochAnchorNotReady,
+    /// The certificate's epoch is below the credit window: its anchor is not merely unready, it is
+    /// out of reach from this pin and always will be. Permanent, and rescuing it later by
+    /// assigning some other anchor would rewrite consensus history.
+    EpochAnchorOutsideWindow,
     /// No bond record for the outpoint the certificate names.
     BondMissing,
     /// The bond exists but is not this executor's, or was not Active at the epoch anchor.
@@ -2091,8 +2096,9 @@ pub enum VltCreditSkipReason {
 impl VltCreditSkipReason {
     /// Every variant, for metric registration and exhaustive reporting. Adding a variant without
     /// adding it here is caught by `every_skip_reason_is_registered`.
-    pub const ALL: [Self; 16] = [
-        Self::MissingEpochAnchor,
+    pub const ALL: [Self; 17] = [
+        Self::EpochAnchorNotReady,
+        Self::EpochAnchorOutsideWindow,
         Self::BondMissing,
         Self::BondInactive,
         Self::ExecutorSignatureInvalid,
@@ -2114,7 +2120,8 @@ impl VltCreditSkipReason {
     /// an operator's alert rule matches on the string.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::MissingEpochAnchor => "missing_epoch_anchor",
+            Self::EpochAnchorNotReady => "epoch_anchor_not_ready",
+            Self::EpochAnchorOutsideWindow => "epoch_anchor_outside_window",
             Self::BondMissing => "bond_missing",
             Self::BondInactive => "bond_inactive",
             Self::ExecutorSignatureInvalid => "executor_signature_invalid",
@@ -2150,7 +2157,9 @@ impl VltCreditSkipReason {
     ///   loading limit into permanent consensus history.
     pub fn severity(&self) -> VltCreditSeverity {
         match self {
-            Self::BeaconNotReady | Self::NotVerified | Self::ChallengeNotMature => VltCreditSeverity::Pending,
+            Self::EpochAnchorNotReady | Self::BeaconNotReady | Self::NotVerified | Self::ChallengeNotMature => {
+                VltCreditSeverity::Pending
+            }
             Self::CommitmentNotLoaded => VltCreditSeverity::Incomplete,
             _ => VltCreditSeverity::Invalid,
         }
@@ -2210,7 +2219,7 @@ pub struct VltCreditTally {
     pub candidates: u64,
     pub accepted: u64,
     /// Indexed by [`VltCreditSkipReason::index`].
-    pub skipped: [u64; 16],
+    pub skipped: [u64; 17],
 }
 
 impl VltCreditTally {
@@ -2977,13 +2986,17 @@ mod tests {
         for r in VltCreditSkipReason::ALL {
             assert_eq!(tally.count(r), 1, "{} was not counted in its own slot", r.as_str());
         }
-        assert!(tally.summary().contains("missing_epoch_anchor=1"));
+        assert!(tally.summary().contains("epoch_anchor_not_ready=1"));
 
         // "Not yet" and "never" have to stay distinguishable: an operator watching a network come
         // up should see only the transient ones, and anything else is a real fault.
         assert!(VltCreditSkipReason::ChallengeNotMature.is_transient());
         assert!(VltCreditSkipReason::BeaconNotReady.is_transient());
-        assert!(!VltCreditSkipReason::MissingEpochAnchor.is_transient(), "an epoch that never anchored never will");
+        // An epoch whose anchor is merely lagging is a "not yet"; one below the window never
+        // anchors from this pin. Calling both permanent is what made a routine wait look like a
+        // dead certificate on the very first devnet that reached this path.
+        assert!(VltCreditSkipReason::EpochAnchorNotReady.is_transient());
+        assert!(!VltCreditSkipReason::EpochAnchorOutsideWindow.is_transient());
         assert!(!VltCreditSkipReason::ExecutorSignatureInvalid.is_transient());
 
         // An empty walk says nothing rather than saying "no skips".
@@ -3039,6 +3052,7 @@ mod tests {
         let mut pending_only = VltCreditTally::default();
         pending_only.note_skipped(VltCreditSkipReason::ChallengeNotMature);
         pending_only.note_skipped(VltCreditSkipReason::CommitmentAbsentFromCanonicalHistory);
+        pending_only.note_skipped(VltCreditSkipReason::EpochAnchorNotReady);
         assert!(!pending_only.is_incomplete(), "pending and invalid are answers; the table stands");
 
         let mut unloaded = VltCreditTally::default();

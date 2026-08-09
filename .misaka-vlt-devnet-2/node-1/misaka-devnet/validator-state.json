@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "validator_id": "efc895024da64a059563fe77bddd079e504902bdc878d344f4b114f29d123a467051b6b52ab53453a53b5448a290138c9d1049cdf7189d91fd6e6b0cd7121ad2",
+  "bond_outpoint": {
+    "transactionId": "d8c1e9aa11047d3045845cfd7b01db60ffa7ee6600a4cee2be063df78ac1cfa5fe36e128f6a4bcc9e014bb2430ab1bb626194691ed99af043a3e76299fe06e87",
+    "index": 0
+  },
+  "records": {
+    "11": {
+      "epoch": 11,
+      "target_hash": "9b9e9116e1b2fd77baac8be0832fc280d0b9634c981cd5839a7504f408ddec5e0a413c7c63bbea31acd576455e1ee50ed10f3a43f7d433070d7205289f3d8bf4",
+      "target_daa_score": 1188,
+      "signature_fingerprint": "65f032990e363689f9761ac662c95f52860801d340a7423aa681e957da36198edd2fbe75a13697b8257a8e415452080b7ac897ea9ab4c963b76851798912d83a"
+    },
+    "12": {
+      "epoch": 12,
+      "target_hash": "470d90f5ea9e5328874195c924b149ecebdc12b171bb9194a1bcc9317bea2799f629764255ea25b5cd94ea64f19143c34c090532576d84e64686789f78c9a9ad",
+      "target_daa_score": 1288,
+      "signature_fingerprint": "4dc94c3c593bb4f4c9626f5f30c0c8fb6076746417ffb80951d4638069e1ade1fb4951c14c8695cbc33c81890638164716081917824987ebc7e3f9fec4291ed9"
+    },
+    "13": {
+      "epoch": 13,
+      "target_hash": "82466fdbf2363457d4203ce2059a7ac437a5f4ad284f7d70e79adc25a2f77a2c43528ba7b8f81b88acdbe4bd3d77e6bc571bd674811dc1d1f0b66b1d3bdadf34",
+      "target_daa_score": 1388,
+      "signature_fingerprint": "d5e234f38e91170b569ed653b798220de10b6d35d2797a15253f5b63d8daa0a9c7f56e8560d76006a26c21eca8ca8b25377eb5c8b9761d1934e77cb5b5f08b5d"
+    },
+    "14": {
+      "epoch": 14,
+      "target_hash": "a284e60e0919fea8c870096776a641f948a8ff59720d04ef687162102b0e53d35a4d4f635a174bc0e229bbf73396dfa87497314f237aef0b38eceb461a2e30c0",
+      "target_daa_score": 1488,
+      "signature_fingerprint": "3a551a068aa892e928cd8e195f11ce1ddcb04e03d98e8c8e09a128265be7f799c8489e167c36701b27980d47ef1cc3cd6adb76a16f50869960f2d244184345f7"
+    },
+    "15": {
+      "epoch": 15,
+      "target_hash": "f5cf09be7bd79a20440e23290192c9010fa9e805af3d60133241bc9788ffdc562b4ee9e536f8f63e0c00415969f7c4b58de8cda367e52d60a3f282c1ab83b1b5",
+      "target_daa_score": 1588,
+      "signature_fingerprint": "7fe04729360f01e2ad5b05b6d6248992fcd8e1a5a086bfa19dd704858f8826c754685907c7239b2e8121402e62ec6e4933bc34727126c7f0db3a6e430be8d070"
+    }
+  }
+}

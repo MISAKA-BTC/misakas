@@ -3158,7 +3158,17 @@ impl VirtualStateProcessor {
             let (cert_tx_id, block_daa) = (*cert_tx_id, *block_daa);
             tally.note_candidate();
             let Some(anchor) = anchors.get(&cert.epoch) else {
-                note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, VltCreditSkipReason::MissingEpochAnchor);
+                // Two different facts wear the same absence. An epoch above the newest anchor is
+                // simply not buried by `attestation_lag_blue_score` yet, which every certificate
+                // is for a while right after it lands; one below the oldest is out of the credit
+                // window and never coming back. Reporting both as permanent turns a routine wait
+                // into an apparently dead certificate.
+                let reason = match anchors.keys().next_back() {
+                    Some(newest) if cert.epoch > *newest => VltCreditSkipReason::EpochAnchorNotReady,
+                    None => VltCreditSkipReason::EpochAnchorNotReady,
+                    _ => VltCreditSkipReason::EpochAnchorOutsideWindow,
+                };
+                note(&mut tally, &mut skips, cert_tx_id, cert.executor_id, cert.epoch, reason);
                 continue;
             };
             let resolved = match self.resolve_certificate(cert, block_daa, anchor, bonds, &walk, dns_params, net_id, &anchors) {

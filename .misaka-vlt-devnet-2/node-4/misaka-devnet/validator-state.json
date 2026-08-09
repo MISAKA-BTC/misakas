@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "validator_id": "697311d4c6baec6bc376e1b07f3bb38c421b60038f6cd26c42d2dbc47bd18d4ab271af0065d920c49d0ae40b2c7ddf988fd37ac6d780e82b0e486f509b0323b8",
+  "bond_outpoint": {
+    "transactionId": "750624e18da3ed08800710aa642daa3b25aafdbf70f103724388aa911d01c121c7eab086bbb42efc25f2278297f696a3455fe60e8633d858540acb6d5cb2beed",
+    "index": 0
+  },
+  "records": {
+    "13": {
+      "epoch": 13,
+      "target_hash": "82466fdbf2363457d4203ce2059a7ac437a5f4ad284f7d70e79adc25a2f77a2c43528ba7b8f81b88acdbe4bd3d77e6bc571bd674811dc1d1f0b66b1d3bdadf34",
+      "target_daa_score": 1388,
+      "signature_fingerprint": "d66ea97210543293d08e620dc662c59f091d426834d8fb6540a86eea717748ee52f89251a5a8b170637381f56d8bb2b76b7be9f999cdacd2434c13af19fa829a"
+    },
+    "14": {
+      "epoch": 14,
+      "target_hash": "a284e60e0919fea8c870096776a641f948a8ff59720d04ef687162102b0e53d35a4d4f635a174bc0e229bbf73396dfa87497314f237aef0b38eceb461a2e30c0",
+      "target_daa_score": 1488,
+      "signature_fingerprint": "c999708ce84f0ffc22e69950cb01ea49ae5b9f7821e7466a6189a970133598a358745b7762dd24c58132bb397f6f7597553bae68291f6cb7a2cc9737ac549bb3"
+    },
+    "15": {
+      "epoch": 15,
+      "target_hash": "f5cf09be7bd79a20440e23290192c9010fa9e805af3d60133241bc9788ffdc562b4ee9e536f8f63e0c00415969f7c4b58de8cda367e52d60a3f282c1ab83b1b5",
+      "target_daa_score": 1588,
+      "signature_fingerprint": "3a22691091827b484e775a2722067249094c1d747140640257557c8f6603a5541af8683daa6effb8fe4a477723ecac47651cd3c2b8de1ba187cd94b48cfbe453"
+    }
+  }
+}
