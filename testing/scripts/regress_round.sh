@@ -76,17 +76,35 @@ RESULT=$(wait_for_score "$FOLLOWER_GRPC" "$HEAVY_SCORE" "$TIMEOUT")
 SETTLED=$?
 
 # Converging is half the property. A node that reaches the right chain and then never
-# participates has failed differently, not succeeded quietly — so wait out the review floor and
-# see it resume. Bounded: the floor is 180s and the whole verification budget fits inside it, so
-# anything beyond this is the node still holding back for a reason worth reporting.
+# participates has failed differently, not succeeded quietly.
+#
+# The observable is the participation gate, NOT `is_synced`. `is_synced` deliberately also folds in
+# whether the sink is recent, which on a fixture that stopped mining hours ago is false forever —
+# so a node correctly resuming would still report unsynced and the check would blame the gate for
+# the fixture being static. Measured: every adversarial round converged and reported
+# became_ready=false with the gate's own log showing an ordinary review still counting down.
+#
+# The gate says so itself, once every ten seconds, while it is holding participation back. Its
+# silence is the signal.
+HELD_LINE="Chain participation held"
 READY=false
-for _ in $(seq 1 ${READY_WAIT_TICKS:-52}); do
-  if [ "$("$RPC" "127.0.0.1:$FOLLOWER_GRPC" 2>/dev/null | sed -n 's/.*is_synced=\([a-z]*\).*/\1/p')" = "true" ]; then
-    READY=true
-    break
+QUIET_NEEDED=${QUIET_TICKS:-4}   # 4 x 10s of silence: two missed heartbeats plus margin
+quiet=0
+for _ in $(seq 1 ${READY_WAIT_TICKS:-60}); do
+  last=$(grep -ac "$HELD_LINE" "$BASE/follower.log" 2>/dev/null || echo 0)
+  sleep 10
+  now=$(grep -ac "$HELD_LINE" "$BASE/follower.log" 2>/dev/null || echo 0)
+  if [ "$now" -eq "$last" ]; then
+    quiet=$((quiet + 1))
+    if [ "$quiet" -ge "$QUIET_NEEDED" ]; then
+      READY=true
+      break
+    fi
+  else
+    quiet=0
   fi
-  sleep 5
 done
+
 RESULT=$("$RPC" "127.0.0.1:$FOLLOWER_GRPC" 2>/dev/null || echo "$RESULT")
 
 PP=$(sed -n 's/.*pruning_point=\([0-9a-f]*\).*/\1/p' <<<"$RESULT")
