@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # One regression round against the two-history VPS fixture.
 #
-# A fresh follower is offered the LIGHT branch first (loopback, so it wins the race every time) and
-# the HEAVY branch a few seconds later from 267 ms away. The property under test is that the closer,
-# lighter chain does not decide the outcome — which is exactly what decided testnet-22.
+# A fresh follower is offered the LIGHT branch first and the HEAVY branch a few seconds later. The
+# property under test is that arrival order and network distance do not decide the outcome — which
+# is exactly what decided testnet-22.
 #
-# Usage: regress_round.sh <round> <heavy_host:port> <light_pruning_point> <heavy_pruning_point> <heavy_score>
+# Both peer addresses are arguments, so the same script runs the two topologies that matter:
+#
+#   adversarial   follower on the light host   light ~0ms, heavy ~267ms   the worse chain is nearer
+#   control       follower near the heavy host light ~251ms, heavy ~2ms   the better chain is nearer
+#
+# The adversarial one is the real test. The control exists so that a failure can be attributed: if
+# only the adversarial topology fails, the problem is discovery, retry, or a deadline; if the
+# control fails too, distance was never the issue and the state machine is wrong.
+#
+# Usage: regress_round.sh <round> <light_host:port> <heavy_host:port> <light_pp> <heavy_pp> <heavy_score>
 #
 # Prints one verdict line per round. Nothing here touches production: simnet, own params file, own
 # data dir under /tmp, ports in the 412xx range, and every process stop goes through
@@ -13,16 +22,16 @@
 set -uo pipefail
 
 ROUND=$1
-HEAVY_ADDR=$2
-LIGHT_PP=$3
-HEAVY_PP=$4
-HEAVY_SCORE=$5
+LIGHT_ADDR=$2
+HEAVY_ADDR=$3
+LIGHT_PP=$4
+HEAVY_PP=$5
+HEAVY_SCORE=$6
 
 BASE=${BASE:-/var/lib/misaka-regression}
 # shellcheck source=regress_lib.sh
 source "$BASE/regress_lib.sh"
 
-LIGHT_P2P=41211
 FOLLOWER_P2P=41231
 FOLLOWER_GRPC=41241
 TIMEOUT=${TIMEOUT:-600}
@@ -48,7 +57,7 @@ sleep 10
 # heavy peer out entirely or make what happens when it is added an open question. Both peers are
 # introduced the same way the local end-to-end tests introduce them — addPeer, permanent — so the
 # only thing differing between the two harnesses is the network between the nodes.
-"$RPC" "127.0.0.1:$FOLLOWER_GRPC" connect "127.0.0.1:$LIGHT_P2P" || {
+"$RPC" "127.0.0.1:$FOLLOWER_GRPC" connect "$LIGHT_ADDR" || {
   echo "VPS-ROUND round=$ROUND FAILED to introduce the light peer" >&2
   stop_regress_pid "$BASE/follower.pid" || true
   exit 2
@@ -71,7 +80,7 @@ SYNCED=$(sed -n 's/.*is_synced=\([a-z]*\).*/\1/p' <<<"$RESULT")
 ON_HEAVY=false; [ "$PP" = "$HEAVY_PP" ] && ON_HEAVY=true
 ON_LIGHT=false; [ "$PP" = "$LIGHT_PP" ] && ON_LIGHT=true
 
-echo "VPS-ROUND round=$ROUND settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED heavy=$HEAVY_ADDR"
+echo "VPS-ROUND round=$ROUND settled=$([ $SETTLED -eq 0 ] && echo true || echo false) on_heavy=$ON_HEAVY on_light=$ON_LIGHT is_synced=$SYNCED light=$LIGHT_ADDR heavy=$HEAVY_ADDR"
 echo "  probe: $RESULT"
 
 stop_regress_pid "$BASE/follower.pid" || true

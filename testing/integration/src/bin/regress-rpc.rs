@@ -78,12 +78,20 @@ async fn probe(addr: &str) -> Result<String, String> {
     let client = client(addr).await?;
     let dag = client.get_block_dag_info().await.map_err(|e| format!("getBlockDagInfo: {e}"))?;
     let server = client.get_server_info().await.map_err(|e| format!("getServerInfo: {e}"))?;
+
+    // Blue work, not just the DAA score. Chain selection is decided on accumulated work; the DAA
+    // score counts a chain's progression through difficulty windows. Two branches mined at
+    // different times can order one way by score and the other way by work — and it is the work
+    // ordering that says which chain a correct node should prefer. A fixture that calls the
+    // higher-score branch "heavier" without checking is asserting the wrong proposition.
+    let blue_work = client.get_block(dag.sink, false).await.map(|b| b.header.blue_work.to_string()).unwrap_or_else(|_| "?".to_owned());
     let _ = client.disconnect().await;
 
     Ok(format!(
-        "pruning_point={} virtual_daa_score={} is_synced={} sink={} network={} tip_count={}",
+        "pruning_point={} virtual_daa_score={} sink_blue_work={} is_synced={} sink={} network={} tip_count={}",
         dag.pruning_point_hash,
         dag.virtual_daa_score,
+        blue_work,
         server.is_synced,
         dag.sink,
         server.network_id,

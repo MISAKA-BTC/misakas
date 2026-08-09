@@ -416,6 +416,37 @@ async fn pruned_branch(overrides: &std::path::Path, blocks: usize) -> (Daemon, G
     (node, client, address, score)
 }
 
+/// Accumulated work at a branch's sink — the quantity chain selection actually uses.
+///
+/// The DAA score is not it. A branch mined quickly at low difficulty can outscore one mined slowly
+/// at high difficulty while carrying less work, and a node choosing between them will correctly
+/// prefer the second. Measured on the VPS fixture, where the branch with 1300 MORE DAA score had
+/// 25% LESS blue work: every round run against it was asserting the wrong proposition, and the node
+/// refusing to switch was right.
+async fn branch_blue_work(client: &GrpcClient) -> kaspa_consensus_core::BlueWorkType {
+    let sink = client.get_block_dag_info().await.unwrap().sink;
+    client.get_block(sink, false).await.unwrap().header.blue_work
+}
+
+/// Assert the premise every one of these tests rests on: two genuinely different histories, and the
+/// one called "heavy" is the one a correct node should prefer.
+///
+/// Checked rather than assumed, because it was assumed once and was false.
+async fn assert_fixture_premise(light: &GrpcClient, heavy: &GrpcClient) {
+    let light_pp = light.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let heavy_pp = heavy.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_ne!(light_pp, heavy_pp, "the two branches share a pruning point, so they are not two histories");
+
+    let light_work = branch_blue_work(light).await;
+    let heavy_work = branch_blue_work(heavy).await;
+    assert!(
+        heavy_work > light_work,
+        "the branch this fixture calls heavy has LESS accumulated work than the light one \
+         (heavy={heavy_work} light={light_work}). A node preferring the light branch would be \
+         correct, so nothing this test asserts about convergence would mean anything."
+    );
+}
+
 /// The whole point, end to end: which chain a node adopts must not depend on who relayed first.
 ///
 /// Two leaders that never met mine independently past pruning depth on identical rules, one heavier
@@ -445,6 +476,7 @@ async fn e2e_a_a_stronger_chain_found_during_ibd_wins() {
     let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_fixture_premise(&light_client, &heavy_client).await;
 
     // Mining has stopped on both: the tips are now fixed, so a reservation cannot be invalidated by
     // the chain moving under it.
@@ -500,6 +532,7 @@ async fn e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point() {
     let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_fixture_premise(&light_client, &heavy_client).await;
 
     // Sync the lighter chain to completion FIRST, so it is provisionally committed and its pruning
     // point becomes the boundary a permit has to cross.
@@ -726,7 +759,7 @@ async fn mainnet_soak_randomized_fault_injection() {
     let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
-    assert_ne!(light_pp, heavy_pp);
+    assert_fixture_premise(&light_client, &heavy_client).await;
     assert!(heavy_score > light_score);
 
     // Each round is reproducible from its seed, so make that reproducibility reachable: SOAK_SEEDS=2
@@ -869,7 +902,7 @@ async fn a_node_killed_partway_through_recovery_comes_back_safe() {
     let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
-    assert_ne!(light_pp, heavy_pp);
+    assert_fixture_premise(&light_client, &heavy_client).await;
 
     let mut failures: Vec<String> = Vec::new();
     for kill_at in RESTART_POINTS {
