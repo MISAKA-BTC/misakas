@@ -7,3 +7,9 @@
 2026-08-09 21:06:40.452+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
 2026-08-09 21:06:40.452+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
 2026-08-09 21:08:24.545+09:00 [WARN ] [vlt-state] none -> shadow at daa=1399
+2026-08-09 21:36:39.465+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 21:36:39.468+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 21:38:52.921+09:00 [WARN ] [vlt-state] none -> shadow at daa=2199
+2026-08-09 21:39:38.938+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 21:39:38.938+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 21:41:30.877+09:00 [WARN ] [vlt-state] none -> shadow at daa=2299

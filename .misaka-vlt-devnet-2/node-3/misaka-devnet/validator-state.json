@@ -47,6 +47,18 @@
       "target_hash": "b7675bf1e5a6f2f234edbe2fdcff37092c8a4044c1b3008ec4cb787e835b4a582594f329683b2788a0a847f805bcfefe0e76b157d5d0488aa6e964d641ec560f",
       "target_daa_score": 1988,
       "signature_fingerprint": "766be74f29b81c5f9ca317f0235694e16cda4334ffbeeebc82f16a329230c33ec36b022261cfe8506d7e4865a32cf467aa1f3d4f05a8ef91c2c35c9af696b3ba"
+    },
+    "20": {
+      "epoch": 20,
+      "target_hash": "18f64d42d6a3ac4a6cc76fc1ca3b604f0579b929d72646b83ee030f6d51a238042498063575ef92455e9df5b08679f9995f441b56ff587c26bac203cbffafa1d",
+      "target_daa_score": 2088,
+      "signature_fingerprint": "926e5291abe4776b2605094111774c2be2aec4f3fb412c1f3951390aab1c1bd88bac5d8a750f71d3e7f747042a22340eb55c37d6ae210df5607aaadb48aadadb"
+    },
+    "21": {
+      "epoch": 21,
+      "target_hash": "f4ef74d1dd7eabc32d3d2c00699389fb6b3d2bc5335d800ebd889e0488b626701f88b95cbc9fb22959f4733da58d098cd941e948989b1a72766b09ff62c461a2",
+      "target_daa_score": 2188,
+      "signature_fingerprint": "60a16df2194b4633f93d8e39b97a2fe0f8f35568c4cd4b13ca74c3c62dc1ffa6229b243806ac8a3509c6c2004d3597ee73b7f768575fbb77d30790fa266d0d04"
     }
   }
 }
