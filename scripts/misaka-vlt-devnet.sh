@@ -21,17 +21,29 @@
 # The fences are devnet/simnet only. kaspad refuses --vlt-devnet on mainnet/testnet: moving a
 # consensus fence belongs in a release, not on a command line.
 #
-# Build kaspad WITH `--features evm`. Devnet has the EVM lane active from DAA 0, so a kaspad
-# without it panics the moment a miner asks for a block template — the chain then never advances
-# and no fence is ever crossed.
+# Build kaspad WITH `--features "evm,devnet-vlt-fixture"`. `evm` because devnet has the EVM lane
+# active from DAA 0, so a kaspad without it panics the moment a miner asks for a block template —
+# the chain then never advances and no fence is ever crossed. `devnet-vlt-fixture` because without
+# a 24 GB model on disk it is the only runtime that can claim this network's registered compute
+# profile; without it every node runs verifier-only and W(E) stays at zero forever.
+#
+# **Asymmetric by construction.** Each node gets a job quota, and the fixture prices every job at
+# exactly 50 VLT, so --job-quotas 8,5,3,2,2 is a plan of 400/250/150/100/100 VLT. Equal quotas
+# would give five validators identical weight, which tests that the overlay runs but not that it
+# weights — the one property the whole exercise is for.
+#
+# Re-running this script on an existing devnet is safe: it stops the recorded pids first, keeps
+# each node's validator key, and carries any --stake-bond a previous bond run recorded, so a
+# bonded devnet can be restarted with new flags without redoing the bond.
 #
 # Usage:
-#   scripts/misaka-vlt-devnet.sh [--shadow-only] [--no-mine] [--nodes N] [--shadow-daa N] [--epochs K]
+#   scripts/misaka-vlt-devnet.sh [--shadow-only] [--no-mine] [--nodes N] [--shadow-daa N]
+#                                [--epochs K] [--job-quotas N,N,...]
 #
 # Env:
 #   MISAKA_DEVNET_DIR   working directory (default: ./.misaka-vlt-devnet)
 #   KASPAD_BIN          kaspad binary (default: ./target/release/kaspad)
-#   PALW_WORKER         palw-worker binary; without it nodes run validator-only and mint no VLT
+#   PALW_WORKER         palw-worker binary; without it the devnet VLT fixture runs instead
 #   MISAMINER_BIN       miner binary (default: ./target/release/misaminer); --no-mine skips it
 
 set -euo pipefail
@@ -41,6 +53,7 @@ SHADOW_DAA=200
 CREDIT_WINDOW_EPOCHS=8
 SHADOW_ONLY=0
 MINE=1
+JOB_QUOTAS=8,5,3,2,2
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -49,7 +62,8 @@ while [ $# -gt 0 ]; do
     --nodes)       NODES="$2"; shift 2 ;;
     --shadow-daa)  SHADOW_DAA="$2"; shift 2 ;;
     --epochs)      CREDIT_WINDOW_EPOCHS="$2"; shift 2 ;;
-    -h|--help)     sed -n '2,30p' "$0"; exit 0 ;;
+    --job-quotas)  JOB_QUOTAS="$2"; shift 2 ;;
+    -h|--help)     sed -n '2,42p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -62,7 +76,7 @@ MISAMINER_BIN="${MISAMINER_BIN:-$REPO_ROOT/target/release/misaminer}"
 
 if [ ! -x "$KASPAD_BIN" ]; then
   echo "kaspad not found at $KASPAD_BIN — build it first:" >&2
-  echo "  cargo build --release --bin kaspad --features evm" >&2
+  echo "  cargo build --release --bin kaspad --features \"evm,devnet-vlt-fixture\"" >&2
   exit 1
 fi
 
@@ -73,6 +87,21 @@ if [ "$NODES" -lt 4 ]; then
   echo "warning: $NODES nodes is below 1 executor + 3 confirmations; no job will ever be creditable" >&2
 fi
 
+# One quota per node, and refused rather than padded if the counts disagree. A missing entry
+# silently defaulted would hand some validator a weight nobody chose, and the resulting plot would
+# be indistinguishable from a real result.
+QUOTAS=()
+IFS=, read -r -a QUOTAS <<< "$JOB_QUOTAS"
+if [ "${#QUOTAS[@]}" -ne "$NODES" ]; then
+  echo "--job-quotas has ${#QUOTAS[@]} entries but there are $NODES nodes; pass one quota per node" >&2
+  exit 2
+fi
+for q in "${QUOTAS[@]}"; do
+  case "$q" in
+    ''|*[!0-9]*) echo "--job-quotas entry '$q' is not a job count" >&2; exit 2 ;;
+  esac
+done
+
 mkdir -p "$WORK_DIR"
 echo "MISAKA VLT devnet"
 echo "  nodes           : $NODES"
@@ -82,11 +111,45 @@ if [ "$SHADOW_ONLY" -eq 1 ]; then
 else
   echo "  weight fence    : one credit window (K=$CREDIT_WINDOW_EPOCHS) above the shadow fence"
 fi
+if [ -n "$PALW_WORKER" ]; then
+  echo "  compute         : palw-worker at $PALW_WORKER (no quota — a real-model devnet is a different experiment)"
+else
+  echo "  compute         : devnet VLT fixture, 50 VLT/job, quotas $JOB_QUOTAS"
+fi
 echo "  work dir        : $WORK_DIR"
 echo
 
 BASE_P2P=17111
 BASE_RPC=17110
+
+# Stop anything this script started before, so it can be re-run to change flags. Without it the new
+# nodes lose the port race, die on bind, and the script reports five exits with no hint that the
+# old mesh is still up and holding the ports.
+stopped=0
+for i in $(seq 0 $((NODES - 1))); do
+  pidfile="$WORK_DIR/node-$i/kaspad.pid"
+  if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    kill "$(cat "$pidfile")" 2>/dev/null || true
+    stopped=$((stopped + 1))
+  fi
+done
+if [ "$stopped" -gt 0 ]; then
+  echo "stopped $stopped node(s) from a previous run; restarting them with the current flags"
+  sleep 5
+fi
+
+# A bond outpoint does not exist until its funding transaction lands, so it is discovered by
+# `misaka-vlt-devnet-bond.sh` and recorded in run.args. Carry it across a regeneration: rebonding a
+# devnet costs a thousand blocks of coinbase maturity, and losing the flag silently drops the node
+# out of the active set — which reads as a consensus problem, not a missing argument.
+#
+# `|| true` on the grep, and not because it is tidy: under `set -o pipefail` a grep that matches
+# nothing makes the whole pipeline non-zero, that status becomes the function's, and `set -e` then
+# kills the script at the *assignment* — on the ordinary path where no bond exists yet.
+saved_bond_of() {
+  [ -f "$WORK_DIR/node-$1/run.args" ] || return 0
+  tr ' ' '\n' < "$WORK_DIR/node-$1/run.args" | sed "s/^'//;s/'$//" | { grep -E '^--stake-bond=' || true; } | tail -1
+}
 
 # `--addpeer`, NOT `--connect`. `--connect` sets the inbound limit to zero, so a mesh where every
 # node passes it is a mesh where every node refuses every connection — five nodes that mine in
@@ -119,6 +182,14 @@ for i in $(seq 0 $((NODES - 1))); do
     chmod 600 "$node_dir/validator.key"
   fi
 
+  # The job input. Its CONTENT does not price anything — the fixture runs one fixed shape (10
+  # prefill + 5 decode = 50 VLT) whatever it reads — so this exists to give each node a job of its
+  # own, not to influence any weight. Written once and then left alone: its LENGTH is part of the
+  # quota's plan id, so editing it to a different length is a different plan and resets the count.
+  if [ ! -f "$node_dir/compute-prompt.txt" ]; then
+    printf 'MISAKA VLT devnet fixture job — node-%s\n' "$i" > "$node_dir/compute-prompt.txt"
+  fi
+
   # Every node's own address is in the peer list; the self-dial fails harmlessly, and keeping the
   # list identical across nodes means one mesh definition rather than N-1 bespoke ones.
   args=(
@@ -142,12 +213,28 @@ for i in $(seq 0 $((NODES - 1))); do
     --vlt-devnet-credit-window-epochs="$CREDIT_WINDOW_EPOCHS"
   )
   [ "$SHADOW_ONLY" -eq 1 ] && args+=(--vlt-shadow-only)
+  # `--compute-prompt` is what makes a node an EXECUTOR; without it the compute role audits peers
+  # and originates nothing, so a devnet where no node has one produces no VLT at all and every
+  # weight stays at zero. That applies to the real worker as much as to the fixture.
+  args+=(--enable-compute --compute-work-dir="$node_dir/compute" --compute-prompt="$node_dir/compute-prompt.txt")
   if [ -n "$PALW_WORKER" ]; then
-    args+=(--enable-compute --compute-worker="$PALW_WORKER" --compute-work-dir="$node_dir/compute")
+    args+=(--compute-worker="$PALW_WORKER")
+  else
+    # Fixture only. The quota is what makes the weights ASYMMETRIC — without it every node
+    # originates forever and the five converge, which measures nothing.
+    args+=(--compute-fixture-job-limit="${QUOTAS[$i]}")
+  fi
+  bond=$(saved_bond_of "$i")
+  if [ -n "$bond" ]; then
+    args+=("$bond")
   fi
   args+=("${peers[@]}")
 
-  echo "node-$i  p2p=$p2p  grpc=$rpc  wrpc=$((rpc + 2))"
+  if [ -n "$PALW_WORKER" ]; then
+    echo "node-$i  p2p=$p2p  grpc=$rpc  wrpc=$((rpc + 2))${bond:+  ${bond#--stake-bond=}}"
+  else
+    echo "node-$i  p2p=$p2p  grpc=$rpc  wrpc=$((rpc + 2))  quota=${QUOTAS[$i]} job(s) = $(( ${QUOTAS[$i]} * 50 )) VLT${bond:+  ${bond#--stake-bond=}}"
+  fi
   printf '  %q' "$KASPAD_BIN" "${args[@]}" > "$node_dir/run.args"
   ( "$KASPAD_BIN" "${args[@]}" >"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
 done
@@ -195,13 +282,39 @@ if [ "$dead" -gt 0 ]; then
   exit 1
 fi
 
+# The compute role resolves at startup and disables itself, with one log line, whenever the runtime
+# cannot claim the consensus-registered profile — which is what a kaspad built without
+# `--features devnet-vlt-fixture` does here. Every node then stays up, mines, gossips and attests,
+# and credits nothing forever. Checking for the role's own "enabled" line turns that into an error
+# now rather than an unexplained W(E) = 0 an hour into the run.
+enabled=0
+for i in $(seq 0 $((NODES - 1))); do
+  if grep -q "validator-compute] enabled:" "$WORK_DIR/node-$i/kaspad.log"; then
+    enabled=$((enabled + 1))
+  fi
+done
+if [ "$enabled" -ne "$NODES" ]; then
+  echo >&2
+  echo "the compute role is active on only $enabled/$NODES nodes; no VLT will be credited. node-0 says:" >&2
+  grep -E "validator-compute]" "$WORK_DIR/node-0/kaspad.log" | tail -3 >&2
+  if [ -z "$PALW_WORKER" ]; then
+    echo >&2
+    echo "If that names the mock runtime, this kaspad was built without the fixture. Rebuild with:" >&2
+    echo "  cargo build --release --bin kaspad --features \"evm,devnet-vlt-fixture\"" >&2
+  fi
+  exit 1
+fi
+echo
+echo "compute     : role active on all $NODES nodes"
+
 echo
 echo "Started. Watch the overlay come up with:"
-echo "  tail -f $WORK_DIR/node-0/kaspad.log | grep -E 'vlt-shadow|stake-score|precommit'"
+echo "  tail -f $WORK_DIR/node-0/kaspad.log | grep -E 'vlt-shadow|stake-score|precommit|validator-compute'"
 echo
 echo "Each node still needs a funded stake bond before it attests, and the bond outpoint is only"
-echo "knowable after the funding transaction lands — so restart each node with its own"
-echo "--stake-bond=<txid:index> once bonded (see ADR-0010). Until then the nodes mine and gossip"
-echo "but produce no attestations, and the overlay stays at W(E) = 0."
+echo "knowable after the funding transaction lands — so run scripts/misaka-vlt-devnet-bond.sh,"
+echo "which bonds every validator and restarts it with its own --stake-bond (see ADR-0010). Until"
+echo "then the nodes mine and gossip but produce no attestations, and the overlay stays at"
+echo "W(E) = 0. Re-running THIS script afterwards keeps each bond."
 echo "Stop everything with:"
 echo "  for p in $WORK_DIR/*/kaspad.pid $WORK_DIR/miner.pid; do kill \"\$(cat \"\$p\")\" 2>/dev/null; done"

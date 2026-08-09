@@ -1396,11 +1396,25 @@ impl DnsParams {
             let _ = genesis_hash;
             crate::vlt::ModelCostTable::palw_qwen36_metal()
         };
+        // `W_min` is profile-relative and the shipped value is the real PALW profile's: it comes
+        // from "a handful of validators each having completed roughly one full job" at that
+        // profile's 4096-token ceiling, ~3.3e10 µRTE apiece. The fixture's job is 5e7 µRTE, so the
+        // SAME derivation over the profile this preset actually registers is four jobs, not the
+        // two thousand the inherited number would demand. Left alone, a fixture devnet runs the
+        // entire compute path correctly — commitments, certificates, quorums, credit — and still
+        // reports the overlay inactive forever, which reads as a broken overlay rather than as a
+        // threshold sized for a model that is not registered here.
+        #[cfg(feature = "devnet-vlt-fixture")]
+        let min_network_compute = (1 + self.vlt.min_verifier_confirmations as u128)
+            * crate::vlt::devnet_fixture_job_vlt(self.vlt.prefill_cost_micro, self.vlt.decode_cost_micro);
+        #[cfg(not(feature = "devnet-vlt-fixture"))]
+        let min_network_compute = self.vlt.min_network_compute;
         self.vlt = VltParams {
             vlt_shadow_activation_daa_score: shadow_daa,
             vlt_activation_daa_score: u64::MAX,
             credit_window_epochs,
             model_cost_table,
+            min_network_compute,
             ..self.vlt
         };
         let soak = self.vlt_credit_span();
@@ -7811,6 +7825,28 @@ mod tests {
             "§7: a validator must not be able to exit while the compute it votes with is still challengeable"
         );
         assert!(devnet.unbonding_period_blocks > base.unbonding_period_blocks, "devnet's stock window predates VLT and is raised");
+
+        // `W_min` must be reachable by the profile this preset registers. The shipped floor is
+        // sized for the real PALW profile's 4096-token job; against the fixture's 50-VLT job it
+        // would take 2000 jobs, and the devnet would run the whole compute path and never leave
+        // `FenceReachedNoSnapshot` — an overlay that looks broken because a threshold was inherited
+        // from a model that is not registered here.
+        #[cfg(feature = "devnet-vlt-fixture")]
+        {
+            let one_job = crate::vlt::devnet_fixture_job_vlt(devnet.vlt.prefill_cost_micro, devnet.vlt.decode_cost_micro);
+            assert!(devnet.vlt.min_network_compute < base.vlt.min_network_compute, "the floor must be re-derived, not inherited");
+            assert_eq!(
+                devnet.vlt.min_network_compute,
+                (1 + devnet.vlt.min_verifier_confirmations as u128) * one_job,
+                "one executor plus a confirming committee, each having completed one job"
+            );
+            // The shipped plan clears it with room: 8+5+3+2+2 jobs across five validators, and even
+            // the two largest quotas alone are enough for the overlay to activate.
+            assert!((8 + 5 + 3 + 2 + 2) * one_job > devnet.vlt.min_network_compute);
+            assert!((8 + 5) * one_job > devnet.vlt.min_network_compute, "a partial run must still activate");
+            // And it is still a floor: one job by one validator must NOT speak for the network.
+            assert!(one_job < devnet.vlt.min_network_compute);
+        }
 
         // K is what makes a devnet's soak minutes rather than tens of minutes, and it must move
         // both the fence gap and the walk together.

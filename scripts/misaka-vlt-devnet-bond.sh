@@ -153,11 +153,24 @@ for i in $(seq 0 $((NODES - 1))); do
   #
   # Read with a while-read loop, not `mapfile`: macOS ships bash 3.2, where `mapfile` does not
   # exist — and the failure lands AFTER the nodes have been killed, so the devnet is left down.
+  #
+  # Any --stake-bond already in the file is dropped rather than kept, so re-running this script
+  # replaces the bond instead of passing two.
   saved=()
   while IFS= read -r tok; do
-    [ -n "$tok" ] && saved+=("$tok")
+    case "$tok" in
+      ''|--stake-bond=*) ;;
+      *) saved+=("$tok") ;;
+    esac
   done < <(tr ' ' '\n' < "$node_dir/run.args" | sed "s/^'//;s/'$//")
-  ( "${saved[@]}" --stake-bond="${OUTPOINTS[$i]}" >>"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
+  saved+=("--stake-bond=${OUTPOINTS[$i]}")
+  # Record it too. The outpoint does not exist until the funding transaction lands, so this file is
+  # the only place the node's full configuration is written down — and the devnet script carries
+  # the flag forward from here when it regenerates the argv. Without this, restarting the devnet to
+  # change any other flag silently drops every validator out of the active set, and rebonding costs
+  # a thousand blocks of coinbase maturity to get back.
+  printf '  %q' "${saved[@]}" > "$node_dir/run.args"
+  ( "${saved[@]}" >>"$node_dir/kaspad.log" 2>&1 & echo $! > "$node_dir/kaspad.pid" )
 done
 
 echo

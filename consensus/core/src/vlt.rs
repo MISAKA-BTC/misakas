@@ -1129,6 +1129,20 @@ pub fn devnet_fixture_entry(genesis_hash: Hash64) -> ModelCostEntry {
     }
 }
 
+/// What one canonical fixture job normalizes to, in µRTE, under `(a, b)`.
+///
+/// [`normalize_vlt`] is the definition; this is the same arithmetic for a job that is known in
+/// advance, so a preset can size a threshold against the profile it registers instead of against a
+/// number copied from a different profile. `devnet_fixture_job_vlt_matches_normalize_vlt` holds the
+/// two together.
+#[cfg(feature = "devnet-vlt-fixture")]
+pub fn devnet_fixture_job_vlt(prefill_cost_micro: u64, decode_cost_micro: u64) -> u128 {
+    let token_cost = (prefill_cost_micro as u128)
+        .saturating_mul(devnet_fixture::JOB_PREFILL_TOKENS as u128)
+        .saturating_add((decode_cost_micro as u128).saturating_mul(devnet_fixture::JOB_DECODE_TOKENS as u128));
+    (devnet_fixture::RHO_MICRO as u128).saturating_mul(token_cost) / VLT_MICRO
+}
+
 /// `h_R` — the exact inference runtime build: upstream commit, applied patch, build number, and
 /// the build profile. Corresponds to PALW's `runtime_manifest_hash` role in `MatchProjectionV1`.
 pub fn derive_runtime_hash(commit: &str, patch_sha256_hex: &str, build_number: u64, build_profile: &str) -> Hash64 {
@@ -2648,6 +2662,11 @@ mod tests {
         for (jobs, vlt) in [(8u128, 400u128), (5, 250), (3, 150), (2, 100), (2, 100)] {
             assert_eq!(jobs * one_job, vlt * VLT_MICRO, "{jobs} jobs must be exactly {vlt} VLT");
         }
+
+        // The preset sizes `W_min` off this helper, so it must be the same arithmetic
+        // `normalize_vlt` performs — a second definition that drifted would move the activation
+        // threshold without moving anything that mints.
+        assert_eq!(devnet_fixture_job_vlt(params.prefill_cost_micro, params.decode_cost_micro), one_job);
     }
 
     /// The shipped presets never carry the fixture, feature or no feature. This is the assertion
