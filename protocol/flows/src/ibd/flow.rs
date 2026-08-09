@@ -357,8 +357,10 @@ impl IbdFlow {
     /// thing this whole path exists to prevent. What the proof genuinely establishes is the header
     /// chain down to the pruning point, so that is what gets compared.
     async fn verify_challenger(&mut self, id: CandidateId) {
-        // Only a peer that actually offers this chain can be asked for its proof.
-        if !self.ctx.ibd_candidates().read().sources_of(&id).contains(&self.router.key()) {
+        // Only a peer that actually offers this chain can be asked for its proof — and only the one
+        // designated to serve it. A nomination reaches every flow, so without this every source
+        // fetches and validates the same multi-megabyte proof simultaneously.
+        if self.ctx.ibd_candidates().read().designated_prover(&id) != Some(self.router.key()) {
             return;
         }
         // The claim the peer must now back. Read here rather than inside the fetch so a candidate
@@ -546,14 +548,10 @@ impl IbdFlow {
             return;
         }
         let me = self.router.key();
-        let pending = self
-            .ctx
-            .ibd_candidates()
-            .read()
-            .candidates_awaiting_proof()
-            .into_iter()
-            .find(|(_, sources)| sources.contains(&me))
-            .map(|(id, _)| id);
+        let pending = {
+            let registry = self.ctx.ibd_candidates().read();
+            registry.candidates_awaiting_proof().into_iter().map(|(id, _)| id).find(|id| registry.designated_prover(id) == Some(me))
+        };
         if let Some(id) = pending {
             self.verify_challenger(id).await;
         }
@@ -947,8 +945,9 @@ impl IbdFlow {
         }
         for id in &timed_out {
             warn!(
-                "Chain candidate {} was nominated for verification but no source produced a pruning proof within its lease; \
-                 refusing it rather than letting it hold up the commit.",
+                "Chain candidate {} was nominated for verification but no source produced a pruning proof within its lease. \
+                 It stops holding up the commit; it may still be checked again, since a source cut off mid-proof has said \
+                 nothing about whether its chain is real.",
                 id.virtual_selected_parent
             );
         }

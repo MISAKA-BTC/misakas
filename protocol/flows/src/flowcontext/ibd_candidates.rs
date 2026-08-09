@@ -526,6 +526,24 @@ impl IbdCandidateRegistry {
             .collect()
     }
 
+    /// Which single source should fetch this candidate's proof right now.
+    ///
+    /// A nomination is broadcast to every flow, and the idle tick reads the registry from every
+    /// flow, so without this every source of a candidate fetches the same multi-megabyte proof at
+    /// the same time and validates it in parallel. One peer is chosen instead — deterministically,
+    /// so the choice needs no lock and no lease of its own.
+    ///
+    /// Rotating on `proof_attempts` is what keeps that from becoming a single point of failure: if
+    /// the chosen source never delivers, the lease expires and the next attempt asks a different
+    /// one. Sources are pruned when a peer disconnects, so this only ever names a live peer.
+    pub fn designated_prover(&self, id: &CandidateId) -> Option<PeerKey> {
+        let c = self.candidates.get(id)?;
+        if c.sources.is_empty() {
+            return None;
+        }
+        Some(c.sources[c.proof_attempts as usize % c.sources.len()])
+    }
+
     /// Peers currently offering this candidate, for asking one of them for a proof.
     pub fn sources_of(&self, id: &CandidateId) -> Vec<PeerKey> {
         self.candidates.get(id).map(|c| c.sources.clone()).unwrap_or_default()
@@ -895,6 +913,31 @@ mod tests {
             PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
             "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
         );
+    }
+
+    #[test]
+    fn exactly_one_source_fetches_a_proof_and_a_different_one_gets_the_next_attempt() {
+        // A nomination is broadcast to every flow and the idle tick reads the registry from every
+        // flow, so "every source of this candidate" is the default number of peers that would fetch
+        // the same multi-megabyte proof at once. One does.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+        r.observe_summary(peer(2), &header(1, 900), pp(1), now);
+        r.observe_summary(peer(3), &header(1, 900), pp(1), now);
+        assert_eq!(r.sources_of(&id).len(), 3, "one chain, three sources");
+
+        let first = r.designated_prover(&id).unwrap();
+        assert_eq!(r.designated_prover(&id), Some(first), "the choice must not wander between reads");
+
+        // If that one never delivers, the next attempt must not ask it again — otherwise one silent
+        // peer spends every retry the chain is allowed.
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        r.expire_proof_requests(now + CHALLENGER_VERIFICATION_LEASE, CHALLENGER_VERIFICATION_LEASE);
+        assert_ne!(r.designated_prover(&id), Some(first), "the next attempt has to try someone else");
     }
 
     #[test]
