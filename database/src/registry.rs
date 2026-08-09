@@ -226,6 +226,12 @@ pub enum DatabaseStorePrefixes {
     /// pool reads exactly like "nobody declared this profile".
     ComputeCapabilitiesBackfilled = 238,
 
+    /// Singleton `u32`: the record layout the [`Self::ComputeCapabilities`] rows were written
+    /// under. A borsh layout change makes existing rows undecodable, and an undecodable row is
+    /// dropped silently — so without this the store reads as empty, which is a wrong answer that
+    /// looks like a valid one.
+    ComputeCapabilitiesSchema = 239,
+
     /// kaspa-pq EVM Lane (§12 archive) — keyed by canonical `BlockHash`: the forward
     /// state DIFF ([`EvmStateDiffV2`]) of the block over its selected parent. The
     /// long-term retention form (the per-block full snapshot at prefix 206 is the

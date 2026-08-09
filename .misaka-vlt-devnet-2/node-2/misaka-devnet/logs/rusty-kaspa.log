@@ -2588,3 +2588,93 @@
 2026-08-09 21:50:40.150+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2640 bond=Active(active=true) active_set=[epoch=26 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
 2026-08-09 21:51:10.165+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2640 bond=Active(active=true) active_set=[epoch=26 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
 2026-08-09 21:51:40.188+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2640 bond=Active(active=true) active_set=[epoch=26 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:51:54.309+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:17111
+2026-08-09 21:51:54.312+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:60356
+2026-08-09 21:51:54.316+09:00 [INFO ] WRPC Server stopped on: 127.0.0.1:17132
+2026-08-09 21:51:54.316+09:00 [INFO ] GRPC Server stopped on: 127.0.0.1:17130
+2026-08-09 21:51:54.317+09:00 [INFO ] P2P Server stopped: 127.0.0.1:17131
+2026-08-09 21:51:54.827+09:00 [INFO ] Kaspad has stopped...
+2026-08-09 21:52:00.294+09:00 [INFO ] kaspad v1.1.0-dd210ce
+2026-08-09 21:52:00.294+09:00 [INFO ] Application directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2
+2026-08-09 21:52:00.294+09:00 [INFO ] Data directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/misaka-devnet/datadir
+2026-08-09 21:52:00.294+09:00 [INFO ] Logs directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/misaka-devnet/logs
+2026-08-09 21:52:00.294+09:00 [INFO ] Utxoindex Data directory /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/misaka-devnet/datadir/utxoindex
+2026-08-09 21:52:00.388+09:00 [INFO ] P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager
+2026-08-09 21:52:00.392+09:00 [INFO ] [vlt-credit] accumulator rows were derived under rules v2 and this build derives v3; discarding them so they are recomputed from the chain (no blocks or overlay transactions are affected)
+2026-08-09 21:52:00.399+09:00 [INFO ] [UPnP] Attempting to register upnp... (to disable run the node with --disable-upnp)
+2026-08-09 21:52:10.400+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 21:52:10.401+09:00 [INFO ] [validator-service] loaded validator signing key from /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/validator.key (validator_id=03e1f2a12936d5f299fe9c78258c3f2a0c31dba5c6522b7415b251ce8da4b4d731df7a2788ee0db5307dd2d39e5697456500cc2d7cbfeb9b239091c6a0bdc1f1)
+2026-08-09 21:52:10.401+09:00 [INFO ] [validator-service] funding address: misakadev:qg8cn2yh25n20utc8h83asjfnq44wrasplzh28t5necn4m5ymdezh205gqxspw5yqmdw3esfjvhwy00nyxygsvw2jluty227ry7a5ysscn5kntes — send UTXOs here to fund attestation-shard submission
+2026-08-09 21:52:10.401+09:00 [INFO ] [validator-service] equivocation-safety log /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/misaka-devnet/validator-state.json (13 prior epoch(s))
+2026-08-09 21:52:10.402+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 21:52:10.402+09:00 [INFO ] [validator-compute] executor job input: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-devnet-2/node-2/compute-prompt.txt (41 bytes)
+2026-08-09 21:52:10.402+09:00 [INFO ] [validator-compute] devnet fixture: max_tokens pinned to the fixed job shape (15 = 10 prefill + 5 decode, 50 VLT/job); --compute-max-tokens=512 ignored
+2026-08-09 21:52:10.402+09:00 [INFO ] [validator-compute] enabled: runtime=7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d class=8d416f720772b533f43006c4cbdc1effa7fc5d1e3fb7974dfecaa9589f1e2865a6144ef5d8d996e456d64429d6d42d9b32cc2fe98a97c5f08704d43c420c89ed max_tokens=15 auto_challenge=false
+2026-08-09 21:52:10.402+09:00 [INFO ] [validator-compute] fixture quota: 1/1 job(s) certified, 1 slot(s) claimed (plan 7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d:1:15:41)
+2026-08-09 21:52:10.402+09:00 [INFO ] MISAKA node endpoints (network devnet):
+2026-08-09 21:52:10.402+09:00 [INFO ]   P2P:             127.0.0.1:17131   node-to-node only (not RPC)
+2026-08-09 21:52:10.402+09:00 [INFO ]   node-grpc:       127.0.0.1:17130   miner / low-level node RPC
+2026-08-09 21:52:10.402+09:00 [INFO ]   node-wrpc-borsh: 127.0.0.1:17132   validator / wallet / operator
+2026-08-09 21:52:10.402+09:00 [INFO ]   node-wrpc-json:  disabled   explorer / browser
+2026-08-09 21:52:10.402+09:00 [INFO ]   evm-rpc-http:    disabled   Ethereum JSON-RPC (EVM lane)
+2026-08-09 21:52:10.403+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-08-09 21:52:10.403+09:00 [INFO ] GRPC Server starting on: 127.0.0.1:17130
+2026-08-09 21:52:10.403+09:00 [INFO ] P2P Server starting on: 127.0.0.1:17131
+2026-08-09 21:52:10.403+09:00 [INFO ] WRPC Server starting on: 127.0.0.1:17132
+2026-08-09 21:52:10.403+09:00 [INFO ] [validator-service] starting (mode=active, validator_id=03e1f2a12936d5f299fe9c78258c3f2a0c31dba5c6522b7415b251ce8da4b4d731df7a2788ee0db5307dd2d39e5697456500cc2d7cbfeb9b239091c6a0bdc1f1, stake-bond=1c0f07f258b086518467c1ee8e6702625af4cd94599b108557468cc6bff4be080bdeb0b0a8acbef76edc4cc716568d63f021b58e167bf6058708490511676d36:0)
+2026-08-09 21:52:10.405+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:61145 for protocol version 102
+2026-08-09 21:52:10.405+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17151 for protocol version 102
+2026-08-09 21:52:10.408+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:61145 (inbound: 1)
+2026-08-09 21:52:10.408+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:61147 for protocol version 102
+2026-08-09 21:52:10.408+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:61147 (inbound: 2)
+2026-08-09 21:52:10.408+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17151 (outbound: 1)
+2026-08-09 21:52:10.409+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:61155 for protocol version 102
+2026-08-09 21:52:10.409+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:61155 (inbound: 3)
+2026-08-09 21:52:10.409+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17121 for protocol version 102
+2026-08-09 21:52:10.409+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17121 (outbound: 2)
+2026-08-09 21:52:10.409+09:00 [WARN ] P2P, Hub event loop, removing peer with duplicate key: 610d24e0-c84b-40e9-8a26-c378451a6ccb+127.0.0.1
+2026-08-09 21:52:10.410+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:17121
+2026-08-09 21:52:10.411+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:61164 for protocol version 102
+2026-08-09 21:52:10.411+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:61164 (inbound: 3)
+2026-08-09 21:52:29.748+09:00 [INFO ] Accepted 3 blocks ...7f912fa5a6f31678224e76caf2440f453fb5069e440e182aae59dfe7f8d0cf649986ba270a1294ae2a7fd65edfdbf7d9ebdb0d99237e95ddd5cca453e8054539 via relay
+2026-08-09 21:52:30.344+09:00 [INFO ] Processed 4 blocks and 4 headers in the last 10.00s (4 transactions; 4 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 21:52:30.344+09:00 [INFO ] [ibd-perf] 4 hdrs avg: validate(A,parallelizable) 2293.7us | commit(serial) 389.7us [add_block 20.5 + db.write 59.1; held-lock 332.6] | f_serial=0.145 f_reach=0.008 | parallelize-ceiling 6.89x
+2026-08-09 21:52:31.075+09:00 [INFO ] Accepted 3 blocks ...5ee4f76ea7eb232298a78cc98d2452fdc6f74ad7f224869e1173dcacde5a6994015dc7440094a5c5355825d50a252648f7ad522ad4815a16b3dad1a66a59e87f via relay
+2026-08-09 21:52:32.283+09:00 [INFO ] Accepted 3 blocks ...24912e779a8b14441d4e946af68c88af2279cbe2cebd92046744f8932d21bc48be78a12f283ca56c8651c7b0eea0b15f1c9bc61d3d79862e9554a7f1be00b881 via relay
+2026-08-09 21:52:33.609+09:00 [INFO ] Accepted 2 blocks ...0918ef403d1e31ce033de094d7d58cdbbf830a585f29744e7714675fe402f89daa8659ed0e5b9ffc61f14a6492923c47575b01bfcb33586cc58dfdf5d0a77c9e via relay
+2026-08-09 21:52:35.166+09:00 [INFO ] Accepted 3 blocks ...9821cd86e6d7540a17c9e8cce1a6c107afbd9ce59b861bbf5b5e280429f315504d9c83291460cbabf16d2073a76cbdf7090d54e470348c2b885164e91ebee4d1 via relay
+2026-08-09 21:52:36.280+09:00 [INFO ] Accepted 5 blocks ...f6b104f6fce1306bddbc04783d307e64ac28a8ed53123a5e7f6c2d9b4c68542945deada8675763003721917cedc98f7a405e58bc949beafa199231e779946007 via relay
+2026-08-09 21:52:37.808+09:00 [INFO ] Accepted 4 blocks ...bdbc150f27172aa7ced3a2789999cdeac9e38c0c3375a60cb79d311c2bd3a3d5014630a46c9c8ac80cd1f15aae4a75c04392790c68be7bfbb3c2654171d46ae1 via relay
+2026-08-09 21:52:40.010+09:00 [INFO ] Accepted 3 blocks ...4f438d34538eb64281898f8dd99b98ae1b26a30f966a63c76d5943504aa6be559fbd256fea195a0071b2e6240cb7d52f63297013d81dd48131b940cc71d48c10 via relay
+2026-08-09 21:52:40.346+09:00 [INFO ] Processed 22 blocks and 22 headers in the last 10.00s (22 transactions; 22 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 21:52:40.346+09:00 [INFO ] [ibd-perf] 22 hdrs avg: validate(A,parallelizable) 107.7us | commit(serial) 227.1us [add_block 16.8 + db.write 43.3; held-lock 153.5] | f_serial=0.678 f_reach=0.050 | parallelize-ceiling 1.47x
+2026-08-09 21:52:40.351+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2666 bond=Active(active=true) active_set=[epoch=26 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:52:41.527+09:00 [INFO ] Accepted 4 blocks ...04a5267749eafc9397c8ad02d297333575018a2dac058cbe3b18d0adb3cde8f4629adf0f2bb4801bf381718531a13577860182d26226b6c4520aff44ffd4948d via relay
+2026-08-09 21:52:42.789+09:00 [INFO ] Accepted 3 blocks ...c564876a175664e0fbc991420f1d083cd31900399e060b7367d06178461af335cb10505276a39e8872d39819582e80b2de965eb3d8e7a9960b0a9e69c87bf8d7 via relay
+2026-08-09 21:52:43.849+09:00 [INFO ] Accepted 4 blocks ...45f50f8dde58c7f4a7102e52d6b565f9262cfa990f82cad5c920d195b43c180a83bd5e616978b2dfd9a707ebd477431e645a8efbf67bba9cf95383953ec6a0b4 via relay
+2026-08-09 21:52:45.305+09:00 [INFO ] Accepted 4 blocks ...411a31f004ba6e328f5bb21f7e149c5810e9adda400ecf5bb19b02e07878bf6ee4f61b4ce9463bf87de7000ba3e17c20ef39577c6889f12836b51042e712174c via relay
+2026-08-09 21:52:46.704+09:00 [INFO ] Accepted 4 blocks ...8ebe79c98eb89bb1922f2a25ced96d9b63df8260c10ef8b01f573ae7fe6807122689b9152d8a94825775a69e21e28481b9bfe891295dab612490b10c9180a37b via relay
+2026-08-09 21:52:48.243+09:00 [INFO ] Accepted block c68534589adf04a9a85e7d552407945a2a013fd8cef30ca7a1d19866bb759d949a14b2c51baffa246cf003df61fcf1c199ac3977833144d8217e5e4012a07113 via relay
+2026-08-09 21:52:49.643+09:00 [INFO ] Accepted 6 blocks ...aa9d6c46c5542466f3f9ca7af2ebb455bb38471d3b71da7fdd35082c088245e613efbf41a112c12b3c001049d7b7efa0a24bd5bea2e4faa5829eb14f0bb11feb via relay
+2026-08-09 21:52:50.346+09:00 [INFO ] Processed 28 blocks and 28 headers in the last 10.00s (28 transactions; 28 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 21:52:50.346+09:00 [INFO ] [ibd-perf] 28 hdrs avg: validate(A,parallelizable) 94.3us | commit(serial) 198.3us [add_block 14.8 + db.write 63.1; held-lock 145.9] | f_serial=0.678 f_reach=0.050 | parallelize-ceiling 1.48x
+2026-08-09 21:52:50.838+09:00 [INFO ] Accepted 5 blocks ...e1230a54a3752c8bcc5c5cf247971692ae4b6615528eb7eda26b546227748f6980cd95a8c1c8e0616979047fba0c490905e1e1d2dc3e6c84a139280437aeab22 via relay
+2026-08-09 21:52:51.209+09:00 [INFO ] [vlt-shadow] sink_daa=2699 0 validator(s) with credit; 0/13 epoch(s) would reach quorum; newest epoch Some(25): W(E)=0 signed=0 snapshot_root=5c26b6d70942f58c6301fa30ffefcc7b90dcba81bbfd6c1a6804b9648716bccb5e2620fce784de9237896aafe7662b660453d3c87c0c90bc7a551e46689ce43e — the weight fence is at 18446744073709551615
+2026-08-09 21:52:51.209+09:00 [WARN ] [vlt-state] none -> shadow at daa=2699
+2026-08-09 21:52:51.209+09:00 [INFO ] [stake-score] sink=fec5ef229d3809002c1f695c8a841dd80d5809641afb530ba0f8d3a2b5ca54d0eb0ce41ac16719cad8b0b1b08953785ba195b0dbbe142af42998f37b4abb8b01 sink_blue=2700 credited 60 attestation(s) over 13 ready epoch(s) → stake_depth=12000000000 (rollout=Active, health=Active)
+2026-08-09 21:52:52.128+09:00 [INFO ] Accepted 5 blocks ...b7a5c650695b6c3caf45a5f67d57b783133969350e02845407058d75ca9d28edb063719e84199e83c3e88b07b46258a13d113ebe86116056c5a9db78aa2c673d via relay
+2026-08-09 21:52:53.508+09:00 [INFO ] Accepted 2 blocks ...cc5ee73864b8a24ed3306c0307c0c99c98ff8aa7b61a24fa12e92e581e9ab26ecbc53efb21c8e2c28e65fe2c82ffcd3e00c00a0b0ff8a7b87d1c97c2f05b34c5 via relay
+2026-08-09 21:52:54.913+09:00 [INFO ] Accepted 3 blocks ...db78535d29a8b20ce5ff3107da9d5432566b60c02e81b2162a3c5a9953039083428d3d41b079a3369d157e666dcac579f628443c127941ac339059a0ceb48411 via relay
+2026-08-09 21:52:56.969+09:00 [INFO ] Accepted 5 blocks ...a66218ed38a6202fb9ffa976efd103b433ea43c6f64fa74ebdbec1a41883c717d5c4cea69d483e28f51b6c95fa59ed34f485fd392c73f5a088d5ff4ac310e6d1 via relay
+2026-08-09 21:52:58.038+09:00 [INFO ] Accepted 3 blocks ...90023f33211fe6df2dcb3920e33f559ad6283552570b2eeb9e302eec7fbd2233939f5ef3a8e7d294324ebb4cc198119333d18d892b6c5f7d1e2ceed220289b61 via relay
+2026-08-09 21:53:00.348+09:00 [INFO ] Processed 21 blocks and 21 headers in the last 10.00s (21 transactions; 21 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 21:53:00.348+09:00 [INFO ] [ibd-perf] 21 hdrs avg: validate(A,parallelizable) 90.4us | commit(serial) 190.2us [add_block 14.5 + db.write 60.0; held-lock 136.1] | f_serial=0.678 f_reach=0.052 | parallelize-ceiling 1.48x
+2026-08-09 21:53:10.365+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:53:40.379+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:54:10.394+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:54:40.427+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:55:10.454+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:55:40.471+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:56:10.486+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:56:40.542+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)
+2026-08-09 21:57:10.620+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=2715 bond=Active(active=true) active_set=[epoch=27 is_active_validator=true (active_validators=5)] dns_overlay=configured (stage=Active, dns_confirmed=true)

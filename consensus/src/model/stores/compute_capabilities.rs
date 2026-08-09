@@ -39,11 +39,28 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem, Direc
 use kaspa_database::registry::DatabaseStorePrefixes;
 use rocksdb::WriteBatch;
 
+/// The record layout AND the derivation rules these rows were written under.
+///
+/// A row is borsh-encoded, so changing the record's fields makes every existing row undecodable —
+/// and `CachedDbAccess`'s iterator drops a row it cannot decode without a word, so the store reads
+/// as *empty* rather than as broken. An empty capability store is indistinguishable from "nobody
+/// declared": the committee is drawn from nothing, every honest verdict belongs to no committee,
+/// and the certificate reads as unverified. That is the same failure this store was introduced to
+/// fix, re-entered through the back door of a schema change.
+///
+/// * 1 — initial.
+/// * 2 — added `declaration_block`, so the candidate pool can be bound to the beacon's own chain
+///   history rather than argued from DAA.
+pub const CAPABILITY_SCHEMA_VERSION: u32 = 2;
+
 /// Accepted capability declarations, keyed by declaring transaction.
 #[derive(Clone)]
 pub struct DbComputeCapabilityStore {
     db: Arc<DB>,
     access: CachedDbAccess<TransactionId, Arc<ComputeCapabilityRecord>>,
+    /// The layout/rules marker. Also gates the sweep: a version change must re-sweep, because the
+    /// rows it would have relied on are gone.
+    schema: CachedDbItem<u32>,
     /// Set once the store has been filled from history. Its absence on a database that already has
     /// a chain means the rows for blocks accepted before this store existed were never written —
     /// and an empty pool is indistinguishable from "nobody declared", which is exactly the failure
@@ -56,6 +73,7 @@ impl DbComputeCapabilityStore {
         Self {
             db: Arc::clone(&db),
             access: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::ComputeCapabilities.into()),
+            schema: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::ComputeCapabilitiesSchema.into()),
             backfilled: CachedDbItem::new(db, DatabaseStorePrefixes::ComputeCapabilitiesBackfilled.into()),
         }
     }
@@ -81,6 +99,32 @@ impl DbComputeCapabilityStore {
 
     pub fn delete_batch(&mut self, batch: &mut WriteBatch, tx_id: TransactionId) -> StoreResult<()> {
         self.access.delete(BatchDbWriter::new(batch), tx_id)
+    }
+
+    /// Drop rows written under a superseded layout, and force the sweep to run again.
+    ///
+    /// Called before any read. Undecodable rows would otherwise be dropped silently by the
+    /// iterator and read as an empty store, which is a live-looking answer that is simply wrong.
+    pub fn reindex_if_stale(&mut self) -> Result<(), StoreError> {
+        let stored = match self.schema.read() {
+            Ok(v) => Some(v),
+            Err(StoreError::KeyNotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if stored == Some(CAPABILITY_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        if self.access.iterator().next().is_some() {
+            kaspa_core::info!(
+                "[capability-store] rows were written under layout v{} and this build reads v{CAPABILITY_SCHEMA_VERSION}; \
+                 discarding them and re-sweeping history",
+                stored.unwrap_or(1)
+            );
+            self.access.delete_all(DirectDbWriter::new(&self.db))?;
+        }
+        // The sweep must run again: whatever it wrote is what was just discarded.
+        self.backfilled.write(DirectDbWriter::new(&self.db), &0u32)?;
+        self.schema.write(DirectDbWriter::new(&self.db), &CAPABILITY_SCHEMA_VERSION)
     }
 
     /// Whether history has already been swept into this store.

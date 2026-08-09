@@ -295,8 +295,16 @@ impl ConsensusStorage {
         // MISAKA VLT: capability declarations. Bounded by the validator count rather than by chain
         // length — `capability_candidate_pool` keeps one entry per validator — so it is sized like
         // the bond set beside it.
-        let compute_capability_store =
-            Arc::new(RwLock::new(DbComputeCapabilityStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
+        let compute_capability_store = {
+            let mut store = DbComputeCapabilityStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
+            // Before any read. A row written under a superseded layout cannot be decoded, and the
+            // iterator drops what it cannot decode without a word — so the store would read as
+            // empty, and an empty capability store is indistinguishable from "nobody declared".
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!("[capability-store] could not check the record layout version: {err}; leaving existing rows");
+            }
+            Arc::new(RwLock::new(store))
+        };
         // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
         // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
         // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
