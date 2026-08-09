@@ -173,6 +173,12 @@ impl IbdFlow {
             //
             // So the same evidence is looked at again once the latch is free.
             let relay_header = tokio::select! {
+                // Why the tick is a sufficient driver for the checks below, when it was NOT for
+                // serving a proof request: those two act only when no IBD is running, and if no IBD
+                // is running then no flow is inside `ibd()` — so every flow is here, ticking.
+                // Serving a proof request is gated on the PEER rather than on global state, and the
+                // one peer that owes a proof is reliably the one whose flow is busy. That is why it
+                // also runs at the top of the loop, where the flow is briefly free.
                 _ = tokio::time::sleep(VALIDATED_CANDIDATE_RECHECK) => {
                     self.serve_pending_nomination().await;
                     self.reconsider_validated_candidates().await;
