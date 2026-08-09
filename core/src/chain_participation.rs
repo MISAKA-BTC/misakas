@@ -101,6 +101,9 @@ pub struct ChainParticipationGate {
     ever_ready: AtomicBool,
     adoption_generation: AtomicU64,
     switches: AtomicU32,
+    /// What to return to when an IBD changes nothing. Written on entry, read on a no-op failure.
+    /// Only one IBD runs at a time — the latch guarantees it — so a single slot is enough.
+    pre_ibd_state: AtomicU8,
     /// Whether the gate constrains anything on this network. Peerless devnet/simnet nodes have no
     /// competing branch to overlook and no peers to wait for, so holding them back only stalls
     /// tests; this mirrors the carve-out `has_sufficient_peer_connectivity` already makes.
@@ -129,6 +132,7 @@ impl ChainParticipationGate {
             decision_pending: AtomicBool::new(false),
             adoption_generation: AtomicU64::new(0),
             switches: AtomicU32::new(0),
+            pre_ibd_state: AtomicU8::new(READY),
             enabled,
             persistence: None,
         }
@@ -241,8 +245,14 @@ impl ChainParticipationGate {
         if !self.enabled {
             return;
         }
-        let _ = self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst);
-        let _ = self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst);
+        // Remember what to go back to. An IBD that changes nothing must leave the node exactly
+        // where it found it — see `release_after_noop_ibd`, which used to end every failed attempt
+        // at Ready regardless of where it started.
+        if self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.pre_ibd_state.store(READY, Ordering::SeqCst);
+        } else if self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.pre_ibd_state.store(CANDIDATE_REVIEW, Ordering::SeqCst);
+        }
         self.persist();
     }
 
@@ -281,12 +291,26 @@ impl ChainParticipationGate {
         self.persist();
     }
 
-    /// The IBD ended without having replaced anything, so there is nothing to review.
+    /// The IBD ended without having replaced anything, so there is nothing NEW to review — and
+    /// nothing has been resolved either. The node goes back to whatever it was doing before.
+    ///
+    /// This used to move unconditionally to `Ready`, which is only correct for a node that was
+    /// already Ready. For a node in `CandidateReview` it was a promotion earned by a stranger's
+    /// failure: a second peer offering a chain this node could not sync would end the review of the
+    /// FIRST peer's chain — the review that existed precisely because nothing had compared it. The
+    /// node resumed mining and attesting on an unreviewed chain, `ever_ready` latched, and the
+    /// one-way door shut permanently.
+    ///
+    /// Measured: a failed IBD from the peer holding the heavier branch is what promoted the node
+    /// out of review and onto the lighter one, intermittently, in about a third of rounds. Once
+    /// Ready, every recovery driver returns early by design, so nothing looked at the heavier chain
+    /// again.
     pub fn release_after_noop_ibd(&self) {
         if !self.enabled {
             return;
         }
-        let _ = self.state.compare_exchange(IBD_RUNNING, READY, Ordering::SeqCst, Ordering::SeqCst);
+        let restore_to = self.pre_ibd_state.load(Ordering::SeqCst);
+        let _ = self.state.compare_exchange(IBD_RUNNING, restore_to, Ordering::SeqCst, Ordering::SeqCst);
         self.persist();
     }
 
@@ -381,6 +405,53 @@ mod tests {
             gate.begin_decision();
         }
         gate
+    }
+
+    #[test]
+    fn a_second_peers_failed_ibd_does_not_end_the_first_peers_review() {
+        // The defect that cost roughly a third of all soak rounds, and the reason it looked
+        // intermittent: it needed a second peer to attempt an IBD *during* the review.
+        //
+        // The node adopts peer A's chain and enters CandidateReview — precisely because nothing has
+        // compared that chain. Peer B, holding the heavier branch, relays; its IBD is refused at the
+        // pruning-proof comparison and changes nothing. `release_after_noop_ibd` then moved the gate
+        // to Ready.
+        //
+        // So B's failure ended the review of A's chain. The node resumed mining and attesting on an
+        // unreviewed branch, `ever_ready` latched, and every recovery driver — summary polling,
+        // nomination, the post-IBD switch — returns early once participation is allowed. Nothing
+        // ever looked at B's heavier chain again. A promotion earned by a stranger's failure.
+        let gate = ChainParticipationGate::new(true);
+
+        // Peer A's IBD succeeds and the node enters review.
+        gate.enter_ibd();
+        gate.enter_candidate_review(60_000);
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
+
+        // Peer B tries and fails, replacing nothing.
+        gate.enter_ibd();
+        assert_eq!(gate.state(), ChainParticipation::IbdRunning);
+        gate.release_after_noop_ibd();
+
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview, "a failed IBD must leave the node where it found it");
+        assert!(!gate.allows_participation(), "and it must not be mining or attesting on the unreviewed chain");
+        assert!(!gate.ever_ready(), "the one-way door must not have been opened by someone else's failure");
+    }
+
+    #[test]
+    fn a_failed_ibd_on_a_settled_node_still_returns_it_to_ready() {
+        // The case `release_after_noop_ibd` was written for, which must keep working: a node that
+        // was already participating tries to sync from someone, fails, and goes back to
+        // participating. Restoring "wherever it was" has to mean Ready here, or an ordinary failed
+        // sync would take a healthy node off the network.
+        let gate = ChainParticipationGate::new(true);
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+
+        gate.enter_ibd();
+        gate.release_after_noop_ibd();
+
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+        assert!(gate.allows_participation());
     }
 
     #[test]
