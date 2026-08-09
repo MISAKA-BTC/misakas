@@ -370,12 +370,22 @@ impl PruningProofManager {
         defender_relay_blue_work: BlueWorkType,
         challenger_relay_blue_work: BlueWorkType,
     ) -> Result<(), ProofWeakness> {
-        // The accumulated blue work of the defender's proof from the pruning point onward
-        let defender_pruning_period_work = defender_relay_blue_work.saturating_sub(defender.pp_header.blue_work);
-
-        // The claimed blue work of the challenger's proof from their pruning point and up to the triggering relay block. This work
-        // will eventually be verified if the proof is accepted so we can treat it as trusted
-        let challenger_claimed_pruning_period_work = challenger_relay_blue_work.saturating_sub(challenger.pp_header.blue_work);
+        // Both pruning-period terms are measured over the SAME span of history —
+        // from one common cut (the lower of the two pruning points' cumulative blue
+        // work) up to each side's tip claim. Subtracting each side's OWN pruning
+        // point (the previous behavior) compared different windows: a defender with
+        // a stale pruning point kept the shared heavy history inside its window
+        // while the challenger's window had advanced past it, so the shared work
+        // counted for the defender in full and for the challenger only via the
+        // sampled level chains. On testnet-10 (defender offline 9 days across a
+        // ~75000x difficulty cliff) that credited the defender ~10^5x extra shared
+        // work and rejected the strictly heavier majority chain forever ("weaker
+        // than local"). The challenger's span beyond its proven pruning point stays
+        // a CLAIM — verified after acceptance, exactly as before — and ties still
+        // favor the defender below, so the conservative bias direction is intact.
+        let period_cut = defender.pp_header.blue_work.min(challenger.pp_header.blue_work);
+        let (defender_pruning_period_work, challenger_claimed_pruning_period_work) =
+            same_span_pruning_period_works(period_cut, defender_relay_blue_work, challenger_relay_blue_work);
 
         for level in 0..=self.max_block_level {
             // Init level ctxs
@@ -447,5 +457,79 @@ impl PruningProofManager {
             defender_relay_blue_work,
             challenger_relay_blue_work,
         ))
+    }
+}
+
+/// The two L0 "pruning period" terms of the proof comparison, measured over the
+/// SAME span of history: from `period_cut` (the lower of the two proofs' pruning
+/// point cumulative blue works) up to each side's tip claim. See the call site in
+/// [`PruningProofManager::compare_proofs_inner`] for why one common cut is load-
+/// bearing: per-side cuts credit a stale defender with shared history the
+/// challenger's window has already advanced past (the testnet-10 permanent
+/// "weaker than local" rejection of the strictly heavier majority chain).
+fn same_span_pruning_period_works(
+    period_cut: BlueWorkType,
+    defender_relay_blue_work: BlueWorkType,
+    challenger_relay_blue_work: BlueWorkType,
+) -> (BlueWorkType, BlueWorkType) {
+    (defender_relay_blue_work.saturating_sub(period_cut), challenger_relay_blue_work.saturating_sub(period_cut))
+}
+
+#[cfg(test)]
+mod period_window_tests {
+    use super::*;
+
+    fn bw(v: u64) -> BlueWorkType {
+        BlueWorkType::from_u64(v)
+    }
+
+    /// Contemporaneous pruning points (the healthy regime): one common cut equals
+    /// the previous per-side subtraction, so the comparison is unchanged.
+    #[test]
+    fn contemporaneous_pps_match_previous_semantics() {
+        let (def_pp, chal_pp) = (bw(1_000), bw(1_000));
+        let cut = def_pp.min(chal_pp);
+        let (d, c) = same_span_pruning_period_works(cut, bw(1_500), bw(1_400));
+        assert_eq!(d, bw(500));
+        assert_eq!(c, bw(400));
+    }
+
+    /// The testnet-10 shape: the defender's pruning point is stale (predates a
+    /// shared heavy segment S), the challenger's has advanced past S. Per-side cuts
+    /// gave defender S+its own post-fork work vs challenger's post-fork work alone
+    /// (S counted once, for the defender) — the stale side won on shared history.
+    /// One common cut counts S for BOTH, so the decision falls to the real
+    /// post-cut difference and the heavier challenger wins.
+    #[test]
+    fn stale_defender_pp_no_longer_keeps_shared_history_to_itself() {
+        // Shared history: cumulative work 1_000 at the stale defender pp, then a
+        // heavy shared segment S = 1_000_000 up to the fork. Defender adds 300
+        // after the fork; challenger adds 3_000 and its pp advanced past S.
+        let def_pp = bw(1_000);
+        let chal_pp = bw(1_000_000); // within/past the shared heavy segment
+        let def_tip = bw(1_000 + 1_000_000 + 300);
+        let chal_tip = bw(1_000 + 1_000_000 + 3_000);
+
+        // Previous per-side semantics: defender period dwarfs the challenger's.
+        let old_def = def_tip.saturating_sub(def_pp); // S + 300
+        let old_chal = chal_tip.saturating_sub(chal_pp); // ~4_000
+        assert!(old_def > old_chal, "the old windows made the stale defender look heavier");
+
+        // Same-span semantics: both periods include S; the heavier tip wins.
+        let cut = def_pp.min(chal_pp);
+        let (d, c) = same_span_pruning_period_works(cut, def_tip, chal_tip);
+        assert!(c > d, "same-span windows let the strictly heavier challenger win");
+        assert_eq!(c.saturating_sub(d), bw(2_700), "decided by the true post-fork difference");
+    }
+
+    /// Symmetry: a stale CHALLENGER pruning point gets the same treatment (the cut
+    /// is the lower of the two), so the fix is not a challenger-favoring bias.
+    #[test]
+    fn stale_challenger_pp_is_symmetric() {
+        let def_pp = bw(1_000_000);
+        let chal_pp = bw(1_000);
+        let cut = def_pp.min(chal_pp);
+        let (d, c) = same_span_pruning_period_works(cut, bw(1_003_000), bw(1_001_300));
+        assert!(d > c, "the heavier defender still wins under the common cut");
     }
 }
