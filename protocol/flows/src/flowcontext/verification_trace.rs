@@ -50,10 +50,15 @@ pub enum SkipReason {
     ParticipationBecameReady,
     /// The proof request could not be sent — the peer's route is gone.
     RequestChannelUnavailable,
+    /// The lease had too little left to be worth starting a request inside.
+    LeaseTooShortToStart,
+    /// A proof arrived, but for an attempt this node had already written off. Applying it would
+    /// credit the current attempt with an answer from the peer that was judged too slow.
+    StaleProofResponse,
 }
 
 impl SkipReason {
-    pub const ALL: [SkipReason; 7] = [
+    pub const ALL: [SkipReason; 9] = [
         SkipReason::NotDesignatedProver,
         SkipReason::NoEligibleProver,
         SkipReason::CandidateNotFound,
@@ -61,6 +66,8 @@ impl SkipReason {
         SkipReason::PeerNoLongerSource,
         SkipReason::ParticipationBecameReady,
         SkipReason::RequestChannelUnavailable,
+        SkipReason::LeaseTooShortToStart,
+        SkipReason::StaleProofResponse,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -72,6 +79,8 @@ impl SkipReason {
             SkipReason::PeerNoLongerSource => "PeerNoLongerSource",
             SkipReason::ParticipationBecameReady => "ParticipationBecameReady",
             SkipReason::RequestChannelUnavailable => "RequestChannelUnavailable",
+            SkipReason::LeaseTooShortToStart => "LeaseTooShortToStart",
+            SkipReason::StaleProofResponse => "StaleProofResponse",
         }
     }
 

@@ -604,6 +604,30 @@ impl IbdCandidateRegistry {
             .collect()
     }
 
+    /// When this candidate's proof request must have finished, one way or another.
+    ///
+    /// The lease deadline, not a duration from now. A request that starts late in the lease gets
+    /// what is left of it and no more — a fixed timeout would let the request outlive the lease
+    /// again, which is the whole defect, only later and less often.
+    pub fn proof_request_deadline(&self, id: &CandidateId) -> Option<Instant> {
+        match self.candidates.get(id)?.validation {
+            CandidateValidation::ProofRequested { since, .. } => Some(since + CHALLENGER_VERIFICATION_LEASE),
+            _ => None,
+        }
+    }
+
+    /// The stamp identifying the current proof attempt for this candidate.
+    ///
+    /// Attempts are told apart by when they started. A reply that arrives after its attempt has
+    /// been written off must not be applied to the attempt that replaced it: the peer that answers
+    /// late is, by construction, the one whose answer was already judged too slow to trust.
+    pub fn proof_attempt_stamp(&self, id: &CandidateId) -> Option<Instant> {
+        match self.candidates.get(id)?.validation {
+            CandidateValidation::ProofRequested { since, .. } => Some(since),
+            _ => None,
+        }
+    }
+
     /// Which single source should fetch this candidate's proof right now.
     ///
     /// A nomination is broadcast to every flow, and the idle tick reads the registry from every
@@ -1020,6 +1044,70 @@ mod tests {
         matches!(r.get(id).map(|c| c.validation), Some(CandidateValidation::ProofRequested { .. }))
             && !r.sources_of(id).is_empty()
             && r.designated_prover(id).is_none()
+    }
+
+    #[test]
+    fn a_proof_request_can_never_outlive_the_lease_that_owns_its_slot() {
+        // The RC3 defect, as an invariant rather than a pair of constants. The old fix — a fixed
+        // timeout shorter than the lease — still lets a request started late run past the end of
+        // one: 90s of budget with 20s of lease left is 70s of a slot the registry has already
+        // handed to someone else. The budget has to be what remains of THIS lease.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+
+        let deadline = r.proof_request_deadline(&id).expect("a nominated candidate has a deadline");
+        assert_eq!(deadline, now + CHALLENGER_VERIFICATION_LEASE);
+
+        // Whenever the request starts, what remains of the lease is all it gets — and that is never
+        // more than the lease itself.
+        for elapsed in [Duration::ZERO, Duration::from_secs(30), CHALLENGER_VERIFICATION_LEASE - Duration::from_secs(1)] {
+            let remaining = deadline.saturating_duration_since(now + elapsed);
+            assert!(remaining <= CHALLENGER_VERIFICATION_LEASE - elapsed);
+            assert!(now + elapsed + remaining <= deadline, "a request starting at +{elapsed:?} must not run past the lease");
+        }
+
+        // Past the deadline there is nothing left to spend, so nothing should be started.
+        assert_eq!(deadline.saturating_duration_since(now + CHALLENGER_VERIFICATION_LEASE), Duration::ZERO);
+
+        // And a candidate not under request has no deadline to hand out at all.
+        r.set_validation(
+            id,
+            CandidateValidation::SummaryReceived { claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        assert_eq!(r.proof_request_deadline(&id), None);
+    }
+
+    #[test]
+    fn a_reply_from_a_written_off_attempt_is_not_credited_to_the_one_that_replaced_it() {
+        // A peer that answers after its lease expired is, by construction, the peer whose answer
+        // was already judged too slow to wait for. By then the candidate has usually been
+        // re-nominated to a different source. Applying the late reply would undo that judgement and
+        // credit the current attempt with evidence from the one it replaced.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        let first = r.proof_attempt_stamp(&id).unwrap();
+
+        // The lease runs out and the candidate is nominated again.
+        let later = now + CHALLENGER_VERIFICATION_LEASE;
+        r.expire_proof_requests(later, CHALLENGER_VERIFICATION_LEASE);
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: later, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        let second = r.proof_attempt_stamp(&id).unwrap();
+
+        assert_ne!(first, second, "attempts must be distinguishable, or a late reply cannot be refused");
     }
 
     #[test]

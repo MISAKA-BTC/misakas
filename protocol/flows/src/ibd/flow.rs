@@ -65,6 +65,20 @@ type BlockBody = Vec<Transaction>;
 /// orphan, and orphan resolution starts a fresh IBD.
 const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
 
+/// Time reserved, inside the lease, for validating a proof after it arrives.
+///
+/// Validation runs in this same flow and inside this same lease, so a request allowed to consume
+/// the whole lease would leave nothing to check the answer with — and the check is the point.
+const PROOF_VALIDATION_MARGIN: Duration = Duration::from_secs(20);
+
+/// Below this, starting a request is not worth the slot it would hold.
+///
+/// A request that cannot plausibly finish inside what remains of the lease will be abandoned
+/// half-way, having spent the one verification slot for nothing. Better to leave the slot free for
+/// the next lease, which starts with a full budget. Real-WAN fetch and validation measured
+/// 0.2-1.5s, so this is generous by more than an order of magnitude.
+const MIN_USEFUL_PROOF_BUDGET: Duration = Duration::from_secs(10);
+
 /// How many times this node may abandon a sync for a verified-better candidate before giving up.
 ///
 /// Switching on evidence is the recovery path and should not be rationed lightly — but two branches
@@ -424,27 +438,35 @@ impl IbdFlow {
             let registry = self.ctx.ibd_candidates().read();
             (registry.designated_prover(&id), registry.sources_of(&id), registry.get(&id).map(|c| c.validation.name()))
         };
-        let skip = |reason| {
+        // Captures only copies, so it stays usable alongside the `&mut self` fetch below.
+        let (me, conn, state_name_or, source_count, participation) = (
+            self.router.key(),
+            self.connection_generation,
+            state_name.unwrap_or("<gone>"),
+            sources.len(),
+            self.ctx.chain_participation().state().as_str(),
+        );
+        let skip = move |reason| {
             verification_trace::record_skip(VerificationSkip {
                 reason,
                 candidate_id: id,
-                connection_generation: self.connection_generation,
-                executing_peer: self.router.key(),
+                connection_generation: conn,
+                executing_peer: me,
                 designated_peer: designated,
-                candidate_state: state_name.unwrap_or("<gone>"),
-                live_sources: sources.len(),
-                participation_state: self.ctx.chain_participation().state().as_str(),
+                candidate_state: state_name_or,
+                live_sources: source_count,
+                participation_state: participation,
             })
         };
         if state_name.is_none() {
             skip(SkipReason::CandidateNotFound);
             return;
         }
-        if !sources.contains(&self.router.key()) {
+        if !sources.contains(&me) {
             skip(SkipReason::PeerNoLongerSource);
             return;
         }
-        if designated != Some(self.router.key()) {
+        if designated != Some(me) {
             skip(if designated.is_none() { SkipReason::NoEligibleProver } else { SkipReason::NotDesignatedProver });
             return;
         }
@@ -460,10 +482,38 @@ impl IbdFlow {
             }
         };
 
+        // The request may not outlive the lease that owns its slot. Not "a timeout shorter than the
+        // lease" — that still lets a request started late run past the end of one. What is left of
+        // THIS lease is the budget, and if too little is left the request is not started at all.
+        //
+        // The margin covers validating the proof after it arrives, which happens inside this same
+        // flow and inside the same lease.
+        let (attempt_stamp, budget) = {
+            let registry = self.ctx.ibd_candidates().read();
+            let stamp = registry.proof_attempt_stamp(&id);
+            let budget = registry
+                .proof_request_deadline(&id)
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()).saturating_sub(PROOF_VALIDATION_MARGIN));
+            (stamp, budget)
+        };
+        let budget = budget.unwrap_or(CHALLENGER_PROOF_TIMEOUT).min(CHALLENGER_PROOF_TIMEOUT);
+        if budget < MIN_USEFUL_PROOF_BUDGET {
+            skip(SkipReason::LeaseTooShortToStart);
+            return;
+        }
+
         let attempt = RecoveryAttemptId::next();
         info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
-        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work).await {
+        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work, budget).await {
             Ok((verified_blue_work, proof_hash)) => {
+                // The answer belongs to the attempt that asked for it. If this candidate has been
+                // re-nominated since — a new lease, most likely to a different source — then the
+                // peer whose reply this is was already judged too slow, and crediting the current
+                // attempt with it would undo that judgement.
+                if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
+                    skip(SkipReason::StaleProofResponse);
+                    return;
+                }
                 record_stage(
                     RecoveryStage::ProofValidated,
                     Some(attempt),
@@ -782,6 +832,7 @@ impl IbdFlow {
         attempt: RecoveryAttemptId,
         id: CandidateId,
         claimed_blue_work: ClaimedBlueWork,
+        budget: Duration,
     ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
         record_stage(
             RecoveryStage::ProofRequestSent,
@@ -792,7 +843,7 @@ impl IbdFlow {
             "",
         );
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
-        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, CHALLENGER_PROOF_TIMEOUT)?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, budget)?;
         record_stage(
             RecoveryStage::ProofReceived,
             Some(attempt),
