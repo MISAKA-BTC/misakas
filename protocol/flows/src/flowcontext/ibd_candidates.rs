@@ -50,7 +50,7 @@ pub const MAX_CANDIDATES: usize = 16;
 ///
 /// Long enough for a real proof to arrive over a slow link, short enough that a dead request does
 /// not cost a node its convergence.
-pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(120);
+pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(60);
 
 /// How long to wait for a nominated peer to actually send its pruning proof.
 ///
@@ -66,7 +66,7 @@ pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(120);
 ///
 /// A transfer deadline must be shorter than the lock deadline it lives inside, or the lock is a
 /// fiction. The assertion below is the only thing that keeps them in that order.
-pub const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(90);
+pub const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(40);
 
 const _: () = assert!(
     CHALLENGER_PROOF_TIMEOUT.as_secs() < CHALLENGER_VERIFICATION_LEASE.as_secs(),
@@ -115,6 +115,41 @@ pub const PEER_SUMMARY_COOLDOWN: Duration = Duration::from_secs(10);
 /// and, usually, three different connections — is enough to distinguish a peer that keeps getting
 /// cut off from one that is stalling on purpose.
 pub const MAX_PROOF_ATTEMPTS: u32 = 3;
+
+/// How long participation stays withheld after an IBD, at minimum.
+///
+/// Lives here, beside the deadlines it has to contain, rather than next to the flow that applies
+/// it. The three constants form one time budget and were previously spread across two files with
+/// nothing relating them — which is how the proof fetch came to be allowed five times the lease
+/// that frees its slot.
+pub const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
+
+/// **The budget must close.** Every attempt this node is willing to make at verifying a challenger
+/// has to fit inside the review those attempts exist to inform.
+///
+/// If it does not, the review floor expires part-way through verification and the node goes Ready —
+/// and once Ready, every recovery driver returns early by design, so the remaining attempts never
+/// happen. The chain being checked is abandoned mid-check, silently, and the node acts on the one
+/// it had not finished doubting. That is the RC1 defect arriving by a different road.
+///
+/// Nothing holds the review open during these attempts, deliberately: only a candidate that has
+/// produced a VALID proof may extend it. Letting an unanswered request extend the review would make
+/// "advertise a chain and go quiet" a way to keep a validator from ever signing. So the attempts
+/// must fit, rather than the review stretch to accommodate them.
+///
+/// For scale: fetching and validating a real pruning proof across a 267 ms intercontinental link
+/// measured 0.2-1.5s. A 60s lease is more than an order of magnitude of headroom, three times over.
+const _: () = assert!(
+    (MAX_PROOF_ATTEMPTS as u64) * CHALLENGER_VERIFICATION_LEASE.as_secs() <= POST_IBD_CANDIDATE_REVIEW.as_secs(),
+    "verification must finish inside the review it informs, or the node goes Ready mid-check"
+);
+
+/// A candidate must outlive every attempt made on it, or the evidence is discarded before the last
+/// attempt can use it.
+const _: () = assert!(
+    (MAX_PROOF_ATTEMPTS as u64) * CHALLENGER_VERIFICATION_LEASE.as_secs() < CANDIDATE_TTL.as_secs(),
+    "a candidate must not expire while it is still being verified"
+);
 
 /// How many proof requests a PEER may leave unanswered before it stops being asked.
 ///

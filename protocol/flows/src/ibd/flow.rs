@@ -7,7 +7,7 @@ use crate::{
     },
     flowcontext::ibd_candidates::{
         CHALLENGER_PROOF_TIMEOUT, CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs,
-        CommitVerdict, decide_commit,
+        CommitVerdict, POST_IBD_CANDIDATE_REVIEW, decide_commit,
     },
     flowcontext::recovery_trace::{RecoveryAttemptId, RecoveryStage, describe_comparison, record_stage},
     flowcontext::verification_trace::{self, SkipReason, VerificationSkip},
@@ -28,6 +28,7 @@ use kaspa_consensus_core::{
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
 use kaspa_core::{debug, info, time::unix_now, warn};
 use kaspa_muhash::MuHash;
+use kaspa_p2p_lib::unwrap_message;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
@@ -53,17 +54,12 @@ use tokio::{sync::broadcast, time::sleep};
 use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
 
-/// Minimum time a node holds back after an IBD before it will mine, attest, or call itself synced.
+/// How often a waiting proof fetch re-checks that its lease is still its own.
 ///
-/// A **floor**, not a verdict. When it expires the node resumes because time passed, not because
-/// anything was compared — a clock has no opinion about chain quality. It is a placeholder for the
-/// pre-commit candidate comparison, and it is only tolerable meanwhile because the alternative,
-/// never releasing, is a node that can never mine again.
-///
-/// Sized for the machinery that can still catch a bad adoption: with the latch released, the relay
-/// guard stops discarding competing offers, so a heavier peer's block is requested, lands as an
-/// orphan, and orphan resolution starts a fresh IBD.
-const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
+/// A revoked lease means the candidate has been re-nominated, usually to a different source. The
+/// waiting flow cannot use an answer that arrives after that — `StaleProofResponse` would discard
+/// it — so continuing to hold the flow open costs a source rotation for nothing.
+const LEASE_REVOKE_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Time reserved, inside the lease, for validating a proof after it arrives.
 ///
@@ -504,7 +500,7 @@ impl IbdFlow {
 
         let attempt = RecoveryAttemptId::next();
         info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
-        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work, budget).await {
+        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work, budget, attempt_stamp).await {
             Ok((verified_blue_work, proof_hash)) => {
                 // The answer belongs to the attempt that asked for it. If this candidate has been
                 // re-nominated since — a new lease, most likely to a different source — then the
@@ -827,12 +823,52 @@ impl IbdFlow {
         }
     }
 
+    /// Wait for the proof, and stop waiting the moment waiting stops being useful.
+    ///
+    /// Three ways out, and the deadline is only one of them:
+    ///
+    /// - the peer sends it;
+    /// - the connection closes, which `recv` reports as `None` — no reason to sit out the rest of
+    ///   the budget for a peer that is gone;
+    /// - the lease is revoked, meaning this candidate has been re-nominated (usually to a different
+    ///   source) or settled by someone else. Continuing would hold a flow open for an answer that
+    ///   can no longer be used, and `StaleProofResponse` would discard it on arrival anyway.
+    ///
+    /// The revoke check is polled rather than signalled. A watch channel per attempt would be
+    /// tighter, but the registry is the authority on who owns the lease and polling it a few times
+    /// a lease costs one uncontended read lock — against a wait measured in tens of seconds.
+    async fn await_pruning_point_proof(
+        &mut self,
+        id: CandidateId,
+        budget: Duration,
+        attempt_stamp: Option<Instant>,
+    ) -> Result<kaspa_p2p_lib::pb::PruningPointProofMessage, ProtocolError> {
+        let deadline = Instant::now() + budget;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ProtocolError::Timeout(budget));
+            }
+            let slice = remaining.min(LEASE_REVOKE_CHECK_INTERVAL);
+            match tokio::time::timeout(slice, self.incoming_route.recv()).await {
+                Ok(op) => return unwrap_message!(op, Payload::PruningPointProof),
+                Err(_) => {
+                    // Nothing arrived in this slice. Still our lease?
+                    if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
+                        return Err(ProtocolError::Other("the verification lease was revoked while waiting for the proof"));
+                    }
+                }
+            }
+        }
+    }
+
     async fn fetch_and_validate_challenger_proof(
         &mut self,
         attempt: RecoveryAttemptId,
         id: CandidateId,
         claimed_blue_work: ClaimedBlueWork,
         budget: Duration,
+        attempt_stamp: Option<Instant>,
     ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
         record_stage(
             RecoveryStage::ProofRequestSent,
@@ -843,7 +879,7 @@ impl IbdFlow {
             "",
         );
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
-        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointProof, budget)?;
+        let msg = self.await_pruning_point_proof(id, budget, attempt_stamp).await?;
         record_stage(
             RecoveryStage::ProofReceived,
             Some(attempt),
