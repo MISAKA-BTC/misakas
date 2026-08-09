@@ -27,7 +27,10 @@ series history — every RC superseded by a defect found, none by a green run:
                   120/120, 0 failures, 7950s — same seed list as darwin
                   (a scheduling race that survived one scheduler and not the
                   other would show up here; it did not)
-                seeds 100..299, 200 scenarios never run before: in progress
+                fresh scenarios, never run before, across three hosts:
+                  seeds 480..599  darwin  120/120, 0 failures
+                  seeds 100..299  linux   in progress
+                  seeds 300..479  linux   in progress
 
 VPS fixture re-mined from genesis, both branches, same preset:
   light 3500 blocks  pp f92cf4225f55e4c1  work 1,584,845,011
