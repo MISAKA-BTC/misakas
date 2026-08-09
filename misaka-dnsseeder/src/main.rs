@@ -60,6 +60,10 @@ struct Args {
     /// Seconds between refreshing the peer set from the node.
     #[arg(long, default_value_t = 30)]
     poll_secs: u64,
+    /// Serve ONLY the `--anchors` (skip the co-located node's address-manager peers). The anchors
+    /// are still health-gated (backing-node sync + TCP liveness) like everything else.
+    #[arg(long, default_value_t = false)]
+    anchors_only: bool,
 }
 
 fn parse_anchors(s: &str) -> Vec<Ipv4Addr> {
@@ -111,9 +115,25 @@ fn is_routable_v4(ip: &Ipv4Addr) -> bool {
         || this_network)
 }
 
-/// Best-effort refresh: query the co-located node's address manager and merge IPv4 peers with the
-/// anchors. Errors are non-fatal (the caller keeps the last good set / anchors).
-async fn refresh_peers(node_rpc: &str, anchors: &[Ipv4Addr]) -> Result<Vec<Ipv4Addr>, String> {
+/// F5 (t10): health-gated refresh. A seeder is the network's front door, and testnet-10 showed what
+/// an ungated one does: it kept advertising two anchors of which one was an isolated self-mining
+/// node and the other a wedged headers-only node, so every newcomer was routed into a bootstrap
+/// path that could not complete. The gate is fail-closed at every layer:
+///
+/// 1. The BACKING NODE must itself report `is_synced` — a seeder whose own node is unsynced/wedged
+///    serves an EMPTY answer set rather than routing newcomers at a broken mesh (a resolver with no
+///    answers makes the newcomer try another seeder; a poisoned answer traps it).
+/// 2. Address-manager peers are advertised only if the backing node is CURRENTLY CONNECTED to them
+///    — a live protocol-102 handshake on the right network is the strongest per-peer evidence this
+///    process can obtain without a P2P probe stack.
+/// 3. Anchors are operator-trusted for identity but still must be TCP-alive on the network's P2P
+///    port.
+///
+/// What this deliberately does NOT verify (needs a P2P probe or ADR-0025's registry, recorded here
+/// so nobody mistakes the gate for more than it is): the peer's own sync state, its chain identity
+/// relative to a trusted checkpoint, and its ability to serve the pruning-point proof/UTXO/EVM
+/// snapshots.
+async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bool, p2p_port: u16) -> Result<Vec<Ipv4Addr>, String> {
     let url = format!("ws://{node_rpc}");
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| e.to_string())?;
     client
@@ -126,16 +146,62 @@ async fn refresh_peers(node_rpc: &str, anchors: &[Ipv4Addr]) -> Result<Vec<Ipv4A
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut set: BTreeSet<Ipv4Addr> = anchors.iter().copied().collect();
-    let resp = client.get_peer_addresses().await.map_err(|e| e.to_string());
-    let _ = client.disconnect().await;
-    for a in resp?.known_addresses {
-        if let IpAddr::V4(v4) = a.ip.0 {
-            // Audit H-01: only advertise publicly-routable peers (drop bogon Sybil).
-            if is_routable_v4(&v4) {
-                set.insert(v4);
+    // Gate 1: the backing node's own sync state. `get_server_info.is_synced` is the same signal
+    // operators read via `node doctor`.
+    let info = match client.get_server_info().await {
+        Ok(i) => i,
+        Err(e) => {
+            let _ = client.disconnect().await;
+            return Err(format!("get_server_info failed: {e}"));
+        }
+    };
+    if !info.is_synced {
+        let _ = client.disconnect().await;
+        return Err(format!("backing node ({}) reports is_synced=false — refusing to advertise ANY peers", info.network_id));
+    }
+
+    // Gate 2 input: the peers the backing node is actually connected to right now.
+    let connected: BTreeSet<Ipv4Addr> = match client.get_connected_peer_info().await {
+        Ok(r) => r
+            .peer_info
+            .iter()
+            .filter_map(|p| match p.address.ip.0 {
+                IpAddr::V4(v4) => Some(v4),
+                _ => None,
+            })
+            .collect(),
+        Err(e) => {
+            let _ = client.disconnect().await;
+            return Err(format!("get_connected_peer_info failed: {e}"));
+        }
+    };
+
+    let mut set: BTreeSet<Ipv4Addr> = BTreeSet::new();
+
+    // Gate 3: anchors — operator-trusted identity, but must be alive on the P2P port.
+    for anchor in anchors {
+        match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect((*anchor, p2p_port))).await {
+            Ok(Ok(_)) => {
+                set.insert(*anchor);
+            }
+            _ => warn!("[dnsseeder] anchor {anchor}:{p2p_port} is not reachable — NOT advertising it this cycle"),
+        }
+    }
+
+    if !anchors_only {
+        let resp = client.get_peer_addresses().await.map_err(|e| e.to_string());
+        let _ = client.disconnect().await;
+        for a in resp?.known_addresses {
+            if let IpAddr::V4(v4) = a.ip.0 {
+                // Audit H-01: only advertise publicly-routable peers (drop bogon Sybil);
+                // F5: and only those the backing node has a live handshake with.
+                if is_routable_v4(&v4) && connected.contains(&v4) {
+                    set.insert(v4);
+                }
             }
         }
+    } else {
+        let _ = client.disconnect().await;
     }
     Ok(set.into_iter().collect())
 }
@@ -211,30 +277,41 @@ async fn main() {
     let args = Args::parse();
     let anchors = parse_anchors(&args.anchors);
     let node_rpc = resolve_node_rpc(&args.network_id, &args.node_rpc);
+    // The network's P2P port, for the anchor liveness probe.
+    let p2p_port =
+        args.network_id.as_deref().and_then(|n| NetworkId::from_str(n).ok()).map(|nid| nid.default_p2p_port()).unwrap_or(26611); // the historical devnet fallback, matching resolve_node_rpc
     info!("[dnsseeder] co-located node wRPC Borsh: {node_rpc}");
-    let peers: Arc<RwLock<Vec<Ipv4Addr>>> = Arc::new(RwLock::new(anchors.clone()));
+    if args.anchors_only {
+        info!("[dnsseeder] anchors-only mode: node address-manager discovery disabled");
+    }
+    // F5: start EMPTY and fail-closed — nothing is advertised until the backing
+    // node has been verified synced once. A seeder that answers with unverified
+    // peers routes newcomers into a broken bootstrap (the t10 failure); a seeder
+    // that answers with nothing makes them retry another seeder.
+    let peers: Arc<RwLock<Vec<Ipv4Addr>>> = Arc::new(RwLock::new(Vec::new()));
 
-    // Background poller: refresh the live peer set from the co-located node.
+    // Background poller: refresh the health-verified peer set from the co-located node.
     {
         let peers = peers.clone();
         let node_rpc = node_rpc.clone();
         let anchors = anchors.clone();
+        let anchors_only = args.anchors_only;
         let poll = Duration::from_secs(args.poll_secs.max(5));
         tokio::spawn(async move {
             loop {
-                match refresh_peers(&node_rpc, &anchors).await {
+                match refresh_verified(&node_rpc, &anchors, anchors_only, p2p_port).await {
                     Ok(ips) => {
                         let n = ips.len();
                         *peers.write().unwrap() = ips;
-                        info!("[dnsseeder] peer set refreshed: {n} IPv4 peers (incl. {} anchors)", anchors.len());
+                        info!("[dnsseeder] verified peer set refreshed: {n} IPv4 peers ({} anchors configured)", anchors.len());
                     }
                     Err(e) => {
-                        // Keep serving the last good set (>= anchors); the node may just be down.
-                        let mut g = peers.write().unwrap();
-                        if g.len() < anchors.len() {
-                            *g = anchors.clone();
-                        }
-                        warn!("[dnsseeder] node refresh failed ({e}); serving {} cached/anchor peers", g.len());
+                        // F5 fail-closed: a seeder that cannot VERIFY its backing node
+                        // (down, unsynced, wedged) must not advertise anyone — the t10
+                        // incident was precisely a seeder faithfully serving two broken
+                        // anchors. Empty answers make resolvers try the other seeders.
+                        *peers.write().unwrap() = Vec::new();
+                        warn!("[dnsseeder] refresh failed ({e}); serving an EMPTY answer set until the backing node verifies healthy");
                     }
                 }
                 tokio::time::sleep(poll).await;
