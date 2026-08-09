@@ -6,7 +6,8 @@ use crate::{
         ValidatedCandidate, VerifiedCandidate, authorize_candidate_adoption, authorize_candidate_validation,
     },
     flowcontext::ibd_candidates::{
-        CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
+        CHALLENGER_PROOF_TIMEOUT, CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs,
+        CommitVerdict, decide_commit,
     },
     flowcontext::recovery_trace::{RecoveryAttemptId, RecoveryStage, describe_comparison, record_stage},
     flowcontext::verification_trace::{self, SkipReason, VerificationSkip},
@@ -69,7 +70,6 @@ const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
 /// Generous, because generating one genuinely takes minutes on a large DAG — but finite, because
 /// "advertise a chain and go quiet" must not be a way to stall every node's commit. A source that
 /// misses this has its candidate refused, not left pending.
-const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// How many times this node may abandon a sync for a verified-better candidate before giving up.
 ///

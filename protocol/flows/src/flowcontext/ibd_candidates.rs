@@ -52,6 +52,27 @@ pub const MAX_CANDIDATES: usize = 16;
 /// not cost a node its convergence.
 pub const CHALLENGER_VERIFICATION_LEASE: Duration = Duration::from_secs(120);
 
+/// How long to wait for a nominated peer to actually send its pruning proof.
+///
+/// **Must stay below the lease**, and it did not: the fetch was allowed 600s against a 120s lease,
+/// five times the deadline that exists to free the slot. The two then contradicted each other —
+/// the registry declared the slot released at 120s while the flow that held it was still parked in
+/// `dequeue_with_timeout` for another eight minutes, unable to serve the re-nomination it had just
+/// been freed for.
+///
+/// Measured, on a peer that stopped answering after its own IBD was refused: request sent, no reply,
+/// and the node still waiting when the round ended 400s later. It never reached the retry that
+/// would have rotated to another source.
+///
+/// A transfer deadline must be shorter than the lock deadline it lives inside, or the lock is a
+/// fiction. The assertion below is the only thing that keeps them in that order.
+pub const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(90);
+
+const _: () = assert!(
+    CHALLENGER_PROOF_TIMEOUT.as_secs() < CHALLENGER_VERIFICATION_LEASE.as_secs(),
+    "the proof fetch must finish, or give up, before the lease that frees its slot expires"
+);
+
 /// Retry delay after a failed summary request: 1s, 2s, 4s, 8s, then held there.
 ///
 /// A request lost to a hiccup must not cost what a delivered summary costs. The two used to share
