@@ -982,6 +982,97 @@ mod tests {
         );
     }
 
+    /// The forbidden state, stated once so the tests below can point at it:
+    ///
+    /// ```text
+    /// candidate in ProofRequested
+    /// live sources > 0
+    /// no source will send the request
+    /// only time passes
+    /// ```
+    ///
+    /// A nominated candidate holds the single verification slot. If nobody will serve it and
+    /// nothing moves it on, the node stops examining every other chain on offer for a whole lease —
+    /// and the chain it stops examining is, by construction, the one it just decided was most worth
+    /// checking.
+    fn nobody_will_serve(r: &IbdCandidateRegistry, id: &CandidateId) -> bool {
+        matches!(r.get(id).map(|c| c.validation), Some(CandidateValidation::ProofRequested { .. }))
+            && !r.sources_of(id).is_empty()
+            && r.designated_prover(id).is_none()
+    }
+
+    #[test]
+    fn a_nominated_candidate_always_has_someone_to_ask() {
+        // The invariant: nomination and eligibility must be decided together. If a candidate can be
+        // nominated while its only source is already written off, the slot is taken by a request
+        // that will never be sent.
+        let mut r = IbdCandidateRegistry::default();
+        let mut now = Instant::now();
+        let only_source = peer(1);
+
+        // Burn the peer's record to the limit through candidates it never proves.
+        for _ in 0..MAX_PEER_PROOF_FAILURES {
+            let id = r.observe_summary(only_source, &header(1, 900), pp(1), now);
+            r.set_validation(
+                id,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)),
+                },
+            );
+            now += CHALLENGER_VERIFICATION_LEASE;
+            r.expire_proof_requests(now, CHALLENGER_VERIFICATION_LEASE);
+            r.forget_peer(&only_source);
+        }
+        assert!(r.peer_has_stopped_answering(&only_source));
+
+        // It comes back offering the same chain. The chain is fine; the peer is not.
+        let id = r.observe_summary(only_source, &header(1, 900), pp(1), now);
+        assert!(!r.sources_of(&id).is_empty(), "it is a live source, it just will not answer");
+
+        // The registry must not nominate what nobody will serve.
+        assert!(r.strongest_unverified().is_none(), "nominating this would take the slot and hold it for a lease");
+        assert!(!nobody_will_serve(&r, &id), "and it is not in the forbidden state, because it was never nominated");
+    }
+
+    #[test]
+    fn a_prover_written_off_mid_lease_does_not_strand_the_candidate() {
+        // The harder half. The candidate is nominated while its source is still eligible, and the
+        // source is written off DURING the lease — by failing to prove some other chain. Nothing
+        // re-examines the nomination, so this is where a stranded candidate would come from.
+        let mut r = IbdCandidateRegistry::default();
+        let mut now = Instant::now();
+        let source = peer(1);
+
+        let stuck = r.observe_summary(source, &header(1, 900), pp(1), now);
+        r.set_validation(
+            stuck,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+
+        // Meanwhile the same peer fails to prove two other chains, taking it to the limit.
+        for n in 2..=(MAX_PEER_PROOF_FAILURES as u64) {
+            let other = r.observe_summary(source, &header(n, 800), pp(n), now);
+            r.set_validation(
+                other,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(800)),
+                },
+            );
+            now += CHALLENGER_VERIFICATION_LEASE;
+            r.expire_proof_requests(now, CHALLENGER_VERIFICATION_LEASE);
+        }
+
+        // Whatever the peer's record now says, the nominated candidate must not be left in the
+        // forbidden state: either someone can still be asked, or its lease has released it.
+        assert!(
+            !nobody_will_serve(&r, &stuck),
+            "candidate is nominated, has a live source, and has no designated prover — the slot is held by a request \
+             nobody will ever send"
+        );
+    }
+
     #[test]
     fn a_peer_cannot_launder_its_record_by_reconnecting() {
         // The attack: advertise a heavy chain, accept the nomination, go quiet, disconnect,
