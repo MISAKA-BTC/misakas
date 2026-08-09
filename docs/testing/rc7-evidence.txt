@@ -23,7 +23,11 @@ series history — every RC superseded by a defect found, none by a green run:
                   10/10, every round on_heavy + review completed + resumed
                 VPS control (follower near the heavy host: heavy 1.9ms,
                   light 251ms): 10/10, same
-                linux series pending
+                linux/x86_64, separate series at the same commit, not merged:
+                  120/120, 0 failures, 7950s — same seed list as darwin
+                  (a scheduling race that survived one scheduler and not the
+                  other would show up here; it did not)
+                seeds 100..299, 200 scenarios never run before: in progress
 
 VPS fixture re-mined from genesis, both branches, same preset:
   light 3500 blocks  pp f92cf4225f55e4c1  work 1,584,845,011
