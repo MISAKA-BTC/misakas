@@ -111,6 +111,9 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
     // --- wRPC borsh: connect + getServerInfo (the authoritative view) ---
     let mut synced_phase = "unknown".to_string();
     let mut virtual_daa: Option<u64> = None;
+    // F7 (t10): the node's currently-connected peer IPs, for the seeder-mesh
+    // divergence check below (None ⇒ could not be queried).
+    let mut connected_peer_ips: Option<Vec<String>> = None;
     match try_connect(&format!("ws://{borsh_hostport}"), timeout).await {
         Ok(client) => match client.get_server_info().await {
             Ok(info) => {
@@ -143,6 +146,13 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
                 }
                 synced_phase = if info.is_synced { "synced".into() } else { "syncing".into() };
                 virtual_daa = Some(info.virtual_daa_score);
+                // F7: capture the live peer IPs while the client is still connected —
+                // input to the seeder-mesh divergence check below.
+                connected_peer_ips = client
+                    .get_connected_peer_info()
+                    .await
+                    .ok()
+                    .map(|r| r.peer_info.iter().map(|p| p.address.ip.0.to_string()).collect());
                 let _ = client.disconnect().await;
             }
             Err(e) => {
@@ -195,6 +205,62 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
 
     if let Some(daa) = virtual_daa {
         rows.push(Row { label: "Virtual DAA score".into(), value: daa.to_string(), health: Health::Ok });
+    }
+
+    // --- F7 (t10): seeder-mesh divergence check ---
+    // The t10 partition was invisible to every per-node health signal: the isolated
+    // node self-reported synced and its explorer looked live. What WOULD have shown
+    // it is the relation between this node and the world the DNS seeders advertise.
+    // Two informational rows: what the seeders currently answer, and whether this
+    // node is connected to ANY of those advertised peers. Zero overlap on a network
+    // with live seeder answers is the partition shape — surface it loudly. (True
+    // chain-identity comparison needs a P2P probe; this is the RPC-only bound.)
+    {
+        let seeds = kaspa_consensus_core::config::params::Params::from(net_id).dns_seeders;
+        if !seeds.is_empty() {
+            let mut advertised: Vec<String> = Vec::new();
+            for seed in seeds {
+                if let Ok(addrs) = (*seed, 0u16).to_socket_addrs() {
+                    for a in addrs {
+                        advertised.push(a.ip().to_string());
+                    }
+                }
+            }
+            advertised.sort();
+            advertised.dedup();
+            if advertised.is_empty() {
+                rows.push(Row {
+                    label: "Seeder-advertised peers".into(),
+                    value: "none (seeders unreachable or answering empty — network bootstrap degraded)".into(),
+                    health: Health::Warn,
+                });
+            } else {
+                rows.push(Row {
+                    label: "Seeder-advertised peers".into(),
+                    value: format!("{} ({})", advertised.len(), advertised.join(", ")),
+                    health: Health::Ok,
+                });
+                match &connected_peer_ips {
+                    Some(mine) => {
+                        let overlap = mine.iter().filter(|ip| advertised.contains(ip)).count();
+                        rows.push(Row {
+                            label: "Seeder mesh overlap".into(),
+                            value: if overlap > 0 {
+                                format!("connected to {overlap} seeder-advertised peer(s)")
+                            } else {
+                                "NONE — this node shares no peer with the seeder-advertised mesh (possible chain divergence)".into()
+                            },
+                            health: if overlap > 0 { Health::Ok } else { Health::Warn },
+                        });
+                    }
+                    None => rows.push(Row {
+                        label: "Seeder mesh overlap".into(),
+                        value: "unknown (peer list not queryable)".into(),
+                        health: Health::Info,
+                    }),
+                }
+            }
+        }
     }
 
     // --- render ---
