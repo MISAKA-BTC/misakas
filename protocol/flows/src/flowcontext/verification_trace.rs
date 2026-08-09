@@ -112,10 +112,18 @@ fn ring() -> &'static Mutex<VecDeque<VerificationSkip>> {
     RING_BUF.get_or_init(|| Mutex::new(VecDeque::with_capacity(RING)))
 }
 
-/// Record a declined verification. Cheap by construction; never logs, never panics.
+/// Record a declined verification. Cheap by construction; never logs, never panics, never waits.
+///
+/// The counter is the fact and is always recorded. The ring is detail, and it is recorded only if
+/// the lock happens to be free: `try_lock`, dropping the event on contention.
+///
+/// That ordering is deliberate. A diagnostic that blocks the path it measures changes the
+/// interleaving it exists to observe — and the bug being observed here is a race that reproduces in
+/// about one round in three. A missing detail line is a cost; instrumentation that makes the race
+/// disappear and get declared fixed is a much larger one.
 pub fn record_skip(skip: VerificationSkip) {
     counters()[skip.reason.index()].fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut ring) = ring().lock() {
+    if let Ok(mut ring) = ring().try_lock() {
         if ring.len() == RING {
             ring.pop_front();
         }

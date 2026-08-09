@@ -29,7 +29,7 @@ use kaspa_consensus_notify::{
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusInstance, ConsensusManager, ConsensusProxy, ConsensusSessionOwned};
 use kaspa_core::{
-    chain_participation::ChainParticipationGate,
+    chain_participation::{ChainParticipationGate, IbdLease},
     debug, info,
     kaspad_env::{name, version},
     task::tick::TickService,
@@ -290,6 +290,9 @@ pub struct FlowContextInner {
     shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
+    /// Identifies the IBD attempt that currently owns the participation state, so one that finishes
+    /// late cannot restore a state the node has already moved past.
+    ibd_lease: Arc<RwLock<Option<IbdLease>>>,
     /// Chains peers advertised while an IBD held the latch, keyed by chain rather than by peer.
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
     /// The chain this node has decided to sync next, reserved so that cancelling an IBD hands the
@@ -434,6 +437,7 @@ impl FlowContext {
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
+                ibd_lease: Default::default(),
                 ibd_candidates: Default::default(),
                 challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 preferred_ibd_candidate: Default::default(),
@@ -517,7 +521,8 @@ impl FlowContext {
             // Stop participating NOW. `staging.commit()` happens partway through an IBD, so waiting
             // for the IBD to report success leaves a window in which this node is already running
             // the new chain and still mining and attesting on it.
-            self.chain_participation().enter_ibd();
+            // The lease is what lets a late-finishing attempt be told from the current one.
+            *self.ibd_lease.write() = Some(self.chain_participation().enter_ibd());
             Some(IbdRunningGuard { indicator: self.is_ibd_running.clone() })
         } else {
             None
@@ -1002,7 +1007,9 @@ impl FlowContext {
         if replaced {
             self.chain_participation().quarantine();
         } else {
-            self.chain_participation().release_after_noop_ibd();
+            if let Some(lease) = self.ibd_lease.write().take() {
+                self.chain_participation().release_after_noop_ibd(lease);
+            }
         }
         replaced
     }

@@ -86,6 +86,15 @@ pub trait ChainParticipationPersistence: Send + Sync + std::fmt::Debug {
     fn restore(&self) -> Option<ChainParticipationSnapshot>;
 }
 
+/// Identifies one IBD attempt's claim on the participation state.
+///
+/// Generation 0 is the null lease: a disabled gate, or an `enter_ibd` that changed nothing because
+/// the node was quarantined or already syncing. It restores nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IbdLease {
+    generation: u64,
+}
+
 const READY: u8 = 0;
 const IBD_RUNNING: u8 = 1;
 const CANDIDATE_REVIEW: u8 = 2;
@@ -104,6 +113,10 @@ pub struct ChainParticipationGate {
     /// What to return to when an IBD changes nothing. Written on entry, read on a no-op failure.
     /// Only one IBD runs at a time — the latch guarantees it — so a single slot is enough.
     pre_ibd_state: AtomicU8,
+    /// Which IBD owns [`Self::pre_ibd_state`]. An attempt that finishes late must not restore a
+    /// state that a newer attempt has already moved on from — "no-op" is a claim about the attempt
+    /// that made it, and a stale one would roll the node backwards.
+    ibd_generation: AtomicU64,
     /// Whether the gate constrains anything on this network. Peerless devnet/simnet nodes have no
     /// competing branch to overlook and no peers to wait for, so holding them back only stalls
     /// tests; this mirrors the carve-out `has_sufficient_peer_connectivity` already makes.
@@ -133,6 +146,7 @@ impl ChainParticipationGate {
             adoption_generation: AtomicU64::new(0),
             switches: AtomicU32::new(0),
             pre_ibd_state: AtomicU8::new(READY),
+            ibd_generation: AtomicU64::new(0),
             enabled,
             persistence: None,
         }
@@ -241,19 +255,35 @@ impl ChainParticipationGate {
     ///
     /// Does not disturb [`ChainParticipation::Quarantined`] — an unresolved problem outranks a new
     /// attempt to sync, and a node must not be able to launder a quarantine by starting an IBD.
-    pub fn enter_ibd(&self) {
+    /// Returns the lease identifying this attempt. Hand it back to [`Self::release_after_noop_ibd`];
+    /// without it a late-finishing attempt could restore a state a newer one has moved past.
+    ///
+    /// Deliberately does NOT move a quarantined node: an unresolved problem outranks a new attempt
+    /// to sync, and the lease it gets back cannot restore anything either.
+    pub fn enter_ibd(&self) -> IbdLease {
         if !self.enabled {
-            return;
+            return IbdLease { generation: 0 };
         }
-        // Remember what to go back to. An IBD that changes nothing must leave the node exactly
-        // where it found it — see `release_after_noop_ibd`, which used to end every failed attempt
-        // at Ready regardless of where it started.
-        if self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            self.pre_ibd_state.store(READY, Ordering::SeqCst);
+        // The interrupted state and the lease are established together with the transition itself,
+        // so there is no window in which the node is IbdRunning without a recorded way back.
+        let interrupted = if self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            Some(READY)
         } else if self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            self.pre_ibd_state.store(CANDIDATE_REVIEW, Ordering::SeqCst);
-        }
+            Some(CANDIDATE_REVIEW)
+        } else {
+            None
+        };
+        let generation = match interrupted {
+            Some(state) => {
+                self.pre_ibd_state.store(state, Ordering::SeqCst);
+                self.ibd_generation.fetch_add(1, Ordering::SeqCst) + 1
+            }
+            // Quarantined, or already IbdRunning. Generation 0 never matches, so this lease can
+            // restore nothing.
+            None => 0,
+        };
         self.persist();
+        IbdLease { generation }
     }
 
     /// An IBD finished and produced a chain that nothing has yet been compared against. Hold
@@ -305,8 +335,14 @@ impl ChainParticipationGate {
     /// out of review and onto the lighter one, intermittently, in about a third of rounds. Once
     /// Ready, every recovery driver returns early by design, so nothing looked at the heavier chain
     /// again.
-    pub fn release_after_noop_ibd(&self) {
+    pub fn release_after_noop_ibd(&self, lease: IbdLease) {
         if !self.enabled {
+            return;
+        }
+        // A lease that is not the current one describes an attempt the node has already moved past.
+        // Restoring from it would roll a newer decision backwards, which is the same class of bug
+        // as the one this function exists to fix — acting on a fact that stopped being true.
+        if lease.generation == 0 || lease.generation != self.ibd_generation.load(Ordering::SeqCst) {
             return;
         }
         let restore_to = self.pre_ibd_state.load(Ordering::SeqCst);
@@ -429,13 +465,55 @@ mod tests {
         assert_eq!(gate.state(), ChainParticipation::CandidateReview);
 
         // Peer B tries and fails, replacing nothing.
-        gate.enter_ibd();
+        let lease = gate.enter_ibd();
         assert_eq!(gate.state(), ChainParticipation::IbdRunning);
-        gate.release_after_noop_ibd();
+        gate.release_after_noop_ibd(lease);
 
         assert_eq!(gate.state(), ChainParticipation::CandidateReview, "a failed IBD must leave the node where it found it");
         assert!(!gate.allows_participation(), "and it must not be mining or attesting on the unreviewed chain");
         assert!(!gate.ever_ready(), "the one-way door must not have been opened by someone else's failure");
+    }
+
+    #[test]
+    fn a_failed_ibd_cannot_launder_a_quarantine() {
+        // Quarantine outranks a new attempt to sync. A node that cannot vouch for the chain it is
+        // running does not get to clear that by trying, and failing, to sync from someone else —
+        // which is the same shape as the review bug: a stranger's failure treated as this node's
+        // vindication.
+        let gate = ChainParticipationGate::new(true);
+        gate.quarantine();
+
+        let lease = gate.enter_ibd();
+        assert_eq!(gate.state(), ChainParticipation::Quarantined, "entering an IBD must not lift it");
+        gate.release_after_noop_ibd(lease);
+        assert_eq!(gate.state(), ChainParticipation::Quarantined);
+        assert!(!gate.allows_participation());
+    }
+
+    #[test]
+    fn an_ibd_that_finishes_late_cannot_roll_the_node_backwards() {
+        // The stale-lease case. An attempt begun while the node was in one state finishes after a
+        // newer attempt has begun. "It was a no-op" is a claim about the attempt that makes it, and
+        // an old one restoring its own memory would undo a newer decision — the same class of bug
+        // as acting on a comparison that has stopped being true.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(60_000);
+
+        // Attempt one begins from CandidateReview.
+        let stale = gate.enter_ibd();
+        // It stalls. Meanwhile the node finishes an adoption and a newer attempt takes over.
+        gate.enter_candidate_review(60_000);
+        let current = gate.enter_ibd();
+        assert_ne!(stale, current);
+
+        // Attempt one finally reports that it changed nothing.
+        gate.release_after_noop_ibd(stale);
+        assert_eq!(gate.state(), ChainParticipation::IbdRunning, "the stale lease must not release the current attempt");
+
+        // The current one still can.
+        gate.release_after_noop_ibd(current);
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
     }
 
     #[test]
@@ -447,8 +525,8 @@ mod tests {
         let gate = ChainParticipationGate::new(true);
         assert_eq!(gate.state(), ChainParticipation::Ready);
 
-        gate.enter_ibd();
-        gate.release_after_noop_ibd();
+        let lease = gate.enter_ibd();
+        gate.release_after_noop_ibd(lease);
 
         assert_eq!(gate.state(), ChainParticipation::Ready);
         assert!(gate.allows_participation());
@@ -641,9 +719,9 @@ mod tests {
         // could launder an unresolved quarantine by triggering a resync.
         gate.enter_candidate_review(0);
         assert!(gate.is_quarantined());
-        gate.enter_ibd();
+        let lease = gate.enter_ibd();
         assert!(gate.is_quarantined());
-        gate.release_after_noop_ibd();
+        gate.release_after_noop_ibd(lease);
         assert_eq!(gate.state(), ChainParticipation::Quarantined);
         assert!(!gate.allows_participation());
     }
@@ -651,8 +729,8 @@ mod tests {
     #[test]
     fn a_failed_ibd_that_changed_nothing_does_not_hold_the_node() {
         let gate = ChainParticipationGate::new(true);
-        gate.enter_ibd();
-        gate.release_after_noop_ibd();
+        let lease = gate.enter_ibd();
+        gate.release_after_noop_ibd(lease);
         assert!(gate.allows_participation());
     }
 
@@ -748,8 +826,8 @@ mod tests {
     fn a_ready_node_restarts_ready() {
         let recorder = Arc::new(Recorder::default());
         let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
-        gate.enter_ibd();
-        gate.release_after_noop_ibd();
+        let lease = gate.enter_ibd();
+        gate.release_after_noop_ibd(lease);
 
         let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert!(restarted.allows_participation());
