@@ -98,14 +98,57 @@ pub struct Daemon {
     appdir_tempdir: Arc<TempDir>,
 }
 
+/// A port no other daemon in this process will be given.
+///
+/// This used to draw at random and confirm the choice by binding and immediately dropping a
+/// listener. Two problems, both of which a soak hits and a single test does not.
+///
+/// The draw can repeat. Over a run that starts many daemons, each taking four ports, two calls
+/// returning the same number stops being unlikely — and both callers then see it bind, because the
+/// first one dropped its listener before the second looked.
+///
+/// And the confirmation is not one. Between the drop and the daemon actually binding, seconds
+/// later, anything may take the port. Observed:
+///
+/// ```text
+/// thread 'tokio-runtime-worker' panicked at rpc/wrpc/server/src/service.rs:160:
+/// WRPC Server bind error on 0.0.0.0:51215: Listen(... Address already in use (os error 48))
+/// ```
+///
+/// That panic is in a spawned task, so the test carried on and reported success. In this codebase
+/// a panic in a node worker thread is what a real defect looks like, so harness noise here costs
+/// real triage time — this one was investigated as a possible product bug before being recognised.
+///
+/// Handing ports out from a process-wide counter removes the repeat entirely: no two calls, on any
+/// thread, ever return the same number. The bind check stays, because it is still the only way to
+/// notice a port already held by something outside this process — it just no longer carries the
+/// weight it could not bear.
+///
+/// The counter starts somewhere random so two concurrent `cargo test` processes do not march in
+/// step, and the test bind uses `0.0.0.0` to match what the daemon will actually ask for.
 fn free_port() -> u16 {
-    loop {
-        let port = rand::random::<u16>() % (u16::MAX - 1024) + 1024;
-        if let Ok(listener) = std::net::TcpListener::bind(format!("127.0.0.1:{}", port)) {
+    /// Above the ephemeral range on Linux and macOS, so the OS is not handing these out to
+    /// outgoing connections while the fixture is handing them to daemons.
+    const FLOOR: u16 = 20_000;
+    const CEILING: u16 = 60_000;
+
+    static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    static BASE: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    let base = *BASE.get_or_init(|| FLOOR + rand::random::<u16>() % (CEILING - FLOOR));
+
+    for _ in 0..(CEILING - FLOOR) {
+        let offset = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let port = FLOOR + (base - FLOOR).wrapping_add(offset) % (CEILING - FLOOR);
+        // Bound to this port only if nothing outside the process holds it. The listener is dropped
+        // immediately, as it must be — the daemon binds it later itself — so this narrows the
+        // window rather than closing it. Closing it would mean passing bound sockets into the
+        // daemon, which is a change to the node rather than to its fixture.
+        if let Ok(listener) = std::net::TcpListener::bind(("0.0.0.0", port)) {
             drop(listener);
             return port;
         }
     }
+    panic!("no free port in {FLOOR}..{CEILING} after a full sweep — something is holding the whole range");
 }
 
 fn port_from_address(addr: Option<ContextualNetAddress>) -> u16 {
@@ -212,5 +255,33 @@ impl Deref for Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         self.shutdown()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn no_two_daemons_are_ever_offered_the_same_port() {
+        // The property the counter exists for. The old draw-at-random could return the same port
+        // to two callers, and both would see it bind — the first had already dropped its listener.
+        // Four hundred ports is a hundred daemons' worth, well past where a random draw's
+        // collisions became likely.
+        let ports: Vec<u16> = (0..400).map(|_| free_port()).collect();
+        let unique: HashSet<u16> = ports.iter().copied().collect();
+        assert_eq!(unique.len(), ports.len(), "free_port() handed the same port out twice");
+        assert!(ports.iter().all(|p| *p >= 20_000), "ports must sit above the ephemeral range");
+    }
+
+    #[test]
+    fn ports_do_not_repeat_across_threads() {
+        // Daemons are started from several threads in the integration tests, so the counter has to
+        // be shared rather than thread-local — a per-thread sequence would collide immediately.
+        let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(|| (0..50).map(|_| free_port()).collect::<Vec<_>>())).collect();
+        let all: Vec<u16> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        let unique: HashSet<u16> = all.iter().copied().collect();
+        assert_eq!(unique.len(), all.len(), "two threads were offered the same port");
     }
 }
