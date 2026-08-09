@@ -65,12 +65,6 @@ type BlockBody = Vec<Transaction>;
 /// orphan, and orphan resolution starts a fresh IBD.
 const POST_IBD_CANDIDATE_REVIEW: Duration = Duration::from_secs(180);
 
-/// How long a nominated challenger has to produce its pruning proof.
-///
-/// Generous, because generating one genuinely takes minutes on a large DAG — but finite, because
-/// "advertise a chain and go quiet" must not be a way to stall every node's commit. A source that
-/// misses this has its candidate refused, not left pending.
-
 /// How many times this node may abandon a sync for a verified-better candidate before giving up.
 ///
 /// Switching on evidence is the recovery path and should not be rationed lightly — but two branches
