@@ -434,6 +434,21 @@ impl IbdCandidateRegistry {
     ///
     /// Strictly: equal work is not a reason to switch, and an unverified candidate is never a
     /// reason to switch no matter what it claims.
+    ///
+    /// **The two sides are not measured at the same place, and callers must know it.** A
+    /// candidate's verified blue work comes from its pruning proof, so it is the work at its
+    /// PRUNING POINT. The barrier passes the staged chain's work at its TIP. Tip work is larger
+    /// than pruning-point work on the same chain, so the comparison is biased toward whatever is
+    /// already staged.
+    ///
+    /// That bias is in the safe direction — it can refuse a switch that was warranted, never
+    /// authorise one that was not — which is why the barrier is allowed to use it as a cheap
+    /// pre-filter. It is NOT the adoption decision. Adoption compares verified tip against verified
+    /// tip under the canonical fork-choice order, in `CandidateAdoptionPermit`.
+    ///
+    /// A challenger this refuses is therefore not settled. Measured: a soak round validated two
+    /// candidates, was refused here, and kept the lighter chain until the post-IBD switch path
+    /// looked at the same evidence again with tip work on both sides.
     pub fn verified_superior_to(&self, current: BlueWorkType) -> Option<&IbdCandidate> {
         self.best_verified().filter(|c| c.verified_blue_work().is_some_and(|w| w > current))
     }
@@ -1180,6 +1195,31 @@ mod commit_barrier_tests {
         r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now + Duration::from_secs(22));
 
         assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::RefuseUnresolved { count: 1 });
+    }
+
+    #[test]
+    fn the_barrier_can_refuse_a_switch_it_should_have_allowed_and_that_is_deliberate() {
+        // The two sides are measured at different places: the candidate's work comes from its
+        // pruning proof (pruning point), the staged work from its tip. So a challenger that IS
+        // heavier at the tip can look lighter here.
+        //
+        // This test exists to stop someone "fixing" that by comparing tip against pruning point the
+        // other way round, which would authorise switches on a bias in the UNSAFE direction. The
+        // asymmetry is allowed only because it fails toward staying put. Adoption is where the
+        // real comparison happens — verified tip against verified tip.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        r.set_validated(id, BlueWorkType::from_u64(500), Hash::from_u64_word(7));
+
+        // Staged tip work 800, challenger's pruning-point work 500. Refused, though the challenger's
+        // own tip may be worth far more than 800.
+        assert!(r.verified_superior_to(BlueWorkType::from_u64(800)).is_none(), "the barrier must not switch on this");
+        assert_eq!(decide_commit(inputs(800, &r)), CommitVerdict::Allow, "and it commits the staged chain");
+
+        // The refusal is not a verdict on the candidate: it is still verified and still in play for
+        // the adoption path, which is what makes the bias survivable.
+        assert!(r.best_verified().is_some_and(|c| c.id == id));
     }
 
     #[test]
