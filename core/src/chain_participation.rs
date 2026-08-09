@@ -327,13 +327,21 @@ impl ChainParticipationGate {
     }
 
     /// Milliseconds left on a review floor, for operator-facing reporting.
+    ///
+    /// `None` also means "held open past its floor": a review stays in
+    /// [`ChainParticipation::CandidateReview`] while a decision is pending, however long the floor
+    /// said, because going Ready while weighing proof-backed evidence against the current chain is
+    /// the failure this whole path exists to prevent.
+    ///
+    /// `checked_sub` rather than a comparison and a subtraction. `(until > now).then_some(until -
+    /// now)` reads as a guard and is not one — `then_some` takes a value, so the subtraction runs
+    /// whether or not the condition held. That underflowed and panicked the node, in this exact
+    /// state, on a link slow enough for a decision to outlive its floor.
     pub fn review_remaining_ms(&self) -> Option<u64> {
         if self.state() != ChainParticipation::CandidateReview {
             return None;
         }
-        let now = unix_now();
-        let until = self.review_until_ms.load(Ordering::SeqCst);
-        (until > now).then_some(until - now)
+        self.review_until_ms.load(Ordering::SeqCst).checked_sub(unix_now())
     }
 }
 
@@ -347,6 +355,32 @@ impl Default for ChainParticipationGate {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn reporting_a_review_that_outlived_its_floor_does_not_kill_the_node() {
+        // Found on a 267 ms intercontinental link, not here: a candidate's proof took longer to
+        // fetch and validate than the review floor, `decision_pending` correctly held the state at
+        // CandidateReview past that floor, and reporting how much time was left computed
+        // `until - now` with `until` in the past. The node panicked and exited.
+        //
+        // Reaching this needs a review whose floor has passed while a decision is still pending —
+        // a combination that only exists because holding the review open is the safe behaviour.
+        // The bug was in the reporting, and it took the node down anyway.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(0);
+        gate.begin_decision();
+        // Put the floor unambiguously in the past. Without the wait the clock can still read equal,
+        // which reports Some(0) and steps over the underflow rather than through it.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview, "a pending decision holds the review open");
+        assert_eq!(gate.review_remaining_ms(), None, "no floor left, and no panic");
+
+        // And once the decision lands, it reports nothing because there is no review.
+        gate.end_decision();
+        assert_eq!(gate.review_remaining_ms(), None);
+    }
 
     /// Stands in for the meta-DB row, so a "restart" is just building a new gate from what the
     /// previous one wrote.
