@@ -103,7 +103,7 @@ use kaspa_consensus_core::{
         VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, adjudicate_compute_challenge,
         commitment_dependency_horizon, compute_capability_message, compute_certificate_message, compute_commitment_message,
         compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
-        verifier_verdict_message, verify_compute_certificate, vlt_epoch_finalized,
+        verifier_verdict_message, verify_compute_certificate, vlt_activation_eligibility, vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -2500,13 +2500,29 @@ impl VirtualStateProcessor {
             let newest = vlt_epochs.last().map(|t| (t.epoch, t.total_weight));
             let snapshot_root = snapshot.commitment_root();
             let last_anchor = prev_dns_state.as_ref().map_or(Hash64::default(), |p| p.last_dns_confirmed_anchor);
+            // Eligibility, not just magnitude. The snapshot must be a complete answer, pinned at a
+            // DNS-confirmed anchor (so it is a fact about the shared prefix rather than about
+            // whichever tip this node happens to hold), carry post-cap weight at or above the
+            // floor, and have that weight spread over enough validators that a quorum is not one
+            // of them. See `vlt_activation_eligibility`.
+            let eligibility = vlt_activation_eligibility(
+                snapshot.resolution_complete(),
+                newest.map_or(0, |(_, w)| w),
+                snapshot.credits().len(),
+                last_anchor != Hash64::default(),
+                &dns_params.vlt,
+            );
             let state = VltActivationState::derive(
                 shadow_active,
                 weight_active,
                 newest,
                 snapshot_root,
-                dns_params.vlt.min_network_compute,
                 last_anchor,
+                eligibility,
+                dns_params.vlt.vlt_activation_daa_score,
+                // Anything ever finalized means the vote has already moved; §4's answer to weight
+                // loss after that is to hold the last anchor, never to re-denominate.
+                last_anchor != Hash64::default(),
             );
             let quorum_epochs = vlt_epochs
                 .iter()
@@ -2523,11 +2539,16 @@ impl VirtualStateProcessor {
                     vlt_epochs.last().map(|t| t.signed_weight).unwrap_or(0),
                     dns_params.vlt.vlt_activation_daa_score,
                 ),
-                VltActivationState::FenceReachedNoSnapshot { total_weight, min_network_compute } => info!(
-                    "[vlt-weight-fence-reached] daa={sink_daa} fence={} — [vlt-finality-inactive] reason={} total_weight={total_weight} min_network_compute={min_network_compute} validators_with_credit={} last_finalized_anchor=none",
-                    dns_params.vlt.vlt_activation_daa_score,
-                    if *total_weight == 0 { "zero_total_weight" } else { "below_min_network_compute" },
+                // The fence and the activation are no longer the same event, so they are no longer
+                // the same line: this one says the fence is behind us and names the single
+                // condition still in the way.
+                VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker } => info!(
+                    "[vlt-weight-fence-reached] daa={sink_daa} fence={weight_fence_daa} — [vlt-activation-delayed] reason=no_eligible_snapshot blocker={} weight_source=bootstrap validators_with_credit={}",
+                    blocker.as_str(),
                     snapshot.credits().len(),
+                ),
+                VltActivationState::ActivationScheduled { activation_epoch, source_anchor, snapshot_root, total_weight } => info!(
+                    "[vlt-activation-scheduled] activation_epoch={activation_epoch} source_anchor={source_anchor} snapshot_root={snapshot_root} total_weight={total_weight}"
                 ),
                 VltActivationState::Recovery { last_finalized_anchor, total_weight, min_network_compute } => info!(
                     "[vlt-finality-inactive] reason={} total_weight={total_weight} min_network_compute={min_network_compute} last_finalized_anchor={last_finalized_anchor} — holding the last finalized anchor until weight returns",

@@ -1519,6 +1519,17 @@ pub struct VltParams {
     /// `0` disables the floor, leaving only the `W(E) = 0` guard.
     pub min_network_compute: u128,
 
+    /// How many validators must hold credit before weighted finality may activate.
+    ///
+    /// `min_network_compute` bounds the total; this bounds its *concentration*. `Q(E)` is a
+    /// fraction of whatever weight exists, so a single validator holding all of it clears any
+    /// magnitude floor and then finalizes the chain alone — which is not a network's compute
+    /// whatever the number says.
+    ///
+    /// Shaped like the floor it accompanies: `1 + min_verifier_confirmations`, one executor plus a
+    /// committee that can confirm it, so the two thresholds cannot drift apart in meaning.
+    pub min_active_validators: u8,
+
     /// §6 audit fee: sompi minted to each verifier whose verdict was counted for a certificate,
     /// paid once, at the block where that certificate leaves its challenge window.
     ///
@@ -1600,6 +1611,9 @@ impl VltParams {
         // first epochs and never sees it again — the floor exists to exclude the vacuous case, not
         // to throttle a healthy one.
         min_network_compute: 100_000_000_000,
+        // 1 + min_verifier_confirmations: the same "one executor plus a confirming committee" shape
+        // `min_network_compute` is derived from.
+        min_active_validators: 4,
         // 50 000 000 sompi (0.5 KAS) per counted verdict. Calibrated against the cost it has to
         // beat: a full replay at the registered profile's 4096-token ceiling, plus the overlay
         // transaction that carries the verdict (whose own mass-based fee is ~250 000 sompi). Two
@@ -1914,10 +1928,22 @@ pub enum VltActivationState {
     PreShadow,
     /// The soak. The overlay credits, audits, pays and slashes; finality is still bonded stake.
     Shadow,
-    /// At or above the weight fence, but `W(E)` is zero or below `min_network_compute`, so no
-    /// epoch can reach `Q(E)`. The base ledger keeps advancing — the overlay is liveness-first —
-    /// and finality resumes on its own once weight appears.
-    FenceReachedNoSnapshot { total_weight: u128, min_network_compute: u128 },
+    /// At or above the weight fence, and no snapshot is eligible to switch onto yet. Bootstrap
+    /// (bonded-stake) weight continues; the base ledger keeps advancing, because the overlay is
+    /// liveness-first.
+    ///
+    /// The fence is the EARLIEST point the switch may happen, not the point at which it does. A
+    /// fence that switched unconditionally would move the vote onto an empty credit table, and
+    /// from there `W(E) = 0` means no epoch reaches `Q(E)`, no anchor is DNS-confirmed, credit
+    /// needs an anchor, an anchor needs quorum — a closed loop with no way out. `blocker` names
+    /// which condition is not met, so waiting can be told from stuck.
+    AwaitingEligibleSnapshot { weight_fence_daa: u64, blocker: VltActivationBlocker },
+    /// An eligible snapshot was found and committed; the switch happens at the next epoch
+    /// boundary. Bootstrap weight is still in force until then.
+    ///
+    /// Never mid-epoch: the validator set and its weights are fixed within an epoch, and compute
+    /// finalized in `E` is usable from `E+1` at the earliest.
+    ActivationScheduled { activation_epoch: u64, source_anchor: Hash64, snapshot_root: Hash64, total_weight: u128 },
     /// Weighted finality is live: a snapshot with enough weight to take two thirds of.
     Active { epoch: u64, snapshot_root: Hash64, total_weight: u128, quorum_weight: u128 },
     /// Weight has fallen back below the floor **after** something was already finalized. Distinct
@@ -2274,19 +2300,91 @@ pub struct VltGauges {
     pub snapshot_root: Hash64,
 }
 
+/// Which single condition stops a snapshot from being eligible to activate weighted finality.
+///
+/// Named rather than counted: an operator watching a network sit at the fence needs to know which
+/// of four things to wait for or fix, and "not eligible" is the answer that sent the last
+/// investigation down a walk it did not need to read.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum VltActivationBlocker {
+    /// A dependency could not be loaded, so the table is an unknown rather than a small answer.
+    /// Never activate on one: see [`VltCreditSeverity::Incomplete`].
+    ResolutionIncomplete,
+    /// `Σ_i min{C_i(E), λ·B_i(E)}` is below `min_network_compute`. §4 defers the set transition
+    /// rather than finalizing over too little compute.
+    BelowMinNetworkCompute { total_weight: u128, min_network_compute: u128 },
+    /// Enough weight, too few validators holding it. `Q(E)` is a *fraction*, so weight concentrated
+    /// in one validator lets that validator finalize the chain for everybody however large it is.
+    TooFewCreditedValidators { credited: usize, required: usize },
+    /// The snapshot is pinned at a block that is not DNS-confirmed, so it is not yet a fact about
+    /// the shared prefix — two branches could still disagree about the denominator.
+    SourceAnchorNotFinalized,
+}
+
+impl VltActivationBlocker {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ResolutionIncomplete => "resolution_incomplete",
+            Self::BelowMinNetworkCompute { .. } => "below_min_network_compute",
+            Self::TooFewCreditedValidators { .. } => "too_few_credited_validators",
+            Self::SourceAnchorNotFinalized => "source_anchor_not_finalized",
+        }
+    }
+}
+
+/// Whether a snapshot may be used to switch voting weight onto verified compute, or what stops it.
+///
+/// `Ok(())` is deliberately narrow. "The credit table is non-empty" is far too weak a test: one
+/// validator holding one job satisfies it, and `Q(E) = ⌊2W(E)/3⌋ + 1` is a fraction, so at
+/// `W(E) = 50 VLT` the quorum is 34 and a single validator finalizes the chain for everyone. That
+/// is the vacuous case `min_network_compute` exists to exclude, arriving through a different door.
+///
+/// `total_effective_weight` must be the post-cap weight — `Σ_i min{C_i(E), λ·B_i(E)}` — because
+/// that is what will actually be voted with, not the credit that was minted.
+pub fn vlt_activation_eligibility(
+    resolution_complete: bool,
+    total_effective_weight: u128,
+    credited_validators: usize,
+    source_anchor_finalized: bool,
+    params: &VltParams,
+) -> Result<(), VltActivationBlocker> {
+    if !resolution_complete {
+        return Err(VltActivationBlocker::ResolutionIncomplete);
+    }
+    if !source_anchor_finalized {
+        return Err(VltActivationBlocker::SourceAnchorNotFinalized);
+    }
+    if total_effective_weight == 0 || total_effective_weight < params.min_network_compute {
+        return Err(VltActivationBlocker::BelowMinNetworkCompute {
+            total_weight: total_effective_weight,
+            min_network_compute: params.min_network_compute,
+        });
+    }
+    if credited_validators < params.min_active_validators as usize {
+        return Err(VltActivationBlocker::TooFewCreditedValidators {
+            credited: credited_validators,
+            required: params.min_active_validators as usize,
+        });
+    }
+    Ok(())
+}
+
 impl VltActivationState {
     /// Which state a network is in, from the numbers a recompute already has.
     ///
     /// `newest` is the newest scored epoch and its `W(E)`, or `None` when no epoch is scorable
     /// yet. `last_finalized_anchor` is the DNS-confirmed anchor — the default hash means nothing
     /// has ever been finalized, which is what separates "not started" from "fell back".
+    #[allow(clippy::too_many_arguments)]
     pub fn derive(
         shadow_active: bool,
         weight_active: bool,
         newest: Option<(u64, u128)>,
         snapshot_root: Hash64,
-        min_network_compute: u128,
         last_finalized_anchor: Hash64,
+        eligibility: Result<(), VltActivationBlocker>,
+        weight_fence_daa: u64,
+        already_active: bool,
     ) -> Self {
         if !shadow_active {
             return Self::PreShadow;
@@ -2295,13 +2393,21 @@ impl VltActivationState {
             return Self::Shadow;
         }
         let (epoch, total_weight) = newest.unwrap_or((0, 0));
-        // The same floor `meets_bft_quorum` applies, checked here so the reported state and the
-        // credit rule can never disagree about whether this epoch was finalizable.
-        if total_weight == 0 || total_weight < min_network_compute {
-            return if last_finalized_anchor == Hash64::default() {
-                Self::FenceReachedNoSnapshot { total_weight, min_network_compute }
+        if let Err(blocker) = eligibility {
+            // Once weighted finality has activated it must NOT fall back to bonded stake: two
+            // authorities on one chain, and a fork free to pick the one it prefers. §4's answer to
+            // weight loss is to hold the last finalized anchor, not to re-denominate.
+            return if already_active || last_finalized_anchor != Hash64::default() {
+                Self::Recovery {
+                    last_finalized_anchor,
+                    total_weight,
+                    min_network_compute: match blocker {
+                        VltActivationBlocker::BelowMinNetworkCompute { min_network_compute, .. } => min_network_compute,
+                        _ => 0,
+                    },
+                }
             } else {
-                Self::Recovery { last_finalized_anchor, total_weight, min_network_compute }
+                Self::AwaitingEligibleSnapshot { weight_fence_daa, blocker }
             };
         }
         Self::Active { epoch, snapshot_root, total_weight, quorum_weight: bft_quorum(total_weight) }
@@ -2316,7 +2422,10 @@ impl VltActivationState {
 
     /// Whether the weight fence is behind us, regardless of whether anything can be finalized.
     pub fn weight_fence_reached(&self) -> bool {
-        matches!(self, Self::FenceReachedNoSnapshot { .. } | Self::Active { .. } | Self::Recovery { .. })
+        matches!(
+            self,
+            Self::AwaitingEligibleSnapshot { .. } | Self::ActivationScheduled { .. } | Self::Active { .. } | Self::Recovery { .. }
+        )
     }
 
     /// The scrape-shaped view of this state: the gauges an operator alerts on.
@@ -2328,7 +2437,18 @@ impl VltActivationState {
     pub fn gauges(&self) -> VltGauges {
         let (total_weight, quorum_weight, epoch, root) = match self {
             Self::PreShadow | Self::Shadow => (0, 0, 0, Hash64::default()),
-            Self::FenceReachedNoSnapshot { total_weight, .. } => (*total_weight, 0, 0, Hash64::default()),
+            Self::AwaitingEligibleSnapshot { blocker, .. } => (
+                match blocker {
+                    VltActivationBlocker::BelowMinNetworkCompute { total_weight, .. } => *total_weight,
+                    _ => 0,
+                },
+                0,
+                0,
+                Hash64::default(),
+            ),
+            Self::ActivationScheduled { total_weight, snapshot_root, activation_epoch, .. } => {
+                (*total_weight, 0, *activation_epoch, *snapshot_root)
+            }
             Self::Recovery { total_weight, .. } => (*total_weight, 0, 0, Hash64::default()),
             Self::Active { epoch, snapshot_root, total_weight, quorum_weight } => {
                 (*total_weight, *quorum_weight, *epoch, *snapshot_root)
@@ -2350,7 +2470,8 @@ impl VltActivationState {
         match self {
             Self::PreShadow => "pre_shadow",
             Self::Shadow => "shadow",
-            Self::FenceReachedNoSnapshot { .. } => "fence_reached_no_snapshot",
+            Self::AwaitingEligibleSnapshot { .. } => "awaiting_eligible_snapshot",
+            Self::ActivationScheduled { .. } => "activation_scheduled",
             Self::Active { .. } => "active",
             Self::Recovery { .. } => "recovery",
         }
@@ -2799,30 +2920,79 @@ mod tests {
     fn activation_state_separates_reaching_the_fence_from_finalizing() {
         let root = h64(9);
         let anchor = h64(7);
-        let derive = |shadow, weight, newest, last| VltActivationState::derive(shadow, weight, newest, root, 1_000, last);
+        let p = VltParams { min_network_compute: 1_000, min_active_validators: 2, ..VltParams::INERT };
+        let eligible =
+            |w: u128, validators: usize, last: Hash64| vlt_activation_eligibility(true, w, validators, last != Hash64::default(), &p);
+        // Two DIFFERENT questions, deliberately separate arguments: "is the snapshot's source
+        // anchor DNS-confirmed" (eligibility) and "has weighted finality already activated"
+        // (the no-fallback rule). Bootstrap finality confirms anchors during the soak, so the
+        // first is true long before the second — conflating them would report a network that never
+        // activated as being in Recovery.
+        let derive = |newest: Option<(u64, u128)>, validators: usize, confirmed: bool, already_active: bool| {
+            let e = vlt_activation_eligibility(true, newest.map_or(0, |(_, w)| w), validators, confirmed, &p);
+            let last = if already_active { anchor } else { Hash64::default() };
+            VltActivationState::derive(true, true, newest, root, last, e, 5_000, already_active)
+        };
 
-        assert_eq!(derive(false, false, None, Hash64::default()), VltActivationState::PreShadow);
-        assert_eq!(derive(true, false, Some((4, 5_000)), Hash64::default()), VltActivationState::Shadow);
-
-        // Past the fence, nothing to vote with, nothing ever finalized.
-        let s = derive(true, true, Some((4, 0)), Hash64::default());
-        assert_eq!(s, VltActivationState::FenceReachedNoSnapshot { total_weight: 0, min_network_compute: 1_000 });
-        assert!(s.weight_fence_reached(), "the fork DID happen");
-        assert!(!s.finality_active(), "and nothing can be finalized — the two are not the same fact");
-
-        // Weight exists but is below `W_min`: still not finalizable, same reasoning.
-        let s = derive(true, true, Some((4, 999)), Hash64::default());
-        assert!(s.weight_fence_reached() && !s.finality_active());
-
-        // The same shortfall AFTER something was finalized is `Recovery`: there is an anchor to
-        // hold, which is what §4 defers the transition in favour of.
+        let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
-            derive(true, true, Some((4, 0)), anchor),
-            VltActivationState::Recovery { last_finalized_anchor: anchor, total_weight: 0, min_network_compute: 1_000 }
+            VltActivationState::derive(false, false, None, root, Hash64::default(), e_ok, 5_000, false),
+            VltActivationState::PreShadow
+        );
+        assert_eq!(
+            VltActivationState::derive(true, false, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000, false),
+            VltActivationState::Shadow
         );
 
-        // Enough weight to take two thirds of ⇒ genuinely active, with the quorum it will apply.
-        let s = derive(true, true, Some((4, 3_000)), Hash64::default());
+        // Past the fence with nothing to vote with: the fence is the EARLIEST point the switch may
+        // happen, so this waits on bootstrap weight rather than moving the vote onto an empty table.
+        let s = derive(Some((4, 0)), 0, true, false);
+        assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "got {s:?}");
+        assert!(s.weight_fence_reached(), "the fence IS behind us");
+        assert!(!s.finality_active(), "and nothing is being finalized — the two are not the same fact");
+
+        // W_min - 1 does not activate; W_min does. The boundary is the whole point of the floor.
+        assert!(matches!(derive(Some((4, 999)), 5, true, false), VltActivationState::AwaitingEligibleSnapshot { .. }));
+        assert!(matches!(derive(Some((4, 1_000)), 5, true, false), VltActivationState::Active { .. }));
+
+        // An unconfirmed source anchor never activates: the snapshot is not yet a fact about the
+        // shared prefix, so two branches could still disagree about the denominator.
+        assert!(matches!(
+            derive(Some((4, 9_000)), 5, false, false),
+            VltActivationState::AwaitingEligibleSnapshot { blocker: VltActivationBlocker::SourceAnchorNotFinalized, .. }
+        ));
+
+        // Enough weight, too few holding it: `Q(E)` is a fraction, so one validator with all of it
+        // would finalize the chain alone however large the number.
+        assert!(matches!(
+            derive(Some((4, 3_000)), 1, true, false),
+            VltActivationState::AwaitingEligibleSnapshot { blocker: VltActivationBlocker::TooFewCreditedValidators { .. }, .. }
+        ));
+
+        // An incomplete resolution never activates, whatever the weight says: it is an unknown
+        // answer, not a small one.
+        assert!(matches!(
+            VltActivationState::derive(
+                true,
+                true,
+                Some((4, 9_000)),
+                root,
+                Hash64::default(),
+                vlt_activation_eligibility(false, 9_000, 5, true, &p),
+                5_000,
+                false
+            ),
+            VltActivationState::AwaitingEligibleSnapshot { blocker: VltActivationBlocker::ResolutionIncomplete, .. }
+        ));
+
+        // The same shortfall AFTER something was finalized is `Recovery`, never a fall back to
+        // bootstrap: two authorities on one chain would let a fork choose the one it prefers.
+        let s = derive(Some((4, 0)), 0, true, true);
+        assert!(matches!(s, VltActivationState::Recovery { .. }), "got {s:?}");
+        assert!(!matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "Active must never fall back to bootstrap");
+
+        // Enough weight, spread widely enough, on a confirmed anchor ⇒ active.
+        let s = derive(Some((4, 3_000)), 5, true, true);
         assert_eq!(
             s,
             VltActivationState::Active { epoch: 4, snapshot_root: root, total_weight: 3_000, quorum_weight: bft_quorum(3_000) }
@@ -2834,7 +3004,10 @@ mod tests {
     /// expressible in them — not just in the enum.
     #[test]
     fn gauges_expose_the_alertable_condition() {
-        let fence_no_snapshot = VltActivationState::FenceReachedNoSnapshot { total_weight: 0, min_network_compute: 1_000 };
+        let fence_no_snapshot = VltActivationState::AwaitingEligibleSnapshot {
+            weight_fence_daa: 5_000,
+            blocker: VltActivationBlocker::BelowMinNetworkCompute { total_weight: 0, min_network_compute: 1_000 },
+        };
         let g = fence_no_snapshot.gauges();
         assert!(g.weight_fence_reached && !g.finality_active, "the one alert worth writing");
         assert_eq!(g.quorum_weight, 0, "no quorum is being applied, so do not report one");
