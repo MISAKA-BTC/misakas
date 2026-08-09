@@ -174,6 +174,7 @@ impl IbdFlow {
             // So the same evidence is looked at again once the latch is free.
             let relay_header = tokio::select! {
                 _ = tokio::time::sleep(VALIDATED_CANDIDATE_RECHECK) => {
+                    self.serve_pending_nomination().await;
                     self.reconsider_validated_candidates().await;
                     continue;
                 }
@@ -526,6 +527,35 @@ impl IbdFlow {
                 debug!("No bootstrap-recovery permit for candidate {}: {:?}", reserved.candidate_id.virtual_selected_parent, e);
                 None
             }
+        }
+    }
+
+    /// Pick up a nomination this flow was too busy to hear.
+    ///
+    /// Nominations are broadcast once. A flow inside `ibd()` does not reach its select, so the
+    /// nomination waits in its receiver — and if that IBD fails, the peer is disconnected and the
+    /// flow dies holding it. The candidate then sits in `ProofRequested` for a whole lease with
+    /// nobody serving it, and the chain that most needed checking is the one least likely to get
+    /// checked: the peer offering it is the one being disconnected every thirty seconds.
+    ///
+    /// So the broadcast is a wake-up, not the only delivery. The registry already holds the request;
+    /// this reads it. `verify_challenger` re-checks the state and the source, so a candidate another
+    /// flow is already serving is skipped rather than fetched twice.
+    async fn serve_pending_nomination(&mut self) {
+        if self.ctx.is_consensus_participation_allowed() {
+            return;
+        }
+        let me = self.router.key();
+        let pending = self
+            .ctx
+            .ibd_candidates()
+            .read()
+            .candidates_awaiting_proof()
+            .into_iter()
+            .find(|(_, sources)| sources.contains(&me))
+            .map(|(id, _)| id);
+        if let Some(id) = pending {
+            self.verify_challenger(id).await;
         }
     }
 

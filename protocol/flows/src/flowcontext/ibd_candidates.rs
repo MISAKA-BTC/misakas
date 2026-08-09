@@ -514,6 +514,18 @@ impl IbdCandidateRegistry {
         stale
     }
 
+    /// Candidates whose proof has been requested but not yet delivered, with who could deliver it.
+    ///
+    /// The level-triggered half of nomination: the broadcast wakes whoever is listening, this is how
+    /// a flow that was not listening finds out anyway. See `IbdFlow::serve_pending_nomination`.
+    pub fn candidates_awaiting_proof(&self) -> Vec<(CandidateId, Vec<PeerKey>)> {
+        self.candidates
+            .values()
+            .filter(|c| matches!(c.validation, CandidateValidation::ProofRequested { .. }))
+            .map(|c| (c.id, c.sources.clone()))
+            .collect()
+    }
+
     /// Peers currently offering this candidate, for asking one of them for a proof.
     pub fn sources_of(&self, id: &CandidateId) -> Vec<PeerKey> {
         self.candidates.get(id).map(|c| c.sources.clone()).unwrap_or_default()
