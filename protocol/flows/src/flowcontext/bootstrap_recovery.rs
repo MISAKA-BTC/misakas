@@ -65,14 +65,19 @@ pub struct VerifiedCandidate {
     pub descends_from_checkpoint: Option<bool>,
 }
 
-/// Authority to **investigate** a chain by syncing it across the provisional pruning point, exactly
-/// once, for exactly this chain.
+/// Authority to **validate** a chain: sync it into staging across the provisional pruning point and
+/// run it through the ordinary pipeline to its tip. Exactly once, for exactly this chain.
 ///
-/// Not authority to adopt it. Everything a permit allows is reversible by cancelling staging; the
-/// adoption decision happens afterwards, at the commit barrier, on work this node validated to the
-/// tip itself. That ordering is the point — see [`authorize_bootstrap_recovery`].
+/// Carries no power to change the active consensus. Everything it allows is undone by cancelling
+/// staging.
+///
+/// Kept separate from [`CandidateAdoptionPermit`] because collapsing the two is circular: crossing
+/// the boundary needs a permit, a permit would need proven superiority, and proving superiority
+/// needs tip work, which needs crossing the boundary. Splitting them cuts the loop at the only
+/// place it can be cut — the expensive, reversible step is authorised on cheap evidence, and the
+/// irreversible step waits for evidence this node computed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BootstrapRecoveryPermit {
+pub struct CandidateValidationPermit {
     pub candidate_id: CandidateId,
     pub pruning_point: BlockHash,
     pub adoption_generation: u64,
@@ -122,7 +127,7 @@ pub struct RecoveryRequest<'a> {
 /// Every condition is checked independently and the first failure is returned, so a refusal names
 /// one reason rather than a conjunction. Ordered from "you may not do this at all" outward, because
 /// that is the order an operator reads them in.
-pub fn authorize_bootstrap_recovery(request: RecoveryRequest<'_>) -> Result<BootstrapRecoveryPermit, RecoveryError> {
+pub fn authorize_candidate_validation(request: RecoveryRequest<'_>) -> Result<CandidateValidationPermit, RecoveryError> {
     // The one-way door first. Nothing about a better chain reopens it.
     if request.state.ever_ready {
         return Err(RecoveryError::HasBeenReady);
@@ -180,7 +185,7 @@ pub fn authorize_bootstrap_recovery(request: RecoveryRequest<'_>) -> Result<Boot
         return Err(RecoveryError::SwitchLimitReached);
     }
 
-    Ok(BootstrapRecoveryPermit {
+    Ok(CandidateValidationPermit {
         candidate_id: request.candidate.id,
         pruning_point: request.candidate.id.pruning_point,
         adoption_generation: request.state.adoption_generation,
@@ -190,7 +195,87 @@ pub fn authorize_bootstrap_recovery(request: RecoveryRequest<'_>) -> Result<Boot
     })
 }
 
-impl BootstrapRecoveryPermit {
+/// Authority to replace the provisional chain with one this node has validated to its tip.
+///
+/// Issued only after staging validation, from figures this node computed for both sides. One-shot
+/// and bound to the exact validated result, so a permit earned by validating A100 cannot be spent
+/// on a later, different A150.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CandidateAdoptionPermit {
+    pub candidate_id: CandidateId,
+    /// The tip this node actually validated — not the one the peer advertised.
+    pub verified_tip: BlockHash,
+    /// Blue work recomputed by staging over that tip.
+    pub verified_blue_work: BlueWorkType,
+    pub proof_hash: Hash,
+    pub adoption_generation: u64,
+    pub switch_generation: u32,
+}
+
+/// What staging established about a candidate after validating it to the tip. Every field is this
+/// node's own computation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValidatedCandidate {
+    pub id: CandidateId,
+    pub verified_tip: BlockHash,
+    pub verified_blue_work: BlueWorkType,
+    pub proof_hash: Hash,
+}
+
+/// Why an adoption was refused. Distinct from [`RecoveryError`]: these are verdicts on evidence,
+/// not gate conditions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdoptionError {
+    /// The node participated while the candidate was being validated. The door shut mid-flight.
+    HasBeenReady,
+    /// The validation permit does not correspond to this candidate, proof, or generation.
+    PermitDoesNotMatch,
+    /// Validated and genuinely worse. An ordinary negative result: keep the incumbent.
+    Weaker,
+    /// Validated and exactly equal. NOT adopted and not simply dropped either — two chains this
+    /// node cannot separate is precisely the situation it must not resolve by itself.
+    Equal,
+}
+
+/// Decide whether a validated candidate may replace the provisional chain.
+///
+/// Both figures come from this node: the candidate's from staging, the incumbent's from the chain
+/// being held. This is the comparison pruning-point work could not make — measured across two real
+/// hosts, two different branches had identical pruning-point work, because that figure follows
+/// depth rather than branch.
+pub fn authorize_candidate_adoption(
+    state: &ChainReviewState,
+    validation_permit: &CandidateValidationPermit,
+    validated: &ValidatedCandidate,
+    incumbent_blue_work: BlueWorkType,
+) -> Result<CandidateAdoptionPermit, AdoptionError> {
+    if state.ever_ready {
+        return Err(AdoptionError::HasBeenReady);
+    }
+    // The adoption permit may only be earned by the validation permit that authorised the work, for
+    // the same chain, the same proof, and the same moment in this node's history.
+    if validation_permit.candidate_id != validated.id
+        || validation_permit.proof_hash != validated.proof_hash
+        || validation_permit.adoption_generation != state.adoption_generation
+        || validation_permit.switch_generation != state.switch_count
+    {
+        return Err(AdoptionError::PermitDoesNotMatch);
+    }
+    match validated.verified_blue_work.cmp(&incumbent_blue_work) {
+        std::cmp::Ordering::Greater => Ok(CandidateAdoptionPermit {
+            candidate_id: validated.id,
+            verified_tip: validated.verified_tip,
+            verified_blue_work: validated.verified_blue_work,
+            proof_hash: validated.proof_hash,
+            adoption_generation: state.adoption_generation,
+            switch_generation: state.switch_count,
+        }),
+        std::cmp::Ordering::Equal => Err(AdoptionError::Equal),
+        std::cmp::Ordering::Less => Err(AdoptionError::Weaker),
+    }
+}
+
+impl CandidateValidationPermit {
     /// Whether this permit still applies. A permit issued for one situation must not be redeemed in
     /// another: chains move, reservations change, and a stale permit is indistinguishable from a
     /// forged one at the point of use.
@@ -257,7 +342,7 @@ mod tests {
 
     #[test]
     fn a_provisional_chain_can_be_replaced_by_a_verified_better_one() {
-        let permit = authorize_bootstrap_recovery(request(reviewing(), candidate())).unwrap();
+        let permit = authorize_candidate_validation(request(reviewing(), candidate())).unwrap();
         assert_eq!(permit.candidate_id, candidate().id);
         assert_eq!(permit.pruning_point, candidate().id.pruning_point);
         assert_eq!(permit.proof_hash, candidate().proof_hash);
@@ -270,18 +355,18 @@ mod tests {
         // a reorg, and reorg policy is not IBD's to make.
         let mut state = reviewing();
         state.ever_ready = true;
-        assert_eq!(authorize_bootstrap_recovery(request(state, candidate())), Err(RecoveryError::HasBeenReady));
+        assert_eq!(authorize_candidate_validation(request(state, candidate())), Err(RecoveryError::HasBeenReady));
 
         // Not even from a state that otherwise qualifies.
         state.participation = ChainParticipation::Quarantined;
-        assert_eq!(authorize_bootstrap_recovery(request(state, candidate())), Err(RecoveryError::HasBeenReady));
+        assert_eq!(authorize_candidate_validation(request(state, candidate())), Err(RecoveryError::HasBeenReady));
     }
 
     #[test]
     fn a_participating_node_is_refused() {
         let mut state = reviewing();
         state.participation = ChainParticipation::Ready;
-        assert_eq!(authorize_bootstrap_recovery(request(state, candidate())), Err(RecoveryError::AlreadyParticipating));
+        assert_eq!(authorize_candidate_validation(request(state, candidate())), Err(RecoveryError::AlreadyParticipating));
     }
 
     #[test]
@@ -290,7 +375,7 @@ mod tests {
             let mut state = reviewing();
             state.participation = participation;
             assert!(
-                authorize_bootstrap_recovery(request(state, candidate())).is_ok(),
+                authorize_candidate_validation(request(state, candidate())).is_ok(),
                 "{participation:?} withholds participation, so its chain is still provisional"
             );
         }
@@ -301,12 +386,12 @@ mod tests {
         let mut wrong_genesis = candidate();
         wrong_genesis.genesis_hash = bhash(777);
         wrong_genesis.claimed_tip_blue_work = work(u64::MAX);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), wrong_genesis)), Err(RecoveryError::WrongGenesis));
+        assert_eq!(authorize_candidate_validation(request(reviewing(), wrong_genesis)), Err(RecoveryError::WrongGenesis));
 
         let mut wrong_params = candidate();
         wrong_params.consensus_params_id = hash(777);
         wrong_params.claimed_tip_blue_work = work(u64::MAX);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), wrong_params)), Err(RecoveryError::WrongConsensusParams));
+        assert_eq!(authorize_candidate_validation(request(reviewing(), wrong_params)), Err(RecoveryError::WrongConsensusParams));
     }
 
     #[test]
@@ -315,11 +400,11 @@ mod tests {
         // later, at the commit barrier, on tip work this node validated itself.
         let mut equal = candidate();
         equal.claimed_tip_blue_work = work(100);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), equal)), Err(RecoveryError::NotWorthInvestigating));
+        assert_eq!(authorize_candidate_validation(request(reviewing(), equal)), Err(RecoveryError::NotWorthInvestigating));
 
         let mut worse = candidate();
         worse.claimed_tip_blue_work = work(99);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), worse)), Err(RecoveryError::NotWorthInvestigating));
+        assert_eq!(authorize_candidate_validation(request(reviewing(), worse)), Err(RecoveryError::NotWorthInvestigating));
     }
 
     #[test]
@@ -328,7 +413,7 @@ mod tests {
         // fabricated chain from buying one.
         let mut unproven = candidate();
         unproven.verified_blue_work = None;
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), unproven)), Err(RecoveryError::ProofNotValidated));
+        assert_eq!(authorize_candidate_validation(request(reviewing(), unproven)), Err(RecoveryError::ProofNotValidated));
     }
 
     #[test]
@@ -341,7 +426,7 @@ mod tests {
         let mut tied = candidate();
         tied.verified_blue_work = Some(work(100));
         tied.claimed_tip_blue_work = work(101);
-        assert!(authorize_bootstrap_recovery(request(reviewing(), tied)).is_ok());
+        assert!(authorize_candidate_validation(request(reviewing(), tied)).is_ok());
     }
 
     #[test]
@@ -350,18 +435,18 @@ mod tests {
         // handoff would stop being a handoff.
         let mut req = request(reviewing(), candidate());
         req.reserved_candidate = None;
-        assert_eq!(authorize_bootstrap_recovery(req), Err(RecoveryError::NoReservation));
+        assert_eq!(authorize_candidate_validation(req), Err(RecoveryError::NoReservation));
 
         let mut req = request(reviewing(), candidate());
         req.reserved_candidate = Some(CandidateId { pruning_point: bhash(90), virtual_selected_parent: bhash(91) });
-        assert_eq!(authorize_bootstrap_recovery(req), Err(RecoveryError::NoReservation));
+        assert_eq!(authorize_candidate_validation(req), Err(RecoveryError::NoReservation));
     }
 
     #[test]
     fn the_switch_limit_is_enforced_here_too() {
         let mut state = reviewing();
         state.switch_count = 5;
-        assert_eq!(authorize_bootstrap_recovery(request(state, candidate())), Err(RecoveryError::SwitchLimitReached));
+        assert_eq!(authorize_candidate_validation(request(state, candidate())), Err(RecoveryError::SwitchLimitReached));
     }
 
     #[test]
@@ -370,19 +455,19 @@ mod tests {
 
         let mut req = request(reviewing(), candidate());
         req.checkpoint = Some(&checkpoint);
-        assert_eq!(authorize_bootstrap_recovery(req), Err(RecoveryError::CheckpointIncompatible), "unknown ancestry is not consent");
+        assert_eq!(authorize_candidate_validation(req), Err(RecoveryError::CheckpointIncompatible), "unknown ancestry is not consent");
 
         let mut descending = candidate();
         descending.descends_from_checkpoint = Some(false);
         let mut req = request(reviewing(), descending);
         req.checkpoint = Some(&checkpoint);
-        assert_eq!(authorize_bootstrap_recovery(req), Err(RecoveryError::CheckpointIncompatible));
+        assert_eq!(authorize_candidate_validation(req), Err(RecoveryError::CheckpointIncompatible));
 
         let mut descending = candidate();
         descending.descends_from_checkpoint = Some(true);
         let mut req = request(reviewing(), descending);
         req.checkpoint = Some(&checkpoint);
-        assert!(authorize_bootstrap_recovery(req).is_ok());
+        assert!(authorize_candidate_validation(req).is_ok());
     }
 
     #[test]
@@ -392,13 +477,83 @@ mod tests {
         descending.descends_from_checkpoint = Some(true);
         let mut req = request(reviewing(), descending);
         req.checkpoint = Some(&checkpoint);
-        assert_eq!(authorize_bootstrap_recovery(req), Err(RecoveryError::WrongConsensusParams));
+        assert_eq!(authorize_candidate_validation(req), Err(RecoveryError::WrongConsensusParams));
+    }
+
+    fn validated(work: u64) -> ValidatedCandidate {
+        ValidatedCandidate {
+            id: candidate().id,
+            verified_tip: bhash(555),
+            verified_blue_work: super::tests::work(work),
+            proof_hash: hash(99),
+        }
+    }
+
+    #[test]
+    fn adoption_is_earned_only_by_strictly_better_verified_work() {
+        // The decision the whole two-stage split exists to make, on figures this node computed for
+        // both sides rather than on anything a peer said.
+        let state = reviewing();
+        let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
+
+        assert!(authorize_candidate_adoption(&state, &permit, &validated(200), work(100)).is_ok());
+        assert_eq!(
+            authorize_candidate_adoption(&state, &permit, &validated(50), work(100)),
+            Err(AdoptionError::Weaker),
+            "validated and worse is an ordinary negative result"
+        );
+    }
+
+    #[test]
+    fn two_chains_that_cannot_be_separated_are_not_adopted() {
+        // Exactly the case the real-host run hit, where both branches measured identical. Equal is
+        // not a tie to be broken by whoever asked first — it is the node's cue to stop.
+        let state = reviewing();
+        let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &validated(100), work(100)), Err(AdoptionError::Equal));
+    }
+
+    #[test]
+    fn a_validation_permit_cannot_be_spent_on_a_different_result() {
+        // A permit earned by validating one chain must not adopt another, nor the same chain at a
+        // different tip after the situation moved on.
+        let state = reviewing();
+        let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
+
+        let mut other_chain = validated(200);
+        other_chain.id = CandidateId { pruning_point: bhash(90), virtual_selected_parent: bhash(91) };
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_chain, work(100)), Err(AdoptionError::PermitDoesNotMatch));
+
+        let mut other_proof = validated(200);
+        other_proof.proof_hash = hash(4242);
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_proof, work(100)), Err(AdoptionError::PermitDoesNotMatch));
+
+        let mut moved_on = state;
+        moved_on.adoption_generation += 1;
+        assert_eq!(
+            authorize_candidate_adoption(&moved_on, &permit, &validated(200), work(100)),
+            Err(AdoptionError::PermitDoesNotMatch)
+        );
+    }
+
+    #[test]
+    fn adoption_stops_if_the_node_participated_while_validating() {
+        // The one-way door can close mid-flight: a review floor can elapse during a long staging
+        // sync. A permit issued before that must not still be spendable after.
+        let state = reviewing();
+        let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
+        let mut participated = state;
+        participated.ever_ready = true;
+        assert_eq!(
+            authorize_candidate_adoption(&participated, &permit, &validated(u64::MAX), work(1)),
+            Err(AdoptionError::HasBeenReady)
+        );
     }
 
     #[test]
     fn a_permit_is_bound_to_the_situation_that_issued_it() {
         let state = reviewing();
-        let permit = authorize_bootstrap_recovery(request(state, candidate())).unwrap();
+        let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
         let c = candidate();
         assert!(permit.is_valid_for(&state, c.id, c.proof_hash));
 

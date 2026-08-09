@@ -2,7 +2,8 @@ use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
     flowcontext::bootstrap_recovery::{
-        BootstrapRecoveryPermit, ChainReviewState, RecoveryRequest, VerifiedCandidate, authorize_bootstrap_recovery,
+        AdoptionError, CandidateValidationPermit, ChainReviewState, RecoveryRequest, ValidatedCandidate, VerifiedCandidate,
+        authorize_candidate_adoption, authorize_candidate_validation,
     },
     flowcontext::ibd_candidates::{
         CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs, CommitVerdict, decide_commit,
@@ -90,7 +91,7 @@ pub struct IbdFlow {
     /// The permit authorising THIS IBD to cross the node's own provisional pruning point, if it
     /// holds one. Set when `determine_ibd_type` grants one and cleared when the IBD ends, so the
     /// authority lasts exactly as long as the attempt it was issued for.
-    active_recovery_permit: Option<BootstrapRecoveryPermit>,
+    active_recovery_permit: Option<CandidateValidationPermit>,
 
     /// Handoffs: a chain this node has decided to sync next. Consumed by whichever flow serves it,
     /// so a switch does not depend on the winning peer happening to relay something.
@@ -377,7 +378,7 @@ impl IbdFlow {
     /// Gathers the facts and lets `authorize_bootstrap_recovery` judge them, so the policy is
     /// testable without a peer. Returns `None` on any refusal — including the ordinary case where
     /// the node has participated and the boundary simply stands.
-    async fn bootstrap_recovery_permit_for(&self, syncer_pruning_point: BlockHash) -> Option<BootstrapRecoveryPermit> {
+    async fn bootstrap_recovery_permit_for(&self, syncer_pruning_point: BlockHash) -> Option<CandidateValidationPermit> {
         let gate = self.ctx.chain_participation();
         record_stage(
             RecoveryStage::RecoveryPermitRequested,
@@ -459,7 +460,7 @@ impl IbdFlow {
             consensus_params_id: self.ctx.config.params.consensus_params_id(),
             descends_from_checkpoint,
         };
-        match authorize_bootstrap_recovery(RecoveryRequest {
+        match authorize_candidate_validation(RecoveryRequest {
             state,
             candidate,
             provisional_blue_work,
@@ -761,31 +762,75 @@ impl IbdFlow {
         // Losing is an ordinary outcome, not an impasse: staging is cancelled and the incumbent
         // stays. Nothing was adopted, so there is nothing to be uncertain about, and quarantining
         // here would punish the node for having checked.
-        if self.active_recovery_permit.is_some() {
+        // The second permit. A validation permit bought the right to sync and check this chain; only
+        // an adoption permit lets it replace what is held, and that is earned here, from figures
+        // this node computed on both sides.
+        if let Some(validation_permit) = self.active_recovery_permit {
             let incumbent = {
                 let session = self.ctx.consensus().session().await;
                 let tip = session.async_get_headers_selected_tip().await;
                 session.async_get_header(tip).await.ok().map(|h| h.blue_work)
             };
-            if let Some(incumbent) = incumbent {
-                record_stage(
-                    RecoveryStage::CandidateCompared,
-                    None,
-                    None,
-                    Some(self.router.to_string()),
-                    self.ctx.chain_participation().state().as_str(),
-                    format!("recovery verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent)),
-                );
-                if staged_blue_work <= incumbent {
+            let Some(incumbent) = incumbent else {
+                return Err(ProtocolError::Other("cannot read the incumbent chain's tip work to judge a recovery candidate"));
+            };
+
+            let gate = self.ctx.chain_participation();
+            let state = ChainReviewState {
+                participation: gate.state(),
+                ever_ready: gate.ever_ready(),
+                adoption_generation: gate.adoption_generation(),
+                switch_count: gate.restored_switches(),
+            };
+            let validated = ValidatedCandidate {
+                id: validation_permit.candidate_id,
+                verified_tip: tip,
+                verified_blue_work: staged_blue_work,
+                proof_hash: validation_permit.proof_hash,
+            };
+            record_stage(
+                RecoveryStage::CandidateCompared,
+                None,
+                Some(validation_permit.candidate_id),
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                format!("adoption verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent)),
+            );
+
+            match authorize_candidate_adoption(&state, &validation_permit, &validated, incumbent) {
+                Ok(adoption) => {
+                    record_stage(
+                        RecoveryStage::RecoveryPermitGranted,
+                        None,
+                        Some(adoption.candidate_id),
+                        Some(self.router.to_string()),
+                        gate.state().as_str(),
+                        format!("adoption permit: verified_blue_work={} tip={}", adoption.verified_blue_work, adoption.verified_tip),
+                    );
+                }
+                // Validated and genuinely worse: an ordinary negative result. Keep the incumbent,
+                // drop staging, do not quarantine — nothing was adopted, so nothing is uncertain,
+                // and quarantining here would punish the node for having checked.
+                Err(AdoptionError::Weaker) => {
                     warn!(
-                        "Investigated the chain offered by {} and it does not beat the one already held ({}). Keeping the \
-                         incumbent; nothing was adopted.",
+                        "Validated the chain offered by {} to its tip and it is weaker than the one held ({}). Keeping the \
+                         incumbent.",
                         self.router,
                         describe_comparison(staged_blue_work, incumbent)
                     );
                     return Err(ProtocolError::OtherOwned(format!(
-                        "recovery candidate from {} is not strictly better once validated to the tip",
+                        "recovery candidate from {} is weaker once validated",
                         self.router
+                    )));
+                }
+                // Two chains this node validated and cannot separate. Not adopted, and not waved
+                // through either: choosing between equals is exactly what it must not do alone.
+                Err(e) => {
+                    self.ctx.chain_participation().quarantine();
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "refusing to adopt the chain from {}: {:?} (verified {} against incumbent {}). This node cannot \
+                         separate these histories and will not pick one by itself.",
+                        self.router, e, staged_blue_work, incumbent
                     )));
                 }
             }
