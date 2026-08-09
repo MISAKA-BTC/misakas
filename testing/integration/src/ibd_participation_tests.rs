@@ -825,11 +825,20 @@ async fn mainnet_soak_randomized_fault_injection() {
 /// the node comes back safe when it died holding something it had not finished — a proof it had not
 /// checked, a reservation it had not redeemed, a staging area it had not committed, a chain it had
 /// committed but not verified to the tip.
-const RESTART_POINTS: [recovery_trace::RecoveryStage; 5] = [
+const RESTART_POINTS: [recovery_trace::RecoveryStage; 7] = [
+    // Discovery: a chain has been described but nothing checked.
     recovery_trace::RecoveryStage::SummaryReceived,
+    // A proof is outstanding — the lease is held and the slot is spent.
     recovery_trace::RecoveryStage::ProofRequestSent,
+    // Evidence in hand, decision not yet made.
     recovery_trace::RecoveryStage::ProofValidated,
+    // The latch is promised to a chain that has not had it yet.
     recovery_trace::RecoveryStage::PreferredCandidateReserved,
+    // Mid-staging: headers are being validated against a chain not yet adopted.
+    recovery_trace::RecoveryStage::IbdStartedForPreferredCandidate,
+    // The adoption permit exists but the swap has not happened.
+    recovery_trace::RecoveryStage::RecoveryPermitGranted,
+    // The chain has been swapped in and the sync that justified it may not have finished.
     recovery_trace::RecoveryStage::CandidateCommitted,
 ];
 
