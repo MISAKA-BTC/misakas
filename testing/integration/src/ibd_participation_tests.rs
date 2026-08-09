@@ -696,3 +696,111 @@ async fn mainnet_gate_recovery_holds_repeatedly_over_a_delayed_link() {
     println!("MAINNET-GATE recovery results={results:?}");
     assert!(results.iter().all(|r| *r), "bootstrap recovery did not hold in every round: {results:?}");
 }
+
+/// Rounds the randomized soak runs. Three greens proved nothing on their own — this work has
+/// already produced a green run that was luck — so the release gate is a soak, not a sample.
+const SOAK_ROUNDS: usize = 20;
+
+/// Mainnet gate: the property must hold under randomized network conditions, repeatedly.
+///
+/// Everything that varied between the passing and failing rounds so far was timing, so timing is
+/// what gets randomized: latency across a wide band, which peer is offered first, how long before
+/// the second appears, and whether the link breaks and heals mid-flight.
+///
+/// The two chains are mined ONCE and reused. What varies between rounds is the follower's
+/// experience of the network, which is the thing under test; re-mining 8700 blocks per round would
+/// buy nothing and cost hours.
+///
+/// Each round is seeded from its index, so a failure replays exactly rather than being a story
+/// about a bad afternoon.
+#[ignore = "mainnet soak: hours; run explicitly"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mainnet_soak_randomized_fault_injection() {
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let overrides = write_shallow_pruning_params("soak");
+    let (mut light, light_client, address, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+    let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_ne!(light_pp, heavy_pp);
+    assert!(heavy_score > light_score);
+
+    let mut failures: Vec<String> = Vec::new();
+    for round in 0..SOAK_ROUNDS {
+        let mut rng = StdRng::seed_from_u64(round as u64);
+        // A band wide enough to cover a LAN and a bad intercontinental hop, drawn per round.
+        let lo = rng.gen_range(5u64..=60);
+        let hi = lo + rng.gen_range(20u64..=440);
+        let delay = Duration::from_millis(lo)..Duration::from_millis(hi);
+        let heavy_first: bool = rng.r#gen();
+        let second_peer_delay_ms = rng.gen_range(0u64..=20_000);
+        let cut_link: bool = rng.gen_bool(0.3);
+
+        recovery_trace::clear();
+        let light_link = LaggyLink::spawn(light.p2p_port, delay.clone()).await;
+        let heavy_link = LaggyLink::spawn(heavy.p2p_port, delay.clone()).await;
+
+        let mut args = gated_args();
+        args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+        let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+        let follower_client = follower.start().await;
+
+        let (first_port, second_port) =
+            if heavy_first { (heavy_link.local_port, light_link.local_port) } else { (light_link.local_port, heavy_link.local_port) };
+        follower_client.add_peer(format!("127.0.0.1:{first_port}").try_into().unwrap(), true).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(second_peer_delay_ms)).await;
+        follower_client.add_peer(format!("127.0.0.1:{second_port}").try_into().unwrap(), true).await.unwrap();
+
+        // A partition that heals: the node must recover from it, not merely survive it.
+        if cut_link {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            heavy_link.cut();
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            heavy_link.heal();
+        }
+
+        let check = follower_client.clone();
+        let target = heavy_score;
+        let settled = tokio::time::timeout(Duration::from_secs(420), async move {
+            loop {
+                if check.get_block_dag_info().await.unwrap().virtual_daa_score >= target {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        let info = follower_client.get_block_dag_info().await.unwrap();
+        let on_heavy = info.pruning_point_hash == heavy_pp;
+        let on_light = info.pruning_point_hash == light_pp;
+        println!(
+            "SOAK round={round} delay={lo}..{hi}ms heavy_first={heavy_first} second_after={second_peer_delay_ms}ms \
+             cut={cut_link} settled={settled} on_heavy={on_heavy} on_light={on_light}"
+        );
+
+        // The property: never the wrong branch. Landing on the heavier one is convergence; landing
+        // on the lighter one is the bug this whole effort exists to prevent.
+        if on_light {
+            failures.push(format!("round {round}: settled on the LIGHTER branch (seed={round})"));
+            println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::CandidateCommitted));
+        } else if !on_heavy {
+            failures.push(format!("round {round}: settled on neither branch (seed={round})"));
+        }
+
+        follower.shutdown();
+        let _ = address;
+    }
+
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+
+    println!("SOAK complete: {} failures out of {SOAK_ROUNDS}", failures.len());
+    assert!(failures.is_empty(), "randomized soak found failures:\n{}", failures.join("\n"));
+}

@@ -15,7 +15,14 @@
 //! product is how you end up shipping the test harness.
 
 use rand::{Rng, thread_rng};
-use std::{ops::Range, sync::Arc, time::Duration};
+use std::{
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -32,6 +39,7 @@ pub const WAN_DELAY: Range<Duration> = Duration::from_millis(25)..Duration::from
 pub struct LaggyLink {
     pub local_port: u16,
     shutdown: Arc<Notify>,
+    cut: Arc<AtomicBool>,
 }
 
 impl LaggyLink {
@@ -42,7 +50,9 @@ impl LaggyLink {
         let local_port = listener.local_addr().expect("laggy link addr").port();
         let shutdown = Arc::new(Notify::new());
 
+        let cut = Arc::new(AtomicBool::new(false));
         let stop = shutdown.clone();
+        let cut_flag = cut.clone();
         tokio::spawn(async move {
             loop {
                 let accepted = tokio::select! {
@@ -50,21 +60,40 @@ impl LaggyLink {
                     _ = stop.notified() => return,
                 };
                 let Ok((inbound, _)) = accepted else { continue };
+                // While cut, connections are accepted and immediately dropped — the shape of a link
+                // that is up but not passing traffic, which is what a real partition looks like to
+                // the peer on either end.
+                if cut_flag.load(Ordering::Relaxed) {
+                    drop(inbound);
+                    continue;
+                }
                 let delay = delay.clone();
+                let cut_flag = cut_flag.clone();
                 tokio::spawn(async move {
                     // A failure to reach the target is a closed connection, which is what a real
                     // network does too — nothing to report.
                     let Ok(outbound) = TcpStream::connect(("127.0.0.1", target_port)).await else { return };
                     let (ri, wi) = inbound.into_split();
                     let (ro, wo) = outbound.into_split();
-                    let a = tokio::spawn(pump(ri, wo, delay.clone()));
-                    let b = tokio::spawn(pump(ro, wi, delay));
+                    let a = tokio::spawn(pump(ri, wo, delay.clone(), cut_flag.clone()));
+                    let b = tokio::spawn(pump(ro, wi, delay, cut_flag));
                     let _ = tokio::join!(a, b);
                 });
             }
         });
 
-        Self { local_port, shutdown }
+        Self { local_port, shutdown, cut }
+    }
+
+    /// Break the link without closing the listener. Existing streams stop passing bytes and new
+    /// connections are dropped on accept.
+    pub fn cut(&self) {
+        self.cut.store(true, Ordering::Relaxed);
+    }
+
+    /// Restore it. Peers reconnect on their own.
+    pub fn heal(&self) {
+        self.cut.store(false, Ordering::Relaxed);
     }
 }
 
@@ -78,7 +107,7 @@ impl Drop for LaggyLink {
 ///
 /// Per chunk rather than per connection: the delay has to keep applying for the whole transfer, or
 /// a long IBD would pay it once and then run at loopback speed for the part that matters.
-async fn pump<R, W>(mut from: R, mut to: W, delay: Range<Duration>)
+async fn pump<R, W>(mut from: R, mut to: W, delay: Range<Duration>, cut: Arc<AtomicBool>)
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -91,6 +120,9 @@ where
         };
         let wait = { thread_rng().gen_range(delay.start..delay.end) };
         tokio::time::sleep(wait).await;
+        if cut.load(Ordering::Relaxed) {
+            break;
+        }
         if to.write_all(&buf[..n]).await.is_err() {
             break;
         }
