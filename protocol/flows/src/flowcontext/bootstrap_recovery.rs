@@ -207,6 +207,14 @@ pub struct CandidateAdoptionPermit {
     pub verified_tip: BlockHash,
     /// Blue work recomputed by staging over that tip.
     pub verified_blue_work: BlueWorkType,
+    /// The incumbent this was judged against.
+    ///
+    /// Bound because the incumbent MOVES: while staging validates a challenger, the provisional
+    /// chain keeps taking blocks from its own peers. A permit that named only the challenger could
+    /// be earned when A beat B and spent after B had overtaken it. Binding both sides makes a
+    /// permit a statement about a comparison, not about a candidate.
+    pub defender_tip: BlockHash,
+    pub defender_blue_work: BlueWorkType,
     pub proof_hash: Hash,
     pub adoption_generation: u64,
     pub switch_generation: u32,
@@ -247,7 +255,7 @@ pub fn authorize_candidate_adoption(
     state: &ChainReviewState,
     validation_permit: &CandidateValidationPermit,
     validated: &ValidatedCandidate,
-    incumbent_blue_work: BlueWorkType,
+    defender: &ChainTip,
 ) -> Result<CandidateAdoptionPermit, AdoptionError> {
     if state.ever_ready {
         return Err(AdoptionError::HasBeenReady);
@@ -261,17 +269,52 @@ pub fn authorize_candidate_adoption(
     {
         return Err(AdoptionError::PermitDoesNotMatch);
     }
-    match validated.verified_blue_work.cmp(&incumbent_blue_work) {
+    // The canonical fork choice, not a private rule invented here.
+    //
+    // GHOSTDAG's `SortableBlock` orders by blue work and breaks ties on the block hash
+    // (`consensus/src/processes/ghostdag/ordering.rs`). Comparing raw blue work alone threw that
+    // deterministic tie-break away and turned every work tie into an impasse — which is not
+    // hypothetical: two real branches measured identical work, and a node that should have had a
+    // decisive answer quarantined instead.
+    //
+    // With the tie-break, `Equal` means same work AND same hash: the same chain, so there is
+    // nothing to choose between. A genuine fork always resolves.
+    let challenger = (validated.verified_blue_work, validated.verified_tip);
+    let incumbent = (defender.blue_work, defender.tip);
+    match challenger.cmp(&incumbent) {
         std::cmp::Ordering::Greater => Ok(CandidateAdoptionPermit {
             candidate_id: validated.id,
             verified_tip: validated.verified_tip,
             verified_blue_work: validated.verified_blue_work,
+            defender_tip: defender.tip,
+            defender_blue_work: defender.blue_work,
             proof_hash: validated.proof_hash,
             adoption_generation: state.adoption_generation,
             switch_generation: state.switch_count,
         }),
         std::cmp::Ordering::Equal => Err(AdoptionError::Equal),
         std::cmp::Ordering::Less => Err(AdoptionError::Weaker),
+    }
+}
+
+/// A chain tip and its work, as this node computed them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainTip {
+    pub tip: BlockHash,
+    pub blue_work: BlueWorkType,
+}
+
+impl CandidateAdoptionPermit {
+    /// Whether this permit still describes the situation.
+    ///
+    /// Checked again immediately before the irreversible step, because the incumbent can advance
+    /// between the comparison and the commit.
+    pub fn still_applies(&self, state: &ChainReviewState, defender_now: &ChainTip) -> bool {
+        !state.ever_ready
+            && self.adoption_generation == state.adoption_generation
+            && self.switch_generation == state.switch_count
+            && self.defender_tip == defender_now.tip
+            && self.defender_blue_work == defender_now.blue_work
     }
 }
 
@@ -496,9 +539,10 @@ mod tests {
         let state = reviewing();
         let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
 
-        assert!(authorize_candidate_adoption(&state, &permit, &validated(200), work(100)).is_ok());
+        let defender = ChainTip { tip: bhash(7), blue_work: work(100) };
+        assert!(authorize_candidate_adoption(&state, &permit, &validated(200), &defender).is_ok());
         assert_eq!(
-            authorize_candidate_adoption(&state, &permit, &validated(50), work(100)),
+            authorize_candidate_adoption(&state, &permit, &validated(50), &defender),
             Err(AdoptionError::Weaker),
             "validated and worse is an ordinary negative result"
         );
@@ -510,7 +554,38 @@ mod tests {
         // not a tie to be broken by whoever asked first — it is the node's cue to stop.
         let state = reviewing();
         let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
-        assert_eq!(authorize_candidate_adoption(&state, &permit, &validated(100), work(100)), Err(AdoptionError::Equal));
+        // Equal work alone is NOT an impasse any more: the canonical fork choice breaks ties on the
+        // block hash, so two different chains always resolve one way or the other. Which way is not
+        // the point and is not assumed here — the hash order is derived, not guessed.
+        let challenger = validated(100);
+        let other_tip = bhash(9999);
+        assert_ne!(other_tip, challenger.verified_tip);
+        let expected = challenger.verified_tip > other_tip;
+        let against_other = ChainTip { tip: other_tip, blue_work: work(100) };
+        assert_eq!(
+            authorize_candidate_adoption(&state, &permit, &challenger, &against_other).is_ok(),
+            expected,
+            "equal work must resolve on the hash, the way GHOSTDAG's SortableBlock does — not deadlock"
+        );
+
+        // Same work and same tip is the same chain — nothing to choose between, and the only case
+        // that is genuinely inseparable.
+        let itself = ChainTip { tip: challenger.verified_tip, blue_work: work(100) };
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &challenger, &itself), Err(AdoptionError::Equal));
+    }
+
+    #[test]
+    fn a_permit_does_not_survive_the_incumbent_moving() {
+        // The incumbent keeps taking blocks from its own peers throughout a staging validation. A
+        // permit earned when A beat B must not be spendable after B has overtaken it.
+        let state = reviewing();
+        let vpermit = authorize_candidate_validation(request(state, candidate())).unwrap();
+        let defender = ChainTip { tip: bhash(7), blue_work: work(100) };
+        let adoption = authorize_candidate_adoption(&state, &vpermit, &validated(200), &defender).unwrap();
+
+        assert!(adoption.still_applies(&state, &defender));
+        let advanced = ChainTip { tip: bhash(8), blue_work: work(300) };
+        assert!(!adoption.still_applies(&state, &advanced), "the comparison it recorded no longer holds");
     }
 
     #[test]
@@ -518,20 +593,21 @@ mod tests {
         // A permit earned by validating one chain must not adopt another, nor the same chain at a
         // different tip after the situation moved on.
         let state = reviewing();
+        let defender = ChainTip { tip: bhash(7), blue_work: work(100) };
         let permit = authorize_candidate_validation(request(state, candidate())).unwrap();
 
         let mut other_chain = validated(200);
         other_chain.id = CandidateId { pruning_point: bhash(90), virtual_selected_parent: bhash(91) };
-        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_chain, work(100)), Err(AdoptionError::PermitDoesNotMatch));
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_chain, &defender), Err(AdoptionError::PermitDoesNotMatch));
 
         let mut other_proof = validated(200);
         other_proof.proof_hash = hash(4242);
-        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_proof, work(100)), Err(AdoptionError::PermitDoesNotMatch));
+        assert_eq!(authorize_candidate_adoption(&state, &permit, &other_proof, &defender), Err(AdoptionError::PermitDoesNotMatch));
 
         let mut moved_on = state;
         moved_on.adoption_generation += 1;
         assert_eq!(
-            authorize_candidate_adoption(&moved_on, &permit, &validated(200), work(100)),
+            authorize_candidate_adoption(&moved_on, &permit, &validated(200), &defender),
             Err(AdoptionError::PermitDoesNotMatch)
         );
     }
@@ -545,7 +621,12 @@ mod tests {
         let mut participated = state;
         participated.ever_ready = true;
         assert_eq!(
-            authorize_candidate_adoption(&participated, &permit, &validated(u64::MAX), work(1)),
+            authorize_candidate_adoption(
+                &participated,
+                &permit,
+                &validated(u64::MAX),
+                &ChainTip { tip: bhash(7), blue_work: work(1) }
+            ),
             Err(AdoptionError::HasBeenReady)
         );
     }

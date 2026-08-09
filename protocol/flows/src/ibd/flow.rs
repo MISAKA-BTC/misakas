@@ -2,7 +2,7 @@ use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
     flowcontext::bootstrap_recovery::{
-        AdoptionError, CandidateValidationPermit, ChainReviewState, RecoveryRequest, ValidatedCandidate, VerifiedCandidate,
+        AdoptionError, CandidateValidationPermit, ChainReviewState, ChainTip, RecoveryRequest, ValidatedCandidate, VerifiedCandidate,
         authorize_candidate_adoption, authorize_candidate_validation,
     },
     flowcontext::ibd_candidates::{
@@ -766,10 +766,13 @@ impl IbdFlow {
         // an adoption permit lets it replace what is held, and that is earned here, from figures
         // this node computed on both sides.
         if let Some(validation_permit) = self.active_recovery_permit {
+            // Read the incumbent as late as possible: it has been taking blocks from its own peers
+            // for the whole of the staging validation, so the figure that mattered when this started
+            // is not the one that matters now.
             let incumbent = {
                 let session = self.ctx.consensus().session().await;
                 let tip = session.async_get_headers_selected_tip().await;
-                session.async_get_header(tip).await.ok().map(|h| h.blue_work)
+                session.async_get_header(tip).await.ok().map(|h| ChainTip { tip, blue_work: h.blue_work })
             };
             let Some(incumbent) = incumbent else {
                 return Err(ProtocolError::Other("cannot read the incumbent chain's tip work to judge a recovery candidate"));
@@ -794,11 +797,16 @@ impl IbdFlow {
                 Some(validation_permit.candidate_id),
                 Some(self.router.to_string()),
                 gate.state().as_str(),
-                format!("adoption verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent)),
+                format!("adoption verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent.blue_work)),
             );
 
-            match authorize_candidate_adoption(&state, &validation_permit, &validated, incumbent) {
+            match authorize_candidate_adoption(&state, &validation_permit, &validated, &incumbent) {
                 Ok(adoption) => {
+                    // Re-checked against the incumbent read a moment ago, so a permit cannot outlive
+                    // the comparison that earned it.
+                    if !adoption.still_applies(&state, &incumbent) {
+                        return Err(ProtocolError::Other("the incumbent chain moved while this candidate was being validated"));
+                    }
                     record_stage(
                         RecoveryStage::RecoveryPermitGranted,
                         None,
@@ -816,7 +824,7 @@ impl IbdFlow {
                         "Validated the chain offered by {} to its tip and it is weaker than the one held ({}). Keeping the \
                          incumbent.",
                         self.router,
-                        describe_comparison(staged_blue_work, incumbent)
+                        describe_comparison(staged_blue_work, incumbent.blue_work)
                     );
                     return Err(ProtocolError::OtherOwned(format!(
                         "recovery candidate from {} is weaker once validated",
@@ -830,7 +838,7 @@ impl IbdFlow {
                     return Err(ProtocolError::OtherOwned(format!(
                         "refusing to adopt the chain from {}: {:?} (verified {} against incumbent {}). This node cannot \
                          separate these histories and will not pick one by itself.",
-                        self.router, e, staged_blue_work, incumbent
+                        self.router, e, staged_blue_work, incumbent.blue_work
                     )));
                 }
             }
