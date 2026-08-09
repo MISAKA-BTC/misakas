@@ -77,6 +77,12 @@ const CHALLENGER_PROOF_TIMEOUT: Duration = Duration::from_secs(600);
 /// count it stops and says so.
 const MAX_CHAIN_SWITCHES: u32 = 5;
 
+/// How often an idle IBD flow re-examines candidates it has already validated.
+///
+/// Short, because the window it covers is the gap between a proof validating and the latch becoming
+/// free, and a node sitting on a chain it has evidence against should not sit there long.
+const VALIDATED_CANDIDATE_RECHECK: Duration = Duration::from_secs(3);
+
 /// Flow for managing IBD - Initial Block Download
 pub struct IbdFlow {
     pub(super) ctx: FlowContext,
@@ -157,7 +163,20 @@ impl IbdFlow {
             // nomination to go check what some peer is claiming. Only one IBD runs at a time, but
             // every other peer's flow is idle meanwhile — and idle is what let the node adopt a
             // branch without ever asking anyone else for evidence.
+            // A tick, so a validated candidate cannot sit in limbo.
+            //
+            // `consider_post_ibd_switch` runs when a proof validates. If that moment happens to fall
+            // inside a running IBD it defers to the commit barrier — and the barrier compares the
+            // candidate's PRUNING-POINT work against the staged chain's TIP work, which can never
+            // favour it. Measured: a soak round validated two candidates, compared both, reserved
+            // none, and kept the lighter chain.
+            //
+            // So the same evidence is looked at again once the latch is free.
             let relay_header = tokio::select! {
+                _ = tokio::time::sleep(VALIDATED_CANDIDATE_RECHECK) => {
+                    self.reconsider_validated_candidates().await;
+                    continue;
+                }
                 block = self.relay_receiver.recv() => match block {
                     Ok(block) => block.header.clone(),
                     Err(_) => return Ok(()),
@@ -501,6 +520,33 @@ impl IbdFlow {
                 );
                 debug!("No bootstrap-recovery permit for candidate {}: {:?}", reserved.candidate_id.virtual_selected_parent, e);
                 None
+            }
+        }
+    }
+
+    /// Look again at candidates that validated while this node was busy.
+    ///
+    /// Cheap and idempotent: it returns immediately unless participation is withheld and the latch
+    /// is free, and `consider_post_ibd_switch` re-applies every condition itself.
+    async fn reconsider_validated_candidates(&self) {
+        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+            return;
+        }
+        if self.ctx.preferred_ibd_candidate().is_some() {
+            return; // a switch is already reserved
+        }
+        let pending: Vec<_> = self
+            .ctx
+            .ibd_candidates()
+            .read()
+            .validated_awaiting_decision()
+            .iter()
+            .filter_map(|c| c.verified_blue_work().map(|w| (c.id, w)))
+            .collect();
+        for (id, verified) in pending {
+            self.consider_post_ibd_switch(id, verified).await;
+            if self.ctx.preferred_ibd_candidate().is_some() {
+                break;
             }
         }
     }

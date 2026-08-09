@@ -343,6 +343,17 @@ impl IbdCandidateRegistry {
         out
     }
 
+    /// Candidates that have a validated proof but have not yet been acted on.
+    ///
+    /// A validated candidate can be left in limbo: if its proof happened to validate while an IBD
+    /// was running, the switch path defers to the commit barrier — and the barrier compares that
+    /// candidate's PRUNING-POINT work against the staged chain's TIP work, which can never favour
+    /// it. Neither path acts, and the node keeps a chain it knows might be worse. Something has to
+    /// come back and look again.
+    pub fn validated_awaiting_decision(&self) -> Vec<&IbdCandidate> {
+        self.candidates.values().filter(|c| matches!(c.validation, CandidateValidation::ProofValidated { .. })).collect()
+    }
+
     /// The best candidate this node has actually verified, if any.
     ///
     /// This — and only this — is what a chain decision may be based on.
@@ -801,6 +812,25 @@ mod tests {
             PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
             "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
         );
+    }
+
+    #[test]
+    fn a_candidate_validated_at_a_busy_moment_is_not_forgotten() {
+        // The measured soak failure: two candidates validated while an IBD held the latch, the
+        // switch path deferred to the commit barrier, the barrier could not favour them because it
+        // compares pruning-point work against tip work, and the node kept the lighter chain. What
+        // makes that recoverable is that the evidence is still here to be looked at again.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(1, 900), pp(1), now);
+        assert!(r.validated_awaiting_decision().is_empty(), "nothing to reconsider before a proof validates");
+
+        r.set_validated(id, BlueWorkType::from_u64(900), Hash::from_u64_word(7));
+        assert_eq!(r.validated_awaiting_decision().iter().map(|c| c.id).collect::<Vec<_>>(), vec![id]);
+
+        // Once it has been settled either way it stops being pending.
+        r.set_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+        assert!(r.validated_awaiting_decision().is_empty());
     }
 
     #[test]
