@@ -35,6 +35,30 @@
       "target_hash": "f5cf09be7bd79a20440e23290192c9010fa9e805af3d60133241bc9788ffdc562b4ee9e536f8f63e0c00415969f7c4b58de8cda367e52d60a3f282c1ab83b1b5",
       "target_daa_score": 1588,
       "signature_fingerprint": "7fe04729360f01e2ad5b05b6d6248992fcd8e1a5a086bfa19dd704858f8826c754685907c7239b2e8121402e62ec6e4933bc34727126c7f0db3a6e430be8d070"
+    },
+    "16": {
+      "epoch": 16,
+      "target_hash": "6a8f8ef96e634996f56e639d44ba52cb77731c968d1f6bbaded620af2bed9c62fea80aaca63de15433fc66198b40feb185472b82c2e5fd28f970d314f65960c0",
+      "target_daa_score": 1688,
+      "signature_fingerprint": "b3380aae8b18b397a42c5055b3bb0fe02bc3794b2c3f2ee1c5b155771efe27f77c4a8e08237c6097f4cb9e8b74020c9418a419fda8972794cc7137af9b609533"
+    },
+    "17": {
+      "epoch": 17,
+      "target_hash": "e21a2548a07cacac13cca3a1a2ea31ecb5718a4169a303c8cf944962157ef5752501a7a8ea63a02b46f9e5a7cbfb88bb0da255e61fe575b4c138b3ffac9b9d00",
+      "target_daa_score": 1788,
+      "signature_fingerprint": "9bc408b8d865f2371a1d301ae9389ce9d9a618e48ff238aca9ce1ee11bb9cb508fa18a1e4aedb5c8c967deb46db430bf5aa9100a6109164dabdf52b76ec4469e"
+    },
+    "18": {
+      "epoch": 18,
+      "target_hash": "e455c6516e8c17f071c7f05db59a79acdab2e0fcfe7eac4e44ce21f72170cdabfc69de2ac7e200dae77364f2d719b4282b68cc97e091d80f6f5c3de7c6a1ab97",
+      "target_daa_score": 1888,
+      "signature_fingerprint": "0fd50c754a69cdebb2667eccb9ebf33eee08e599e8f6227d531ee71b6116bf3c4579069d23f48905825d471aa1425a3b6e2e21787c4cba65689e8d85423e09a4"
+    },
+    "19": {
+      "epoch": 19,
+      "target_hash": "b7675bf1e5a6f2f234edbe2fdcff37092c8a4044c1b3008ec4cb787e835b4a582594f329683b2788a0a847f805bcfefe0e76b157d5d0488aa6e964d641ec560f",
+      "target_daa_score": 1988,
+      "signature_fingerprint": "08ba385f791fac01e775bf08ecceaf2b3573e9865b9d366938e5c48ac09dbfe2e0020fb6a724c25bfd09f8364f0f1d79bb91347a1a9255cb49d031420332fc93"
     }
   }
 }

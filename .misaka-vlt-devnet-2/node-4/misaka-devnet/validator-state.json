@@ -23,6 +23,30 @@
       "target_hash": "f5cf09be7bd79a20440e23290192c9010fa9e805af3d60133241bc9788ffdc562b4ee9e536f8f63e0c00415969f7c4b58de8cda367e52d60a3f282c1ab83b1b5",
       "target_daa_score": 1588,
       "signature_fingerprint": "3a22691091827b484e775a2722067249094c1d747140640257557c8f6603a5541af8683daa6effb8fe4a477723ecac47651cd3c2b8de1ba187cd94b48cfbe453"
+    },
+    "16": {
+      "epoch": 16,
+      "target_hash": "6a8f8ef96e634996f56e639d44ba52cb77731c968d1f6bbaded620af2bed9c62fea80aaca63de15433fc66198b40feb185472b82c2e5fd28f970d314f65960c0",
+      "target_daa_score": 1688,
+      "signature_fingerprint": "749ecefd70f09e0962ede57427fbf771984d14e22e281a9f8983665a4ea9636c945a54a3381fe1e5ad1aa4e99d39b17b8624e8b4c4c795956b29cf88fe2db058"
+    },
+    "17": {
+      "epoch": 17,
+      "target_hash": "e21a2548a07cacac13cca3a1a2ea31ecb5718a4169a303c8cf944962157ef5752501a7a8ea63a02b46f9e5a7cbfb88bb0da255e61fe575b4c138b3ffac9b9d00",
+      "target_daa_score": 1788,
+      "signature_fingerprint": "8746d8e2a7de4f7f6a2d0a409e36d92b60c732d20e4351790ee14429397823f204bb5d4e600d55763f23ffa7078dbd7a3f87962c47c4257fcb26013ce52fbcbd"
+    },
+    "18": {
+      "epoch": 18,
+      "target_hash": "e455c6516e8c17f071c7f05db59a79acdab2e0fcfe7eac4e44ce21f72170cdabfc69de2ac7e200dae77364f2d719b4282b68cc97e091d80f6f5c3de7c6a1ab97",
+      "target_daa_score": 1888,
+      "signature_fingerprint": "d0d459c3c89a155fe9afcfaed29cbc56c5846a8b04d999960a99e99fff8e0ee25e730142d52b6acc6ad4fba930b06d22cfba9a0dd4239826f597e26b8f8c1ae1"
+    },
+    "19": {
+      "epoch": 19,
+      "target_hash": "b7675bf1e5a6f2f234edbe2fdcff37092c8a4044c1b3008ec4cb787e835b4a582594f329683b2788a0a847f805bcfefe0e76b157d5d0488aa6e964d641ec560f",
+      "target_daa_score": 1988,
+      "signature_fingerprint": "acde57cddfda0334b0945bb27d36e863ec232ac8462a6b45b2d1dbb4bfe43b98961dece2871e4008455162ab9a32a4541056837032c4c0d1044151dd19e0a0a1"
     }
   }
 }

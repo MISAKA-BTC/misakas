@@ -211,6 +211,21 @@ pub enum DatabaseStorePrefixes {
     /// came from are untouched.
     VltCreditsSchemaVersion = 236,
 
+    /// Keyed by the declaring transaction: an accepted [`ComputeCapabilityRecord`].
+    ///
+    /// A capability is valid for `max_capability_validity_blocks` (a day of blocks), while the
+    /// credit walk spans `vlt_credit_window_blue_score` (minutes). Deriving the verifier committee
+    /// from declarations the walk happens to have collected therefore loses the pool the moment the
+    /// walk floor rises past a declaration — and a certificate whose committee cannot be redrawn
+    /// reads as unverified, however many honest verdicts it has. Stored, like the bonds it is
+    /// filtered against, and queried at the beacon's own DAA.
+    ComputeCapabilities = 237,
+
+    /// Singleton flag: history has been swept into [`Self::ComputeCapabilities`]. A database that
+    /// predates that store has declarations on chain and no rows for them, and an empty candidate
+    /// pool reads exactly like "nobody declared this profile".
+    ComputeCapabilitiesBackfilled = 238,
+
     /// kaspa-pq EVM Lane (§12 archive) — keyed by canonical `BlockHash`: the forward
     /// state DIFF ([`EvmStateDiffV2`]) of the block over its selected parent. The
     /// long-term retention form (the per-block full snapshot at prefix 206 is the

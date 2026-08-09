@@ -6065,6 +6065,20 @@ pub fn compute_commitments_from_accepted_txs(txs: &[Transaction]) -> Vec<(Transa
     out
 }
 
+/// Accepted capability declarations with the transaction that carried each, so a store can key by
+/// it and a reorg can delete exactly what it added.
+pub fn compute_capabilities_with_ids_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, ComputeCapabilityPayload)> {
+    let mut out = Vec::new();
+    for tx in txs {
+        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCapability)
+            && let Ok(c) = borsh::from_slice::<ComputeCapabilityPayload>(&tx.payload)
+        {
+            out.push((tx.id(), c));
+        }
+    }
+    out
+}
+
 /// Stateless validation of a [`ComputeCapabilityPayload`]'s bytes. The signature, the bond
 /// binding, the model-table membership and the expiry cap are stateful and are checked by the
 /// credit walk when it builds a job's candidate pool.
@@ -6092,8 +6106,12 @@ pub fn compute_capabilities_from_accepted_txs(txs: &[Transaction]) -> Vec<Comput
     out
 }
 
-/// A signature- and bond-verified capability declaration, as the credit walk collects it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A signature- and bond-verified capability declaration.
+///
+/// Persisted (`DatabaseStorePrefixes::ComputeCapabilities`) rather than re-collected per walk: it
+/// outlives the credit window by orders of magnitude, so a walk-scoped copy disappears while the
+/// declaration is still perfectly valid.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct ComputeCapabilityRecord {
     pub validator_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
@@ -6124,6 +6142,10 @@ impl ComputeCapabilityRecord {
         self.model_weights_hash == model_weights_hash && self.runtime_hash == runtime_hash
     }
 }
+
+/// Fixed-size: six 64-byte digests and two scores, no owned collections, so the derived estimate
+/// is exact and the store may be size-tracked.
+impl MemSizeEstimator for ComputeCapabilityRecord {}
 
 /// Reduce collected declarations to the `(validator_id, runtime_class_id)` candidate pool
 /// [`crate::vlt::select_verifiers`] draws from for one job profile.

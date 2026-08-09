@@ -23,6 +23,30 @@
       "target_hash": "f5cf09be7bd79a20440e23290192c9010fa9e805af3d60133241bc9788ffdc562b4ee9e536f8f63e0c00415969f7c4b58de8cda367e52d60a3f282c1ab83b1b5",
       "target_daa_score": 1588,
       "signature_fingerprint": "a5b6522b00eb4f719a8679eb3647bc312bbc34a6c5e5e0ab5b76fbd8e12fc3b63b572ad3a32dc5eea54ee630436d198f843613cb554280077016fbe621b42ff1"
+    },
+    "16": {
+      "epoch": 16,
+      "target_hash": "6a8f8ef96e634996f56e639d44ba52cb77731c968d1f6bbaded620af2bed9c62fea80aaca63de15433fc66198b40feb185472b82c2e5fd28f970d314f65960c0",
+      "target_daa_score": 1688,
+      "signature_fingerprint": "9a16992da97985035b2e80f20d29939bbc6d70d2fed2d23142ac58cd4f2ec581052255c510d714c98d36e91c7dad6b13ee4f767cf5d1618d4523063c010b0150"
+    },
+    "17": {
+      "epoch": 17,
+      "target_hash": "e21a2548a07cacac13cca3a1a2ea31ecb5718a4169a303c8cf944962157ef5752501a7a8ea63a02b46f9e5a7cbfb88bb0da255e61fe575b4c138b3ffac9b9d00",
+      "target_daa_score": 1788,
+      "signature_fingerprint": "c6b00f2b72ba6c385c7b89902aacdd5eb6c343a80dc64de8cfd9de1c84ea6408de2ca0664d82b3f509a874a228b4c0d4571cbf3d069f91323101bc256560535b"
+    },
+    "18": {
+      "epoch": 18,
+      "target_hash": "e455c6516e8c17f071c7f05db59a79acdab2e0fcfe7eac4e44ce21f72170cdabfc69de2ac7e200dae77364f2d719b4282b68cc97e091d80f6f5c3de7c6a1ab97",
+      "target_daa_score": 1888,
+      "signature_fingerprint": "8cf272a52fbac74afd8bbc025b6defbb7449be8be66db606fb485df2e02441e7a927c26320a3b8aadf21a4584ef832f93bb367d40c2f0d65800b44db96d23c7c"
+    },
+    "19": {
+      "epoch": 19,
+      "target_hash": "b7675bf1e5a6f2f234edbe2fdcff37092c8a4044c1b3008ec4cb787e835b4a582594f329683b2788a0a847f805bcfefe0e76b157d5d0488aa6e964d641ec560f",
+      "target_daa_score": 1988,
+      "signature_fingerprint": "0a000a2139269b9d306374b7a86e53d3ab4003466bb17e28df679af55ed79c9bfa84f4d4f3b4c3aa05d7a439bae3192228a86529229fcfda14b24a29a844edac"
     }
   }
 }

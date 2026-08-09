@@ -18,6 +18,7 @@ use crate::{
             acceptance_data::{AcceptanceDataStoreReader, DbAcceptanceDataStore},
             block_transactions::{BlockTransactionsStoreReader, DbBlockTransactionsStore},
             block_window_cache::{BlockWindowCacheStore, BlockWindowCacheWriter},
+            compute_capabilities::DbComputeCapabilityStore,
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
@@ -78,12 +79,12 @@ use kaspa_consensus_core::{
         PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_compute_credits,
         aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
         bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool, check_dns_reorg_rule,
-        commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_certificates_from_accepted_txs,
-        compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs, compute_stake_score,
-        compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge, effective_bond_status,
-        epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at, is_dns_confirmed, lock_consistent_precommits,
-        mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk, precommits_from_accepted_txs, quorum_epochs,
-        ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
+        commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
+        compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
+        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
+        effective_bond_status, epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at, is_dns_confirmed,
+        lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk, precommits_from_accepted_txs,
+        quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
         required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, stake_precommit_message,
         total_active_stake_by_epoch, total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
     },
@@ -296,6 +297,10 @@ pub struct VirtualStateProcessor {
     // dormancy guard — `None` on every current network, so the bond-population
     // pass below is a single `Option` check and a return.
     pub(super) stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+    /// Accepted capability declarations. A store rather than a walk product: a declaration
+    /// outlives the credit window by three orders of magnitude, so a walk-scoped copy vanishes
+    /// while it is still in force and takes the certificate's whole committee with it.
+    pub(super) compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
@@ -502,6 +507,7 @@ impl VirtualStateProcessor {
             selected_chain_store: storage.selected_chain_store.clone(),
             pruning_samples_store: storage.pruning_samples_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
+            compute_capability_store: storage.compute_capability_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
             evm_header_store: storage.evm_header_store.clone(),
@@ -1861,6 +1867,12 @@ impl VirtualStateProcessor {
         // changes into the same batch so they commit atomically with the
         // virtual state. Inert unless the overlay is configured.
         self.stage_dns_bond_mutations(&mut batch, chain_path);
+        // Capability declarations, staged into the same batch so the pool a committee is drawn
+        // from commits atomically with the bonds it is filtered against.
+        if let Some(dns_params) = self.dns_params.as_ref() {
+            let sink_daa = self.headers_store.get_header(dns_sink).map(|h| h.daa_score).unwrap_or_default();
+            self.stage_compute_capabilities(&mut batch, chain_path, dns_params, sink_daa);
+        }
 
         // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
         // the bounded recent epoch window and stage the updated DnsState into
@@ -1995,6 +2007,69 @@ impl VirtualStateProcessor {
         ActiveBondView::from_records(
             self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (rec.bond_outpoint, (*rec).clone()))),
         )
+    }
+
+    /// Persist the capability declarations a selected-chain change adds, and drop those it
+    /// removes.
+    ///
+    /// Same discipline as the bond mutations beside it, and simpler: a declaration has no state
+    /// machine — it cannot be slashed or unbonded — so reverting one is deleting it. Both
+    /// directions re-derive from retained acceptance data, so apply and revert cannot disagree.
+    fn stage_compute_capabilities(&self, batch: &mut WriteBatch, chain_path: &ChainPath, dns_params: &DnsParams, sink_daa: u64) {
+        if !dns_params.vlt_shadow_active_at(sink_daa) {
+            return; // the whole compute overlay is dormant; write nothing
+        }
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        let net_id = self.genesis.hash;
+        let mut store = self.compute_capability_store.write();
+
+        // A database whose chain predates this store has declarations accepted and no rows for
+        // them, and an empty pool reads exactly like "nobody declared". Sweep history once, bounded
+        // by the furthest back a declaration could still be live at any beacon this walk will ask
+        // about: `max_capability_validity_blocks` before the oldest anchor in the credit window.
+        if !store.is_backfilled() {
+            let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
+            let mut swept = 0usize;
+            if let Ok(sink_blue) = self.headers_store.get_blue_score(chain_path.added.last().copied().unwrap_or(self.genesis.hash)) {
+                for block in self
+                    .reachability_service
+                    .default_backward_chain_iterator(chain_path.added.last().copied().unwrap_or(self.genesis.hash))
+                {
+                    let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
+                    if sink_blue.saturating_sub(bs) > horizon {
+                        break;
+                    }
+                    let Ok(header) = self.headers_store.get_header(block) else { break };
+                    for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(block)) {
+                        if let Some(record) =
+                            verified_capability(cap, &bonds, net_id.as_byte_slice(), header.daa_score, &dns_params.vlt)
+                        {
+                            store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
+                            swept += 1;
+                        }
+                    }
+                }
+            }
+            info!("[vlt-credit] swept {swept} capability declaration(s) out of history into the capability store");
+            store.mark_backfilled(batch).unwrap();
+        }
+
+        for removed in chain_path.removed.iter().rev() {
+            for (tx_id, _) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed)) {
+                store.delete_batch(batch, tx_id).unwrap();
+            }
+        }
+        for added in chain_path.added.iter() {
+            let Ok(header) = self.headers_store.get_header(*added) else { continue };
+            for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*added)) {
+                // The same bond-binding and signature checks the walk applied, so a row can only
+                // hold a declaration the credit walk would itself have accepted.
+                if let Some(record) = verified_capability(cap, &bonds, net_id.as_byte_slice(), header.daa_score, &dns_params.vlt) {
+                    store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
+                }
+            }
+        }
     }
 
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
@@ -3616,8 +3691,14 @@ impl VirtualStateProcessor {
         // function of that draw alone. Measured at the certificate instead, the executor picks the
         // pool by choosing when to publish — and anyone can change a drawn committee after the fact
         // by declaring a capability, invalidating verdicts the real committee already gave.
+        // From the STORE, not the walk. A declaration is valid for `max_capability_validity_blocks`
+        // and the walk spans `vlt_credit_window_blue_score` — three orders of magnitude less — so
+        // drawing the pool from whatever the walk happened to collect empties it the moment the
+        // walk floor rises past a declaration that is still perfectly in force. Every honest
+        // verdict then belongs to no committee and the certificate reads as unverified for good.
+        let stored_capabilities = self.compute_capability_store.read().all();
         let declared = capability_candidate_pool(
-            &walk.capabilities,
+            &stored_capabilities,
             cert.spec.model_weights_hash,
             cert.spec.runtime_hash,
             beacon_anchor.anchor_daa_score,
@@ -6004,6 +6085,55 @@ enum MergesetIncreaseResult {
 /// listing them. A wide credit window on a busy network holds a lot of certificates, and a
 /// diagnostic that can print all of them is one that can fill a disk.
 const MAX_REPORTED_CREDIT_SKIPS: usize = 16;
+
+/// One capability declaration, accepted only if it is bond-bound, names a registered profile under
+/// its registered class, and its validator's ML-DSA-87 signature verifies.
+///
+/// The same checks `walk_compute_overlay` applies, so a stored row can only hold a declaration the
+/// credit walk would itself have accepted. Expiry is capped at `max_capability_validity_blocks`
+/// past the accepting block, so a stale declaration cannot name a far-future expiry and squat in
+/// committees.
+fn verified_capability(
+    cap: kaspa_consensus_core::vlt::ComputeCapabilityPayload,
+    bonds: &[StakeBondRecord],
+    net_id: &[u8],
+    accepted_daa_score: u64,
+    vlt: &kaspa_consensus_core::vlt::VltParams,
+) -> Option<ComputeCapabilityRecord> {
+    let bond = bonds.iter().find(|b| b.bond_outpoint == cap.bond_outpoint)?;
+    if cap.validator_id != bond.validator_pubkey_hash {
+        return None;
+    }
+    let entry = vlt.model_cost_table.lookup(cap.model_weights_hash, cap.runtime_hash)?;
+    if cap.runtime_class_id != entry.runtime_class_id {
+        return None;
+    }
+    let digest = compute_capability_message(
+        net_id,
+        cap.validator_id,
+        cap.bond_outpoint,
+        cap.model_weights_hash,
+        cap.runtime_hash,
+        cap.runtime_class_id,
+        cap.expiry_daa_score,
+    )
+    .as_bytes();
+    if !matches!(
+        verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &cap.signature, COMPUTE_CAPABILITY_MLDSA87_CONTEXT),
+        Ok(true)
+    ) {
+        return None;
+    }
+    Some(ComputeCapabilityRecord {
+        accepted_daa_score,
+        validator_id: cap.validator_id,
+        bond_outpoint: cap.bond_outpoint,
+        model_weights_hash: cap.model_weights_hash,
+        runtime_hash: cap.runtime_hash,
+        runtime_class_id: cap.runtime_class_id,
+        expiry_daa_score: cap.expiry_daa_score.min(accepted_daa_score.saturating_add(vlt.max_capability_validity_blocks)),
+    })
+}
 
 /// One phase-1 commitment, accepted only if it is bond-bound and its executor's ML-DSA-87 signature
 /// verifies.

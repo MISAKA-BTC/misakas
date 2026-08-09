@@ -5,6 +5,7 @@ use crate::{
         acceptance_data::DbAcceptanceDataStore,
         block_transactions::DbBlockTransactionsStore,
         block_window_cache::BlockWindowCacheStore,
+        compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
@@ -66,6 +67,8 @@ pub struct ConsensusStorage {
     // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
     pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+    /// MISAKA VLT: accepted capability declarations, the pool a verifier committee is drawn from.
+    pub compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
     // are inert (never read or written) until `evm_activation_daa_score` is
@@ -289,6 +292,11 @@ impl ConsensusStorage {
         let pruning_overlay_snapshot_store = Arc::new(RwLock::new(DbPruningPointOverlaySnapshotStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
+        // MISAKA VLT: capability declarations. Bounded by the validator count rather than by chain
+        // length — `capability_candidate_pool` keeps one entry per validator — so it is sized like
+        // the bond set beside it.
+        let compute_capability_store =
+            Arc::new(RwLock::new(DbComputeCapabilityStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
         // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
         // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
         // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
@@ -425,6 +433,7 @@ impl ConsensusStorage {
             dns_state_store,
             pruning_overlay_snapshot_store,
             stake_bonds_store,
+            compute_capability_store,
             evm_header_store,
             evm_state_store,
             evm_payload_store,
