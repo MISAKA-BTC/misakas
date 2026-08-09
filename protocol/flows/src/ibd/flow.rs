@@ -414,15 +414,42 @@ impl IbdFlow {
         // Only a peer that actually offers this chain can be asked for its proof — and only the one
         // designated to serve it. A nomination reaches every flow, so without this every source
         // fetches and validates the same multi-megabyte proof simultaneously.
-        if self.ctx.ibd_candidates().read().designated_prover(&id) != Some(self.router.key()) {
+        // Both refusals below are recorded. Three separate diagnoses of one failing soak round were
+        // wrong because this step declining was invisible: the trace showed nominations rising and
+        // proof requests not, and every explanation for the gap had to be inferred. A step that can
+        // refuse silently will be blamed for someone else's bug, or excused for its own.
+        let designated = self.ctx.ibd_candidates().read().designated_prover(&id);
+        if designated != Some(self.router.key()) {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                match designated {
+                    Some(other) => format!("not this flow's job: {other} is the designated prover"),
+                    None => "nobody is eligible to prove this candidate (every source has stopped answering)".to_owned(),
+                },
+            );
             return;
         }
         // The claim the peer must now back. Read here rather than inside the fetch so a candidate
         // already settled by another source's flow is skipped instead of re-verified.
-        let claimed_blue_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
+        let validation = self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation);
+        let claimed_blue_work = match validation {
             Some(CandidateValidation::ProofRequested { claimed_blue_work, .. })
             | Some(CandidateValidation::SummaryReceived { claimed_blue_work }) => claimed_blue_work,
-            _ => return,
+            other => {
+                record_stage(
+                    RecoveryStage::Rejected,
+                    None,
+                    Some(id),
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    format!("not in a state that wants a proof: {other:?}"),
+                );
+                return;
+            }
         };
 
         let attempt = RecoveryAttemptId::next();
