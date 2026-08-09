@@ -40,10 +40,19 @@ nohup "$BIN" --simnet \
   --rpclisten-json=127.0.0.1:$((FOLLOWER_GRPC+2000)) \
   --disable-upnp --unsaferpc --enable-unsynced-mining --enforce-chain-participation \
   --nologfiles \
-  --connect=127.0.0.1:$LIGHT_P2P \
   > "$BASE/follower.log" 2>&1 &
 echo $! > "$BASE/follower.pid"
 sleep 10
+
+# Deliberately NOT --connect: that flag means "connect only to these", which would either lock the
+# heavy peer out entirely or make what happens when it is added an open question. Both peers are
+# introduced the same way the local end-to-end tests introduce them — addPeer, permanent — so the
+# only thing differing between the two harnesses is the network between the nodes.
+"$RPC" "127.0.0.1:$FOLLOWER_GRPC" connect "127.0.0.1:$LIGHT_P2P" || {
+  echo "VPS-ROUND round=$ROUND FAILED to introduce the light peer" >&2
+  stop_regress_pid "$BASE/follower.pid" || true
+  exit 2
+}
 
 # The heavy peer arrives late and from 267 ms away — the disadvantage it has to overcome on
 # evidence alone, since the light one has already had the latch to itself for several seconds.
