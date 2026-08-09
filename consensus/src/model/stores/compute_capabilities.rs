@@ -153,3 +153,71 @@ impl DbComputeCapabilityStore {
         self.access.iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::BlockHash;
+    use kaspa_consensus_core::tx::TransactionOutpoint;
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::ConnBuilder;
+    use kaspa_hashes::Hash64;
+    use rocksdb::WriteBatch;
+
+    fn record(v: u8) -> ComputeCapabilityRecord {
+        ComputeCapabilityRecord {
+            declaration_block: BlockHash::from_bytes([v; 64]),
+            validator_id: Hash64::from_bytes([v; 64]),
+            bond_outpoint: TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([v; 64]), 0),
+            model_weights_hash: Hash64::from_bytes([1; 64]),
+            runtime_hash: Hash64::from_bytes([2; 64]),
+            runtime_class_id: Hash64::from_bytes([3; 64]),
+            accepted_daa_score: 1_000,
+            expiry_daa_score: 900_000,
+        }
+    }
+
+    /// A declaration on a branch that loses must not stay in the store. The read side filters by
+    /// ancestry, so a survivor cannot contaminate a committee — but a store that only ever grows
+    /// accumulates every dead branch's declarations forever, and the delete is what bounds it.
+    ///
+    /// Exercised here rather than on a devnet because a live mesh will not produce the case: a
+    /// validator declares once and renews `max_capability_validity_blocks` later, so no ordinary
+    /// reorg removes a block containing a declaration.
+    #[test]
+    fn a_declaration_that_leaves_the_selected_chain_is_deleted() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbComputeCapabilityStore::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let (a, b) = (TransactionId::from_bytes([0xAA; 64]), TransactionId::from_bytes([0xBB; 64]));
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, a, Arc::new(record(1))).unwrap();
+        store.insert_batch(&mut batch, b, Arc::new(record(2))).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.all().len(), 2);
+
+        // `b`'s block leaves the selected chain.
+        let mut batch = WriteBatch::default();
+        store.delete_batch(&mut batch, b).unwrap();
+        db.write(batch).unwrap();
+        let left = store.all();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].declaration_block, BlockHash::from_bytes([1; 64]));
+
+        // Re-inclusion restores it — the same block can rejoin the selected chain, and the record
+        // is keyed by its declaring transaction, so this is an overwrite rather than a duplicate.
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, b, Arc::new(record(2))).unwrap();
+        store.insert_batch(&mut batch, b, Arc::new(record(2))).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.all().len(), 2, "re-inclusion must not duplicate the declaration");
+
+        // Deleting one that was never there is not an error: the revert re-derives from acceptance
+        // data and may name a declaration this node filtered out when it was applied.
+        let mut batch = WriteBatch::default();
+        store.delete_batch(&mut batch, TransactionId::from_bytes([0xCC; 64])).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.all().len(), 2);
+    }
+}

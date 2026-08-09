@@ -1,40 +1,710 @@
-2026-08-09 22:47:38.413+09:00 [INFO ] kaspad v1.1.0-104a189
-2026-08-09 22:47:38.414+09:00 [INFO ] Application directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2
-2026-08-09 22:47:38.414+09:00 [INFO ] Data directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir
-2026-08-09 22:47:38.414+09:00 [INFO ] Logs directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/logs
-2026-08-09 22:47:38.414+09:00 [INFO ] Utxoindex Data directory /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir/utxoindex
-2026-08-09 22:47:38.419+09:00 [INFO ] P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager
-2026-08-09 22:47:38.424+09:00 [WARN ] [vlt-state] none -> pre_shadow at daa=0
-2026-08-09 22:47:38.424+09:00 [INFO ] Importing the UTXO set of the pruning point c31bfae8fc7a45010d6aab0e38ebdcce1e87b1444eb9aac6ed2d00de7f286aa6785eb88416b7e7b3c4b46750c2ae9e17bfa6e9f0312a4db82eb5652f17674f12
-2026-08-09 22:47:38.428+09:00 [INFO ] Resyncing the utxoindex...
-2026-08-09 22:47:38.428+09:00 [INFO ] [UPnP] Attempting to register upnp... (to disable run the node with --disable-upnp)
-2026-08-09 22:47:48.429+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
-2026-08-09 22:47:48.430+09:00 [INFO ] [validator-service] loaded validator signing key from /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/validator.key (validator_id=ac27106530bda8cfc3e8f5110d7ccad1f0660025baed7ff5e8f3acd3dc76d115f358f37db166198dc6407d808b28b41debf688589eb8b203ae51fa47535f4345)
-2026-08-09 22:47:48.430+09:00 [INFO ] [validator-service] funding address: misakadev:qf5dexzlkkphhntn2jdktpfuq5chdnu9cy2jyp4dykgtv98vrxgndhjqsxydzqsru5wtrc0kfy9z2ct2nmxc7ncfjqgvezgylk23ex85y6y5ftav — send UTXOs here to fund attestation-shard submission
-2026-08-09 22:47:48.431+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
-2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] executor job input: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/compute-prompt.txt (41 bytes)
-2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] devnet fixture: max_tokens pinned to the fixed job shape (15 = 10 prefill + 5 decode, 50 VLT/job); --compute-max-tokens=512 ignored
-2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] enabled: runtime=7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d class=8d416f720772b533f43006c4cbdc1effa7fc5d1e3fb7974dfecaa9589f1e2865a6144ef5d8d996e456d64429d6d42d9b32cc2fe98a97c5f08704d43c420c89ed max_tokens=15 auto_challenge=false
-2026-08-09 22:47:48.431+09:00 [INFO ] [validator-compute] fixture quota: 0/1 job(s) certified, 0 slot(s) claimed (plan 7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d:1:15:41)
-2026-08-09 22:47:48.431+09:00 [INFO ] MISAKA node endpoints (network devnet):
-2026-08-09 22:47:48.431+09:00 [INFO ]   P2P:             127.0.0.1:17131   node-to-node only (not RPC)
-2026-08-09 22:47:48.431+09:00 [INFO ]   node-grpc:       127.0.0.1:17130   miner / low-level node RPC
-2026-08-09 22:47:48.431+09:00 [INFO ]   node-wrpc-borsh: 127.0.0.1:17132   validator / wallet / operator
-2026-08-09 22:47:48.431+09:00 [INFO ]   node-wrpc-json:  disabled   explorer / browser
-2026-08-09 22:47:48.431+09:00 [INFO ]   evm-rpc-http:    disabled   Ethereum JSON-RPC (EVM lane)
-2026-08-09 22:47:48.432+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
-2026-08-09 22:47:48.433+09:00 [INFO ] GRPC Server starting on: 127.0.0.1:17130
-2026-08-09 22:47:48.433+09:00 [INFO ] P2P Server starting on: 127.0.0.1:17131
-2026-08-09 22:47:48.434+09:00 [ERROR] thread 'tokio-runtime-worker' panicked at rpc/grpc/server/src/connection_handler.rs:164:29: GRPC Server 127.0.0.1:17130 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
-
-thread 'tokio-runtime-worker' (5620910) panicked at rpc/grpc/server/src/connection_handler.rs:164:29:
-GRPC Server 127.0.0.1:17130 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-Exiting...
-2026-08-09 22:47:48.434+09:00 [INFO ] [validator-service] starting (mode=active, validator_id=ac27106530bda8cfc3e8f5110d7ccad1f0660025baed7ff5e8f3acd3dc76d115f358f37db166198dc6407d808b28b41debf688589eb8b203ae51fa47535f4345, stake-bond=none)
-2026-08-09 22:47:48.435+09:00 [ERROR] thread 'tokio-runtime-worker' panicked at protocol/p2p/src/core/connection_handler.rs:90:29: P2P, Server 127.0.0.1:17131 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
-
-thread 'tokio-runtime-worker' (5620909) panicked at protocol/p2p/src/core/connection_handler.rs:90:29:
-P2P, Server 127.0.0.1:17131 stopped with error: tonic::transport::Error(Transport, Os { code: 48, kind: AddrInUse, message: "Address already in use" })
-Exiting...
-2026-08-09 22:47:48.435+09:00 [INFO ] WRPC Server starting on: 127.0.0.1:17132
+2026-08-09 22:50:18.057+09:00 [INFO ] kaspad v1.1.0-104a189
+2026-08-09 22:50:18.057+09:00 [INFO ] Application directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2
+2026-08-09 22:50:18.057+09:00 [INFO ] Data directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir
+2026-08-09 22:50:18.057+09:00 [INFO ] Logs directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/logs
+2026-08-09 22:50:18.057+09:00 [INFO ] Utxoindex Data directory /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir/utxoindex
+2026-08-09 22:50:18.060+09:00 [INFO ] P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager
+2026-08-09 22:50:18.063+09:00 [WARN ] [vlt-state] none -> pre_shadow at daa=0
+2026-08-09 22:50:18.063+09:00 [INFO ] Importing the UTXO set of the pruning point c31bfae8fc7a45010d6aab0e38ebdcce1e87b1444eb9aac6ed2d00de7f286aa6785eb88416b7e7b3c4b46750c2ae9e17bfa6e9f0312a4db82eb5652f17674f12
+2026-08-09 22:50:18.066+09:00 [INFO ] Resyncing the utxoindex...
+2026-08-09 22:50:18.066+09:00 [INFO ] [UPnP] Attempting to register upnp... (to disable run the node with --disable-upnp)
+2026-08-09 22:50:28.067+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-service] loaded validator signing key from /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/validator.key (validator_id=511f9cae92c3d603383beab1149f738f3f9f453e90a64085c179597ea47562cfcdc4cd1228c3a775f8a81f12f1f7f5d6cde556c90532ba85aeaa9a62af5a930f)
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-service] funding address: misakadev:qt9zx6cafet2fx9thcf2wcc0ngu9tc9zsxnjn2rkvtvcp9cvgyv6d50zz4jhyu07qnuav3wyqw4k7rgdmex6pkp429462wu23x8y2cgs7jt548aa — send UTXOs here to fund attestation-shard submission
+2026-08-09 22:50:28.068+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-compute] executor job input: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/compute-prompt.txt (41 bytes)
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-compute] devnet fixture: max_tokens pinned to the fixed job shape (15 = 10 prefill + 5 decode, 50 VLT/job); --compute-max-tokens=512 ignored
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-compute] enabled: runtime=7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d class=8d416f720772b533f43006c4cbdc1effa7fc5d1e3fb7974dfecaa9589f1e2865a6144ef5d8d996e456d64429d6d42d9b32cc2fe98a97c5f08704d43c420c89ed max_tokens=15 auto_challenge=false
+2026-08-09 22:50:28.068+09:00 [INFO ] [validator-compute] fixture quota: 0/1 job(s) certified, 0 slot(s) claimed (plan 7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d:1:15:41)
+2026-08-09 22:50:28.068+09:00 [INFO ] MISAKA node endpoints (network devnet):
+2026-08-09 22:50:28.068+09:00 [INFO ]   P2P:             127.0.0.1:17231   node-to-node only (not RPC)
+2026-08-09 22:50:28.068+09:00 [INFO ]   node-grpc:       127.0.0.1:17230   miner / low-level node RPC
+2026-08-09 22:50:28.068+09:00 [INFO ]   node-wrpc-borsh: 127.0.0.1:17232   validator / wallet / operator
+2026-08-09 22:50:28.068+09:00 [INFO ]   node-wrpc-json:  disabled   explorer / browser
+2026-08-09 22:50:28.068+09:00 [INFO ]   evm-rpc-http:    disabled   Ethereum JSON-RPC (EVM lane)
+2026-08-09 22:50:28.068+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-08-09 22:50:28.069+09:00 [INFO ] GRPC Server starting on: 127.0.0.1:17230
+2026-08-09 22:50:28.069+09:00 [INFO ] P2P Server starting on: 127.0.0.1:17231
+2026-08-09 22:50:28.069+09:00 [INFO ] [validator-service] starting (mode=active, validator_id=511f9cae92c3d603383beab1149f738f3f9f453e90a64085c179597ea47562cfcdc4cd1228c3a775f8a81f12f1f7f5d6cde556c90532ba85aeaa9a62af5a930f, stake-bond=none)
+2026-08-09 22:50:28.069+09:00 [INFO ] WRPC Server starting on: 127.0.0.1:17232
+2026-08-09 22:50:28.070+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17211 for protocol version 102
+2026-08-09 22:50:28.070+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17211 (outbound: 1)
+2026-08-09 22:50:28.071+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17221 for protocol version 102
+2026-08-09 22:50:28.071+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17221 (outbound: 2)
+2026-08-09 22:50:28.081+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:63669 for protocol version 102
+2026-08-09 22:50:28.081+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:63669 (inbound: 1)
+2026-08-09 22:50:29.920+09:00 [INFO ] Accepted block 06b81985b302a3e4540652ca3d8229178f260ffab0431f7ae63c3991fd32435ecf3680f7e6eee19c64a2e5370d1c41df05b125c865291fbf4431d30f1d47b58b via relay
+2026-08-09 22:50:32.224+09:00 [INFO ] Accepted block 84a99df9d56d802c07c653e5d481913ea3294691274fde1b647d719eea15b404cad6db8646b8dd881dbf5fd8a80a71f94be328c0b9ead51ec7c1553e6be5796a via relay
+2026-08-09 22:50:35.831+09:00 [INFO ] Accepted block fbdb1d0e8d0eba4d5709576ad36a6f904c045271635a2da7b04f85778ef440c545af6c1135f3dc9dd09a83955ad30f349a8c051d65b08790476450d3b80b465c via relay
+2026-08-09 22:50:37.284+09:00 [INFO ] Accepted block f88f4ed5a9ea918353af42c3e70069c5d7a413660ffa39606f1dcf4e8410daa958dd676e83f101a38f87dd5b02a73ef17481e4d4dbf46df16f06a38d5a924f81 via relay
+2026-08-09 22:50:38.071+09:00 [INFO ] Processed 5 blocks and 5 headers in the last 10.00s (5 transactions; 5 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:50:38.071+09:00 [INFO ] [ibd-perf] 5 hdrs avg: validate(A,parallelizable) 83.1us | commit(serial) 64.8us [add_block 8.8 + db.write 21.6; held-lock 46.6] | f_serial=0.438 f_reach=0.060 | parallelize-ceiling 2.28x
+2026-08-09 22:50:38.342+09:00 [INFO ] Accepted block 55f4a879009482f7e41a2b4ac07c55e8e1e6ef5317c19f27224c1709314712baa6532416aa93419d03564b8bed9db87fd4ecab423e0a6ace75b0b155f3b993b2 via relay
+2026-08-09 22:50:39.728+09:00 [INFO ] Accepted block ca4d71d6f276492733000fe5ff00293e4f6521069a40b35d0817cfd8ae28fca28745938f7c6fdf05014bfb418df11b660be5c6825d9b12a1ff5ffc70c5fc3b22 via relay
+2026-08-09 22:50:41.085+09:00 [INFO ] Accepted block aefac792133a5ac20a5d6053fd2b934b9b83eaea3604125629941e541460da0369e5fea5482ded58619eeefd7df1c7d71ccf11d945dc95dfca7ec6a2ef8b1ad2 via relay
+2026-08-09 22:50:42.242+09:00 [INFO ] Accepted block bfe3c624c235433d6f8dc53216dd5211a6b46884f7a2549841c85a67e7c5c7fe793d36894a461f39440d1c0dfc095bb58e51b71d637290f84a0e0efcffcc561f via relay
+2026-08-09 22:50:43.399+09:00 [INFO ] Accepted block 1e7a2c4cd791fb24787d729065278750afb3cfe6c741e4b6c317a7db3e72d734f85e0edad222ef65a329a5d77cd5a2df4680bcf79e7d1dc1993a66716135ae04 via relay
+2026-08-09 22:50:44.707+09:00 [INFO ] Accepted 2 blocks ...d94d8f2ecfd752bae90ece775db9edc87fe38ed2811866165635649dabeff3c745d29ef9ff11fc9f846afe53350ba9c8ecaee8579c9d7686382c6f885df69f2e via relay
+2026-08-09 22:50:45.717+09:00 [INFO ] Accepted 2 blocks ...e43e43b4354b4ba3a6d0c5a29609f2770e6bde797a9bbeb63824a3ec3089df6a0af8cae62d6c6fd6f6c8950047daac6ee81628aea8316fd05bb9bbdf7db2774e via relay
+2026-08-09 22:50:46.852+09:00 [INFO ] Accepted 5 blocks ...348a3988c48c0e505f204d1a3c23c81d21979a62b4d1235c8dd176a9ff7236357ba40c523fb2f1414db6e132c44b0b71a76cfe3218bdd3e627ffb8413a91c11f via relay
+2026-08-09 22:50:47.902+09:00 [INFO ] Accepted 3 blocks ...6ef25dc513c11aa043d1e7ce019e5b7438da2157d7bd7322d72ab3953bce587128e9dfd6dfcb1cfaa9a5b34e526c22f34a3dfb4e52646bcd51c36750fd90497e via relay
+2026-08-09 22:50:48.074+09:00 [INFO ] Processed 17 blocks and 17 headers in the last 10.00s (17 transactions; 16 UTXO-validated blocks; 1.24 parents; 1.24 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:50:48.074+09:00 [INFO ] [ibd-perf] 17 hdrs avg: validate(A,parallelizable) 76.4us | commit(serial) 52.7us [add_block 7.4 + db.write 18.5; held-lock 34.9] | f_serial=0.408 f_reach=0.058 | parallelize-ceiling 2.45x
+2026-08-09 22:50:49.015+09:00 [INFO ] Accepted 5 blocks ...2d477a15a3a9c34e2cb3a2d8d0b0fb33de9f2d6b9bd3260ea838587f349d1a6c721404a5f35541ba94e0c5c7f71635c237ffee042d3a7da17a3633f110b7ce68 via relay
+2026-08-09 22:50:50.059+09:00 [INFO ] Accepted 3 blocks ...7700d9e6f99fdd1f9cdc9af0e896e5b2293cdbfe9435c5062c6cb67a258a9e94d7f43e75d5830bae63f15c06d79f73cbde34e433bc59a31a4b52c9f131660c6f via relay
+2026-08-09 22:50:51.143+09:00 [INFO ] Accepted 5 blocks ...4502d191aeac8f8753ccfe70c16661be6a130851668edd85fc6ff42b0fc2c292c178ed56a4fd20c9fcbe783ee42f1b500e250cf76547ace032ed2f85f190054c via relay
+2026-08-09 22:50:52.380+09:00 [INFO ] Accepted 5 blocks ...413853e0cdbdaf0762f85e41f0f06a42fa283421c7f9788b09e6ac008df2e30f055bf32f4bfbbbe72db26101f8fef11ca992b6f1a95a583bda688fdda0dea324 via relay
+2026-08-09 22:50:53.632+09:00 [INFO ] Accepted 2 blocks ...1f2499069befd751527dd064d0cbebcff27d88cf580c0b469f62bc3920215b0ef1a6bedb0b9ed5f7ffa5d6380653f31f3d672d90481246a388b0fab0c59667d0 via relay
+2026-08-09 22:50:55.059+09:00 [INFO ] Accepted 7 blocks ...5cdf7d7710cb38f10b25531e99ba109401bc41d7e8172edda52b873dbb6399cb055858cde25f720e245ee19dc6e0bae0bc522ff6511e7fad9a5c05cbde517374 via relay
+2026-08-09 22:50:56.442+09:00 [INFO ] Accepted 3 blocks ...9194254b17c627f682c68887b981534c70b8a578c60694afcc76b2ad022fac63395bb97c51b212f84e49196176e5840c7e49a6f35a11d2ac59b5b4b1b7ce1bfa via relay
+2026-08-09 22:50:57.583+09:00 [INFO ] Accepted 4 blocks ...6734cfb58c5876e0e9386093b95739f3ad1d4c31c598bf45081c4c4cc4413f7defb844277316372716b96bbd07a193e1e2e63b3226e07be782b8b78b6a98b733 via relay
+2026-08-09 22:50:58.006+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=57 bond=unconfigured active_set=[epoch=0 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:50:58.009+09:00 [INFO ] Processed 36 blocks and 36 headers in the last 10.00s (36 transactions; 32 UTXO-validated blocks; 1.19 parents; 1.19 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:50:58.009+09:00 [INFO ] [ibd-perf] 36 hdrs avg: validate(A,parallelizable) 81.5us | commit(serial) 60.2us [add_block 8.1 + db.write 22.3; held-lock 40.9] | f_serial=0.425 f_reach=0.057 | parallelize-ceiling 2.35x
+2026-08-09 22:50:58.631+09:00 [INFO ] Accepted 3 blocks ...6f226f8b9b57f238df81abda7eeb8a617c94e2a885b8877265b95666957d412c8a112cb9284a26bddec7a28437008ee690b3fc6793ae1581c0a3e1f123e3a8c5 via relay
+2026-08-09 22:50:59.712+09:00 [INFO ] Accepted 7 blocks ...7b0b3361a4b96f4f0d19d29b816f7dbbed62e0c09d1b2f6be8014fd2ed0690fa956451c2e0f0e5497353180a94008814197e36e8575385ebe7577db84dc3ce9d via relay
+2026-08-09 22:51:01.321+09:00 [INFO ] Accepted 4 blocks ...698e8d3c889a7747c2bf4fde03b88093fc9d5cba768f0497d5b43b7f308da7f28e5ba2a98484a85e8499115833440aacf2027dbfe3be4113555fc13234056acb via relay
+2026-08-09 22:51:02.414+09:00 [INFO ] Accepted 4 blocks ...ddb586e7e46ab206dd5facdb1e64b366dfc9eccd0546eebe4acdfc8f3ca9609c198d9796c4d06106fda0cbd43a7ecb7c031f71382105ab5156785feb63f23ed8 via relay
+2026-08-09 22:51:03.697+09:00 [INFO ] Accepted 4 blocks ...1c21be83a68f5934b07dc3f9f5bfa859ad5d9b16830ca15d07a96fe5f497fb7c88e745b7298013885c76591721d9901691e98cba42931b87f94896e89bd6ebdd via relay
+2026-08-09 22:51:05.240+09:00 [INFO ] Accepted 2 blocks ...fac70db63616d9876c515e11debd5322068fde7c6a5d24ad3cc185ef13a35e79d87034418d1f15beba4deb6577fd214fe6f9482cdd99bc6d7b9c3a74d2c22b36 via relay
+2026-08-09 22:51:06.567+09:00 [INFO ] Accepted 3 blocks ...27fb2479b218d48e9c04e87875f14bab4423b6cfaa90e083deedcf215aa857024429e05cd7457744455f5dd7f067c154b9db79f6f7c322ebbc39e6298125a090 via relay
+2026-08-09 22:51:07.756+09:00 [INFO ] Accepted 4 blocks ...9532895aadec45ed82e6a1296e88c605ba2d930f180cb03c4d061f5850c14ba2f1dd20676556217705e35faea875e81823c412d85c2456cdc391ed2e5a6992cc via relay
+2026-08-09 22:51:08.011+09:00 [INFO ] Processed 28 blocks and 28 headers in the last 10.00s (28 transactions; 23 UTXO-validated blocks; 1.21 parents; 1.21 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:08.011+09:00 [INFO ] [ibd-perf] 28 hdrs avg: validate(A,parallelizable) 79.7us | commit(serial) 59.2us [add_block 11.5 + db.write 22.0; held-lock 42.6] | f_serial=0.426 f_reach=0.083 | parallelize-ceiling 2.34x
+2026-08-09 22:51:09.566+09:00 [INFO ] Accepted 3 blocks ...83e9494b81f84895c07e531bc71771b1d82d288199e622405d96480cdfe5682388c7bc76c6024830eb4a4eac71141c0afaaec66892bee287110cc396ae13f6a4 via relay
+2026-08-09 22:51:10.577+09:00 [INFO ] Accepted 4 blocks ...0dd764083e7b4920cb491b8c577f310f67a92ee210b96f829655d4aef6d2c3672ec1928990e8ca85d201046fb7f50a18e7affeba72ab703e8a6e41cd158cecd6 via relay
+2026-08-09 22:51:12.651+09:00 [INFO ] Accepted block e299484dc6708c6195b9747b542580245f0247591e732ba63b165979f21dcb659d8b9def8a0b1bf96a83870818247e4fdefad32e8efae742cf4f861dc3d94d53 via relay
+2026-08-09 22:51:13.776+09:00 [INFO ] Accepted 4 blocks ...701d0b547a6d0458253b4b142851688fbf9a286af9cf76ac958caa6bbaf3074bfbc1e6bd1dd2c3baf41d523d298ea7620f8040ae358bdb017025a317fff9dbe2 via relay
+2026-08-09 22:51:15.024+09:00 [INFO ] Accepted 4 blocks ...bc04498dc14a8ea8cb5514848578cf416c3580f933f31f56609a617da1c91747789edeb61943aec9efc3a015636a15bb215c387c93d1b3d25da6cd1a6a041918 via relay
+2026-08-09 22:51:16.325+09:00 [INFO ] Accepted 4 blocks ...9c8813c7146a0d93a37bbfa2789bc2a652913134d84776627a2c5d887b940af6f750308b9622c1501b6bae5d97415f72fcc1d116c342c862e01386464bb63fee via relay
+2026-08-09 22:51:17.382+09:00 [INFO ] Accepted 4 blocks ...2672b4a98c2cdeec26d2090d797fe675e80028ccec33077cda2b3bf354462535c9b9fe9938ba8247cf0d1e5b145320152a08eeb1a40335538461c8ae1e426d62 via relay
+2026-08-09 22:51:18.012+09:00 [INFO ] Processed 25 blocks and 25 headers in the last 10.00s (25 transactions; 21 UTXO-validated blocks; 1.36 parents; 1.36 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:18.012+09:00 [INFO ] [ibd-perf] 25 hdrs avg: validate(A,parallelizable) 85.0us | commit(serial) 65.2us [add_block 13.1 + db.write 26.0; held-lock 49.6] | f_serial=0.434 f_reach=0.087 | parallelize-ceiling 2.30x
+2026-08-09 22:51:18.901+09:00 [INFO ] Accepted 2 blocks ...1c948211199683aba288e5d91bcf388759dc4f811252428da3ed7dcaf40029fe3ec3530ca31b6a9194bd4b4814eb45f3f19d7e4acdc0897e5c7f38d951e4b7d5 via relay
+2026-08-09 22:51:20.517+09:00 [INFO ] Accepted 4 blocks ...82d2b6155638742a4bebccde6d995b075c81447cd203ba15a256a502f5b4a7c8a881526aec49c8307dbdcb1b2dc52e7c6e171ff7f11331c0275895f06ef04d76 via relay
+2026-08-09 22:51:21.874+09:00 [INFO ] Accepted 2 blocks ...713bb1e405d27b56953ee912a461783fbd818ddd557053906db034a280dfe758e4535e18bfdf2622700e029c4764241600009b0cc59012e861e3043e9ad8034a via relay
+2026-08-09 22:51:23.054+09:00 [INFO ] Accepted 5 blocks ...e4622423f8ef0ff0c3cd46e428dc532e8f67e9ef7d1250721cd79f357696e806efb8dca4f8403345f7e2d293f6dd4a5dd67f1cb647a0edda5e9bade7a4c470a7 via relay
+2026-08-09 22:51:24.488+09:00 [INFO ] Accepted 5 blocks ...ccc2f73ffb5830188468ca020ed2d3f71293bcd631993eb3c5d9bceeb1ace44ed7cecf411d3fad95cf102fe294b6586d411abbea0571b3b748f5b8566aba8fc6 via relay
+2026-08-09 22:51:25.545+09:00 [INFO ] Accepted 5 blocks ...2588e65828fa0b2fe26f7d847c1f331fb9d483086f073230b8f3127b291c7261021e7df83f4fe9c7b31e5e83e9983cdf2850f8dab4af89d55d20e7be3f90d0cc via relay
+2026-08-09 22:51:26.623+09:00 [INFO ] Accepted 2 blocks ...d23b34e4c78597d7dc150b6b60b6ef2934e9da155c2a5bea5c546f91083cb3470aaac89cb98cc850049cff17dcc263e3bde3923d95838257efa436c6f7837b6a via relay
+2026-08-09 22:51:27.774+09:00 [INFO ] Accepted 3 blocks ...5c283a035794e8530fa10c5ff45f894d1af71765251cfe851415f77be3f29ee58920355066c5336878a24b87a748daf62e44416d26808c06cf61b44d982985a6 via relay
+2026-08-09 22:51:28.006+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=137 bond=unconfigured active_set=[epoch=1 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:51:28.014+09:00 [INFO ] Processed 27 blocks and 27 headers in the last 10.00s (27 transactions; 21 UTXO-validated blocks; 1.30 parents; 1.30 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:28.014+09:00 [INFO ] [ibd-perf] 27 hdrs avg: validate(A,parallelizable) 87.5us | commit(serial) 110.2us [add_block 12.4 + db.write 42.6; held-lock 92.2] | f_serial=0.557 f_reach=0.063 | parallelize-ceiling 1.79x
+2026-08-09 22:51:29.791+09:00 [INFO ] Accepted 4 blocks ...b9dc5c1caf8c8985e13a8168576b7b214888898bb23b7b72b070959177cb46d3c55a9bdc6274e54b647964b85619e2ba786bce1b8feae953a6bf3797f5eb02f6 via relay
+2026-08-09 22:51:30.960+09:00 [INFO ] Accepted 5 blocks ...6b5f8c5c75105abaf811e8d6bd3bc283e89964bea429a882166c1d06bdd523fc83dae1dc3eb716b8097f27ec5ca3141327f991820dd6695963e8cafb3faac288 via relay
+2026-08-09 22:51:32.401+09:00 [INFO ] Accepted 3 blocks ...bd4a2890e345325b31c6e36b7296153e85c2f283c54f56285497df16d2c24b359166e6f90cf2f8e17321dff607440e59a56f71a08a687bae0ffa0c621d5ff82e via relay
+2026-08-09 22:51:33.507+09:00 [INFO ] Accepted 3 blocks ...4e92ba7f9898c4ea0d5ba663d3626e2bac025be96051064a34b2b7d747f9b5b8b8166fa40b9148c9b6cf1a5d43d99cc6db91e0d35bcfb94211d4a6efd0cd4543 via relay
+2026-08-09 22:51:35.104+09:00 [INFO ] Accepted 3 blocks ...8b6866f8460180365c641069861fc261aacc46bdbaf49f24e1a5a3d71d086d4122ffb9e1e412775a1c2411791d231cf205a0906597d1d468f108a220127fcc43 via relay
+2026-08-09 22:51:36.387+09:00 [INFO ] Accepted 3 blocks ...8158e9e309ffd59f3ef46e363c8bc23aa93d4dabb42fa393de43156746b14100cf94cfe140de02dbc600db876fc9b2b1b1581e63320a517884c05fafa2bf1089 via relay
+2026-08-09 22:51:37.602+09:00 [INFO ] Accepted 5 blocks ...8b3c56fb2bfe68446e40787b356e14b9553d11ac39fe046a8c45c0f55b02c5c3c2632734e51f4f6ab475489b6ec64b4ec89f8fb990e4c5b594c90d886850c811 via relay
+2026-08-09 22:51:38.015+09:00 [INFO ] Processed 27 blocks and 27 headers in the last 10.00s (27 transactions; 22 UTXO-validated blocks; 1.30 parents; 1.30 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:38.015+09:00 [INFO ] [ibd-perf] 27 hdrs avg: validate(A,parallelizable) 82.2us | commit(serial) 131.2us [add_block 8.0 + db.write 56.2; held-lock 114.7] | f_serial=0.615 f_reach=0.037 | parallelize-ceiling 1.63x
+2026-08-09 22:51:38.709+09:00 [INFO ] Accepted 4 blocks ...c833fa132e8ff38a8e5d672c3f145bb4dfeca08e9b2638657d5a4a5621e4cd422d7ea78687c0b3fbf8e13bb1a0b3bd5f9abfc6aa787cc181ca8a400c07b23ca1 via relay
+2026-08-09 22:51:39.885+09:00 [INFO ] Accepted 5 blocks ...194e6607c8ebce5a25cced0001dc8502dc58d0af8e5247cd64686aa9f851f807eab4cf1bf6c136139748a6ed48ffd473718a2aef2ac874a9c2469a1336e478d0 via relay
+2026-08-09 22:51:41.033+09:00 [INFO ] Accepted 5 blocks ...adc11a133b85127c2b75d404662a411b0d5d818a12843359f774b0402ef63b4dbf3298e4fe850f02b511bb09489517b21279304cc772f944ffe1196794bc3e73 via relay
+2026-08-09 22:51:42.150+09:00 [INFO ] Accepted 2 blocks ...ff640105d088fca1e57685ed29917d0a0566d0559acc530b057dc3349b2d79a13ffa74c8fd00087bf392f7ee408ab04f9a08824a8462ce3a7b2e7bc84fcdf687 via relay
+2026-08-09 22:51:43.280+09:00 [INFO ] Accepted 5 blocks ...95fe5d979a6f0e2d845d776d7b8a43856836aeb4d5fb335110e19676cadb8c82890462aaab0bcf8ceab9da936ace9bd5470769790b45986f59908e29c75e5f98 via relay
+2026-08-09 22:51:45.664+09:00 [INFO ] Accepted 3 blocks ...8698ec8b40bdbc17c6c8c124f798db0f026892feffd71303d93beb980cd3c9d02edad6490f9195c9572af978632417062870e52ee3579d779bab454a91d90093 via relay
+2026-08-09 22:51:46.793+09:00 [INFO ] Accepted 4 blocks ...9e6eaae90986aaf19a4329c4db76490b5900d84fe3b8d01ebdf4bb62baf9cee262709b6578113679a74d1acb0be07198d58962188d1a8b00e7bbfcab3498879b via relay
+2026-08-09 22:51:48.017+09:00 [INFO ] Processed 31 blocks and 31 headers in the last 10.00s (31 transactions; 25 UTXO-validated blocks; 1.16 parents; 1.16 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:48.017+09:00 [INFO ] [ibd-perf] 31 hdrs avg: validate(A,parallelizable) 83.2us | commit(serial) 141.8us [add_block 7.5 + db.write 63.2; held-lock 125.2] | f_serial=0.630 f_reach=0.033 | parallelize-ceiling 1.59x
+2026-08-09 22:51:48.302+09:00 [INFO ] Accepted 4 blocks ...375e0557502d3d92a57eaead757f122737899127725d218b41944f22624e79b17c836ff618c0856fd247d36f08fb808129d9fd1903dd2614ef3bd534a3296504 via relay
+2026-08-09 22:51:50.203+09:00 [INFO ] Accepted 2 blocks ...fbbc64dba9bf866e15f3c2f97b11582b48b7c4c10e0d1db2258180e2cc46ef008d1b6527ec335837ed29d823a2f8e9c079252cc710204864da040a80d48b3f06 via relay
+2026-08-09 22:51:51.527+09:00 [INFO ] Accepted 2 blocks ...15c74df7b78a71e89b3f09260f1143ea82fbb971d9a8f6c2cdcfe41fe37c031398f743b393c2b9406f9102837a0a5dcfe511a63a203be3e22d77dbedee6733dc via relay
+2026-08-09 22:51:51.554+09:00 [INFO ] [vlt-credit] swept 0 capability declaration(s) out of history into the capability store
+2026-08-09 22:51:52.556+09:00 [INFO ] Accepted 3 blocks ...dbe7a9fd0b85f0862818aa9b714b4a42a023d30b48754a18c461beb0fd7e96458d489f93053dc826c8cc3cefc65548e8df530466c8cd1bc4299410721ce24a6e via relay
+2026-08-09 22:51:53.683+09:00 [INFO ] Accepted 2 blocks ...ebbdd2defb15d5405b13cf3804e1e344782012624ae5235d200f9397c255316a1c3a05446014d96def139e550304eba162d4288d0940ed29a3683e2dd3a66654 via relay
+2026-08-09 22:51:54.808+09:00 [INFO ] Accepted 3 blocks ...32a300833d94b7984377c83f051178df515fd08aa9272f06fa8c869d3b7b237af9ba1054d874db4a9290ca875578a4e08bd02e9839cc12005ddba950203599bd via relay
+2026-08-09 22:51:56.376+09:00 [INFO ] Accepted 4 blocks ...4735d161c3e4aa731855daf4066253560ffcb59a4320e7ce62c41566d39b8494c4fd10fd6387319517cd15749d5b172b5bba720bd2ba4b7d38e14bcfa98eaf35 via relay
+2026-08-09 22:51:57.732+09:00 [INFO ] Accepted 2 blocks ...59d35ea64832371ea0193134bb1ea4a594763b5770ada13f5683874ec2b5a41539cc935590e96c5905e7cd1e25c25ef5df20bc766ab2180564d514ea2ca14ed0 via relay
+2026-08-09 22:51:58.007+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=213 bond=unconfigured active_set=[epoch=2 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:51:58.019+09:00 [INFO ] Processed 18 blocks and 18 headers in the last 10.00s (18 transactions; 17 UTXO-validated blocks; 1.44 parents; 1.44 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:51:58.019+09:00 [INFO ] [ibd-perf] 18 hdrs avg: validate(A,parallelizable) 89.5us | commit(serial) 149.2us [add_block 8.6 + db.write 69.4; held-lock 132.2] | f_serial=0.625 f_reach=0.036 | parallelize-ceiling 1.60x
+2026-08-09 22:51:59.043+09:00 [INFO ] Accepted 2 blocks ...74873edcea4d4d4cd2434cf3f04a883f7866f226665511fd2a60b2ac34b5c355d034e8e17f35da4183e15a2fd3549de64c2e7ab6a3e17f7a89af92f14c9c0923 via relay
+2026-08-09 22:52:00.845+09:00 [INFO ] Accepted 6 blocks ...00a597aae76170bbe9a306037293874719ca4112b1d0369bf0f167144c785c3069b0a31b8d28db35337ef05c1faa61ea89ec034d8c91e85a1a67cf17c586448b via relay
+2026-08-09 22:52:02.211+09:00 [INFO ] Accepted 3 blocks ...d6e7cf96ee628bc697ac078579b533324d898349d30f36bed3cf8ca16072cff62b35222a822451124e7a8ceabd09327fc1c5bf597e76143ed592d277f6a341bd via relay
+2026-08-09 22:52:03.447+09:00 [INFO ] Accepted 4 blocks ...cb747f72861c62b0858d45d22feadd445db1ed297d249b15bdcca3d1667fc1a8fe8473db235627f08c360899f1f4814b3ae8bfcad22c3e6dac99fd4f534f6dde via relay
+2026-08-09 22:52:04.565+09:00 [INFO ] Accepted 4 blocks ...919e3370d2591c9c58248ce441cdf782f3399cf9d5410d9724a2ce5abe44f0950c4410a5778b4398bcf0367ea8bd78b6e19a789f8b484c24cba6fce7222e2a59 via relay
+2026-08-09 22:52:05.981+09:00 [INFO ] Accepted 3 blocks ...70d1adf0411789c8586d224bf614a2463cd9f17f37240aebb5a665aa23ff1c6c14ce04dee6d51ed520e768e7c6c8b28f80f66bbc9791c71676147e1398c87f3c via relay
+2026-08-09 22:52:07.711+09:00 [INFO ] Accepted 3 blocks ...a0e89db4fd3501ec715f1fce8cba79df74aa54baa62eb175483a69942832c40c125584772e918c066b296f9281dec66842598e4ce74dc1aa65e4e14e89e4a67f via relay
+2026-08-09 22:52:08.020+09:00 [INFO ] Processed 25 blocks and 25 headers in the last 10.00s (25 transactions; 24 UTXO-validated blocks; 1.20 parents; 1.20 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:08.020+09:00 [INFO ] [ibd-perf] 25 hdrs avg: validate(A,parallelizable) 78.8us | commit(serial) 161.1us [add_block 8.8 + db.write 75.0; held-lock 143.7] | f_serial=0.672 f_reach=0.037 | parallelize-ceiling 1.49x
+2026-08-09 22:52:09.392+09:00 [INFO ] Accepted 2 blocks ...8d42363aaf93fe401c6dc929de57c0ec7f94cc1beb1c827631b62ff3c1ed5c2c1bfc26b79de2ce5a83424ee4fbc9e5827f984ed33ec44caa2d8ccf05049c0ad9 via relay
+2026-08-09 22:52:10.709+09:00 [INFO ] Accepted 4 blocks ...12a2518d035193675974710224d3f111e8d8b5e8fd7c40d022171451efb607af557f2897f29276f59ddc697846c79e5eb9f773acec71610870bc2224bf672828 via relay
+2026-08-09 22:52:12.156+09:00 [INFO ] Accepted 4 blocks ...2a512c860812c7afabff95bbabfa41aacced5f5692d7c14d86ea9a402fb304cfcbc2eb6603f8782571d3993aedc51a2a880c8c91548255f2cd586ef8874bcf96 via relay
+2026-08-09 22:52:14.844+09:00 [INFO ] Accepted 3 blocks ...02dcccf2d01d86f1d4b5f693d02a8046c557555c4a93fbbfd7a25aa3c2e27ac3070f3737cf679f1e91863d30e48b982ea3e3f355c50a71d46f6773d2c3b78da6 via relay
+2026-08-09 22:52:15.925+09:00 [INFO ] Accepted 4 blocks ...30d2ee50f3b3fc061474cc7b94acc33741d48d174a1ce9cb4dd28e468a34543c6083c8f25315900bb65a2b87a81840c7ff42b2c8fee6bf5163c115492b76bf87 via relay
+2026-08-09 22:52:18.022+09:00 [INFO ] Processed 18 blocks and 18 headers in the last 10.00s (18 transactions; 18 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:18.022+09:00 [INFO ] [ibd-perf] 18 hdrs avg: validate(A,parallelizable) 75.9us | commit(serial) 179.4us [add_block 9.5 + db.write 84.6; held-lock 160.8] | f_serial=0.703 f_reach=0.037 | parallelize-ceiling 1.42x
+2026-08-09 22:52:18.915+09:00 [INFO ] Accepted 5 blocks ...c1c628d45af78385285aeb48ccaaaac8c897a7b4713e76b4f7b5efc73c257cc91035201aca30a18f9ea459917a974533c294877c57ac91057b2f83cb7336331a via relay
+2026-08-09 22:52:20.314+09:00 [INFO ] Accepted 3 blocks ...cb3f044c1514ce85a91646c8f22a07f86ec8f6dfd2f67d9353922ebb0cf9cd054743a407ccd33cf6845280524588ff3cf2f585625790f6a81872795a6dc35750 via relay
+2026-08-09 22:52:21.842+09:00 [INFO ] Accepted 2 blocks ...b05102d59d81dbe2ca531e0793a3172a31509f0c6c7dd836bbce9d5011b6fe1252da30da7c40046293a598b81a8d91d698f1a6e143bd58fd6743116d7d7439c5 via relay
+2026-08-09 22:52:23.030+09:00 [INFO ] Accepted 5 blocks ...b867cb43f103113764c42f03f49bb2277848fb9107f8a510f3758da9f4b6e778d699e105d100f3b9fc9a870b15417592053f7c82f6a35c0d2b615ded3db6d3b7 via relay
+2026-08-09 22:52:24.100+09:00 [INFO ] Accepted 3 blocks ...88b5e0e2037132e9361ab354d70dd85366e5550c74e0a826a9fc7e40be03644eac3c471c92bc3fb32118503e0103c11291bb7dcb057d106a13da57cb97a8dbf9 via relay
+2026-08-09 22:52:25.107+09:00 [INFO ] Accepted 3 blocks ...3d24d1381689c3cf0f1cc2d31d432420562809a01159c56f2fcf897c558c190f41fcf511fed4bd9cbdbacd939d33ed2dd872e7a6f94d4a7107e5fc2dcde5c2d7 via relay
+2026-08-09 22:52:26.391+09:00 [INFO ] Accepted 5 blocks ...dfeaa9055401600b2920d9f63f8a157a069e34fd9439a1349e84ea41f8c08f8823ba934752171b1eae208d468b0417936dab53831904f6d20ff2e51e1d9f052e via relay
+2026-08-09 22:52:28.008+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=284 bond=unconfigured active_set=[epoch=2 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:52:28.024+09:00 [INFO ] Processed 28 blocks and 28 headers in the last 10.00s (28 transactions; 27 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:28.024+09:00 [INFO ] [ibd-perf] 28 hdrs avg: validate(A,parallelizable) 89.5us | commit(serial) 216.8us [add_block 9.1 + db.write 121.8; held-lock 194.9] | f_serial=0.708 f_reach=0.030 | parallelize-ceiling 1.41x
+2026-08-09 22:52:28.138+09:00 [INFO ] Accepted 3 blocks ...48bcc11d90812eb2fafa8216f213344b4b1ae97ce73d19c5fb6722846b5ba56c08eb0e79a55738b4da8414db91b84735647775bdf097c00ca4f6ff673d3c1eac via relay
+2026-08-09 22:52:29.355+09:00 [INFO ] EVM lane KPI (O9): 256 chain blocks, avg mergeset 1.21, avg accepted-gas utilization 0.00%, 0 deposit-claims applied (cumulative)
+2026-08-09 22:52:29.592+09:00 [INFO ] Accepted 7 blocks ...bc9d024ff0cb92a8e2c001d773cfa3cc23eb314c598bb1a3d23cf830c574e86d594fae359df8cc8a06e97aeb93b66e60657130e0f846b46896aa8ffe45c164de via relay
+2026-08-09 22:52:31.305+09:00 [INFO ] Accepted 3 blocks ...6aab2a2dd4f10beec18f769f747739a0cabe60de10cb8a62c4145f9a440239eb80c84f760ee81e8dbfbaed6ea0e0ca1bfdc4f6d688cdbb2639e2a4fd70c542df via relay
+2026-08-09 22:52:32.265+09:00 [INFO ] [vlt-shadow] sink_daa=299 0 validator(s) with credit; 0/2 epoch(s) would reach quorum; newest epoch Some(1): W(E)=0 signed=0 snapshot_root=38c7c0ed3cd66d1bb5350fcf81d5aeb08526652fc9eb8656e682e8b2ac276c550f4bd069e2afcbb5c311a9bafa2f7f7e8e5615d85e2a71b8fef368822fc80940 — the weight fence is at 18446744073709551615
+2026-08-09 22:52:32.265+09:00 [WARN ] [vlt-state] pre_shadow -> shadow at daa=299
+2026-08-09 22:52:32.330+09:00 [INFO ] Accepted 5 blocks ...adf16260650c76d95c592de3e0b13c1ac7832f9eab8c755b9aa5c4e7f47d9f12835196108f00cd4572dae4339fdf47ec576f0e4acf94079385126b4195542a19 via relay
+2026-08-09 22:52:33.474+09:00 [INFO ] Accepted 5 blocks ...568419ddf0ee8e53b203679c009cfba5d762d213a5646ac5562f4725f7402cef6b69663a5c4a283b35b8a09664aa1cf9907d6e8069c2861881e9257de56a2ed4 via relay
+2026-08-09 22:52:35.841+09:00 [INFO ] Accepted 3 blocks ...088010f63c2e8b70ff16db8ad76ce4c8a21f27900720784e97217cc0582b1cdfb23a95493d9ecd8c97ef0c52abc8fadd47e619f13422b31c3f355c22f8004ea6 via relay
+2026-08-09 22:52:36.864+09:00 [INFO ] Accepted 6 blocks ...91550992c63e21010e71e6b58a55d30e9a32f8130166f1b8b10b9041c0433af336bd48a89d5f8eaa01b253da85a2fc7f276cd35d7486fd1185a2b6df8a650bef via relay
+2026-08-09 22:52:38.025+09:00 [INFO ] Processed 34 blocks and 34 headers in the last 10.00s (34 transactions; 33 UTXO-validated blocks; 1.03 parents; 1.03 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:38.025+09:00 [INFO ] [ibd-perf] 34 hdrs avg: validate(A,parallelizable) 80.3us | commit(serial) 176.1us [add_block 8.1 + db.write 91.8; held-lock 157.4] | f_serial=0.687 f_reach=0.031 | parallelize-ceiling 1.46x
+2026-08-09 22:52:38.179+09:00 [INFO ] Accepted 5 blocks ...c21f496a3dc5c61ec97c63021ed359d06b4559f159ce9e7169fbc378f216620190ae5a7823f13aa997fb27aa2d2aa7120db38e9ed888186641f12d5849453565 via relay
+2026-08-09 22:52:39.333+09:00 [INFO ] Accepted 2 blocks ...c95ec2ba12e09d507af8195c004fb251db3933506ab76941dba419a76948ea479a78cbcb87306b86bba5bf6e57574645398f56da7fa5fc0b3d8a4cf2a7e38abe via relay
+2026-08-09 22:52:40.628+09:00 [INFO ] Accepted 4 blocks ...11e785589bbb00db5b11962b59f9653b365c65fe51f8732eb5835c8bace76405a26c6d3d2c48b3a550643b29dd276b951ae5890869f69c2a47980e1c1d2ed895 via relay
+2026-08-09 22:52:41.913+09:00 [INFO ] Accepted 3 blocks ...2ad62ecb642365cd00af0a5f6d397bf2e2de47adcd40e99ab5ebc6924121d84b287d1ac6324959fc72668068ccf0007e8e8656c9f365a21a6539f710671a86f3 via relay
+2026-08-09 22:52:43.184+09:00 [INFO ] Accepted 5 blocks ...149eb0b3a2d61baf634ece4af67004bbb4d557f2a89b79efad186229d08061e4464bcd5beaeea2365ba11db8b1aae593732cc2e6b381f1525bcab162f6318cfa via relay
+2026-08-09 22:52:45.060+09:00 [INFO ] Accepted block 832836f2b2e0b20afdec2a2f1ac133e7f6b4b26ff7551954372393890020b90b3948070fb8a644a86353efe9ba816ce2cca6ff6b5bae6ce572fce406f3375a97 via relay
+2026-08-09 22:52:46.708+09:00 [INFO ] Accepted 2 blocks ...523e12e4c1c0884bb08ea28ef24a910054f5887be6052c3130f8ca6418e5a895975952a3653d2e03cb17a4e16a4b0ffe323f8000d77c77cd26561e4b53a57262 via relay
+2026-08-09 22:52:47.734+09:00 [INFO ] Accepted 5 blocks ...948567730f150c90f3527ec16805a4764f1fb165d13b943777526e41ce506a01f11c564e4f36977c47aa87a5ffc5a941f08ea28108f1f8beb9174d9d523d6eb4 via relay
+2026-08-09 22:52:48.027+09:00 [INFO ] Processed 24 blocks and 24 headers in the last 10.00s (24 transactions; 24 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:48.028+09:00 [INFO ] [ibd-perf] 24 hdrs avg: validate(A,parallelizable) 83.2us | commit(serial) 173.0us [add_block 8.5 + db.write 86.6; held-lock 154.7] | f_serial=0.675 f_reach=0.033 | parallelize-ceiling 1.48x
+2026-08-09 22:52:48.898+09:00 [INFO ] Accepted 3 blocks ...7fc75942668a3b403cff33eff6d5d22bcd127d6d21d4870bd0d4f38e2aa81d5c24e1d0a87b68bf3af88671340ccbeca50138fac9aa40ab688e1830a3543b1960 via relay
+2026-08-09 22:52:50.128+09:00 [INFO ] Accepted 2 blocks ...110b21b7e4b58eb6a68b1bf11af86a53ce705210e883a5e8c23b1df094101f465d6940413619f2279e0893f1fa337919189fc81f4246ada8f8e635cec916f337 via relay
+2026-08-09 22:52:53.264+09:00 [INFO ] Accepted block 2a8ff25a3bfe35281a42ee545d4e1e0a9ac9d1803b86ad3ac1fe04beb29f525445e3ee42d23e309218768ab0bb0e8c44572c7e23d4512f5f4201e8ad21d4e491 via relay
+2026-08-09 22:52:54.644+09:00 [INFO ] Accepted 4 blocks ...715d506bdfa4870823446cf52c9e5abc991fd3552ba95347da26085dc8c563f39d375c967d425520ec5c282171efe475ef71b66c9ad8c5ac76e4dacd1712038b via relay
+2026-08-09 22:52:56.368+09:00 [INFO ] Accepted 4 blocks ...74cffccd54aae924f527f3b04813a3dfd69e86578504fd3cd490bdd8423c35f2c94cb3d62ea6f1e48e58cab338b6bcb143e711664ee95e928b84357b3e071b8f via relay
+2026-08-09 22:52:57.744+09:00 [INFO ] Accepted 2 blocks ...9d9561b94e3655be9c1a4672af55d01608a782fb76147b83361a194fe7b872961887b3b2955e2accd3c2ac44335780e9ff6e0f15ae8574dd85567129f9cf4507 via relay
+2026-08-09 22:52:58.010+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=356 bond=unconfigured active_set=[epoch=3 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:52:58.029+09:00 [INFO ] Processed 14 blocks and 14 headers in the last 10.00s (14 transactions; 14 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:52:58.029+09:00 [INFO ] [ibd-perf] 14 hdrs avg: validate(A,parallelizable) 85.3us | commit(serial) 172.2us [add_block 8.6 + db.write 92.2; held-lock 155.3] | f_serial=0.669 f_reach=0.033 | parallelize-ceiling 1.50x
+2026-08-09 22:52:59.041+09:00 [INFO ] Accepted block 105da831f2226499bc9946d40c6f5ecef55395649d89107f3579e396d3511af8d769e4da5d6ffa3aad51282cbae94e5279eff5a1debfede33fd4f48d57438787 via relay
+2026-08-09 22:53:00.132+09:00 [INFO ] Accepted 3 blocks ...593b4419e1035d8852f8d33d2c8572ca83e8758ab4f808163b296579fea542a9b26eb6d638052c5f25a087c8b8e45dbcc7b843c5ca406d23d0818c162fd5be0b via relay
+2026-08-09 22:53:01.733+09:00 [INFO ] Accepted 4 blocks ...d90afe5ba3a61c5b26f64d1bf46aaa4d898ece7f61cbac007b64adc0bf136a8322e7e17bd8f074b60a90d683612e008998222e71cbb2cf3a4074f9e8664ee7ae via relay
+2026-08-09 22:53:03.210+09:00 [INFO ] Accepted 2 blocks ...30a1a2333b44b8511fb8e85fb76677219745ed8079b1e817a1ab15f7d54121b7f6d98ec69e3f138b0d726c323a8ddfa27d234c597b7a426436ace9cadf4f8ce6 via relay
+2026-08-09 22:53:05.206+09:00 [INFO ] Accepted 4 blocks ...d0c97348381e334e2546e5dab7423c154f875de8644e7bafd5f1bf1665a0db458d90628249d6743eabb370a2968a9045d44e8f5d0c605ca6537a5d8c4911b6c0 via relay
+2026-08-09 22:53:06.627+09:00 [INFO ] Accepted 3 blocks ...7da9267deeb798f32e378dfab74a44272a3eeea9108aa8dc973b15acd60d789e0ad291fde4bf0d7b586b2aa6e8e690757670f5c90dc1aefe775db5ad8596492c via relay
+2026-08-09 22:53:07.997+09:00 [INFO ] Accepted 4 blocks ...9ddf70dd412ddbf371578d070f443405a269e407a5db9242e93df4f5a233d4645cbfc8bf6c8ec312a7c3d71d0c4741008c2ef5f6ac1648a7d2daf1f57d958091 via relay
+2026-08-09 22:53:08.030+09:00 [INFO ] Processed 21 blocks and 21 headers in the last 10.00s (21 transactions; 21 UTXO-validated blocks; 1.05 parents; 1.05 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:08.030+09:00 [INFO ] [ibd-perf] 21 hdrs avg: validate(A,parallelizable) 84.2us | commit(serial) 161.7us [add_block 8.0 + db.write 82.8; held-lock 143.5] | f_serial=0.658 f_reach=0.032 | parallelize-ceiling 1.52x
+2026-08-09 22:53:09.041+09:00 [INFO ] Accepted 2 blocks ...370133352f1aa1ac8980f3cadad056f1154daac6a101eafe37ef0d9858d11c4299ddc142e27f2b6f223a9f23fc555531d09879768d4ff69abad46cf831960570 via relay
+2026-08-09 22:53:10.131+09:00 [INFO ] Accepted 5 blocks ...a8e3a5a2da81680128f4c09882ca147abbbf448fd71f769580b4d24576ae6b37d01b4d0775a7230e189c70250f4581c2156923597f0eca07d1e6621d8e15f238 via relay
+2026-08-09 22:53:11.218+09:00 [INFO ] Accepted 2 blocks ...2505430680123cfeb046dcf3a9bb6f5cdda7f9dced6bbe21693aed39042f45d0a855d588bb6e374ce47b928576da38d2760444e57ffec786e5f07f8615714fbd via relay
+2026-08-09 22:53:12.989+09:00 [INFO ] Accepted 2 blocks ...99fb2b639cc602265af7fe1fdac41c75f0de37795c2c33006015c37240d41894f7c68022697f09c61a51801317c17cf639f4649a74d15c6478997cf55bfafa16 via relay
+2026-08-09 22:53:14.035+09:00 [INFO ] Accepted 2 blocks ...b6e34ed13f9249260ecbb51ea2d4c4cb6732c02efa9b3485a837be169d06c43f413d11ca8ccab7bc33e61165293e1cf31305b70001eded94778cbba262d9d2c6 via relay
+2026-08-09 22:53:15.090+09:00 [INFO ] Accepted block 3e41d1256effadce3c7611054e0ff1c84ab6ac91369b972f588dd250a7668f908b39227c6ec2066bd51225bfb00bbda262a5336d26ace7660a97fac68e9e4a60 via relay
+2026-08-09 22:53:16.298+09:00 [INFO ] Accepted 2 blocks ...e1cb296b04b7484468a10d5b08b7a36e963947f8f374dc903c1884ac26077558360701ee5cd51bc9581411f0bedda9cbb76501b0dad4148b0452388bbd580556 via relay
+2026-08-09 22:53:18.032+09:00 [INFO ] Processed 18 blocks and 18 headers in the last 10.00s (18 transactions; 17 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:18.032+09:00 [INFO ] [ibd-perf] 18 hdrs avg: validate(A,parallelizable) 83.7us | commit(serial) 161.1us [add_block 8.5 + db.write 84.0; held-lock 142.0] | f_serial=0.658 f_reach=0.035 | parallelize-ceiling 1.52x
+2026-08-09 22:53:18.488+09:00 [INFO ] Accepted 3 blocks ...d004b25ff68e2a3b87d6c64f38cd4c0c4ab936cbae9861aace993e4b1fc1b0b7037a1698fc36e9f70e0bf7f4b786b536e4ce7a790e3755471376bfd00b1b2bcc via relay
+2026-08-09 22:53:19.783+09:00 [INFO ] [vlt-shadow] sink_daa=399 0 validator(s) with credit; 0/3 epoch(s) would reach quorum; newest epoch Some(2): W(E)=0 signed=0 snapshot_root=2b0706ad57002a8c6f6d761083056f2fb702959c9a88e32a8b8945c2cc46898886678c36b35dbd34cbbc9621883edca4e96623ce62b74b5c1af015a510eb9dbb — the weight fence is at 18446744073709551615
+2026-08-09 22:53:20.068+09:00 [INFO ] Accepted 4 blocks ...5cd7a4784a140bb41a5b02a4b1a8575e982f3d2ee1cfa2c96b4e1ad849f57ef556ad035b26e678914543647089913de4bb7e9c4c42f279b8bfea526b11cf97e8 via relay
+2026-08-09 22:53:21.139+09:00 [INFO ] Accepted 2 blocks ...240dd7fee5a3a0bd3ca4254b8247ccd7eddf2492e6740898e55a4e52cdebe66e74e61468ae823bbb1364459bd1d793a3d2e6e5b217dfbd0a7c95fe3dcf4c279f via relay
+2026-08-09 22:53:22.147+09:00 [INFO ] Accepted 5 blocks ...fd5f4ce2ab441f6ecbd4129884c800953f656d413b863e09bf2c1eb094c41912a643113811813b6a361c3c8dedef3808309e73799deddd24c80038dd1ed55131 via relay
+2026-08-09 22:53:23.371+09:00 [INFO ] Accepted 4 blocks ...1290855b8b2af0c3e58c81717f28504a7ec74906dd425b0b0bbf05ce4f52d318c56147898f76399e1029fcfce133bd76249deb6bb3ace46d78ff3e4f55f9cc1c via relay
+2026-08-09 22:53:24.637+09:00 [INFO ] Accepted 4 blocks ...a5657e6d6dafd301dad191337b5beaee5baec472240f3eabb743edd9214bb8f21cf2eaed4df7713cfd3ab1aadf2a3a104b1dd1e52e19ce577aab908db62db31f via relay
+2026-08-09 22:53:28.012+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=419 bond=unconfigured active_set=[epoch=4 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:53:28.035+09:00 [INFO ] Processed 24 blocks and 24 headers in the last 10.00s (24 transactions; 24 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:28.035+09:00 [INFO ] [ibd-perf] 24 hdrs avg: validate(A,parallelizable) 90.7us | commit(serial) 202.4us [add_block 10.0 + db.write 108.5; held-lock 176.7] | f_serial=0.690 f_reach=0.034 | parallelize-ceiling 1.45x
+2026-08-09 22:53:28.413+09:00 [INFO ] Accepted 5 blocks ...ae490068edd291c9c3eb906aa2e2c4b709fa65665c1205fc9ed425616e6eca9f8b869ae9e704436c369d14e658715e87f01a7c556df3c70061e14bd0fb224b3b via relay
+2026-08-09 22:53:31.463+09:00 [INFO ] Accepted block dd8bd55cdc88ed6b39758b4566ae7085f61e8bf0129a7d540b3b904e1d03fcfb63ee6acf5c948184478f77c52f5eb7ed8a775c330b57a9e3ebecdaae010871b4 via relay
+2026-08-09 22:53:32.771+09:00 [INFO ] Accepted 4 blocks ...3a9deb6adc0002cea11f454c9edfc22faf8ff6a73452ed4585519e74dd745c4f75d8d70b95763f8dfd1d73b243cb9e31f1c28975ff576f30fcbcda669a3a8338 via relay
+2026-08-09 22:53:33.943+09:00 [INFO ] Accepted 6 blocks ...0c69b8540a41e603c3d2a20363572aa5cce2179445c9f7826bef43bc8f1c4a8ec41f708b48c3a25e3b82912334ddee82c071def84ce797d1f24974aa79d3b3e9 via relay
+2026-08-09 22:53:35.045+09:00 [INFO ] Accepted 3 blocks ...2ec0f8ca730c48a741de6d1c1fc0762e2d379db2e1ca70ac01ccc0638fe0c066c900b611bff36f629b34a89f267bb900cf8572cacd585407fa15bbb0652ba3fc via relay
+2026-08-09 22:53:36.114+09:00 [INFO ] Accepted 3 blocks ...c6cb9c2f1a860127caed577d3c329c7c8a68711dd64e218d42c1a1aebcecbf8a6720e399b1cd9a53942e1fecbe35e0b324faff32e68e792a9e0709ee3fcba6dc via relay
+2026-08-09 22:53:37.148+09:00 [INFO ] Accepted 2 blocks ...e46451495978c52fdc41c33c282bab27d9b64af055e49074cc4513b15a1a22db6a28e9c1088e2dca60d79819f3298af15bfb8f8b46df72bad93b0ad735d6c822 via relay
+2026-08-09 22:53:38.036+09:00 [INFO ] Processed 24 blocks and 24 headers in the last 10.00s (24 transactions; 24 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:38.036+09:00 [INFO ] [ibd-perf] 24 hdrs avg: validate(A,parallelizable) 81.7us | commit(serial) 179.7us [add_block 8.8 + db.write 92.2; held-lock 159.4] | f_serial=0.687 f_reach=0.033 | parallelize-ceiling 1.45x
+2026-08-09 22:53:38.344+09:00 [INFO ] Accepted 6 blocks ...233aabef790c0bbf86f82ad432f11d91e923a7f8109a42ea21517bf1b4315bdcef4dded8752ec5b10a78d6d8e47820f5e1d0d4b79432a71e65194c29ceacad19 via relay
+2026-08-09 22:53:40.370+09:00 [INFO ] Accepted block 48cc6a385f806d3b9e839e521444c696319dd0aecd70dd93a2940f720c3c981aa2462268f6b62b3d500c52708a0e8cea7269bf6b065013282047fbb10b1f8b50 via relay
+2026-08-09 22:53:41.804+09:00 [INFO ] Accepted block f2c190891bc0dad32b1c022918127e22dfc4ec0a61cca0efd183b7f6b28e4451004ecee2aa7121d88335ab41b695cea6880706d86317cbf6b3989135662617a9 via relay
+2026-08-09 22:53:42.896+09:00 [INFO ] Accepted 2 blocks ...e3cbc49dab429eebeec25a6d3712b223d7928c9e9014e86c5bf0a525e2c7ef01de0b956919b3ff9e5c02f2093cb072dfb157b87161e19e45c831f61314f322a9 via relay
+2026-08-09 22:53:44.547+09:00 [INFO ] Accepted 3 blocks ...ba1d08d53a74c6fab4132f2a9a19d4abbb13ceaf7faf7ab6ea9feea908d12178d442bdeeb3362e034d8f0c79730819a8663caff9565e505f8f742bca16d282a6 via relay
+2026-08-09 22:53:45.712+09:00 [INFO ] Accepted 3 blocks ...3d2339519d682790d2ae9bdbe807c508ea59df9b1c8f209d20adde991f7badd2e8c5bc95be7fcf28bcefe951d242a16cc283e87833227c5619248edc680843c7 via relay
+2026-08-09 22:53:47.219+09:00 [INFO ] Accepted 4 blocks ...4c84e4489f6f82875a5b294b5e65e0fefd44768f9e219e2b443dc2afb4cb69b394ed7308a13a2b786ff44fced576849fd347dc32188b2fb64f4a25f9d808a828 via relay
+2026-08-09 22:53:48.039+09:00 [INFO ] Processed 19 blocks and 19 headers in the last 10.00s (19 transactions; 18 UTXO-validated blocks; 1.05 parents; 1.05 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:48.039+09:00 [INFO ] [ibd-perf] 19 hdrs avg: validate(A,parallelizable) 85.8us | commit(serial) 188.7us [add_block 10.4 + db.write 96.5; held-lock 165.2] | f_serial=0.687 f_reach=0.038 | parallelize-ceiling 1.45x
+2026-08-09 22:53:48.267+09:00 [INFO ] Accepted 5 blocks ...f3d0dd881af16db070739e1f920e0f36268ecbef218ceb83c80e6da70a698702320d57e540e03f884d7b9e434e13d7ffde99a839af9a139513a76ccce942c7e6 via relay
+2026-08-09 22:53:50.082+09:00 [INFO ] Accepted 4 blocks ...229401a9a4e7cfcee1c74db2a7a7c2c9c95eb7b48e507e62f74ee14de3ae2ff6b260609d850f762d141c731607ea32856cc7896c9f7b44fee74f5446c215b22b via relay
+2026-08-09 22:53:51.418+09:00 [INFO ] Accepted 3 blocks ...3e0feb5e8dda68c78413878add2faaf572d157bf94bc628cc4fb1d48046819b85bfcd90cb4df22cb6565b28c182ebfd01831dcd459723d45e6f377bdcb703cd4 via relay
+2026-08-09 22:53:52.471+09:00 [INFO ] Accepted block d31cd1241cf20cbca07ca5f3df5d85374bd7c3a91a3d0e923514358bb7aad9117a8e9041fe25190739690b59e7a89591e5a4eca18d574d3a32055d7805e74377 via relay
+2026-08-09 22:53:53.656+09:00 [INFO ] Accepted 6 blocks ...b45004c9bce1dc8e7ef1fd9cbad33eb75bbd1fe368c847d86101827328c2709f80666fa9974774a4b0caa1a4bb27e9d8b0e805bc115721eb8d16d5fec0d8b652 via relay
+2026-08-09 22:53:54.956+09:00 [INFO ] Accepted 4 blocks ...fc0cbb5fdeed9f68a64835c3b34cf84935dbe71c0bd434e6e8b3f344ad09f654fe7d5824477c6dbe3fa6633ef6a989fcb84f5af519ea9fa7ff2a0e2a3852969d via relay
+2026-08-09 22:53:56.700+09:00 [INFO ] Accepted 8 blocks ...5d91457f2b5385e421d23068a8ef413b7531ef1b14f62c1af821a8b74afb7753b664ef507134f382286d23aa65ce8eca7844aa6689fde0d1d7d62be4682c29a2 via relay
+2026-08-09 22:53:58.014+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=492 bond=unconfigured active_set=[epoch=4 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:53:58.041+09:00 [INFO ] Processed 30 blocks and 30 headers in the last 10.00s (30 transactions; 30 UTXO-validated blocks; 1.03 parents; 1.03 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:53:58.041+09:00 [INFO ] [ibd-perf] 30 hdrs avg: validate(A,parallelizable) 83.0us | commit(serial) 185.3us [add_block 9.3 + db.write 98.3; held-lock 164.4] | f_serial=0.691 f_reach=0.035 | parallelize-ceiling 1.45x
+2026-08-09 22:53:58.251+09:00 [INFO ] Accepted 2 blocks ...1728c61adee336ee5706392852ccff70c59cc262de64b79fdb2876d43690873fdc924f2a32cb1f884a53feaac4d7096c12ff21d82b09ffd7881d0eafd4da1450 via relay
+2026-08-09 22:53:59.393+09:00 [INFO ] Accepted 5 blocks ...7c30edda24db044e880971edfdc9e2ff475dfa6672e8687855f16e11b3b79a5aa6f005cd8af199e8caa449a54883b5e78ae44ff9811cb71ec912eb664ec69c40 via relay
+2026-08-09 22:53:59.604+09:00 [INFO ] [vlt-shadow] sink_daa=499 0 validator(s) with credit; 0/4 epoch(s) would reach quorum; newest epoch Some(3): W(E)=0 signed=0 snapshot_root=0de71ad8cf640b8ffaca49d10613ebaebe999782af6ba9132e40f0050266559f3f3926add1bf7d39b51e98cfb72f1005621345c7a8363f82efc205ebfd9a8b41 — the weight fence is at 18446744073709551615
+2026-08-09 22:54:00.497+09:00 [INFO ] Accepted 4 blocks ...31ac71727760e889bc19985fd75641d462c3d7aee964e924d075f0438dd40863f503dae49657a3dfdbd1e634aeaebc49a325f8e5e1d95a769ef88cb3ba8ab893 via relay
+2026-08-09 22:54:01.563+09:00 [INFO ] Accepted 5 blocks ...752089c9f674461ee7b0a8f59364a888d4e849d9adb580f0abe65549dfde4c8453cf1f521ad340b1689f8c427834507784add4373f49583210f2c5ebf88b9b0d via relay
+2026-08-09 22:54:02.714+09:00 [INFO ] Accepted 3 blocks ...0f8c7027f4e6b82484ebdf81ba30254d3a30028b45390bad5e409a717923808f6c9758f2b07227214ff20e4889bfa5a764244911ae8f601a26fe69bf36680a03 via relay
+2026-08-09 22:54:04.749+09:00 [INFO ] Accepted 3 blocks ...5a97cba3d8720887bbdcb7ddecd57013793a1c1569f21ed629638eee963837646b89a36ff0f0ceb79473ba89f8d1633588fa1352f1cebea88b3a46d7e393fe46 via relay
+2026-08-09 22:54:05.778+09:00 [INFO ] Accepted 5 blocks ...a20f8c6b4dfcd44585368648f44b4bd8a3a7191e898ec70f6851e6e1eb865b7b41de3f4af6497661db8bbb44a39a622bada3eac11fd6c6b6036d53effb8e8fea via relay
+2026-08-09 22:54:07.196+09:00 [INFO ] Accepted 2 blocks ...6b97aa6e5cc5414ff589c6df884e82f4f914c22e3fea884a888998ef7ef2ad9d25df2c7505e1d1d801c2d182e53acd34f1867cd39b3c4329492d1f455f55eb40 via relay
+2026-08-09 22:54:08.042+09:00 [INFO ] Processed 31 blocks and 31 headers in the last 10.00s (31 transactions; 31 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:08.042+09:00 [INFO ] [ibd-perf] 31 hdrs avg: validate(A,parallelizable) 104.5us | commit(serial) 290.0us [add_block 9.6 + db.write 196.4; held-lock 268.6] | f_serial=0.735 f_reach=0.024 | parallelize-ceiling 1.36x
+2026-08-09 22:54:08.408+09:00 [INFO ] Accepted 7 blocks ...6aad1007c6509e6cb602338364835f63943fa5018ce73c3cc65b08ba49175dd7ebf114464f2715c06293e7a58c0afc5013400e80b558bb90cb8ad92992d90dfe via relay
+2026-08-09 22:54:09.501+09:00 [INFO ] Accepted 8 blocks ...8949bcc0a6551d73a779a2cc8ea3cb28dc9c3f1d7f3e487eb229b54ce45e79c5a165179ce8b8aefa052e7f268cda243567630207e776c97abcd13d28d74b4f04 via relay
+2026-08-09 22:54:11.108+09:00 [INFO ] Accepted 3 blocks ...afa63baa5d51d37145c78aafbb1d45c1e22c2f10f4e4f64e2f4bf63b5fb34057ae4ca8f63bad28896c427a3e5e0616a68a0b659411f7d645ef5ed78887fe41c1 via relay
+2026-08-09 22:54:13.304+09:00 [INFO ] Accepted 2 blocks ...c85d91a5ba9e557960bb51341431a2673d1e045bf129cc5e8665c97ff609f0f88811466dcb6868bb37f5cc0f96712a3f0211949e6bc99b5efbfbe8f381498a5c via relay
+2026-08-09 22:54:14.318+09:00 [INFO ] Accepted 2 blocks ...0d4aa57bf92df95b54f48f71b8784fa5314fa5808200addf0f07781f71d468f07b11e095da3c9b961a2d57e8dc394d4e6df937acee2a93fbaf0f71e6d74e07cb via relay
+2026-08-09 22:54:15.403+09:00 [INFO ] Accepted 4 blocks ...b30ffaffb3af94cccb6ac087a9fb9ba40f8833672a23327e1f88201604a327e9b0f9fa8185a92817395b159b3192b419816a3a38883ff7cb3a849797c54e9181 via relay
+2026-08-09 22:54:16.928+09:00 [INFO ] EVM lane KPI (O9): 512 chain blocks, avg mergeset 1.12, avg accepted-gas utilization 0.00%, 0 deposit-claims applied (cumulative)
+2026-08-09 22:54:17.195+09:00 [INFO ] Accepted 3 blocks ...5f6c6251f78c2fc72e4ca1f8b7a972e00a061373197579ff18d43ff272459fa1ebbdcd702198eee4897779c452a6b83886e1e0aeb12d32e7c0daa8a47e4b606a via relay
+2026-08-09 22:54:18.044+09:00 [INFO ] Processed 28 blocks and 28 headers in the last 10.00s (28 transactions; 28 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:18.044+09:00 [INFO ] [ibd-perf] 28 hdrs avg: validate(A,parallelizable) 78.3us | commit(serial) 181.5us [add_block 10.3 + db.write 95.9; held-lock 162.1] | f_serial=0.699 f_reach=0.040 | parallelize-ceiling 1.43x
+2026-08-09 22:54:18.344+09:00 [INFO ] Accepted 3 blocks ...91fc40acbaa4afe649212fe2c7938e69e05154b4469ee7614b382f20b4b1b82615668ec9bc9a5b7f62ccb53f9e788f167d9de47281cfd61f6039b8c6c334378b via relay
+2026-08-09 22:54:19.375+09:00 [INFO ] Accepted 3 blocks ...8019e66a1c61b43e3ee45d6049850ecfb86250bae23192f1ef6cab0974904d94317f94f799075c6955342b54ee3411530835839f39c261eb13793673c51522af via relay
+2026-08-09 22:54:20.562+09:00 [INFO ] Accepted 2 blocks ...cf85464f7c4f6b53a4a988e474fd4f0450c4ca7080ccfd644dd45af7b7220e5e7bfd18ebae78ff5baf9cbad5fd1bb1c4c0ca73d05bafd2bc40df0bed47879ee3 via relay
+2026-08-09 22:54:21.681+09:00 [INFO ] Accepted 2 blocks ...028f015ecc4d222381141bfa3da6ef87ba6ce5c202d5d12668443a0f279c890bba4e76fd3c1e06100970b3bfdf99e9343678922ab069674c550b48ca836b27b6 via relay
+2026-08-09 22:54:23.633+09:00 [INFO ] Accepted 4 blocks ...fef2036ad9df336b3d343cdbbdd4ead6b667b90b6c4af8445eefba25f5c84dc1a3b8b00de980ae4442adef35b8f9503ec4b541a6ea05b93ae9c4d1466344463f via relay
+2026-08-09 22:54:25.361+09:00 [INFO ] Accepted 5 blocks ...53aa078e8d8a4bea41f941e2d3208758e9134f7718dbfd68d103774654028438146b404cd37db4b43c5b9ff8c8199b6c329b9930f79c022a06a51400baff76f0 via relay
+2026-08-09 22:54:26.682+09:00 [INFO ] Accepted 4 blocks ...cfe3009db469b03f56829c0192fecb33d10cd5daa0b5e5d949c347ca6e8a511161aff4672c61addf339b2af34e2259616169413835171b16cb923b42369e0411 via relay
+2026-08-09 22:54:28.015+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=576 bond=unconfigured active_set=[epoch=5 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:54:28.046+09:00 [INFO ] Processed 25 blocks and 25 headers in the last 10.00s (25 transactions; 25 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:28.047+09:00 [INFO ] [ibd-perf] 25 hdrs avg: validate(A,parallelizable) 90.9us | commit(serial) 205.6us [add_block 11.2 + db.write 109.3; held-lock 184.4] | f_serial=0.694 f_reach=0.038 | parallelize-ceiling 1.44x
+2026-08-09 22:54:28.060+09:00 [INFO ] Accepted 5 blocks ...bc271fcb6c1171877c902d0c7257bf43b9962a42f98438491a0f6929858110d079a68a7fdf4c9557bd597405c0def98b3e2e1fdcc3673c90c8037ba7f52852d5 via relay
+2026-08-09 22:54:29.169+09:00 [INFO ] Accepted 5 blocks ...cc668f5f091244da07caa93684eec1c3a584d27e667f7d019294593c23e62e9c3cd7998f8611f4a632e22cf6fa3ec512d71116242007de878fd0e3c33f515770 via relay
+2026-08-09 22:54:30.458+09:00 [INFO ] Accepted 2 blocks ...cc120159bc3240402845511d6579f841b4dfb648692981dfc3ef295b2c0cc702d2082831a5e39847e15edca989ad5b4ded73ae92f161b3bddcdd4195ec438b22 via relay
+2026-08-09 22:54:32.320+09:00 [INFO ] Accepted 3 blocks ...4e3eac02a1399ca3a8b9d75880aeb2ed3c562fb68c2e7d71cf8d920b9dcfe59bad0867000cfa9067150b83a53739bd0d9616af887fdf9767b536686c3822255c via relay
+2026-08-09 22:54:33.871+09:00 [INFO ] Accepted 2 blocks ...aa67d56a30db0636fe65d2ccddf0d5b7b231f970bcd090d3a1b0d74a6d3aff07cd8ea83978ed08c1fc01635afdc78eaa2ebe1779696837276c45cf8a90404635 via relay
+2026-08-09 22:54:34.881+09:00 [INFO ] Accepted 3 blocks ...3b257e4b148bd2507bd040017b4f5a5fc99a240a78ec71c6584ef1193d3e947fe37943423c0bd58201fd67be6e8134d9cc6aea80fed1e48dc976d704adc5f34a via relay
+2026-08-09 22:54:36.430+09:00 [INFO ] Accepted 4 blocks ...657c3777d4b6449b559268eb90b413d6017518e47115970018de76b6ac2383f95f422bddf1a0c37c29bb7bde73dd6e83ffd125e1835b396d89eccc180d223852 via relay
+2026-08-09 22:54:37.966+09:00 [INFO ] Accepted 3 blocks ...5270accaebc6702cf1c7dae6a0b27ac90dcf17a869dc6a5ea2ccb42f2943e0288381a88d25d2b14d9a7528e930d81449f0d9326786088672641d3579d843f449 via relay
+2026-08-09 22:54:38.048+09:00 [INFO ] Processed 22 blocks and 22 headers in the last 10.00s (22 transactions; 21 UTXO-validated blocks; 1.05 parents; 1.05 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:38.048+09:00 [INFO ] [ibd-perf] 22 hdrs avg: validate(A,parallelizable) 85.0us | commit(serial) 183.0us [add_block 9.8 + db.write 99.7; held-lock 162.5] | f_serial=0.683 f_reach=0.037 | parallelize-ceiling 1.46x
+2026-08-09 22:54:38.134+09:00 [INFO ] [vlt-shadow] sink_daa=599 0 validator(s) with credit; 0/5 epoch(s) would reach quorum; newest epoch Some(4): W(E)=0 signed=0 snapshot_root=6f2dab39bfc33458828b5d50b15b5859401ef24a0a3245cfee2333cdc90a67eb34c51af114fb40ec26d3d4657aaa3d6ba3524c6cc46e39549af6d08d1764e429 — the weight fence is at 18446744073709551615
+2026-08-09 22:54:39.135+09:00 [INFO ] Accepted 3 blocks ...b79f3dba54241dadab9b3e963cb24902fd7627a34765130867fe6c8e35f736e69450edf8805f27db64365eac273e3934b5249f9923cb4915e9f2bea375576d62 via relay
+2026-08-09 22:54:40.505+09:00 [INFO ] Accepted 4 blocks ...b5904fae96407c809c47c5d929b1363d38d034b56d9ea990c64ead808f4d5d219e2a07b5d5001a783fff57c9f2ec019f6ceb60e9de87e1016a170adb67f55980 via relay
+2026-08-09 22:54:42.081+09:00 [INFO ] Accepted 2 blocks ...276edee1657e1a3e1b07961376a5e9a2dd325897c717a0dbe72ff1a2a2253d6c9f36ad507fbbe0d146af05738d1bb06139bf3ad016f77a4ed9ef0df4e57da2c0 via relay
+2026-08-09 22:54:43.586+09:00 [INFO ] Accepted 4 blocks ...7d2e1c0fafce7eb4097b28d724b04bfc9a261ca235acd80b4717534401ea028b3bef3ba4fbdfb3f44d8130902aa4dbc4e7938a6535b1c96338c69cf36a10b13d via relay
+2026-08-09 22:54:44.916+09:00 [INFO ] Accepted 5 blocks ...08312d835f9d684b30b288c4ef487f211eb897d9f1df71b0bd7c7cb1fbc06448defeb4389556043ccc684da3e92068cccb45c28c9aae4240755a1bd447f25dae via relay
+2026-08-09 22:54:46.139+09:00 [INFO ] Accepted block 5470d9cbc0362a71821f3b35d56d0319924ca6d941abca0bf47c7ce5c79f250edabc7c7694914917c8c4ef4a4b741e4ccee7d368d253036bf808258852a0436f via relay
+2026-08-09 22:54:47.719+09:00 [INFO ] Accepted 5 blocks ...632f860d1c392b5b76b5a9c94cd4cc4367e98806512393a185ccf9684ece8b8525c7432f8c6ce031fa6741b1dcf6677af393c0d651fc4c41d7d127e8aef962b5 via relay
+2026-08-09 22:54:48.049+09:00 [INFO ] Processed 24 blocks and 24 headers in the last 10.00s (24 transactions; 24 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:48.049+09:00 [INFO ] [ibd-perf] 24 hdrs avg: validate(A,parallelizable) 90.7us | commit(serial) 208.6us [add_block 9.8 + db.write 115.0; held-lock 187.7] | f_serial=0.697 f_reach=0.033 | parallelize-ceiling 1.43x
+2026-08-09 22:54:49.085+09:00 [INFO ] Accepted block ddaf05f21bc84e6f0e875c0d3632097e2cd0df6a45729cca4ad41e8d438032e50362edafead8ef264bd25910906f28636163642f4f7667127b825ed0204cd9fb via relay
+2026-08-09 22:54:50.396+09:00 [INFO ] Accepted 2 blocks ...058b94923c873f1c7a718e555beec5166d5928cd3f6f6ee5495b07f8267b28d697acd22707e4f356789d321f5c1aa25b83153f842bc0d0244549f1b11e7dd2c2 via relay
+2026-08-09 22:54:51.402+09:00 [INFO ] Accepted 2 blocks ...8c7c4a403195f0e5f80bee1eafc621ebc1c495efa48a58df4bd934a2f651daf1e139d19c9b607e9a880648514f10ab4f20747335105c98ddd5dd2b0251cbbc5b via relay
+2026-08-09 22:54:52.650+09:00 [INFO ] Accepted 4 blocks ...0e329d31b61f2e4cc5039dc8b537b7ad07eaab683596343010a5b54a9d93213a6e9b0d458208dcd9c21a54f2110181486f8436f21a26b4aa7bb1599b1d6e76ec via relay
+2026-08-09 22:54:54.328+09:00 [INFO ] Accepted 4 blocks ...fde2942efdc49e73474dadca735bfa8b8c7ffa159e933af1696263b9bd97102b1989e92b479b6d9d02d88ffd3f4b0d5d0ce857f14187ba5c2f14daf5dfd61ad1 via relay
+2026-08-09 22:54:55.332+09:00 [INFO ] Accepted 4 blocks ...a2c247c99f6efc8107c29b80d39b033c203917a5c133eca84e9693ac3084d721cd3977b2fa7de589b1b299a581f58a33c658bab43d2f57a3abd2f008f158f744 via relay
+2026-08-09 22:54:56.477+09:00 [INFO ] Accepted 3 blocks ...7ca017504e293708ff1ba5d2ab51b211c428a12859ad38e6f8e3c115d8fd712e23f056cc278310cb7d24ac29010c184d27dfdbd28ad0f428df7c796680607a7f via relay
+2026-08-09 22:54:57.694+09:00 [INFO ] Accepted 4 blocks ...6e9b9f05ab03f295076cc3234c9c52f6fa84349f0b2acec2e0bd9ab58864d1d18832da678be395ce1902f6e0a07b64dfedb894e0e21ac37ee42e74468065c8d5 via relay
+2026-08-09 22:54:58.017+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=647 bond=unconfigured active_set=[epoch=6 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:54:58.051+09:00 [INFO ] Processed 25 blocks and 25 headers in the last 10.00s (25 transactions; 25 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:54:58.051+09:00 [INFO ] [ibd-perf] 25 hdrs avg: validate(A,parallelizable) 79.5us | commit(serial) 196.3us [add_block 9.1 + db.write 110.3; held-lock 176.5] | f_serial=0.712 f_reach=0.033 | parallelize-ceiling 1.40x
+2026-08-09 22:54:58.910+09:00 [INFO ] Accepted block b16cc1887501992049e846844d148c5da28e3f50888564d20ad947edea6cbc4e3241ca6cc6db1d032d6ff8f527d8f215c9b897c65a6f8aab7c76f7ee8da572bc via relay
+2026-08-09 22:55:00.038+09:00 [INFO ] Accepted 7 blocks ...3276416e8a2eefa2fb151f4e0453fabc77e3034a1282af4c07897ab0c2fae60272fe9e24c5b3120587ac9c735783e332ce51a177806b1ae21906a3474aa62227 via relay
+2026-08-09 22:55:01.322+09:00 [INFO ] Accepted 4 blocks ...62a8f5aa9e01086cac086e25e1ce9a0f1f08031940909995bf8813b28793f52cc8065e93f7106f3ca3584c5b5eee4066549675bd087cc08092cdd97707cc6773 via relay
+2026-08-09 22:55:03.239+09:00 [INFO ] Accepted 4 blocks ...5f0ec79cf0126d33ca47f156c7ce21e394e7bc004c216fb7c33a9d277ed8026988f8918229597b6cbc087dd4b3c317d2e708782e2791565e2bc3e1fa73281bba via relay
+2026-08-09 22:55:05.459+09:00 [INFO ] Accepted 3 blocks ...ecd6ba2949ae880e0a5f8238565dba11f271f8404e9c4333ce8a193c3432e439ba6c53e16bc84cb3ca7e5abdcfe76da8cd92745a221c551a11599ef7595b49b1 via relay
+2026-08-09 22:55:07.073+09:00 [INFO ] Accepted 2 blocks ...f62f8a6afb077801372c424a15670a49d60e3ddc38732e4154e4f708171485bb51a6268107b911178c5ec7a5f09256f882987f48c1878429a5cfca41591fb4c5 via relay
+2026-08-09 22:55:08.053+09:00 [INFO ] Processed 23 blocks and 23 headers in the last 10.00s (23 transactions; 23 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:08.053+09:00 [INFO ] [ibd-perf] 23 hdrs avg: validate(A,parallelizable) 95.5us | commit(serial) 259.4us [add_block 10.5 + db.write 163.8; held-lock 236.0] | f_serial=0.731 f_reach=0.030 | parallelize-ceiling 1.37x
+2026-08-09 22:55:08.162+09:00 [INFO ] Accepted 3 blocks ...91a07f700f8770d4d213a50971d00b95b919236b378f41b98f0e10b81dc57f70366fe294df42b1fb6cf072ac11c70b75dde12699b2e1073661f97aa2614e4acf via relay
+2026-08-09 22:55:10.472+09:00 [INFO ] Accepted 2 blocks ...87428bcb3a5663cab7a11cd02bbedaaa72628dee1f672c66b6c5a5fbeb010f75f7a865ba8958513af772ac9fd30975b00170a0c99dabe00e5f8093d379915459 via relay
+2026-08-09 22:55:12.077+09:00 [INFO ] Accepted 2 blocks ...3a1ab159421e765b61095b6a3540b66f3f4f08d6eff32b34e03a2f023c80f73d34e43385cfef128b3bc879a74005caf3de7b73da784ddc9726e60b314e1fe835 via relay
+2026-08-09 22:55:13.879+09:00 [INFO ] Accepted 3 blocks ...6a4c2af7f5f996d703bacb6725761593d3d374262b1fc8dc0d24f0e6232ed3bc5d7102689af7cab5f4a193e10af416a6b1d037c76bd7f2699910a4d57771e889 via relay
+2026-08-09 22:55:15.022+09:00 [INFO ] Accepted 4 blocks ...a3840d8a5ded25bdd0c0bff7dbf3767a571293295ca0137f81ef73a916eefdff31b38560df52e3089e3ae8ec1728a528c1b313bf460c38ef9250e874971d3fe7 via relay
+2026-08-09 22:55:16.062+09:00 [INFO ] Accepted 5 blocks ...0385041a7042a90780c05e3dfab309688ca980aaee0cb8136b10078d76fc332f4fd5f861ff172e1e3f0845eaf41c5840ba8dad363e312819e4ba8de2635d04e7 via relay
+2026-08-09 22:55:17.167+09:00 [INFO ] Accepted 3 blocks ...63674e0aad8e039e6a10ecabefe92fd33d1702229ea32dfbc4dffeb8e662b8a09924af80962f673c6f194d8da4f2117d1926251154050fcc8b9655bb7291dae2 via relay
+2026-08-09 22:55:18.056+09:00 [INFO ] Processed 21 blocks and 21 headers in the last 10.00s (21 transactions; 21 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:18.056+09:00 [INFO ] [ibd-perf] 21 hdrs avg: validate(A,parallelizable) 87.6us | commit(serial) 164.3us [add_block 10.5 + db.write 74.4; held-lock 142.8] | f_serial=0.652 f_reach=0.042 | parallelize-ceiling 1.53x
+2026-08-09 22:55:18.620+09:00 [INFO ] Accepted 4 blocks ...aad57ff157ba8096713fb4d03ca24ff11642cafd478250123fd91ae1ea43004e6ef17a4142b0d17c6ed39278652677d2673389d55bbd40a930eec162abc97ada via relay
+2026-08-09 22:55:19.642+09:00 [INFO ] Accepted 3 blocks ...b6e5daa8874cf15327b7c928872ffe39d6cb999fc3ab5ffb79def2a622c269e472c3d1086e1c4124c7d98797cb2bf3cd644febaab54cea8edc911aa0867b9773 via relay
+2026-08-09 22:55:20.213+09:00 [INFO ] [vlt-shadow] sink_daa=699 0 validator(s) with credit; 0/6 epoch(s) would reach quorum; newest epoch Some(5): W(E)=0 signed=0 snapshot_root=f94a8f2b2a2511a5a54fea41149ab19b3845a7a953d10034aac722369a20aab7eea9894a63ac9391a2e6217b043ff26c030541ca429b64702b48ae4d1de27669 — the weight fence is at 18446744073709551615
+2026-08-09 22:55:21.129+09:00 [INFO ] Accepted 3 blocks ...db2f34b4027cd031e2301216f3edfde30b3f22a483b6f83f8df2ea4a726d8d0ecd8ee5de31f3e1ba05b3ae489ca170270a529e2a097a72495bfcf27f22928716 via relay
+2026-08-09 22:55:22.146+09:00 [INFO ] Accepted 2 blocks ...574f52d6588ce745f0ecc8f11c8b464be2449b5a950f51d600da79285bb0d0b68a52994fdf94c7d11da9965c0a5b944ef6243777c50b332eff5c8a78529f7590 via relay
+2026-08-09 22:55:23.861+09:00 [INFO ] Accepted 4 blocks ...b8a1fe78d54b348fcc4880e97f4002afc286db414688ce53e8f9fecbe2865738337551a50efb1ede4924bee5cee48e7db679f7383f031dbec0ca1f7d902c94cb via relay
+2026-08-09 22:55:25.090+09:00 [INFO ] Accepted 5 blocks ...6bf0284a054cc34eead036bf80fd5de37f3397f6d4822c225ebe02f67f78d5c1c1ad2f0f35e37d3bae9f90e91b7ae0e2e3248af5ac35ab17e6872d4a5e36afbe via relay
+2026-08-09 22:55:26.195+09:00 [INFO ] Accepted 4 blocks ...30f5b9446fe8556d677a2d1af6ff2519658b82362384129212637e24478da3efb8f0c2c6ff2ebbe03203d46c3b70061da57c13b00de0a6887a39f7402d96b33f via relay
+2026-08-09 22:55:27.557+09:00 [INFO ] Accepted 3 blocks ...92d74b8ba12350426962f66399e686aba3b064335871ca3289f1cead9298068bd6526dbca735aefaab53d2204a38abbc3ec3ecf0711cda4c9dc58f2966993f93 via relay
+2026-08-09 22:55:28.019+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=720 bond=unconfigured active_set=[epoch=7 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:55:28.057+09:00 [INFO ] Processed 29 blocks and 29 headers in the last 10.00s (29 transactions; 29 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:28.057+09:00 [INFO ] [ibd-perf] 29 hdrs avg: validate(A,parallelizable) 83.0us | commit(serial) 142.8us [add_block 11.1 + db.write 51.0; held-lock 117.9] | f_serial=0.632 f_reach=0.049 | parallelize-ceiling 1.58x
+2026-08-09 22:55:28.716+09:00 [INFO ] Accepted 5 blocks ...667002fa1d532a1388fdfae25c607d736fcf0c6cc7fc478af3368777bfdecea6a67d0b548f31f2c6477276af780fcbc714419783349fed96089bed3972da8cae via relay
+2026-08-09 22:55:29.761+09:00 [INFO ] Accepted 6 blocks ...467e49c7256f78a62c049c143169a3b165ca06ea71a822e1e61711aada8d1786f03fbcd3a9f8ee5726e6c18eb6115fba980c528dfa41ac304992070c3a96e42a via relay
+2026-08-09 22:55:31.156+09:00 [INFO ] Accepted 3 blocks ...d9341c20188fd6edabea57a782031536b70097cdacf292f97b5e950305de9f3b168ff0ffa9482c3f411704305275fa3af798eb96431587c40dae80c8d22ff042 via relay
+2026-08-09 22:55:32.238+09:00 [INFO ] Accepted 4 blocks ...68cedb0b056d78a59a0fa1a65e8a526232619e3fbcf41afeb57e9b9d47de066889b991fb932bc05185589fb854d683fad675723c1a13b9cd775f96e7b42fe6a0 via relay
+2026-08-09 22:55:33.902+09:00 [INFO ] Accepted 2 blocks ...6719e6d9679b1a3fca6ff278c6dc753fd9c20a032e3cf530dcf2925919d406a6c30a24d762f51ba01c9947e47284d3a62b9361397c83c80641812da0a63bcb5e via relay
+2026-08-09 22:55:35.918+09:00 [INFO ] Accepted 5 blocks ...42408f7a10440fa79801c56c94083128c4e70ae8331d2443cb5d5a2b0062abdb789aa4d60b7fa74f7009181818c3d0bba3f5a1620de360e7ef2679b011ab9bc7 via relay
+2026-08-09 22:55:37.481+09:00 [INFO ] Accepted 4 blocks ...e92dd85cb3a87b91bb4f51e96b0590bd59088127dc6dde1dd0eb2dc354230910835158f0cc343bfdd977869212f70e9910b69a1ad9f8910da28372e8aae94551 via relay
+2026-08-09 22:55:38.057+09:00 [INFO ] Processed 28 blocks and 28 headers in the last 10.00s (28 transactions; 27 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:38.057+09:00 [INFO ] [ibd-perf] 28 hdrs avg: validate(A,parallelizable) 83.2us | commit(serial) 153.4us [add_block 10.7 + db.write 56.5; held-lock 127.6] | f_serial=0.648 f_reach=0.045 | parallelize-ceiling 1.54x
+2026-08-09 22:55:38.505+09:00 [INFO ] Accepted 4 blocks ...540bba2ab0704306b5a1c3cc6f77117f0c9e1774cab4f6be2c6166447a891710f2f122ba278264435cb883bf86a4e0c7601786510f126eb0a46292387e96cb82 via relay
+2026-08-09 22:55:39.557+09:00 [INFO ] Accepted 4 blocks ...69aed5ab1e7c3833b3df020773091d57c8d27948794317f41a97cc39bd1745d913f92f22ac86180d246dfe6edb631c04eb1091cf146e9c8ca1c80ec307c38bd4 via relay
+2026-08-09 22:55:41.187+09:00 [INFO ] Accepted 2 blocks ...07c7ffc4cc9f45be223e26c296ea8d1174b6ef20f332b5565f7d00ea888e7e777f7265baa89d88c5dc2f60644d2fba0346a42c0af874c50c87250732e2913bea via relay
+2026-08-09 22:55:42.277+09:00 [INFO ] Accepted 2 blocks ...8c763bface302c32a7385aa9edea2df31e6d444081c63e443aeabe14f7eeea995d815208e3ca4a8501b454486f89ad6c88a50f8a6d3d921f4d8cc9d611955285 via relay
+2026-08-09 22:55:43.465+09:00 [INFO ] Accepted 4 blocks ...809532331841339baf0f4bc5059cdac3f0880cc478917776c1bb54fb00beb54ea7d0a2127710a4dbbfb1185896274178c8dbd0cc646464cf037ec3860fdc154f via relay
+2026-08-09 22:55:44.512+09:00 [INFO ] Accepted 4 blocks ...aa7fc77bedccc709bbd803943ab004bdf3864d3c14d20ff7f07d83093b69e14593b8937a186c4ae25df936b6818e96e4d4b8f26df0fba5bc3dc5ace9d2b0de44 via relay
+2026-08-09 22:55:45.556+09:00 [INFO ] Accepted 4 blocks ...dfc4206a2088faea9735abbf998e0cff67d2af71881b5a97f6874dc465242c5e1698ddc6f76608b0171e7d37f067dff68ae6c0c08dba3fe81b9ca5d4779ac994 via relay
+2026-08-09 22:55:46.570+09:00 [INFO ] Accepted 2 blocks ...0a9fdb2dd6ff660632a50cc70e3d5489736b8481c3683d8b23599175d15c03b9fead358d5f50dbbe1e58cd492343f034e6a7520861102fcfb1babf98bb279853 via relay
+2026-08-09 22:55:48.060+09:00 [INFO ] Processed 27 blocks and 27 headers in the last 10.00s (27 transactions; 27 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:48.060+09:00 [INFO ] [ibd-perf] 27 hdrs avg: validate(A,parallelizable) 84.6us | commit(serial) 166.1us [add_block 12.1 + db.write 65.4; held-lock 137.7] | f_serial=0.663 f_reach=0.048 | parallelize-ceiling 1.51x
+2026-08-09 22:55:48.256+09:00 [INFO ] Accepted 3 blocks ...b18e8e92c4ade937bdf34165ee8e1b8136f7cd4cf4a54f11c11a9fce631d25168bbd756365332f71f4b50f23d7bea6365f4f3dd40f6422210283e09ae047d68b via relay
+2026-08-09 22:55:49.513+09:00 [INFO ] Accepted 3 blocks ...a4cbb4c3446b8c90bb00f65a4fe5519bb241abb97d23ef313820267e528aa3ee88b1590eae6e4976886720b3b97a4464922dd5d472b84a518b4d218769314049 via relay
+2026-08-09 22:55:50.608+09:00 [INFO ] Accepted 3 blocks ...2cf107ee3302ada3bbb78083c831ae80be2926c9547838dabad25ed10042b8e874074d21d7a4f3c4116475202556fea98129c7ae01f6e6803534b0d665ffdc92 via relay
+2026-08-09 22:55:51.668+09:00 [INFO ] Accepted block eb0e89316fbfe3b4ed20750795d61785e159fc25e41f4a68a863aec34486be21537f1e12754b4dedecac07dd94040a4fce79d872a439d1448ace63612ac6d44f via relay
+2026-08-09 22:55:52.740+09:00 [INFO ] Accepted 5 blocks ...64974728662050437b0d5c085f34b38cb8abde36e24f1eb4f8037eb4be7dd6d759f7076ee6b16d9eaa724482d8f334f25f9065c4f67d6bea6ba75c448bbd42ad via relay
+2026-08-09 22:55:53.948+09:00 [INFO ] Accepted 4 blocks ...af87701927563ffd05e0f2c250d1d4480881b0a7cc17b4aa67b63a657f5ee50fa995ca4f153e147f29973ea2d46481fc4db643ca25fbb8b8b00a77fd3cd2b6b0 via relay
+2026-08-09 22:55:55.603+09:00 [INFO ] Accepted 4 blocks ...87d55f65dff229a2773db0a8275319896a31f62fab43066df05897d589458bcb6bafbd22e5f0327ebc766447e20b64faa63fc1f431876595f5868b1bfc3525ca via relay
+2026-08-09 22:55:56.665+09:00 [INFO ] Accepted 2 blocks ...011d65545f5e67b6fc19e420c1f030da3bf56f6565e1405e54e61e0b371d3780f36bf7809bd482aaf0a09c4664d30d7f31dd5736f43e3c601b370a8e60eb06c0 via relay
+2026-08-09 22:55:58.020+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=798 bond=unconfigured active_set=[epoch=7 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:55:58.062+09:00 [INFO ] Processed 23 blocks and 23 headers in the last 10.00s (23 transactions; 23 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:55:58.062+09:00 [INFO ] [ibd-perf] 23 hdrs avg: validate(A,parallelizable) 83.4us | commit(serial) 261.4us [add_block 12.6 + db.write 155.9; held-lock 233.4] | f_serial=0.758 f_reach=0.037 | parallelize-ceiling 1.32x
+2026-08-09 22:55:58.307+09:00 [INFO ] [vlt-shadow] sink_daa=799 0 validator(s) with credit; 0/7 epoch(s) would reach quorum; newest epoch Some(6): W(E)=0 signed=0 snapshot_root=64526bb2f89e0732a07c7f1437ca622e11592c9eb13e34f867c8186c6091c3d04baf6fcd88659c434d06866b771cfc3cf8abd3ecfbd04e19219bba3793a60638 — the weight fence is at 18446744073709551615
+2026-08-09 22:55:58.937+09:00 [INFO ] Accepted 3 blocks ...dd6a2b3c6d5ecca377c0f239a970c1680967a07e43403b292210470573155d047b62c9e749ea84ff6e2e6d87a185978a09f9364509cdabceb90344f14414d81e via relay
+2026-08-09 22:56:00.184+09:00 [INFO ] Accepted 4 blocks ...a6ef6e9fb8f70abe03caa61813bf92db737df41a3d39a86cf230d9b27b2119edc023016c1fd6a476cd57628586ad7abee2d55a8ea48324f8f8c13012874a8e71 via relay
+2026-08-09 22:56:01.600+09:00 [INFO ] Accepted 2 blocks ...33a3c7dc09d707d76a55838625c1aa67f9f123da0d748645899603dbdf6e30061f6b4701959ad9f3f7122f8c0fa3a1b5128cca2b1b1983d9a9369c8d568eeb91 via relay
+2026-08-09 22:56:02.136+09:00 [INFO ] EVM lane KPI (O9): 768 chain blocks, avg mergeset 1.08, avg accepted-gas utilization 0.00%, 0 deposit-claims applied (cumulative)
+2026-08-09 22:56:03.142+09:00 [INFO ] Accepted 6 blocks ...d67af222f26e8edefd1fe1f8015551a9d961809f2c369dc52c26d6375c3d962e5387d6b88791289c196b0ec16e37c7eaa980bf7082c03183fa1249c9c1632c27 via relay
+2026-08-09 22:56:04.235+09:00 [INFO ] Accepted 3 blocks ...2b3679ffbd2cfcc3479262fd2743b16c3cf2443c1ef02a53d8411b5513ff79c827a50e991869481fb2259d9f3abeed58f2aabec0c80de9983b0d3eec8698ccc7 via relay
+2026-08-09 22:56:05.491+09:00 [INFO ] Accepted block 00e17ab9218556482271b09dd8e2cca9b4dc272a6dbe4814ed3357612bf5b05a634c76aa6d5fc37bb779fd32a6bdfa38335c8ac66ccc08e16b27f904e6b17c75 via relay
+2026-08-09 22:56:06.825+09:00 [INFO ] Accepted 2 blocks ...433089427b838c209f2a9bc1979c56acb4d6c5332ceb1db85961ac040d42e964c3f440e46bf2f419bf27333f16c0eaeda20d12769d6facba93aac3e968da493a via relay
+2026-08-09 22:56:08.064+09:00 [INFO ] Processed 20 blocks and 20 headers in the last 10.00s (20 transactions; 18 UTXO-validated blocks; 1.10 parents; 1.10 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:08.064+09:00 [INFO ] [ibd-perf] 20 hdrs avg: validate(A,parallelizable) 85.9us | commit(serial) 253.5us [add_block 12.7 + db.write 143.3; held-lock 214.7] | f_serial=0.747 f_reach=0.038 | parallelize-ceiling 1.34x
+2026-08-09 22:56:09.087+09:00 [INFO ] Accepted 3 blocks ...84e7fc0cf8da1ed6ec911ed8ee3476ab5a22c554ad56e2868d9333ffafbaf0df90c3d10b02ef60185534907ec3b954679603d861c83489baf13cf504a6e7fa19 via relay
+2026-08-09 22:56:10.201+09:00 [INFO ] Accepted 2 blocks ...bc0051a7e0655570f7d66b6087875f6bbbd4d0ffa1d864a22ae6ff2d6cd90f30d9d5dfc20caf100a2f1d7170b5661638137c8b804b6f0b89496293c2fea7d62e via relay
+2026-08-09 22:56:11.847+09:00 [INFO ] Accepted 4 blocks ...d7aac84de1b5f57cb74b716ef4ba1beb2e081f1f2ba67312dd53df3a3add24db1187c8b391c5a13450c5b1c3ea8aea1626951dc937bdd5123fb308840aab95b6 via relay
+2026-08-09 22:56:12.879+09:00 [INFO ] Accepted 6 blocks ...6a6974c5a7267a484ab6c4a3eecb3a2ef4212685bd3835b19ecd7bfbd2cf221d1545029748f542740c935e2a131d95113c23d3a77b587b755c06ef7d0325267a via relay
+2026-08-09 22:56:14.596+09:00 [INFO ] Accepted 4 blocks ...c3489da455efcb91dd5628dc696ceea5247e6b4395604b8c49ac679b5b976f15f9865f6009d6a33e2499a3f9de961cca8fe2e52b04fbf9580ade9d44e6e05edb via relay
+2026-08-09 22:56:15.712+09:00 [INFO ] Accepted 5 blocks ...11004289736ba51e24c6d15d7f389749f04ec3b96d327dc4842b85a6afb46709bed7b80b61df8564bb3ab28951df1f7c6d1cd0e58ae3ab0ab441cee3203a03f7 via relay
+2026-08-09 22:56:17.905+09:00 [INFO ] Accepted 2 blocks ...86850a558671efdd52c001cf8611356878a7428fc3441e7bdb762f7e49cb1c35a46a62200e7ef68ea8d0964a33902dccec7d92f9b33da5731d11460f704c7b18 via relay
+2026-08-09 22:56:18.065+09:00 [INFO ] Processed 27 blocks and 27 headers in the last 10.00s (27 transactions; 27 UTXO-validated blocks; 1.04 parents; 1.04 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:18.065+09:00 [INFO ] [ibd-perf] 27 hdrs avg: validate(A,parallelizable) 100.9us | commit(serial) 178.8us [add_block 11.7 + db.write 74.8; held-lock 149.9] | f_serial=0.639 f_reach=0.042 | parallelize-ceiling 1.56x
+2026-08-09 22:56:19.041+09:00 [INFO ] Accepted 2 blocks ...0a75d90cf27e9faead53f1f5b633d47811b05146e3356d29d3acb3d31b6d6b926e4b05d1173162ec633f4ae7323662be7ec2e04ff53a56ccd4acba8d051c88f9 via relay
+2026-08-09 22:56:20.179+09:00 [INFO ] Accepted 4 blocks ...749a2ce43118c99ce4ccf117522d587c251be51f985ab646c5d4007e93469ab4d8c1653238e21b99ac5631c7a51b85b0d5c3dea025a74631258b3330d2fd3b65 via relay
+2026-08-09 22:56:21.964+09:00 [INFO ] Accepted 2 blocks ...751095a2faa5dc2a9484064fa0433bfd53ec1ca26b3ab54b39fa97d7856cac5d5c24f0e220e6b0fb1bffdf65218ab3eaf2f5e27970438c39100e64875e4b7f0e via relay
+2026-08-09 22:56:23.069+09:00 [INFO ] Accepted block 013d3afc227fd62e4f3ddcf22146cb81266708c46c164c812a2a9f45f360d3df6acd1865a69b5b3102eb5ce4417107939c5a113904e19d5cb413a96bd18042cd via relay
+2026-08-09 22:56:24.895+09:00 [INFO ] Accepted 2 blocks ...fb65caf9a54dada0e50788852eec4ccf5953b559cb9400e40aba3620946c20c2031c20a9bf67c6e79640af5125dc257aa20f4122b9320dad4f3205ca58a21874 via relay
+2026-08-09 22:56:26.928+09:00 [INFO ] Accepted 6 blocks ...bea5dfd2bbbe04ba3ec71f10611e6d17f926cb41ef73368535ea5af5f21331e831f6868446059fdbc26822a0a304f8c1f9f15f537b0c6b4a28ac00705e92571a via relay
+2026-08-09 22:56:28.022+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=862 bond=unconfigured active_set=[epoch=8 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:56:28.067+09:00 [INFO ] Processed 17 blocks and 17 headers in the last 10.00s (17 transactions; 16 UTXO-validated blocks; 1.06 parents; 1.06 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:28.067+09:00 [INFO ] [ibd-perf] 17 hdrs avg: validate(A,parallelizable) 87.3us | commit(serial) 196.6us [add_block 14.0 + db.write 85.5; held-lock 166.0] | f_serial=0.692 f_reach=0.049 | parallelize-ceiling 1.44x
+2026-08-09 22:56:28.577+09:00 [INFO ] Accepted 2 blocks ...079704dd4df6ab86ffe0629d88427e6f8c61e558de2b1b34ab419f7b507ddd679fb68ee722067107a4341581eb7316294ca7e36c97e243b913d14887cde54fcf via relay
+2026-08-09 22:56:30.080+09:00 [INFO ] Accepted 3 blocks ...ee35ee004ca976576aa8dc7e14caee63c284dd3ea80861260741e2e2a33864722cf5a46903a037d8d973eab84e665f3474d9a8cc13cefb4a5c43954c77badb76 via relay
+2026-08-09 22:56:31.170+09:00 [INFO ] Accepted block 7f0d2587030e541c63deca2a47eebdfb6d99cdacb34bfdfb2b87372279e3ca875bc42c341bdecd0b479533b5389c8ed51723e5ac495570178a81987e4ca6ec24 via relay
+2026-08-09 22:56:32.750+09:00 [INFO ] Accepted 3 blocks ...253449d5b80a7872c76b2aa754efbe15e4e18bf10dd94640ed45b3ba8404c069701d2c2ea235ba152432b1df91ddddeb46304a0f739f5a9f5033d360e9d16585 via relay
+2026-08-09 22:56:34.118+09:00 [INFO ] Accepted block d313bb9a98d61434380ac141a6f7c4b40ae814569479618be36677847ab9e616dd378e3871ca833aad8cd552439d589451a485df0985d02ebd5c7ccfbff10859 via relay
+2026-08-09 22:56:35.433+09:00 [INFO ] Accepted 4 blocks ...71a507411282eae9865347f731ffb065ca30da65a4694789c11dd02c9f15c462509ba20e96421989f503fdabfb6f7e4746746e3a29ceb339cad465b33f7ec97f via relay
+2026-08-09 22:56:36.581+09:00 [INFO ] Accepted 2 blocks ...b0f17418cb23ce9f55964d2098c00bd2c3de7bf80972b1759ebf889e97b1608d97600c197984592887db23f5ebd5363a33b64a35b0ac0f15f17f03affbcf9e7a via relay
+2026-08-09 22:56:37.897+09:00 [INFO ] Accepted block c158a7bcebeb7ca400377f84e9bf753b30ff8aa4108473a84442858a834e7157cd9ee4f056691591a58c34dc18d869111d0ead2076b7b86fe5d61efbc71be1dc via relay
+2026-08-09 22:56:38.070+09:00 [INFO ] Processed 16 blocks and 16 headers in the last 10.00s (16 transactions; 16 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:38.070+09:00 [INFO ] [ibd-perf] 16 hdrs avg: validate(A,parallelizable) 101.8us | commit(serial) 220.9us [add_block 14.0 + db.write 91.3; held-lock 188.1] | f_serial=0.685 f_reach=0.043 | parallelize-ceiling 1.46x
+2026-08-09 22:56:39.368+09:00 [INFO ] Accepted 2 blocks ...f8c3391dc5200f7d35815c5cbbc747a5925d7ea03c45b372e7863a0a1a3cfa530a3a855765b63e7fb1e586fe0d3fe227c61271b64231c734c1108815c5a35ddd via relay
+2026-08-09 22:56:41.478+09:00 [INFO ] Accepted 2 blocks ...603de370805e3a3f8e8a64fbc6439811b4ca4c1eab6c4bc273202b641748e15289babdf9b2510bac39f3f7d5f7d49243b1ca3b55d6d807b1009d4b4e17370216 via relay
+2026-08-09 22:56:43.587+09:00 [INFO ] Accepted 2 blocks ...2ec5af7fd63847cd0f354e2e9796dc890568b111e370b51591273d725415c61eea9c6aa918c85a85343c91c9af9a12480547d5c97fe96f488207aec4e4eeca66 via relay
+2026-08-09 22:56:46.166+09:00 [INFO ] Accepted block 4beba96a02a7324297f9537d14abb20acb3a267d00d2b8e3423dce563585529611e5b3bd5e607da6e1356c7a9d0b8003196cd04b9b90f518dce4fe4cbdb49ce8 via relay
+2026-08-09 22:56:47.207+09:00 [INFO ] Accepted 3 blocks ...a75658d33313d9b6a4dafc1eef3d0b3de0b7324e9ad48ab78b8a2a4baac0a3209eb4d90b17152809a09775ace6c32ec02acb17404001da2575fc4e9d8a1e56dc via relay
+2026-08-09 22:56:48.072+09:00 [INFO ] Processed 11 blocks and 11 headers in the last 10.00s (11 transactions; 8 UTXO-validated blocks; 1.36 parents; 1.36 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:48.072+09:00 [INFO ] [ibd-perf] 11 hdrs avg: validate(A,parallelizable) 145.0us | commit(serial) 297.3us [add_block 24.4 + db.write 151.9; held-lock 251.3] | f_serial=0.672 f_reach=0.055 | parallelize-ceiling 1.49x
+2026-08-09 22:56:48.710+09:00 [INFO ] Accepted 3 blocks ...971110a789480195902621a2e4a8798b080923f99332f03e94138bf1e54dd891379418414f9d1d5554230c0b2252ee5b8e5096ff846c5c3b2e132e24799919a4 via relay
+2026-08-09 22:56:50.016+09:00 [INFO ] Accepted 4 blocks ...141311af3c20d4e523767c5dc941df4cad4c531ae2979f9925b44d63fc3a586d992389905dad90d39620dcbe1453bca16500662cb249d53d89ceed9a6080aea5 via relay
+2026-08-09 22:56:51.164+09:00 [INFO ] Accepted 2 blocks ...ef176f4e929b59c8ce10401d5b0eca1b562c9f0034e829ea566aacd8b568bc4cec1411d4513021d1c08049a9fbfcc6571d83dd7d9d41a6afaca5da2a05ec9335 via relay
+2026-08-09 22:56:52.214+09:00 [INFO ] [vlt-shadow] sink_daa=899 0 validator(s) with credit; 0/8 epoch(s) would reach quorum; newest epoch Some(7): W(E)=0 signed=0 snapshot_root=930357e931c7394163ba608d47cd981f2f71971b5b556f9d2c9137dbc72eddd625139e1a07dbf6755702bcaffbb72c93740a35fb3a5669e8f8a20b607b1b2dfb — the weight fence is at 18446744073709551615
+2026-08-09 22:56:52.934+09:00 [INFO ] Accepted 3 blocks ...1bcf567b462ebbcaba3d0fcbbffd725313a4bfcf8830ce0d6f0acf0364fa7eab97123a161a10505fa5cb9ed446bb947a365b77682f05c3f83ddcf1d5052a0dcb via relay
+2026-08-09 22:56:54.205+09:00 [INFO ] Accepted 3 blocks ...cc1b1e1e5f833db9561a7b52781e5a8f557c9c432beeef9034de2bf618811f70679480e5b6f27b26009649742a9e0e9219229b397d892f286903908c2c023351 via relay
+2026-08-09 22:56:55.267+09:00 [INFO ] Accepted block e0ecb052d140df0cbbbadebaa6565eb62d694c24991303e5657ab8de6818cfded7d81247fc733b86278112fc1d1b046e4ea14a18a5ed31908944344334b0d4ac via relay
+2026-08-09 22:56:57.887+09:00 [INFO ] Accepted block 54fc27e5c1efbf1dc4f633bb9dbd3291729ec1d922a6ab8e039b140856239203aefe2ddd7d982fb019549be4ea1cd378b97e038548d6cf2ce1427b506c60ebbe via relay
+2026-08-09 22:56:58.024+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=905 bond=unconfigured active_set=[epoch=9 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:56:58.074+09:00 [INFO ] Processed 16 blocks and 16 headers in the last 10.00s (16 transactions; 16 UTXO-validated blocks; 1.06 parents; 1.06 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:56:58.074+09:00 [INFO ] [ibd-perf] 16 hdrs avg: validate(A,parallelizable) 158.2us | commit(serial) 381.7us [add_block 21.6 + db.write 165.0; held-lock 333.3] | f_serial=0.707 f_reach=0.040 | parallelize-ceiling 1.41x
+2026-08-09 22:56:59.349+09:00 [INFO ] Accepted 5 blocks ...16de8b6d7ecae74a7b1008217f3f720eb0d1f85005d9d8cb95e80b4c14045795bd76c732fe41b2ab93ae04f3bc2eb2d488bdc12200dd4ab40d4659942b6b1e22 via relay
+2026-08-09 22:57:01.232+09:00 [INFO ] Accepted 2 blocks ...de3cba2852250d2791a09564a26c5d85b3a364b61b1aa5e776ed0407bf8463c076ae4241b7845cbd3f755ca784d2f3d005c00fc054fdb444b96cf6b616dea475 via relay
+2026-08-09 22:57:03.565+09:00 [INFO ] Accepted 4 blocks ...40425c1c495e271987b6c8676d7694192b4b66bc39b63a30287354253046c5306ffd45adf36ee637605b21239ac9a4d02a333bb0e1e319f9e90525b48fdc2bc9 via relay
+2026-08-09 22:57:04.677+09:00 [INFO ] Accepted 2 blocks ...fdd82e831be7bf3734e8cd1ae14adf17e46527d4311ae5650167dd909d9c6242f39aaed49051661136a54e274e99e1ce157a5d83a73be555d2879b2d3e5e2ba3 via relay
+2026-08-09 22:57:05.894+09:00 [INFO ] Accepted block 32f34002986172e79a3b16447f1822697d7c800662db7a01e55c68910e4badd4587eb90492f3c74f68df3463e39ad92714b0bac4b2e7006babc66d8dd5997d43 via relay
+2026-08-09 22:57:07.050+09:00 [INFO ] Accepted 2 blocks ...97f7294a69a8060f530108d83f7e09cf00bf0eca943f86931fb16c260ce4560872e77f8350088204328c13054e3f4bdab677a643e92499a07d99368effb57a13 via relay
+2026-08-09 22:57:08.075+09:00 [INFO ] Processed 17 blocks and 17 headers in the last 10.00s (17 transactions; 15 UTXO-validated blocks; 1.12 parents; 1.12 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:08.075+09:00 [INFO ] [ibd-perf] 17 hdrs avg: validate(A,parallelizable) 166.6us | commit(serial) 339.8us [add_block 18.1 + db.write 134.8; held-lock 300.7] | f_serial=0.671 f_reach=0.036 | parallelize-ceiling 1.49x
+2026-08-09 22:57:08.452+09:00 [INFO ] Accepted block 9750d3af141e0e4f47e029de2bde74432b4f947b5e421afd4f5a2f51ee46d2c209515d1eba452cfdbc5e00c0c9ac3f40519ffd28d747e37a93616c3afe2e97e1 via relay
+2026-08-09 22:57:10.706+09:00 [INFO ] Accepted 4 blocks ...aa9c198ce08d16e527ed4aee0e242604e8385a92f75364aae645be932a1213060b9ddd060ebad1d2610bdf35e964f69f39cee43327ff7cbea7886bcd5a1df5b5 via relay
+2026-08-09 22:57:12.031+09:00 [INFO ] Accepted 3 blocks ...df3b217752531b837510c85ef3542da46445c23c97659ca528f22bc8921c60b16c8dd670ec0cc2050e780391dcf16bcc01b8028768b5ca4de7eac3dd6a3350bc via relay
+2026-08-09 22:57:14.131+09:00 [INFO ] Accepted 3 blocks ...3d69fb9d8a34bd9b129f11aaa049d479b9f20a370648f3eb2a396e0b0c91d7af2d4214af47d108da6d5929ec1536d9154f644e7a5c7f1181f145fc0c9cd66427 via relay
+2026-08-09 22:57:15.407+09:00 [INFO ] Accepted 2 blocks ...bdd8d4a76c45110d234b19e3c04b44af0b78dce7d5ee537460e92d92843c9b443f89f6a807e35abb0d803c8a60aed6f1c807b7a1ecaba92ddb0e6ed4c34261e9 via relay
+2026-08-09 22:57:17.328+09:00 [INFO ] Accepted 3 blocks ...311f06d872c62d482f6fe435249a3ea86974d477ead903e66cd526c47e994dfc3c8343bf70aed95c6afec86c8e2f4cd023fdad6421b90a1142868a5f935d470a via relay
+2026-08-09 22:57:18.077+09:00 [INFO ] Processed 18 blocks and 18 headers in the last 10.00s (18 transactions; 18 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:18.077+09:00 [INFO ] [ibd-perf] 18 hdrs avg: validate(A,parallelizable) 181.1us | commit(serial) 386.7us [add_block 32.8 + db.write 172.6; held-lock 335.4] | f_serial=0.681 f_reach=0.058 | parallelize-ceiling 1.47x
+2026-08-09 22:57:18.624+09:00 [INFO ] Accepted 5 blocks ...6bbbf95484855b085369b22ee52be53274b4c789e011085fbf8be090a772da3be6a976ab69778dc0e8815d3d569f1dd9450690b6d39070c603ca9524a30bda67 via relay
+2026-08-09 22:57:19.711+09:00 [INFO ] Accepted block cc60cb91c459eef8db285a745ad413bd5fd61e7a7f3b689c5a25fd01c34305c276d9ac6565dbbe94028f9d7453a89f000308305d01c29ead271dc6e97019f3c1 via relay
+2026-08-09 22:57:21.967+09:00 [INFO ] Accepted 4 blocks ...3dcbfe527b2fa87f4ed68d50af2c0506878d02294f27bde5ae2f36d491a26af0a28f19cb85638cfb595d89298cdb909d3a8fcee58aefce41ad97608f1445f983 via relay
+2026-08-09 22:57:23.173+09:00 [INFO ] Accepted 2 blocks ...b46ab3fcfeba996c15dd79cd364693a327e51c869de8ca61e02b1af346aff8acc4f6fed3fba0a5bcae7c78bc16265c0278d35f2d07388409d111b674be3a1ef9 via relay
+2026-08-09 22:57:25.688+09:00 [INFO ] Accepted 4 blocks ...6156fed30d799f6c58af6d66cfbaf243cb1e52b3f75bc0a768a4ce29f78c9590045f9460b5cc22ad0379d967fa092f41cf6f8d875ca5ac6e1053204e85441ac1 via relay
+2026-08-09 22:57:26.790+09:00 [INFO ] Accepted 3 blocks ...dd52308eb4406a267992c16d09e75571e60e04821991c72759d8d7be493cacb9a091424a2c0b6b29330d05d08f8d062d63fda3ce72bcc23135b8a79604a2170b via relay
+2026-08-09 22:57:28.026+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=958 bond=unconfigured active_set=[epoch=9 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:57:28.027+09:00 [INFO ] Accepted 2 blocks ...5884c34f7b15c6fadd8bcd26dcd0a9248f4af4988294b851b9c1d5ab9cda9703ef6dd224375f1b702ebe1196b6e77993b6e90a6bcae36caab565346e50092de1 via relay
+2026-08-09 22:57:28.078+09:00 [INFO ] Processed 18 blocks and 18 headers in the last 10.00s (18 transactions; 17 UTXO-validated blocks; 1.06 parents; 1.06 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:28.078+09:00 [INFO ] [ibd-perf] 18 hdrs avg: validate(A,parallelizable) 88.4us | commit(serial) 199.2us [add_block 14.6 + db.write 90.8; held-lock 169.0] | f_serial=0.693 f_reach=0.051 | parallelize-ceiling 1.44x
+2026-08-09 22:57:30.232+09:00 [INFO ] Accepted 3 blocks ...44ad135c599fa0380c4aacbe899cc4c518c67cccd25800e1a905ac89d7c8cf574faacf4c5d431a5e6cd3dd78905fbbd4067e5d52ed50da09c99f74d580e86393 via relay
+2026-08-09 22:57:31.653+09:00 [INFO ] Accepted 5 blocks ...194a38cec2dcc9ff211d326cf2af6f6dab4e4ed761891a5cf2732dbaa3cfa35e6be32b011d11fb51cd3fbe1626989446f45a93232e496fa7ce87b0005c134557 via relay
+2026-08-09 22:57:32.994+09:00 [INFO ] Accepted 2 blocks ...f35019baa253b0142e93d41c5c15f5ad2ad33d6c662cad04875c8860f78bceeeaaca368ad5e1135694a769598abaf46258e11a94e6f68c992da23763d8b1b094 via relay
+2026-08-09 22:57:34.811+09:00 [INFO ] Accepted 3 blocks ...6ed509d05a8f285a77d39b49fb6d1270e94380b3bbf9c22674e52bb6bd1bd3018df34b115ade1d6b83ea411db0735d6ad77b69afd27db4a97cf03ae087bce1c5 via relay
+2026-08-09 22:57:35.977+09:00 [INFO ] Accepted 4 blocks ...0d96c16a06ebb0bec5296af75c16a123a98ebf34aee8a17f16cde5aa79523e3304b7948c7472fef7ed63e58f1ac04b47068a6b1e21882c636f57d4df0a2ff288 via relay
+2026-08-09 22:57:38.081+09:00 [INFO ] Processed 17 blocks and 17 headers in the last 10.00s (17 transactions; 17 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:38.081+09:00 [INFO ] [ibd-perf] 17 hdrs avg: validate(A,parallelizable) 95.3us | commit(serial) 243.9us [add_block 15.9 + db.write 110.3; held-lock 205.7] | f_serial=0.719 f_reach=0.047 | parallelize-ceiling 1.39x
+2026-08-09 22:57:39.217+09:00 [INFO ] Accepted 2 blocks ...2606dbbcb75c67cfd496eb961cd3219590c4a7e3afc3e02a2269782eeb9c22aa1a5d239bb571d8b502576d26796f25d41fc35376471339ea4426d7c63720d010 via relay
+2026-08-09 22:57:40.225+09:00 [INFO ] Accepted 4 blocks ...9b2bc9c1da87030e908d12a434b38eea8e6c71d0a221fdbb9f4404bb639d9d9473f40003bae8991d41db4cf243047677df198abd5f7b02773d7497a5de6bd3f1 via relay
+2026-08-09 22:57:41.596+09:00 [INFO ] Accepted block 425101fbe18f7135bee618cdde4e333db49d279a10220edbe3634c72ca503c7318e89a2323a0555cb28e32302e9a98c575e404d207ccb0a8613ee64e6fc996e4 via relay
+2026-08-09 22:57:42.625+09:00 [INFO ] Accepted 3 blocks ...6c2e3bc65fb4b9c0bab05f560cb7fb57561961015b80b0438fbd5921a6099e84921f1043e649390449a3a68dcd508fbfdc4d3c2760ba2e02a4f082b59ff3285f via relay
+2026-08-09 22:57:44.074+09:00 [INFO ] Accepted 2 blocks ...b90f19599b2c83fc83702d74360d310f7a81f2ab92c51c116ee12b736cd81ba109dedcc1f02665fa1944b261f913bb3a63036393709bc010a4c0402eee8fe869 via relay
+2026-08-09 22:57:45.444+09:00 [INFO ] Accepted 2 blocks ...f2edc0a50a091bf0fc26737a2b4acb50e6c84be6195fe89bea18cc566d03722f209f96ca980159f811dac6d5e76b62cb81022fc799286f36288f0bffc69c9027 via relay
+2026-08-09 22:57:47.632+09:00 [INFO ] Accepted block 46d2fcea520a9b76b647a9bbce5957c19ea56093266fc18c53c15a5d9e76389499f39f0dd09b79b5488afd09146818653105bab4478baf039c5b269a8062f856 via relay
+2026-08-09 22:57:48.082+09:00 [INFO ] Processed 16 blocks and 16 headers in the last 10.00s (16 transactions; 16 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:48.082+09:00 [INFO ] [ibd-perf] 16 hdrs avg: validate(A,parallelizable) 84.8us | commit(serial) 205.7us [add_block 12.0 + db.write 100.6; held-lock 176.4] | f_serial=0.708 f_reach=0.041 | parallelize-ceiling 1.41x
+2026-08-09 22:57:48.847+09:00 [INFO ] Accepted 2 blocks ...589a189937658ac42c78e6b202c2e547c170e5949a6e13fd17fa7e4e3ce5576475c18118bd51da06b8c18b179f37a9f07448700c08409681df08edc1556773ab via relay
+2026-08-09 22:57:51.069+09:00 [INFO ] Accepted 2 blocks ...263d16b8e7794b8c3efbccf14f966e308aea6e1d9c41290d9b508c4ae207d975ebafff17c656fb249a3a6ad2ce1cc26d6a004d71f46f7722dd63ec3970ceb6dd via relay
+2026-08-09 22:57:52.251+09:00 [INFO ] Accepted 2 blocks ...2cd4729b2f65311bd09753071baf0c1f6c8ac8859fad10d9e24493b71d5124a70bb501ba723c8db7839729c04ee775a5f0bc793c53b91ebfb31c94ccba508a88 via relay
+2026-08-09 22:57:58.029+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=998 bond=unconfigured active_set=[epoch=9 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:57:58.085+09:00 [INFO ] Processed 7 blocks and 7 headers in the last 10.00s (7 transactions; 7 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:57:58.085+09:00 [INFO ] [ibd-perf] 7 hdrs avg: validate(A,parallelizable) 199.3us | commit(serial) 354.0us [add_block 23.1 + db.write 166.0; held-lock 304.7] | f_serial=0.640 f_reach=0.042 | parallelize-ceiling 1.56x
+2026-08-09 22:57:58.206+09:00 [INFO ] Accepted 2 blocks ...775077f9cbcd6ee98e7f388b28eae10b66f8c5a9b4e0fd3f68cee4dc963611bc3e7df87f69c23ae00a0bd023bd7ca43c96117ca3c8fbf4f628d7490d15eef560 via relay
+2026-08-09 22:57:58.332+09:00 [INFO ] [vlt-shadow] sink_daa=999 0 validator(s) with credit; 0/9 epoch(s) would reach quorum; newest epoch Some(8): W(E)=0 signed=0 snapshot_root=afa17aee5fa0b9ad23b198bec5bf73d7a599cff4691b5b854bbb341453daedb79f57fb2fa8a90614f4ac11afca32c0404824860be0f0d2f3cf8d69693c4362b8 — the weight fence is at 18446744073709551615
+2026-08-09 22:57:59.341+09:00 [INFO ] Accepted 3 blocks ...fe8d8d4a221e26bf6970f90037942289cf22783164c1e5be00f2c2f9074ca34e50eb5d2e30d217ad622956a70f700462a98858996f5d09f2157087f1e5692d89 via relay
+2026-08-09 22:58:00.637+09:00 [INFO ] Accepted 2 blocks ...02a1b5574f141b1c45681fedc6d636cf40ba25edb7eb556b3e26779f5217d02b95389cbfc41e7aa42156d0575949f0fbf155fa733626744355db11b12ca4105e via relay
+2026-08-09 22:58:02.543+09:00 [INFO ] Accepted 2 blocks ...ee4e413539ae2f40e4a3063d72096d153d02976cdc96970451a40d5a9d997f4f880f8f4f91720a643668f3f58bac6e67656f547bec0d597ea17ccf42b76e6653 via relay
+2026-08-09 22:58:04.505+09:00 [INFO ] Accepted 3 blocks ...99d48f7f3792d59564184e148ae08cd50e7fdf910101d2ec3ae5b1dbed3b543fd110156b7af25d9720ea0c23ca5b6bceda921314f3dbf9deca544d0bce43654d via relay
+2026-08-09 22:58:05.936+09:00 [INFO ] Accepted block 55e535ec1d7e75f26a652afafbb1cbe5e32b8bb892234843882c1aa6ec76e2d97d9cb812fa8c768319abe6a04044bf9e881a1ebe4742e0cb6eb64954bc373ebf via relay
+2026-08-09 22:58:08.086+09:00 [INFO ] Processed 11 blocks and 11 headers in the last 10.00s (11 transactions; 9 UTXO-validated blocks; 1.18 parents; 1.18 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:58:08.087+09:00 [INFO ] [ibd-perf] 11 hdrs avg: validate(A,parallelizable) 197.2us | commit(serial) 362.5us [add_block 25.0 + db.write 169.2; held-lock 304.7] | f_serial=0.648 f_reach=0.045 | parallelize-ceiling 1.54x
+2026-08-09 22:58:10.111+09:00 [INFO ] Accepted 2 blocks ...f0d19de1a1a0a787c27e3a65aae5a10efab3318c743c0c70de263eee3b0cbe8ac36554a768d2f9d9df9dbcf57f0c73e410ceebffa4ac3adb35ba362d4da37816 via relay
+2026-08-09 22:58:12.052+09:00 [INFO ] Accepted 4 blocks ...143d05a973195ea40a1d823d62cb22366dc1a16f5a9160fecc380320bd9636150028ad317f77a34c09476f0c46932ac7b3c53e8c46f1e9510b51b521cfd4f475 via relay
+2026-08-09 22:58:16.166+09:00 [INFO ] Accepted block 11f7998890973f8ea6f0c9d746df4b1facb38626b2ed090c2304e1c4eb25334815f545c74fcc13e4591abc4bea5541affc56ee8e765043b3bfc7a0eac62d5968 via relay
+2026-08-09 22:58:18.088+09:00 [INFO ] Processed 9 blocks and 9 headers in the last 10.00s (9 transactions; 7 UTXO-validated blocks; 1.56 parents; 1.56 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:58:18.088+09:00 [INFO ] [ibd-perf] 9 hdrs avg: validate(A,parallelizable) 227.0us | commit(serial) 276.2us [add_block 20.7 + db.write 119.6; held-lock 231.0] | f_serial=0.549 f_reach=0.041 | parallelize-ceiling 1.82x
+2026-08-09 22:58:18.214+09:00 [INFO ] Accepted 3 blocks ...ead434a290f2dc01d3a5905b2d3edb0e284b8035f15527bc0a16d64dd0bb88a3317b849abe7b741292667cd667fe7b903dc02af8354ab4cca297492ebdf002a7 via relay
+2026-08-09 22:58:20.405+09:00 [INFO ] Accepted 5 blocks ...b37d49eaf1117e4bc9fa326cc8a9c8cc4517d867d9e4591dd843e609b69151b69d4ae66042d00ed4b92cbc252b40dc3d271b8a0cca871848e5b6cbd269ff7bfb via relay
+2026-08-09 22:58:22.662+09:00 [INFO ] Accepted 3 blocks ...34b851a2fb15211f0861a6f239e06a9152edef7eba713b36e6910d5a3b67290cb757897ef379697dc23e67069967dffc49c64e284d43dc691b682d02f0a13e19 via relay
+2026-08-09 22:58:23.706+09:00 [INFO ] Accepted block f260f231cfebd87868bce7b3d7b0ae29cb18aaf05912b564bbdd3bec919db5002d7e9c0fa009f95f22f40851aca9c42c68167ce6a549c9586b733cb66fc36108 via relay
+2026-08-09 22:58:24.942+09:00 [INFO ] Accepted 2 blocks ...7f8451994e36c3c4694134bdf0ac445c3d8357d096df02570bbccc2c659b1e3c7221e73b1303c2cc62416bf6f18a07acfd6c0d8044db8ee63120fd6ee9767097 via relay
+2026-08-09 22:58:26.617+09:00 [INFO ] Accepted 2 blocks ...be6ca8a4bbc3056905c86d23b40b8f8f70027d39c6160399268b40ae943a379873c0e299435813bea1d71561af4e3b5742377cf5c55cce674d6d7cd262e6802d via relay
+2026-08-09 22:58:28.009+09:00 [INFO ] Accepted 5 blocks ...c7d6df0d940e06afd2b4b3f10756c41f2e6dbf8a418cd1ebb1eaf2298e65135c705308b5cf307aa28489e9cdbac95d3f7866edf3b9f6bbd7f9b7e6b5962ebd93 via relay
+2026-08-09 22:58:28.032+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1037 bond=unconfigured active_set=[epoch=10 is_active_validator=false (active_validators=0)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:58:28.089+09:00 [INFO ] Processed 19 blocks and 19 headers in the last 10.00s (19 transactions; 19 UTXO-validated blocks; 1.05 parents; 1.05 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:58:28.089+09:00 [INFO ] [ibd-perf] 19 hdrs avg: validate(A,parallelizable) 112.8us | commit(serial) 227.7us [add_block 14.5 + db.write 108.1; held-lock 193.9] | f_serial=0.669 f_reach=0.043 | parallelize-ceiling 1.50x
+2026-08-09 22:58:29.592+09:00 [INFO ] Accepted 3 blocks ...c66ad5279c27b038ba248e315358d185dff68087182eeb28fa3703ee65bf131513c2eb1127468343bb84d7eed581fd96ad8b0cff5541869f64402f49f3bca86c via relay
+2026-08-09 22:58:30.841+09:00 [INFO ] Accepted 2 blocks ...9424997400876af7ecfd4a60e854bfdf69a9b0d674a0e3fe253411854ecfbf0684a931902bb25a3aae5705492f1d12a6a9c34e320155f701118c5d7f01b35864 via relay
+2026-08-09 22:58:31.863+09:00 [INFO ] Accepted 3 blocks ...ef6d3776c27d899da6c349f8856164c5be639aedb36d6793a532be1caedd3f5aa81b0b35bcbdd0ec92ed9573166486b9c9ce00877686168a2f22034bc63883ee via relay
+2026-08-09 22:58:33.095+09:00 [INFO ] Accepted 2 blocks ...c557eaeaeccc8f72d10b0976bcca757cb2537098547c68e94c7ed5400cca1c76b2d21771351a105b814c9b2e44be55aa32fb94b34324326f92a0748cfca1e006 via relay
+2026-08-09 22:58:35.514+09:00 [INFO ] Accepted 2 blocks ...9691d9f385e9d3f8323c6ca5977c00135598acab6e64839adfe32ae0598b3cb6d337936ac73d774b00f3f14a1f9c16b1e714a9bf9e33aaf495bd24caae1bec8f via relay
+2026-08-09 22:58:36.655+09:00 [INFO ] Accepted 2 blocks ...6430e5efb38f17f4561567ffdc91a6102d65c4901b710e40a4db179905b8cee385ee9b3a6cb5befdf8a7fc63f792903d68608094ef3bb0012d9e1ad49ac05d28 via relay
+2026-08-09 22:58:37.748+09:00 [INFO ] Accepted 2 blocks ...05ede7c794bca5f78e283fad8e3d00c1fee4a498671c6475c10a9af25ec25e1ce6e93834e8e1df09036aba07125fbb4612764016a51c9740934b7752b11ca12a via relay
+2026-08-09 22:58:38.091+09:00 [INFO ] Processed 16 blocks and 16 headers in the last 10.00s (17 transactions; 16 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.06 TPB; 17218.0 mass)
+2026-08-09 22:58:38.091+09:00 [INFO ] [ibd-perf] 16 hdrs avg: validate(A,parallelizable) 188.2us | commit(serial) 666.1us [add_block 22.8 + db.write 144.2; held-lock 619.2] | f_serial=0.780 f_reach=0.027 | parallelize-ceiling 1.28x
+2026-08-09 22:58:38.091+09:00 [INFO ] Tx throughput stats: 0.10 u-tps, 100.00% e-tps (in: 0 via RPC, 1 via P2P, out: 1 via accepted blocks)
+2026-08-09 22:58:39.785+09:00 [INFO ] Accepted block 98cadca3ca602c89a90079caec015ca011ed0e4f220a2f4066ad33c850754ed35be97aeb99e2bf8cd6a6d6b7d641a1ce21967dac6bf369bdb08f26cdda695130 via relay
+2026-08-09 22:58:41.218+09:00 [INFO ] Accepted 3 blocks ...7f2cc06d1ce3db8bfb733d2d68d1601b139cc36da39f9061349a028b0cd0e5d1a1328d3f70f704fec45dc9a7faa0d70f9056afb204a721b47c8689acdbb62c7c via relay
+2026-08-09 22:58:42.300+09:00 [INFO ] Accepted 3 blocks ...f10e4eb5edac62841787e2a7257cd1887df41dfc12a91cb6ed5746b4cc17c43127a1e5059659a3f7ea0aa33214c6d2d7b14c24f5ec88a56e96b12f07f19f325a via relay
+2026-08-09 22:58:43.459+09:00 [INFO ] Accepted 3 blocks ...1253791dc3af8f92e647ae5f94cc1f5099b344c9f4d8384fe71e43355e1df5759003ba9d1dac209d67af32112036b45af3e3eed332b71ed80d72cd3e7c23e023 via relay
+2026-08-09 22:58:44.717+09:00 [INFO ] Accepted block 517f775b954eb469ed6d4d3f8c9ed21d08ded8ae6a93162f06a29aa61b9590508880e7b945837462afd527103e52a10e8d3a72e9d6b51c62fc2ad199c32471b4 via relay
+2026-08-09 22:58:46.308+09:00 [INFO ] Accepted 2 blocks ...28caad2286cee9c6a44ccd52de9990cb9eb5495a846b2c9bcac3440926e13c0e440ce77147402b1bc8274164cdf9bea7a47833b72a91b6c3180d0507790dbd47 via relay
+2026-08-09 22:58:48.093+09:00 [INFO ] Processed 14 blocks and 14 headers in the last 10.00s (14 transactions; 14 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:58:48.093+09:00 [INFO ] [ibd-perf] 14 hdrs avg: validate(A,parallelizable) 190.8us | commit(serial) 330.6us [add_block 22.7 + db.write 152.0; held-lock 279.5] | f_serial=0.634 f_reach=0.044 | parallelize-ceiling 1.58x
+2026-08-09 22:58:48.579+09:00 [INFO ] Accepted block 675ed4b87504908f059f3953ff0d15370ef8ebe6a8e89989d7e8a03018748e4e7e7f541cec6859e2a2cc8050c8ec645fa2974296009192f786ec595a8642530b via relay
+2026-08-09 22:58:49.755+09:00 [INFO ] Accepted 3 blocks ...8ca08197bc4629db95148b5af2455cf688671abe43a3233d91f0de46aeead898cfac8a8295dd9e4d4348b46cd93b30d833372d79436aca7304de52d44789414c via relay
+2026-08-09 22:58:52.644+09:00 [INFO ] Accepted 3 blocks ...8485fb44970ce497ca0629e6a7a28f1ee320e7011bc5b49a30ca0f90c5d628bab543669813d8cf3d3db0bab9f43e5928a54ae175901e9c0c77f0bb0755f37181 via relay
+2026-08-09 22:58:54.908+09:00 [INFO ] EVM lane KPI (O9): 1024 chain blocks, avg mergeset 1.08, avg accepted-gas utilization 0.00%, 0 deposit-claims applied (cumulative)
+2026-08-09 22:58:55.476+09:00 [INFO ] Accepted 5 blocks ...f14984a051809c88a72c7c798737f9e56b50918d7bedd1d92e5e62108ec9d9c33091f0f923e6b549eb624e715b23962d80d126e4ece2c023098f7b112cad3c61 via relay
+2026-08-09 22:58:56.616+09:00 [INFO ] Accepted 4 blocks ...74b7b9cb77950ff4d0a5d12a521bb7a3af865855af38c6ff3cb1708960f1df70931f2cbeb4b26ced0722a2b0a138d2debb0fe52b2b4f5e972a0e792dc499b7f5 via relay
+2026-08-09 22:58:58.034+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1084 bond=unconfigured active_set=[epoch=10 is_active_validator=false (active_validators=1)] dns_overlay=configured (stage=Bootstrap, dns_confirmed=false)
+2026-08-09 22:58:58.095+09:00 [INFO ] Processed 17 blocks and 17 headers in the last 10.00s (17 transactions; 15 UTXO-validated blocks; 1.24 parents; 1.24 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:58:58.095+09:00 [INFO ] [ibd-perf] 17 hdrs avg: validate(A,parallelizable) 224.9us | commit(serial) 312.0us [add_block 21.8 + db.write 133.3; held-lock 262.1] | f_serial=0.581 f_reach=0.041 | parallelize-ceiling 1.72x
+2026-08-09 22:58:58.665+09:00 [INFO ] Accepted 4 blocks ...0033d0088080ba7a7a26a117f4a07f617c01bc99e3c599fad4ef705f82d2b61d39ec38ce5baba04ab35b6326e38a3b70173e13c8980b0556d5c9a385118ae01d via relay
+2026-08-09 22:59:01.328+09:00 [INFO ] Accepted 3 blocks ...9a4e843f16502dbcff1ea8387fe96af0456ffb9340bb0745dc887fb707fbd388dff146bae43b8f7c4b2255f1686220fdf2ba5a4b926bc1ddef6d3628b8129a27 via relay
+2026-08-09 22:59:04.481+09:00 [INFO ] Accepted block 81a7bb8e5218522527fa034f9f54b8de700268eadda5fef943af700f44473c062d4b5a6f2b0a97721d878915f3b79bae26f7e9ca607985123331e85851bc67b8 via relay
+2026-08-09 22:59:06.377+09:00 [INFO ] Accepted 2 blocks ...84cb76bcac9945029bc435362e653d8fcf7054ce5e0ea2236ceb6c2b24409a7edaf496f42d17028e53abf30e3764565ad453f67899ba9b0ed0ff7c291d428713 via relay
+2026-08-09 22:59:08.096+09:00 [INFO ] Processed 8 blocks and 8 headers in the last 10.00s (8 transactions; 7 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:08.096+09:00 [INFO ] [ibd-perf] 8 hdrs avg: validate(A,parallelizable) 183.7us | commit(serial) 395.2us [add_block 24.1 + db.write 199.8; held-lock 350.9] | f_serial=0.683 f_reach=0.042 | parallelize-ceiling 1.46x
+2026-08-09 22:59:11.750+09:00 [INFO ] Accepted 4 blocks ...e566cc892448db1f612f2b35eaa3f8411e88c309849a76a5ecadafaccbad318aeb1dbd83cc1a8c83dad49e6469b034b980579a14bd2b10c2d90915204122bd95 via relay
+2026-08-09 22:59:13.190+09:00 [INFO ] Accepted 2 blocks ...c4aad9b97c0ca46a29aa3d165781ef102c551554ff8cc93e592f56b69caaa62f5d03af2f9d0f5e604094c37a82bb60ac540afa20829f229ba934d92ea01ca9b1 via relay
+2026-08-09 22:59:15.049+09:00 [INFO ] [vlt-shadow] sink_daa=1099 0 validator(s) with credit; 0/10 epoch(s) would reach quorum; newest epoch Some(9): W(E)=0 signed=0 snapshot_root=d8ee92fc3bb2ebec14d39bda8ce83535e106a168be462d5bfdc1939dc4743da601880450992cdc6936ff7dfbc98687ccdb5b6c8adbf53a2c6717d480d3f31917 — the weight fence is at 18446744073709551615
+2026-08-09 22:59:16.051+09:00 [INFO ] Accepted block d2f3fedf2292a44ce20a27e82d1f465f5818054fc1dffc55c0e493aa92da6d0b38fb25a8e4bd685b1f7e07ca3ca9ce18c9ce52dea829ae2f7fe3cc11869af1a6 via relay
+2026-08-09 22:59:17.536+09:00 [INFO ] Accepted 3 blocks ...2e558c2f5314308898a737dfb0714f003e88fdd17803e242f64faa74ae33902306001dc006a22edb2c73b0fb3733407bff01ce28fe0fecb67612de7847e791d8 via relay
+2026-08-09 22:59:18.099+09:00 [INFO ] Processed 12 blocks and 12 headers in the last 10.00s (12 transactions; 12 UTXO-validated blocks; 1.25 parents; 1.25 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:18.099+09:00 [INFO ] [ibd-perf] 12 hdrs avg: validate(A,parallelizable) 99.4us | commit(serial) 215.6us [add_block 12.1 + db.write 114.8; held-lock 185.0] | f_serial=0.684 f_reach=0.039 | parallelize-ceiling 1.46x
+2026-08-09 22:59:18.762+09:00 [INFO ] Accepted 6 blocks ...d9cdcccd6199d4b4b9a31bbd55fa7a8c06530a6895dc0a8261445529539d75387f6c4ce903b702e32a4d0ff3335b78a1cf11d95a5f212502833db6c521effaf7 via relay
+2026-08-09 22:59:19.947+09:00 [INFO ] Accepted 5 blocks ...12e285f30d2f16feffa5f01e49aebb03349e544472055230736acbf175605acb9ad03e7154118e28c2a7ab307a781aaea3dd2faef11bfd8bd372db6b2fb065e6 via relay
+2026-08-09 22:59:20.995+09:00 [INFO ] Accepted 2 blocks ...b61eb555ff9fc3e27c5869331187d44d53829f219dbc487049f78f1465625b763491683e43c31f3d198ca71576f09cefbbfaa0f296170e97d80f3c06d83974dc via relay
+2026-08-09 22:59:22.378+09:00 [INFO ] Accepted 3 blocks ...4a123d6451d6c9c6fba305d24f6a4a57477fe95a916f8be2a3cfaeeab0fae625fd25fc78f8a5282268d9ffd7a9d1e983207adbb3e276b23b23bff64e77b161dd via relay
+2026-08-09 22:59:23.475+09:00 [INFO ] Accepted 4 blocks ...3b971cc1855a466770b34ec64b22cf82d765276b359b883dd2e13f452f8e06f0e6351f950d3ea10090fec1a37ceda35258fd8181f1fa1f13ad913490f1a6702d via relay
+2026-08-09 22:59:25.547+09:00 [INFO ] Accepted 4 blocks ...b1cf86a778f80785e9924259ba9e374a55debc229fa0e143e1f425522d32e82b7022d87755a92ada3a67825b01908f7cd5bf4eed1ec352ab5a5ce524366216aa via relay
+2026-08-09 22:59:26.744+09:00 [INFO ] Accepted 3 blocks ...7bb6601b9c65b937066e23ee8372d83847b6deac3edf1d60e6e363ac223cfb0f037eb6d96479c34d0452f5c5966ad9d1bcb76969a907d451902d38303ef584b9 via relay
+2026-08-09 22:59:27.802+09:00 [INFO ] Accepted 4 blocks ...951711a2473d63e0e5fbfc20aab649fd50a9c91c1be78e4598bbbad6df2a994a6dc53cabd0f71e12e9b9c123806d2b7aaece4532cf0871890b9af59212258970 via relay
+2026-08-09 22:59:28.035+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1134 bond=unconfigured active_set=[epoch=11 is_active_validator=false (active_validators=1)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 22:59:28.099+09:00 [INFO ] Processed 30 blocks and 30 headers in the last 10.00s (30 transactions; 30 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:28.099+09:00 [INFO ] [ibd-perf] 30 hdrs avg: validate(A,parallelizable) 90.7us | commit(serial) 211.5us [add_block 12.8 + db.write 101.8; held-lock 181.6] | f_serial=0.700 f_reach=0.042 | parallelize-ceiling 1.43x
+2026-08-09 22:59:28.857+09:00 [INFO ] Accepted 2 blocks ...0d1cbe17bdb2cd0ebbcfe81ad300b07691852383689e7f4d68fae2d6220b8fd1e2be3b0458d5ee385b2c95627568f43e9d2cf0620dafa49914e6c9edb4c63dd6 via relay
+2026-08-09 22:59:29.865+09:00 [INFO ] Accepted 2 blocks ...5288bc22fc68e7c02be39e9a4d7dfc73faaad8d4185b5f4f477d738b0895d0cc8bd9989101e58b5943d2e8cd19e7f9f0f7ac8267099184aece8bb351144ea5b8 via relay
+2026-08-09 22:59:31.028+09:00 [INFO ] Accepted 6 blocks ...c24a03137012e8ca2e05daa47dba000de8454e4d9808d97601cfa0b5cd98035e7055553e830b9a2e89d2ff1ee734bf22869ef04ec6eeff6ab2441e59903300f3 via relay
+2026-08-09 22:59:34.011+09:00 [INFO ] Accepted 3 blocks ...185bffd456fd074c627445e0e7ec43b39efca4b281d1601df30c1d55fca1dfae349bedf88f4d3817157b8a026f6b2b77b1c64259e5b994e02fef1cfc5a23450b via relay
+2026-08-09 22:59:36.302+09:00 [INFO ] Accepted 2 blocks ...cfcbdf5122cac7b0e72a3d84eb53c543838605ded390f90347ede7001938a7f18cb6f9912285355840ad3c41a806d4268ff19743e28d9a40b17f2d96b8a561c3 via relay
+2026-08-09 22:59:37.726+09:00 [INFO ] Accepted 3 blocks ...b3d3620e5903ec0b705446eb6f0f9fc2a599e08ef998b316ebfed285b6798b58f2aec0a1b698156982d14292dff6ae99c19d8b475ae4ac179b573449fda473dd via relay
+2026-08-09 22:59:38.101+09:00 [INFO ] Processed 21 blocks and 21 headers in the last 10.00s (21 transactions; 21 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:38.101+09:00 [INFO ] [ibd-perf] 21 hdrs avg: validate(A,parallelizable) 95.0us | commit(serial) 199.6us [add_block 12.8 + db.write 95.1; held-lock 168.6] | f_serial=0.678 f_reach=0.044 | parallelize-ceiling 1.48x
+2026-08-09 22:59:38.738+09:00 [INFO ] Accepted 6 blocks ...d9df26d74166f41933ca8efac7ebed5ae2c7d221a84cc138a26bea9aef3e3ca5af4274310b5340e048efd3bccdb9da2decdfd41c967479ba7c7ebe34c3861c99 via relay
+2026-08-09 22:59:40.357+09:00 [INFO ] Accepted block 0011768cdd3b2df39c6aa7c60fad5ce2fe2047757f11d4e71ed73e4e42b2c7fc93a79cc735ca2b437579df5976045b0d1505ddd838a9b4263c4e322da9769dc3 via relay
+2026-08-09 22:59:41.392+09:00 [INFO ] Accepted 4 blocks ...6237754d88ce4cef21f9dcdb0d31ad9d5b7f1eecb4f1d4d51b693dc5c33f8cd4d531bbd487fbe73b5782c7e0d88be8b4bd74a52d536cb61a4968ae399946b35c via relay
+2026-08-09 22:59:42.855+09:00 [INFO ] Accepted 2 blocks ...04a21a254f228dee3c8ffedee5a51702385f6187a6da8df33df23eca0dedc2c56d9d9cb7765d7dae904b2e77ecaab171a6792a4c8349c9903d3c34246f1983b0 via relay
+2026-08-09 22:59:43.884+09:00 [INFO ] Accepted 2 blocks ...bf061851592bf50f4e02c7df20b7164689ae0c41757a051624f027a468850a896926e5ce4b6184cf8b9f2e14c849c2511a69b221e1cf5d3cc18f579b3f83e8cf via relay
+2026-08-09 22:59:45.183+09:00 [INFO ] Accepted 4 blocks ...4b430cca6c758800dd9e35300c4048140503cb4f428555934a68460cb65054b0ebc299602f901ee55a7d394794be81f419459be6ae55bd77a7c272a9434e5584 via relay
+2026-08-09 22:59:47.296+09:00 [INFO ] Accepted block e6921a15adfe1afe0ba747b6d3f4b887b2c44a51b6a6caf3ecd5ddb3e0d0a5b4f05124dde8c70f95c2bc49caaf97f80cc1f2690445f459041c6e268359597d4f via relay
+2026-08-09 22:59:48.104+09:00 [INFO ] Processed 20 blocks and 20 headers in the last 10.00s (20 transactions; 20 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:48.104+09:00 [INFO ] [ibd-perf] 20 hdrs avg: validate(A,parallelizable) 109.1us | commit(serial) 252.5us [add_block 15.5 + db.write 111.3; held-lock 216.0] | f_serial=0.698 f_reach=0.043 | parallelize-ceiling 1.43x
+2026-08-09 22:59:48.505+09:00 [INFO ] Accepted 5 blocks ...279d0fd4c3c60bc683f1148aaafe0f2a0aa93477910c6b91b6bad71c098eaa0ca50b1143429608054af59b47e92d59d7290ba94daa7e5c02d1a9ce1bf2d9f694 via relay
+2026-08-09 22:59:49.666+09:00 [INFO ] Accepted 3 blocks ...daa1d6e37d6001892c95777275ea6474353af73ff40933880763e86bb83767c02e3a5d633801517efb358c1b07af29b0580d61db4873efc01cffe438bb81a2d1 via relay
+2026-08-09 22:59:50.744+09:00 [INFO ] Accepted 4 blocks ...0b7e392c6b86badd0737c03959d384868148be4a7fd741840a869a0c0f1f4a9c52cea5dab305dffb6131d04716d9002d6c03f6062ef5781003207071dc25c151 via relay
+2026-08-09 22:59:52.492+09:00 [INFO ] Accepted 2 blocks ...6d67aece9bc85858705d2bfeaa20dd49aff1f10da2fafea0cde45b3454da91158f5eb90409225b3e6ed518d703a1e40e422817757c7ec47f1114ff752e8e9bf7 via relay
+2026-08-09 22:59:53.728+09:00 [INFO ] Accepted 2 blocks ...69dff9fe457b4ade1d7c1bdb3f92c76888c87f3f44be18ae4698cc977b6a7851d890aa78f63e7461c5b644b659f8d534e74d066cc676a9ace27e25bd734240b5 via relay
+2026-08-09 22:59:55.034+09:00 [INFO ] Accepted 2 blocks ...89965ef63b559319fad8f31eed0a2d4ddb22d232e7130d496515263871ae6de41bf001aae5f05c492528184db767c7a7214db19706ce8afc6d7e5af6bbda9b3e via relay
+2026-08-09 22:59:56.803+09:00 [INFO ] Accepted 4 blocks ...357a0b2cb11051cb3376914e2144d99ca58cc2e603360682ab35fde02ed85dfa2a75eceab8721f10b20b44b75eb4eb0dad028b90529fff1d5fc79134fc2c6c48 via relay
+2026-08-09 22:59:58.037+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1197 bond=unconfigured active_set=[epoch=11 is_active_validator=false (active_validators=1)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 22:59:58.057+09:00 [INFO ] Accepted 4 blocks ...822e2e89862033668985a183cfee064022fdf37bf957456a46733ce639aa536b20e07d7ba0afd5f231f683c859136f71dcd3b77775c2b5afab910fc3b5c36309 via relay
+2026-08-09 22:59:58.105+09:00 [INFO ] Processed 22 blocks and 22 headers in the last 10.00s (22 transactions; 22 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 22:59:58.106+09:00 [INFO ] [ibd-perf] 22 hdrs avg: validate(A,parallelizable) 107.1us | commit(serial) 211.5us [add_block 13.9 + db.write 102.4; held-lock 180.5] | f_serial=0.664 f_reach=0.044 | parallelize-ceiling 1.51x
+2026-08-09 22:59:58.382+09:00 [INFO ] [vlt-shadow] sink_daa=1199 0 validator(s) with credit; 0/11 epoch(s) would reach quorum; newest epoch Some(10): W(E)=0 signed=0 snapshot_root=ea0ffa8be1702c8d4dd5ac91a52168f6387794ab8d3244886b7567d862a726176010e32d514fbb097044819e1cc095bdff02892bbb8641590e59586ae643a8c8 — the weight fence is at 18446744073709551615
+2026-08-09 22:59:59.201+09:00 [INFO ] Accepted 7 blocks ...7fefb0dfed60634483173e8f6b94e635a4c391edc2994285df8e347f66df7bb928ff4a1738f9cc4a70c6d5cec67d529f56577ecb6bdaf19e23503c0ed1a93796 via relay
+2026-08-09 23:00:00.930+09:00 [INFO ] Accepted 3 blocks ...6dcd36d081f0924f5fcbe70ffcea14425a661601de4ce20543ed4c6c3ffcf62d6b95f9e8261f52da85e893999595fb4343ea1ae797a9f6f3b351a86ce3fb9df3 via relay
+2026-08-09 23:00:02.084+09:00 [INFO ] Accepted 3 blocks ...55379db4d3e4c0f2b32776c97ba3d32d362498c41962782eb584bf4da1be9a931748f5e8a0d8239340692ea47500fe430b538cad430df4e609f31ae6b5344add via relay
+2026-08-09 23:00:03.302+09:00 [INFO ] Accepted 3 blocks ...01a71f6020ab01b076a7dd8ca501e85dbf7682302f691b640109c28dc95caac1cb8d16626c35446ef6803ff6568563418d98457d6aa2a5e33e6aa4ee0647be44 via relay
+2026-08-09 23:00:04.357+09:00 [INFO ] Accepted 4 blocks ...777cc4563cd4783f60be56cd85b066b41483117000f9f34db41f9dce0b87360be3f49a2a7bbcce3cc857516c3a46f38b82d458b8a7a5d97cadadce5d878295f1 via relay
+2026-08-09 23:00:05.420+09:00 [INFO ] Accepted 2 blocks ...0223dcfa68ce9789c1906c1e8265b2679e64bcb13b4e09026cfdef1aa0297197b65ec13b82f86bcfe774469892c487a5c6a6c152fd718dee40ed5a4cbf4c0053 via relay
+2026-08-09 23:00:06.428+09:00 [INFO ] Accepted 3 blocks ...480a347886be8e300848bee9db45ddfce00acd809d82497098f0e9c6542650b76e54c95fd4658be0e786b38f7fa741a101af804b7f361da446660a90b144760f via relay
+2026-08-09 23:00:08.107+09:00 [INFO ] Processed 27 blocks and 27 headers in the last 10.00s (27 transactions; 26 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:00:08.107+09:00 [INFO ] [ibd-perf] 27 hdrs avg: validate(A,parallelizable) 113.5us | commit(serial) 228.4us [add_block 13.3 + db.write 113.7; held-lock 196.1] | f_serial=0.668 f_reach=0.039 | parallelize-ceiling 1.50x
+2026-08-09 23:00:08.458+09:00 [INFO ] Accepted 2 blocks ...2b82e15fac0e8d17fa8a221f213b482b08a3351f259e247c2c9b0602c896cb0fe2aab7c167e6bae1daead21fbff42ad35b319788a28a8b183d3a2ad5c93c2e85 via relay
+2026-08-09 23:00:09.599+09:00 [INFO ] Accepted 6 blocks ...543052203e7936d2b4dcab2934fbb3dfa05c2899a67d3e0ae3327ab3029af0f58bf4220ddbaca6be6795dd7c6e773e7cd3c2aa2764d98cfcc6f97aa59e4b310d via relay
+2026-08-09 23:00:11.065+09:00 [INFO ] Accepted 2 blocks ...05f5416cddaec9a0ad1e607a514d8ec9f1f51933a77dbbe85a6cefa11b81906c41d6ab2a13c01c8d383d17c8dafa56d5f1eb4921a893ca60c61f3279f00b134c via relay
+2026-08-09 23:00:12.730+09:00 [INFO ] Accepted 3 blocks ...fd140ebd0a8c5bf0b434f07e524ba5a7b8291cf78d91b9fa3a17610e2fb6289d7ecbe28c19ec6c80ee289f6b658de94a1528991d41cfbbc356423c0bc5979520 via relay
+2026-08-09 23:00:14.152+09:00 [INFO ] Accepted 4 blocks ...d9d3f8e6939a430b5acd70d935a1e55d04e5f7991a9ca5f3c9f1a4ce936957964324c8891faaad0707005bed08015247ef7a8f21506424e09d88c6637f45237c via relay
+2026-08-09 23:00:16.308+09:00 [INFO ] Accepted 3 blocks ...41b71aacea729f7dd6ecb6a257f5d3abf0b818d474db6888859539a093178534c30e443cd9e1f99bd3577a2142d81213349f1995b5c2acbdbda72d79a56b4d20 via relay
+2026-08-09 23:00:18.109+09:00 [INFO ] Processed 19 blocks and 19 headers in the last 10.00s (19 transactions; 19 UTXO-validated blocks; 1.05 parents; 1.05 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:00:18.109+09:00 [INFO ] [ibd-perf] 19 hdrs avg: validate(A,parallelizable) 90.6us | commit(serial) 234.7us [add_block 12.3 + db.write 118.8; held-lock 204.5] | f_serial=0.721 f_reach=0.038 | parallelize-ceiling 1.39x
+2026-08-09 23:00:18.976+09:00 [INFO ] Accepted block 2b0c702a868e6cd91f7be1f2307cbd563f073e0e122cb5e8bda82291ece8b72d9583c496445cbb71c22bd7e2792a1fdb1c1d7c958712d7ae8e461b4e7d78cb3e via relay
+2026-08-09 23:00:20.605+09:00 [INFO ] Accepted 6 blocks ...db65767084ad6c33295f18cac43347a668322d1914b3bcd155f15d07d4f0e665c905b172ddc4d1006ba7faaab3258ac732af589b20dc331d9d1651f1e45b9f80 via relay
+2026-08-09 23:00:22.103+09:00 [INFO ] Accepted 4 blocks ...089309734d2f3805795725b49d05ab820f966eab71e74ee522b73c421a5c5c6ecf5a8ad1b156df3b83c9e923268410edc01477edb1913efd5a02f9916012009e via relay
+2026-08-09 23:00:23.225+09:00 [INFO ] Accepted 4 blocks ...b17c718ffcf0ecd24d00e969c7069c143120ab90468f25f3c77c3f1958859489a40339e948e5a8117939f568c24d865febace90e4083f22c62dbbef723a380c3 via relay
+2026-08-09 23:00:24.882+09:00 [INFO ] Accepted 2 blocks ...2cb3434b094db97648c0d99af9747aab94d3c431c2645772e165e0abdcaf22551406c80f0f4efa4bf798151acca5a31da634054516def5e8864b6cc6d468387e via relay
+2026-08-09 23:00:26.192+09:00 [INFO ] Accepted 6 blocks ...2b3130abbcb3204f5f4410b5c96613b0789a0a0c144239e45edf07f47a5407aabde7e250b0e680d2a9e541db79c03183ed4f00c855b83443777a9008ce58194e via relay
+2026-08-09 23:00:27.353+09:00 [INFO ] Accepted 6 blocks ...4530fd19fba5050aff89826e512b6540ffc740c2e2c72f3e8befb33dcfe78e6cdbf949c21f0c897ed01e0278d8f62bae38d15d3fbbf519c7c532e6220b16bb27 via relay
+2026-08-09 23:00:28.039+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1274 bond=unconfigured active_set=[epoch=12 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:00:28.111+09:00 [INFO ] Processed 31 blocks and 31 headers in the last 10.00s (34 transactions; 31 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.10 TPB; 26660.1 mass)
+2026-08-09 23:00:28.111+09:00 [INFO ] Tx throughput stats: 0.30 u-tps, 100.00% e-tps (in: 0 via RPC, 3 via P2P, out: 3 via accepted blocks)
+2026-08-09 23:00:28.111+09:00 [INFO ] [ibd-perf] 31 hdrs avg: validate(A,parallelizable) 96.6us | commit(serial) 207.2us [add_block 12.6 + db.write 102.2; held-lock 176.0] | f_serial=0.682 f_reach=0.041 | parallelize-ceiling 1.47x
+2026-08-09 23:00:28.659+09:00 [INFO ] Accepted 5 blocks ...9dbc68c21c4b1f948dc620ec9c70bde45a5ad65e7d8835efe1c83069a07f0b33e9dd7f0abacc04fb918fa8ef03307783d0a219223658f3353f0b2ddfce4f5059 via relay
+2026-08-09 23:00:30.602+09:00 [INFO ] Accepted 3 blocks ...625945edac7bed707558783b5c7c5744d4dbe9e51ff61fab3b7b6e9544119867556f00458a1a32dcc89fcb2f26f6253bab5ce4bf3e8c53d2b8988abb4de989d9 via relay
+2026-08-09 23:00:31.762+09:00 [INFO ] Accepted 4 blocks ...dee0542dcef2470d85438d92cc9eef0f931c6d8307ca57e5dfa02c7ab1b955e28e32ebf387cfdbced5803b19169d480c5dae5e9afbe7f934a5842d24e4b4757c via relay
+2026-08-09 23:00:31.849+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:17211
+2026-08-09 23:00:31.851+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:17221
+^SIGTERM - shutting down...
+2026-08-09 23:00:31.853+09:00 [INFO ] WRPC Server stopped on: 127.0.0.1:17232
+2026-08-09 23:00:31.853+09:00 [INFO ] P2P Server stopped: 127.0.0.1:17231
+2026-08-09 23:00:31.853+09:00 [INFO ] GRPC Server stopped on: 127.0.0.1:17230
+2026-08-09 23:00:32.355+09:00 [INFO ] Accepted block 32c25316d8c7a34412d93458c1e2b666e7a30bcac746c185e36fb5ad0fde8e978b7f43d6c3ac1bf8e0b6f70284653b91a14de52c0f3c995120888299178d4830 via relay
+2026-08-09 23:00:32.360+09:00 [INFO ] Kaspad has stopped...
+2026-08-09 23:00:36.876+09:00 [INFO ] kaspad v1.1.0-104a189
+2026-08-09 23:00:36.877+09:00 [INFO ] Application directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2
+2026-08-09 23:00:36.877+09:00 [INFO ] Data directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir
+2026-08-09 23:00:36.877+09:00 [INFO ] Logs directory: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/logs
+2026-08-09 23:00:36.877+09:00 [INFO ] Utxoindex Data directory /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/datadir/utxoindex
+2026-08-09 23:00:36.953+09:00 [INFO ] P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager
+2026-08-09 23:00:36.964+09:00 [INFO ] [UPnP] Attempting to register upnp... (to disable run the node with --disable-upnp)
+2026-08-09 23:00:46.964+09:00 [WARN ] [UPnP] Error adding port mapping: IO error: Resource temporarily unavailable (os error 35)
+2026-08-09 23:00:46.964+09:00 [INFO ] [validator-service] loaded validator signing key from /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/validator.key (validator_id=511f9cae92c3d603383beab1149f738f3f9f453e90a64085c179597ea47562cfcdc4cd1228c3a775f8a81f12f1f7f5d6cde556c90532ba85aeaa9a62af5a930f)
+2026-08-09 23:00:46.964+09:00 [INFO ] [validator-service] funding address: misakadev:qt9zx6cafet2fx9thcf2wcc0ngu9tc9zsxnjn2rkvtvcp9cvgyv6d50zz4jhyu07qnuav3wyqw4k7rgdmex6pkp429462wu23x8y2cgs7jt548aa — send UTXOs here to fund attestation-shard submission
+2026-08-09 23:00:46.964+09:00 [INFO ] [validator-service] equivocation-safety log /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/misaka-devnet/validator-state.json (0 prior epoch(s))
+2026-08-09 23:00:46.965+09:00 [WARN ] [validator-compute] --enable-compute without --compute-worker: using the DEVNET VLT FIXTURE runtime.                      Deterministic, not a model — valid only where the fixture profile is registered.
+2026-08-09 23:00:46.965+09:00 [INFO ] [validator-compute] executor job input: /Users/wata/Downloads/MISAKA-testnet/.misaka-vlt-reorg/node-2/compute-prompt.txt (41 bytes)
+2026-08-09 23:00:46.965+09:00 [INFO ] [validator-compute] devnet fixture: max_tokens pinned to the fixed job shape (15 = 10 prefill + 5 decode, 50 VLT/job); --compute-max-tokens=512 ignored
+2026-08-09 23:00:46.965+09:00 [INFO ] [validator-compute] enabled: runtime=7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d class=8d416f720772b533f43006c4cbdc1effa7fc5d1e3fb7974dfecaa9589f1e2865a6144ef5d8d996e456d64429d6d42d9b32cc2fe98a97c5f08704d43c420c89ed max_tokens=15 auto_challenge=false
+2026-08-09 23:00:46.965+09:00 [INFO ] [validator-compute] fixture quota: 0/1 job(s) certified, 0 slot(s) claimed (plan 7ee20f6e853b2fb413bbbef94f7a6fc8951e82d55efec7c739f2c5267fea6eae7d68b9bf9f29566505ec539068b0677e7a16f833ad18d106f54556d3a6ecce7d:1:15:41)
+2026-08-09 23:00:46.965+09:00 [INFO ] MISAKA node endpoints (network devnet):
+2026-08-09 23:00:46.965+09:00 [INFO ]   P2P:             127.0.0.1:17231   node-to-node only (not RPC)
+2026-08-09 23:00:46.965+09:00 [INFO ]   node-grpc:       127.0.0.1:17230   miner / low-level node RPC
+2026-08-09 23:00:46.965+09:00 [INFO ]   node-wrpc-borsh: 127.0.0.1:17232   validator / wallet / operator
+2026-08-09 23:00:46.965+09:00 [INFO ]   node-wrpc-json:  disabled   explorer / browser
+2026-08-09 23:00:46.965+09:00 [INFO ]   evm-rpc-http:    disabled   Ethereum JSON-RPC (EVM lane)
+2026-08-09 23:00:46.965+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-08-09 23:00:46.966+09:00 [INFO ] GRPC Server starting on: 127.0.0.1:17230
+2026-08-09 23:00:46.966+09:00 [INFO ] P2P Server starting on: 127.0.0.1:17231
+2026-08-09 23:00:46.966+09:00 [INFO ] WRPC Server starting on: 127.0.0.1:17232
+2026-08-09 23:00:46.966+09:00 [INFO ] [validator-service] starting (mode=active, validator_id=511f9cae92c3d603383beab1149f738f3f9f453e90a64085c179597ea47562cfcdc4cd1228c3a775f8a81f12f1f7f5d6cde556c90532ba85aeaa9a62af5a930f, stake-bond=e69ca1686f43bf0fdca9d2d6d4f3c3ac8db2bb62aec2533b43dfb4b9590f1ace2f4097d5518c83652cc877ffeb9df120ec18b1150a9c0bcf3238742c35fa07ca:0)
+2026-08-09 23:00:46.966+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17211 for protocol version 102
+2026-08-09 23:00:46.966+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17211 (outbound: 1)
+2026-08-09 23:00:46.967+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:17221 for protocol version 102
+2026-08-09 23:00:46.967+09:00 [INFO ] P2P Connected to outgoing peer 127.0.0.1:17221 (outbound: 2)
+2026-08-09 23:00:46.968+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:64276 for protocol version 102
+2026-08-09 23:00:46.968+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:64276 (inbound: 1)
+2026-08-09 23:00:50.170+09:00 [INFO ] Accepted block 06187a68b075748ab8fbd77f60232898c7a07a3d152c0a7e60e313d2e19afb76926c91e54061e795dd4f1af49971cdd31f9f0361d1620e17ef91be9411ca6bd4 via relay
+2026-08-09 23:00:51.189+09:00 [INFO ] Accepted block 3ed2de328d8f161f5fbd00b0b2364423c7fc48db7550fcc39553ed4406390e737daeeb5b243aa1a440fead36d86e59894d757e239fea7b2be61689614350d663 via relay
+2026-08-09 23:00:52.598+09:00 [INFO ] Accepted block 669f1eb826ace05f398631d294cfe2597b852dca83798221951f19cca54784328a9948827733f2dbbf9bae7bcf71de3a69e1c78ea88ff79a0a110e706ebfb39a via relay
+2026-08-09 23:00:54.115+09:00 [INFO ] Accepted block 52d0f0cb315b0a99e94d1f0aa53d9ec5cbcd98deb9d612a4cca88787edd05f6e721f0e3d3ad689e3123ca408cb41bb1c964f68f5cd2afaf28d953e68f22d9f5a via relay
+2026-08-09 23:00:55.223+09:00 [INFO ] Accepted block 423cb432c22520d9398062e85d18a2922e8059234140dcff53600d2587a95a174182efc545eafa881182505e84c3728630e2c5540a38816c5c3065414744c99f via relay
+2026-08-09 23:00:56.967+09:00 [INFO ] Processed 6 blocks and 6 headers in the last 10.00s (6 transactions; 6 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:00:56.967+09:00 [INFO ] [ibd-perf] 6 hdrs avg: validate(A,parallelizable) 544.3us | commit(serial) 207.4us [add_block 10.3 + db.write 38.7; held-lock 175.8] | f_serial=0.276 f_reach=0.014 | parallelize-ceiling 3.62x
+2026-08-09 23:00:57.044+09:00 [INFO ] Accepted block e08e40f0ddab41e3f6c9dd7046273079ae257fc82f4783070135c8c5efdbf44b048a8fc93eeca95625d22c80d91dd6be06f530af552f97c989510fc7a1cf475b via relay
+2026-08-09 23:00:58.808+09:00 [INFO ] Accepted block 07e6849234782cf98c76944205f88be6e49bbef6a0ab3ae5152cc2f7f36c4f0d9824090f4afdbd42b210f00caed5cc65d16d2a55fd0120b5b986128b36ff8037 via relay
+2026-08-09 23:01:00.146+09:00 [INFO ] Accepted block e116a24eb1d1a2df65a9d120c0960d4eb9425ba069932645d7a8f6a80826df638cbb4131c5f2a9d103ac3c211b7e024e05e1b511a74bd1cd31cc6e7fa03514a3 via relay
+2026-08-09 23:01:02.496+09:00 [INFO ] Accepted block 0b5b9c8e64b1e9140cc44a6bcc59c6d808a3a26000253599352c63d7d8e4afdbcc30333c58a55a9b998b1d7a391ef1ee72157a91bdf05444c9ee94848cf2c20e via relay
+2026-08-09 23:01:04.269+09:00 [INFO ] Accepted block d4a925c59b0dd7d5905d685580e4ff1cd10ef2889083945f3822dd3cc64126089ff6c6e44bb816025b136734d5c75493e136a61193779bb8b4c90653a2f1a117 via relay
+2026-08-09 23:01:05.510+09:00 [INFO ] Accepted block 0f4a093b1956e30a501859b1167f794948c771eef0a4229285835069928d00f968f7828937afce236d2ec8d0bec4744bc7e11e7132820ecbeb5128e9a73ed813 via relay
+2026-08-09 23:01:06.969+09:00 [INFO ] Accepted block d2eb4b780361d281f5380ec32d827e7f974544a4d2f62b10c377adc66c7f2e354e75bf6a72e38bf40d3f050eea751a17910e9a890010f7d72a99a95441f6bb80 via relay
+2026-08-09 23:01:06.969+09:00 [INFO ] Processed 6 blocks and 6 headers in the last 10.00s (6 transactions; 6 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:01:06.969+09:00 [INFO ] [ibd-perf] 6 hdrs avg: validate(A,parallelizable) 85.7us | commit(serial) 138.6us [add_block 10.1 + db.write 39.1; held-lock 103.3] | f_serial=0.618 f_reach=0.045 | parallelize-ceiling 1.62x
+2026-08-09 23:01:08.197+09:00 [INFO ] Accepted block ed1d7b3c75f236eb9fca1589df4a115bd078d73bde6ea276e408aede0b98c0f7b07b5a97a7a98d324a063645747fb9fbe852d914e70582e156bacc492b89427b via relay
+2026-08-09 23:01:09.966+09:00 [INFO ] Accepted block f97af8477fa6a63f1def1d9cfee3a3b9b7b1a32fdd72a743aee69f8c8ce6633cf446f6196196b387f004163b2e9ff056e53efb7a4ea5fd589898afd4eb29d58d via relay
+2026-08-09 23:01:10.472+09:00 [INFO ] [vlt-shadow] sink_daa=1299 0 validator(s) with credit; 0/12 epoch(s) would reach quorum; newest epoch Some(11): W(E)=0 signed=0 snapshot_root=61c8651142648fd294253ed5afe5e837c0270f83d402406c200d71772527840c3c99f3f93de57ced731fff9d8eefe737e4c383fb2fd1c4946041ff5e85d5f1b7 — the weight fence is at 18446744073709551615
+2026-08-09 23:01:10.474+09:00 [WARN ] [vlt-state] none -> shadow at daa=1299
+2026-08-09 23:01:11.476+09:00 [INFO ] Accepted block a0f848c7bf937890af5a12bc873744ec79797ad999ad6411d3a541ed83fc3e9ff5bc4ba834cdcff92f4bfc17ece9f619a441f8f23b76b7a7a719161d326c7eff via relay
+2026-08-09 23:01:12.691+09:00 [INFO ] Accepted block 32cb2a2e394a202d42dd84acb124bdf5e0c385f9422b299d8b2b9116fb0fbe9f17e576984c0e7b8c4f3d2671dc5dcfd52b7df74ac0f5136a6e08a17501a966fd via relay
+2026-08-09 23:01:14.066+09:00 [INFO ] Accepted block ebb8eff994d7ef26720633fcdf31991dff8c2dfe322aa65df6d972c070ac84e9f2c6ccabbd00ccaa142524b8b5d00aff582fd86244817cc7c5c1540887db56e2 via relay
+2026-08-09 23:01:15.199+09:00 [INFO ] Accepted block 30a94ad790f23960c3af318e963e19578c51c06b4af672d28dce8a24694d7a66c9cb28819dc960d21a30b941206394cc254bd40063a016fb5cc28c2ca692e23f via relay
+2026-08-09 23:01:16.565+09:00 [INFO ] Accepted block 5987ed9cfce3e98c94deee86ca39768186505585a985abeecd48c0137d21cfb4658f5419da4e8c424ff019bb3436df174fbc61e3f6a38e7e1adc00c2288f4c28 via relay
+2026-08-09 23:01:16.969+09:00 [INFO ] Processed 7 blocks and 7 headers in the last 10.00s (7 transactions; 7 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:01:16.969+09:00 [INFO ] [ibd-perf] 7 hdrs avg: validate(A,parallelizable) 88.0us | commit(serial) 161.6us [add_block 11.5 + db.write 52.7; held-lock 124.6] | f_serial=0.647 f_reach=0.046 | parallelize-ceiling 1.54x
+2026-08-09 23:01:16.970+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 0 via RPC, 1 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:01:16.996+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1303 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:01:16.998+09:00 [INFO ] [validator-service] compute: declared capability for the registered profile, valid to DAA 865303
+2026-08-09 23:01:18.481+09:00 [INFO ] Accepted block 6afcae60085ebffccba801bafe7ecd7de3ad3d6a46402da1d3c12c620a85e62ec18d49cf4ac36207cf5403d088310e34c8bff1dc88726cdd1d47e14f6c22db30 via relay
+2026-08-09 23:01:19.661+09:00 [INFO ] Accepted block 6be0bc1f3317abc2e7e0baa0cb4be5d31012f822abc966395b3344dcb38bc221711004ceda4a2567f2934ae7b74a08b0ac9642646fd4ad53df3122baaeded2c5 via relay
+2026-08-09 23:01:20.989+09:00 [INFO ] Accepted block fc6b1bf68d2f385020ab421a308b4ebe8176e2a864b9911c0d1ceabef7bc1fce1de75ca35ee517ff728a55ae0f1286d0fd3c0c53d643dccb14e0c88b72aea007 via relay
+2026-08-09 23:01:22.049+09:00 [INFO ] Accepted block a925b48a38be3b0683b580509cad5ecb57429dbb9dd26ded2c8f26ba5bb37f177f76cda1b28c39476e6ee7c70edd8cd2c5f72ea4294972104a2352afb8f19470 via relay
+2026-08-09 23:01:23.843+09:00 [INFO ] Accepted block de11f6c5bcc14306263ea63a2ee3e463303095ca7e2e5037137c04c7455dc0c32eed36bca1f0c7459b34c684ebd14531740cecc8be749ec85913752708cd91bb via relay
+2026-08-09 23:01:25.128+09:00 [INFO ] Accepted block dba22f5a88467a77cc170e65e93221bf92022534682df2117c9c676d2ffdc59e3cfed42fa6ddfab9cf82e93f78d1866f983cf1ecda9b3dc9790504e9acfbf2b0 via relay
+2026-08-09 23:01:26.325+09:00 [INFO ] Accepted block 73de286dcc594d12373f56ad01f937bcbbeb486b93c4e119e5d7ab41e8604fc038beb1b9d50a50aad087c565885469968ae281fc61ac9dce48a31ea1569b73bc via relay
+2026-08-09 23:01:26.972+09:00 [INFO ] Processed 8 blocks and 8 headers in the last 10.00s (13 transactions; 8 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.62 TPB; 31187.0 mass)
+2026-08-09 23:01:26.972+09:00 [INFO ] [ibd-perf] 8 hdrs avg: validate(A,parallelizable) 85.7us | commit(serial) 151.0us [add_block 10.8 + db.write 50.7; held-lock 115.4] | f_serial=0.638 f_reach=0.046 | parallelize-ceiling 1.57x
+2026-08-09 23:01:26.997+09:00 [INFO ] Tx throughput stats: 0.50 u-tps, 100.00% e-tps (in: 0 via RPC, 4 via P2P, out: 5 via accepted blocks)
+2026-08-09 23:01:27.590+09:00 [INFO ] Accepted block 8c09d93d211bf22f180566899e8d6fcf0c00eb59cf1e410a96570ba3f74bb95770b67608e47f4ea88266bfd69ab79b62db4ba9f7bff6be9f0e9a13ead659e61e via relay
+2026-08-09 23:01:29.078+09:00 [INFO ] Accepted block 77aa327abead97a8812095965df77bc7ec19a77a6d5af9d511762bd18bab0577ea3b32829d6929622651dd4065a6a389e671980c348f981b715cd156e92182a5 via relay
+2026-08-09 23:01:30.189+09:00 [INFO ] Accepted block bdd06dabc91fa6800519e07d910f6d597921946e986fc69f3034c98f67e58a20678853fbf57415e8f6ad97e0009cab850353d35e06cdb703a63d5e897c2b3b3f via relay
+2026-08-09 23:01:31.720+09:00 [INFO ] Accepted block 0019c2d35248faf9042842004d841178f822276293d497f0f12bc39b821cdf1fdc40e322054341abaefbdd1cff9fc34a44a2e66e5ff19aba139830219b4a8b23 via relay
+2026-08-09 23:01:33.554+09:00 [INFO ] Accepted block 6f265b5207e8c7e08749da4229c4b859873ebc98d7e3f2ca30395ac3e7ec25f969035cdfbe7cb1ed957a1348655e3e884514a6d6e6a871ad73da75ae19927207 via relay
+2026-08-09 23:01:35.111+09:00 [INFO ] Accepted block d7fc0516d6a631b0b43a22743403998e1ad79613c4366915197803644b41721bfc5c9075583c399fc7bd3aaff4e9ac4e738ca0358b28bdbc9f040b2ffc491fdc via relay
+2026-08-09 23:01:36.973+09:00 [INFO ] Processed 6 blocks and 6 headers in the last 10.00s (6 transactions; 6 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:01:36.973+09:00 [INFO ] [ibd-perf] 6 hdrs avg: validate(A,parallelizable) 86.2us | commit(serial) 449.5us [add_block 11.7 + db.write 51.2; held-lock 188.7] | f_serial=0.839 f_reach=0.022 | parallelize-ceiling 1.19x
+2026-08-09 23:01:37.603+09:00 [INFO ] Accepted block 5a92a338e52a1438bf58ac95ee4f9c38c7f2652255e604b720be663625c03a4412f13b4795a790b5857b1f7515e95cada4e1f25e15ef6246c5a9a9159dd70131 via relay
+2026-08-09 23:01:41.446+09:00 [INFO ] P2P, incoming stream ended from peer 127.0.0.1:64276
+2026-08-09 23:01:47.000+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1317 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:01:47.000+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 0 via RPC, 1 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:01:47.003+09:00 [INFO ] [validator-service] compute: committed to job 7c40ef2abbdc91302b9248aa28657db7c6442d9db5813e8cdb5bb1b9f81e501ef2bdb9097da01ab91faa5dc223059aaa7584c4ed6d39c53955ac55178c8fd58f (63 byte input); awaiting the sortition beacon
+2026-08-09 23:01:57.002+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 0 via RPC, 1 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:02:17.006+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1317 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:02:47.012+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1317 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:03:17.019+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1317 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:03:35.661+09:00 [INFO ] Registering p2p flows for peer 127.0.0.1:64455 for protocol version 102
+2026-08-09 23:03:35.661+09:00 [INFO ] P2P Connected to incoming peer 127.0.0.1:64455 (inbound: 1)
+2026-08-09 23:03:36.665+09:00 [INFO ] Accepted block 4e79f99a3f398ab2e46c3ab88af756cbc7e08fb47ea74902fd6b85f3cfcb80d4092289e12c3849c5512080b5fd563df0a318e68effe7ef228ecf66ff0efa0707 via relay
+2026-08-09 23:03:36.665+09:00 [INFO ] Orphaned 59 block(s) ...4f8dcfb1387d22f1c3d7d1a0dd571b9b385f0d9e77be0cf95e404d5de46581e19fc6a1ed3d695d9562cf5b826f028a1755238fc3cb421fe635897c6856696454 and queued 59 missing roots
+2026-08-09 23:03:36.665+09:00 [INFO ] Unorphaned 59 block(s) ...a83c22ae4f8656a3091f8cb3d771f567dcf6ccd785a9be9dd362f99b7a30de1f954079f6b993ab839ffa941348885b606847096faaf96f33669d34043c6e6740
+2026-08-09 23:03:36.995+09:00 [INFO ] Processed 60 blocks and 60 headers in the last 10.00s (60 transactions; 60 UTXO-validated blocks; 1.00 parents; 1.00 mergeset; 1.00 TPB; 0.0 mass)
+2026-08-09 23:03:36.995+09:00 [INFO ] [ibd-perf] 60 hdrs avg: validate(A,parallelizable) 80.0us | commit(serial) 195.1us [add_block 6.5 + db.write 35.8; held-lock 101.1] | f_serial=0.709 f_reach=0.024 | parallelize-ceiling 1.41x
+2026-08-09 23:03:37.015+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 0 via RPC, 2 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:03:47.018+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 0 via RPC, 1 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:03:47.026+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1377 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:03:47.041+09:00 [INFO ] [validator-service] submitted attestation shard tx 20b5dfc56e6e6f9b4e245844394256c2a797dd1f3d22b535000b1e10412669255b6ea95182206c67bed317ff8bd679791924db1f54251231ffd66b615832331a for epoch 12
+2026-08-09 23:03:57.020+09:00 [INFO ] Tx throughput stats: 0.00 u-tps, 100.00% e-tps (in: 1 via RPC, 0 via P2P, out: 0 via accepted blocks)
+2026-08-09 23:04:17.049+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1377 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:04:47.058+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1377 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)
+2026-08-09 23:05:17.094+09:00 [INFO ] [validator-service] heartbeat: mode=active sink_daa=1377 bond=Active(active=true) active_set=[epoch=13 is_active_validator=true (active_validators=4)] dns_overlay=configured (stage=Active, dns_confirmed=false)

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "validator_id": "511f9cae92c3d603383beab1149f738f3f9f453e90a64085c179597ea47562cfcdc4cd1228c3a775f8a81f12f1f7f5d6cde556c90532ba85aeaa9a62af5a930f",
+  "bond_outpoint": {
+    "transactionId": "e69ca1686f43bf0fdca9d2d6d4f3c3ac8db2bb62aec2533b43dfb4b9590f1ace2f4097d5518c83652cc877ffeb9df120ec18b1150a9c0bcf3238742c35fa07ca",
+    "index": 0
+  },
+  "records": {
+    "12": {
+      "epoch": 12,
+      "target_hash": "52d0f0cb315b0a99e94d1f0aa53d9ec5cbcd98deb9d612a4cca88787edd05f6e721f0e3d3ad689e3123ca408cb41bb1c964f68f5cd2afaf28d953e68f22d9f5a",
+      "target_daa_score": 1288,
+      "signature_fingerprint": "a39a829b87cf3fb504569639bbaae8e92a7f6697b2e2b306d7e5f0c3cc72cb030c81246890057045ddd348c35e6fcde830fc3f54a91e7e18357d6b94b0a77cdc"
+    }
+  }
+}
