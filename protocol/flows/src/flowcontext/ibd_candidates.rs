@@ -161,6 +161,9 @@ pub struct IbdCandidate {
     /// The virtual selected parent header this peer advertised. Kept so a handoff can start an IBD
     /// directly instead of waiting for the peer to relay a block.
     pub header: Arc<Header>,
+    /// The tip work claimed in the summary, retained through every validation state so the
+    /// investigation trigger can still read it after the candidate has been proof-validated.
+    pub claimed_tip: ClaimedBlueWork,
     /// Every peer offering this chain. More than one is a liveness benefit — a source to fail over
     /// to — and **not** a vote: N peers is N sybils just as easily.
     pub sources: Vec<PeerKey>,
@@ -184,6 +187,12 @@ impl IbdCandidate {
             CandidateValidation::Observed | CandidateValidation::ProofRequested { .. } => Some((0, BlueWorkType::from_u64(0))),
             CandidateValidation::Rejected { .. } => None,
         }
+    }
+
+    /// The tip work this peer claimed in its summary. A claim: it decides what to investigate and
+    /// never what to adopt.
+    pub fn claimed_tip_blue_work(&self) -> Option<BlueWorkType> {
+        Some(ClaimedBlueWork::for_priority_only(&self.claimed_tip))
     }
 
     /// The only number about this candidate this node derived itself.
@@ -257,6 +266,7 @@ impl IbdCandidateRegistry {
             IbdCandidate {
                 id,
                 header: Arc::new(header.clone()),
+                claimed_tip: claimed,
                 sources: vec![peer],
                 validation: CandidateValidation::SummaryReceived { claimed_blue_work: claimed },
                 proof_hash: None,

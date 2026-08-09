@@ -413,18 +413,26 @@ impl IbdFlow {
             return None;
         }
 
-        let (verified_blue_work, proof_hash) = {
+        let (verified_blue_work, claimed_tip_blue_work, proof_hash) = {
             let registry = self.ctx.ibd_candidates().read();
             let candidate = registry.get(&reserved.candidate_id)?;
+            let claimed = candidate.claimed_tip_blue_work()?;
             match candidate.validation {
-                CandidateValidation::ProofValidated { verified_blue_work } => (verified_blue_work, candidate.proof_hash?),
+                CandidateValidation::ProofValidated { verified_blue_work } => {
+                    (Some(verified_blue_work), claimed, candidate.proof_hash?)
+                }
                 _ => return None,
             }
         };
 
         let session = self.ctx.consensus().session().await;
         let provisional_pruning_point = session.async_pruning_point().await;
-        let provisional_blue_work = session.async_get_header(provisional_pruning_point).await.ok().map(|h| h.blue_work)?;
+        let _ = provisional_pruning_point;
+        // The incumbent's TIP work, not its pruning point: the trigger asks whether the challenger
+        // claims to beat the chain actually held, and pruning-point work cannot tell two branches of
+        // comparable depth apart.
+        let provisional_tip = session.async_get_headers_selected_tip().await;
+        let provisional_blue_work = session.async_get_header(provisional_tip).await.ok().map(|h| h.blue_work)?;
         let descends_from_checkpoint = match self.ctx.config.trusted_checkpoint {
             Some(cp) => Some(
                 session
@@ -445,6 +453,7 @@ impl IbdFlow {
         let candidate = VerifiedCandidate {
             id: reserved.candidate_id,
             verified_blue_work,
+            claimed_tip_blue_work,
             proof_hash,
             genesis_hash: self.ctx.config.genesis.hash,
             consensus_params_id: self.ctx.config.params.consensus_params_id(),
@@ -512,9 +521,30 @@ impl IbdFlow {
             );
             return;
         }
+        // What triggers an investigation is the peer's CLAIM about its tip, measured against this
+        // node's own tip. Not the proof's pruning-point work.
+        //
+        // Pruning-point work is a function of depth, not of branch: two histories of comparable
+        // length reach almost the same figure there. Measured across two real hosts, the challenger
+        // and the incumbent came out exactly Equal — 80289507 against 80289507 — so a rule that
+        // required strict superiority at this point could never fire, and the node fail-closed to
+        // quarantine instead of converging.
+        //
+        // Using the claim here is what claims are for: deciding what to look at. It decides nothing
+        // about adoption. `verified_blue_work` is still required to be present — the proof must have
+        // validated — but the number that settles which chain wins is computed later, at the commit
+        // barrier, from headers this node validated to the tip itself.
+        let claimed_tip_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
+            Some(CandidateValidation::ProofValidated { .. }) => {
+                self.ctx.ibd_candidates().read().get(&id).and_then(|c| c.claimed_tip_blue_work())
+            }
+            _ => None,
+        };
+        let Some(claimed_tip_work) = claimed_tip_work else { return };
+
         let session = self.ctx.consensus().session().await;
-        let our_pruning_point = session.async_pruning_point().await;
-        let ours = session.async_get_header(our_pruning_point).await.ok().map(|h| h.blue_work);
+        let our_tip = session.async_get_headers_selected_tip().await;
+        let ours = session.async_get_header(our_tip).await.ok().map(|h| h.blue_work);
         drop(session);
 
         let Some(ours) = ours else { return };
@@ -524,16 +554,20 @@ impl IbdFlow {
             Some(id),
             Some(self.router.to_string()),
             self.ctx.chain_participation().state().as_str(),
-            describe_comparison(verified_blue_work, ours),
+            format!(
+                "trigger (claimed, decides nothing): {} | proof-backed pruning-point work {}",
+                describe_comparison(claimed_tip_work, ours),
+                verified_blue_work
+            ),
         );
-        if verified_blue_work <= ours {
+        if claimed_tip_work <= ours {
             record_stage(
                 RecoveryStage::Rejected,
                 None,
                 Some(id),
                 Some(self.router.to_string()),
                 self.ctx.chain_participation().state().as_str(),
-                format!("not strictly superior: {}", describe_comparison(verified_blue_work, ours)),
+                format!("not worth investigating: {}", describe_comparison(claimed_tip_work, ours)),
             );
             return;
         }
@@ -717,6 +751,46 @@ impl IbdFlow {
         // tolerance `determine_ibd_type` already applies — is the same history whatever its tip. A
         // candidate rooted somewhere staging has never heard of is a genuinely different history,
         // and that is what must not be committed past.
+        // A recovery IBD is an investigation, and this is where it is judged.
+        //
+        // Both figures are now this node's own: the challenger's, from headers it validated to the
+        // tip in staging, and the incumbent's, from the chain it is holding. That is the comparison
+        // pruning-point work could not make — measured across two real hosts, the two branches were
+        // exactly Equal there, and this node quarantined rather than converging.
+        //
+        // Losing is an ordinary outcome, not an impasse: staging is cancelled and the incumbent
+        // stays. Nothing was adopted, so there is nothing to be uncertain about, and quarantining
+        // here would punish the node for having checked.
+        if self.active_recovery_permit.is_some() {
+            let incumbent = {
+                let session = self.ctx.consensus().session().await;
+                let tip = session.async_get_headers_selected_tip().await;
+                session.async_get_header(tip).await.ok().map(|h| h.blue_work)
+            };
+            if let Some(incumbent) = incumbent {
+                record_stage(
+                    RecoveryStage::CandidateCompared,
+                    None,
+                    None,
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    format!("recovery verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent)),
+                );
+                if staged_blue_work <= incumbent {
+                    warn!(
+                        "Investigated the chain offered by {} and it does not beat the one already held ({}). Keeping the \
+                         incumbent; nothing was adopted.",
+                        self.router,
+                        describe_comparison(staged_blue_work, incumbent)
+                    );
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "recovery candidate from {} is not strictly better once validated to the tip",
+                        self.router
+                    )));
+                }
+            }
+        }
+
         // Refuse candidates whose source never delivered a proof, before counting what is still
         // unresolved. Otherwise "advertise a chain and go quiet" would hold up every commit — the
         // denial of service that fail-closed invites if it has no deadline.

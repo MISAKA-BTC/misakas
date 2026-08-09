@@ -51,7 +51,12 @@ pub struct ChainReviewState {
 pub struct VerifiedCandidate {
     pub id: CandidateId,
     /// Blue work at the candidate's pruning point, established by its validated pruning proof.
-    pub verified_blue_work: BlueWorkType,
+    /// Proof-backed work at the candidate's pruning point. Establishes that the chain is real; it
+    /// is deliberately NOT what decides adoption, because pruning-point work is a function of depth
+    /// rather than of branch and cannot separate two histories of comparable length.
+    pub verified_blue_work: Option<BlueWorkType>,
+    /// The tip work the peer claims. Orders investigation; decides nothing.
+    pub claimed_tip_blue_work: BlueWorkType,
     /// Digest of the proof that established it, so a permit cannot be reused for a different proof.
     pub proof_hash: Hash,
     pub genesis_hash: BlockHash,
@@ -60,7 +65,12 @@ pub struct VerifiedCandidate {
     pub descends_from_checkpoint: Option<bool>,
 }
 
-/// Authority to cross the provisional pruning point exactly once, for exactly this chain.
+/// Authority to **investigate** a chain by syncing it across the provisional pruning point, exactly
+/// once, for exactly this chain.
+///
+/// Not authority to adopt it. Everything a permit allows is reversible by cancelling staging; the
+/// adoption decision happens afterwards, at the commit barrier, on work this node validated to the
+/// tip itself. That ordering is the point — see [`authorize_bootstrap_recovery`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootstrapRecoveryPermit {
     pub candidate_id: CandidateId,
@@ -81,8 +91,12 @@ pub enum RecoveryError {
     WrongConsensusParams,
     /// Does not descend from the operator's trusted checkpoint.
     CheckpointIncompatible,
-    /// Not strictly better than what is provisionally held. Equality keeps the incumbent.
-    NotStrictlySuperior,
+    /// Not worth investigating: the chain does not even claim to beat what is held. A claim decides
+    /// what to look at and nothing else, so this is the cheapest possible filter, not a verdict.
+    NotWorthInvestigating,
+    /// Its pruning proof has not been validated, so there is nothing to distinguish it from a
+    /// fabricated chain and no reason to spend a header sync on it.
+    ProofNotValidated,
     /// No reservation, or one naming a different chain.
     NoReservation,
     SwitchLimitReached,
@@ -92,6 +106,8 @@ pub enum RecoveryError {
 pub struct RecoveryRequest<'a> {
     pub state: ChainReviewState,
     pub candidate: VerifiedCandidate,
+    /// Tip work of the chain currently held. Compared against the challenger's CLAIM to decide
+    /// whether investigating is worthwhile.
     pub provisional_blue_work: BlueWorkType,
     pub local_genesis: BlockHash,
     pub local_consensus_params_id: Hash,
@@ -134,9 +150,24 @@ pub fn authorize_bootstrap_recovery(request: RecoveryRequest<'_>) -> Result<Boot
         }
     }
 
-    // Strictly. Equal work is not a reason to abandon what is already synced.
-    if request.candidate.verified_blue_work <= request.provisional_blue_work {
-        return Err(RecoveryError::NotStrictlySuperior);
+    // The chain must be real: a validated pruning proof, so a header sync is not spent on something
+    // fabricated.
+    if request.candidate.verified_blue_work.is_none() {
+        return Err(RecoveryError::ProofNotValidated);
+    }
+
+    // And it must at least CLAIM to beat what is held. A claim decides what to look at, never what
+    // to adopt — the adoption decision happens at the commit barrier, on tip work this node
+    // validated for itself.
+    //
+    // Superiority is deliberately not required here. Requiring it at permit time meant comparing
+    // pruning-point work, which is a function of depth rather than of branch: measured across two
+    // real hosts the challenger and the incumbent came out exactly Equal, so no permit could ever
+    // issue and the node fail-closed to quarantine instead of converging. Verified tip work is what
+    // separates them, and it cannot be obtained without syncing the chain — which is what the
+    // permit authorises.
+    if request.candidate.claimed_tip_blue_work <= request.provisional_blue_work {
+        return Err(RecoveryError::NotWorthInvestigating);
     }
 
     // The reservation is what makes this a handoff rather than a free-for-all; a permit without one
@@ -192,7 +223,8 @@ mod tests {
     fn candidate() -> VerifiedCandidate {
         VerifiedCandidate {
             id: CandidateId { pruning_point: bhash(10), virtual_selected_parent: bhash(11) },
-            verified_blue_work: work(500),
+            verified_blue_work: Some(work(500)),
+            claimed_tip_blue_work: work(500),
             proof_hash: hash(99),
             genesis_hash: bhash(LOCAL_GENESIS),
             consensus_params_id: hash(LOCAL_PARAMS),
@@ -268,24 +300,48 @@ mod tests {
     fn rules_are_checked_before_quality() {
         let mut wrong_genesis = candidate();
         wrong_genesis.genesis_hash = bhash(777);
-        wrong_genesis.verified_blue_work = work(u64::MAX);
+        wrong_genesis.claimed_tip_blue_work = work(u64::MAX);
         assert_eq!(authorize_bootstrap_recovery(request(reviewing(), wrong_genesis)), Err(RecoveryError::WrongGenesis));
 
         let mut wrong_params = candidate();
         wrong_params.consensus_params_id = hash(777);
-        wrong_params.verified_blue_work = work(u64::MAX);
+        wrong_params.claimed_tip_blue_work = work(u64::MAX);
         assert_eq!(authorize_bootstrap_recovery(request(reviewing(), wrong_params)), Err(RecoveryError::WrongConsensusParams));
     }
 
     #[test]
-    fn superiority_must_be_strict() {
+    fn a_chain_that_does_not_even_claim_to_win_is_not_investigated() {
+        // The cheapest filter, and the only thing a claim is allowed to decide. Adoption is settled
+        // later, at the commit barrier, on tip work this node validated itself.
         let mut equal = candidate();
-        equal.verified_blue_work = work(100);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), equal)), Err(RecoveryError::NotStrictlySuperior));
+        equal.claimed_tip_blue_work = work(100);
+        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), equal)), Err(RecoveryError::NotWorthInvestigating));
 
         let mut worse = candidate();
-        worse.verified_blue_work = work(99);
-        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), worse)), Err(RecoveryError::NotStrictlySuperior));
+        worse.claimed_tip_blue_work = work(99);
+        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), worse)), Err(RecoveryError::NotWorthInvestigating));
+    }
+
+    #[test]
+    fn an_unproven_chain_is_never_investigated() {
+        // A header sync is expensive. Requiring a validated pruning proof first is what stops a
+        // fabricated chain from buying one.
+        let mut unproven = candidate();
+        unproven.verified_blue_work = None;
+        assert_eq!(authorize_bootstrap_recovery(request(reviewing(), unproven)), Err(RecoveryError::ProofNotValidated));
+    }
+
+    #[test]
+    fn pruning_point_work_no_longer_gates_the_permit() {
+        // The regression this ordering exists to fix: across two real hosts the challenger and the
+        // incumbent had IDENTICAL pruning-point work (80289507 each), because that figure follows
+        // depth rather than branch. Gating on it meant no permit could issue and the node
+        // quarantined instead of converging. A candidate whose pruning-point work merely ties must
+        // still be investigable.
+        let mut tied = candidate();
+        tied.verified_blue_work = Some(work(100));
+        tied.claimed_tip_blue_work = work(101);
+        assert!(authorize_bootstrap_recovery(request(reviewing(), tied)).is_ok());
     }
 
     #[test]

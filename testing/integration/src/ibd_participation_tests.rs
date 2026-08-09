@@ -565,7 +565,7 @@ const QUALIFYING_REPETITIONS: usize = 3;
 /// fresh data directories, fresh link.
 async fn handoff_round_over_wan(tag: &str) -> bool {
     let overrides = write_shallow_pruning_params(tag);
-    let (mut light, light_client, _l, _ls) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut light, _light_client, _l, _ls) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
     let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
     let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
 
