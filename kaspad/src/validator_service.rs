@@ -12,7 +12,7 @@
 //! behavior is unchanged; `Observer`/`Standby` modes never submit. The DNS overlay
 //! reorg gate itself remains dormant until activated per-network.
 
-use crate::compute::{ComputeConfig, ComputeInflight, ComputeRole, capability_expiry_to_declare};
+use crate::compute::{ComputeConfig, ComputeInflight, ComputeRole, capability_expiry_to_declare, new_job_input};
 use async_trait::async_trait;
 use kaspa_addresses::Prefix;
 use kaspa_consensus_core::dns_finality::{
@@ -939,6 +939,9 @@ impl ValidatorService {
 
     /// Publish the phase-1 commitment for a new job: the job id, and the input a verifier will
     /// replay. Both must be on chain before the beacon that draws the committee exists.
+    ///
+    /// The committed input is [`new_job_input`]'s, not the configured prompt itself — see there for
+    /// why a node that committed to the same bytes twice would be paid for one of them.
     async fn submit_commitment(
         &self,
         key: &ValidatorKey,
@@ -947,14 +950,24 @@ impl ValidatorService {
         prompt: &[u8],
         now_daa: u64,
     ) {
-        let job_id = job_spec_id(&role.job_spec(prompt));
+        let input = new_job_input(prompt, now_daa);
+        let job_id = job_spec_id(&role.job_spec(&input));
+        let input_for_build = input.clone();
         let build = |funding_outpoint, funding: &UtxoEntry, fee| {
-            key.build_commitment_tx(&self.config.network_id, job_id, prompt.to_vec(), bond_outpoint, funding_outpoint, funding, fee)
+            key.build_commitment_tx(
+                &self.config.network_id,
+                job_id,
+                input_for_build.clone(),
+                bond_outpoint,
+                funding_outpoint,
+                funding,
+                fee,
+            )
         };
-        let payload_bytes = COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES + prompt.len();
+        let payload_bytes = COMPUTE_COMMITMENT_BASE_PAYLOAD_BYTES + input.len();
         if self.build_and_submit_overlay_tx("commitment", payload_bytes, false, build).await.is_some() {
             self.compute_inflight.lock().unwrap().note_commitment(now_daa);
-            info!("[{VALIDATOR}] compute: committed to job {job_id} ({} byte input); awaiting the sortition beacon", prompt.len());
+            info!("[{VALIDATOR}] compute: committed to job {job_id} ({} byte input); awaiting the sortition beacon", input.len());
         }
     }
 

@@ -363,6 +363,38 @@ pub fn job_spec_for(entry: &ModelCostEntry, input: &[u8], max_tokens: u32) -> Ll
     }
 }
 
+/// What [`new_job_input`] appends to the configured prompt, and the widest it can get: the tag,
+/// the 20 digits of `u64::MAX`, and the closing bracket.
+const JOB_NONCE_TAG: &[u8] = b"\n[misaka-job@daa:";
+pub const JOB_NONCE_MAX_BYTES: usize = JOB_NONCE_TAG.len() + 20 + 1;
+
+/// The input bytes for a **new** job over this node's configured prompt.
+///
+/// One executor is credited for one `job_id` exactly once: `aggregate_compute_credits` dedups on
+/// `(validator_id, job_id)` so that replaying a certificate — which carries perfectly valid
+/// signatures — cannot mint twice. And `job_id` is `H(S_j)`, a pure function of the input.
+///
+/// So a node that committed to the same bytes on every cycle would be credited for its first job
+/// and then spend GPU time, two transaction fees and its verifiers' replays on jobs consensus had
+/// already counted, forever, while every log line reported a certified job and the quota counted
+/// up. The failure is entirely silent from the node's side — the certificates are accepted; they
+/// are simply not *added*. A quota of 8 would have been worth 50 VLT, not 400.
+///
+/// The DAA score is the discriminator because it needs no local state to survive a restart: at
+/// certificate time the spec is re-derived from the input the commitment published on chain, so
+/// nothing here has to be remembered. Two of this node's jobs cannot share one score — the cycle
+/// originates at most one commitment per [`RESUBMIT_GRACE_BLOCKS`], and a commitment cannot even be
+/// certified until the *next* epoch's beacon exists — so the sequence is distinct by construction
+/// rather than by being unlikely to repeat.
+pub fn new_job_input(prompt: &[u8], now_daa: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(prompt.len() + JOB_NONCE_MAX_BYTES);
+    out.extend_from_slice(prompt);
+    out.extend_from_slice(JOB_NONCE_TAG);
+    out.extend_from_slice(now_daa.to_string().as_bytes());
+    out.push(b']');
+    out
+}
+
 /// `s_j`, derived from the input commitment.
 ///
 /// The seed's job is to make sampling deterministic, not to be unpredictable: verifiers read it
@@ -376,11 +408,17 @@ fn sampling_seed_for(input_commitment: Hash64) -> [u8; 32] {
 }
 
 /// Read an executor's job input, rejecting one that could not be committed to.
+///
+/// The ceiling is the consensus one less [`JOB_NONCE_MAX_BYTES`], because what gets committed is
+/// [`new_job_input`]'s output rather than the file. A prompt that fits the raw limit but not the
+/// suffixed one would be accepted at startup and then rejected by every commitment.
 fn load_prompt(path: &PathBuf) -> Result<Vec<u8>, String> {
+    const MAX_PROMPT_BYTES: usize = MAX_JOB_INPUT_BYTES - JOB_NONCE_MAX_BYTES;
     let bytes = std::fs::read(path).map_err(|e| format!("could not read the compute prompt at {}: {e}", path.display()))?;
-    if bytes.is_empty() || bytes.len() > MAX_JOB_INPUT_BYTES {
+    if bytes.is_empty() || bytes.len() > MAX_PROMPT_BYTES {
         return Err(format!(
-            "the compute prompt at {} is {} bytes; a job input must be 1..={MAX_JOB_INPUT_BYTES}",
+            "the compute prompt at {} is {} bytes; a job input must be 1..={MAX_PROMPT_BYTES} \
+             (the consensus limit of {MAX_JOB_INPUT_BYTES} less the per-job nonce)",
             path.display(),
             bytes.len()
         ));
@@ -538,6 +576,33 @@ mod tests {
         let other = job_spec_for(&entry(), b"an entirely different prompt", 512);
         assert_ne!(job_spec_id(&a), job_spec_id(&other));
         assert_ne!(a.sampling_seed, other.sampling_seed);
+    }
+
+    /// Consensus credits an executor for a `job_id` once and only once, so two jobs from one node
+    /// must never be the same job. This is the property that makes a quota of N jobs worth N jobs
+    /// of weight instead of one — and its absence would be invisible from the node, which would go
+    /// on paying fees for certificates that are accepted and then not counted.
+    #[test]
+    fn each_new_job_is_a_different_job() {
+        let prompt = b"the capital of France is";
+        let a = new_job_input(prompt, 1_000);
+        let b = new_job_input(prompt, 1_120);
+        assert_ne!(a, b);
+        assert_ne!(
+            job_spec_id(&job_spec_for(&entry(), &a, 512)),
+            job_spec_id(&job_spec_for(&entry(), &b, 512)),
+            "two jobs sharing a job_id would be credited once between them"
+        );
+        // Same score ⇒ same job, which is what makes re-committing after a lost transaction a
+        // retry of that job rather than a second one.
+        assert_eq!(a, new_job_input(prompt, 1_000));
+        // The prompt is still the prompt: the nonce is appended, not mixed in.
+        assert!(a.starts_with(prompt));
+
+        // A prompt `load_prompt` accepts must still fit the consensus limit once suffixed, at any
+        // score — the check at startup is worth nothing if the commitment is refused later.
+        let longest = vec![b'x'; MAX_JOB_INPUT_BYTES - JOB_NONCE_MAX_BYTES];
+        assert!(new_job_input(&longest, u64::MAX).len() <= MAX_JOB_INPUT_BYTES);
     }
 
     /// A spec above the registered ceiling normalizes to zero VLT, so the ceiling is a clamp on
