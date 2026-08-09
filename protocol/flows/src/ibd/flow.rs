@@ -227,6 +227,11 @@ impl IbdFlow {
                 // lock the node out of syncing from anyone else.
                 let served_reservation =
                     self.ctx.preferred_ibd_candidate().is_some_and(|p| p.preferred_sources.contains(&self.router.key()));
+                if served_reservation {
+                    // It is being used, so it is not waiting. Restart the no-progress clock; the
+                    // absolute lifetime keeps running, which is what bounds a retry loop.
+                    self.ctx.note_preferred_candidate_claimed();
+                }
 
                 let outcome = self.ibd(relay_header).await;
                 // The permit covered exactly this attempt, and so did the hold on the review.
@@ -532,6 +537,10 @@ impl IbdFlow {
         if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
             return;
         }
+        // Before anything else: a reservation that has stopped making progress is holding the latch
+        // shut against every other chain, including the ones examined just below. Its sources may
+        // have disconnected minutes ago, and nothing else would ever notice.
+        self.ctx.expire_stale_preferred_candidate();
         if self.ctx.preferred_ibd_candidate().is_some() {
             return; // a switch is already reserved
         }

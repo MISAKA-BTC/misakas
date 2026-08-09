@@ -648,12 +648,15 @@ impl FlowContext {
             return false;
         }
         let switch_generation = self.ibd_candidates.read().switches();
+        let now = Instant::now();
         self.preferred_ibd_candidate.write().replace(PreferredIbdCandidate {
             candidate_id,
             preferred_sources,
             header,
             verified_blue_work,
             switch_generation,
+            reserved_at: now,
+            unclaimed_since: now,
         });
         record_stage(
             RecoveryStage::PreferredCandidateReserved,
@@ -681,6 +684,37 @@ impl FlowContext {
     /// out of syncing from anyone.
     pub fn clear_preferred_ibd_candidate(&self) {
         self.preferred_ibd_candidate.write().take();
+    }
+
+    /// Note that the reserved chain has just taken the latch, restarting its unclaimed clock.
+    ///
+    /// A reservation survives a failed attempt on purpose, so the no-progress clock has to measure
+    /// time spent waiting rather than time spent trying. The absolute lifetime is untouched — that
+    /// one is what stops an endlessly-retrying reservation from waiting forever in instalments.
+    pub fn note_preferred_candidate_claimed(&self) {
+        if let Some(preferred) = self.preferred_ibd_candidate.write().as_mut() {
+            preferred.unclaimed_since = Instant::now();
+        }
+    }
+
+    /// Release a reservation that has stopped making progress, so the node can sync from anyone.
+    ///
+    /// Call only when no IBD is running: a sync in flight is progress, and cutting a reservation out
+    /// from under its own attempt would re-open the race this node already decided.
+    ///
+    /// Releasing a reservation does NOT resume participation. It re-opens the latch, nothing else —
+    /// the gate stays shut until a chain is actually committed.
+    pub fn expire_stale_preferred_candidate(&self) -> bool {
+        let Some((candidate_id, reason)) = ({
+            let guard = self.preferred_ibd_candidate.read();
+            guard.as_ref().and_then(|p| p.expiry_reason(Instant::now()).map(|r| (p.candidate_id, r)))
+        }) else {
+            return false;
+        };
+        self.preferred_ibd_candidate.write().take();
+        warn!("releasing the IBD reservation for {}: {}", candidate_id.virtual_selected_parent, reason);
+        record_stage(RecoveryStage::Rejected, None, Some(candidate_id), None, self.chain_participation().state().as_str(), reason);
+        true
     }
 
     /// The candidate registry, for the commit barrier and for reporting.

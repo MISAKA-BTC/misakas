@@ -729,8 +729,17 @@ async fn mainnet_soak_randomized_fault_injection() {
     assert_ne!(light_pp, heavy_pp);
     assert!(heavy_score > light_score);
 
+    // Each round is reproducible from its seed, so make that reproducibility reachable: SOAK_SEEDS=2
+    // replays the one failing round without paying for the nineteen that already passed. The full
+    // sweep is still what the gate runs; this is for the loop between a failure and its fix.
+    let rounds: Vec<usize> = match std::env::var("SOAK_SEEDS") {
+        Ok(list) => list.split(',').filter_map(|s| s.trim().parse().ok()).collect(),
+        Err(_) => (0..SOAK_ROUNDS).collect(),
+    };
+    assert!(!rounds.is_empty(), "SOAK_SEEDS was set but named no rounds");
+
     let mut failures: Vec<String> = Vec::new();
-    for round in 0..SOAK_ROUNDS {
+    for round in rounds.iter().copied() {
         let mut rng = StdRng::seed_from_u64(round as u64);
         // A band wide enough to cover a LAN and a bad intercontinental hop, drawn per round.
         let lo = rng.gen_range(5u64..=60);
@@ -801,6 +810,6 @@ async fn mainnet_soak_randomized_fault_injection() {
     light.shutdown();
     let _ = std::fs::remove_file(&overrides);
 
-    println!("SOAK complete: {} failures out of {SOAK_ROUNDS}", failures.len());
+    println!("SOAK complete: {} failures out of {}", failures.len(), rounds.len());
     assert!(failures.is_empty(), "randomized soak found failures:\n{}", failures.join("\n"));
 }

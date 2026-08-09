@@ -61,6 +61,26 @@ fn backoff_for(failures: u32) -> Duration {
     Duration::from_secs(1 << failures.min(3))
 }
 
+/// How long a reservation may sit unclaimed, with the latch free, before it is released.
+///
+/// A reservation closes the latch to every peer but the reserved chain's sources. That is the point
+/// of it. But it means a reservation whose sources have all disconnected locks this node out of
+/// syncing from *anyone*, permanently and silently — the reservation is never cleared, because the
+/// only thing that clears it is the successful IBD it is waiting for.
+///
+/// So it is only allowed to wait so long. The clock runs only while no IBD is running: an IBD in
+/// flight IS progress, however slow, and interrupting a real sync to re-open a race would be worse
+/// than the stall.
+pub const PREFERRED_CANDIDATE_HANDOFF_DEADLINE: Duration = Duration::from_secs(180);
+
+/// Absolute ceiling on one reservation, however many attempts it makes.
+///
+/// A reservation deliberately survives a failed attempt — spending the handoff on one stumble drops
+/// the node back to the branch it had already decided against. But surviving failure and surviving
+/// forever are different: a chain that cannot be synced after half an hour of trying should stop
+/// excluding the chains that might be.
+pub const PREFERRED_CANDIDATE_MAX_LIFETIME: Duration = Duration::from_secs(1800);
+
 /// How long to leave a peer alone AFTER it has answered.
 ///
 /// Its answer does not change quickly, so re-asking immediately learns nothing while still costing
@@ -173,6 +193,26 @@ pub struct PreferredIbdCandidate {
     /// Which switch this is. Guards against a stale reservation from an earlier round being honoured
     /// after the situation has moved on.
     pub switch_generation: u32,
+    /// When this reservation was first made. Bounds its total life across every attempt.
+    pub reserved_at: Instant,
+    /// When it last had the latch, or when it was made. Bounds how long it may hold the latch shut
+    /// while nobody is using it.
+    pub unclaimed_since: Instant,
+}
+
+impl PreferredIbdCandidate {
+    /// Why this reservation should be released, if it should be. `None` means it is still working.
+    ///
+    /// Only meaningful while no IBD is running — see [`PREFERRED_CANDIDATE_HANDOFF_DEADLINE`].
+    pub fn expiry_reason(&self, now: Instant) -> Option<&'static str> {
+        if now.duration_since(self.reserved_at) >= PREFERRED_CANDIDATE_MAX_LIFETIME {
+            Some("reservation exceeded its absolute lifetime without ever committing its chain")
+        } else if now.duration_since(self.unclaimed_since) >= PREFERRED_CANDIDATE_HANDOFF_DEADLINE {
+            Some("reservation went unclaimed with the latch free; its sources are gone or silent")
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -812,6 +852,47 @@ mod tests {
             PEER_SUMMARY_COOLDOWN * 4 <= CHALLENGER_VERIFICATION_LEASE,
             "cooldown {PEER_SUMMARY_COOLDOWN:?} leaves too few attempts inside a {CHALLENGER_VERIFICATION_LEASE:?} lease"
         );
+    }
+
+    fn reservation(reserved_at: Instant, unclaimed_since: Instant) -> PreferredIbdCandidate {
+        PreferredIbdCandidate {
+            candidate_id: CandidateId { pruning_point: pp(1), virtual_selected_parent: BlockHash::from_u64_word(1) },
+            preferred_sources: vec![peer(1)],
+            header: Arc::new(header(1, 100)),
+            verified_blue_work: BlueWorkType::from_u64(100),
+            switch_generation: 0,
+            reserved_at,
+            unclaimed_since,
+        }
+    }
+
+    #[test]
+    fn a_reservation_nobody_claims_does_not_hold_the_latch_forever() {
+        // The failure this prevents: the reserved chain's only source disconnects. Nothing clears
+        // the reservation, because the only thing that clears it is the IBD that will now never
+        // start, and try_set_ibd_running refuses every other peer. The node stops syncing. For good.
+        let now = Instant::now();
+        let r = reservation(now, now);
+        assert_eq!(r.expiry_reason(now), None);
+        assert_eq!(r.expiry_reason(now + PREFERRED_CANDIDATE_HANDOFF_DEADLINE - Duration::from_secs(1)), None);
+        assert!(r.expiry_reason(now + PREFERRED_CANDIDATE_HANDOFF_DEADLINE).unwrap().contains("unclaimed"));
+    }
+
+    #[test]
+    fn retrying_holds_the_reservation_but_only_up_to_a_ceiling() {
+        // Surviving a failed attempt is deliberate — spending the handoff on one stumble drops the
+        // node back to the branch it already decided against. Surviving forever is not: each retry
+        // pushes the no-progress clock out, so without the ceiling a chain that can never be synced
+        // would exclude every chain that could be, indefinitely.
+        let reserved_at = Instant::now();
+        let much_later = reserved_at + PREFERRED_CANDIDATE_MAX_LIFETIME - Duration::from_secs(1);
+
+        // Freshly claimed, so not idle — and still inside its lifetime.
+        assert_eq!(reservation(reserved_at, much_later).expiry_reason(much_later), None);
+
+        // One second later the ceiling lands, and a fresh claim no longer saves it.
+        let past_ceiling = reserved_at + PREFERRED_CANDIDATE_MAX_LIFETIME;
+        assert!(reservation(reserved_at, past_ceiling).expiry_reason(past_ceiling).unwrap().contains("absolute lifetime"));
     }
 
     #[test]
