@@ -504,12 +504,21 @@ impl std::fmt::Display for ReconstructGatherError {
 /// replay + verify. Following the BLOCK'S OWN parent links (not the canonical
 /// number map) serves canonical and side-branch blocks uniformly. Pure store-walk
 /// (no revm); the three reads are closures so it is unit-testable offline.
+///
+/// `is_pre_activation` decides the empty-genesis anchor and MUST be derived from
+/// consensus data that outlives pruning (the L1 DAA score vs the EVM activation
+/// score), NEVER from "does this block still have an EVM header row": pruning
+/// deletes sub-pruning-point EVM rows in head/recent history modes, and the
+/// testnet-10 incident showed that reading a deleted row as "pre-activation"
+/// anchors the walk on the empty state and reconstructs garbage (caught only by
+/// the final root check, and misreported as a root mismatch). A parent that
+/// cannot be classified is a hard `Unavailable` — fail closed.
 #[allow(clippy::type_complexity)]
 pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
     block: kaspa_consensus_core::BlockHash,
     get_checkpoint: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateCheckpointV1>, E>,
     get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, E>,
-    has_header: impl Fn(kaspa_consensus_core::BlockHash) -> bool,
+    is_pre_activation: impl Fn(kaspa_consensus_core::BlockHash) -> Result<bool, E>,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, Vec<kaspa_consensus_core::evm::EvmStateDiffV2>), ReconstructGatherError> {
     // A healthy chain anchors on a checkpoint within EVM_CHECKPOINT_INTERVAL steps
     // (or reaches genesis for an early block). Far beyond ⇒ broken chain — fail closed.
@@ -521,16 +530,22 @@ pub fn gather_reconstruction_inputs<E: std::fmt::Display>(
         if let Some(cp) = get_checkpoint(cur).map_err(|e| ReconstructGatherError::Store(e.to_string()))? {
             break cp.decode_snapshot().map_err(|e| ReconstructGatherError::Checkpoint(format!("{cur}: {e}")))?;
         }
-        let diff = get_diff(cur)
-            .map_err(|e| ReconstructGatherError::Store(e.to_string()))?
-            .ok_or_else(|| ReconstructGatherError::Unavailable(format!("no diff for {cur} (older than retention)")))?;
+        let diff = get_diff(cur).map_err(|e| ReconstructGatherError::Store(e.to_string()))?.ok_or_else(|| {
+            ReconstructGatherError::Unavailable(format!(
+                "no diff for {cur} (older than retention; serving this block's state needs a checkpoint/snapshot anchor at or above it — see --evm-history-mode)"
+            ))
+        })?;
         let parent = diff.parent;
         pending.push(diff);
         if pending.len() > MAX_RECONSTRUCTION_DIFFS {
             return Err(ReconstructGatherError::TooDeep(format!("{block}: exceeded {MAX_RECONSTRUCTION_DIFFS} diffs")));
         }
-        // A parent with no EVM header is pre-activation ⇒ anchor = empty genesis.
-        if !has_header(parent) {
+        // Only a parent that provably predates EVM activation anchors the walk on
+        // the empty genesis state; anything else (including "cannot tell") walks on
+        // and fails closed at the retention boundary above.
+        if is_pre_activation(parent)
+            .map_err(|e| ReconstructGatherError::Unavailable(format!("cannot classify parent {parent} vs EVM activation: {e}")))?
+        {
             break kaspa_consensus_core::evm::EvmStateSnapshot::default();
         }
         cur = parent;
@@ -602,6 +617,130 @@ pub fn materialize_snapshot(
         };
         accounts.push(fa.to_snapshot(addr, code_bytes));
     }
+    Ok(EvmStateSnapshot { accounts })
+}
+
+/// F2c (t10 recovery): the in-memory working state of a reverse replay — account
+/// cores plus a sorted storage map per address, indexed for O(log n) updates.
+pub type ReverseReplayState = std::collections::HashMap<
+    kaspa_consensus_core::evm::EvmAddress,
+    (
+        kaspa_consensus_core::evm::AccountCore,
+        std::collections::BTreeMap<kaspa_consensus_core::evm::EvmU256, kaspa_consensus_core::evm::EvmU256>,
+    ),
+>;
+
+/// F2c: reverse-apply one forward §12 diff to a working state — `state(child)`
+/// becomes `state(parent)`. The mirror of the forward `apply_state_diff`: the
+/// diff's `after` view is verified against the current state (the reverse analog
+/// of the forward path's `before` tripwire), so a wrong walk order or a corrupt
+/// diff aborts with an error instead of silently derailing the replay.
+pub fn reverse_apply_state_diff(
+    state: &mut ReverseReplayState,
+    diff: &kaspa_consensus_core::evm::EvmStateDiffV2,
+) -> Result<(), String> {
+    for ch in &diff.account_changes {
+        // Tripwire: the diff's `after` must equal what the state currently holds.
+        let current_core = state.get(&ch.address).map(|(core, _)| core.clone());
+        if ch.after != current_core {
+            return Err(format!(
+                "reverse replay tripwire at block {}: account {} after-core mismatch (diff says {:?}, state holds {:?})",
+                diff.block, ch.address, ch.after, current_core
+            ));
+        }
+        match &ch.before {
+            None => {
+                // Created in this block ⇒ the parent state has no such account.
+                state.remove(&ch.address);
+            }
+            Some(before_core) => {
+                let entry = state.entry(ch.address).or_insert_with(|| (before_core.clone(), Default::default()));
+                entry.0 = before_core.clone();
+                for sc in &ch.storage_changes {
+                    // Slot tripwire, then restore the prior value (0 ⇒ absent).
+                    let have = entry.1.get(&sc.slot).copied().unwrap_or(kaspa_consensus_core::evm::EvmU256::ZERO);
+                    if sc.after != have {
+                        return Err(format!(
+                            "reverse replay tripwire at block {}: slot {:?} of {} after mismatch (diff says {:?}, state holds {have:?})",
+                            diff.block, sc.slot, ch.address, sc.after
+                        ));
+                    }
+                    if sc.before.is_zero() {
+                        entry.1.remove(&sc.slot);
+                    } else {
+                        entry.1.insert(sc.slot, sc.before);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// F2c driver: compute `state(target)` by reverse-replaying the retained forward
+/// diffs from `from` (whose full `start_snapshot` the caller supplies — normally
+/// the flat head) down the parent links to `target` (normally the pruning point).
+/// Streaming: one diff in memory at a time; the diff volume is bounded only by the
+/// caller's patience (`progress` is called every step so it can log). Code bytes
+/// are resolved from `start_snapshot` first, then `get_code` (the content-
+/// addressed store, never per-block pruned) for accounts resurrected by reverse-
+/// destroys. The result is snapshot-canonical (address-sorted, slot-sorted) and
+/// carries NO trust: the caller MUST verify its keccak-MPT root against the
+/// target's committed `state_root` before persisting anything.
+pub fn reverse_replay_to_block<E: std::fmt::Display>(
+    start_snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
+    from: kaspa_consensus_core::BlockHash,
+    target: kaspa_consensus_core::BlockHash,
+    get_diff: impl Fn(kaspa_consensus_core::BlockHash) -> Result<Option<kaspa_consensus_core::evm::EvmStateDiffV2>, E>,
+    get_code: impl Fn(&kaspa_hashes::EvmH256) -> Option<Vec<u8>>,
+    mut progress: impl FnMut(u64),
+) -> Result<kaspa_consensus_core::evm::EvmStateSnapshot, String> {
+    use kaspa_consensus_core::evm::{AccountCore, EVM_EMPTY_CODE_HASH, EvmAccountSnapshot, EvmStateSnapshot};
+
+    // Harvest the start snapshot into the working state + a code-bytes cache.
+    let mut code_cache: std::collections::HashMap<kaspa_hashes::EvmH256, Vec<u8>> = Default::default();
+    let mut state: ReverseReplayState = Default::default();
+    for acc in start_snapshot.accounts {
+        if acc.code_hash != EVM_EMPTY_CODE_HASH {
+            code_cache.insert(acc.code_hash, acc.code);
+        }
+        let core = AccountCore { nonce: acc.nonce, balance: acc.balance, code_hash: acc.code_hash };
+        state.insert(acc.address, (core, acc.storage.into_iter().collect()));
+    }
+
+    let mut cur = from;
+    let mut steps: u64 = 0;
+    while cur != target {
+        let diff = get_diff(cur).map_err(|e| format!("reverse replay: diff read failed at {cur}: {e}"))?.ok_or_else(|| {
+            format!("reverse replay: no diff for {cur} — the walk left the retained window before reaching {target}")
+        })?;
+        reverse_apply_state_diff(&mut state, &diff)?;
+        cur = diff.parent;
+        steps += 1;
+        progress(steps);
+    }
+
+    // Assemble the snapshot in canonical order, resolving code bytes.
+    let mut accounts: Vec<EvmAccountSnapshot> = Vec::with_capacity(state.len());
+    for (address, (core, storage)) in state {
+        let code = if core.code_hash == EVM_EMPTY_CODE_HASH {
+            Vec::new()
+        } else if let Some(c) = code_cache.get(&core.code_hash) {
+            c.clone()
+        } else {
+            get_code(&core.code_hash)
+                .ok_or_else(|| format!("reverse replay: missing code {:?} for account {address}", core.code_hash))?
+        };
+        accounts.push(EvmAccountSnapshot {
+            address,
+            nonce: core.nonce,
+            balance: core.balance,
+            code_hash: core.code_hash,
+            code,
+            storage: storage.into_iter().collect(),
+        });
+    }
+    accounts.sort_by(|a, b| a.address.as_bytes().cmp(&b.address.as_bytes()));
     Ok(EvmStateSnapshot { accounts })
 }
 
@@ -1485,8 +1624,8 @@ mod gather_tests {
             block,
             |b| Ok(c.checkpoints.get(&b).cloned()),
             |b| Ok(c.diffs.get(&b).cloned()),
-            // Blocks 1..3 have headers; block 0 (genesis) does not.
-            |b| (1..=3u8).any(|n| h(n) == b),
+            // Blocks 1..3 are post-activation; block 0 (genesis) predates activation.
+            |b| Ok(!(1..=3u8).any(|n| h(n) == b)),
         )
     }
 
@@ -1531,6 +1670,105 @@ mod gather_tests {
         c.diffs.remove(&h(2)); // GC block 2's diff, no checkpoint to anchor on
         let err = gather(&c, h(3)).unwrap_err();
         assert!(matches!(err, ReconstructGatherError::Unavailable(_)));
+    }
+
+    /// The t10 incident shape: the walk reaches a POST-activation parent whose rows
+    /// were pruned. The old code read the missing EVM header as "pre-activation" and
+    /// anchored on the empty state (garbage caught only by the final root check);
+    /// now the missing diff at that parent is a hard Unavailable — fail closed.
+    #[test]
+    fn pruned_post_activation_parent_is_unavailable_not_empty_seed() {
+        let c = chain();
+        // Walk from block 3; block 2's diff exists, block 1's diff is "pruned".
+        let mut diffs = c.diffs.clone();
+        diffs.remove(&h(1));
+        let err = gather_reconstruction_inputs::<Infallible>(
+            h(3),
+            |_| Ok(None),
+            |b| Ok(diffs.get(&b).cloned()),
+            // EVERY block is post-activation (genesis-active net, like testnet-10).
+            |_| Ok(false),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)), "got {err:?}");
+    }
+
+    /// A parent that cannot be classified against activation (its L1 header is gone
+    /// too) is Unavailable — "cannot tell" must never anchor the empty state.
+    #[test]
+    fn unclassifiable_parent_is_unavailable() {
+        let c = chain();
+        let err = gather_reconstruction_inputs::<String>(
+            h(3),
+            |_| Ok(None),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |b| if b == h(2) { Err("header pruned".to_string()) } else { Ok(false) },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReconstructGatherError::Unavailable(_)), "got {err:?}");
+    }
+
+    /// F2c: reverse replay walks head→target through the forward diffs and lands on
+    /// exactly the forward-computed ancestor states, all the way to the empty genesis.
+    #[test]
+    fn reverse_replay_recovers_ancestor_states() {
+        let c = chain();
+        let got1 = super::reverse_replay_to_block::<Infallible>(
+            c.snaps[3].clone(),
+            h(3),
+            h(1),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(got1, c.snaps[1], "head@3 reverse-replayed to block 1 must equal the forward state@1");
+
+        let got0 = super::reverse_replay_to_block::<Infallible>(
+            c.snaps[3].clone(),
+            h(3),
+            h(0),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(got0, c.snaps[0], "reverse replay to genesis must equal the empty state");
+    }
+
+    /// F2c: a start snapshot that does not match the first diff's `after` view hits
+    /// the tripwire — the replay aborts instead of producing a silently-wrong state.
+    #[test]
+    fn reverse_replay_tripwire_rejects_wrong_start() {
+        let c = chain();
+        let err = super::reverse_replay_to_block::<Infallible>(
+            c.snaps[2].clone(), // claims to be state@3's start but is state@2
+            h(3),
+            h(1),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("tripwire"), "got {err}");
+    }
+
+    /// F2c: a diff missing mid-walk (outside the retained window) is a hard error,
+    /// mirroring the forward gather's fail-closed behavior.
+    #[test]
+    fn reverse_replay_missing_diff_errors() {
+        let mut c = chain();
+        c.diffs.remove(&h(2));
+        let err = super::reverse_replay_to_block::<Infallible>(
+            c.snaps[3].clone(),
+            h(3),
+            h(0),
+            |b| Ok(c.diffs.get(&b).cloned()),
+            |_| None,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("no diff for"), "got {err}");
     }
 }
 
@@ -2009,9 +2247,11 @@ fn classify_seed_store_error(e: kaspa_database::prelude::StoreError) -> ParentSe
 /// from the flat state backend: materialize the flat store (prefix 234 + 222)
 /// when `selected_parent` IS the flat store's canonical head (`flat_head`), else
 /// §12-reconstruct it (root-verified, the same path RPC `reconstruct_evm_state_at`
-/// uses) for a non-head parent. A pre-activation parent (no EVM header) is the
-/// empty genesis state. This MUST reproduce the per-block 206 snapshot the
-/// executor reads today — the shadow check halts the node on any divergence.
+/// uses) for a non-head parent. A provably pre-activation parent is the empty
+/// genesis state — `is_pre_activation` must judge by the L1 DAA score vs the EVM
+/// activation score (NOT by EVM-header-row presence, which pruning erases; see
+/// [`gather_reconstruction_inputs`]). This MUST reproduce the per-block 206
+/// snapshot the executor reads today — the shadow check halts on any divergence.
 #[cfg(feature = "evm")]
 #[allow(clippy::too_many_arguments)]
 pub fn flat_or_reconstruct_parent_snapshot(
@@ -2022,17 +2262,26 @@ pub fn flat_or_reconstruct_parent_snapshot(
     header_store: &crate::model::stores::evm::DbEvmHeaderStore,
     checkpoint_store: &crate::model::stores::evm::DbEvmStateCheckpointStore,
     diff_store: &crate::model::stores::evm::DbEvmStateDiffStore,
+    is_pre_activation: impl Fn(kaspa_consensus_core::BlockHash) -> Result<bool, kaspa_database::prelude::StoreError>,
 ) -> Result<(kaspa_consensus_core::evm::EvmStateSnapshot, ParentSeedSource), ParentSeedError> {
     use crate::model::stores::evm::{
         EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader,
     };
     use kaspa_consensus_core::evm::EvmStateSnapshot;
 
-    // Pre-activation parent (no EVM header) ⇒ the empty genesis state.
+    // Missing EVM header: only a parent that provably predates activation is the
+    // empty genesis state; otherwise the row was pruned/lost ⇒ fail closed (skip),
+    // never anchor the executor seed on an empty state by row-absence alone.
     let parent_header = match header_store.get(selected_parent) {
         Ok(h) => h,
         Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
-            return Ok((EvmStateSnapshot::default(), ParentSeedSource::PreActivation));
+            return match is_pre_activation(selected_parent) {
+                Ok(true) => Ok((EvmStateSnapshot::default(), ParentSeedSource::PreActivation)),
+                Ok(false) => Err(ParentSeedError::Unavailable(format!(
+                    "post-activation parent {selected_parent} has no EVM header (pruned past retention)"
+                ))),
+                Err(e) => Err(classify_seed_store_error(e)),
+            };
         }
         Err(e) => return Err(classify_seed_store_error(e)),
     };
@@ -2047,36 +2296,23 @@ pub fn flat_or_reconstruct_parent_snapshot(
 
     // Non-head parent ⇒ §12 reconstruct + keccak-MPT root verify against the
     // parent's committed state root (fail-closed on a broken chain / bad root).
-    // `gather_reconstruction_inputs`'s `has_header` is bool-valued, so a store read
-    // failure there would otherwise be swallowed as "no header" and anchor the walk
-    // at the wrong seed — capture it so it surfaces as Unavailable (a skip), never
-    // a silently-wrong reconstruction. The same applies to the code resolver.
+    // The activation classifier is Result-valued, so a store read failure inside
+    // the walk surfaces as Unavailable (a skip), never a silently-wrong
+    // reconstruction. The same applies to the code resolver below.
+    let (seed, forward_diffs) =
+        gather_reconstruction_inputs(selected_parent, |b| checkpoint_store.get(b), |b| diff_store.get(b), &is_pre_activation)
+            .map_err(|e| match e {
+                // Retention gap / depth bound / a store read inside the walk ⇒ cannot
+                // validate here (skip). A bad checkpoint ENCODING is real corruption (halt).
+                ReconstructGatherError::Unavailable(m) | ReconstructGatherError::TooDeep(m) | ReconstructGatherError::Store(m) => {
+                    ParentSeedError::Unavailable(m)
+                }
+                ReconstructGatherError::Checkpoint(m) => ParentSeedError::Corrupt(m),
+            })?;
+    // The engine's code resolver is Option-valued, so a code-store read failure
+    // would otherwise be swallowed as MissingCode (a Corrupt halt) — capture it and
+    // reclassify as a transient skip below.
     let store_errored = std::cell::Cell::new(false);
-    let (seed, forward_diffs) = gather_reconstruction_inputs(
-        selected_parent,
-        |b| checkpoint_store.get(b),
-        |b| diff_store.get(b),
-        |b| match header_store.has(b) {
-            Ok(v) => v,
-            Err(_) => {
-                store_errored.set(true);
-                false
-            }
-        },
-    )
-    .map_err(|e| match e {
-        // Retention gap / depth bound / a store read inside the walk ⇒ cannot
-        // validate here (skip). A bad checkpoint ENCODING is real corruption (halt).
-        ReconstructGatherError::Unavailable(m) | ReconstructGatherError::TooDeep(m) | ReconstructGatherError::Store(m) => {
-            ParentSeedError::Unavailable(m)
-        }
-        ReconstructGatherError::Checkpoint(m) => ParentSeedError::Corrupt(m),
-    })?;
-    if store_errored.get() {
-        return Err(ParentSeedError::Unavailable(format!(
-            "header store read failed while gathering reconstruction inputs for {selected_parent}"
-        )));
-    }
     let snap = kaspa_evm::reconstruct::reconstruct_evm_state(
         &seed,
         &forward_diffs,
@@ -2178,7 +2414,10 @@ mod s6_seed_tests {
         db.write(batch).unwrap();
 
         let seed = |parent: BlockHash, flat_head: Option<BlockHash>| {
-            flat_or_reconstruct_parent_snapshot(parent, flat_head, &flat, &code, &header_store, &checkpoint_store, &diff_store)
+            flat_or_reconstruct_parent_snapshot(parent, flat_head, &flat, &code, &header_store, &checkpoint_store, &diff_store, |b| {
+                // Genesis and `pre` predate activation; every other block is EVM-active.
+                Ok(b == h(0) || b == h(0x99))
+            })
         };
 
         // (1) Canonical head ⇒ materialize the flat store == s_h.
@@ -2247,8 +2486,16 @@ mod s6_seed_tests {
         header_store.insert_batch(&mut batch, block_1, header_with_root(root_of(&s_1), 1)).unwrap();
         db.write(batch).unwrap();
 
-        let res =
-            flat_or_reconstruct_parent_snapshot(block_1, Some(h(0x11)), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        let res = flat_or_reconstruct_parent_snapshot(
+            block_1,
+            Some(h(0x11)),
+            &flat,
+            &code,
+            &header_store,
+            &checkpoint_store,
+            &diff_store,
+            |_| Ok(false),
+        );
         assert!(matches!(res, Err(super::ParentSeedError::Unavailable(_))), "missing §12 history ⇒ Unavailable, got {res:?}");
     }
 
@@ -2282,8 +2529,16 @@ mod s6_seed_tests {
         .unwrap();
         db.write(batch).unwrap();
 
-        let res =
-            flat_or_reconstruct_parent_snapshot(block_h, Some(block_h), &flat, &code, &header_store, &checkpoint_store, &diff_store);
+        let res = flat_or_reconstruct_parent_snapshot(
+            block_h,
+            Some(block_h),
+            &flat,
+            &code,
+            &header_store,
+            &checkpoint_store,
+            &diff_store,
+            |_| Ok(false),
+        );
         assert!(matches!(res, Err(super::ParentSeedError::Corrupt(_))), "flat-head missing code ⇒ Corrupt (halt), got {res:?}");
     }
 }

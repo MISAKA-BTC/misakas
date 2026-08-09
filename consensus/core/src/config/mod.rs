@@ -125,6 +125,16 @@ pub struct Config {
     /// oracle, so the bulk delete leaves the seed itself unchanged (consensus-neutral, node-local). `false`
     /// by default and on every current network.
     pub evm_prune_legacy_206: bool,
+
+    /// F2c (t10 recovery): ONE-SHOT startup backfill of the pruning point's EVM state anchor on a
+    /// retired-206 datadir that predates the pp-anchor step (`ensure_pp_evm_anchor`) — i.e. a node
+    /// whose sub-pruning-point §12 rows are already gone and whose flat head has moved past the pp,
+    /// so it cannot serve pruned-IBD (the exact testnet-10 anchor state). Reverse-replays the
+    /// retained forward diffs from the flat head down to the pruning point, verifies the result
+    /// against the pp's COMMITTED `state_root` (never persists an unverified anchor), and writes
+    /// `checkpoint[pp]`. Node-local, consensus-neutral, idempotent (a present anchor short-circuits).
+    /// `false` by default; drop the flag after the one successful run.
+    pub evm_materialize_pp_anchor: bool,
 }
 
 impl Config {
@@ -158,6 +168,7 @@ impl Config {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_prune_legacy_206: false,
+            evm_materialize_pp_anchor: false,
         }
     }
 

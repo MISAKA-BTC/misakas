@@ -135,6 +135,12 @@ pub struct Args {
     /// + `--evm-shadow-state-backend`); otherwise refused with a warning. Off by default; node-local.
     #[serde(default)]
     pub evm_prune_legacy_206: bool,
+    /// F2c (t10 recovery): ONE-SHOT startup backfill of the pruning point's EVM state anchor by
+    /// reverse-replaying the retained §12 diffs from the flat head down to the pruning point.
+    /// Verified against the pp's committed state_root before anything is persisted; idempotent.
+    /// For retired-206 datadirs that predate the pruning processor's pp-anchor step. Off by default.
+    #[serde(default)]
+    pub evm_materialize_pp_anchor: bool,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub rpclisten_borsh: Option<WrpcNetAddress>,
     #[serde_as(as = "Option<DisplayFromStr>")]
@@ -301,6 +307,7 @@ impl Default for Args {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_prune_legacy_206: false,
+            evm_materialize_pp_anchor: false,
             wrpc_verbose: false,
             log_level: "INFO".into(),
             connect_peers: vec![],
@@ -359,6 +366,7 @@ impl Args {
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
+        config.evm_materialize_pp_anchor = self.evm_materialize_pp_anchor; // F2c: one-shot pp EVM anchor backfill
 
         // MISAKA VLT: private-devnet activation. Refused anywhere else — these are consensus
         // fences, and a node that moved them by flag would simply fork itself off the network it
@@ -515,6 +523,13 @@ pub fn cli() -> Command {
                 .env("KASPAD_EVM_PRUNE_LEGACY_206")
                 .action(clap::ArgAction::SetTrue)
                 .help("C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation at startup of the legacy per-block 206 EVM state snapshots that accumulated before --evm-retire-206 (delete_range + prefix-bounded compaction). Then a no-op. Refused unless --evm-retire-206 is effective (requires --evm-flat-authoritative + --evm-shadow-state-backend). Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
+        )
+        .arg(
+            Arg::new("evm-materialize-pp-anchor")
+                .long("evm-materialize-pp-anchor")
+                .env("KASPAD_EVM_MATERIALIZE_PP_ANCHOR")
+                .action(clap::ArgAction::SetTrue)
+                .help("F2c (t10 recovery): ONE-SHOT startup backfill of the pruning point's EVM state anchor by reverse-replaying the retained §12 diffs from the flat head down to the pruning point. The result is verified against the pruning point's committed state_root BEFORE anything is persisted (a mismatch aborts with nothing written), and a present anchor makes it a no-op. For retired-206 datadirs that predate the automatic pp-anchor step and therefore cannot serve pruned-IBD. Node-local, consensus-neutral; off by default. Effective only in an --features evm build."),
         )
         .arg(
             Arg::new("rpclisten-borsh")
@@ -953,6 +968,11 @@ impl Args {
             evm_flat_authoritative: arg_match_unwrap_or::<bool>(&m, "evm-flat-authoritative", defaults.evm_flat_authoritative),
             evm_retire_206: arg_match_unwrap_or::<bool>(&m, "evm-retire-206", defaults.evm_retire_206),
             evm_prune_legacy_206: arg_match_unwrap_or::<bool>(&m, "evm-prune-legacy-206", defaults.evm_prune_legacy_206),
+            evm_materialize_pp_anchor: arg_match_unwrap_or::<bool>(
+                &m,
+                "evm-materialize-pp-anchor",
+                defaults.evm_materialize_pp_anchor,
+            ),
             rpclisten_borsh: m.get_one::<WrpcNetAddress>("rpclisten-borsh").cloned().or(defaults.rpclisten_borsh),
             rpclisten_json: m.get_one::<WrpcNetAddress>("rpclisten-json").cloned().or(defaults.rpclisten_json),
             unsafe_rpc: arg_match_unwrap_or::<bool>(&m, "unsaferpc", defaults.unsafe_rpc),

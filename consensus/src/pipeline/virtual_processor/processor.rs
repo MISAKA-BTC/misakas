@@ -482,6 +482,18 @@ impl VirtualStateProcessor {
                 "[C-01] --evm-retire-206 with --evm-history-mode=head: the IBD pruning-point export and historical state RPC will be UNAVAILABLE on this node (no §12 history to reconstruct 206 from). Use recent/archive history if this node serves IBD or state queries."
             );
         }
+        // The same serving hole exists on `recent` once pruning has deleted the
+        // sub-pruning-point rows: with 206 retired, the pruning-point export then
+        // depends entirely on an anchor AT the pruning point (a materialized
+        // checkpoint/snapshot — see the pruning processor's pp-anchor step and
+        // --evm-materialize-pp-anchor for a datadir where the anchor is already
+        // missing). testnet-10 ran retire-206+recent with no anchor and silently
+        // could not serve pruned IBD to any peer — warn instead of staying quiet.
+        if evm_retire_206 && evm_history_mode.writes_state_history() && !evm_history_mode.retains_state_history_past_pruning() {
+            warn!(
+                "[C-01] --evm-retire-206 with --evm-history-mode=recent: serving the IBD pruning-point export relies on a state anchor AT the pruning point (kept checkpoint/snapshot). If this node's anchor is missing (e.g. the datadir predates the pp-anchor step), run --evm-materialize-pp-anchor once; otherwise peers cannot pruned-IBD from this node."
+            );
+        }
         Self {
             receiver,
             pruning_sender,
@@ -1208,6 +1220,9 @@ impl VirtualStateProcessor {
             &self.evm_header_store,
             &self.evm_state_checkpoint_store,
             &self.evm_state_diff_store,
+            // Pre-activation is judged by the L1 DAA score, never by EVM-row
+            // presence (pruning erases rows; see gather_reconstruction_inputs).
+            |b| self.headers_store.get_compact_header_data(b).map(|c| c.daa_score < self.evm_activation_daa_score),
         ) {
             Ok((snapshot_flat, source)) => {
                 match &snapshot_206 {
@@ -5892,6 +5907,7 @@ impl VirtualStateProcessor {
 
         // (3) Persist the rows and pin the finalized EVM head to the pruning point.
         let state_root = evm_header.state_root; // captured before `evm_header` is moved below
+        let evm_number_for_checkpoint = evm_header.evm_number; // ditto, for the F2a anchor checkpoint
         let mut batch = WriteBatch::default();
         // C-01 S8 (audit M-01): also seed the flat latest-canonical state from the verified
         // snapshot, so a pruned-IBD node starts with a flat store materialized at the pruning point
@@ -5914,6 +5930,23 @@ impl VirtualStateProcessor {
             .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, format!("flat seed: {e}")))?;
         }
         self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
+        // F2a (t10 recovery): the imported, root-verified snapshot is also this
+        // node's FIRST pruning-point state anchor — persist it as a checkpoint so
+        // the pruning processor's pp-anchor induction (`ensure_pp_evm_anchor`) has
+        // a base once the pp advances, even on a retired-206 node (which writes no
+        // per-block 206 rows of its own; §12 gathering anchors on checkpoints).
+        {
+            use crate::model::stores::evm::EvmStateCheckpointStoreReader;
+            if self.evm_state_checkpoint_store.get(pruning_point).ok().flatten().is_none() {
+                let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
+                    pruning_point,
+                    evm_number_for_checkpoint,
+                    state_root,
+                    &snapshot,
+                );
+                self.evm_state_checkpoint_store.insert_batch(&mut batch, pruning_point, checkpoint).unwrap();
+            }
+        }
         self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
         {
             let mut heads_write = self.evm_heads_store.write();
@@ -5968,7 +6001,10 @@ impl VirtualStateProcessor {
                 pruning_point,
                 |b| self.evm_state_checkpoint_store.get(b),
                 |b| self.evm_state_diff_store.get(b),
-                |b| self.evm_header_store.get(b).optional().unwrap().is_some(),
+                // Pre-activation is judged by the L1 DAA score. Sub-pruning-point
+                // blocks have no EVM rows (pruned), and reading that absence as
+                // pre-activation is exactly the t10 empty-seed bug — fail closed.
+                |b| self.headers_store.get_compact_header_data(b).map(|c| c.daa_score < self.evm_activation_daa_score),
             ) {
                 Ok(v) => v,
                 Err(e) => {

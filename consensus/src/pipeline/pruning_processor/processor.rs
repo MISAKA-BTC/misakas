@@ -294,6 +294,97 @@ impl PruningProcessor {
         true
     }
 
+    /// F2a (t10 recovery): guarantee the NEW pruning point keeps a servable EVM
+    /// state anchor before its past is deleted. A retired-206 (`--evm-retire-206`)
+    /// node writes no per-block snapshot, its flat head has moved past the pp, and
+    /// §12 reconstruction anchors on CHECKPOINT rows — but the periodic (2048-
+    /// aligned) checkpoints below the pp are exactly what the GC deletes, so after
+    /// every pruning cycle such a node served pruned-IBD only if the pp happened to
+    /// land on a checkpoint (~1/2048). testnet-10's anchors ran in that state and
+    /// no peer could complete pruned IBD from them. Materializing `checkpoint[pp]`
+    /// HERE — while the sub-pp diffs still exist — closes the hole inductively:
+    /// each new pp anchors on the previous one (or on a periodic checkpoint), and a
+    /// freshly imported node gets its first anchor from
+    /// `import_pruning_point_evm_state`. Failure is a loud warn, never a block of
+    /// pruning: the node stays consensus-healthy, only its serving stays broken
+    /// (run `--evm-materialize-pp-anchor` to backfill a datadir already past help).
+    #[cfg(feature = "evm")]
+    fn ensure_pp_evm_anchor(&self, new_pruning_point: BlockHash) {
+        use crate::model::stores::evm::{
+            EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader,
+        };
+
+        // Only an EFFECTIVE retire-206 node on `recent` history needs the anchor:
+        // non-retired nodes serve the kept 206[pp] row, archive retains all history,
+        // and `head` writes no diffs to materialize from (its startup warning
+        // already declares it non-serving).
+        let retire_effective =
+            self.config.evm_retire_206 && self.config.evm_flat_authoritative && self.config.evm_shadow_state_backend;
+        if !retire_effective
+            || !self.config.evm_history_mode.writes_state_history()
+            || self.config.evm_history_mode.retains_state_history_past_pruning()
+        {
+            return;
+        }
+        // Pre-activation pruning point (no committed EVM header) has no state to anchor.
+        let header = match self.evm_header_store.get(new_pruning_point) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        if self.evm_state_checkpoint_store.get(new_pruning_point).ok().flatten().is_some() {
+            return; // anchor already present (import-time or a periodic checkpoint)
+        }
+        let gathered = crate::processes::evm::gather_reconstruction_inputs(
+            new_pruning_point,
+            |b| self.evm_state_checkpoint_store.get(b),
+            |b| self.evm_state_diff_store.get(b),
+            // Pre-activation is judged by the L1 DAA score (see gather docs).
+            |b| self.headers_store.get_compact_header_data(b).map(|c| c.daa_score < self.config.params.evm_activation_daa_score),
+        );
+        let (seed, forward_diffs) = match gathered {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    "[evm] pruning-point anchor materialization for {new_pruning_point} could not gather inputs ({e}); \
+                     this node will NOT be able to serve pruned-IBD for this pruning point — run --evm-materialize-pp-anchor to backfill"
+                );
+                return;
+            }
+        };
+        match kaspa_evm::reconstruct::reconstruct_evm_state(
+            &seed,
+            &forward_diffs,
+            |h| self.evm_code_store.get(*h).ok().flatten(),
+            header.state_root,
+        ) {
+            Ok(snapshot) => {
+                let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
+                    new_pruning_point,
+                    header.evm_number,
+                    header.state_root,
+                    &snapshot,
+                );
+                let mut batch = WriteBatch::default();
+                self.evm_state_checkpoint_store.insert_batch(&mut batch, new_pruning_point, checkpoint).unwrap();
+                self.db.write(batch).unwrap();
+                info!(
+                    "[evm] materialized the pruning-point state anchor for {new_pruning_point} (evm number {}, {} diffs replayed) — pruned-IBD serving stays available",
+                    header.evm_number,
+                    forward_diffs.len()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "[evm] pruning-point anchor materialization for {new_pruning_point} failed root verification ({e}); \
+                     refusing to persist an unverified anchor — run --evm-materialize-pp-anchor to backfill"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(feature = "evm"))]
+    fn ensure_pp_evm_anchor(&self, _new_pruning_point: BlockHash) {}
+
     // PR-9.5e: `pruning_point` is a block hash (BlockHash) despite the fn name; the
     // utxo_commitment read below is a 64-byte Hash64 (the MuHash accumulator commitment).
     fn assert_utxo_commitment(&self, pruning_point: BlockHash) {
@@ -313,6 +404,12 @@ impl PruningProcessor {
             warn!("The node is configured as an archival node -- avoiding data pruning. Note this might lead to heavy disk usage.");
             return;
         }
+
+        // BEFORE deleting anything below the new pruning point, make sure the
+        // pruning point itself keeps a servable EVM state anchor — the sub-pp
+        // diffs/checkpoints this materialization reads are exactly what the GC
+        // below is about to delete.
+        self.ensure_pp_evm_anchor(new_pruning_point);
 
         info!("Header and Block pruning: preparing proof and anticone data...");
 

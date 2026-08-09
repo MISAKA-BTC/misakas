@@ -361,6 +361,165 @@ impl Consensus {
         self.consensus_transitional_flags_upgrade();
         // C-01 S9b-prune: one-shot bulk reclamation of the legacy 206 snapshot store (opt-in, gated).
         self.evm_legacy_206_bulk_prune();
+        // F2c (t10 recovery): one-shot backfill of the pruning-point EVM anchor (opt-in, verified).
+        self.evm_materialize_pp_anchor_one_shot();
+    }
+
+    /// F2c (t10 recovery): ONE-SHOT backfill of the pruning point's EVM state anchor, run at startup
+    /// when `--evm-materialize-pp-anchor` is set. For a retired-206 node whose datadir predates the
+    /// pruning processor's pp-anchor step: its sub-pp §12 rows are pruned, its flat head is far past
+    /// the pp, so `pruning_point_evm_state` has no serve path and every peer's pruned IBD dies at the
+    /// EVM snapshot stage (the testnet-10 wedge). The §12 diffs for the whole retained window
+    /// (pp..head) are still present on a `recent` node and carry `before` views, so the pp state is
+    /// recomputed by REVERSE-replaying them from the (root-verified) flat head down to the pp. The
+    /// result is verified against the pp's COMMITTED `state_root` before anything is persisted — a
+    /// mismatch aborts with nothing written, so a rehearsal on a datadir copy and the production run
+    /// enforce the same gate. Idempotent: an existing anchor short-circuits.
+    fn evm_materialize_pp_anchor_one_shot(&self) {
+        if !self.config.evm_materialize_pp_anchor {
+            return;
+        }
+        #[cfg(not(feature = "evm"))]
+        {
+            warn!(
+                "[F2c] --evm-materialize-pp-anchor requires a kaspad built with --features evm; skipping (no EVM state on this build)."
+            );
+        }
+        #[cfg(feature = "evm")]
+        {
+            use crate::model::stores::evm::{
+                EvmCodeStoreReader, EvmHeaderStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader, EvmStateStoreReader,
+            };
+
+            let pp = match self.pruning_point_store.read().pruning_point() {
+                Ok(pp) => pp,
+                Err(e) => {
+                    warn!("[F2c] cannot read the pruning point ({e}); skipping the anchor backfill this startup.");
+                    return;
+                }
+            };
+            let pp_header = match self.storage.evm_header_store.get(pp) {
+                Ok(h) => h,
+                Err(_) => {
+                    info!("[F2c] pruning point {pp} has no committed EVM header (pre-activation chain segment); nothing to anchor.");
+                    return;
+                }
+            };
+            if self.storage.evm_state_checkpoint_store.get(pp).ok().flatten().is_some() || self.storage.evm_state_store.get(pp).is_ok()
+            {
+                info!("[F2c] pruning point {pp} already has a state anchor (checkpoint or 206 row); nothing to do.");
+                return;
+            }
+            // The start of the reverse replay is the flat head — verify it is FAITHFUL
+            // (its on-disk rows keccak-MPT-hash to the committed head root) before
+            // trusting a single reverse step, mirroring the S9b-prune gold standard.
+            let flat_ptr = match self.storage.evm_latest_state_ptr_store.read().get() {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    warn!(
+                        "[F2c] the flat state pointer is absent — no start state to reverse-replay from. Aborting (nothing written)."
+                    );
+                    return;
+                }
+                Err(e) => {
+                    warn!("[F2c] flat state pointer read failed ({e}); aborting (nothing written).");
+                    return;
+                }
+            };
+            let start_snapshot = match crate::processes::evm::materialize_snapshot(
+                &self.storage.evm_flat_account_store,
+                &self.storage.evm_code_store,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[F2c] flat materialization failed ({e}); aborting (nothing written).");
+                    return;
+                }
+            };
+            let head_committed_root = match self.storage.evm_header_store.get(flat_ptr.canonical_head) {
+                Ok(h) => h.state_root,
+                Err(e) => {
+                    warn!(
+                        "[F2c] cannot read the committed EVM header of the flat head {} ({e}); aborting (nothing written).",
+                        flat_ptr.canonical_head
+                    );
+                    return;
+                }
+            };
+            let root_of = |snap: &kaspa_consensus_core::evm::EvmStateSnapshot| {
+                kaspa_evm::snapshot::seed_cachedb(snap)
+                    .map_err(|e| e.to_string())
+                    .map(|cdb| kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&cdb).0))
+            };
+            match root_of(&start_snapshot) {
+                Ok(r) if r == head_committed_root => {}
+                Ok(r) => {
+                    warn!(
+                        "[F2c] the flat head {} is NOT faithful (rows hash to {r:?}, committed {head_committed_root:?}); \
+                         refusing to reverse-replay from a wrong start. Aborting (nothing written).",
+                        flat_ptr.canonical_head
+                    );
+                    return;
+                }
+                Err(e) => {
+                    warn!("[F2c] could not hash the flat head state ({e}); aborting (nothing written).");
+                    return;
+                }
+            }
+            info!(
+                "[F2c] reverse-replaying §12 diffs from the flat head {} down to the pruning point {pp} — this walks the whole retained window once and may take a while...",
+                flat_ptr.canonical_head
+            );
+            let snapshot = if flat_ptr.canonical_head == pp {
+                start_snapshot
+            } else {
+                match crate::processes::evm::reverse_replay_to_block(
+                    start_snapshot,
+                    flat_ptr.canonical_head,
+                    pp,
+                    |b| self.storage.evm_state_diff_store.get(b),
+                    |h| self.storage.evm_code_store.get(*h).ok().flatten(),
+                    |steps| {
+                        if steps % 100_000 == 0 {
+                            info!("[F2c] reverse replay progress: {steps} diffs applied");
+                        }
+                    },
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("[F2c] reverse replay failed: {e}. Aborting (nothing written).");
+                        return;
+                    }
+                }
+            };
+            // The gate the whole feature hangs on: the recomputed pp state MUST hash
+            // to the pp's committed state_root, or nothing is persisted.
+            match root_of(&snapshot) {
+                Ok(r) if r == pp_header.state_root => {}
+                Ok(r) => {
+                    warn!(
+                        "[F2c] the reverse-replayed pruning-point state hashes to {r:?} but the committed state_root is {:?}; \
+                         REFUSING to persist an unverified anchor. Aborting (nothing written).",
+                        pp_header.state_root
+                    );
+                    return;
+                }
+                Err(e) => {
+                    warn!("[F2c] could not hash the reverse-replayed state ({e}); aborting (nothing written).");
+                    return;
+                }
+            }
+            let checkpoint =
+                kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, pp_header.evm_number, pp_header.state_root, &snapshot);
+            let mut batch = rocksdb::WriteBatch::default();
+            self.storage.evm_state_checkpoint_store.insert_batch(&mut batch, pp, checkpoint).unwrap();
+            self.db.write(batch).unwrap();
+            info!(
+                "[F2c] pruning-point EVM anchor materialized and VERIFIED for {pp} (evm number {}); pruned-IBD serving is restored. \
+                 Drop --evm-materialize-pp-anchor on the next restart (a present anchor makes it a no-op).",
+                pp_header.evm_number
+            );
+        }
     }
 
     /// C-01 (slice S9b-prune): a ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206
@@ -2119,12 +2278,19 @@ impl ConsensusApi for Consensus {
 
             // Walk `block`'s selected-parent chain backward (design §12.4) to the
             // nearest checkpoint (its full state) or the pre-activation genesis,
-            // collecting the forward diffs to replay. Pure store-walk.
+            // collecting the forward diffs to replay. Pure store-walk. Pre-activation
+            // is judged by the L1 DAA score vs the activation score — never by EVM-row
+            // presence, which pruning erases (the t10 empty-seed bug).
             let (seed, forward_diffs) = crate::processes::evm::gather_reconstruction_inputs(
                 block,
                 |b| self.storage.evm_state_checkpoint_store.get(b),
                 |b| self.storage.evm_state_diff_store.get(b),
-                |b| self.storage.evm_header_store.get(b).optional().unwrap().is_some(),
+                |b| {
+                    self.storage
+                        .headers_store
+                        .get_compact_header_data(b)
+                        .map(|c| c.daa_score < self.config.params.evm_activation_daa_score)
+                },
             )
             .map_err(|e| oops(e.to_string()))?;
 
