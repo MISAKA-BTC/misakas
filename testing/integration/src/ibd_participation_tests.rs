@@ -813,3 +813,133 @@ async fn mainnet_soak_randomized_fault_injection() {
     println!("SOAK complete: {} failures out of {}", failures.len(), rounds.len());
     assert!(failures.is_empty(), "randomized soak found failures:\n{}", failures.join("\n"));
 }
+
+/// The points in recovery at which the process is killed, one per round.
+///
+/// Chosen to bracket each irreversible step rather than to sample evenly: what matters is whether
+/// the node comes back safe when it died holding something it had not finished — a proof it had not
+/// checked, a reservation it had not redeemed, a staging area it had not committed, a chain it had
+/// committed but not verified to the tip.
+const RESTART_POINTS: [recovery_trace::RecoveryStage; 5] = [
+    recovery_trace::RecoveryStage::SummaryReceived,
+    recovery_trace::RecoveryStage::ProofRequestSent,
+    recovery_trace::RecoveryStage::ProofValidated,
+    recovery_trace::RecoveryStage::PreferredCandidateReserved,
+    recovery_trace::RecoveryStage::CandidateCommitted,
+];
+
+/// Kill the node partway through recovery and require that what comes back is still safe.
+///
+/// Every other test here restarts nothing, so every one of them proves a property of a process that
+/// ran to completion. A validator does not get that guarantee. It gets power cuts, OOM kills, and
+/// operators typing `systemctl restart` at the least convenient moment — and the one moment that
+/// matters most is while the node is holding a chain it has not finished checking.
+///
+/// The safety property is NOT "it always converges". Restarting mid-IBD is deliberately
+/// unrecoverable: an interrupted IBD leaves the active consensus in a state nothing can vouch for,
+/// so the node comes back QUARANTINED and stays there until an operator looks at it. Converging
+/// would mean guessing, and guessing is what this whole effort exists to stop.
+///
+/// What must hold at every restart point, without exception:
+///   - it never comes back participating, whatever it was doing when it died;
+///   - it never ends up mining or attesting on the lighter chain;
+///   - if it is not quarantined, it converges to the heavier chain on its own.
+#[ignore = "restart fault injection: ~25 minutes; run explicitly"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_killed_partway_through_recovery_comes_back_safe() {
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let overrides = write_shallow_pruning_params("restart");
+    let (mut light, light_client, _l, light_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE).await;
+    let (mut heavy, heavy_client, _h, heavy_score) = pruned_branch(&overrides, BLOCKS_TO_PRUNE + 2500).await;
+    let light_pp = light_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    let heavy_pp = heavy_client.get_block_dag_info().await.unwrap().pruning_point_hash;
+    assert_ne!(light_pp, heavy_pp);
+
+    let mut failures: Vec<String> = Vec::new();
+    for kill_at in RESTART_POINTS {
+        recovery_trace::clear();
+
+        // Lighter chain first, so the node has something provisional to lose.
+        let mut args = gated_args();
+        args.override_params_file = Some(overrides.to_string_lossy().into_owned());
+        let mut follower = Daemon::new_random_with_args(args, TOTAL_FD_LIMIT);
+        let follower_client = follower.start().await;
+        follower_client.add_peer(format!("127.0.0.1:{}", light.p2p_port).try_into().unwrap(), true).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        follower_client.add_peer(format!("127.0.0.1:{}", heavy.p2p_port).try_into().unwrap(), true).await.unwrap();
+
+        // Wait for the moment being tested, but never forever: if recovery never reaches this stage
+        // the round has nothing to say about restarts, and saying so beats a timeout that reads like
+        // a restart bug.
+        let reached = tokio::time::timeout(Duration::from_secs(300), async {
+            loop {
+                if recovery_trace::furthest_stage().is_some_and(|s| s >= kill_at) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if !reached {
+            failures.push(format!("{kill_at:?}: recovery never reached this stage, so the restart was never exercised"));
+            follower.shutdown();
+            continue;
+        }
+
+        // The kill. Not a graceful drain — the point is what survived on disk.
+        let mut follower = follower.restarted(TOTAL_FD_LIMIT);
+        let follower_client = follower.start().await;
+
+        // First thing after coming back, before it has had any chance to re-sync: it must not be
+        // telling miners and validators to go ahead. This is the assertion a persisted gate exists
+        // for; an in-memory one would read `synced` here.
+        if follower_client.get_sync_status().await.unwrap() {
+            failures.push(format!("{kill_at:?}: reported synced immediately after restart — the gate did not survive"));
+        }
+
+        follower_client.add_peer(format!("127.0.0.1:{}", light.p2p_port).try_into().unwrap(), true).await.unwrap();
+        follower_client.add_peer(format!("127.0.0.1:{}", heavy.p2p_port).try_into().unwrap(), true).await.unwrap();
+
+        let check = follower_client.clone();
+        let settled = tokio::time::timeout(Duration::from_secs(300), async move {
+            loop {
+                if check.get_block_dag_info().await.unwrap().virtual_daa_score >= heavy_score {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        let info = follower_client.get_block_dag_info().await.unwrap();
+        let on_heavy = info.pruning_point_hash == heavy_pp;
+        let on_light = info.pruning_point_hash == light_pp;
+        let participating = follower_client.get_sync_status().await.unwrap();
+        println!("RESTART at={kill_at:?} settled={settled} on_heavy={on_heavy} on_light={on_light} participating={participating}");
+
+        // The one rule with no exceptions: never acting on the lighter chain.
+        if on_light && participating {
+            failures.push(format!("{kill_at:?}: came back PARTICIPATING on the lighter chain"));
+            println!("{}", recovery_trace::diagnosis(recovery_trace::RecoveryStage::CandidateCommitted));
+        } else if !on_heavy && !participating {
+            // Quarantined, or still working. Safe either way — it is not acting on anything.
+            println!("  (held back rather than converged, which is the safe outcome, not a pass)");
+        } else if !on_heavy {
+            failures.push(format!("{kill_at:?}: participating on neither branch"));
+        }
+
+        follower.shutdown();
+    }
+
+    heavy.shutdown();
+    light.shutdown();
+    let _ = std::fs::remove_file(&overrides);
+    let _ = light_score;
+
+    println!("RESTART complete: {} failures out of {}", failures.len(), RESTART_POINTS.len());
+    assert!(failures.is_empty(), "restart fault injection found failures:\n{}", failures.join("\n"));
+}

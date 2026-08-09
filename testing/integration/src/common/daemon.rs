@@ -93,7 +93,9 @@ pub struct Daemon {
     shutdown_requested: Listener,
     workers: Option<Vec<std::thread::JoinHandle<()>>>,
 
-    _appdir_tempdir: TempDir,
+    /// Shared so a restart can rebuild over the same data directory. The directory is removed when
+    /// the last daemon holding it drops, not when the first one shuts down.
+    appdir_tempdir: Arc<TempDir>,
 }
 
 fn free_port() -> u16 {
@@ -136,7 +138,11 @@ impl Daemon {
     }
 
     pub fn with_manager(client_manager: Arc<ClientManager>, fd_total_budget: i32) -> Daemon {
-        let appdir_tempdir = get_kaspa_tempdir();
+        Self::with_manager_in(client_manager, Arc::new(get_kaspa_tempdir()), fd_total_budget)
+    }
+
+    /// Build a daemon over a specific data directory. See [`Daemon::restarted`].
+    pub fn with_manager_in(client_manager: Arc<ClientManager>, appdir_tempdir: Arc<TempDir>, fd_total_budget: i32) -> Daemon {
         client_manager.args.write().appdir = Some(appdir_tempdir.path().to_str().unwrap().to_owned());
         let (core, _) = create_core_with_runtime(&Default::default(), &client_manager.args.read(), fd_total_budget);
         let async_service = &Arc::downcast::<AsyncRuntime>(core.find(AsyncRuntime::IDENT).unwrap().into_any_arc()).unwrap();
@@ -145,7 +151,7 @@ impl Daemon {
         let shutdown_requested = rpc_core_service.core_shutdown_request_listener();
         let grpc_server = &Arc::downcast::<GrpcService>(async_service.find(GrpcService::IDENT).unwrap().into_any_arc()).unwrap();
         let grpc_server_started = grpc_server.started();
-        Daemon { client_manager, core, grpc_server_started, shutdown_requested, workers: None, _appdir_tempdir: appdir_tempdir }
+        Daemon { client_manager, core, grpc_server_started, shutdown_requested, workers: None, appdir_tempdir }
     }
 
     pub fn client_manager(&self) -> Arc<ClientManager> {
@@ -180,6 +186,18 @@ impl Daemon {
     pub fn shutdown(&mut self) {
         self.core.shutdown();
         self.join();
+    }
+
+    /// Stop this daemon and bring a new one up over the same data directory and the same ports.
+    ///
+    /// What an operator restart looks like from the node's point of view, and the only way to test
+    /// that state which must survive one actually does. Anything held only in memory is gone; what
+    /// comes back is whatever was written to disk.
+    ///
+    /// The returned daemon is not started — call `start()` on it, as after `new_random_with_args`.
+    pub fn restarted(&mut self, fd_total_budget: i32) -> Daemon {
+        self.shutdown();
+        Daemon::with_manager_in(self.client_manager.clone(), self.appdir_tempdir.clone(), fd_total_budget)
     }
 }
 
