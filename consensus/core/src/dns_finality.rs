@@ -6113,6 +6113,13 @@ pub fn compute_capabilities_from_accepted_txs(txs: &[Transaction]) -> Vec<Comput
 /// declaration is still perfectly valid.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct ComputeCapabilityRecord {
+    /// The chain block that accepted the declaration.
+    ///
+    /// DAA is a number like a clock, not a proof of ancestry: two branches can carry blocks at the
+    /// same score, so `accepted_daa_score <= pov` admits a declaration that the point of view's own
+    /// history does not contain. A candidate branch scored against the selected chain's store would
+    /// then borrow the other branch's committee. This field is what the ancestry check uses.
+    pub declaration_block: BlockHash,
     pub validator_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
     pub model_weights_hash: Hash64,
@@ -8227,6 +8234,7 @@ mod tests {
         let metal = Hash64::from_u64_word(3);
         let cuda = Hash64::from_u64_word(4);
         let rec = |v: u64, m: Hash64, r: Hash64, class: Hash64, expiry: u64| ComputeCapabilityRecord {
+            declaration_block: BlockHash::from_u64_word(v),
             accepted_daa_score: 0,
             validator_id: Hash64::from_u64_word(v),
             bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(v + 900), 0),
@@ -8430,6 +8438,7 @@ mod tests {
         let runtime = Hash64::from_u64_word(2);
         let class = Hash64::from_u64_word(3);
         let cap = |validator: u64, accepted: u64, expiry: u64| ComputeCapabilityRecord {
+            declaration_block: BlockHash::from_u64_word(validator),
             validator_id: Hash64::from_u64_word(validator),
             bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(validator + 100), 0),
             model_weights_hash: model,

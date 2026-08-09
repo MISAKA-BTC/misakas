@@ -2043,7 +2043,7 @@ impl VirtualStateProcessor {
                     let Ok(header) = self.headers_store.get_header(block) else { break };
                     for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(block)) {
                         if let Some(record) =
-                            verified_capability(cap, &bonds, net_id.as_byte_slice(), header.daa_score, &dns_params.vlt)
+                            verified_capability(cap, &bonds, net_id.as_byte_slice(), block, header.daa_score, &dns_params.vlt)
                         {
                             store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
                             swept += 1;
@@ -2052,7 +2052,10 @@ impl VirtualStateProcessor {
                 }
             }
             info!("[vlt-credit] swept {swept} capability declaration(s) out of history into the capability store");
-            store.mark_backfilled(batch).unwrap();
+            // Marked only after every insert is durable. A crash mid-sweep leaves the marker unset,
+            // so the next start sweeps again — idempotently, since a declaration keyed by its own
+            // transaction id rewrites to the same value.
+            store.mark_backfilled_direct().unwrap();
         }
 
         for removed in chain_path.removed.iter().rev() {
@@ -2065,7 +2068,9 @@ impl VirtualStateProcessor {
             for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*added)) {
                 // The same bond-binding and signature checks the walk applied, so a row can only
                 // hold a declaration the credit walk would itself have accepted.
-                if let Some(record) = verified_capability(cap, &bonds, net_id.as_byte_slice(), header.daa_score, &dns_params.vlt) {
+                if let Some(record) =
+                    verified_capability(cap, &bonds, net_id.as_byte_slice(), *added, header.daa_score, &dns_params.vlt)
+                {
                     store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
                 }
             }
@@ -3506,6 +3511,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 capabilities.push(ComputeCapabilityRecord {
+                    declaration_block: chain_block,
                     accepted_daa_score: block_daa,
                     validator_id: cap.validator_id,
                     bond_outpoint: cap.bond_outpoint,
@@ -3696,7 +3702,22 @@ impl VirtualStateProcessor {
         // drawing the pool from whatever the walk happened to collect empties it the moment the
         // walk floor rises past a declaration that is still perfectly in force. Every honest
         // verdict then belongs to no committee and the certificate reads as unverified for good.
-        let stored_capabilities = self.compute_capability_store.read().all();
+        // Ancestry, not DAA. The store follows the SELECTED chain, and this resolution also runs
+        // while scoring a candidate branch (pinned at the two branches' shared ancestor). Without
+        // this filter that scoring would draw committee candidates from declarations the branch
+        // under evaluation does not contain — one branch borrowing another's verifiers, which is a
+        // consensus split rather than a slow path. `accepted_daa_score <= pov` does not substitute:
+        // a DAA score is a number like a clock, and two branches can carry blocks at the same one.
+        let stored_capabilities: Vec<ComputeCapabilityRecord> = self
+            .compute_capability_store
+            .read()
+            .all()
+            .into_iter()
+            .filter(|r| {
+                r.declaration_block == beacon_anchor.anchor_hash
+                    || self.reachability_service.is_chain_ancestor_of(r.declaration_block, beacon_anchor.anchor_hash)
+            })
+            .collect();
         let declared = capability_candidate_pool(
             &stored_capabilities,
             cert.spec.model_weights_hash,
@@ -6097,6 +6118,7 @@ fn verified_capability(
     cap: kaspa_consensus_core::vlt::ComputeCapabilityPayload,
     bonds: &[StakeBondRecord],
     net_id: &[u8],
+    declaration_block: BlockHash,
     accepted_daa_score: u64,
     vlt: &kaspa_consensus_core::vlt::VltParams,
 ) -> Option<ComputeCapabilityRecord> {
@@ -6125,6 +6147,7 @@ fn verified_capability(
         return None;
     }
     Some(ComputeCapabilityRecord {
+        declaration_block,
         accepted_daa_score,
         validator_id: cap.validator_id,
         bond_outpoint: cap.bond_outpoint,

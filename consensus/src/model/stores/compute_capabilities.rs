@@ -73,6 +73,12 @@ impl DbComputeCapabilityStore {
         self.access.write(BatchDbWriter::new(batch), tx_id, record)
     }
 
+    /// Immediate, unbatched write — used by the history sweep, whose rows must be readable by the
+    /// rest of the same commit.
+    pub fn insert_direct(&mut self, tx_id: TransactionId, record: Arc<ComputeCapabilityRecord>) -> StoreResult<()> {
+        self.access.write(DirectDbWriter::new(&self.db), tx_id, record)
+    }
+
     pub fn delete_batch(&mut self, batch: &mut WriteBatch, tx_id: TransactionId) -> StoreResult<()> {
         self.access.delete(BatchDbWriter::new(batch), tx_id)
     }
