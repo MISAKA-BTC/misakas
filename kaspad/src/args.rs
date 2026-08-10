@@ -216,6 +216,10 @@ pub struct Args {
     pub vlt_devnet_shadow_daa: Option<u64>,
     pub vlt_devnet_credit_window_epochs: u32,
     pub vlt_shadow_only: bool,
+    /// MISAKA VLT PR 3: with `--vlt-devnet`, pin `credit_decay_bps` to 10_000 (a flat `d_τ = 1`).
+    /// The 8/5/3/2/2 weight-plan devnet needs job counts to map to weights EXACTLY — under decay,
+    /// validators that finish their quotas across different epochs drift off the plan's ratios.
+    pub vlt_devnet_flat_decay: bool,
 
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
@@ -311,6 +315,7 @@ impl Default for Args {
             vlt_devnet_shadow_daa: None,
             vlt_devnet_credit_window_epochs: 8,
             vlt_shadow_only: false,
+            vlt_devnet_flat_decay: false,
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -402,12 +407,19 @@ impl Args {
             // meaningless anywhere but the devnet it was built for — a constraint that holds even
             // if the feature flag were somehow on in the wrong build.
             let genesis_hash = config.params.genesis.hash;
-            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_vlt_devnet(
+            let mut dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_vlt_devnet(
                 shadow_daa,
                 self.vlt_devnet_credit_window_epochs,
                 self.vlt_shadow_only,
                 genesis_hash,
             );
+            // Flat decay is a devnet CALIBRATION, not a rule change: `is_coherent` admits
+            // `credit_decay_bps == 10_000` (d_τ = 1 for every τ). It exists so a job-quota plan
+            // like 8/5/3/2/2 lands as exactly 400/250/150/100/100 VLT of weight regardless of
+            // which epoch each validator finished in.
+            if self.vlt_devnet_flat_decay {
+                dns.vlt.credit_decay_bps = 10_000;
+            }
             // Fail loudly rather than let the node start into a configuration `update_dns_state`
             // would silently refuse to leave Bootstrap for.
             assert!(
@@ -420,6 +432,8 @@ impl Args {
             config.params.dns_params = Some(dns);
         } else if self.vlt_shadow_only {
             panic!("--vlt-shadow-only only means something together with --vlt-devnet");
+        } else if self.vlt_devnet_flat_decay {
+            panic!("--vlt-devnet-flat-decay only means something together with --vlt-devnet");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -811,6 +825,12 @@ pub fn cli() -> Command {
                  weight fence: it produces the C_i(E) you need to see before deciding it is safe to vote on.")
                 .env("KASPAD_VLT_SHADOW_ONLY"),
         )
+        .arg(
+            arg!(--"vlt-devnet-flat-decay" "MISAKA VLT: with --vlt-devnet, pin the credit decay flat (d_tau = 1). A job-quota \
+                 weight plan (e.g. 8/5/3/2/2 jobs at 50 VLT each) then lands as exactly its intended weights, whichever epoch \
+                 each validator finished its quota in. Devnet calibration only — production keeps real decay.")
+                .env("KASPAD_VLT_DEVNET_FLAT_DECAY"),
+        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -1061,6 +1081,7 @@ impl Args {
                 defaults.vlt_devnet_credit_window_epochs,
             ),
             vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
+            vlt_devnet_flat_decay: arg_match_unwrap_or::<bool>(&m, "vlt-devnet-flat-decay", defaults.vlt_devnet_flat_decay),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

@@ -399,6 +399,10 @@ pub struct VirtualStateProcessor {
     /// epoch's boundary recompute; a cache and audit surface for the chain-derived denominator,
     /// never a verification source on branches whose derivation pins elsewhere.
     pub(super) vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
+    /// MISAKA VLT PR 3: whether this process has logged the frozen snapshot it RESUMED with.
+    /// One line per process start, so a restart leaves grep-able proof that the persisted roots
+    /// equal the ones the previous run froze.
+    pub(super) vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool,
     /// MISAKA: the last reported activation state, so a TRANSITION can be announced rather than
     /// left for an operator to infer from a periodic line changing shape. In-memory only — it is
     /// a report about the chain, not a fact of it, and it re-derives on the next recompute.
@@ -568,6 +572,7 @@ impl VirtualStateProcessor {
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             vlt_credit_store: storage.vlt_credit_store.clone(),
             vlt_voting_snapshot_store: storage.vlt_voting_snapshot_store.clone(),
+            vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool::new(false),
             vlt_state: Arc::new(Mutex::new(None)),
             vlt_metrics: Arc::new(VltMetrics::default()),
             block_quality_pool_store: storage.block_quality_pool_store.clone(),
@@ -2430,6 +2435,29 @@ impl VirtualStateProcessor {
         // blue_score is read from its anchor (recent — at most ~1 epoch old, never pruned).
         let sink_blue = self.headers_store.get_blue_score(sink).unwrap();
         let epoch_len_blue = dns_params.attestation_epoch_length_blue_score.max(1);
+        // MISAKA VLT PR 3: once per process, surface the frozen snapshot this node RESUMED with —
+        // grep-able proof that the persisted roots equal the ones the previous run's "frozen"
+        // line logged for the same epoch. Before the throttle, because the first recompute after
+        // a restart usually lands inside an already-frozen epoch, which the freeze block below
+        // never revisits.
+        if dns_params.vlt_shadow_active_at(sink_daa)
+            && !self.vlt_snapshot_resume_logged.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            let wall_epoch = sink_blue / epoch_len_blue;
+            for w in [wall_epoch, wall_epoch.saturating_sub(1)] {
+                if let Ok(row) = self.vlt_voting_snapshot_store.get(w) {
+                    info!(
+                        "[vlt-voting-snapshot] resumed epoch={w} snapshot_root={} validator_set_root={} vote_commitment={} total_weight={} quorum_weight={} (persisted across restart)",
+                        row.snapshot_root,
+                        row.validator_set_root,
+                        row.vote_commitment(),
+                        row.total_weight,
+                        row.quorum_weight,
+                    );
+                    break;
+                }
+            }
+        }
         if let Some(prev) = prev_dns_state.as_ref() {
             let prev_blue = self.headers_store.get_blue_score(prev.selected_chain_anchor).unwrap_or(0);
             if sink_blue / epoch_len_blue == prev_blue / epoch_len_blue {
@@ -2656,12 +2684,16 @@ impl VirtualStateProcessor {
         // Announce a CHANGE at warn level too. The per-epoch lines above are the steady state; a
         // transition is the thing an operator wants paged on, and the two fences are each a
         // one-time event that must not be buried in a periodic report.
+        //
+        // By LABEL, not by value: `Active` carries the live epoch/root/weights, so comparing
+        // values pages "active -> active" once per epoch forever — steady state dressed as an
+        // event. The stored value still updates, so gauges and future consumers see the numbers.
         {
             let mut last = self.vlt_state.lock().unwrap();
-            if last.as_ref() != Some(&vlt_state) {
+            if last.as_ref().map(|s| s.label()) != Some(vlt_state.label()) {
                 warn!("[vlt-state] {} -> {} at daa={sink_daa}", last.as_ref().map_or("none", |s| s.label()), vlt_state.label());
-                *last = Some(vlt_state.clone());
             }
+            *last = Some(vlt_state.clone());
         }
         self.vlt_metrics.record(&vlt_state, sink_daa);
 
@@ -2677,17 +2709,7 @@ impl VirtualStateProcessor {
                 && let Some(snap) = self.voting_snapshot_for_wall_epoch(sink, wall_epoch, &bonds, net_id.as_byte_slice(), dns_params)
             {
                 if snap.resolution_complete {
-                    info!(
-                        "[vlt-voting-snapshot] frozen epoch={wall_epoch} snapshot_root={} validator_set_root={} vote_commitment={} validators={} total_weight={} quorum_weight={} (pinned at {} daa={})",
-                        snap.snapshot_root,
-                        snap.validator_set_root,
-                        snap.vote_commitment(),
-                        snap.validators.len(),
-                        snap.total_weight,
-                        snap.quorum_weight,
-                        snap.source_finalized_anchor,
-                        snap.source_anchor_daa,
-                    );
+                    Self::log_frozen_snapshot(&snap, wall_epoch, &format!("pinned at {} daa={}", snap.source_finalized_anchor, snap.source_anchor_daa));
                     self.vlt_voting_snapshot_store.set_batch(batch, wall_epoch, snap).unwrap();
                 } else {
                     info!(
@@ -3335,6 +3357,36 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// One canonical log line per frozen snapshot, shared by the boundary freeze and the lazy
+    /// sign-path freeze so every row on disk has exactly one grep-able record of its birth —
+    /// `suffix` says which path froze it. The verify harness parses this line; treat its shape
+    /// as an operator API.
+    fn log_frozen_snapshot(snap: &VltVotingSnapshot, wall_epoch: u64, suffix: &str) {
+        // Per-row weights for small sets (a devnet's whole point is comparing them); capped so a
+        // production-sized set cannot turn the line into a table dump.
+        let weights = if snap.validators.len() <= 8 {
+            format!(
+                " weights=[{}]",
+                snap.validators
+                    .iter()
+                    .map(|v| format!("{}:{}", &v.validator_id.to_string()[..8], v.effective_weight))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else {
+            String::new()
+        };
+        info!(
+            "[vlt-voting-snapshot] frozen epoch={wall_epoch} snapshot_root={} validator_set_root={} vote_commitment={} validators={} total_weight={} quorum_weight={}{weights} ({suffix})",
+            snap.snapshot_root,
+            snap.validator_set_root,
+            snap.vote_commitment(),
+            snap.validators.len(),
+            snap.total_weight,
+            snap.quorum_weight,
+        );
+    }
+
     /// The commitment every vote signed at the CURRENT sink must carry (§5.1), or `None` below
     /// the weight fence / when no complete snapshot can be derived yet.
     ///
@@ -3367,6 +3419,7 @@ impl VirtualStateProcessor {
             return None;
         }
         let commitment = snap.vote_commitment();
+        Self::log_frozen_snapshot(&snap, wall_epoch, "lazy sign-path freeze");
         if let Err(e) = self.vlt_voting_snapshot_store.set(wall_epoch, snap) {
             warn!("[vlt-voting-snapshot] lazy freeze of epoch {wall_epoch} failed: {e}");
         }

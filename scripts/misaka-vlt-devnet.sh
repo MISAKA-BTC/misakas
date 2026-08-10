@@ -32,13 +32,26 @@
 # would give five validators identical weight, which tests that the overlay runs but not that it
 # weights — the one property the whole exercise is for.
 #
+# The plan lands EXACTLY because the devnet pins the credit decay flat (--vlt-devnet-flat-decay):
+# under production decay (0.97/epoch) a validator that finished its quota earlier would out-decay
+# one that finished late, and 8/5/3/2/2 jobs would land near — but not at — 400/250/150/100/100.
+# Pass --real-decay to run the production curve instead (a decay experiment, not the weight plan).
+#
+# Flat decay does NOT stop the credit WINDOW from sliding: C_i(E) sums only the last K epochs, so
+# the full plan is frozen only while every job is simultaneously inside one window. The measured
+# fixture cadence is ~2.5-3 epochs per job (commit -> next-epoch beacon -> certificate), so the
+# largest quota spans ~quota x 3 epochs and the whole plan needs
+#     K >= max_quota x 3 + challenge maturity (~3 epochs) + margin
+# — for 8/5/3/2/2 that is --epochs 32. The K=8 default is a fast OVERLAY soak, not a plan run: it
+# proves crediting/committees/verdicts in minutes, and its W(E) will slide back down by design.
+#
 # Re-running this script on an existing devnet is safe: it stops the recorded pids first, keeps
 # each node's validator key, and carries any --stake-bond a previous bond run recorded, so a
 # bonded devnet can be restarted with new flags without redoing the bond.
 #
 # Usage:
 #   scripts/misaka-vlt-devnet.sh [--shadow-only] [--no-mine] [--nodes N] [--shadow-daa N]
-#                                [--epochs K] [--job-quotas N,N,...]
+#                                [--epochs K] [--job-quotas N,N,...] [--real-decay]
 #
 # Env:
 #   MISAKA_DEVNET_DIR   working directory (default: ./.misaka-vlt-devnet)
@@ -54,6 +67,7 @@ CREDIT_WINDOW_EPOCHS=8
 SHADOW_ONLY=0
 MINE=1
 JOB_QUOTAS=8,5,3,2,2
+FLAT_DECAY=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,6 +77,7 @@ while [ $# -gt 0 ]; do
     --shadow-daa)  SHADOW_DAA="$2"; shift 2 ;;
     --epochs)      CREDIT_WINDOW_EPOCHS="$2"; shift 2 ;;
     --job-quotas)  JOB_QUOTAS="$2"; shift 2 ;;
+    --real-decay)  FLAT_DECAY=0; shift ;;
     -h|--help)     sed -n '2,42p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -270,6 +285,7 @@ for i in $(seq 0 $((NODES - 1))); do
     --vlt-devnet-credit-window-epochs="$CREDIT_WINDOW_EPOCHS"
   )
   [ "$SHADOW_ONLY" -eq 1 ] && args+=(--vlt-shadow-only)
+  [ "$FLAT_DECAY" -eq 1 ] && args+=(--vlt-devnet-flat-decay)
   # `--compute-prompt` is what makes a node an EXECUTOR; without it the compute role audits peers
   # and originates nothing, so a devnet where no node has one produces no VLT at all and every
   # weight stays at zero. That applies to the real worker as much as to the fixture.
@@ -376,5 +392,7 @@ echo "knowable after the funding transaction lands — so run scripts/misaka-vlt
 echo "which bonds every validator and restarts it with its own --stake-bond (see ADR-0010). Until"
 echo "then the nodes mine and gossip but produce no attestations, and the overlay stays at"
 echo "W(E) = 0. Re-running THIS script afterwards keeps each bond."
+echo "Verify the 8/5/3/2/2 weight plan, cross-node root equality and restart persistence with:"
+echo "  scripts/misaka-vlt-devnet-verify.sh            # once bonds are Active and quotas are filling"
 echo "Stop everything with:"
 echo "  for p in $WORK_DIR/*/kaspad.pid $WORK_DIR/miner.pid; do kill \"\$(cat \"\$p\")\" 2>/dev/null; done"
