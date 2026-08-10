@@ -166,7 +166,7 @@ for _ in $(seq 1 60); do
   if (exec 3<>"/dev/tcp/127.0.0.1/$BASE_RPC") 2>/dev/null; then exec 3<&- 3>&-; break; fi
   sleep 1
 done
-"$MISAMINER_BIN" --rpc="127.0.0.1:$BASE_RPC" --network-id=devnet --allow-burn --threads=2 \
+"$MISAMINER_BIN" --rpc="127.0.0.1:$BASE_RPC" --network-id=devnet --allow-burn --mine-when-not-synced --threads=2 \
   >>"$WORK_DIR/miner.log" 2>&1 &
 echo $! > "$WORK_DIR/miner.pid"
 

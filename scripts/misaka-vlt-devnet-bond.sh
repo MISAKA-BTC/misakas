@@ -118,7 +118,7 @@ for i in $(seq 0 $((NODES - 1))); do
     out=$(try_bond "$i") || true
     if [ -n "$out" ]; then break; fi
     echo "  attempt $attempt: funding not mature yet; mining 200 more blocks"
-    "$MISAMINER_BIN" --rpc="127.0.0.1:$(grpc_of 0)" --network-id=devnet --allow-burn --threads=2 \
+    "$MISAMINER_BIN" --rpc="127.0.0.1:$(grpc_of 0)" --network-id=devnet --allow-burn --mine-when-not-synced --threads=2 \
       --blocks=200 --min-block-interval-ms=0 >>"$WORK_DIR/bond-miner.log" 2>&1 || true
   done
   if [ -z "$out" ]; then
@@ -135,7 +135,7 @@ done
 # looks like a bonding failure that is really just a race.
 echo
 echo "advancing the chain so the bond transactions are accepted ..."
-"$MISAMINER_BIN" --rpc="127.0.0.1:$(grpc_of 0)" --network-id=devnet --allow-burn --threads=2 \
+"$MISAMINER_BIN" --rpc="127.0.0.1:$(grpc_of 0)" --network-id=devnet --allow-burn --mine-when-not-synced --threads=2 \
   --blocks=30 --min-block-interval-ms=0 >>"$WORK_DIR/bond-miner.log" 2>&1 || true
 
 echo
