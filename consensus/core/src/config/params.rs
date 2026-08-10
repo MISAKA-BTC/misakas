@@ -944,6 +944,9 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // and spend without attestation flow) keep their semantics; dedicated fixtures opt in with
     // custom DnsParams. See the field doc for the phase discipline.
     coinbase_settlement_long_maturity_daa: 0,
+    // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
+    // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
+    coinbase_settlement_consensus_activation_daa_score: u64::MAX,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1135,6 +1138,9 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // DNS-accelerated coinbase settlement: OFF on mainnet until testnet has soaked the policy
     // layer through at least one full anchor-live / anchor-dead cycle. See the field doc.
     coinbase_settlement_long_maturity_daa: 0,
+    // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
+    // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
+    coinbase_settlement_consensus_activation_daa_score: u64::MAX,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1276,6 +1282,9 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // ~110 DAA/min this is ~4.5 h — long enough to bite, short enough to tolerate while the
     // validator set is being restored.
     coinbase_settlement_long_maturity_daa: 30_000,
+    // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
+    // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
+    coinbase_settlement_consensus_activation_daa_score: u64::MAX,
     ..PRODUCTION_DNS_PARAMS
 };
 
@@ -1658,7 +1667,7 @@ mod consensus_params_id_tests {
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
         //
-        // Last moved when `coinbase_settlement_long_maturity_daa` joined `stake_preference_max_work_deficit_multiplier` in the same pre-flag-day batch (a `DnsParams`
+        // Last moved when `coinbase_settlement_consensus_activation_daa_score` (the fold fence, u64::MAX everywhere) joined the settlement/preference pre-flag-day batch (a `DnsParams`
         // field, and `dns_params` is hashed here as its whole borsh encoding, so every preset that
         // carries an overlay moved at once — the same shape as the unbond-authorization fence move
         // before it). Deliberate: the preference decides where a node puts its sink, and two nodes
@@ -1670,10 +1679,10 @@ mod consensus_params_id_tests {
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "b675a94972d9154932615b22d60b176bcd2917f5a1d6228c00d1cf511c7d8ce3"),
-            ("testnet", TESTNET_PARAMS, "70dadcf404ae12841aba2df28b2141b15b10e408652e2eaa5c5d194ba9fe8a7e"),
-            ("simnet", SIMNET_PARAMS, "74295a7c3c6b790e03ebcbb92661c0c1a33a7b018af4dcc4a28eaf5f1ecc70fa"),
-            ("devnet", DEVNET_PARAMS, "426721c7faf0029977cc7e18984defd4c1cb6513d023f85198ee3826b5f12438"),
+            ("mainnet", MAINNET_PARAMS, "fc55b73e9995b62cc1a27eee6ba0234a900b2a8cd359e9a9e7a71b6383632b6b"),
+            ("testnet", TESTNET_PARAMS, "5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571"),
+            ("simnet", SIMNET_PARAMS, "a5860578b2d43e7e5b1d50f3c14e106c716b5388f95f9f5a610a219b394c7ef8"),
+            ("devnet", DEVNET_PARAMS, "6a1cfe59bffb944e67ee5344b7004c2a522905bcf57aafff842f96de3c938423"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

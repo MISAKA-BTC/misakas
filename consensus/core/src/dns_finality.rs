@@ -1183,6 +1183,25 @@ pub struct DnsParams {
     /// through the fallback.
     pub coinbase_settlement_long_maturity_daa: u64,
 
+    /// The DAA score at and above which coinbase settlement becomes a CONSENSUS rule (spends of
+    /// unsettled coinbases invalid at acceptance) rather than mempool policy alone.
+    ///
+    /// `u64::MAX` (never) on every preset in this build, deliberately: the consensus rule needs
+    /// the confirmed anchor as a sequential per-chain-block fold — initialized from the
+    /// pruning-point overlay snapshot and advanced with apply/revert symmetry, the
+    /// [`ActiveBondView`] pattern — and that fold is NOT in this build. The fence exists NOW so
+    /// that the build which does carry the fold announces itself: setting a real activation
+    /// height changes this struct's borsh encoding and therefore the consensus fingerprint, so a
+    /// fold-carrying node and a policy-only node refuse each other at handshake instead of
+    /// splitting at the activation height. A fence that ships with the fold, rather than before
+    /// it, would leave a window where two builds agree on params and disagree on validity.
+    ///
+    /// Enablement order, pinned by test until done: (1) the anchor fold lands with its scenario
+    /// matrix (genesis IBD, pruning-point init, reconnection, Active↔Stale boundary), (2)
+    /// testnet sets a coordinated future height here and flag-days, (3) mainnet follows a full
+    /// testnet cycle later.
+    pub coinbase_settlement_consensus_activation_daa_score: u64,
+
     /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the parameters that replace
     /// bonded capital with verified useful compute as the source of validator voting power.
     ///
@@ -7413,6 +7432,15 @@ mod tests {
         assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "dev/sim fixtures keep their semantics");
         let t = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
         assert!(t > 0, "testnet soaks the settlement policy");
+        for (name, p) in
+            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
+        {
+            assert_eq!(
+                p.coinbase_settlement_consensus_activation_daa_score,
+                u64::MAX,
+                "{name}: consensus settlement must stay fenced until the anchor fold lands with its scenario matrix"
+            );
+        }
         assert!(
             t > TESTNET_DNS_PARAMS.gate_horizon_blocks() + TESTNET_DNS_PARAMS.dns_veto_ttl_daa_score,
             "the fallback must outlast the dispute-resolution horizon (got {t})"
@@ -10411,6 +10439,7 @@ mod tests {
             emergency_work_override_multiplier: 4,
             stake_preference_max_work_deficit_multiplier: 2,
             coinbase_settlement_long_maturity_daa: 30_000,
+            coinbase_settlement_consensus_activation_daa_score: u64::MAX,
             unbond_authz_mergeset_activation_daa_score: 0,
             max_reorg_horizon_blocks: 100_000,
             evidence_window_blocks: 200_000,

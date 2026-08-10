@@ -61,6 +61,11 @@ pub struct Inner {
     connection_signaler: Mutex<Option<Sender<std::result::Result<(), String>>>>,
     fee_rate_task_ctl: DuplexChannel,
     fee_rate_task_is_running: AtomicBool,
+    /// The DAA score at which the DNS confirmed anchor was last polled
+    /// (`get_dns_confirmation` → `NetworkParams::set_dns_confirmed_anchor_daa`). The anchor
+    /// only moves at attestation-epoch cadence, so polling it on every virtual DAA tick would
+    /// be pure chatter; this throttles the refresh to ~once per epoch worth of DAA.
+    dns_anchor_polled_at_daa: AtomicU64,
 }
 
 impl Inner {
@@ -93,6 +98,7 @@ impl Inner {
             connection_signaler: Mutex::new(None),
             fee_rate_task_ctl: DuplexChannel::oneshot(),
             fee_rate_task_is_running: AtomicBool::new(false),
+            dns_anchor_polled_at_daa: AtomicU64::new(0),
         }
     }
 }
@@ -262,10 +268,35 @@ impl UtxoProcessor {
 
     pub async fn handle_daa_score_change(&self, current_daa_score: u64) -> Result<()> {
         self.inner.current_daa_score.store(current_daa_score, Ordering::SeqCst);
+        self.refresh_dns_anchor(current_daa_score).await;
         self.notify(Events::DaaScoreChange { current_daa_score }).await?;
         self.handle_pending(current_daa_score).await?;
         self.handle_outgoing(current_daa_score).await?;
         Ok(())
+    }
+
+    /// Refresh [`NetworkParams::dns_confirmed_anchor_daa`] from the node's
+    /// `get_dns_confirmation` — the input [`UtxoEntryReferenceExtension::dns_settled`] reads to
+    /// keep a coinbase Pending until the anchor passes it. Throttled to ~once per 100 DAA (the
+    /// attestation-epoch cadence the anchor itself moves at) and inert on networks whose params
+    /// carry no settlement. A poll failure keeps the last value: settlement then errs toward
+    /// Pending, which is the conservative direction for a display of spendability.
+    async fn refresh_dns_anchor(&self, current_daa_score: u64) {
+        let Ok(params) = self.network_params() else { return };
+        if params.coinbase_settlement_long_maturity_daa() == 0 {
+            return;
+        }
+        let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
+        if current_daa_score < last.saturating_add(100) && last != 0 {
+            return;
+        }
+        let Some(rpc) = self.try_rpc_api() else { return };
+        self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
+        if let Ok(confirmation) = rpc.get_dns_confirmation().await {
+            if confirmation.available {
+                params.set_dns_confirmed_anchor_daa(confirmation.last_dns_confirmed_anchor_daa_score);
+            }
+        }
     }
 
     #[allow(clippy::mutable_key_type)]
