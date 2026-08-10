@@ -4747,6 +4747,10 @@ impl VirtualStateProcessor {
                 info!("[token] transfer {}: {from} -> {} amount {} (asset {})", tx.id(), p.to, p.amount, p.asset_id);
             }
             Ok(_) => info!("[token-shadow] transfer {} would move {} (asset {})", tx.id(), p.amount, p.asset_id),
+            // Shadow mode is an observability contract: EVERY shadow-era op gets an info
+            // line, would-be-void included — a trace-only outcome reads as "never folded",
+            // which is exactly the false alarm the first e2e run raised.
+            Err(e) if !live => info!("[token-shadow] transfer {} would be void: {e} (asset {})", tx.id(), p.asset_id),
             Err(e) => trace!("[token] transfer {} void: {e}", tx.id()),
         }
     }
@@ -4782,6 +4786,7 @@ impl VirtualStateProcessor {
                 info!("[token] burn {}: {owner} destroyed {} (asset {})", tx.id(), p.amount, p.asset_id);
             }
             Ok(_) => info!("[token-shadow] burn {} would destroy {} (asset {})", tx.id(), p.amount, p.asset_id),
+            Err(e) if !live => info!("[token-shadow] burn {} would be void: {e} (asset {})", tx.id(), p.asset_id),
             Err(e) => trace!("[token] burn {} void: {e}", tx.id()),
         }
     }

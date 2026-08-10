@@ -91,8 +91,12 @@ current_daa() { # from node-0's log: the newest daa= any overlay line reported
 
 # ---- Phase 1: a bonded, computing VLT devnet ---------------------------------------------------
 if [ "$SKIP_PHASE1" -eq 0 ]; then
-  echo "== Phase 1: VLT devnet ($NODES nodes, ports p2p=$BASE_P2P rpc=$BASE_RPC) =="
-  "$REPO_ROOT/scripts/misaka-vlt-devnet.sh" --nodes "$NODES"
+  echo "== Phase 1: VLT devnet ($NODES nodes, ports p2p=$BASE_P2P rpc=$BASE_RPC, SHADOW-ONLY) =="
+  # Shadow-only on purpose (design §10, revised): emission settles over finalized credit
+  # rows, which the accumulator produces from the SHADOW fence under bonded-stake finality.
+  # Opening the weight fence couples the run to the §6 activation state machine — the
+  # 2026-08-10 run showed that stalls anchors, starves verdicts, and reads as X=0 forever.
+  "$REPO_ROOT/scripts/misaka-vlt-devnet.sh" --nodes "$NODES" --shadow-only
   echo
   echo "== Phase 1: bonding every validator (mines through coinbase maturity — takes a while) =="
   # The bond script exits non-zero when some bonds are still awaiting acceptance at its final
@@ -107,9 +111,9 @@ else
 fi
 
 echo
-echo "== Phase 1: waiting for the VLT weight fence (compute becomes the vote) =="
-wait_for_log "$WORK_DIR/node-0/kaspad.log" '\[vlt-weight-fence-reached\]' "$WAIT_SECS" "the VLT weight fence"
-echo "weight fence reached; letting credits finalize for 60s"
+echo "== Phase 1: waiting for the compute pipeline (first certified job under bonded finality) =="
+wait_for_log "$WORK_DIR/node-0/kaspad.log" 'compute: certified job' "$WAIT_SECS" "the first certified compute job"
+echo "compute pipeline live; letting certificates and credits accumulate for 60s"
 sleep 60
 
 # ---- Phase 2: restart with the token fences + node-0's fixture-op plan -------------------------
