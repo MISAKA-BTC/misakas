@@ -1111,6 +1111,54 @@ pub struct DnsParams {
     /// anchor, never reach this branch, and are unaffected.
     pub emergency_work_override_multiplier: u32,
 
+    /// Sink-side dual of [`Self::emergency_work_override_multiplier`]: how large a WORK deficit
+    /// this node will forgive to move its sink onto a branch whose DNS overlay is demonstrably
+    /// alive, once its own branch's overlay has demonstrably died.
+    ///
+    /// The reorg gate above is purely negative — it refuses candidates, it never prefers one. A
+    /// node whose own chain stopped receiving attestations (anchor stale past
+    /// [`Self::dns_veto_ttl_daa_score`]) therefore keeps extending its dead branch as long as that
+    /// branch out-works every visible alternative, and every block it mines there deepens the
+    /// split — the incident-#8 shape: work-heavy/DNS-dead branch vs work-light/DNS-live branch.
+    /// Templates always extend the sink, so pointing the *sink* at the live-overlay branch is what
+    /// makes miners extend it, and work then accumulates where the validators are.
+    ///
+    /// A candidate within [`Self::gate_horizon_blocks`] qualifies only if ALL hold (evaluated in
+    /// [`stake_preference_verdict`], chain-deterministic on every input):
+    ///   * this node's own rollout stage is `Active` and its own confirmed anchor is stale past
+    ///     the full [`Self::dns_veto_ttl_daa_score`] — a fresh anchor means this chain IS a
+    ///     live-DNS branch, and symmetric-live contests (including a partition with validators
+    ///     on BOTH islands) stay work-decided: the preference is an escape from a dead branch,
+    ///     never an attraction between live ones, so it cannot amplify a split;
+    ///   * the candidate's StakeScore since the common ancestor is at least
+    ///     [`Self::required_stake_depth`] in ABSOLUTE terms — confirmation-grade attestation
+    ///     flow, the same H-02 depth an anchor needs to confirm at all. Tentative or trickle
+    ///     DNS moves nothing. This floor, being far above the stale trigger, is also the
+    ///     hysteresis: the ON bar and the OFF bar are separated without giving fork choice any
+    ///     memory (state in fork choice would make sink selection path-dependent, and two nodes
+    ///     with different histories would then disagree about the same DAG);
+    ///   * it also clears canonical's since-ancestor StakeScore by
+    ///     [`Self::emergency_stake_margin`] — relative dominance, under the same Sybil floor
+    ///     (`min_bond_amount_sompi`) as the veto;
+    ///   * `candidate_work_after × multiplier > canonical_work_after` — the deficit bound. `2`
+    ///     means a branch with less than HALF this branch's since-ancestor work is never
+    ///     preferred, whatever its stake says; H-02's "stake must not confirm shallow PoW" caps
+    ///     the reach of the stake dimension here exactly as it does in confirmation, and it
+    ///     subsumes the emergency work override: a branch the override would defend (>4×) can
+    ///     never be left by this rule (<½ fails the bound first).
+    ///
+    /// `0` disables the preference (pure work-max sink selection, the historical behaviour).
+    /// Mainnet ships 0 until the partition/IBD scenario matrix (genesis IBD, reconnection,
+    /// stale-anchor recovery, validator-outage recovery, Active↔Stale boundary, overwhelming-work
+    /// reorg) has been exercised by the regression harness; test networks ship 2.
+    ///
+    /// Liveness-first is preserved on both sides of the switch: a stale own-anchor never stops
+    /// block production or template serving — it only re-aims them; and if no qualifying branch is
+    /// visible, behaviour is byte-identical to today. An isolated node (sees no branch at all)
+    /// gains nothing from any rule — this engages exactly when the split becomes visible, which is
+    /// when re-aiming the hashpower still matters.
+    pub stake_preference_max_work_deficit_multiplier: u32,
+
     /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the parameters that replace
     /// bonded capital with verified useful compute as the source of validator voting power.
     ///
@@ -4000,6 +4048,69 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
             }
         }
     }
+}
+
+/// Inputs to [`stake_preference_verdict`] — every field is derived from chain
+/// data (own DnsState at the current resolve step, blue work, and windowed
+/// per-branch stake walks), so every node evaluating the same DAG computes the
+/// same verdict.
+#[derive(Clone, Debug)]
+pub struct StakePreferenceInputs {
+    /// This node's own rollout stage at the resolve step.
+    pub rollout_stage: DnsRolloutStage,
+    /// How far this node's own chain advanced past its last confirmed anchor.
+    pub own_anchor_age_daa_score: u64,
+    /// [`DnsParams::dns_veto_ttl_daa_score`].
+    pub veto_ttl_daa_score: u64,
+    /// [`DnsParams::stake_preference_max_work_deficit_multiplier`]; `0` disables.
+    pub multiplier: u32,
+    /// Candidate/canonical blue work accumulated since the common ancestor.
+    pub candidate_work_after: BlueWorkType,
+    pub canonical_work_after: BlueWorkType,
+    /// Candidate/canonical StakeScore accumulated since the common ancestor.
+    pub candidate_stake_after: StakeScore,
+    pub canonical_stake_after: StakeScore,
+    /// [`DnsParams::emergency_stake_margin`] — relative-dominance margin.
+    pub emergency_stake_margin: StakeScore,
+    /// [`DnsParams::required_stake_depth`] — the absolute confirmation-grade floor.
+    pub required_stake_depth: StakeScore,
+}
+
+/// The stake-preference decision (see
+/// [`DnsParams::stake_preference_max_work_deficit_multiplier`] for the design):
+/// `true` iff the sink should move onto `candidate` because this node's own
+/// branch has demonstrably lost its DNS overlay while the candidate's is
+/// demonstrably alive at confirmation grade, within a bounded work deficit.
+///
+/// Pure so the boundary behaviour is unit-testable: every condition below is a
+/// distinct guard with a distinct reason to exist, and each has a test pinning
+/// the side of the boundary it decides.
+pub fn stake_preference_verdict(i: &StakePreferenceInputs) -> bool {
+    // Disabled, or the overlay is not in the Active stage: pure work-max selection.
+    if i.multiplier == 0 || i.rollout_stage != DnsRolloutStage::Active {
+        return false;
+    }
+    // The preference is an ESCAPE from a dead branch, never an attraction between live ones.
+    // `>` (not `>=`): the veto's own staleness boundary, kept identical so there is no DAA at
+    // which the anchor is simultaneously "fresh enough to defend" and "dead enough to flee".
+    if i.own_anchor_age_daa_score <= i.veto_ttl_daa_score {
+        return false;
+    }
+    // Absolute confirmation-grade depth (H-02): tentative or trickle DNS moves nothing. This is
+    // the hysteresis ON-bar — far above zero, while the OFF condition (own anchor fresh again)
+    // is a different quantity entirely, so boundary jitter in one cannot oscillate the other.
+    if i.candidate_stake_after.0 == 0 || i.candidate_stake_after.0 < i.required_stake_depth.0 {
+        return false;
+    }
+    // Relative dominance with the same margin the veto's stake dimension uses.
+    if i.candidate_stake_after.0 <= i.canonical_stake_after.0.saturating_add(i.emergency_stake_margin.0) {
+        return false;
+    }
+    // Bounded work deficit: candidate_work_after × multiplier must exceed canonical's. Overflow
+    // means the candidate's work is astronomically large — the deficit condition is then
+    // trivially satisfied (and the normal work-max search would have chosen it anyway).
+    let (bound, overflowed) = i.candidate_work_after.overflowing_mul_u64(i.multiplier as u64);
+    overflowed || bound > i.canonical_work_after
 }
 
 /// ADR-0018 §H — assemble [`DnsReorgInputs`] from the raw per-chain facts the
@@ -7126,6 +7237,84 @@ mod tests {
         }
     }
 
+    /// Every guard in [`stake_preference_verdict`] exists for a named failure mode; this pins
+    /// each boundary from both sides so none of them can be quietly widened.
+    #[test]
+    fn stake_preference_is_an_escape_from_a_dead_branch_only() {
+        let base = StakePreferenceInputs {
+            rollout_stage: DnsRolloutStage::Active,
+            own_anchor_age_daa_score: 6_001, // one past the TTL: own DNS is DEAD
+            veto_ttl_daa_score: 6_000,
+            multiplier: 2,
+            candidate_work_after: BlueWorkType::from_u64(600),
+            canonical_work_after: BlueWorkType::from_u64(1_000),
+            candidate_stake_after: StakeScore(20 * STAKE_SCORE_SCALE),
+            canonical_stake_after: StakeScore(0),
+            emergency_stake_margin: StakeScore(3 * STAKE_SCORE_SCALE),
+            required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
+        };
+        assert!(stake_preference_verdict(&base), "the qualifying case must qualify, or nothing below means anything");
+
+        // Symmetric-live safety: a fresh own anchor disarms the preference entirely — validators
+        // on BOTH sides of a partition means neither side gets pulled.
+        assert!(!stake_preference_verdict(&StakePreferenceInputs { own_anchor_age_daa_score: 6_000, ..base.clone() }));
+        assert!(!stake_preference_verdict(&StakePreferenceInputs { own_anchor_age_daa_score: 0, ..base.clone() }));
+
+        // Not Active, or disabled: inert.
+        assert!(!stake_preference_verdict(&StakePreferenceInputs { rollout_stage: DnsRolloutStage::Bootstrap, ..base.clone() }));
+        assert!(!stake_preference_verdict(&StakePreferenceInputs { multiplier: 0, ..base.clone() }));
+
+        // Hysteresis ON-bar: below confirmation-grade absolute depth, tentative DNS moves nothing —
+        // even with total relative dominance.
+        assert!(!stake_preference_verdict(&StakePreferenceInputs {
+            candidate_stake_after: StakeScore(10 * STAKE_SCORE_SCALE - 1),
+            ..base.clone()
+        }));
+        assert!(!stake_preference_verdict(&StakePreferenceInputs { candidate_stake_after: StakeScore(0), ..base.clone() }));
+
+        // Relative dominance must clear the margin strictly.
+        assert!(!stake_preference_verdict(&StakePreferenceInputs {
+            candidate_stake_after: StakeScore(13 * STAKE_SCORE_SCALE),
+            canonical_stake_after: StakeScore(10 * STAKE_SCORE_SCALE),
+            ..base.clone()
+        }));
+        assert!(stake_preference_verdict(&StakePreferenceInputs {
+            candidate_stake_after: StakeScore(13 * STAKE_SCORE_SCALE + 1),
+            canonical_stake_after: StakeScore(10 * STAKE_SCORE_SCALE),
+            ..base.clone()
+        }));
+
+        // The deficit bound: at multiplier 2, a branch with exactly half the work fails (500×2 is
+        // not > 1000) and one just above half passes — and a >4× work advantage on the canonical
+        // side (the emergency-override regime) is therefore unreachable from this rule.
+        assert!(!stake_preference_verdict(&StakePreferenceInputs {
+            candidate_work_after: BlueWorkType::from_u64(500),
+            ..base.clone()
+        }));
+        assert!(stake_preference_verdict(&StakePreferenceInputs {
+            candidate_work_after: BlueWorkType::from_u64(501),
+            ..base.clone()
+        }));
+        assert!(!stake_preference_verdict(&StakePreferenceInputs {
+            candidate_work_after: BlueWorkType::from_u64(249),
+            ..base.clone()
+        }));
+    }
+
+    /// Mainnet ships the preference OFF until the partition/IBD scenario matrix has run; test
+    /// networks ship it ON so the soak and the regression harness actually exercise it.
+    #[test]
+    fn presets_declare_the_stake_preference_posture() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        assert_eq!(
+            PRODUCTION_DNS_PARAMS.stake_preference_max_work_deficit_multiplier, 0,
+            "mainnet enables the stake preference only after the scenario matrix passes"
+        );
+        for (name, p) in [("genesis-active/dev-sim", GENESIS_ACTIVE_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)] {
+            assert_eq!(p.stake_preference_max_work_deficit_multiplier, 2, "{name} soaks the preference at the ½-work bound");
+        }
+    }
+
     #[test]
     fn dns_reorg_dominance_respects_margins() {
         let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
@@ -10090,6 +10279,7 @@ mod tests {
             emergency_work_margin: BlueWorkType::from_u64(10_000_000),
             emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
             emergency_work_override_multiplier: 4,
+            stake_preference_max_work_deficit_multiplier: 2,
             unbond_authz_mergeset_activation_daa_score: 0,
             max_reorg_horizon_blocks: 100_000,
             evidence_window_blocks: 200_000,

@@ -76,8 +76,8 @@ use kaspa_consensus_core::{
         ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
-        PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, UNBOND_REQUEST_CONTEXT, advance_dns_confirmation,
-        aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
+        PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
+        advance_dns_confirmation, aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool,
         check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs,
         compute_capabilities_with_ids_from_accepted_txs, compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs,
@@ -86,8 +86,9 @@ use kaspa_consensus_core::{
         is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
         precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
         reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
-        stake_precommit_message, total_active_stake_by_epoch, total_voting_weight_by_epoch, unbond_request_message,
-        unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight, verdicts_for_certificate,
+        stake_precommit_message, stake_preference_verdict, total_active_stake_by_epoch, total_voting_weight_by_epoch,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight,
+        verdicts_for_certificate,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -4758,6 +4759,99 @@ impl VirtualStateProcessor {
     /// The function returns with `diff` being the diff of the new sink from previous virtual.
     /// In addition to the found sink the function also returns a queue of additional virtual
     /// parent candidates ordered in descending blue work order.
+    /// Escape-from-a-dead-branch sink preference (see
+    /// [`DnsParams::stake_preference_max_work_deficit_multiplier`]): when this node's OWN chain
+    /// has demonstrably lost its DNS overlay (Active stage, confirmed anchor stale past the full
+    /// veto TTL), screen `tips` for a branch whose overlay is demonstrably alive at
+    /// confirmation grade within a bounded work deficit, and return the best qualifier.
+    ///
+    /// Screening only — the caller still runs UTXO validation and the reorg gate on the result.
+    /// Every input is chain-derived and the tie-break is total (stake desc, work-after desc, hash
+    /// asc), so all nodes evaluating the same DAG return the same tip; fork choice stays
+    /// memoryless — the hysteresis the boundary needs lives in the verdict's asymmetric bars
+    /// (own anchor dead past the FULL TTL vs candidate at FULL confirmation depth), not in state.
+    ///
+    /// Both stake walks run under the CANONICAL bond set: a bond created on the candidate branch
+    /// above the ancestor is invisible here, which UNDER-counts the candidate — the conservative
+    /// direction for a rule whose false positive is "sink moved onto the wrong branch". The cost
+    /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
+    /// state, which the cheap staleness check settles first on every healthy resolve.
+    fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
+        let dns_params = self.dns_params.as_ref()?;
+        let mult = dns_params.stake_preference_max_work_deficit_multiplier;
+        if mult == 0 || tips.len() < 2 {
+            return None;
+        }
+        let state = self.dns_state_store.read().get().ok()?;
+        if state.rollout_stage != DnsRolloutStage::Active || state.last_dns_confirmed_anchor == BlockHash::default() {
+            return None;
+        }
+        let canonical_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or_default();
+        if !dns_params.confirmed_anchor_is_stale(canonical_daa, state.last_dns_confirmed_anchor_daa_score) {
+            // Own overlay is alive: symmetric-live contests stay work-decided. This is the cheap
+            // early exit every healthy resolve takes.
+            return None;
+        }
+        let own_anchor_age = canonical_daa.saturating_sub(state.last_dns_confirmed_anchor_daa_score);
+        let canonical_work = self.ghostdag_store.get_blue_work(prev_sink).unwrap_or_default();
+        let net_id_hash = self.genesis.hash;
+        let net_id = net_id_hash.as_byte_slice();
+        let canonical_bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+
+        let mut best: Option<(u128, BlueWorkType, BlockHash)> = None;
+        for &tip in tips {
+            if tip == prev_sink || !self.reachability_service.try_is_chain_ancestor_of(finality_point, tip).unwrap_or(false) {
+                continue;
+            }
+            let Some(ancestor) = self.chain_common_ancestor_within(tip, prev_sink, dns_params.gate_horizon_blocks()) else {
+                // Deeper than the gate horizon: the preference abstains exactly where the veto does.
+                continue;
+            };
+            let ancestor_work = self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default();
+            let candidate_work_after = self.ghostdag_store.get_blue_work(tip).unwrap_or_default().saturating_sub(ancestor_work);
+            let canonical_work_after = canonical_work.saturating_sub(ancestor_work);
+            // Work-deficit bound first: it needs two store reads, the stake walks need O(divergence).
+            let (bound, overflowed) = candidate_work_after.overflowing_mul_u64(mult as u64);
+            if !overflowed && bound <= canonical_work_after {
+                continue;
+            }
+            let ancestor_daa = self.headers_store.get_daa_score(ancestor).unwrap_or_default();
+            let candidate_daa = self.headers_store.get_daa_score(tip).unwrap_or_default();
+            let vlt_live = dns_params.vlt_weighting_active_at(candidate_daa) || dns_params.vlt_weighting_active_at(canonical_daa);
+            let snapshot = self.vlt_epoch_snapshot(ancestor, ancestor_daa, &canonical_bonds, net_id, dns_params, vlt_live, false);
+            let candidate_stake =
+                self.stake_score_since_ancestor(tip, ancestor, &canonical_bonds, dns_params, net_id, candidate_daa, &snapshot);
+            let canonical_stake =
+                self.stake_score_since_ancestor(prev_sink, ancestor, &canonical_bonds, dns_params, net_id, canonical_daa, &snapshot);
+            let qualifies = stake_preference_verdict(&StakePreferenceInputs {
+                rollout_stage: state.rollout_stage,
+                own_anchor_age_daa_score: own_anchor_age,
+                veto_ttl_daa_score: dns_params.dns_veto_ttl_daa_score,
+                multiplier: mult,
+                candidate_work_after,
+                canonical_work_after,
+                candidate_stake_after: candidate_stake,
+                canonical_stake_after: canonical_stake,
+                emergency_stake_margin: dns_params.emergency_stake_margin,
+                required_stake_depth: dns_params.required_stake_depth,
+            });
+            if qualifies {
+                let better = match &best {
+                    None => true,
+                    Some((best_stake, best_work, best_hash)) => {
+                        (candidate_stake.0, candidate_work_after) > (*best_stake, *best_work)
+                            || ((candidate_stake.0, candidate_work_after) == (*best_stake, *best_work) && tip < *best_hash)
+                    }
+                };
+                if better {
+                    best = Some((candidate_stake.0, candidate_work_after, tip));
+                }
+            }
+        }
+        best.map(|(_, _, tip)| tip)
+    }
+
     pub(super) fn sink_search_algorithm(
         &self,
         stores: &VirtualStores,
@@ -4770,13 +4864,37 @@ impl VirtualStateProcessor {
     ) -> (BlockHash, VecDeque<BlockHash>) {
         // TODO (relaxed): additional tests
 
+        // The initial diff point is the previous sink
+        let mut diff_point = prev_sink;
+
+        // Escape-from-a-dead-branch preference: consulted BEFORE the work-max search, because its
+        // whole point is to select a sink the work ordering would bury. The result is still
+        // UTXO-validated and still passes the reorg gate (whose ConfirmedAnchorStale arm releases
+        // the dead anchor's veto), so every sink move continues to flow through one gate.
+        //
+        // On success the returned virtual is SINGLE-PARENT: merging the heavier dead-branch tips
+        // into the mergeset would hand GHOSTDAG's selected-parent rule (max blue work) exactly the
+        // branch being escaped, and the preference would undo itself. The dead tips stay unmerged;
+        // if hashpower follows the live branch they are progressively orphaned, and once the live
+        // branch out-works them the preference stops firing and ordinary work-max selection
+        // resumes seamlessly.
+        if let Some(preferred) = self.dns_stake_preferred_tip(prev_sink, &tips, finality_point) {
+            diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, preferred);
+            if diff_point == preferred && self.dns_reorg_outcome(preferred, prev_sink, bond_view).is_accept() {
+                info!(
+                    "DNS stake preference: this chain's own overlay is dead (anchor stale past TTL) and tip {preferred} carries a confirmation-grade live overlay within the work-deficit bound; moving the sink there (previous sink {prev_sink}). Templates now extend the live-overlay branch."
+                );
+                return (preferred, VecDeque::new());
+            }
+            warn!(
+                "DNS stake preference: preferred tip {preferred} failed UTXO validation or the reorg gate; falling back to work-max sink selection"
+            );
+        }
+
         let mut heap = tips
             .into_iter()
             .map(|block| SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() })
             .collect::<BinaryHeap<_>>();
-
-        // The initial diff point is the previous sink
-        let mut diff_point = prev_sink;
 
         // Self-wedge diagnostics (incident 2026-07-19 §2-1): the heaviest candidate the DNS gate
         // refused during this search, if any. The heap is blue-work ordered, so the first refusal

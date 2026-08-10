@@ -937,6 +937,9 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // rejoins the work-dominant chain instead of wedging forever, which a strictly absolute stake
     // veto cannot do (no node can locally tell that it is the minority side of a partition).
     emergency_work_override_multiplier: 4,
+    // Escape-from-a-dead-branch sink preference (incident #8 family): ON at the ½-work bound on
+    // every test network so the soak and the regression harness exercise it. See the field doc.
+    stake_preference_max_work_deficit_multiplier: 2,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1120,6 +1123,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // because the deadlock is structural, not threshold-dependent: it is reachable on any network
     // whose `reorg_mode` is TwoDimensionalDominance, which is every current preset.
     emergency_work_override_multiplier: 4,
+    // Escape-from-a-dead-branch sink preference (incident #8 family): OFF on mainnet until the
+    // partition/IBD scenario matrix (genesis IBD, reconnection, stale-anchor recovery,
+    // validator-outage recovery, Active↔Stale boundary, overwhelming-work reorg) has been run by
+    // the regression harness. Testnet overrides to 2 and soaks it first. See the field doc.
+    stake_preference_max_work_deficit_multiplier: 0,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1251,6 +1259,9 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // they buy ~2.5 h of rewind protection and auto-release a dead-branch wedge in ~55 min, versus
     // the 3.5 h (2026-07-19) and ~15 h (2026-08-03) that needed manual arbitration. A shorter TTL
     // here would trip on ordinary attestation hiccups, which this mesh has plenty of.
+    // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
+    // this chain's own anchor has been dead past the TTL above. See the field doc.
+    stake_preference_max_work_deficit_multiplier: 2,
     ..PRODUCTION_DNS_PARAMS
 };
 
@@ -1633,20 +1644,22 @@ mod consensus_params_id_tests {
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
         //
-        // Last moved when the unbond-authorization fence merged in: it is a
-        // `DnsParams` field, `dns_params` is hashed here as its whole borsh encoding, and so every
-        // preset that carries an overlay moved at once. Deliberate — the fence decides which bond
-        // mutations a block produces, so two nodes that disagree about it disagree about validity,
-        // which is exactly what this fingerprint exists to keep apart.
+        // Last moved when `stake_preference_max_work_deficit_multiplier` was added (a `DnsParams`
+        // field, and `dns_params` is hashed here as its whole borsh encoding, so every preset that
+        // carries an overlay moved at once — the same shape as the unbond-authorization fence move
+        // before it). Deliberate: the preference decides where a node puts its sink, and two nodes
+        // that disagree about it can mine different branches of the same DAG; the deployed
+        // testnet-10 fleet (00d1294 lineage) does NOT peer with builds carrying this change, so
+        // shipping it is the next coordinated flag day, not a rolling update.
         //
         // Report every preset rather than dying on the first. All four moved together on that
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "ef996e354885ce39358914e86fba42adaa9688659738aaa184191dcd9f60f022"),
-            ("testnet", TESTNET_PARAMS, "41cb37ae67b1a2aca3c19721bb0c8c8bd8e3f76959951523b7953c18546004ac"),
-            ("simnet", SIMNET_PARAMS, "e7f9ccf9d80eab801daaf2189bf17a06691c54f92568673f63eef0996abdd63f"),
-            ("devnet", DEVNET_PARAMS, "d3f0abe1bd5c07fb2b8808c5296c4b91993d2c61a6adedf612de043c10c25489"),
+            ("mainnet", MAINNET_PARAMS, "1cfbf28997b5e868393c74b8933fb78a271f3f641b28b89a3bff1daf294d4713"),
+            ("testnet", TESTNET_PARAMS, "2ce0a86ad5405007dbde98d69cb802b9516e906add689dad316455b4d3269231"),
+            ("simnet", SIMNET_PARAMS, "ee270fcde307984909fdbab7caa7cd0c1e13a645b687b3057847bee5faf128d6"),
+            ("devnet", DEVNET_PARAMS, "aba862a33914de907c3e760e312a28692843f9c0932adff5e64d495ed1465c14"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
