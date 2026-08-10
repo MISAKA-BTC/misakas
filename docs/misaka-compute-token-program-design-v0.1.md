@@ -251,6 +251,8 @@ job は self-originated であり、orderer も Job fee も存在しないとい
 1. epoch あたり audit fee 総額に cap を置く
 2. audit fee の財源を `R(E)` 内（TOK 建て）へ移し、base coin の発行を止める — verifier と executor が同じ発行 pie を分ける PoW 型に揃う
 
+**解決済み（2026-08-11）**: `docs/misaka-audit-emission-v0.2-design.md` が本節を閉じた。上の 2 案はどちらも却下（cap は繁忙 epoch の検証飢餓、bps 分割は committee 較正のたびに誤価格）し、**統一仕事量 emission** を採る — counted verdict を「判じた cert の x_j と同量の仕事」として `R(E)` の同一比例分配に含め、base-coin audit fee は `tkn_activation` fence で停止。実装は PR #62 の後続 PR。
+
 ### 6.4 基軸コインとの関係
 
 TOK は基軸コインと **別資産** である（ユーザー要件）。fee は base coin のまま、変換・市場価格形成はプロトコル外。基軸コイン自体を LLM 計算で発行する hybrid issuance 案は、既存供給 schedule・halving 監査を全て再実施することになるため採らない（却下を明記）。
@@ -362,7 +364,7 @@ emission_activation_epoch         … R(E) の E_a 原点
 |---|---|---|
 | 1 | 資産名・ticker | **決定（2026-08-10）: Token / TOK** |
 | 2 | `R0` / `H` / `D_settle` の凍結値（TBD 維持を 2026-08-10 確認。§5.2 の数値は引き続き候補例示） | testnet shadow 後 |
-| 3 | audit fee の財源（base coin 継続 or `R(E)` 内 TOK 建て） | v0.2 設計 |
+| 3 | audit fee の財源 | **設計済み（2026-08-11）**: 統一仕事量 emission — `misaka-audit-emission-v0.2-design.md`。実装は後続 PR |
 | 4 | Phase B（一般 mint）の activation 時期 | Phase A 安定後 |
 | 5 | pruned IBD 向け台帳 snapshot 方式（ADR-0022 準拠の詳細） | Phase A 実装中 |
 | 6 | certificate への payout 先フィールド追加（§5.4 の MAY） | 需要を見て |
