@@ -156,6 +156,41 @@ a pre-restart datadir backup (`misaka-testnet-10.pre-t10-restart-backup`) from 2
 Rolling back re-splits the fleet at the handshake (old ↔ new cannot peer), so a rollback
 is also fleet-wide or not at all.
 
+## Recovery findings (2026-08-10, the deep-reorg adoption of node A)
+
+Node A's adoption of Branch M — a ~1.6M-block-deep reorg off its isolated Branch A — surfaced
+four things worth keeping, three of them defects and one a design edge behaving as designed:
+
+1. **Quarantine had no operator exit (FIXED, `cca8b1e`).** B and C were both driven to
+   `Quarantined` by IBDs that failed after `staging.commit()`; A joined them via the
+   unresolved-candidates commit barrier. ADR-0025 said "until an operator intervenes" but shipped
+   no interface — the only exit was hand-deleting the meta-DB key. Added `--clear-quarantine`
+   (one-shot, WARNs each boot, clears quarantine only, keeps the switch counter).
+
+2. **The deep-reorg IBD OOM-loops on a co-tenant host (ROOT CAUSE of A's non-convergence).**
+   With `highest_known_syncer_chain_hash == None` (no shared chain segment past the pruning point
+   — the deep-fork case), `determine_ibd_type` takes `DownloadHeadersProof`, which stages the
+   ENTIRE header set in a fresh staging consensus before the commit barrier. On A that reached
+   anon-rss 10.5 GB; sharing a 16 GB host with A2 (the canonical server, ~6 GB) the kernel
+   `global_oom` killed A mid-validation every ~40 min, and staging was discarded, so every retry
+   restarted from the Jul-30 negotiation point. NOT a logic loop — a memory ceiling. Fix in place:
+   `--ram-scale=0.25` + systemd `MemoryHigh=5G`/`MemoryMax=6G` on A's unit, so the two nodes no
+   longer contend and any OOM hits A alone, before the host. The real lesson for the soak: the
+   headers-proof staging peak is unbounded by fork depth and needs a documented per-host RAM floor
+   (or a staged/streamed header import) before a from-scratch deep reorg is run beside another node.
+
+3. **The unresolved-candidates barrier can self-wedge on a stale candidate set.** Repeatedly-severed
+   IBDs (here, caused by #2 and by operator restarts) leave provisional candidates in the registry;
+   the barrier then refuses to commit ("N other chain candidate(s) ... none could be verified in
+   time") and quarantines. Correct-by-design (arrival-order commit is what fixes a partition in
+   place), but the exit is operator-only: `--trusted-checkpoint <daa>:<hash>:<params-id>` naming
+   the DNS-confirmed anchor, which is exactly the history the operator can vouch for.
+
+4. **A2 as the explorer/mining/validator anchor is what kept the network live throughout.** None of
+   the above touched A2: it served the canonical chain, fed the miner, and carried the re-bonded 20M
+   validator while A thrashed. Splitting the "canonical server" from the "node being recovered" onto
+   separate processes is why misakascan never stopped advancing during A's four failed adoptions.
+
 ## Known log artifacts the soak baseline inherits
 
 B's log carries exactly one `panicked at` line, 2026-08-10 03:17:12 +02:00
