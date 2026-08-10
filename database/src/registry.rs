@@ -305,6 +305,25 @@ pub enum DatabaseStorePrefixes {
     /// payload.
     DnsFinalityCertificates = 244,
 
+    // ---- MISAKA Compute Token Program (design v0.1, Phase A) ----
+    /// Keyed by `(asset_id, owner)` (8 LE bytes + 64-byte overlay id): one
+    /// [`TokenAccount`] `{balance, nonce}` ledger row per holder (design §4.2). Inert (never
+    /// written) while every preset's token fence is `u64::MAX`; the acceptance-time application
+    /// and its reorg-rollback strategy land with the processor wiring (design §9.5).
+    TokenLedger = 245,
+    /// Keyed by `u64` asset id: the asset's [`TokenSupply`] `{minted, burned}` counters, the
+    /// anchors of the §4.2 conservation invariant `Σ balance == minted − burned`.
+    TokenSupply = 246,
+    /// Keyed by `u64` epoch: the epoch's settled [`TokenEmissionSettlement`] (budget, X(E), paid
+    /// rewards). Write-once per epoch and derived from the **finalized** credit rows
+    /// ([`Self::VltCredits`]), so a row is branch-invariant for the same reason those are —
+    /// settlement never reads an epoch a challenge or reorg could still change (design §5.3).
+    TokenEmissionSettlements = 247,
+    /// Singleton `u32`: the rules the three token stores' rows were written under, mirroring
+    /// [`Self::VltCreditsSchemaVersion`] — a derivation/layout change discards and rebuilds
+    /// rather than reading old rows as final.
+    TokenLedgerSchemaVersion = 248,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

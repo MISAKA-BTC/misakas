@@ -26,6 +26,7 @@ pub mod selected_chain;
 pub mod stake_bonds;
 pub mod statuses;
 pub mod tips;
+pub mod token_ledger;
 pub mod utxo_diffs;
 pub mod utxo_multisets;
 pub mod utxo_set;
