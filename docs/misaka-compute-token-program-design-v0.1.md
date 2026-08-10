@@ -338,7 +338,7 @@ emission_activation_epoch         … R(E) の E_a 原点
 ```
 
 - 出荷 default は全網 INERT（`VltParams::INERT` と同じ流儀）。module 追加自体は consensus 変更にならない
-- 制約: `tkn_activation ≥ vlt_activation`（VLT が INERT の網に emission は定義されない、MUST）
+- 制約: `tkn_activation ≥ vlt_shadow_activation`（credit 機構が動いていない網に emission は定義されない、MUST）。**v0.1 改**: 当初は weight fence を下限としたが、settlement が読むのは shadow fence から動く finalized credit 行であり、weight fence（§6 活性化状態機械）への結合は 2026-08-10 の devnet 実走で「activation 待ちの overlay に emission が同伴停止する」ことが判明したため shadow fence に緩和した。金は票の活性化と独立
 - shadow 期間で凍結する数値: `R0`, `H`, `D_settle`, `min_network_compute`（emission 用途での妥当性）, audit fee 方針（§6.3）, committee 再較正（§8.9）
 - 供給保存 suite（§4.2）と skip-class 相当（nonce 不一致 = 無視）の e2e を activation 前提条件とする
 

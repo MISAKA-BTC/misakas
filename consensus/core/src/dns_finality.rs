@@ -1657,7 +1657,7 @@ impl DnsParams {
         }
         self.tkn
             .is_coherent_with_vlt(
-                self.vlt.vlt_activation_daa_score,
+                self.vlt.vlt_shadow_activation_daa_score,
                 self.vlt.challenge_window_blocks,
                 self.max_reorg_horizon_blocks,
                 self.attestation_epoch_length_blue_score,

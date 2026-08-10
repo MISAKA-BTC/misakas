@@ -675,15 +675,21 @@ impl TokenParams {
     /// the credit accumulator finalizes under.
     pub fn is_coherent_with_vlt(
         &self,
-        vlt_activation_daa_score: u64,
+        vlt_shadow_activation_daa_score: u64,
         challenge_window_blocks: u64,
         max_reorg_horizon_blocks: u64,
         epoch_length_blocks: u64,
         credit_delay_epochs: u32,
     ) -> Result<(), &'static str> {
         self.is_coherent()?;
-        if self.tkn_activation_daa_score < vlt_activation_daa_score {
-            return Err("tkn_activation_daa_score must be >= vlt_activation_daa_score (design §10: no token program on an inert compute overlay)");
+        // The SHADOW fence, deliberately: the credit accumulator runs (and finalizes
+        // epochs) from the shadow fence, and settlement reads only those finalized
+        // rows. Whether compute also WEIGHTS votes is irrelevant to money — pinning
+        // emission to the weight fence would couple the ledger to the §6 activation
+        // state machine, which is exactly the dependency the 2026-08-10 devnet run
+        // showed stalls it (design §10, revised).
+        if self.tkn_activation_daa_score < vlt_shadow_activation_daa_score {
+            return Err("tkn_activation_daa_score must be >= vlt_shadow_activation_daa_score (design §10: no token program on an inert compute overlay)");
         }
         if self.emission_epoch_budget_r0_atomic > 0 {
             let floor = Self::min_settlement_delay_epochs(
@@ -1017,6 +1023,6 @@ mod tests {
         p.settlement_delay_epochs = 6;
         assert!(p.is_coherent_with_vlt(2_000, 300, 300, 100, 1).is_err(), "below the burial depth");
         p.settlement_delay_epochs = 7;
-        assert!(p.is_coherent_with_vlt(3_000, 300, 300, 100, 1).is_err(), "token fence below the VLT weight fence");
+        assert!(p.is_coherent_with_vlt(3_000, 300, 300, 100, 1).is_err(), "token fence below the VLT shadow fence");
     }
 }

@@ -490,8 +490,8 @@ impl Args {
             assert!(
                 dns.tkn_params_consistent(),
                 "--tkn-devnet={active_daa} produced an inconsistent token configuration against the VLT fences \
-                 (vlt_activation={}, D_settle={}); raise --tkn-devnet above the VLT weight fence",
-                dns.vlt.vlt_activation_daa_score,
+                 (vlt_shadow={}, D_settle={}); raise --tkn-devnet above the VLT shadow fence",
+                dns.vlt.vlt_shadow_activation_daa_score,
                 dns.tkn.settlement_delay_epochs,
             );
             config.params.dns_params = Some(dns);
