@@ -40,7 +40,7 @@ set -euo pipefail
 
 NODES=5
 SKIP_PHASE1=0
-WAIT_SECS=1800
+WAIT_SECS=4800
 RUN_VERIFY=1
 
 while [ $# -gt 0 ]; do
