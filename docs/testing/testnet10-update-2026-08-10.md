@@ -47,11 +47,18 @@ green at that commit; RC7's regression series still running at install time — 
 chose not to wait, and the residual risk is recorded here rather than hidden). sha256 of
 `kaspad` recorded below at install time; every node runs that exact file.
 
-| artifact | sha256 |
-|---|---|
-| kaspad | `5ed2dce364015fdd81ca2412ee0193cf2d5d4cb5737fe4652301687fbf458e8d` |
-| misaka-dnsseeder | `b4c71dba09d1cda0c1347084ae52e89611c1de502f7ce2bda390fb2b504977c7` |
-| misaminer | `30624eb3161e333584942cb2ac4a07c80ff425cd69970e223bcbe5cd5af0dc3a` |
+| artifact | sha256 | commit |
+|---|---|---|
+| kaspad (superseded same-day) | `5ed2dce364015fdd81ca2412ee0193cf2d5d4cb5737fe4652301687fbf458e8d` | `00d1294` |
+| **kaspad (running)** | `1cfcf4a09aca82ba05f1118c1219ed889fad1f099f2d4ee0458f9068f15300e1` | `203d2c6` |
+| misaka-dnsseeder | `b4c71dba09d1cda0c1347084ae52e89611c1de502f7ce2bda390fb2b504977c7` | unchanged between the two |
+| misaminer | `30624eb3161e333584942cb2ac4a07c80ff425cd69970e223bcbe5cd5af0dc3a` | unchanged between the two |
+
+The same-day supersede (operator-directed) carries the stake preference (testnet 2), the
+settlement policy layer (testnet 30_000 DAA), the wallet pending display, and the
+consensus-settlement fence (`u64::MAX`, inert). Binary trail per host: `kaspad.prev` =
+`5ed2dce…`, `kaspad.prev-4decb38c` = the pre-flag-day build. During the recovery all three
+additions are inert or abstaining on the live fork by construction.
 
 (also in `cand-build.sha256` on each host; the pre-update `kaspad` on A and B was
 `4decb38c9c91e2c9…`, kept as `kaspad.prev` beside the installed candidate)
