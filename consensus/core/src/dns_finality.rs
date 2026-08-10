@@ -1159,6 +1159,30 @@ pub struct DnsParams {
     /// when re-aiming the hashpower still matters.
     pub stake_preference_max_work_deficit_multiplier: u32,
 
+    /// DNS-accelerated coinbase settlement (see [`coinbase_spend_settled`] for the rule and the
+    /// reasoning): a coinbase becomes spendable at `block_daa + min(THIS, anchor-passage delay)`,
+    /// never below the base `coinbase_maturity`. Acceleration-not-permission by construction —
+    /// a dead or censored overlay grants nobody a new mode, it only makes everyone (attacker
+    /// included) wait the long fallback, so "blind the DNS" earns nothing.
+    ///
+    /// `0` disables settlement entirely (base maturity only — today's behaviour).
+    ///
+    /// Enforcement phases, deliberately split:
+    /// * **Phase 1 (this knob, now):** policy only — mempool admission and therefore relay and
+    ///   template inclusion. Policy divergence cannot split acceptance, so this soaks the
+    ///   economics with zero consensus risk: a compliant miner's rewards are liquid at epoch
+    ///   speed when the overlay confirms them, and unsettled spends do not propagate.
+    /// * **Phase 2 (consensus, NOT wired):** requires the confirmed anchor as a sequential
+    ///   per-chain-block view with apply/revert symmetry (the [`ActiveBondView`] pattern) —
+    ///   the consensus validation path passes no settlement context until that view exists,
+    ///   because a validity rule fed the node-local DnsState singleton would depend on virtual
+    ///   resolve batching and split the chain. The consensus call site documents this.
+    ///
+    /// Sizing: strictly greater than [`Self::gate_horizon_blocks`]-worth of DAA plus the veto
+    /// TTL, so a contested fork is expected to RESOLVE before either side's rewards go liquid
+    /// through the fallback.
+    pub coinbase_settlement_long_maturity_daa: u64,
+
     /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the parameters that replace
     /// bonded capital with verified useful compute as the source of validator voting power.
     ///
@@ -4048,6 +4072,70 @@ pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
             }
         }
     }
+}
+
+/// The DNS-settlement context a coinbase-spend check runs under: the network's
+/// long-maturity fallback and the confirmed anchor's DAA position, if any.
+/// Assembled by the caller because the two enforcement layers source the anchor
+/// differently — see [`coinbase_spend_settled`].
+#[derive(Clone, Copy, Debug)]
+pub struct DnsCoinbaseSettlement {
+    /// [`DnsParams::coinbase_settlement_long_maturity_daa`]; caller guarantees non-zero.
+    pub long_maturity_daa: u64,
+    /// The DAA score of the last DNS-confirmed anchor in this context's lineage, or `None`
+    /// while nothing is confirmed (bootstrap, overlay off, or a dead overlay whose anchor
+    /// never existed). `None` grants no acceleration — everyone waits the long fallback.
+    pub confirmed_anchor_daa: Option<u64>,
+}
+
+/// DNS-accelerated coinbase settlement: `settle_at = block_daa + min(long_maturity,
+/// anchor-passage delay)`, with the ordinary `coinbase_maturity` as an unconditional floor.
+///
+/// The design is ACCELERATION, not permission (the mode-switch alternative was rejected for its
+/// blinding attack): a live overlay makes rewards liquid at epoch speed once the confirmed
+/// anchor passes the reward's block; a dead, censored, or absent overlay merely means nobody is
+/// accelerated and every coinbase waits `long_maturity`. Killing the overlay therefore grants an
+/// attacker nothing — it only slows everyone's settlement, including the attacker's own — and
+/// validators who withhold confirmation only surrender their own acceleration. There is no
+/// Active→Stale reward boundary to grief because there are no modes.
+///
+/// Anchor-passage is `anchor_daa >= block_daa`: every coinbase UTXO belongs to a selected-chain
+/// block and the anchor lives on the same selected chain, so DAA comparison is chain order.
+/// Confirmation is permanent (the confirmed prefix only grows along a branch), so acceleration
+/// once earned is never re-litigated; a reorg discards losing-branch coinbases wholesale by UTXO
+/// semantics, which is what makes settlement need no bookkeeping of its own.
+///
+/// Enforcement discipline (why the caller supplies the anchor):
+/// * **Policy layer (mempool/relay/template)** — reads the node's current DnsState singleton.
+///   Node-local timing differences here are safe: policy divergence cannot split acceptance.
+/// * **Consensus layer** — MUST NOT read the singleton: its value depends on the node's own
+///   virtual-resolve batching, and a validity rule fed node-local state is a chain split. Wiring
+///   consensus enforcement requires the anchor as a sequential per-chain-block view with
+///   apply/revert symmetry — the [`ActiveBondView`] pattern — and until that view exists the
+///   consensus call site passes `None` settlement, keeping consensus byte-identical to the
+///   pre-settlement rule at any knob value.
+///
+/// `coinbase_maturity` stays the floor in every branch so this can only ever DELAY spendability
+/// relative to today, never hasten it below the depth the base rule already demands.
+pub fn coinbase_spend_settled(
+    utxo_block_daa_score: u64,
+    pov_daa_score: u64,
+    coinbase_maturity: u64,
+    settlement: Option<&DnsCoinbaseSettlement>,
+) -> bool {
+    let age = pov_daa_score.saturating_sub(utxo_block_daa_score);
+    // The base floor is unconditional — acceleration may not undercut it.
+    if age < coinbase_maturity || pov_daa_score < utxo_block_daa_score {
+        return false;
+    }
+    let Some(s) = settlement else {
+        return true; // feature off (or consensus layer awaiting its sequential anchor view)
+    };
+    if age >= s.long_maturity_daa {
+        return true; // the long fallback: nobody is ever frozen forever
+    }
+    // Acceleration: the confirmed anchor has passed this coinbase's block.
+    s.confirmed_anchor_daa.is_some_and(|anchor| anchor >= utxo_block_daa_score)
 }
 
 /// Inputs to [`stake_preference_verdict`] — every field is derived from chain
@@ -7315,6 +7403,48 @@ mod tests {
         }
     }
 
+    /// Settlement posture: testnet soaks the policy layer first; mainnet and the dev/sim fixture
+    /// presets ship it off. The testnet value must clear the dispute-resolution horizon —
+    /// `gate_horizon + veto TTL` — or the fallback goes liquid while a fork can still flip.
+    #[test]
+    fn presets_declare_the_coinbase_settlement_posture() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        assert_eq!(PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "mainnet waits for the testnet soak");
+        assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "dev/sim fixtures keep their semantics");
+        let t = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
+        assert!(t > 0, "testnet soaks the settlement policy");
+        assert!(
+            t > TESTNET_DNS_PARAMS.gate_horizon_blocks() + TESTNET_DNS_PARAMS.dns_veto_ttl_daa_score,
+            "the fallback must outlast the dispute-resolution horizon (got {t})"
+        );
+    }
+
+    /// Every branch of [`coinbase_spend_settled`] pinned from both sides: the base floor is
+    /// unconditional, `None` settlement is byte-identical to the base rule, the long fallback
+    /// releases exactly at its bound, and acceleration requires the anchor AT or PAST the block.
+    #[test]
+    fn coinbase_settlement_accelerates_and_never_undercuts() {
+        let s = |anchor: Option<u64>| DnsCoinbaseSettlement { long_maturity_daa: 30_000, confirmed_anchor_daa: anchor };
+
+        // Base floor unconditional — even with a passed anchor.
+        assert!(!coinbase_spend_settled(1_000, 1_099, 100, Some(&s(Some(2_000)))));
+        assert!(coinbase_spend_settled(1_000, 1_100, 100, Some(&s(Some(2_000)))));
+
+        // Feature off (None): base maturity alone — today's behaviour.
+        assert!(coinbase_spend_settled(1_000, 1_100, 100, None));
+
+        // No anchor: only the long fallback releases, exactly at its bound.
+        assert!(!coinbase_spend_settled(1_000, 30_999, 100, Some(&s(None))));
+        assert!(coinbase_spend_settled(1_000, 31_000, 100, Some(&s(None))));
+
+        // Anchor short of the block grants nothing; at the block it grants settlement.
+        assert!(!coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(999)))));
+        assert!(coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(1_000)))));
+
+        // A pov below the block (malformed context) never settles.
+        assert!(!coinbase_spend_settled(1_000, 999, 0, Some(&s(Some(2_000)))));
+    }
+
     #[test]
     fn dns_reorg_dominance_respects_margins() {
         let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
@@ -10280,6 +10410,7 @@ mod tests {
             emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
             emergency_work_override_multiplier: 4,
             stake_preference_max_work_deficit_multiplier: 2,
+            coinbase_settlement_long_maturity_daa: 30_000,
             unbond_authz_mergeset_activation_daa_score: 0,
             max_reorg_horizon_blocks: 100_000,
             evidence_window_blocks: 200_000,

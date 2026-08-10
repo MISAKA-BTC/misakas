@@ -1558,7 +1558,17 @@ impl VirtualStateProcessor {
             return Err(TxRuleError::SpendsNonReleasableBond(input.previous_outpoint));
         }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
-        let res = self.transaction_validator.validate_populated_transaction_and_get_fee(&populated_tx, pov_daa_score, flags, None);
+        // CONSENSUS path: DNS coinbase settlement is deliberately NOT consulted here
+        // (`dns_settlement: None`). The settlement's anchor input would have to be a sequential
+        // per-chain-block view with apply/revert symmetry (the ActiveBondView pattern) to be a
+        // validity rule; the node-local DnsState singleton depends on this node's own virtual
+        // resolve batching, and feeding it into acceptance would let two honest nodes accept
+        // different sets for the same chain block. Until that view exists, consensus is
+        // byte-identical to the base maturity rule at ANY knob value; the settlement is enforced
+        // at mempool admission (see `validate_mempool_transaction_impl`), where policy divergence
+        // cannot split acceptance.
+        let res =
+            self.transaction_validator.validate_populated_transaction_and_get_fee(&populated_tx, pov_daa_score, flags, None, None);
         match res {
             Ok(calculated_fee) => Ok(ValidatedTransaction::new(populated_tx, calculated_fee)),
             Err(tx_rule_error) => {
@@ -1623,6 +1633,10 @@ impl VirtualStateProcessor {
             pov_daa_score,
             TxValidationFlags::SkipMassCheck, // we can skip the mass check since we just set it
             mass_and_feerate_threshold,
+            // POLICY path (mempool admission → relay → template inclusion): the settlement layer
+            // where node-local anchor timing is safe — a policy disagreement keeps a tx out of a
+            // mempool, never out of a block's acceptance.
+            self.dns_coinbase_settlement().as_ref(),
         )?;
         mutable_tx.calculated_fee = Some(calculated_fee);
         Ok(())

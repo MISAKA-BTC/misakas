@@ -940,6 +940,10 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // Escape-from-a-dead-branch sink preference (incident #8 family): ON at the ½-work bound on
     // every test network so the soak and the regression harness exercise it. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
+    // DNS-accelerated coinbase settlement: OFF on dev/sim so the existing fixtures (which mine
+    // and spend without attestation flow) keep their semantics; dedicated fixtures opt in with
+    // custom DnsParams. See the field doc for the phase discipline.
+    coinbase_settlement_long_maturity_daa: 0,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1128,6 +1132,9 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // validator-outage recovery, Active↔Stale boundary, overwhelming-work reorg) has been run by
     // the regression harness. Testnet overrides to 2 and soaks it first. See the field doc.
     stake_preference_max_work_deficit_multiplier: 0,
+    // DNS-accelerated coinbase settlement: OFF on mainnet until testnet has soaked the policy
+    // layer through at least one full anchor-live / anchor-dead cycle. See the field doc.
+    coinbase_settlement_long_maturity_daa: 0,
     // Unbond-authorization mergeset hardening (incident 2026-08-07): GENESIS-ACTIVE on every
     // preset, so a new network never has to pick — and remember — a per-net activation score.
     //
@@ -1262,6 +1269,13 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
+    // Settlement soaks here first too, POLICY layer only (the consensus layer is unwired until
+    // the anchor gets its sequential per-chain-block view — see the field doc). 30_000 DAA >
+    // gate horizon (18_000) + veto TTL (6_000) with margin: a contested fork should resolve
+    // before either side's rewards go liquid through the fallback. At the mesh's measured
+    // ~110 DAA/min this is ~4.5 h — long enough to bite, short enough to tolerate while the
+    // validator set is being restored.
+    coinbase_settlement_long_maturity_daa: 30_000,
     ..PRODUCTION_DNS_PARAMS
 };
 
@@ -1644,7 +1658,7 @@ mod consensus_params_id_tests {
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
         //
-        // Last moved when `stake_preference_max_work_deficit_multiplier` was added (a `DnsParams`
+        // Last moved when `coinbase_settlement_long_maturity_daa` joined `stake_preference_max_work_deficit_multiplier` in the same pre-flag-day batch (a `DnsParams`
         // field, and `dns_params` is hashed here as its whole borsh encoding, so every preset that
         // carries an overlay moved at once — the same shape as the unbond-authorization fence move
         // before it). Deliberate: the preference decides where a node puts its sink, and two nodes
@@ -1656,10 +1670,10 @@ mod consensus_params_id_tests {
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "1cfbf28997b5e868393c74b8933fb78a271f3f641b28b89a3bff1daf294d4713"),
-            ("testnet", TESTNET_PARAMS, "2ce0a86ad5405007dbde98d69cb802b9516e906add689dad316455b4d3269231"),
-            ("simnet", SIMNET_PARAMS, "ee270fcde307984909fdbab7caa7cd0c1e13a645b687b3057847bee5faf128d6"),
-            ("devnet", DEVNET_PARAMS, "aba862a33914de907c3e760e312a28692843f9c0932adff5e64d495ed1465c14"),
+            ("mainnet", MAINNET_PARAMS, "b675a94972d9154932615b22d60b176bcd2917f5a1d6228c00d1cf511c7d8ce3"),
+            ("testnet", TESTNET_PARAMS, "70dadcf404ae12841aba2df28b2141b15b10e408652e2eaa5c5d194ba9fe8a7e"),
+            ("simnet", SIMNET_PARAMS, "74295a7c3c6b790e03ebcbb92661c0c1a33a7b018af4dcc4a28eaf5f1ecc70fa"),
+            ("devnet", DEVNET_PARAMS, "426721c7faf0029977cc7e18984defd4c1cb6513d023f85198ee3826b5f12438"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

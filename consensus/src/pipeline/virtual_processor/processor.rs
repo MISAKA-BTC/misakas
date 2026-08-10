@@ -73,7 +73,7 @@ use kaspa_consensus_core::{
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
-        ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
+        ComputeStatusView, ComputeVerdictRecord, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
         PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
@@ -4771,6 +4771,29 @@ impl VirtualStateProcessor {
     /// memoryless — the hysteresis the boundary needs lives in the verdict's asymmetric bars
     /// (own anchor dead past the FULL TTL vs candidate at FULL confirmation depth), not in state.
     ///
+    /// The DNS coinbase-settlement context for MEMPOOL ADMISSION (see
+    /// [`kaspa_consensus_core::dns_finality::coinbase_spend_settled`]): the current confirmed
+    /// anchor from the node's DnsState singleton, plus the network's long-maturity fallback.
+    ///
+    /// Policy layer only. The singleton is "state as of this node's last virtual commit", which
+    /// differs across nodes by their resolve batching — safe for admission (a policy disagreement
+    /// keeps a tx out of a mempool, never out of a block's acceptance), disqualifying for
+    /// validity. The consensus call site passes `None` and says why.
+    pub(super) fn dns_coinbase_settlement(&self) -> Option<DnsCoinbaseSettlement> {
+        let dns_params = self.dns_params.as_ref()?;
+        let long_maturity_daa = dns_params.coinbase_settlement_long_maturity_daa;
+        if long_maturity_daa == 0 {
+            return None;
+        }
+        let confirmed_anchor_daa = self
+            .dns_state_store
+            .read()
+            .get()
+            .ok()
+            .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
+        Some(DnsCoinbaseSettlement { long_maturity_daa, confirmed_anchor_daa })
+    }
+
     /// Both stake walks run under the CANONICAL bond set: a bond created on the candidate branch
     /// above the ancestor is invisible here, which UNDER-counts the candidate — the conservative
     /// direction for a rule whose false positive is "sink moved onto the wrong branch". The cost

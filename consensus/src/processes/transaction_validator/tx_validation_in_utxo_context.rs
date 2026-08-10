@@ -1,5 +1,6 @@
 use crate::constants::{MAX_SOMPI, SEQUENCE_LOCK_TIME_DISABLED, SEQUENCE_LOCK_TIME_MASK};
 use kaspa_consensus_core::{
+    dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled},
     hashing::sighash::{SigHashReusedValuesSync, SigHashReusedValuesUnsync},
     tx::{TransactionInput, VerifiableTransaction},
 };
@@ -37,8 +38,14 @@ impl TransactionValidator {
         pov_daa_score: u64,
         flags: TxValidationFlags,
         mass_and_feerate_threshold: Option<(u64, f64)>,
+        // DNS-accelerated coinbase settlement context ([`coinbase_spend_settled`]). `None` =
+        // base maturity only. The POLICY caller (mempool admission) supplies it from the node's
+        // current DnsState; the CONSENSUS caller passes `None` until the anchor exists as a
+        // sequential per-chain-block view — a validity rule must not read the node-local
+        // singleton (see the field doc on `coinbase_settlement_long_maturity_daa`).
+        dns_settlement: Option<&DnsCoinbaseSettlement>,
     ) -> TxResult<u64> {
-        self.check_transaction_coinbase_maturity(tx, pov_daa_score)?;
+        self.check_transaction_coinbase_maturity(tx, pov_daa_score, dns_settlement)?;
         let total_in = self.check_transaction_input_amounts(tx)?;
         let fee = self.check_output_values_and_compute_fee(tx, total_in)?;
         if flags != TxValidationFlags::SkipMassCheck {
@@ -85,18 +92,25 @@ impl TransactionValidator {
         Ok(())
     }
 
-    fn check_transaction_coinbase_maturity(&self, tx: &impl VerifiableTransaction, pov_daa_score: u64) -> TxResult<()> {
-        if let Some((index, (input, entry))) = tx
-            .populated_inputs()
-            .enumerate()
-            .find(|(_, (_, entry))| entry.is_coinbase && entry.block_daa_score + self.coinbase_maturity > pov_daa_score)
-        {
+    fn check_transaction_coinbase_maturity(
+        &self,
+        tx: &impl VerifiableTransaction,
+        pov_daa_score: u64,
+        dns_settlement: Option<&DnsCoinbaseSettlement>,
+    ) -> TxResult<()> {
+        if let Some((index, (input, entry))) = tx.populated_inputs().enumerate().find(|(_, (_, entry))| {
+            entry.is_coinbase && !coinbase_spend_settled(entry.block_daa_score, pov_daa_score, self.coinbase_maturity, dns_settlement)
+        }) {
+            // The reported bound is the EFFECTIVE requirement for this spend: the long fallback
+            // when settlement applies (acceleration may release it earlier, but that is the
+            // anchor's doing, not a fixed depth), the base maturity otherwise.
+            let effective_bound = dns_settlement.map_or(self.coinbase_maturity, |s| s.long_maturity_daa.max(self.coinbase_maturity));
             return Err(TxRuleError::ImmatureCoinbaseSpend(
                 index,
                 input.previous_outpoint,
                 entry.block_daa_score,
                 pov_daa_score,
-                self.coinbase_maturity,
+                effective_bound,
             ));
         }
 
