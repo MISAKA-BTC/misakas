@@ -55,20 +55,39 @@ Restart command lines: each host's `cmdline.new` — the recorded production fla
 kept on purpose: if that host ever returns it is a live straggler, and its refusal at
 handshake is a soak observation.
 
+## Branch M, and why the order below is the order
+
+A's 28.2 M chain is **Branch A** — the difficulty-floor branch it self-mined while
+isolated; the true majority chain (**Branch M**, ~29.7 M) lives on three external
+old-build peers (`169.58.39.220/13.16/3.28`). The flag day severs the fleet from those
+peers, so Branch M must be inside the fleet *before* the fleet flips. That copy is the
+P0 E2E node already running on host A (appdir `/home/ubuntu/p0-e2e-appdir`, private ports
+361xx/366xx, `--connect` to the three Branch M peers, pre-fingerprint fix build): at
+planning time it stood at DAA 29.30 M with its blue work already above Branch A's. When
+it completes, its appdir is a full Branch M datadir owned by the fleet — it becomes node
+**A2**, restarted under the candidate on `0.0.0.0:36211`.
+
+Binary swaps on A use `mv` + `cp` (rename, never copy-onto): the E2E process runs from
+the same path being replaced, and an in-place copy would truncate the running inode.
+
 ## Order of operations
 
-1. **B first, with the rollback rehearsal.** B is the worse-off node (stuck sink) and A
-   still holds the heavier chain while B is down. Install → start → verify RPC → stop →
-   restore `.prev` → start old → verify RPC → reinstall candidate. After this, rollback is
-   a rehearsed operation, not a document.
-2. **A.** Same, minus rehearsal. From here A(candidate) ↔ B(candidate) peer, and B must
-   IBD onto A's heavier chain — the first live exercise of the fixed comparator (F1).
-3. **C = 5.104.81.23.** Fresh node, fresh appdir, syncing from genesis against A+B under
-   the gate — the from-genesis IBD path, on the real chain, under the candidate.
-4. **Seeders** (`misaka-dnsseeder` units on A and B) updated only if their running binary
+1. **B first, with the rollback rehearsal.** Install → start → verify RPC → stop →
+   restore `.prev` → start old → verify RPC → reinstall candidate. After this, rollback
+   is a rehearsed operation, not a document. B then idles peerless — expected, until A2.
+2. **E2E completes → A2.** Stop the E2E cleanly, restart its appdir under the candidate
+   (`cmdline.a2`). B begins adopting Branch M from A2 — the first live exercise of the
+   fixed comparator (F1), against the real majority chain.
+3. **A.** Swap the production binary (`mv`-then-`cp`), restart on its existing Branch A
+   datadir with `cmdline.new`. A must abandon its own mined branch for Branch M via the
+   deep-reorg/IBD path — the exact incident scenario, run live on the node that caused it.
+4. **C = 5.104.81.23.** Fresh node, fresh appdir, syncing from genesis against the island
+   under the gate — the from-genesis IBD path, on the real chain, under the candidate.
+5. **Seeders** (`misaka-dnsseeder` units on A and B) updated only if their running binary
    differs from the candidate build's.
-5. **Cold-start mining** on A (candidate `misaminer --mine-when-not-synced`, operator's
-   own payout address) until `is_synced=true` fleet-wide, then the override is dropped.
+6. **Cold-start mining** against A2's Branch M tip (candidate `misaminer
+   --mine-when-not-synced`, operator's own payout address) until `is_synced=true`
+   fleet-wide, then the override is dropped.
 
 ## Rollback (rehearsed in step 1)
 
