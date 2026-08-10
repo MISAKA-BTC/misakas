@@ -35,6 +35,7 @@ use crate::{
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
         vlt_credits::DbVltCreditStore,
+        vlt_voting_snapshot::DbVltVotingSnapshotStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
 };
@@ -133,6 +134,9 @@ pub struct ConsensusStorage {
     pub epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
     /// MISAKA Verified LLM Token-Weighted BFT: per-epoch finalized verified-compute credit.
     pub vlt_credit_store: Arc<DbVltCreditStore>,
+    /// MISAKA VLT PR 2: per-epoch frozen voting snapshots (§5) — the denominator a vote's signed
+    /// commitment binds. Write-once per wall epoch, frozen at the boundary recompute.
+    pub vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
     pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
@@ -347,6 +351,19 @@ impl ConsensusStorage {
             }
             Arc::new(store)
         };
+        // A handful of epochs is plenty: the sign path reads the current epoch, the credit walk
+        // memoizes per run. Untracked for the same estimator reason as the credit store.
+        let vlt_voting_snapshot_store = {
+            let mut store = DbVltVotingSnapshotStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build());
+            // Same write-once-and-derived discipline as the credit rows: frozen under superseded
+            // rules means wrong forever, so discard for re-freezing rather than read as final.
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!(
+                    "[vlt-voting-snapshot] could not check the schema version: {err}; leaving existing rows in place"
+                );
+            }
+            Arc::new(store)
+        };
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -473,6 +490,7 @@ impl ConsensusStorage {
             rewarded_epochs_store,
             epoch_accumulator_store,
             vlt_credit_store,
+            vlt_voting_snapshot_store,
             block_quality_pool_store,
             reserve_balance_store,
             utxo_multisets_store,

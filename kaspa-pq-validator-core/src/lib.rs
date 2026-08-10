@@ -208,6 +208,7 @@ impl ValidatorKey {
     /// Refuses to sign a lock that is not strictly below the epoch being locked — that is a lock
     /// the signer could not yet have held, and consensus rejects it at the stateless layer, so
     /// producing one only burns a fee.
+    #[allow(clippy::too_many_arguments)]
     pub fn sign_precommit(
         &self,
         network_id: &[u8],
@@ -215,11 +216,23 @@ impl ValidatorKey {
         target_hash: Hash64,
         target_daa_score: u64,
         held: Option<PrecommitLock>,
+        snapshot_commitment: Hash64,
         bond_outpoint: TransactionOutpoint,
     ) -> Result<StakePrecommitPayload, String> {
         let lock = held.unwrap_or_default();
-        let message =
-            stake_precommit_message(network_id, epoch, target_hash, target_daa_score, lock.epoch, lock.anchor, bond_outpoint);
+        // §5.1: the snapshot commitment comes from the duty (the chain's word on which frozen
+        // denominator is in force), never from this process's memory — same authority rule as
+        // the lock.
+        let message = stake_precommit_message(
+            network_id,
+            epoch,
+            target_hash,
+            target_daa_score,
+            lock.epoch,
+            lock.anchor,
+            snapshot_commitment,
+            bond_outpoint,
+        );
         let signature = self.sign_with_context(message.as_bytes().as_slice(), PRECOMMIT_MLDSA87_CONTEXT).to_vec();
         let payload = StakePrecommitPayload {
             version: DNS_PAYLOAD_VERSION_V1,
@@ -230,6 +243,7 @@ impl ValidatorKey {
             target_daa_score,
             locked_epoch: lock.epoch,
             locked_hash: lock.anchor,
+            snapshot_commitment,
             signature,
         };
         if !payload.lock_is_self_consistent() {

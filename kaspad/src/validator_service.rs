@@ -90,7 +90,8 @@ const COMPUTE_CERTIFICATE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 8 + 64 
 const COMPUTE_VERDICT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 2 * 64 + 64 + 68 + 1 + 64;
 /// MISAKA §5 round 2: version + validator_id + bond outpoint + epoch + target (hash, daa) + the
 /// declared lock (epoch, hash).
-const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64;
+// MISAKA VLT PR 2: + 64 for the §5.1 `snapshot_commitment` the payload now carries.
+const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64 + 64;
 /// The challenge, sized for the `ForgedReceipt` kind (no contradiction proof attached).
 const COMPUTE_CHALLENGE_PAYLOAD_BYTES: usize = MLDSA87_SIG_BYTES + 2 + 64 + 64 + 1 + 64 + 68 + 68 + 64 + 64 + 64;
 
@@ -818,7 +819,15 @@ impl ValidatorService {
             return;
         };
         let held = if duty.held == PrecommitLock::default() { None } else { Some(duty.held) };
-        let precommit = match key.sign_precommit(&self.config.network_id, epoch, target_hash, target_daa_score, held, bond_outpoint) {
+        let precommit = match key.sign_precommit(
+            &self.config.network_id,
+            epoch,
+            target_hash,
+            target_daa_score,
+            held,
+            duty.snapshot_commitment,
+            bond_outpoint,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 warn!("[{VALIDATOR}] precommit: refusing to sign epoch {epoch}: {e}");

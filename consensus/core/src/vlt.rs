@@ -157,6 +157,18 @@ pub const VERIFIER_SORTITION_KEY: &[u8] = b"misaka-vlt-verifier-sortition-v1";
 /// distinguishable.
 pub const VLT_SNAPSHOT_COMMITMENT_KEY: &[u8] = b"misaka-vlt-snapshot-v1";
 
+/// Keyed BLAKE2b-512 domain for [`VltVotingSnapshot::validator_set_root`] — the set, without
+/// weights, so "who may vote" and "with how much" stay separately comparable.
+pub const VLT_VALIDATOR_SET_ROOT_KEY: &[u8] = b"misaka-vlt-validator-set-v1";
+
+/// Keyed BLAKE2b-512 domain for [`VltVotingSnapshot::snapshot_root`] — the whole frozen
+/// denominator, weights included.
+pub const VLT_VOTING_SNAPSHOT_ROOT_KEY: &[u8] = b"misaka-vlt-voting-snapshot-v1";
+
+/// Keyed BLAKE2b-512 domain for [`vote_snapshot_commitment`] — the single 64-byte value a vote
+/// signs to bind BOTH roots.
+pub const VLT_VOTE_SNAPSHOT_COMMITMENT_KEY: &[u8] = b"misaka-vlt-vote-commitment-v1";
+
 /// ML-DSA-87 signing context for an executor's compute-certificate signature.
 pub const COMPUTE_CERT_MLDSA87_CONTEXT: &[u8] = b"misaka-vlt-v1/cert/mldsa87";
 /// ML-DSA-87 signing context for a verifier's verdict signature.
@@ -1644,6 +1656,26 @@ impl VltParams {
         daa_score >= self.vlt_activation_daa_score
     }
 
+    /// Commitment to the model cost table in force — `ρ(S_j)` prices voting power directly, so a
+    /// [`VltVotingSnapshot`] records which pricing its weights were computed under (§5's
+    /// `model_table_hash`). Hashes only the `len` live entries: two tables that differ solely in
+    /// dead capacity are the same table.
+    pub fn model_table_hash(&self) -> Hash64 {
+        let mut hasher = Blake2bParams::new().hash_length(64).key(b"misaka-vlt-model-table-v1").to_state();
+        let live = &self.model_cost_table.entries[..self.model_cost_table.len as usize];
+        hasher.update(&(live.len() as u64).to_le_bytes());
+        for e in live {
+            hasher.update(e.model_weights_hash.as_byte_slice());
+            hasher.update(e.runtime_hash.as_byte_slice());
+            hasher.update(e.runtime_class_id.as_byte_slice());
+            hasher.update(&e.rho_micro.to_le_bytes());
+            hasher.update(&e.max_tokens.to_le_bytes());
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(hasher.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+
     /// Internal-consistency check for a preset. Not a consensus rule — a startup /
     /// test assertion that catches a preset which would be unsafe or inert-by-accident
     /// if its fence were ever moved.
@@ -2051,6 +2083,167 @@ impl VltActivationRecord {
     pub fn is_active(&self) -> bool {
         self.state == PersistedVltActivationState::Active
     }
+}
+
+/// Persisted schema version for [`VltVotingSnapshot`].
+pub const VLT_VOTING_SNAPSHOT_VERSION_V1: u16 = 1;
+
+/// One validator's row in a frozen [`VltVotingSnapshot`] (§5): the identity that may vote, the
+/// collateral that makes the vote slashable, and the three numbers `W_i(E)` decomposes into.
+///
+/// `raw_recent_compute` and `bond_cap` are both carried even though only their `min` votes,
+/// because an operator diagnosing a weight has to see WHICH bound is binding — "your compute
+/// decayed" and "your bond is too small for your compute" are different problems with the same
+/// `effective_weight`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct VltValidatorWeight {
+    pub validator_id: Hash64,
+    /// The bond's 2592-byte ML-DSA-87 validator public key — carried whole so a snapshot (and
+    /// later a checkpoint package) is sufficient to verify this validator's votes without the
+    /// bond registry.
+    pub consensus_key: Vec<u8>,
+    pub bond_outpoint: TransactionOutpoint,
+    /// `C_i(E)` — decayed recent verified compute at [`VltVotingSnapshot::snapshot_epoch`].
+    pub raw_recent_compute: u128,
+    /// `λ·B_i` — the collateral cap.
+    pub bond_cap: u128,
+    /// `W_i(E) = min{C_i(E), λ·B_i(E)}` — what actually votes.
+    pub effective_weight: u128,
+}
+
+/// The §5 frozen voting snapshot: the complete denominator for one epoch, as one persistable,
+/// root-committed value.
+///
+/// The BFT safety argument needs every voter dividing by the same `W(E)`, which makes the
+/// denominator itself consensus-relevant state rather than something each recompute re-derives
+/// and forgets. This struct is that state. It is derived once per wall epoch, pinned at a
+/// canonical lag-buried anchor (`source_finalized_anchor`) so every node — and every branch that
+/// contains that anchor — derives it byte-identically, and then committed by two roots:
+///
+/// * [`Self::validator_set_root`] — who may vote (id, key, bond), weights excluded.
+/// * [`Self::snapshot_root`] — the whole thing, weights and provenance included.
+///
+/// A vote then signs [`vote_snapshot_commitment`] over both (§5.1): a signature under one
+/// denominator can no longer be counted against another, which closes the "same vote, different
+/// `W(E)`" replay the paper calls out. `resolution_complete` stays OUTSIDE both roots for the
+/// same reason it is outside [`VltEpochSnapshot::commitment_root`]: it is a fact about this
+/// node's storage, not about the chain.
+///
+/// `validators` is sorted ascending by `validator_id` (ties by bond outpoint) — a consensus
+/// rule, not a convenience: the roots hash the vector in order.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct VltVotingSnapshot {
+    pub version: u16,
+    /// The canonical lag-buried anchor the whole derivation is pinned at.
+    pub source_finalized_anchor: Hash64,
+    pub source_anchor_daa: u64,
+    /// The epoch the weights are evaluated at — the newest ready epoch at the freeze.
+    pub snapshot_epoch: u64,
+    /// The wall epoch this snapshot is the denominator FOR. Weights frozen here are usable from
+    /// this epoch and not before — the §4 delay, restated as data.
+    pub activation_epoch: u64,
+    /// Commitment to the model cost table in force — `ρ` moves voting power, so the snapshot
+    /// records which pricing it was computed under.
+    pub model_table_hash: Hash64,
+    /// Commitment to the capability declarations live at the pin (the committee candidate pool).
+    pub capability_set_root: Hash64,
+    pub validator_set_root: Hash64,
+    /// [`VltEpochSnapshot::commitment_root`] of the pinned credit table the weights came from.
+    pub credit_table_root: Hash64,
+    pub snapshot_root: Hash64,
+    pub validators: Vec<VltValidatorWeight>,
+    pub total_weight: u128,
+    pub quorum_weight: u128,
+    /// Local licence, not consensus data (outside every root): `false` means a dependency could
+    /// not be loaded and this snapshot must not be frozen or activated on.
+    pub resolution_complete: bool,
+}
+
+impl VltVotingSnapshot {
+    /// The root over WHO may vote: count then `validator_id || key || bond outpoint` per row, in
+    /// the vector's (sorted) order. Weights deliberately excluded — see the struct doc.
+    pub fn compute_validator_set_root(validators: &[VltValidatorWeight]) -> Hash64 {
+        let mut hasher = Blake2bParams::new().hash_length(64).key(VLT_VALIDATOR_SET_ROOT_KEY).to_state();
+        hasher.update(&(validators.len() as u64).to_le_bytes());
+        for v in validators {
+            hasher.update(v.validator_id.as_byte_slice());
+            hasher.update(&(v.consensus_key.len() as u64).to_le_bytes());
+            hasher.update(&v.consensus_key);
+            hasher.update(v.bond_outpoint.transaction_id.as_byte_slice());
+            hasher.update(&v.bond_outpoint.index.to_le_bytes());
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(hasher.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+
+    /// The root over the WHOLE snapshot: provenance, both sub-roots, every weight row in order,
+    /// and the totals. Everything consensus-meaningful except `resolution_complete`.
+    pub fn compute_snapshot_root(&self) -> Hash64 {
+        let mut hasher = Blake2bParams::new().hash_length(64).key(VLT_VOTING_SNAPSHOT_ROOT_KEY).to_state();
+        hasher.update(&self.version.to_le_bytes());
+        hasher.update(self.source_finalized_anchor.as_byte_slice());
+        hasher.update(&self.source_anchor_daa.to_le_bytes());
+        hasher.update(&self.snapshot_epoch.to_le_bytes());
+        hasher.update(&self.activation_epoch.to_le_bytes());
+        hasher.update(self.model_table_hash.as_byte_slice());
+        hasher.update(self.capability_set_root.as_byte_slice());
+        hasher.update(self.validator_set_root.as_byte_slice());
+        hasher.update(self.credit_table_root.as_byte_slice());
+        hasher.update(&(self.validators.len() as u64).to_le_bytes());
+        for v in &self.validators {
+            hasher.update(v.validator_id.as_byte_slice());
+            hasher.update(&v.raw_recent_compute.to_le_bytes());
+            hasher.update(&v.bond_cap.to_le_bytes());
+            hasher.update(&v.effective_weight.to_le_bytes());
+        }
+        hasher.update(&self.total_weight.to_le_bytes());
+        hasher.update(&self.quorum_weight.to_le_bytes());
+        let mut out = [0u8; 64];
+        out.copy_from_slice(hasher.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+
+    /// Sort the rows into consensus order, recompute both roots and the totals, and return the
+    /// sealed snapshot. The ONLY way the roots should ever be produced — a snapshot whose fields
+    /// were hand-set can claim any root it likes, which is why consumers compare against
+    /// [`Self::compute_snapshot_root`] rather than trusting the field.
+    pub fn seal(mut self) -> Self {
+        self.validators.sort_by(|a, b| {
+            (a.validator_id, a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(
+                b.validator_id,
+                b.bond_outpoint.transaction_id,
+                b.bond_outpoint.index,
+            ))
+        });
+        self.total_weight = self.validators.iter().fold(0u128, |acc, v| acc.saturating_add(v.effective_weight));
+        self.quorum_weight = bft_quorum(self.total_weight);
+        self.validator_set_root = Self::compute_validator_set_root(&self.validators);
+        self.snapshot_root = self.compute_snapshot_root();
+        self
+    }
+
+    /// The 64-byte value a vote signs for this snapshot — both roots, bound.
+    pub fn vote_commitment(&self) -> Hash64 {
+        vote_snapshot_commitment(self.snapshot_root, self.validator_set_root)
+    }
+}
+
+/// §5.1: the single digest-sized commitment a Prevote/Precommit signs to bind BOTH the frozen
+/// denominator (`snapshot_root`) and the eligible voter set (`validator_set_root`).
+///
+/// Without this in the signed message, a vote aggregated under one denominator is
+/// indistinguishable from the same vote aggregated under another, and `Q(E)` silently stops
+/// meaning two thirds of anything. One value rather than two because the attestation wire format
+/// has exactly one commitment slot (`validator_set_commitment`) — and one keyed hash of both
+/// roots loses nothing: forging either root still changes the commitment.
+pub fn vote_snapshot_commitment(snapshot_root: Hash64, validator_set_root: Hash64) -> Hash64 {
+    let mut hasher = Blake2bParams::new().hash_length(64).key(VLT_VOTE_SNAPSHOT_COMMITMENT_KEY).to_state();
+    hasher.update(snapshot_root.as_byte_slice());
+    hasher.update(validator_set_root.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 /// Step the persisted activation record one recompute forward and report the resulting
@@ -3303,6 +3496,75 @@ mod tests {
         let e = vlt_activation_eligibility(true, 2_000, 5, true, &p);
         let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence);
         assert_eq!((r.as_ref(), s), (Some(&active), VltActivationState::Shadow));
+    }
+
+    /// The frozen snapshot is only a shared denominator if its roots are a pure function of its
+    /// consensus content: same rows in any input order ⇒ one root; any consensus field moved ⇒ a
+    /// different root; the local `resolution_complete` licence ⇒ no effect at all.
+    #[test]
+    fn voting_snapshot_roots_commit_content_not_input_order() {
+        let row = |id: u8, raw: u128, cap: u128| VltValidatorWeight {
+            validator_id: h64(id),
+            consensus_key: vec![id; 8],
+            bond_outpoint: TransactionOutpoint::new(TransactionId::from_bytes([id; 64]), 0),
+            raw_recent_compute: raw,
+            bond_cap: cap,
+            effective_weight: raw.min(cap),
+        };
+        let base = VltVotingSnapshot {
+            version: VLT_VOTING_SNAPSHOT_VERSION_V1,
+            source_finalized_anchor: h64(1),
+            source_anchor_daa: 900,
+            snapshot_epoch: 4,
+            activation_epoch: 7,
+            model_table_hash: h64(2),
+            capability_set_root: h64(3),
+            validator_set_root: Hash64::default(),
+            credit_table_root: h64(4),
+            snapshot_root: Hash64::default(),
+            validators: vec![row(9, 500, 400), row(3, 250, 800)],
+            total_weight: 0,
+            quorum_weight: 0,
+            resolution_complete: true,
+        };
+        let sealed = base.clone().seal();
+        // Sealing sorts into consensus order and derives the totals from the rows.
+        assert_eq!(sealed.validators[0].validator_id, h64(3), "validator_id ascending is a consensus rule");
+        assert_eq!(sealed.total_weight, 400 + 250);
+        assert_eq!(sealed.quorum_weight, bft_quorum(650));
+        assert_eq!(sealed.snapshot_root, sealed.compute_snapshot_root(), "the field is only ever the computed value");
+
+        // Same rows, opposite input order ⇒ byte-identical roots.
+        let mut flipped = base.clone();
+        flipped.validators.reverse();
+        let flipped = flipped.seal();
+        assert_eq!(flipped.snapshot_root, sealed.snapshot_root);
+        assert_eq!(flipped.validator_set_root, sealed.validator_set_root);
+
+        // The local licence is outside every root: two honest nodes may disagree on it while
+        // agreeing on the denominator.
+        let mut incomplete = base.clone();
+        incomplete.resolution_complete = false;
+        assert_eq!(incomplete.seal().snapshot_root, sealed.snapshot_root);
+
+        // Every consensus field moves the snapshot root; the set root moves only with the set.
+        let mut w = base.clone();
+        w.validators[0].effective_weight = 401;
+        let w = w.seal();
+        assert_ne!(w.snapshot_root, sealed.snapshot_root, "a weight is consensus content");
+        assert_eq!(w.validator_set_root, sealed.validator_set_root, "but not part of WHO may vote");
+        let mut k = base.clone();
+        k.validators[0].consensus_key = vec![0xff; 8];
+        let k = k.seal();
+        assert_ne!(k.validator_set_root, sealed.validator_set_root);
+        let mut m = base.clone();
+        m.model_table_hash = h64(99);
+        assert_ne!(m.seal().snapshot_root, sealed.snapshot_root, "rho prices voting power, so the table is committed");
+
+        // The vote commitment binds BOTH roots (§5.1): forging either changes what was signed.
+        assert_eq!(sealed.vote_commitment(), vote_snapshot_commitment(sealed.snapshot_root, sealed.validator_set_root));
+        assert_ne!(sealed.vote_commitment(), vote_snapshot_commitment(sealed.snapshot_root, h64(8)));
+        assert_ne!(sealed.vote_commitment(), vote_snapshot_commitment(h64(8), sealed.validator_set_root));
     }
 
     /// The gauges are what a monitoring query can match on, so the alertable condition has to be

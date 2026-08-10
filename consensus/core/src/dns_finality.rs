@@ -131,6 +131,7 @@ use crate::{
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
         ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltEpochSnapshot, VltParams,
+        VltValidatorWeight, VltVotingSnapshot,
     },
 };
 
@@ -557,6 +558,14 @@ pub struct StakePrecommitPayload {
     /// `locked_epoch` on two branches is provable equivocation.
     pub locked_hash: Hash64,
 
+    /// §5.1: [`crate::vlt::vote_snapshot_commitment`] over the frozen voting snapshot this
+    /// precommit was weighed under (`snapshot_root` + `validator_set_root`). In the signed
+    /// digest, so a lock counted against one denominator cannot be restated against another; the
+    /// credit walk requires it to equal the commitment the chain froze for the epoch the
+    /// precommit landed in. [`Hash64::default`] below the VLT weight fence, where no snapshot is
+    /// frozen and the round does not run.
+    pub snapshot_commitment: Hash64,
+
     /// ML-DSA-87 over [`stake_precommit_message`] under [`PRECOMMIT_MLDSA87_CONTEXT`].
     pub signature: Vec<u8>,
 }
@@ -693,6 +702,10 @@ pub struct PrecommitDuty {
     /// the canonical anchor to lock on. Ascending, so signing them in order builds the lock chain
     /// the walk expects.
     pub due: Vec<(u64, Hash64, u64)>,
+    /// §5.1: the [`crate::vlt::vote_snapshot_commitment`] of the frozen voting snapshot in force
+    /// at the sink — what every precommit signed off this duty must carry. Zero when the round is
+    /// not live (below the VLT weight fence) or no snapshot is frozen yet.
+    pub snapshot_commitment: Hash64,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
@@ -2140,6 +2153,7 @@ pub fn stake_attestation_message(
 ///          || target_daa_score.to_le_bytes()
 ///          || locked_epoch.to_le_bytes()
 ///          || locked_hash.as_bytes()           (64 B)
+///          || snapshot_commitment.as_bytes()   (64 B)
 ///          || bond_outpoint.transaction_id     (64 B)
 ///          || bond_outpoint.index.to_le_bytes()  (4 B),
 /// )
@@ -2151,8 +2165,16 @@ pub fn stake_attestation_message(
 /// the chain happened to want — so the on-chain lock check would verify nothing and the
 /// cross-branch evidence would prove nothing.
 ///
+/// The **snapshot commitment is inside the digest** for the same shape of reason, at the
+/// denominator instead of the lock (§5.1): a precommit whose signature did not cover which
+/// `W(E)` it was weighed under could be counted against a different one, and `Q(E)` would
+/// silently stop meaning two thirds of anything. Zero below the VLT weight fence, where the
+/// round does not exist — the round and the commitment activate together, so there is no signed
+/// precommit anywhere whose digest predates the field.
+///
 /// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
 /// weight it pledges, exactly as in [`stake_attestation_message`].
+#[allow(clippy::too_many_arguments)]
 pub fn stake_precommit_message(
     network_id: &[u8],
     epoch: u64,
@@ -2160,6 +2182,7 @@ pub fn stake_precommit_message(
     target_daa_score: u64,
     locked_epoch: u64,
     locked_hash: Hash64,
+    snapshot_commitment: Hash64,
     bond_outpoint: TransactionOutpoint,
 ) -> Hash {
     let mut hasher = Blake2bParams::new().hash_length(32).key(PRECOMMIT_MESSAGE_DOMAIN).to_state();
@@ -2169,6 +2192,7 @@ pub fn stake_precommit_message(
     hasher.update(&target_daa_score.to_le_bytes());
     hasher.update(&locked_epoch.to_le_bytes());
     hasher.update(locked_hash.as_byte_slice());
+    hasher.update(snapshot_commitment.as_byte_slice());
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
 
@@ -4372,10 +4396,6 @@ pub enum DnsTxError {
     /// An attestation in a shard does not match the shard's
     /// `(epoch, target_hash, validator_set_commitment)` tuple.
     ShardTupleMismatch,
-    /// An attestation declares a non-zero `validator_set_commitment` (audit #4):
-    /// ADR-0017 dropped the sortition committee, so the VSC is a fixed-zero wire
-    /// invariant; a non-zero value is rejected at the stateless layer.
-    NonZeroValidatorSetCommitment,
     /// The two attestations in slashing evidence do not share the same
     /// `(bond_outpoint, validator_id, epoch)` triple.
     EvidenceTripleMismatch,
@@ -4453,7 +4473,6 @@ impl Display for DnsTxError {
             DnsTxError::EmptyShard => write!(f, "attestation shard is empty"),
             DnsTxError::ShardTooLarge(n) => write!(f, "attestation shard has {n} attestations, above the maximum"),
             DnsTxError::ShardTupleMismatch => write!(f, "attestation does not match the shard's anchor tuple"),
-            DnsTxError::NonZeroValidatorSetCommitment => write!(f, "attestation validator_set_commitment must be zero (ADR-0017)"),
             DnsTxError::EvidenceTripleMismatch => {
                 write!(f, "slashing evidence attestations are not from the same (bond, validator, epoch) triple")
             }
@@ -4517,15 +4536,14 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
     if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
     }
-    // audit #4: the validator_set_commitment is a fixed-zero wire invariant (ADR-0017 dropped the
-    // sortition committee). Enforce it at the single per-attestation gate that BOTH the shard
-    // (`validate_stake_attestation_shard_payload`) and the slashing-evidence
-    // (`validate_slashing_evidence_payload`) paths funnel through, so no attestation with a
-    // non-zero VSC ever reaches a block and the downstream eligibility / StakeScore paths only
-    // ever see VSC == 0 (the signed digest's VSC field is then always zero too).
-    if att.validator_set_commitment != Hash64::default() {
-        return Err(DnsTxError::NonZeroValidatorSetCommitment);
-    }
+    // MISAKA VLT PR 2: the audit-#4 "VSC is fixed zero" rule is no longer stateless, because the
+    // field now has a value above the VLT weight fence — §5.1's vote_snapshot_commitment binding
+    // the vote to the frozen denominator it was weighed under. A stateless check cannot see the
+    // fence, so the zero rule moved to the acceptance gate (`classify_one_attestation`), which
+    // enforces exactly the old invariant below the fence and the snapshot binding above it. The
+    // slashing-evidence path deliberately accepts any VSC here: an above-fence equivocation
+    // carries real commitments, and refusing to decode it would make exactly those votes
+    // unprovable.
     Ok(())
 }
 
@@ -5528,6 +5546,102 @@ pub fn validator_voting_weight(bond: &StakeBondRecord, epoch: u64, snapshot: &Vl
     }
     let recent = snapshot.recent_compute(&bond.validator_pubkey_hash, epoch, vlt);
     crate::vlt::effective_voting_weight(recent, bond.amount, vlt.lambda_vlt_per_kas)
+}
+
+/// Assemble and seal the §5 frozen [`VltVotingSnapshot`] for one wall epoch, from the same pinned
+/// table and bond set every other weight consumer reads.
+///
+/// One row per bond **Active at the pin** — including zero-weight rows, deliberately: the
+/// validator-set root commits who was *eligible*, and "eligible with nothing to vote" is a fact
+/// (it is what [`crate::vlt::VltActivationBlocker::TooFewCreditedValidators`] counts against).
+/// Each row's numbers come from the identical primitives the live quorum comparison uses
+/// ([`VltEpochSnapshot::recent_compute`], [`crate::vlt::collateral_weight_cap`],
+/// [`crate::vlt::effective_voting_weight`]), so the frozen `total_weight` IS the denominator a
+/// vote under this snapshot is measured against — computing them differently here would freeze a
+/// number nothing ever divides by.
+///
+/// `seal` sorts the rows into consensus order (`validator_id` ascending) and derives both roots;
+/// callers never fill the root fields by hand.
+#[allow(clippy::too_many_arguments)]
+pub fn build_voting_snapshot(
+    source_finalized_anchor: Hash64,
+    source_anchor_daa: u64,
+    snapshot_epoch: u64,
+    activation_epoch: u64,
+    model_table_hash: Hash64,
+    capability_set_root: Hash64,
+    table: &VltEpochSnapshot,
+    bonds: &[StakeBondRecord],
+    vlt: &VltParams,
+) -> VltVotingSnapshot {
+    let validators = bonds
+        .iter()
+        .filter(|b| is_bond_active_at(b, source_anchor_daa))
+        .map(|b| {
+            let raw = table.recent_compute(&b.validator_pubkey_hash, snapshot_epoch, vlt);
+            let cap = crate::vlt::collateral_weight_cap(b.amount, vlt.lambda_vlt_per_kas);
+            VltValidatorWeight {
+                validator_id: b.validator_pubkey_hash,
+                consensus_key: b.validator_pubkey.clone(),
+                bond_outpoint: b.bond_outpoint,
+                raw_recent_compute: raw,
+                bond_cap: cap,
+                effective_weight: validator_voting_weight(b, snapshot_epoch, table, vlt),
+            }
+        })
+        .collect();
+    VltVotingSnapshot {
+        version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
+        source_finalized_anchor,
+        source_anchor_daa,
+        snapshot_epoch,
+        activation_epoch,
+        model_table_hash,
+        capability_set_root,
+        validator_set_root: Hash64::default(),
+        credit_table_root: table.commitment_root(),
+        snapshot_root: Hash64::default(),
+        validators,
+        total_weight: 0,
+        quorum_weight: 0,
+        resolution_complete: table.resolution_complete(),
+    }
+    .seal()
+}
+
+// Count-cached only (owned key vectors make the derived estimate wrong, exactly as for
+// [`VltEpochCredits`]); the store uses an untracked policy, so the estimate is never consulted.
+impl MemSizeEstimator for VltVotingSnapshot {}
+
+/// §5's `capability_set_root`: a commitment over the capability declarations live at a pin — the
+/// pool a verifier committee is drawn from — in canonical order. The caller supplies the records
+/// already filtered to the pin (liveness at the pin's DAA plus ancestry in the pin's chain);
+/// this sorts and hashes, so the root is a function of the SET and never of collection order.
+pub fn capability_set_root(records: &mut [ComputeCapabilityRecord]) -> Hash64 {
+    records.sort_by(|a, b| {
+        (a.validator_id, a.bond_outpoint.transaction_id, a.bond_outpoint.index, a.model_weights_hash, a.runtime_hash).cmp(&(
+            b.validator_id,
+            b.bond_outpoint.transaction_id,
+            b.bond_outpoint.index,
+            b.model_weights_hash,
+            b.runtime_hash,
+        ))
+    });
+    let mut hasher = Blake2bParams::new().hash_length(64).key(b"misaka-vlt-capability-set-v1").to_state();
+    hasher.update(&(records.len() as u64).to_le_bytes());
+    for r in records {
+        hasher.update(r.validator_id.as_byte_slice());
+        hasher.update(r.bond_outpoint.transaction_id.as_byte_slice());
+        hasher.update(&r.bond_outpoint.index.to_le_bytes());
+        hasher.update(r.model_weights_hash.as_byte_slice());
+        hasher.update(r.runtime_hash.as_byte_slice());
+        hasher.update(r.runtime_class_id.as_byte_slice());
+        hasher.update(&r.accepted_daa_score.to_le_bytes());
+        hasher.update(&r.expiry_daa_score.to_le_bytes());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 /// kaspa-pq ADR-0018 "本格版" (PoS-v2) — the per-epoch accumulator tally (Phase 1).
@@ -7858,6 +7972,46 @@ mod tests {
         assert_eq!(totals[&10], w1 * 2, "W(E) counts only validators with compute");
     }
 
+    /// The §5 frozen snapshot must freeze THE denominator, not a parallel one: every row's
+    /// `effective_weight` is byte-for-byte [`validator_voting_weight`], the total is the same sum
+    /// the live quorum divides by, zero-weight-but-eligible validators are committed rows (the
+    /// set root is about eligibility), and bond input order cannot move a root.
+    #[test]
+    fn frozen_voting_snapshot_freezes_the_live_denominator() {
+        let vlt = vlt_params_active();
+        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
+        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
+        let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
+        let anchor = Hash64::from_u64_word(77);
+
+        let snap = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &bonds, &vlt);
+        assert_eq!(snap.validators.len(), 3, "eligible-with-zero-weight is a committed fact, not an omission");
+        for row in &snap.validators {
+            let bond = bonds.iter().find(|b| b.validator_pubkey_hash == row.validator_id).unwrap();
+            assert_eq!(row.effective_weight, validator_voting_weight(bond, 10, &credits, &vlt));
+            assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
+        }
+        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
+        assert_eq!(snap.total_weight, totals[&10], "the frozen total IS the live quorum denominator");
+        assert_eq!(snap.quorum_weight, crate::vlt::bft_quorum(snap.total_weight));
+        assert!(snap.validators.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
+        assert_eq!(snap.credit_table_root, credits.commitment_root());
+
+        // Bond input order is a collection accident, never consensus content.
+        let mut reversed: Vec<StakeBondRecord> = bonds.clone();
+        reversed.reverse();
+        let again = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &reversed, &vlt);
+        assert_eq!(again.snapshot_root, snap.snapshot_root);
+        assert_eq!(again.vote_commitment(), snap.vote_commitment());
+
+        // A bond that did not exist at the pin is not in the set — same rule as the weight fn.
+        let mut late = vlt_bond(4, bond_amount);
+        late.activation_daa_score = 6_000; // above the 5_000 pin
+        let with_late = [bonds.as_slice(), &[late]].concat();
+        let pruned = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &with_late, &vlt);
+        assert_eq!(pruned.validator_set_root, snap.validator_set_root, "a post-pin bond is on one branch only; the set must not see it");
+    }
+
     /// The quorum is over *weight*, and a compute-less majority of validators cannot block or
     /// forge it — they contribute nothing to either side of the comparison.
     #[test]
@@ -8097,18 +8251,26 @@ mod tests {
 
     /// The lock is inside the signed digest. Without that the declaration would be an unsigned
     /// field anyone could restate, and both the on-chain lock check and the cross-branch
-    /// equivocation proof would be checking a number nobody committed to.
+    /// equivocation proof would be checking a number nobody committed to. Same for the §5.1
+    /// snapshot commitment, at the denominator instead of the lock: a signature that did not
+    /// cover it could be counted against a `W(E)` its signer never weighed under.
     #[test]
     fn precommit_digest_covers_the_declared_lock() {
         let net = b"misaka-test";
         let op = TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0);
         let anchor = Hash64::from_bytes([0xa1; 64]);
-        let base = stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), op);
+        let snap = Hash64::from_bytes([0x5a; 64]);
+        let base = stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), snap, op);
         // Same vote, different declared lock ⇒ different digest ⇒ the old signature does not carry.
-        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xbb; 64]), op));
-        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 9, Hash64::from_bytes([0xa0; 64]), op));
+        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xbb; 64]), snap, op));
+        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 9, Hash64::from_bytes([0xa0; 64]), snap, op));
+        // Same vote, different denominator ⇒ different digest — §5.1's whole point.
+        assert_ne!(
+            base,
+            stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), Hash64::from_bytes([0x5b; 64]), op)
+        );
         // And it is bound to the network and the bond, like an attestation.
-        assert_ne!(base, stake_precommit_message(b"other-net", 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), op));
+        assert_ne!(base, stake_precommit_message(b"other-net", 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), snap, op));
         assert_ne!(
             base,
             stake_precommit_message(
@@ -8118,6 +8280,7 @@ mod tests {
                 500,
                 10,
                 Hash64::from_bytes([0xa0; 64]),
+                snap,
                 TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 0)
             )
         );
@@ -8138,6 +8301,7 @@ mod tests {
             target_daa_score: 500,
             locked_epoch,
             locked_hash,
+            snapshot_commitment: Hash64::default(),
             signature: sig.clone(),
         };
         let some = Hash64::from_bytes([0xa0; 64]);
@@ -8308,6 +8472,7 @@ mod tests {
             target_daa_score: target_daa,
             locked_epoch: lock.0,
             locked_hash: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
+            snapshot_commitment: Hash64::default(),
             signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
         }
     }
@@ -9339,13 +9504,19 @@ mod tests {
         let mut bad = fixture_shard(2);
         bad.attestations[0].epoch = 999;
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
-        // audit #4: a non-zero validator_set_commitment is rejected (fixed-zero invariant).
-        let mut bad = fixture_shard(1);
-        bad.attestations[0].validator_set_commitment = Hash64::from_bytes([0x01; 64]);
-        assert_eq!(
-            validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()),
-            Err(DnsTxError::NonZeroValidatorSetCommitment)
-        );
+        // MISAKA VLT PR 2: a non-zero validator_set_commitment is stateless-VALID — above the
+        // weight fence it is the §5.1 snapshot binding. (Below the fence the acceptance gate
+        // still rejects it; a stateless layer cannot see the fence.) It remains part of the
+        // shard tuple, so members must agree on it.
+        let mut shard = fixture_shard(2);
+        shard.validator_set_commitment = Hash64::from_bytes([0x01; 64]);
+        for att in shard.attestations.iter_mut() {
+            att.validator_set_commitment = Hash64::from_bytes([0x01; 64]);
+        }
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&shard).unwrap()), Ok(()));
+        let mut bad = shard.clone();
+        bad.attestations[1].validator_set_commitment = Hash64::default();
+        assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
     }
 
     #[test]

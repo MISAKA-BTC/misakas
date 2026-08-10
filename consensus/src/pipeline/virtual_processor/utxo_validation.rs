@@ -1113,7 +1113,11 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> AttestationShardDecision {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
+        // MISAKA VLT PR 2: below the weight fence the audit-#4 fixed-zero VSC rule is enforced
+        // here (it was stateless before the slot gained its §5.1 meaning); above it any value is
+        // template/validity-legal and the credit walk judges the actual commitment.
+        let require_zero_vsc = !self.dns_params.as_ref().is_some_and(|p| p.vlt_weighting_active_at(daa_score));
+        classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated, require_zero_vsc)
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): legacy block-template
@@ -1140,10 +1144,11 @@ impl VirtualStateProcessor {
             return;
         }
         let net_id = self.genesis.hash;
+        let require_zero_vsc = !dns_params.vlt_weighting_active_at(daa_score);
         // A non-shard tx yields no attestations → `attestation_reward_eligibility`
         // returns Ok, so it is retained. A shard tx is retained iff *all* its
         // attestations are eligible.
-        txs.retain(|tx| attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true).is_ok());
+        txs.retain(|tx| attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true, require_zero_vsc).is_ok());
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
@@ -1171,8 +1176,9 @@ impl VirtualStateProcessor {
     ) -> BlockProcessResult<()> {
         // Fold the gate: configured overlay AND past activation.
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let require_zero_vsc = !self.dns_params.as_ref().is_some_and(|p| p.vlt_weighting_active_at(daa_score));
         // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
-        attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated)
+        attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated, require_zero_vsc)
             .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
     }
 
@@ -1687,6 +1693,11 @@ pub(crate) enum AttestationDropReason {
     /// payloads), but classified explicitly so a malformed shard is dropped with a
     /// reason rather than silently kept as a `KeepEligible{count:0}`.
     MalformedPayload,
+    /// A non-zero `validator_set_commitment` below the VLT weight fence — audit #4's fixed-zero
+    /// invariant, enforced here since PR 2 moved it off the stateless layer (which cannot see
+    /// the fence). Above the fence the field carries the §5.1 snapshot commitment and this
+    /// reason is never produced.
+    NonZeroValidatorSetCommitment,
 }
 
 impl AttestationDropReason {
@@ -1702,6 +1713,7 @@ impl AttestationDropReason {
         match self {
             AttestationDropReason::MalformedPayload
             | AttestationDropReason::ValidatorIdMismatch
+            | AttestationDropReason::NonZeroValidatorSetCommitment
             | AttestationDropReason::BadSignature => AttestationTemplateDropKind::Terminal,
             AttestationDropReason::BondNotActiveAtTarget => AttestationTemplateDropKind::Quarantine,
         }
@@ -1732,7 +1744,17 @@ fn classify_one_attestation(
     att: &StakeAttestation,
     bond_view: &ActiveBondView,
     net_id: BlockHash,
+    require_zero_vsc: bool,
 ) -> Result<(), AttestationDropReason> {
+    // MISAKA VLT PR 2: audit #4's fixed-zero VSC invariant, relocated from the stateless layer
+    // (which cannot see the weight fence) to this gate, which both the template and the §B.4
+    // block-validity rule funnel through — below the fence the consensus outcome is unchanged: a
+    // block carrying a non-zero-VSC attestation is invalid. Above the fence the slot carries the
+    // §5.1 snapshot commitment and any value is validity-legal; whether it matches the frozen
+    // denominator is the credit walk's judgment, not a block-validity one.
+    if require_zero_vsc && att.validator_set_commitment != kaspa_hashes::Hash64::default() {
+        return Err(AttestationDropReason::NonZeroValidatorSetCommitment);
+    }
     // (a) bond resolves to Active at the attestation's anchor.
     let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) else {
         return Err(AttestationDropReason::BondNotActiveAtTarget);
@@ -1772,6 +1794,7 @@ pub(crate) fn classify_attestation_shard_for_template(
     bond_view: &ActiveBondView,
     net_id: BlockHash,
     activated: bool,
+    require_zero_vsc: bool,
 ) -> AttestationShardDecision {
     if !activated || tx.subnetwork_id != SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
         return AttestationShardDecision::KeepNonShard;
@@ -1788,7 +1811,7 @@ pub(crate) fn classify_attestation_shard_for_template(
         };
     };
     for att in shard.attestations.iter() {
-        if let Err(reason) = classify_one_attestation(att, bond_view, net_id) {
+        if let Err(reason) = classify_one_attestation(att, bond_view, net_id, require_zero_vsc) {
             return AttestationShardDecision::Drop { reason, bond: att.bond_outpoint, epoch: att.epoch };
         }
     }
@@ -1815,12 +1838,13 @@ fn attestation_reward_eligibility(
     bond_view: &ActiveBondView,
     net_id: BlockHash,
     activated: bool,
+    require_zero_vsc: bool,
 ) -> Result<(), (TransactionId, u64)> {
     if !activated {
         return Ok(());
     }
     for att in attestations_from_accepted_txs(txs) {
-        if classify_one_attestation(&att, bond_view, net_id).is_err() {
+        if classify_one_attestation(&att, bond_view, net_id, require_zero_vsc).is_err() {
             return Err((att.bond_outpoint.transaction_id, att.epoch));
         }
     }
@@ -1947,6 +1971,10 @@ fn precommit_evidence_genuine(
             if !matches!(effective_bond_status(bond, p.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
                 return Err(ev.bond_outpoint.transaction_id);
             }
+            // The claimed snapshot commitment is echoed into the digest exactly like the claimed
+            // lock: the evidence proves the validator SIGNED these two payloads, whatever
+            // denominator each named — equivocation does not become honest by being weighed
+            // against the wrong `W(E)`.
             let digest = stake_precommit_message(
                 net_id.as_byte_slice(),
                 p.epoch,
@@ -1954,6 +1982,7 @@ fn precommit_evidence_genuine(
                 p.target_daa_score,
                 p.locked_epoch,
                 p.locked_hash,
+                p.snapshot_commitment,
                 p.bond_outpoint,
             )
             .as_bytes();
@@ -2284,7 +2313,18 @@ mod tests {
     // ML-DSA-87 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
     // integration test rather than here.
     mod attestation_reward_eligibility {
-        use super::super::attestation_reward_eligibility as eligibility;
+        use kaspa_consensus_core::tx::Transaction;
+
+        // Pin require_zero_vsc = true: these tests exercise the below-fence path, where the
+        // audit-#4 fixed-zero rule holds.
+        fn eligibility(
+            txs: &[Transaction],
+            view: &ActiveBondView,
+            net: BlockHash,
+            activated: bool,
+        ) -> Result<(), (kaspa_consensus_core::tx::TransactionId, u64)> {
+            super::super::attestation_reward_eligibility(txs, view, net, activated, true)
+        }
         use kaspa_consensus_core::{
             BlockHash,
             dns_finality::{
@@ -2307,7 +2347,7 @@ mod tests {
                 epoch: 1,
                 target_hash: Hash64::from_bytes([0x55; 64]),
                 target_daa_score: 10_000,
-                validator_set_commitment: Hash64::from_bytes([0x66; 64]),
+                validator_set_commitment: Hash64::default(),
                 // Garbage signature — never verifies. The accept path is tested
                 // end-to-end in b3 (a real validator-signed attestation).
                 signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
@@ -2373,7 +2413,17 @@ mod tests {
     // pin that the two never diverge. The KeepEligible accept path uses a real
     // ML-DSA-87 signature (libcrux), so a kept shard provably also passes §B.4.
     mod classify_attestation_shard_for_template {
-        use super::super::{AttestationDropReason, AttestationShardDecision, classify_attestation_shard_for_template as classify};
+        use super::super::{AttestationDropReason, AttestationShardDecision};
+
+        // Same below-fence pin as `eligibility` above.
+        fn classify(
+            tx: &Transaction,
+            view: &ActiveBondView,
+            net: BlockHash,
+            activated: bool,
+        ) -> AttestationShardDecision {
+            super::super::classify_attestation_shard_for_template(tx, view, net, activated, true)
+        }
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
@@ -2425,7 +2475,9 @@ mod tests {
             target_daa_score: u64,
         ) -> StakeAttestation {
             let target_hash = Hash64::from_bytes([0x55; 64]);
-            let vsc = Hash64::from_bytes([0x66; 64]);
+            // Zero, as every below-fence signer emits: the classifier under test pins the
+            // below-fence path, where a non-zero VSC is itself a drop reason.
+            let vsc = Hash64::default();
             let digest = stake_attestation_message(NET().as_byte_slice(), epoch, target_hash, target_daa_score, vsc, bond_outpoint);
             let sig = mldsa::sign(&kp.signing_key, digest.as_bytes().as_slice(), ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32])
                 .expect("ml-dsa-87 sign");
@@ -2439,6 +2491,32 @@ mod tests {
                 validator_set_commitment: vsc,
                 signature: sig.as_ref().to_vec(),
             }
+        }
+
+        /// MISAKA VLT PR 2: audit #4's fixed-zero VSC rule, relocated here from the stateless
+        /// layer. Below the fence a non-zero VSC is its own drop reason — BEFORE the signature
+        /// check, so the reason names the actual fault; above the fence (`require_zero_vsc =
+        /// false`) the same attestation falls through to the ordinary checks, because the slot
+        /// legitimately carries the §5.1 snapshot commitment there.
+        #[test]
+        fn below_the_fence_a_nonzero_vsc_is_rejected_and_above_it_is_not() {
+            let kp = mldsa::generate_key_pair([9u8; 32]);
+            let op = outpoint(9);
+            let view = ActiveBondView::from_records([(op, active_bond_with_key(op, &kp))]);
+            let mut att = signed_attestation(&kp, validator_id_from_pubkey(kp.verification_key.as_ref()), op, 1, 10_000);
+            att.validator_set_commitment = Hash64::from_bytes([0x66; 64]);
+            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
+            assert_eq!(
+                classify(&tx, &view, NET(), true),
+                AttestationShardDecision::Drop { reason: AttestationDropReason::NonZeroValidatorSetCommitment, bond: op, epoch: 1 }
+            );
+            // Above the fence the value is validity-legal; this one was not SIGNED with that
+            // commitment, so it falls to the signature check — the credit walk's business, and
+            // the proof the zero-rule arm sits before it.
+            assert_eq!(
+                super::super::classify_attestation_shard_for_template(&tx, &view, NET(), true, false),
+                AttestationShardDecision::Drop { reason: AttestationDropReason::BadSignature, bond: op, epoch: 1 }
+            );
         }
 
         #[test]
@@ -2717,7 +2795,7 @@ mod tests {
                 epoch: 1,
                 target_hash: Hash64::from_bytes([target; 64]),
                 target_daa_score: 10_000,
-                validator_set_commitment: Hash64::from_bytes([0x66; 64]),
+                validator_set_commitment: Hash64::default(),
                 signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
             }
         }
@@ -2843,6 +2921,7 @@ mod tests {
                 target_daa_score: 10_000,
                 locked_epoch: 1,
                 locked_hash: Hash64::from_bytes([lock_anchor; 64]),
+                snapshot_commitment: Hash64::default(),
                 signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
             }
         }

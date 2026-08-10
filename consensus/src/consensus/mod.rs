@@ -990,16 +990,37 @@ impl Consensus {
     }
 
     /// kaspa-pq DNS v3: assemble the signed `ValidatorAttestationTarget` for a canonical
-    /// lagged anchor — the exact `(net_id, epoch, target_hash, target_daa_score, vsc=0,
-    /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The VSC
-    /// is a fixed zero (P-1D: ADR-0017 retired the committee; not a gate, kept for domain
-    /// separation). The service only signs `message`. Shared by the singular + batch signers.
+    /// lagged anchor — the exact `(net_id, epoch, target_hash, target_daa_score, vsc,
+    /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The
+    /// service only signs `message`. Shared by the singular + batch signers.
+    ///
+    /// Below the VLT weight fence the VSC is the audit-#4 fixed zero (P-1D: ADR-0017 retired
+    /// the committee; kept for domain separation). At and above it, PR 2 gives the slot its
+    /// §5.1 meaning: the [`kaspa_consensus_core::vlt::vote_snapshot_commitment`] of the frozen
+    /// voting snapshot in force at the sink, binding this vote to the denominator it will be
+    /// weighed against.
     fn build_attestation_target(
         &self,
         anchor: &CanonicalLaggedEpochAnchor,
         bond_outpoint: TransactionOutpoint,
     ) -> ValidatorAttestationTarget {
-        let vsc = kaspa_consensus_core::Hash64::default();
+        let vsc = self
+            .config
+            .params
+            .dns_params
+            .as_ref()
+            .and_then(|dns_params| {
+                let sink = self.get_sink();
+                let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
+                self.virtual_processor.frozen_vote_commitment_at_sink(
+                    sink,
+                    sink_daa,
+                    &self.all_stake_bond_records(),
+                    self.config.params.genesis.hash.as_byte_slice(),
+                    dns_params,
+                )
+            })
+            .unwrap_or_default();
         // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
         let message = stake_attestation_message(
             self.config.params.genesis.hash.as_byte_slice(),

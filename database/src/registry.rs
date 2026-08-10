@@ -284,6 +284,18 @@ pub enum DatabaseStorePrefixes {
     /// exactly the moment it must be re-derived from the new chain.
     VltActivation = 241,
 
+    /// Per-epoch frozen `VltVotingSnapshot` rows (§5), keyed by `u64` wall epoch: the complete
+    /// voting denominator — validator rows, weights, and the two roots a vote signs — frozen at
+    /// the first recompute of each epoch and write-once thereafter, which is what "the validator
+    /// set and its weights are fixed within an epoch" means on disk. Derived state: every row is
+    /// re-derivable from the chain at its pinned anchor, so a fresh IBD converges to identical
+    /// rows.
+    VltVotingSnapshots = 242,
+    /// Singleton schema-version marker for [`Self::VltVotingSnapshots`], mirroring
+    /// [`Self::VltCreditsSchemaVersion`]: frozen rows are derived AND write-once, so a derivation
+    /// change must discard rows recorded under the old rules rather than read them as final.
+    VltVotingSnapshotsSchemaVersion = 243,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,
