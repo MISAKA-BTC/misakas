@@ -1955,8 +1955,11 @@ impl VirtualStateProcessor {
             self.stage_vlt_credits(&mut batch, dns_sink, sink_daa, dns_params);
             // MISAKA Compute Token Program (design v0.1 §9.2): fold newly-buried token ops
             // into the TOK ledger and settle emission for finalized epochs. Inert below the
-            // token shadow fence (`u64::MAX` on every shipped preset).
-            self.stage_token(&mut batch, dns_sink, sink_daa, dns_params);
+            // token shadow fence (`u64::MAX` on every shipped preset). The held selected-chain
+            // WRITE guard is passed through as the fold's reader: taking `.read()` here would
+            // self-deadlock against it — which is exactly what froze five devnet nodes at the
+            // first shadow-fence commit (daa 1640, 2026-08-10) before this parameter existed.
+            self.stage_token(&mut batch, dns_sink, sink_daa, dns_params, &*selected_chain_write);
         }
 
         // Flush the batch changes
@@ -4617,7 +4620,14 @@ impl VirtualStateProcessor {
     /// once (every shipped preset, forever). In `[shadow, active)` it walks, verifies
     /// and logs but stages nothing — and the cursors still advance, which is what makes
     /// shadow ops void *forever* rather than retroactively binding at the fork.
-    fn stage_token(&self, batch: &mut WriteBatch, sink: BlockHash, sink_daa: u64, dns_params: &DnsParams) {
+    fn stage_token(
+        &self,
+        batch: &mut WriteBatch,
+        sink: BlockHash,
+        sink_daa: u64,
+        dns_params: &DnsParams,
+        selected_chain: &impl SelectedChainStoreReader,
+    ) {
         let tkn = &dns_params.tkn;
         if !tkn.shadow_active_at(sink_daa) {
             return;
@@ -4627,7 +4637,7 @@ impl VirtualStateProcessor {
         let mut accounts: HashMap<(u64, Hash64), TokenAccount> = HashMap::new();
         let mut supplies: HashMap<u64, TokenSupply> = HashMap::new();
 
-        self.fold_token_ledger(batch, sink, sink_daa, dns_params, &mut accounts, &mut supplies);
+        self.fold_token_ledger(batch, sink, sink_daa, dns_params, selected_chain, &mut accounts, &mut supplies);
         self.settle_token_emission(batch, sink, sink_daa, dns_params, &mut accounts, &mut supplies);
 
         for ((asset, owner), account) in accounts {
@@ -4654,23 +4664,24 @@ impl VirtualStateProcessor {
         sink: BlockHash,
         sink_daa: u64,
         dns_params: &DnsParams,
+        selected_chain: &impl SelectedChainStoreReader,
         accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
         supplies: &mut HashMap<u64, TokenSupply>,
     ) {
         const MAX_FOLD_BLOCKS_PER_COMMIT: u64 = 4096;
         let tkn = &dns_params.tkn;
-        let Ok(sink_index) = self.selected_chain_store.read().get_by_hash(sink) else { return };
+        let Ok(sink_index) = selected_chain.get_by_hash(sink) else { return };
         let mut next = match self.token_store.fold_cursor().unwrap() {
             Some(v) => v,
             // First run: nothing below the shadow fence can carry a bindable op, so start
             // the fold there instead of walking the whole pre-program history.
-            None => self.first_chain_index_at_daa(tkn.tkn_shadow_activation_daa_score, sink_index),
+            None => Self::first_chain_index_at_daa(&self.headers_store, selected_chain, tkn.tkn_shadow_activation_daa_score, sink_index),
         };
         let net_id = self.genesis.hash;
         let horizon = dns_params.max_reorg_horizon_blocks;
         let end = sink_index.min(next.saturating_add(MAX_FOLD_BLOCKS_PER_COMMIT));
         while next <= end {
-            let Ok(block) = self.selected_chain_store.read().get_by_index(next) else { break };
+            let Ok(block) = selected_chain.get_by_index(next) else { break };
             let Ok(block_daa) = self.headers_store.get_daa_score(block) else { break };
             if sink_daa.saturating_sub(block_daa) <= horizon {
                 break; // not buried yet — resume on a later commit
@@ -4691,11 +4702,16 @@ impl VirtualStateProcessor {
     /// The first selected-chain index whose block DAA is at/above `daa` — binary search
     /// over the chain index (DAA is non-decreasing along the selected chain). Holes
     /// (pruned rows) push the bound up, which errs toward re-scanning, never skipping.
-    fn first_chain_index_at_daa(&self, daa: u64, hi_index: u64) -> u64 {
+    fn first_chain_index_at_daa(
+        headers: &Arc<DbHeadersStore>,
+        selected_chain: &impl SelectedChainStoreReader,
+        daa: u64,
+        hi_index: u64,
+    ) -> u64 {
         let (mut lo, mut hi) = (0u64, hi_index);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match self.selected_chain_store.read().get_by_index(mid).ok().and_then(|h| self.headers_store.get_daa_score(h).ok()) {
+            match selected_chain.get_by_index(mid).ok().and_then(|h| headers.get_daa_score(h).ok()) {
                 Some(d) if d < daa => lo = mid + 1,
                 Some(_) => hi = mid,
                 None => lo = mid + 1,
