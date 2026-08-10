@@ -95,7 +95,13 @@ if [ "$SKIP_PHASE1" -eq 0 ]; then
   "$REPO_ROOT/scripts/misaka-vlt-devnet.sh" --nodes "$NODES"
   echo
   echo "== Phase 1: bonding every validator (mines through coinbase maturity — takes a while) =="
-  "$REPO_ROOT/scripts/misaka-vlt-devnet-bond.sh"
+  # The bond script exits non-zero when some bonds are still awaiting acceptance at its final
+  # check — a soft outcome its own output says to wait through, so do exactly that here rather
+  # than dying: the authoritative signal is every node's heartbeat reaching active_validators=N.
+  "$REPO_ROOT/scripts/misaka-vlt-devnet-bond.sh" || true
+  echo
+  echo "== Phase 1: waiting for all $NODES bonds to read Active =="
+  wait_for_log "$WORK_DIR/node-0/kaspad.log" "active_validators=$NODES" "$WAIT_SECS" "all $NODES bonds Active"
 else
   [ -d "$WORK_DIR/node-0" ] || { echo "--skip-phase1 but no devnet at $WORK_DIR" >&2; exit 1; }
 fi
