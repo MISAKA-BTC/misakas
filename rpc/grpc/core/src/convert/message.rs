@@ -368,6 +368,40 @@ from!(item: RpcResult<&kaspa_rpc_core::GetSinkBlueScoreResponse>, protowire::Get
 });
 
 from!(item: &kaspa_rpc_core::GetDnsConfirmationRequest, protowire::GetDnsConfirmationRequestMessage, { Self { block_hash: item.block_hash.clone() } });
+from!(item: &kaspa_rpc_core::GetTokenLedgerEntryRequest, protowire::GetTokenLedgerEntryRequestMessage, {
+    Self { asset_id: item.asset_id, owner: item.owner.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetTokenLedgerEntryResponse>, protowire::GetTokenLedgerEntryResponseMessage, {
+    Self { available: item.available, balance: item.balance.clone(), nonce: item.nonce, error: None }
+});
+from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
+from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
+    Self {
+        available: item.available,
+        minted: item.minted.clone(),
+        burned: item.burned.clone(),
+        circulating: item.circulating.clone(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetTokenEmissionInfoRequest, protowire::GetTokenEmissionInfoRequestMessage, {
+    Self { epoch: item.epoch, latest: item.latest }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetTokenEmissionInfoResponse>, protowire::GetTokenEmissionInfoResponseMessage, {
+    Self {
+        available: item.available,
+        epoch: item.epoch,
+        settled: item.settled,
+        budget: item.budget.clone(),
+        network_compute: item.network_compute.clone(),
+        paid_total: item.paid_total.clone(),
+        reward_count: item.reward_count,
+        settlement_root: item.settlement_root.clone(),
+        next_settlement_epoch: item.next_settlement_epoch,
+        fold_cursor: item.fold_cursor,
+        error: None,
+    }
+});
 from!(item: RpcResult<&kaspa_rpc_core::GetDnsConfirmationResponse>, protowire::GetDnsConfirmationResponseMessage, {
     Self {
         available: item.available,
@@ -1003,6 +1037,38 @@ try_from!(item: &protowire::GetSinkBlueScoreResponseMessage, RpcResult<kaspa_rpc
 });
 
 try_from!(item: &protowire::GetDnsConfirmationRequestMessage, kaspa_rpc_core::GetDnsConfirmationRequest, { Self { block_hash: item.block_hash.clone() } });
+try_from!(item: &protowire::GetTokenLedgerEntryRequestMessage, kaspa_rpc_core::GetTokenLedgerEntryRequest, {
+    Self { asset_id: item.asset_id, owner: item.owner.clone() }
+});
+try_from!(item: &protowire::GetTokenLedgerEntryResponseMessage, RpcResult<kaspa_rpc_core::GetTokenLedgerEntryResponse>, {
+    Self { available: item.available, balance: item.balance.clone(), nonce: item.nonce }
+});
+try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
+try_from!(item: &protowire::GetTokenSupplyResponseMessage, RpcResult<kaspa_rpc_core::GetTokenSupplyResponse>, {
+    Self {
+        available: item.available,
+        minted: item.minted.clone(),
+        burned: item.burned.clone(),
+        circulating: item.circulating.clone(),
+    }
+});
+try_from!(item: &protowire::GetTokenEmissionInfoRequestMessage, kaspa_rpc_core::GetTokenEmissionInfoRequest, {
+    Self { epoch: item.epoch, latest: item.latest }
+});
+try_from!(item: &protowire::GetTokenEmissionInfoResponseMessage, RpcResult<kaspa_rpc_core::GetTokenEmissionInfoResponse>, {
+    Self {
+        available: item.available,
+        epoch: item.epoch,
+        settled: item.settled,
+        budget: item.budget.clone(),
+        network_compute: item.network_compute.clone(),
+        paid_total: item.paid_total.clone(),
+        reward_count: item.reward_count,
+        settlement_root: item.settlement_root.clone(),
+        next_settlement_epoch: item.next_settlement_epoch,
+        fold_cursor: item.fold_cursor,
+    }
+});
 try_from!(item: &protowire::GetDnsConfirmationResponseMessage, RpcResult<kaspa_rpc_core::GetDnsConfirmationResponse>, {
     Self {
         available: item.available,

@@ -101,6 +101,10 @@ pub enum KaspadPayloadOps {
     GetUtxosByAddressPage,
     // kaspa-pq Phase 11 (ADR-0010)
     GetValidatorStatus,
+    // MISAKA Compute Token Program (design v0.1 §9.3)
+    GetTokenLedgerEntry,
+    GetTokenSupply,
+    GetTokenEmissionInfo,
 
     // Subscription commands for starting/stopping notifications
     NotifyBlockAdded,

@@ -536,6 +536,28 @@ pub fn emission_rewards(budget: u128, credits: &VltEpochCredits, min_network_com
     settlement
 }
 
+/// The `getTokenEmissionInfo` read DTO (design §9.3): one epoch's settlement
+/// view plus the two live cursors — the ops gauges that let a harness or a
+/// monitor tell "settling normally" from "stalled" without log access.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TokenEmissionInfo {
+    /// The epoch this view describes.
+    pub epoch: u64,
+    /// Whether that epoch has a settlement row (false ⇒ the numeric fields are
+    /// zero — not yet settled, or skipped as pre-program history).
+    pub settled: bool,
+    pub budget: u128,
+    pub network_compute: u128,
+    pub paid_total: u128,
+    pub reward_count: u32,
+    /// [`TokenEmissionSettlement::digest`] of the row (zero hash when unsettled).
+    pub settlement_root: Hash,
+    /// The settlement cursor: the next epoch settlement will consider.
+    pub next_settlement_epoch: u64,
+    /// The ledger fold cursor: the next selected-chain index the fold processes.
+    pub fold_cursor: u64,
+}
+
 // ---------------------------------------------------------------------
 // Params (design §10). Unwired in Phase A PR 1: the `DnsParams`/preset field
 // lands with the processor seam so this PR changes no network's behavior.

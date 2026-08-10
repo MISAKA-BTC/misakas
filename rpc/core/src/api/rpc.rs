@@ -482,6 +482,48 @@ pub trait RpcApi: Sync + Send + AnySync {
         Err(RpcError::NotImplemented)
     }
 
+    /// MISAKA Compute Token Program (design §9.3): one `(asset, owner)` TOK ledger row.
+    async fn get_token_ledger_entry(&self, asset_id: u64, owner: String) -> RpcResult<GetTokenLedgerEntryResponse> {
+        self.get_token_ledger_entry_call(None, GetTokenLedgerEntryRequest { asset_id, owner }).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a
+    /// no-op; the node's core service overrides it.
+    async fn get_token_ledger_entry_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenLedgerEntryRequest,
+    ) -> RpcResult<GetTokenLedgerEntryResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenLedgerEntryResponse::default())
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
+    async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
+        self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await
+    }
+    async fn get_token_supply_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenSupplyRequest,
+    ) -> RpcResult<GetTokenSupplyResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenSupplyResponse::default())
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): the most recently settled epoch's
+    /// emission view (pass a request with `latest: false` for a specific epoch).
+    async fn get_token_emission_info(&self) -> RpcResult<GetTokenEmissionInfoResponse> {
+        self.get_token_emission_info_call(None, GetTokenEmissionInfoRequest { epoch: 0, latest: true }).await
+    }
+    async fn get_token_emission_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenEmissionInfoRequest,
+    ) -> RpcResult<GetTokenEmissionInfoResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenEmissionInfoResponse::default())
+    }
+
     /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.
     async fn get_validator_status(&self) -> RpcResult<GetValidatorStatusResponse> {
         self.get_validator_status_call(None, GetValidatorStatusRequest {}).await

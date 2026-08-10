@@ -274,6 +274,23 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_stake_bond(bond_outpoint)).await
     }
 
+    /// MISAKA Compute Token Program (design §9.3): one `(asset, owner)` TOK ledger
+    /// row (`None` if the token program is not configured for this network).
+    pub async fn async_get_token_account(&self, asset_id: u64, owner: Hash64) -> Option<kaspa_consensus_core::token::TokenAccount> {
+        self.clone().spawn_blocking(move |c| c.get_token_account(asset_id, owner)).await
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
+    pub async fn async_get_token_supply(&self, asset_id: u64) -> Option<kaspa_consensus_core::token::TokenSupply> {
+        self.clone().spawn_blocking(move |c| c.get_token_supply(asset_id)).await
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): one epoch's emission settlement
+    /// view + cursors (`epoch = None` reads the most recently settled epoch).
+    pub async fn async_get_token_emission_info(&self, epoch: Option<u64>) -> Option<kaspa_consensus_core::token::TokenEmissionInfo> {
+        self.clone().spawn_blocking(move |c| c.get_token_emission_info(epoch)).await
+    }
+
     /// kaspa-pq: a paged, filtered page of stake bonds (behind the `GetStakeBonds`
     /// RPC). Empty page if the overlay is not configured.
     pub async fn async_get_stake_bonds(&self, query: StakeBondQuery) -> StakeBondPage {
