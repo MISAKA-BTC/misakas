@@ -40,6 +40,22 @@ swap goes through `systemctl stop`). Exact command lines preserved per host as
 `misaka-dnsseeder` units: active on both, running pre-F5 binaries (`daa1143c…`) to be updated
 to the candidate seeder (`b4c71dba…`) once the nodes are stable.
 
+**Third seeder zone, 2026-08-10.** Until now both seeder zones (`misakascan.com`,
+`misakachain.com`) delegated to the same two hosts that back the fleet's own nodes, so
+bootstrap discovery was single-operator AND single-pair: losing either host took a
+disproportionate share of the discovery path with it. `seeder1.misakastake.com` is delegated
+(NS → `ns-seeder1.misakastake.com`, glue A → `5.104.81.23`) to host C, the third machine,
+which now runs `misaka-dnsseeder` (`b4c71dba…`, same binary as A and B) bound to the public
+IP — `systemd-resolved` owns `127.0.0.53/54:53` there, so `0.0.0.0:53` would collide. ufw
+opened UDP/53 only; 26211/tcp was already allowed.
+
+Adding a seeder is NOT a flag day: `consensus_params_id` excludes `dns_seeders`, and the
+pinned-fingerprint test passing unchanged is the proof. The record answers `NOERROR` with
+zero A records today — F5 fail-closed, because C's backing node is still doing its
+from-genesis IBD (`refresh failed … reports is_synced=false`). That is the wanted behaviour:
+a recovering node must not be advertised as a bootstrap target. It starts answering when C
+syncs, which is also the moment its answer is worth having.
+
 ## What is being installed
 
 One build, made once on host C from a fresh clone pinned to `00d1294` (workspace tests all

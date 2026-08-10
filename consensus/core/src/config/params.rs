@@ -1385,6 +1385,16 @@ pub const TESTNET_PARAMS: Params = Params {
     // docs/adr/0001-network-isolation.md). Same Kaspa-style auto-discovery as mainnet,
     // but nodes connect on the testnet-10 default P2P port (26211) — so the hosts
     // behind these records must also run a reachable testnet-10 node on 26211.
+    //
+    // Not a consensus input: `consensus_params_id` excludes `dns_seeders` ("where to find
+    // peers is not a rule about blocks"), so adding a record here is NOT a flag day and a
+    // node carrying it peers with one that does not.
+    //
+    // Third zone (`misakastake.com`) added 2026-08-10, on purpose: `misakascan.com` and
+    // `misakachain.com` both delegate to the same two hosts that back the fleet's own nodes,
+    // so a bootstrap has been single-operator AND single-pair since launch. seeder1 here is
+    // delegated to host C (5.104.81.23) — the third machine, previously build-only — which
+    // makes the discovery path survive the loss of either original host.
     dns_seeders: &[
         "seeder1.misakascan.com",
         "seeder2.misakascan.com",
@@ -1393,6 +1403,7 @@ pub const TESTNET_PARAMS: Params = Params {
         "seeder1.misakachain.com",
         "seeder2.misakachain.com",
         "seeder3.misakachain.com",
+        "seeder1.misakastake.com",
     ],
     net: NetworkId::with_suffix(NetworkType::Testnet, 10),
     genesis: TESTNET_GENESIS,
