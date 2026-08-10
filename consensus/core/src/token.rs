@@ -470,6 +470,24 @@ pub struct TokenEmissionSettlement {
 
 impl kaspa_utils::mem_size::MemSizeEstimator for TokenEmissionSettlement {}
 
+/// Keyed-BLAKE2b-256 domain for [`TokenEmissionSettlement::digest`].
+pub const TOKEN_SETTLEMENT_DIGEST_KEY: &[u8] = b"misaka-tkn-v1/settlement";
+
+impl TokenEmissionSettlement {
+    /// Deterministic digest of the whole settlement — keyed BLAKE2b-256 over the
+    /// borsh encoding. Logged at settle time, so a verify harness can assert
+    /// cross-node equality of the entire reward vector from the operator surface
+    /// alone (the same role the frozen snapshots' `snapshot_root` plays for §5).
+    pub fn digest(&self) -> Hash {
+        let bytes = borsh::to_vec(self).expect("borsh serialization of a settlement is infallible");
+        let mut hasher = Blake2bParams::new().hash_length(32).key(TOKEN_SETTLEMENT_DIGEST_KEY).to_state();
+        hasher.update(&bytes);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(hasher.finalize().as_bytes());
+        Hash::from_bytes(out)
+    }
+}
+
 /// `R(E)` — the halving-step emission schedule (design §5.2):
 /// `R(E) = r0 >> ⌊(E − emission_activation_epoch) / H⌋`, and 0 before
 /// activation or on an inert preset.

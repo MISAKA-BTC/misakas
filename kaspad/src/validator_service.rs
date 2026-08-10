@@ -150,6 +150,56 @@ pub struct ValidatorConfig {
     pub vlt: Option<VltParams>,
     /// MISAKA Verified LLM Token-Weighted BFT: the compute role's configuration.
     pub compute: ComputeConfig,
+    /// MISAKA Compute Token Program devnet fixture: token ops to submit once the chain reaches
+    /// each op's DAA (`--tkn-fixture-transfer` / `--tkn-fixture-burn`, parsed at service
+    /// construction; a malformed spec fails startup rather than silently submitting nothing).
+    pub tkn_fixture_transfers: Vec<String>,
+    pub tkn_fixture_burns: Vec<String>,
+}
+
+/// One parsed devnet fixture token op (see [`ValidatorConfig::tkn_fixture_transfers`]).
+#[derive(Clone, Debug)]
+enum TokenFixtureOp {
+    /// `to:amount:nonce:at_daa`
+    Transfer { to: Hash64, amount: u128, nonce: u64, at_daa: u64 },
+    /// `amount:nonce:at_daa`
+    Burn { amount: u128, nonce: u64, at_daa: u64 },
+}
+
+impl TokenFixtureOp {
+    fn at_daa(&self) -> u64 {
+        match self {
+            Self::Transfer { at_daa, .. } | Self::Burn { at_daa, .. } => *at_daa,
+        }
+    }
+
+    fn parse_transfer(spec: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let [to, amount, nonce, at_daa] = parts.as_slice() else {
+            return Err(format!("--tkn-fixture-transfer '{spec}': expected to_hex128:amount_atomic:nonce:at_daa"));
+        };
+        let to = to
+            .parse::<Hash64>()
+            .map_err(|_| format!("--tkn-fixture-transfer '{spec}': 'to' must be 128 hex chars"))?;
+        Ok(Self::Transfer {
+            to,
+            amount: amount.parse().map_err(|_| format!("--tkn-fixture-transfer '{spec}': bad amount"))?,
+            nonce: nonce.parse().map_err(|_| format!("--tkn-fixture-transfer '{spec}': bad nonce"))?,
+            at_daa: at_daa.parse().map_err(|_| format!("--tkn-fixture-transfer '{spec}': bad at_daa"))?,
+        })
+    }
+
+    fn parse_burn(spec: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let [amount, nonce, at_daa] = parts.as_slice() else {
+            return Err(format!("--tkn-fixture-burn '{spec}': expected amount_atomic:nonce:at_daa"));
+        };
+        Ok(Self::Burn {
+            amount: amount.parse().map_err(|_| format!("--tkn-fixture-burn '{spec}': bad amount"))?,
+            nonce: nonce.parse().map_err(|_| format!("--tkn-fixture-burn '{spec}': bad nonce"))?,
+            at_daa: at_daa.parse().map_err(|_| format!("--tkn-fixture-burn '{spec}': bad at_daa"))?,
+        })
+    }
 }
 
 /// A point-in-time snapshot of the validator's operational status, produced by
@@ -299,6 +349,12 @@ pub struct ValidatorService {
     /// transaction's payload size varies (a commitment carries the job input), so its fee cannot
     /// be computed once at startup.
     mass_calculator: MassCalculator,
+    /// MISAKA Compute Token Program devnet fixture ops, in submission order.
+    token_fixture: Vec<TokenFixtureOp>,
+    /// Indexes into [`Self::token_fixture`] already submitted this process run. In-memory on
+    /// purpose: a restart re-submits, and the ledger nonce voids the duplicate — cheaper and
+    /// more honest than pretending a submission is durable.
+    token_fixture_submitted: Mutex<HashSet<usize>>,
 }
 
 impl ValidatorService {
@@ -340,6 +396,20 @@ impl ValidatorService {
             },
             None => None,
         };
+        // A malformed fixture spec is a startup error: the harness that passed it is asserting on
+        // the op's on-chain effect, and "silently submitted nothing" is the one outcome it cannot
+        // distinguish from a broken fold.
+        let mut token_fixture: Vec<TokenFixtureOp> = Vec::new();
+        for spec in &config.tkn_fixture_transfers {
+            token_fixture.push(TokenFixtureOp::parse_transfer(spec).unwrap_or_else(|e| panic!("{e}")));
+        }
+        for spec in &config.tkn_fixture_burns {
+            token_fixture.push(TokenFixtureOp::parse_burn(spec).unwrap_or_else(|e| panic!("{e}")));
+        }
+        token_fixture.sort_by_key(|op| op.at_daa());
+        if !token_fixture.is_empty() {
+            info!("[{VALIDATOR}] token fixture: {} op(s) scheduled", token_fixture.len());
+        }
         // The equivocation-safety log requires a key (validator_id), a bond, and a path.
         // A load failure (e.g. a foreign state file) leaves it `None`, which disables signing.
         let signed_epochs = match (&key, bond_outpoint, &config.state_path) {
@@ -383,6 +453,8 @@ impl ValidatorService {
             compute,
             compute_inflight: Mutex::new(ComputeInflight::default()),
             mass_calculator,
+            token_fixture,
+            token_fixture_submitted: Mutex::new(HashSet::new()),
         }
     }
 
@@ -539,6 +611,11 @@ impl ValidatorService {
                         // DNS finality must not wait behind a multi-minute inference: attesting is
                         // what keeps the overlay confirming, and it is cheap.
                         self.run_compute_cycle(key, outpoint).await;
+
+                        // MISAKA Compute Token Program devnet fixture: cheap (a signature and a
+                        // funded tx), and strictly after the compute cycle so a harness's token
+                        // ops never delay the credits they will later be paid from.
+                        self.run_token_fixture(key).await;
                     }
                 }
                 None => {
@@ -1241,6 +1318,50 @@ impl ValidatorService {
     /// Common path for every overlay transaction this service submits (capability, commitment,
     /// verdict). Gated here for the same reason as `try_attest`: the check belongs at the point of
     /// signing, so a new submitter cannot bypass it by not knowing about the heartbeat's check.
+    /// MISAKA Compute Token Program devnet fixture: submit every scheduled op whose DAA has
+    /// arrived and which this process run has not submitted yet. Idempotence is the ledger's:
+    /// a re-submission after a restart carries the same nonce and folds to void.
+    async fn run_token_fixture(&self, key: &ValidatorKey) {
+        // ~7.3 KB: version + asset + 2592-byte pubkey + 64-byte recipient + amount + nonce +
+        // 4627-byte signature, borsh-framed. Burn is smaller; one conservative constant serves
+        // both (the fee difference is noise against the relay floor).
+        const TOKEN_OP_PAYLOAD_BYTES: usize = 7350;
+        if self.token_fixture.is_empty() {
+            return;
+        }
+        let virtual_daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+        for (idx, op) in self.token_fixture.iter().enumerate() {
+            if virtual_daa < op.at_daa() || self.token_fixture_submitted.lock().unwrap().contains(&idx) {
+                continue;
+            }
+            let op_clone = op.clone();
+            let network_id = self.config.network_id.clone();
+            let build = move |funding_outpoint, funding: &UtxoEntry, fee| match op_clone {
+                TokenFixtureOp::Transfer { to, amount, nonce, .. } => {
+                    key.build_token_transfer_tx(&network_id, to, amount, nonce, funding_outpoint, funding, fee)
+                }
+                TokenFixtureOp::Burn { amount, nonce, .. } => {
+                    key.build_token_burn_tx(&network_id, amount, nonce, funding_outpoint, funding, fee)
+                }
+            };
+            if let Some(tx_id) = self.build_and_submit_overlay_tx("token-op", TOKEN_OP_PAYLOAD_BYTES, false, build).await {
+                self.token_fixture_submitted.lock().unwrap().insert(idx);
+                match op {
+                    TokenFixtureOp::Transfer { to, amount, nonce, .. } => info!(
+                        "[{VALIDATOR}] token fixture: submitted transfer #{idx} tx={tx_id} to={to} amount={amount} nonce={nonce} at daa {virtual_daa}"
+                    ),
+                    TokenFixtureOp::Burn { amount, nonce, .. } => info!(
+                        "[{VALIDATOR}] token fixture: submitted burn #{idx} tx={tx_id} amount={amount} nonce={nonce} at daa {virtual_daa}"
+                    ),
+                }
+            } else {
+                // No funding yet (or participation gated): retry next heartbeat, loudly enough
+                // that a harness tailing the log can see the op is pending rather than lost.
+                debug!("[{VALIDATOR}] token fixture: op #{idx} waiting (funding/participation) at daa {virtual_daa}");
+            }
+        }
+    }
+
     async fn build_and_submit_overlay_tx<F>(
         &self,
         kind: &str,

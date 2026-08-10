@@ -4837,17 +4837,21 @@ impl VirtualStateProcessor {
                 supply.minted = supply.minted.saturating_add(settlement.paid_total);
                 supplies.insert(TOK_ASSET_ID, supply);
                 info!(
-                    "[token] epoch {next} settled: R={} X={} paid={} to {} executor(s)",
+                    "[token] epoch {next} settled: R={} X={} paid={} to {} executor(s) root={}",
                     settlement.budget,
                     settlement.network_compute,
                     settlement.paid_total,
-                    settlement.rewards.len()
+                    settlement.rewards.len(),
+                    settlement.digest(),
                 );
                 self.token_store.set_settlement_batch(batch, next, settlement).unwrap();
             } else {
                 info!(
-                    "[token-shadow] epoch {next} would settle: R={} X={} paid={}",
-                    settlement.budget, settlement.network_compute, settlement.paid_total
+                    "[token-shadow] epoch {next} would settle: R={} X={} paid={} root={}",
+                    settlement.budget,
+                    settlement.network_compute,
+                    settlement.paid_total,
+                    settlement.digest(),
                 );
             }
             next += 1;

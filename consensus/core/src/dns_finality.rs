@@ -1586,6 +1586,40 @@ impl DnsParams {
         self
     }
 
+    /// MISAKA Compute Token Program devnet fences (design v0.1 §10): move the token fences on a
+    /// PRIVATE devnet the way [`Self::with_vlt_devnet`] moves the VLT ones. `active_daa` opens the
+    /// ledger fold and emission; the shadow fence sits `shadow_span` below it, giving the harness a
+    /// real `[shadow, active)` window in which to prove that shadow-era ops stay void forever.
+    ///
+    /// Emission is pinned to the shapes a devnet can actually verify: a flat `R0` (no halving
+    /// inside a run — `H` is pinned huge), `D_settle` at exactly its coherence floor against this
+    /// preset's own challenge window / reorg horizon / epoch length, and the compute floor at 1
+    /// µRTE so a five-node fixture devnet (5e7 µRTE per job) actually mints. The §5.1 floor-skip
+    /// property itself is unit-tested in consensus-core; the devnet exists to exercise the fold
+    /// and settlement plumbing, not to re-prove the arithmetic.
+    ///
+    /// Devnet DAA and blue score track closely on a private mesh, so the epoch origin derived from
+    /// the DAA fence is the right epoch ±1 — and with a flat budget, being one epoch early or late
+    /// moves nothing a harness asserts.
+    pub fn with_tkn_devnet(mut self, active_daa: u64, shadow_span: u64, r0_atomic: u128) -> Self {
+        let epoch_len = self.attestation_epoch_length_blue_score.max(1);
+        self.tkn = crate::token::TokenParams {
+            tkn_shadow_activation_daa_score: active_daa.saturating_sub(shadow_span),
+            tkn_activation_daa_score: active_daa,
+            emission_activation_epoch: active_daa / epoch_len,
+            emission_epoch_budget_r0_atomic: r0_atomic,
+            emission_halving_epochs: u64::MAX,
+            settlement_delay_epochs: crate::token::TokenParams::min_settlement_delay_epochs(
+                self.vlt.challenge_window_blocks,
+                self.max_reorg_horizon_blocks,
+                epoch_len,
+                self.vlt.credit_delay_epochs,
+            ),
+            emission_min_network_compute: 1,
+        };
+        self
+    }
+
     pub fn vlt_params_consistent(&self) -> bool {
         if self.vlt.vlt_activation_daa_score == u64::MAX {
             return true;
