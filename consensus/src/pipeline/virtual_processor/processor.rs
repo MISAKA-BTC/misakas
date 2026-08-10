@@ -21,7 +21,7 @@ use crate::{
             compute_capabilities::DbComputeCapabilityStore,
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
-            dns_state::{DbDnsStateStore, DnsStateStoreReader},
+            dns_state::{DbDnsStateStore, DbVltActivationStore, DnsStateStoreReader, VltActivationStoreReader},
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
                 DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmCanonicalHeadsStoreReader,
@@ -105,7 +105,8 @@ use kaspa_consensus_core::{
         VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, adjudicate_compute_challenge,
         commitment_dependency_horizon, compute_capability_message, compute_certificate_message, compute_commitment_message,
         compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
-        verifier_verdict_message, verify_compute_certificate, vlt_activation_eligibility, vlt_epoch_finalized,
+        verifier_verdict_message, verify_compute_certificate, tick_vlt_activation, vlt_activation_eligibility,
+        vlt_epoch_finalized,
     },
 };
 use kaspa_consensus_notify::{
@@ -304,6 +305,9 @@ pub struct VirtualStateProcessor {
     /// while it is still in force and takes the certificate's whole committee with it.
     pub(super) compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
+    /// `update_dns_state` and written in the same batch as the `DnsState`.
+    pub(super) vlt_activation_store: Arc<RwLock<DbVltActivationStore>>,
     // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
@@ -523,6 +527,7 @@ impl VirtualStateProcessor {
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
+            vlt_activation_store: storage.vlt_activation_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
             evm_header_store: storage.evm_header_store.clone(),
             evm_state_store: storage.evm_state_store.clone(),
@@ -2562,18 +2567,46 @@ impl VirtualStateProcessor {
                 last_anchor != Hash64::default(),
                 &dns_params.vlt,
             );
-            let state = VltActivationState::derive(
+            // MISAKA VLT PR 1: the activation guard is a persisted state machine, not a
+            // per-recompute opinion. Step the stored record one epoch forward — reserve on the
+            // first eligible snapshot (for the NEXT epoch, never this one), re-evaluate at the
+            // boundary, cancel if the proof stopped holding — and persist the step in the same
+            // batch as the DnsState it travels with, so a restart resumes the reservation instead
+            // of re-deriving a fresh opinion. "Already active" is the record's word now: the old
+            // `last_anchor != default` proxy let bootstrap confirmations masquerade as a moved
+            // vote, reporting Recovery on networks that had never activated.
+            let prev_record = self.vlt_activation_store.read().get().ok();
+            let (new_record, state) = tick_vlt_activation(
                 shadow_active,
                 weight_active,
+                prev_record.as_ref(),
+                sink_blue / epoch_len_blue,
                 newest,
                 snapshot_root,
                 last_anchor,
                 eligibility,
                 dns_params.vlt.vlt_activation_daa_score,
-                // Anything ever finalized means the vote has already moved; §4's answer to weight
-                // loss after that is to hold the last anchor, never to re-denominate.
-                last_anchor != Hash64::default(),
             );
+            if let Some(record) = new_record
+                && prev_record.as_ref() != Some(&record)
+            {
+                // A record transition is rarer than an epoch and is the durable event an
+                // operator audits after the fact, so it is announced at warn like the state
+                // transitions below — with the numbers the decision was made on.
+                warn!(
+                    "[vlt-activation-record] {} -> {} at epoch={} (scheduled_at={} activation_epoch={} snapshot_epoch={} snapshot_root={} total_weight={} quorum_weight={})",
+                    prev_record.as_ref().map_or("none", |r| r.state.as_str()),
+                    record.state.as_str(),
+                    sink_blue / epoch_len_blue,
+                    record.scheduled_at_epoch,
+                    record.activation_epoch,
+                    record.snapshot_epoch,
+                    record.snapshot_root,
+                    record.total_weight,
+                    record.quorum_weight,
+                );
+                self.vlt_activation_store.write().set_batch(batch, record).unwrap();
+            }
             let quorum_epochs = vlt_epochs
                 .iter()
                 .filter(|t| meets_bft_quorum(t.signed_weight, t.total_weight, dns_params.vlt.min_network_compute))

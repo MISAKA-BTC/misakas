@@ -8,7 +8,7 @@ use crate::{
         compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
-        dns_state::DbDnsStateStore,
+        dns_state::{DbDnsStateStore, DbVltActivationStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
             DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmFlatAccountStore,
@@ -64,6 +64,9 @@ pub struct ConsensusStorage {
 
     // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
     pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    /// MISAKA VLT PR 1: the persisted §6 activation record — the reservation/active state the
+    /// per-epoch recompute steps and a restart resumes from. Same batch as `dns_state_store`.
+    pub vlt_activation_store: Arc<RwLock<DbVltActivationStore>>,
     // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
     pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
@@ -289,6 +292,7 @@ impl ConsensusStorage {
         // bond set is small (bounded by the active validator count), so a
         // modest item-capped cache suffices.
         let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
+        let vlt_activation_store = Arc::new(RwLock::new(DbVltActivationStore::new(db.clone())));
         let pruning_overlay_snapshot_store = Arc::new(RwLock::new(DbPruningPointOverlaySnapshotStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
@@ -439,6 +443,7 @@ impl ConsensusStorage {
             virtual_stores,
             selected_chain_store,
             dns_state_store,
+            vlt_activation_store,
             pruning_overlay_snapshot_store,
             stake_bonds_store,
             compute_capability_store,

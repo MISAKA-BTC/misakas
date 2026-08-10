@@ -7,8 +7,18 @@
 //! (PR-10.6/10.7) and read by the `getDnsConfirmation` RPC (PR-10.14).
 //! Before the first write, [`DnsStateStoreReader::get`] returns
 //! `StoreError::KeyNotFound`, which callers map to "overlay dormant".
+//!
+//! MISAKA VLT PR 1: also home to the [`VltActivationRecord`] singleton
+//! ([`DatabaseStorePrefixes::VltActivation`]) — same pattern, written in
+//! the same per-epoch recompute batch as `DnsState`. A separate row
+//! rather than a `DnsState` field because `DnsState` is a live per-anchor
+//! gauge rewritten every epoch, while the record is a state machine whose
+//! whole value is *not* moving unless a transition happened — and because
+//! appending to `DnsState`'s borsh layout would invalidate every deployed
+//! row for a field that changes a handful of times per network lifetime.
 
 use kaspa_consensus_core::dns_finality::DnsState;
+use kaspa_consensus_core::vlt::VltActivationRecord;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbItem, DirectDbWriter};
@@ -55,6 +65,50 @@ impl DnsStateStoreReader for DbDnsStateStore {
 impl DnsStateStore for DbDnsStateStore {
     fn set(&mut self, state: DnsState) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), &state)
+    }
+}
+
+/// Reader API for `VltActivationStore`.
+pub trait VltActivationStoreReader {
+    /// `StoreError::KeyNotFound` before the first write — i.e. the weight fence has never been
+    /// crossed on this consensus, which callers treat as "no record" rather than an error.
+    fn get(&self) -> StoreResult<VltActivationRecord>;
+}
+
+pub trait VltActivationStore: VltActivationStoreReader {
+    fn set(&mut self, record: VltActivationRecord) -> StoreResult<()>;
+}
+
+/// A DB + cache implementation of the `VltActivationStore` trait.
+#[derive(Clone)]
+pub struct DbVltActivationStore {
+    db: Arc<DB>,
+    access: CachedDbItem<VltActivationRecord>,
+}
+
+impl DbVltActivationStore {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self { db: Arc::clone(&db), access: CachedDbItem::new(db, DatabaseStorePrefixes::VltActivation.into()) }
+    }
+
+    pub fn clone_with_new_cache(&self) -> Self {
+        Self::new(Arc::clone(&self.db))
+    }
+
+    pub fn set_batch(&mut self, batch: &mut WriteBatch, record: VltActivationRecord) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), &record)
+    }
+}
+
+impl VltActivationStoreReader for DbVltActivationStore {
+    fn get(&self) -> StoreResult<VltActivationRecord> {
+        self.access.read()
+    }
+}
+
+impl VltActivationStore for DbVltActivationStore {
+    fn set(&mut self, record: VltActivationRecord) -> StoreResult<()> {
+        self.access.write(DirectDbWriter::new(&self.db), &record)
     }
 }
 
@@ -105,5 +159,42 @@ mod tests {
         store.set_batch(&mut batch, s2.clone()).unwrap();
         db.write(batch).unwrap();
         assert_eq!(store.get().unwrap(), s2);
+    }
+
+    /// The record is what a restart resumes the §6 activation machine from, so the row has to
+    /// survive the store byte-exactly — including the `u128` weights and every enum arm. A fresh
+    /// cache over the same DB (the restart shape) must read the same record back.
+    #[test]
+    fn vlt_activation_store_roundtrip_and_reopen() {
+        use kaspa_consensus_core::vlt::{PersistedVltActivationState, VltActivationRecord};
+
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbVltActivationStore::new(db.clone());
+
+        // No record until the weight fence has been crossed once.
+        assert!(store.get().is_err());
+
+        let scheduled = VltActivationRecord {
+            state: PersistedVltActivationState::ActivationScheduled,
+            source_anchor: Hash64::from_bytes([0x44; 64]),
+            snapshot_epoch: 41,
+            snapshot_root: Hash64::from_bytes([0x55; 64]),
+            scheduled_at_epoch: 46,
+            activation_epoch: 47,
+            // > 2^64 to exercise the u128 weights through the serializer.
+            total_weight: 340_282_366_920_938_463_463u128,
+            quorum_weight: 226_854_911_280_625_642_309u128,
+            ..VltActivationRecord::awaiting()
+        };
+        store.set(scheduled.clone()).unwrap();
+        assert_eq!(store.get().unwrap(), scheduled);
+
+        // Batch write (the recompute path) + a fresh cache over the same DB (the restart path).
+        let mut active = scheduled.clone();
+        active.state = PersistedVltActivationState::Active;
+        let mut batch = WriteBatch::default();
+        store.set_batch(&mut batch, active.clone()).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.clone_with_new_cache().get().unwrap(), active);
     }
 }

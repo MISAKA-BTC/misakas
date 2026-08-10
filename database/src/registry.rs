@@ -274,6 +274,16 @@ pub enum DatabaseStorePrefixes {
     /// from the unset default, which is the same state a first boot presents.
     ChainParticipation = 240,
 
+    /// Singleton `VltActivationRecord`: where this consensus is on the §6 VLT activation state
+    /// machine — awaiting an eligible snapshot, holding a reservation for the next epoch, or
+    /// activated (terminal). Written by the virtual processor's per-epoch DNS recompute in the
+    /// same batch as [`Self::DnsState`]; read back at the next recompute and after a restart, so
+    /// a committed reservation survives the process and an activated network can never be
+    /// re-derived back onto bootstrap weight. Lives in the consensus DB (not meta): the record is
+    /// a fact about this consensus's chain, and a staging commit that swaps the consensus out is
+    /// exactly the moment it must be re-derived from the new chain.
+    VltActivation = 241,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,
