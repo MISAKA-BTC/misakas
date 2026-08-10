@@ -29,11 +29,15 @@ series history — every RC superseded by a defect found, none by a green run:
                   other would show up here; it did not)
                 fresh scenarios, never run before, across three hosts:
                   seeds 480..599  darwin  120/120, 0 failures
-                  seeds 600..719  darwin  KILLED at round 106 (SIGKILL, memory
-                    pressure — swap 3.9G of 5G). Not a property failure: all
-                    106 completed rounds were clean. Not counted as a series:
-                    an incomplete run is not a result. The machine's ceiling
-                    for this test is roughly a hundred rounds per process.
+                  seeds 600..719  darwin  KILLED at round 106 (SIGKILL; the
+                    memory-pressure reading was one hypothesis — a concurrent
+                    session's process cleanup matching the test binary's name
+                    pattern is the likelier killer). All 106 completed rounds
+                    were clean, but an incomplete run is not a result, so the
+                    series was RESTARTED from seed 600 with the same binary:
+                  seeds 600..719  darwin  120/120, 0 failures (restart run,
+                    6,662 s wall — which also retires the 'machine ceiling
+                    ~100 rounds' inference; the full 120 fit in one process).
                   seeds 100..299  linux   in progress
                   seeds 300..479  linux   180/180, 0 failures
 
