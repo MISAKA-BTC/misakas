@@ -76,17 +76,18 @@ use kaspa_consensus_core::{
         ComputeStatusView, ComputeVerdictRecord, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
-        PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, advance_dns_confirmation, aggregate_compute_credits,
-        aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
-        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool, check_dns_reorg_rule,
-        commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
-        compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
-        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
-        effective_bond_status, epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at, is_dns_confirmed,
-        lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk, precommits_from_accepted_txs,
-        quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies, reorg_inputs_since_common_ancestor,
-        required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message, stake_precommit_message,
-        total_active_stake_by_epoch, total_voting_weight_by_epoch, validator_voting_weight, verdicts_for_certificate,
+        PruningPointOverlaySnapshot, StakeBondRecord, StakeScore, UNBOND_REQUEST_CONTEXT, advance_dns_confirmation,
+        aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool,
+        check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs,
+        compute_capabilities_with_ids_from_accepted_txs, compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs,
+        compute_commitments_from_accepted_txs, compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health,
+        dns_finality_fresh_for_bridge, effective_bond_status, epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at,
+        is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
+        precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
+        reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
+        stake_precommit_message, total_active_stake_by_epoch, total_voting_weight_by_epoch, unbond_request_message,
+        unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight, verdicts_for_certificate,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -1979,7 +1980,7 @@ impl VirtualStateProcessor {
                     BondMutation::Insert(outpoint, _) => {
                         store.delete_batch(batch, outpoint).unwrap();
                     }
-                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _) => {
+                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
                         if let Ok(record) = store.get(&outpoint) {
                             let mut record = (*record).clone();
                             revert_bond_stamp(&mut record, &mutation);
@@ -1997,7 +1998,7 @@ impl VirtualStateProcessor {
                     BondMutation::Insert(outpoint, record) => {
                         store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                     }
-                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _) => {
+                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
                         if let Ok(record) = store.get(&outpoint) {
                             let mut record = (*record).clone();
                             apply_bond_stamp(&mut record, &mutation);
@@ -2106,12 +2107,8 @@ impl VirtualStateProcessor {
     fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
-        let mut muts = bond_mutations_from_accepted_txs(
-            &self.accepted_txs_of_chain_block(chain_block),
-            accepted_daa_score,
-            min_bond,
-            unbonding_floor,
-        );
+        let txs = self.accepted_txs_of_chain_block(chain_block);
+        let mut muts = self.dns_bond_mutations_from_txs(&txs, accepted_daa_score, min_bond, unbonding_floor);
         // §7(b)/(c): the mutations a challenge ADJUDICATION implies at this block. Appended after
         // the transaction-derived ones so the order is deterministic, and derived from the same
         // chain data on both apply and revert.
@@ -2220,6 +2217,47 @@ impl VirtualStateProcessor {
         muts
     }
 
+    /// Shared tail of the two bond-mutation derivations: map accepted txs to mutations, then —
+    /// at and above `unbond_authz_mergeset_activation_daa_score` — drop `Unbond` mutations whose
+    /// ML-DSA-87 signature does not verify (incident 2026-08-07).
+    ///
+    /// The own-body `unbond_request_authorized` block gate never sees a request that arrives via
+    /// the MERGESET, so authorization has to be re-established at acceptance. This half checks the
+    /// signature; the owner-to-record binding is enforced in `ActiveBondView::apply`/`revert` and
+    /// in `stage_dns_bond_mutations`, which have the record. Both halves are symmetric between
+    /// apply and revert: this one reads only the block's own accepted txs (no chain view), so it
+    /// returns the same set every time it is re-derived.
+    fn dns_bond_mutations_from_txs(
+        &self,
+        txs: &[Transaction],
+        accepted_daa_score: u64,
+        min_bond: u64,
+        unbonding_floor: u64,
+    ) -> Vec<BondMutation> {
+        let enforce = self.dns_params.as_ref().is_some_and(|p| accepted_daa_score >= p.unbond_authz_mergeset_activation_daa_score);
+        let mut muts = bond_mutations_from_accepted_txs(txs, accepted_daa_score, min_bond, unbonding_floor, enforce);
+        if enforce {
+            let net_id = self.genesis.hash;
+            let signed: std::collections::HashSet<(TransactionOutpoint, Hash64)> = unbond_requests_from_accepted_txs(txs)
+                .into_iter()
+                .map(|(_, req)| req)
+                .filter(|req| {
+                    let digest = unbond_request_message(net_id.as_byte_slice(), req.bond_outpoint);
+                    matches!(
+                        verify_mldsa87_with_context(&req.owner_pubkey, &digest.as_bytes(), &req.signature, UNBOND_REQUEST_CONTEXT),
+                        Ok(true)
+                    )
+                })
+                .map(|req| (req.bond_outpoint, validator_id_from_pubkey(&req.owner_pubkey)))
+                .collect();
+            muts.retain(|m| match m {
+                BondMutation::Unbond(outpoint, _, Some(claimed)) => signed.contains(&(*outpoint, *claimed)),
+                _ => true,
+            });
+        }
+        muts
+    }
+
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
     /// `DnsParams`, or `(0, 0)` where the overlay is off — so the bond-acceptance filter is a no-op
     /// on networks without `dns_params`.
@@ -2301,12 +2339,8 @@ impl VirtualStateProcessor {
         accepted_daa_score: u64,
     ) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
-        let mut muts = bond_mutations_from_accepted_txs(
-            &self.accepted_txs_from_acceptance_data(acceptance_data),
-            accepted_daa_score,
-            min_bond,
-            unbonding_floor,
-        );
+        let txs = self.accepted_txs_from_acceptance_data(acceptance_data);
+        let mut muts = self.dns_bond_mutations_from_txs(&txs, accepted_daa_score, min_bond, unbonding_floor);
         // The adjudication reads only the SELECTED PARENT's chain, never this block's own
         // acceptance data, so it produces the same mutations here as it does from the store — which
         // it must, or the in-memory bond view and the persisted one would drift apart.

@@ -1215,6 +1215,33 @@ pub struct DnsParams {
     /// [`Self::min_active_validators`]); mainnet's floor of 3 validators leaves room to require
     /// more than one distinct attester without making confirmation hostage to a single outage.
     pub min_anchor_attesters: u32,
+
+    /// **Unbond-authorization mergeset hardening** (incident 2026-08-07). DAA score at and above
+    /// which an accepted `StakeUnbondRequest` must be owner-authorized *at acceptance* before it
+    /// may stamp a bond's unbond clock. `u64::MAX` keeps the pre-fix behaviour byte-identical.
+    ///
+    /// The H-05 rule `unbond_request_authorized` is a block-validity gate over the block's OWN
+    /// body, but bond mutations are derived from a chain block's **accepted** transactions — which
+    /// include everything its mergeset merges. A request riding in a merge-blue block is therefore
+    /// never authorization-checked, yet its mutation applies. Observed live: a request signed by a
+    /// NON-owner was correctly disqualified as a chain block (H-05 fired) and the victim's bond
+    /// still moved to `Unbonding`, persisting across restart, identically on both nodes. That is the
+    /// same own-body/mergeset gap [`Self::bond_spend_gate_mergeset_activation_daa_score`] documents
+    /// for the bond-SPEND gate, and it is closed the same way — an acceptance-time SKIP rather than
+    /// a block reject, so an honest miner that merely MERGES a forged request does not self-reject.
+    ///
+    /// Still live under VLT: the bond stops being voting power but remains the slashable collateral
+    /// that CAPS weight (`W_i(E) = min{C_i(E), λ·B_i(E)}`), so forcing a victim's bond to `Unbonding`
+    /// remains a grief that drives its weight to zero.
+    ///
+    /// The check is split across two layers so apply and revert stay symmetric — an asymmetric
+    /// filter would corrupt the bond store on reorg, precisely the class of bug this closes:
+    /// * **signature validity** is re-derived per chain block from its acceptance data (view-free,
+    ///   so both directions agree), and
+    /// * the **owner binding** is enforced against the record inside [`apply_bond_stamp`] /
+    ///   [`revert_bond_stamp`] — the single stamp state machine both the in-memory view and the
+    ///   persisted store go through, so the two directions cannot drift apart.
+    pub unbond_authz_mergeset_activation_daa_score: u64,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -4575,7 +4602,16 @@ pub enum BondMutation {
     /// `unbond_request_daa_score`; revert = clear it. The stateful rule rejects
     /// unbond on a non-`Pending`/`Active` bond, so at most one applies per bond
     /// per chain (clean revert).
-    Unbond(TransactionOutpoint, u64),
+    ///
+    /// The third field carries the **requester's claimed `validator_id`**
+    /// (`validator_id_from_pubkey(payload.owner_pubkey)`) once
+    /// [`DnsParams::unbond_authz_mergeset_activation_daa_score`] is reached, and
+    /// `None` below it — so pre-fence behaviour stays byte-identical. When it is
+    /// `Some`, apply/revert refuse to touch a record whose `owner_pubkey_hash`
+    /// differs: the own-body H-05 block gate never sees a request that arrives by
+    /// MERGE, so the owner binding has to be enforced here too. The condition is
+    /// identical in both directions, so a reorg reverts exactly what it applied.
+    Unbond(TransactionOutpoint, u64, Option<Hash64>),
 }
 
 /// Derives the ordered [`BondMutation`]s implied by a chain block's
@@ -4599,6 +4635,11 @@ pub fn bond_mutations_from_accepted_txs(
     accepted_daa_score: u64,
     min_bond_amount_sompi: u64,
     unbonding_floor_blocks: u64,
+    // `accepted_daa_score >= unbond_authz_mergeset_activation_daa_score`. When set, each
+    // `Unbond` mutation carries the requester's claimed `validator_id` so the applier can bind it
+    // to the record's `owner_pubkey_hash`; below the fence they carry `None` and apply
+    // unconditionally, byte-identically to the pre-fix behaviour.
+    enforce_unbond_authz: bool,
 ) -> Vec<BondMutation> {
     let mut muts = Vec::new();
     for tx in txs {
@@ -4645,12 +4686,18 @@ pub fn bond_mutations_from_accepted_txs(
                 }
             }
             Some(DnsTxKind::StakeUnbond) => {
-                // audit H-05: an accepted, owner-authorized unbond request stamps the bond's
-                // unbond clock. Authorization (owner-key binding + signature) and the
-                // Pending/Active precondition are enforced by `unbond_request_authorized` as a
-                // block-validity rule, so any unbond reaching here is valid and applies once.
+                // audit H-05: an accepted unbond request stamps the bond's unbond clock.
+                //
+                // The `unbond_request_authorized` block rule enforces authorization over the
+                // block's OWN body only, so a request that arrives via the MERGESET reaches here
+                // unchecked (incident 2026-08-07). We therefore carry the requester's claimed
+                // `validator_id` on the mutation and bind it to the record's `owner_pubkey_hash`
+                // in `ActiveBondView::apply`/`revert`; the caller separately drops mutations whose
+                // ML-DSA-87 signature does not verify. Both layers are gated on
+                // `unbond_authz_mergeset_activation_daa_score`.
                 if let Ok(req) = borsh::from_slice::<StakeUnbondRequestPayload>(&tx.payload) {
-                    muts.push(BondMutation::Unbond(req.bond_outpoint, accepted_daa_score));
+                    let claimed = enforce_unbond_authz.then(|| validator_id_from_pubkey(&req.owner_pubkey));
+                    muts.push(BondMutation::Unbond(req.bond_outpoint, accepted_daa_score, claimed));
                 }
             }
             Some(DnsTxKind::ComputeChallenge) => {
@@ -4745,8 +4792,13 @@ pub fn apply_bond_stamp(record: &mut StakeBondRecord, mutation: &BondMutation) {
                 record.status = BondStatus::Slashed;
             }
         }
-        BondMutation::Unbond(_, daa) => {
-            if record.unbond_request_daa_score.is_none() {
+        BondMutation::Unbond(_, daa, claimed_owner) => {
+            // Owner binding (incident 2026-08-07). The H-05 rule `unbond_request_authorized` only
+            // sees a block's OWN body, but these mutations come from its ACCEPTED txs — so a
+            // request that arrives by MERGE is never authorization-checked upstream. Bind it to
+            // the record here, where both directions already meet. `None` = below
+            // `unbond_authz_mergeset_activation_daa_score`: unconditional, as before.
+            if claimed_owner.is_none_or(|c| record.owner_pubkey_hash == c) && record.unbond_request_daa_score.is_none() {
                 record.unbond_request_daa_score = Some(*daa);
             }
         }
@@ -4769,8 +4821,11 @@ pub fn revert_bond_stamp(record: &mut StakeBondRecord, mutation: &BondMutation) 
                 record.status = BondStatus::Active;
             }
         }
-        BondMutation::Unbond(_, daa) => {
-            if record.unbond_request_daa_score == Some(*daa) {
+        BondMutation::Unbond(_, daa, claimed_owner) => {
+            // The owner condition is repeated verbatim from `apply_bond_stamp`, not implied by the
+            // DAA match: two mutations inside ONE block share a DAA, so a forged request could
+            // otherwise revert the real owner's stamp from the same block.
+            if claimed_owner.is_none_or(|c| record.owner_pubkey_hash == c) && record.unbond_request_daa_score == Some(*daa) {
                 record.unbond_request_daa_score = None;
             }
         }
@@ -4824,7 +4879,7 @@ impl ActiveBondView {
                 BondMutation::Insert(outpoint, record) => {
                     self.bonds.insert(*outpoint, record.clone());
                 }
-                BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _) => {
+                BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
                     if let Some(record) = self.bonds.get_mut(outpoint) {
                         apply_bond_stamp(record, mutation);
                     }
@@ -4844,7 +4899,7 @@ impl ActiveBondView {
                 BondMutation::Insert(outpoint, _) => {
                     self.bonds.remove(outpoint);
                 }
-                BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _) => {
+                BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
                     if let Some(record) = self.bonds.get_mut(outpoint) {
                         revert_bond_stamp(record, mutation);
                     }
@@ -6887,11 +6942,11 @@ mod tests {
         };
         for muts in [
             vec![BondMutation::Slash(op, 900)],
-            vec![BondMutation::Unbond(op, 900)],
+            vec![BondMutation::Unbond(op, 900, None)],
             // Two stamps of each kind inside ONE block (same DAA), plus a mixed block.
             vec![BondMutation::Slash(op, 900), BondMutation::Slash(op, 900)],
-            vec![BondMutation::Unbond(op, 900), BondMutation::Unbond(op, 900)],
-            vec![BondMutation::Unbond(op, 900), BondMutation::Slash(op, 900)],
+            vec![BondMutation::Unbond(op, 900, None), BondMutation::Unbond(op, 900, None)],
+            vec![BondMutation::Unbond(op, 900, None), BondMutation::Slash(op, 900)],
         ] {
             let mut v = seeded();
             v.apply(&muts);
@@ -6927,10 +6982,10 @@ mod tests {
         assert_eq!(rec.slashed_at_daa_score, None);
         // Same for the unbond clock.
         let mut rec = stake_bond_record_from_payload(&fixture_bond(), op);
-        apply_bond_stamp(&mut rec, &BondMutation::Unbond(op, 100));
-        apply_bond_stamp(&mut rec, &BondMutation::Unbond(op, 150));
+        apply_bond_stamp(&mut rec, &BondMutation::Unbond(op, 100, None));
+        apply_bond_stamp(&mut rec, &BondMutation::Unbond(op, 150, None));
         assert_eq!(rec.unbond_request_daa_score, Some(100));
-        revert_bond_stamp(&mut rec, &BondMutation::Unbond(op, 150));
+        revert_bond_stamp(&mut rec, &BondMutation::Unbond(op, 150, None));
         assert_eq!(rec.unbond_request_daa_score, Some(100));
     }
 
@@ -8002,7 +8057,7 @@ mod tests {
             reporter_reward_spk_payload: [0xab; 64],
         });
 
-        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&tx), RESOLVE_DAA, 0, 0);
+        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&tx), RESOLVE_DAA, 0, 0, false);
         assert_eq!(muts, vec![BondMutation::Slash(op, RESOLVE_DAA)], "the bond is slashed at acceptance");
 
         let effects = resolve_slashing_side_effects(std::slice::from_ref(&tx), &view, RESOLVE_DAA, 1000, 0, 0);
@@ -8697,12 +8752,12 @@ mod tests {
             )
         };
         assert_eq!(
-            bond_mutations_from_accepted_txs(&[tx(ComputeFraudKind::ContradictoryVerification)], 4_242, 0, 0),
+            bond_mutations_from_accepted_txs(&[tx(ComputeFraudKind::ContradictoryVerification)], 4_242, 0, 0, false),
             vec![BondMutation::Slash(target, 4_242)]
         );
         for unprovable in [ComputeFraudKind::ForgedReceipt, ComputeFraudKind::InvalidCertificate, ComputeFraudKind::FailedChallenge] {
             assert!(
-                bond_mutations_from_accepted_txs(&[tx(unprovable)], 4_242, 0, 0).is_empty(),
+                bond_mutations_from_accepted_txs(&[tx(unprovable)], 4_242, 0, 0, false).is_empty(),
                 "{unprovable:?} is a claim, not a proof, and must not slash"
             );
         }
@@ -8717,7 +8772,7 @@ mod tests {
             0,
             borsh::to_vec(&fixture_certificate()).unwrap(),
         );
-        assert!(bond_mutations_from_accepted_txs(&[cert_tx], 4_242, 0, 0).is_empty());
+        assert!(bond_mutations_from_accepted_txs(&[cert_tx], 4_242, 0, 0, false).is_empty());
     }
 
     #[test]
@@ -8783,14 +8838,78 @@ mod tests {
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_UNBOND), Some(DnsTxKind::StakeUnbond));
     }
 
+    /// Incident 2026-08-07 — the own-body/mergeset authorization gap. `unbond_request_authorized`
+    /// is a block-validity gate over the block's OWN body, but bond mutations come from a chain
+    /// block's ACCEPTED txs, which include everything its mergeset merges. A forged request that
+    /// rides in a merge-blue block therefore reached the bond store unchecked: observed live, a
+    /// request signed by a NON-owner was correctly disqualified as a chain block and the victim's
+    /// bond still moved to `Unbonding`, persisting across restart on both nodes.
+    ///
+    /// Past the fence the mutation carries the requester's claimed `validator_id` and the view
+    /// binds it to the record, so a foreign request is inert.
+    #[test]
+    fn foreign_unbond_request_cannot_stamp_a_bond_past_the_fence() {
+        let op = TransactionOutpoint::new(Hash64::from_bytes([0x22u8; 64]), 0);
+        let payload = borsh::to_vec(&fixture_unbond(op)).unwrap();
+        let tx = Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
+        let requester = validator_id_from_pubkey(&vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN]);
+
+        // Below the fence the mutation is unbound — byte-identical to the pre-fix behaviour.
+        assert_eq!(
+            bond_mutations_from_accepted_txs(std::slice::from_ref(&tx), 5_000, 0, 0, false),
+            vec![BondMutation::Unbond(op, 5_000, None)]
+        );
+        // Past it the mutation carries the requester identity.
+        let muts = bond_mutations_from_accepted_txs(&[tx], 5_000, 0, 0, true);
+        assert_eq!(muts, vec![BondMutation::Unbond(op, 5_000, Some(requester))]);
+
+        // A bond owned by SOMEONE ELSE is untouched by the request.
+        let victim = StakeBondRecord { owner_pubkey_hash: Hash64::from_bytes([0x77u8; 64]), ..mk_bond(1, 10) };
+        assert_ne!(victim.owner_pubkey_hash, requester, "fixture must model a foreign owner");
+        let mut view = ActiveBondView::from_records(vec![(op, victim.clone())]);
+        view.apply(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, None, "a foreign request must not start the unbond clock");
+
+        // The bond's real owner is unaffected by the guard.
+        let owned = StakeBondRecord { owner_pubkey_hash: requester, ..victim.clone() };
+        let mut view = ActiveBondView::from_records(vec![(op, owned)]);
+        view.apply(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, Some(5_000), "the owner's own request still applies");
+
+        // Revert is the exact mirror of apply, so a reorg cannot desync the store.
+        view.revert(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, None);
+        let mut view = ActiveBondView::from_records(vec![(op, victim)]);
+        view.apply(&muts);
+        view.revert(&muts);
+        assert_eq!(view.get(&op).unwrap().unbond_request_daa_score, None, "reverting a never-applied stamp is a no-op");
+    }
+
+    /// Every shipped preset must have the unbond-authorization rule GENESIS-ACTIVE, so a new
+    /// network can never silently reopen the own-body/mergeset gap by forgetting to pick a score.
+    #[test]
+    fn presets_declare_the_unbond_authz_fence() {
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        for (name, p) in [
+            ("genesis-active/dev-sim", GENESIS_ACTIVE_DNS_PARAMS),
+            ("production/mainnet", PRODUCTION_DNS_PARAMS),
+            ("testnet", TESTNET_DNS_PARAMS),
+        ] {
+            assert_eq!(
+                p.unbond_authz_mergeset_activation_daa_score, 0,
+                "{name} must keep unbond authorization genesis-active — a per-net activation score is a footgun the next testnet would inherit"
+            );
+        }
+    }
+
     #[test]
     fn unbond_mutation_and_view_apply_revert() {
         let op = TransactionOutpoint::new(Hash64::from_bytes([0x22u8; 64]), 0);
         let payload = borsh::to_vec(&fixture_unbond(op)).unwrap();
         let tx = Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
         // bond_mutations derives exactly one Unbond stamped at the accepting DAA.
-        let muts = bond_mutations_from_accepted_txs(&[tx], 5_000, 0, 0);
-        assert_eq!(muts, vec![BondMutation::Unbond(op, 5_000)]);
+        let muts = bond_mutations_from_accepted_txs(&[tx], 5_000, 0, 0, false);
+        assert_eq!(muts, vec![BondMutation::Unbond(op, 5_000, None)]);
         // apply → unbond clock set → effective status Unbonding (precedence over activation).
         let mut view = ActiveBondView::from_records([(op, stake_bond_record_from_payload(&fixture_bond(), op))]);
         view.apply(&muts);
@@ -9012,7 +9131,7 @@ mod tests {
         let shard_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
         let native_tx = dns_overlay_tx(SubnetworkId::from_byte(0), vec![1, 2, 3]);
 
-        let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345, 0, 0);
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx, slash_tx, shard_tx, native_tx], 12_345, 0, 0, false);
         assert_eq!(muts.len(), 2);
         // P-1B: the inserted record's activation is clamped up to the acceptance DAA (12_345 here),
         // so a bond cannot back-date itself into a past epoch's active set / StakeScore denominator.
@@ -9032,7 +9151,7 @@ mod tests {
         let mut past = fixture_bond();
         past.activation_daa_score = 5;
         let past_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&past).unwrap());
-        match &bond_mutations_from_accepted_txs(&[past_tx], 10_000, 0, 0)[0] {
+        match &bond_mutations_from_accepted_txs(&[past_tx], 10_000, 0, 0, false)[0] {
             BondMutation::Insert(_, record) => {
                 assert_eq!(record.activation_daa_score, 10_000, "past activation is clamped up to acceptance DAA");
             }
@@ -9042,7 +9161,7 @@ mod tests {
         let mut future = fixture_bond();
         future.activation_daa_score = 50_000;
         let future_tx = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&future).unwrap());
-        match &bond_mutations_from_accepted_txs(&[future_tx], 10_000, 0, 0)[0] {
+        match &bond_mutations_from_accepted_txs(&[future_tx], 10_000, 0, 0, false)[0] {
             BondMutation::Insert(_, record) => {
                 assert_eq!(record.activation_daa_score, 50_000, "future activation is left as declared (no down-clamp)");
             }
@@ -9217,14 +9336,14 @@ mod tests {
     fn bond_mutations_skips_undecodable_overlay_payload() {
         // A malformed stake-bond payload is defensively skipped, not panicked on.
         let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, vec![0xff, 0x00, 0x12]);
-        assert!(bond_mutations_from_accepted_txs(&[bad], 0, 0, 0).is_empty());
+        assert!(bond_mutations_from_accepted_txs(&[bad], 0, 0, 0, false).is_empty());
     }
 
     #[test]
     fn bond_mutations_empty_without_overlay_txs() {
         let native = dns_overlay_tx(SubnetworkId::from_byte(0), vec![]);
         let coinbase = dns_overlay_tx(SubnetworkId::from_byte(1), vec![]);
-        assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100, 0, 0).is_empty());
+        assert!(bond_mutations_from_accepted_txs(&[native, coinbase], 100, 0, 0, false).is_empty());
     }
 
     #[test]
@@ -9234,21 +9353,21 @@ mod tests {
 
         // (a) below the per-bond minimum → not admitted (no mutation).
         assert!(
-            bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 100_000_000_001, 0).is_empty(),
+            bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 100_000_000_001, 0, false).is_empty(),
             "a bond below min_bond_amount must be rejected"
         );
         // (b) at/above the minimum → admitted.
-        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 100_000_000_000, 0);
+        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 100_000_000_000, 0, false);
         assert_eq!(muts.len(), 1, "a bond at exactly the minimum is accepted");
 
         // (c) the stored unbonding period is clamped UP to the floor (declared 100_000 < 500_000).
-        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 0, 500_000);
+        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&bond_tx), 1, 0, 500_000, false);
         match &muts[0] {
             BondMutation::Insert(_, rec) => assert_eq!(rec.unbonding_period_blocks, 500_000, "unbonding clamped to floor"),
             other => panic!("expected Insert, got {other:?}"),
         }
         // (d) a floor below the declared value leaves the larger declared value intact.
-        let muts = bond_mutations_from_accepted_txs(&[bond_tx], 1, 0, 50_000);
+        let muts = bond_mutations_from_accepted_txs(&[bond_tx], 1, 0, 50_000, false);
         match &muts[0] {
             BondMutation::Insert(_, rec) => assert_eq!(rec.unbonding_period_blocks, 100_000, "declared > floor is kept"),
             other => panic!("expected Insert, got {other:?}"),
@@ -9971,6 +10090,7 @@ mod tests {
             emergency_work_margin: BlueWorkType::from_u64(10_000_000),
             emergency_stake_margin: StakeScore(100 * STAKE_SCORE_SCALE),
             emergency_work_override_multiplier: 4,
+            unbond_authz_mergeset_activation_daa_score: 0,
             max_reorg_horizon_blocks: 100_000,
             evidence_window_blocks: 200_000,
             unbonding_period_blocks: 350_000, // > R + E
