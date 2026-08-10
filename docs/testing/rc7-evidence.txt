@@ -1,0 +1,67 @@
+MISAKA IBD candidate selection — release candidate 7
+commit:              23ad1edc7bf62eeb68953df1d8a05d7392928ed3
+darwin/arm64 sha256: c3ba190482a9278fdc029413fa757bfbe571c2f7ea77f8fa871c8fd0c66aedb2
+
+series history — every RC superseded by a defect found, none by a green run:
+  91ce6643 RC1  2 fail / 6    release_after_noop_ibd promoted CandidateReview -> Ready
+  ae0fc7f  RC2  12/12 stopped stale lease could roll back; quarantine unpinned
+  871ab2d  RC3  1 fail / 4    proof fetch outlived the lease that frees its slot
+  85a12fb  RC4  24/24 stopped constant fix only; a late-started request still overran
+  c4b186e  RC5  not run       superseded before any series
+  52caec4  RC6  30/30 seeds, 20/20 darwin, 20/20 linux, 7/7 restart,
+                2 fails in the first 26 of 100 (rounds 13, 26) — leftover IBD
+                reply read as the proof, chain marked InvalidProof permanently
+  23ad1ed  RC7  first attempt discarded (CPU contention with RC6's run).
+                Clean re-run, idle machine, darwin/arm64:
+                  120/120, 0 failures, 6706s
+                  = seed 2 x5, seed 7 x5, seed 13 x10, then seeds 0..99
+                  the three seeds that previously failed, repeated, plus the
+                  full sweep
+                95% upper bound on the failure rate, rule of three: ~2.5%
+                VPS adversarial (follower on the light host: light loopback,
+                  heavy 267ms — the worse chain is the nearer one):
+                  10/10, every round on_heavy + review completed + resumed
+                VPS control (follower near the heavy host: heavy 1.9ms,
+                  light 251ms): 10/10, same
+                linux/x86_64, separate series at the same commit, not merged:
+                  120/120, 0 failures, 7950s — same seed list as darwin
+                  (a scheduling race that survived one scheduler and not the
+                  other would show up here; it did not)
+                fresh scenarios, never run before, across three hosts:
+                  seeds 480..599  darwin  120/120, 0 failures
+                  seeds 100..299  linux   in progress
+                  seeds 300..479  linux   in progress
+
+VPS fixture re-mined from genesis, both branches, same preset:
+  light 3500 blocks  pp f92cf4225f55e4c1  work 1,584,845,011
+  heavy 7000 blocks  pp 80e0800df405f478  work 3,719,751,311
+  premise now asserted by blue work, not block count
+
+rule: every round below is this binary. Any source change voids the whole series.
+
+=== VPS adversarial series, verbatim ===
+VPS-ROUND round=adversarial-1 floor_at_end=(3s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-2 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-3 floor_at_end=(2s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-4 floor_at_end=(7s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-5 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-6 floor_at_end=(8s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-7 floor_at_end=(5s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-8 floor_at_end=(8s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-9 floor_at_end=(1s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=adversarial-10 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+SERIES adversarial complete: 10 passed, 0 failed, out of 10
+
+=== VPS control series, verbatim ===
+(follower near the heavy host: heavy 1.9ms, light 251ms)
+VPS-ROUND round=control-1 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-2 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-3 floor_at_end=(3s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-4 floor_at_end=(3s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-5 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-6 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-7 floor_at_end=(7s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-8 floor_at_end=(4s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-9 floor_at_end=(0s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+VPS-ROUND round=control-10 floor_at_end=(6s floor remaining) settled=true on_heavy=true on_light=false is_synced=false became_ready=true 
+SERIES control complete: 10 passed, 0 failed, out of 10

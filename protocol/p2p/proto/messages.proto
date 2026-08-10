@@ -68,6 +68,12 @@ message KaspadMessage {
     RequestEvmDepositClaimsMessage requestEvmDepositClaims = 68;
     EvmDepositClaimMessage evmDepositClaim = 69;
     EvmDepositClaimNotFoundMessage evmDepositClaimNotFound = 70;
+    // kaspa-pq: chain-candidate summaries (protocol >= 103). Deliberately tiny and
+    // separate from block relay so a node can learn WHAT a peer is offering during an
+    // IBD without fetching blocks — fetching blocks mid-IBD is the DoS the relay guard
+    // exists to prevent, and it is why competing chains used to be discarded unseen.
+    RequestIbdCandidateSummaryMessage requestIbdCandidateSummary = 71;
+    IbdCandidateSummaryMessage ibdCandidateSummary = 72;
   }
 }
 

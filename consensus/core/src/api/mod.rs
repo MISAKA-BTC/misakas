@@ -419,6 +419,14 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Validate a proof's own soundness without comparing it to this node's chain.
+    ///
+    /// For weighing a chain the node has not committed to; see
+    /// `PruningProofManager::validate_pruning_point_proof_standalone`.
+    fn validate_pruning_proof_standalone(&self, _proof: &PruningPointProof) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
     fn validate_pruning_proof(&self, proof: &PruningPointProof, proof_metadata: &PruningProofMetadata) -> PruningImportResult<()> {
         unimplemented!()
     }

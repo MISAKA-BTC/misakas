@@ -35,6 +35,8 @@ impl From<Version> for protowire::VersionMessage {
             disable_relay_tx: item.disable_relay_tx,
             subnetwork_id: item.subnetwork_id.map(|x| x.into()),
             network: item.network.clone(),
+            genesis_hash: item.genesis_hash,
+            consensus_params_id: item.consensus_params_id,
         }
     }
 }
@@ -56,6 +58,8 @@ impl TryFrom<protowire::VersionMessage> for Version {
             disable_relay_tx: msg.disable_relay_tx,
             subnetwork_id: msg.subnetwork_id.map(TryInto::try_into).transpose()?,
             network: msg.network.clone(),
+            genesis_hash: msg.genesis_hash,
+            consensus_params_id: msg.consensus_params_id,
         })
     }
 }

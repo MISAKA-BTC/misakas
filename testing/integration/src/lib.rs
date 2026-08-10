@@ -28,4 +28,7 @@ pub mod subscribe_benchmarks;
 pub mod rpc_perf_benchmarks;
 
 #[cfg(test)]
+pub mod ibd_participation_tests;
+
+#[cfg(test)]
 pub mod rpc_tests;

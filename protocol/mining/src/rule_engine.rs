@@ -1,5 +1,8 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -12,6 +15,8 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
+    chain_participation::{ChainParticipation, ChainParticipationGate},
+    info,
     task::{
         service::{AsyncService, AsyncServiceFuture},
         tick::{TickReason, TickService},
@@ -37,6 +42,9 @@ pub struct MiningRuleEngine {
     hub: Hub,
     mining_rules: Arc<MiningRules>,
     rules: Vec<Arc<dyn MiningRule>>,
+    /// The one answer to "may this node act on the chain it holds?", shared with the RPC
+    /// layer, the in-process validator, and compute — see [`ChainParticipationGate`].
+    chain_participation: Arc<ChainParticipationGate>,
 }
 
 impl MiningRuleEngine {
@@ -84,6 +92,19 @@ impl MiningRuleEngine {
                 }
             }
 
+            // A node at tip that reports itself unsynced looks broken. Say why, on every tick of
+            // the window, so an operator seeing an idle miner or a `NodeNotSynced` validator has
+            // the reason in front of them rather than having to infer it.
+            match self.chain_participation.state() {
+                ChainParticipation::Ready => {}
+                ChainParticipation::CandidateReview => info!(
+                    "Chain participation held: reviewing the chain just adopted ({}s floor remaining). Not mining, not \
+                     attesting, reporting unsynced.",
+                    self.chain_participation.review_remaining_ms().unwrap_or_default() / 1000
+                ),
+                state => info!("Chain participation held: state={}. Not mining, not attesting, reporting unsynced.", state.as_str()),
+            }
+
             last_snapshot = snapshot;
             last_log_time = now;
         }
@@ -96,27 +117,58 @@ impl MiningRuleEngine {
         tick_service: Arc<TickService>,
         hub: Hub,
         mining_rules: Arc<MiningRules>,
+        chain_participation: Arc<ChainParticipationGate>,
     ) -> Self {
         let use_sync_rate_rule = Arc::new(AtomicBool::new(false));
         let rules: Vec<Arc<dyn MiningRule + 'static>> = vec![Arc::new(SyncRateRule::new(use_sync_rate_rule.clone()))];
 
-        Self { consensus_manager, config, processing_counters, tick_service, hub, use_sync_rate_rule, mining_rules, rules }
+        Self {
+            consensus_manager,
+            config,
+            processing_counters,
+            tick_service,
+            hub,
+            use_sync_rate_rule,
+            mining_rules,
+            rules,
+            chain_participation,
+        }
+    }
+
+    /// The participation gate this engine consults, for services that need the same answer.
+    pub fn chain_participation(&self) -> &Arc<ChainParticipationGate> {
+        &self.chain_participation
     }
 
     pub fn should_mine(&self, sink_daa_score_timestamp: DaaScoreTimestamp) -> bool {
+        // Checked ahead of the sync-rate rule, which it deliberately overrides: that rule exists to
+        // keep a node mining when the network is slow, and answers "is my chain moving?". The gate
+        // answers "is my chain the one anybody else is on?" — an unresolved doubt there is not
+        // something a healthy block rate can settle.
+        if !self.chain_participation.allows_participation() {
+            return false;
+        }
+
         if !self.has_sufficient_peer_connectivity() {
             return false;
         }
 
         let is_nearly_synced = self.is_nearly_synced(sink_daa_score_timestamp);
 
-        is_nearly_synced || self.use_sync_rate_rule.load(std::sync::atomic::Ordering::Relaxed)
+        is_nearly_synced || self.use_sync_rate_rule.load(Ordering::Relaxed)
     }
 
     /// In non-mining contexts, we consider the node synced if the sink is recent and it is connected
     /// to a peer
+    ///
+    /// Backs the `is_synced` flag on `getInfo` / `getServerInfo` / `getSyncStatus`, which is what
+    /// the external validator polls before it will attest (`kaspa-pq-validator`: `ValidatorStatus::
+    /// NodeNotSynced`). Reporting `false` while the gate is closed is what keeps a freshly synced
+    /// node from signing an anchor on a branch it adopted by arrival order.
     pub fn is_sink_recent_and_connected(&self, sink_daa_score_timestamp: DaaScoreTimestamp) -> bool {
-        self.has_sufficient_peer_connectivity() && self.is_nearly_synced(sink_daa_score_timestamp)
+        self.chain_participation.allows_participation()
+            && self.has_sufficient_peer_connectivity()
+            && self.is_nearly_synced(sink_daa_score_timestamp)
     }
 
     /// Returns whether the sink timestamp is recent enough and the node is considered synced or nearly synced.

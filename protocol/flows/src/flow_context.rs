@@ -1,8 +1,10 @@
 use crate::flowcontext::{
     evm_deposit_claims::EvmDepositClaimsSpread,
     evm_transactions::EvmTransactionsSpread,
+    ibd_candidates::{CHALLENGER_VERIFICATION_LEASE, CandidateId, CandidateValidation, IbdCandidateRegistry, PreferredIbdCandidate},
     orphans::{OrphanBlocksPool, OrphanOutput},
     process_queue::ProcessQueue,
+    recovery_trace::{RecoveryStage, record_stage},
     transactions::TransactionsSpread,
 };
 use crate::{v7, v8};
@@ -10,12 +12,13 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use kaspa_addressmanager::AddressManager;
 use kaspa_connectionmanager::ConnectionManager;
-use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::api::{BlockValidationFuture, BlockValidationFutures};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::evm::DepositClaim;
+use kaspa_consensus_core::header::Header;
+use kaspa_consensus_core::{BlockHash, BlueWorkType}; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
     subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
     tx::{Transaction, TransactionId, TransactionOutpoint},
@@ -26,6 +29,7 @@ use kaspa_consensus_notify::{
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusInstance, ConsensusManager, ConsensusProxy, ConsensusSessionOwned};
 use kaspa_core::{
+    chain_participation::{ChainParticipationGate, IbdLease},
     debug, info,
     kaspad_env::{name, version},
     task::tick::TickService,
@@ -60,7 +64,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{
-    RwLock as AsyncRwLock,
+    RwLock as AsyncRwLock, broadcast,
     mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 };
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
@@ -73,12 +77,15 @@ use uuid::Uuid;
 // immediately. See docs/adr/0001-network-isolation.md.
 //
 // 101 (EVM Lane §14.2) adds the pending-EVM-tx relay messages; 102 adds the EVM
-// deposit-claim relay messages (oneof 67-70). Lower-version peers are still fully
+// deposit-claim relay messages (oneof 67-70); 103 adds `genesisHash` /
+// `consensusParamsId` to the handshake. Peers below 103 send those empty, which the
+// handshake treats as a mismatch — a peer that cannot state which rules it runs is
+// exactly the testnet-22 shape, so it is disconnected rather than waved through. Lower-version peers are still fully
 // served (they negotiate the same flow set minus the newer relay flows), but must
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 102;
+const PROTOCOL_VERSION: u32 = 103;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -93,6 +100,12 @@ const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
 
 /// Orphans are kept as full blocks so we cannot hold too much of them in memory
 const MAX_ORPHANS_UPPER_BOUND: usize = 1024;
+
+/// How many challenger nominations may queue before the oldest is dropped.
+///
+/// Small on purpose: a nomination is a hint about what is worth checking right now, and a stale one
+/// is worse than none. A flow that misses one will be nominated again on the next summary.
+const CHALLENGER_NOMINATION_BACKLOG: usize = 16;
 
 /// The min time to wait before allowing another parallel request
 const REQUEST_SCOPE_WAIT_TIME: Duration = Duration::from_secs(1);
@@ -277,6 +290,24 @@ pub struct FlowContextInner {
     shared_evm_deposit_claim_requests: Arc<Mutex<HashMap<TransactionOutpoint, RequestScopeMetadata>>>,
     is_ibd_running: Arc<AtomicBool>,
     ibd_metadata: Arc<RwLock<Option<IbdMetadata>>>,
+    /// Identifies the IBD attempt that currently owns the participation state, so one that finishes
+    /// late cannot restore a state the node has already moved past.
+    ibd_lease: Arc<RwLock<Option<IbdLease>>>,
+    /// Chains peers advertised while an IBD held the latch, keyed by chain rather than by peer.
+    ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
+    /// The chain this node has decided to sync next, reserved so that cancelling an IBD hands the
+    /// latch to the winner rather than to whoever relays first. See [`PreferredIbdCandidate`].
+    preferred_ibd_candidate: Arc<RwLock<Option<PreferredIbdCandidate>>>,
+    /// Wakes the flow that should serve a reserved candidate, so the handoff does not depend on that
+    /// peer happening to relay something.
+    handoff_tx: broadcast::Sender<CandidateId>,
+    /// Nominates a candidate for proof verification. Broadcast because only the IBD flow of a peer
+    /// that actually offers the chain can fetch its proof — `PruningPointProof` is routed to that
+    /// flow — and every idle IBD flow listens to see whether the nomination is theirs to serve.
+    challenger_tx: broadcast::Sender<CandidateId>,
+    /// Set once `staging.commit()` has swapped in a new active consensus during the running IBD.
+    /// A failure after this point is not a no-op — see `finish_ibd_after_failure`.
+    active_consensus_replaced: Arc<AtomicBool>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -312,12 +343,21 @@ impl Drop for IbdRunningGuard {
     }
 }
 
+/// Render a peer's handshake fingerprint for an error message, distinguishing "an older build that
+/// does not send this" from "a different value", since the operator response differs.
+fn describe_fingerprint(bytes: &[u8]) -> String {
+    if bytes.is_empty() { "absent (peer predates this field)".to_owned() } else { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct IbdMetadata {
     /// The peer from which current IBD is syncing from
     peer: PeerKey,
     /// The DAA score of the relay block which triggered the current IBD
     daa_score: u64,
+    /// The blue work the relay block which triggered the current IBD claimed. Recorded so that
+    /// completion can say what was adopted, next to what was passed over.
+    blue_work: BlueWorkType,
 }
 
 pub struct RequestScopeMetadata {
@@ -397,6 +437,12 @@ impl FlowContext {
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
                 ibd_metadata: Default::default(),
+                ibd_lease: Default::default(),
+                ibd_candidates: Default::default(),
+                challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
+                preferred_ibd_candidate: Default::default(),
+                handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
+                active_consensus_replaced: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -455,13 +501,236 @@ impl FlowContext {
         &self.mining_manager
     }
 
-    pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64) -> Option<IbdRunningGuard> {
+    pub fn try_set_ibd_running(&self, peer: PeerKey, relay_daa_score: u64, relay_blue_work: BlueWorkType) -> Option<IbdRunningGuard> {
+        // A reservation closes the latch to everyone but the reserved chain's sources. This is what
+        // makes a switch a handoff rather than a fresh race: without it, abandoning an IBD would
+        // simply re-run the arrival-order lottery, and the branch just rejected could win it.
+        if let Some(preferred) = self.preferred_ibd_candidate.read().as_ref()
+            && !preferred.preferred_sources.contains(&peer)
+        {
+            return None;
+        }
         if self.is_ibd_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score });
+            self.ibd_metadata.write().replace(IbdMetadata { peer, daa_score: relay_daa_score, blue_work: relay_blue_work });
+            // Deliberately NOT cleared. A validated pruning proof costs the prover minutes and this
+            // node a large transfer, and the reason an IBD is starting may well be that the last one
+            // was abandoned for a candidate verified during it. Throwing that away would mean
+            // re-fetching the same proofs and, worse, forgetting which chain won — the registry
+            // expires by TTL instead.
+            self.active_consensus_replaced.store(false, Ordering::SeqCst);
+            // Stop participating NOW. `staging.commit()` happens partway through an IBD, so waiting
+            // for the IBD to report success leaves a window in which this node is already running
+            // the new chain and still mining and attesting on it.
+            // The lease is what lets a late-finishing attempt be told from the current one.
+            *self.ibd_lease.write() = Some(self.chain_participation().enter_ibd());
             Some(IbdRunningGuard { indicator: self.is_ibd_running.clone() })
         } else {
             None
         }
+    }
+
+    /// What the currently running IBD's syncer claimed, for comparison against passed-over offers.
+    pub fn ibd_relay_blue_work(&self) -> Option<BlueWorkType> {
+        self.ibd_metadata.read().map(|md| md.blue_work)
+    }
+
+    /// Note that `peer` offered something while an IBD held the latch, so it can be asked what
+    /// chain it is on. Records only that the peer is worth asking — an inv hash is not a chain.
+    pub fn observe_ibd_candidate_peer(&self, peer: PeerKey) {
+        self.ibd_candidates.write().observe_peer(peer, Instant::now());
+    }
+
+    /// Whether `peer` may be asked for a candidate summary now, claiming the rate-limit budget.
+    pub fn claim_ibd_summary_request(&self, peer: PeerKey) -> bool {
+        self.ibd_candidates.write().claim_summary_request(peer, Instant::now())
+    }
+
+    /// A summary arrived from `peer`; leave it alone for a while.
+    pub fn note_ibd_summary_success(&self, peer: PeerKey) {
+        self.ibd_candidates.write().note_summary_success(peer, Instant::now());
+    }
+
+    /// Asking `peer` failed; retry soon, backing off.
+    pub fn note_ibd_summary_failure(&self, peer: PeerKey) {
+        self.ibd_candidates.write().note_summary_failure(peer, Instant::now());
+    }
+
+    /// Record what a peer says it is on. Merges into an existing candidate when the chain matches,
+    /// so peers on the same branch become sources of one candidate rather than rivals.
+    pub fn observe_ibd_candidate_summary(&self, peer: PeerKey, header: &Header, pruning_point: BlockHash) -> CandidateId {
+        self.ibd_candidates.write().observe_summary(peer, header, pruning_point, Instant::now())
+    }
+
+    pub fn set_ibd_candidate_validation(&self, id: CandidateId, validation: CandidateValidation) {
+        self.ibd_candidates.write().set_validation(id, validation);
+    }
+
+    /// Ask whoever can to verify the strongest chain nobody has checked yet.
+    ///
+    /// A no-op when there is nothing worth checking. Verified candidates are never re-nominated,
+    /// and a candidate already being verified is not nominated again, so this is safe to call on
+    /// every summary that arrives.
+    /// Write off verification attempts that have held the single slot too long.
+    ///
+    /// Called from the relay flow's idle poll rather than only at the commit barrier. The barrier
+    /// runs during an IBD; after one finishes there may be no further IBD at all, so a request whose
+    /// flow died would hold the nomination slot for as long as the lease and nothing would ever
+    /// clear it. That is not hypothetical — it is what a failing recovery round looked like.
+    pub fn expire_stale_verifications(&self) -> Vec<CandidateId> {
+        self.ibd_candidates.write().expire_proof_requests(Instant::now(), CHALLENGER_VERIFICATION_LEASE)
+    }
+
+    pub fn nominate_challenger(&self) {
+        let nominee = {
+            let registry = self.ibd_candidates.read();
+            registry.strongest_unverified().and_then(|c| match c.validation {
+                CandidateValidation::SummaryReceived { claimed_blue_work } => Some((c.id, claimed_blue_work)),
+                _ => None,
+            })
+        };
+        match nominee {
+            Some((id, claimed_blue_work)) => {
+                self.ibd_candidates
+                    .write()
+                    .set_validation(id, CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work });
+                record_stage(RecoveryStage::CandidateNominated, None, Some(id), None, self.chain_participation().state().as_str(), "");
+                // Failure means no IBD flow is listening, which simply means nobody can serve it.
+                let _ = self.challenger_tx.send(id);
+            }
+            None => record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                None,
+                self.chain_participation().state().as_str(),
+                "nothing to nominate: no SummaryReceived candidate, or a verification is already in flight",
+            ),
+        }
+    }
+
+    pub fn subscribe_challenger_nominations(&self) -> broadcast::Receiver<CandidateId> {
+        self.challenger_tx.subscribe()
+    }
+
+    pub fn subscribe_ibd_handoffs(&self) -> broadcast::Receiver<CandidateId> {
+        self.handoff_tx.subscribe()
+    }
+
+    /// Reserve the next IBD for a chain this node verified, and wake whoever can serve it.
+    ///
+    /// Called when the commit barrier abandons a sync for a better candidate. Until the reservation
+    /// is consumed or cleared, `try_set_ibd_running` refuses every peer that does not offer this
+    /// chain — otherwise the latch would go to whichever peer relayed next, which may be the branch
+    /// just rejected. The switch would then be decided by arrival order, which is the thing the
+    /// switch exists to stop.
+    pub fn reserve_preferred_ibd_candidate(&self, candidate_id: CandidateId, verified_blue_work: BlueWorkType) -> bool {
+        let (header, preferred_sources) = {
+            let registry = self.ibd_candidates.read();
+            match registry.get(&candidate_id) {
+                Some(c) => (c.header.clone(), c.sources.clone()),
+                None => {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        None,
+                        Some(candidate_id),
+                        None,
+                        self.chain_participation().state().as_str(),
+                        "cannot reserve: candidate is no longer in the registry",
+                    );
+                    return false;
+                }
+            }
+        };
+        if preferred_sources.is_empty() {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(candidate_id),
+                None,
+                self.chain_participation().state().as_str(),
+                "cannot reserve: no connected peer still offers this chain",
+            );
+            return false;
+        }
+        let switch_generation = self.ibd_candidates.read().switches();
+        let now = Instant::now();
+        self.preferred_ibd_candidate.write().replace(PreferredIbdCandidate {
+            candidate_id,
+            preferred_sources,
+            header,
+            verified_blue_work,
+            switch_generation,
+            reserved_at: now,
+            unclaimed_since: now,
+        });
+        record_stage(
+            RecoveryStage::PreferredCandidateReserved,
+            None,
+            Some(candidate_id),
+            None,
+            self.chain_participation().state().as_str(),
+            format!(
+                "verified_blue_work={verified_blue_work} sources={} generation={switch_generation}",
+                self.ibd_candidates.read().sources_of(&candidate_id).len()
+            ),
+        );
+        // Failure means no IBD flow is listening; the reservation still stands and will be honoured
+        // when one of the sources next relays.
+        let _ = self.handoff_tx.send(candidate_id);
+        true
+    }
+
+    pub fn preferred_ibd_candidate(&self) -> Option<PreferredIbdCandidate> {
+        self.preferred_ibd_candidate.read().clone()
+    }
+
+    /// Release the reservation. Called once the reserved chain has had its turn at the latch,
+    /// whether it succeeded or failed — a reservation that outlived its attempt would lock the node
+    /// out of syncing from anyone.
+    pub fn clear_preferred_ibd_candidate(&self) {
+        self.preferred_ibd_candidate.write().take();
+    }
+
+    /// Note that the reserved chain has just taken the latch, restarting its unclaimed clock.
+    ///
+    /// A reservation survives a failed attempt on purpose, so the no-progress clock has to measure
+    /// time spent waiting rather than time spent trying. The absolute lifetime is untouched — that
+    /// one is what stops an endlessly-retrying reservation from waiting forever in instalments.
+    pub fn note_preferred_candidate_claimed(&self) {
+        if let Some(preferred) = self.preferred_ibd_candidate.write().as_mut() {
+            preferred.unclaimed_since = Instant::now();
+        }
+    }
+
+    /// Release a reservation that has stopped making progress, so the node can sync from anyone.
+    ///
+    /// Call only when no IBD is running: a sync in flight is progress, and cutting a reservation out
+    /// from under its own attempt would re-open the race this node already decided.
+    ///
+    /// Releasing a reservation does NOT resume participation. It re-opens the latch, nothing else —
+    /// the gate stays shut until a chain is actually committed.
+    pub fn expire_stale_preferred_candidate(&self) -> bool {
+        let Some((candidate_id, reason)) = ({
+            let guard = self.preferred_ibd_candidate.read();
+            guard.as_ref().and_then(|p| p.expiry_reason(Instant::now()).map(|r| (p.candidate_id, r)))
+        }) else {
+            return false;
+        };
+        self.preferred_ibd_candidate.write().take();
+        warn!("releasing the IBD reservation for {}: {}", candidate_id.virtual_selected_parent, reason);
+        record_stage(RecoveryStage::Rejected, None, Some(candidate_id), None, self.chain_participation().state().as_str(), reason);
+        true
+    }
+
+    /// The candidate registry, for the commit barrier and for reporting.
+    pub fn ibd_candidates(&self) -> &Arc<RwLock<IbdCandidateRegistry>> {
+        &self.ibd_candidates
+    }
+
+    /// Forget a disconnected peer as a source. Candidates it shared with other peers survive: a
+    /// dropped connection is a source failover, not a reason to reconsider which chain to follow.
+    pub fn forget_ibd_candidate_peer(&self, peer: &PeerKey) {
+        self.ibd_candidates.write().forget_peer(peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {
@@ -703,6 +972,61 @@ impl FlowContext {
         self.mining_rule_engine.should_mine(sink_daa_score_and_timestamp)
     }
 
+    /// The gate every participation path consults — mining, both validators, compute.
+    pub fn chain_participation(&self) -> &Arc<ChainParticipationGate> {
+        self.mining_rule_engine.chain_participation()
+    }
+
+    /// Whether this node may act on the chain it is holding: mine, attest, sign, call itself synced.
+    ///
+    /// Deliberately not `should_mine`, which folds in the sync-rate rule and peer connectivity —
+    /// conditions about mining throughput, not about whether the chain under us has been settled.
+    /// A validator that reused `should_mine` would inherit the sync-rate override, which can hold
+    /// `true` on a chain nobody has compared.
+    pub fn is_consensus_participation_allowed(&self) -> bool {
+        self.chain_participation().allows_participation()
+    }
+
+    /// Record that an IBD has replaced the active consensus (`staging.commit()` returned).
+    ///
+    /// From here on the node is running on the new chain whether or not the rest of the IBD
+    /// succeeds, so a later failure cannot simply be reported and forgotten — see
+    /// [`FlowContext::finish_ibd_after_failure`].
+    pub fn mark_active_consensus_replaced(&self) {
+        self.active_consensus_replaced.store(true, Ordering::SeqCst);
+    }
+
+    /// Settle the gate after an IBD that failed.
+    ///
+    /// If the active consensus was already replaced, the node is now running a chain whose sync
+    /// never finished: quarantine, because nothing here can tell whether that chain is usable and
+    /// guessing means signing on it. If nothing was replaced, the failure changed nothing and the
+    /// node goes back to whatever it was doing.
+    pub fn finish_ibd_after_failure(&self) -> bool {
+        let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
+        if replaced {
+            self.chain_participation().quarantine();
+        } else {
+            if let Some(lease) = self.ibd_lease.write().take() {
+                self.chain_participation().release_after_noop_ibd(lease);
+            }
+        }
+        replaced
+    }
+
+    /// Settle the gate after an IBD that succeeded, holding the node for at least `min_review`.
+    ///
+    /// Deliberately does NOT quarantine on an unverified competing claim. A passed-over offer is
+    /// just an inv hash from some peer: it may be a side block, a merge block, or simply a newer
+    /// block on the very chain we just synced. None of those are competing branches, and all of
+    /// them out-weigh an older tip, so quarantining on "someone claimed more work" would fire on
+    /// routine relay traffic and take honest nodes offline. Quarantine is reserved for the case
+    /// this node can state without guessing — see [`FlowContext::finish_ibd_after_failure`].
+    pub fn finish_ibd_after_success(&self, min_review: Duration) {
+        self.active_consensus_replaced.store(false, Ordering::SeqCst);
+        self.chain_participation().enter_candidate_review(min_review.as_millis() as u64);
+    }
+
     /// Notifies that the UTXO set was reset due to pruning point change via IBD.
     pub fn on_pruning_point_utxoset_override(&self) {
         // Notifications from the flow context might be ignored if the inner channel is already closing
@@ -908,7 +1232,15 @@ impl ConnectionInitializer for FlowContext {
 
         // Build the local version message
         // Subnets are not currently supported
-        let mut self_version_message = Version::new(local_address, self.node_id, network_name.clone(), None, PROTOCOL_VERSION);
+        let mut self_version_message = Version::new(
+            local_address,
+            self.node_id,
+            network_name.clone(),
+            None,
+            PROTOCOL_VERSION,
+            self.config.genesis.hash.as_bytes().to_vec(),
+            self.config.params.consensus_params_id().as_bytes().to_vec(),
+        );
         self_version_message.add_user_agent(name(), version(), &self.config.user_agent_comments);
         // TODO: get number of live services
         // TODO: disable_relay_tx from config/cmd
@@ -931,6 +1263,35 @@ impl ConnectionInitializer for FlowContext {
 
         if peer_version.network != network_name {
             return Err(ProtocolError::WrongNetwork(network_name, peer_version.network));
+        }
+
+        // Answering to the same network name does not mean running the same rules.
+        //
+        // testnet-22 forked because an older build computed different overlay commitments while
+        // presenting a handshake indistinguishable from a correct node's. The two peered, synced
+        // from each other, and disagreed about block validity — which no amount of candidate
+        // selection downstream can repair, because by then both sides believe they are right.
+        // Separate them here, before either can become an IBD source for the other.
+        //
+        // Peers predating these fields send them empty. Treated as a mismatch rather than waved
+        // through: an unknown rule set is exactly the case this check exists for, and the protocol
+        // version bump means anything that omits them is an older build.
+        let local_genesis = self.config.genesis.hash.as_bytes().to_vec();
+        if peer_version.genesis_hash != local_genesis {
+            return Err(ProtocolError::WrongGenesis(
+                network_name,
+                self.config.genesis.hash.to_string(),
+                describe_fingerprint(&peer_version.genesis_hash),
+            ));
+        }
+
+        let local_params_id = self.config.params.consensus_params_id();
+        if peer_version.consensus_params_id != local_params_id.as_bytes().to_vec() {
+            return Err(ProtocolError::WrongConsensusParams(
+                network_name,
+                local_params_id.to_string(),
+                describe_fingerprint(&peer_version.consensus_params_id),
+            ));
         }
 
         debug!("protocol versions - self: {}, peer: {}", PROTOCOL_VERSION, peer_version.protocol_version);

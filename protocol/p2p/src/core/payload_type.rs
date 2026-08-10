@@ -62,6 +62,9 @@ pub enum KaspadMessagePayloadType {
     RequestEvmDepositClaims,
     EvmDepositClaim,
     EvmDepositClaimNotFound,
+    // kaspa-pq: chain-candidate summaries (protocol >= 103).
+    RequestIbdCandidateSummary,
+    IbdCandidateSummary,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -132,6 +135,8 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::RequestEvmDepositClaims(_) => KaspadMessagePayloadType::RequestEvmDepositClaims,
             KaspadMessagePayload::EvmDepositClaim(_) => KaspadMessagePayloadType::EvmDepositClaim,
             KaspadMessagePayload::EvmDepositClaimNotFound(_) => KaspadMessagePayloadType::EvmDepositClaimNotFound,
+            KaspadMessagePayload::RequestIbdCandidateSummary(_) => KaspadMessagePayloadType::RequestIbdCandidateSummary,
+            KaspadMessagePayload::IbdCandidateSummary(_) => KaspadMessagePayloadType::IbdCandidateSummary,
         }
     }
 }

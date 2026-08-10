@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use crate::chain_participation_store::ChainParticipationStore;
 use async_channel::unbounded;
 use kaspa_consensus_core::{
     config::ConfigBuilder,
@@ -14,7 +15,7 @@ use kaspa_consensus_core::{
     mining_rules::MiningRules,
 };
 use kaspa_consensus_notify::{root::ConsensusNotificationRoot, service::NotifyService};
-use kaspa_core::{core::Core, debug, info, warn};
+use kaspa_core::{chain_participation::ChainParticipationGate, core::Core, debug, info, warn};
 use kaspa_core::{kaspad_env::version, task::tick::TickService};
 use kaspa_database::{
     prelude::{CachePolicy, DbWriter, DirectDbWriter, RocksDbPreset},
@@ -780,7 +781,7 @@ Do you confirm? (y/n)";
         None
     };
 
-    let (address_manager, port_mapping_extender_svc) = AddressManager::new(config.clone(), meta_db, tick_service.clone());
+    let (address_manager, port_mapping_extender_svc) = AddressManager::new(config.clone(), meta_db.clone(), tick_service.clone());
 
     // kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's declared EVM coinbase.
     // A malformed value is a startup error (silently burning a miner's priority
@@ -817,6 +818,29 @@ Do you confirm? (y/n)";
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
 
     let hub = Hub::new();
+    // One gate, consulted by mining, both validator paths, and compute. Scoped to the networks that
+    // have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a peerless
+    // devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
+    // Restored from the meta DB before anyone can consult it: a quarantine that a restart clears is
+    // not a quarantine, and this is the one object every signer asks for permission.
+    let chain_participation_store = Arc::new(ChainParticipationStore::new(meta_db.clone()));
+    let chain_participation = Arc::new(
+        ChainParticipationGate::new(
+            matches!(
+                config.net.network_type,
+                kaspa_consensus_core::network::NetworkType::Mainnet | kaspa_consensus_core::network::NetworkType::Testnet
+            ) || args.enforce_chain_participation,
+        )
+        .with_persistence(chain_participation_store),
+    );
+    match chain_participation.state() {
+        kaspa_core::chain_participation::ChainParticipation::Ready => {}
+        state => warn!(
+            "Chain participation restored as {} from the previous run: this node will NOT mine, attest, or report itself \
+             synced until that resolves. It stopped because an IBD left it on a chain it could not vouch for.",
+            state.as_str()
+        ),
+    }
     let mining_rule_engine = Arc::new(MiningRuleEngine::new(
         consensus_manager.clone(),
         config.clone(),
@@ -824,6 +848,7 @@ Do you confirm? (y/n)";
         tick_service.clone(),
         hub.clone(),
         mining_rules,
+        chain_participation.clone(),
     ));
     let flow_context = Arc::new(FlowContext::new(
         consensus_manager.clone(),

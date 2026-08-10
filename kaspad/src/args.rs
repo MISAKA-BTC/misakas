@@ -1,4 +1,5 @@
 use clap::{Arg, ArgAction, Command, arg};
+use kaspa_consensus_core::config::trusted_checkpoint::TrustedCheckpoint;
 use kaspa_consensus_core::{
     config::Config,
     evm::EvmHistoryMode,
@@ -173,6 +174,21 @@ pub struct Args {
     pub enable_unsynced_mining: bool,
     pub enable_mainnet_mining: bool,
 
+    /// `<daa-score>:<block-hash>:<consensus-params-id>` — the history this operator vouches for.
+    ///
+    /// A hard constraint on which chains this node may adopt, not a preference. Unset means the
+    /// node has no trust root beyond accumulated work, which is the weak-subjectivity gap
+    /// ADR-0009 documents rather than a safe default.
+    pub trusted_checkpoint: Option<String>,
+
+    /// Enforce the chain-participation gate on a network where it is off by default.
+    ///
+    /// The gate is scoped to mainnet/testnet because a peerless devnet or simnet node has no
+    /// competing branch to overlook. That is a default, not a law: a devnet with real peers wants
+    /// production behaviour, and a test that means to exercise the gate has to be able to turn it
+    /// on. Never needed on mainnet or testnet, where it is always enforced.
+    pub enforce_chain_participation: bool,
+
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
     pub enable_validator: bool,
     pub validator_key: Option<String>,
@@ -277,6 +293,8 @@ impl Default for Args {
             max_tracked_addresses: 0,
             enable_unsynced_mining: false,
             enable_mainnet_mining: true,
+            trusted_checkpoint: None,
+            enforce_chain_participation: false,
             enable_validator: false,
             validator_key: None,
             evm_fee_recipient: None,
@@ -403,6 +421,17 @@ impl Args {
         } else if self.vlt_shadow_only {
             panic!("--vlt-shadow-only only means something together with --vlt-devnet");
         }
+
+        // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
+        // syncing by work alone while its operator believes it is pinned — the one failure mode
+        // where a silent fallback is worse than not starting.
+        config.trusted_checkpoint = match self.trusted_checkpoint.as_deref() {
+            Some(raw) => match raw.parse::<TrustedCheckpoint>() {
+                Ok(cp) => Some(cp),
+                Err(e) => panic!("--trusted-checkpoint {raw:?} is invalid: {e}"),
+            },
+            None => None,
+        };
 
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
@@ -624,6 +653,23 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .hide(true)
                 .help("Allow mainnet mining (currently enabled by default while the flag is kept for backwards compatibility)"),
+        )
+        .arg(
+            Arg::new("trusted-checkpoint")
+                .long("trusted-checkpoint")
+                .value_name("daa:hash:params-id")
+                .require_equals(false)
+                .help(
+                    "kaspa-pq: the history this operator vouches for, as <daa-score>:<block-hash>:<consensus-params-id>. \
+                     Chains that do not descend from this block are refused during IBD, whatever work they claim. A node \
+                     with no chain of its own cannot tell two internally consistent histories apart, so on a network that \
+                     has forked this is what decides which one it may join. Unset means work alone decides.",
+                )
+                .env("KASPAD_TRUSTED_CHECKPOINT"),
+        )
+        .arg(
+            arg!(--"enforce-chain-participation" "kaspa-pq: enforce the post-IBD chain-participation gate on networks where it is off by default (devnet/simnet). Always enforced on mainnet and testnet.")
+                .env("KASPAD_ENFORCE_CHAIN_PARTICIPATION"),
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
@@ -989,6 +1035,12 @@ impl Args {
             reset_db: arg_match_unwrap_or::<bool>(&m, "reset-db", defaults.reset_db),
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
+            trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
+            enforce_chain_participation: arg_match_unwrap_or::<bool>(
+                &m,
+                "enforce-chain-participation",
+                defaults.enforce_chain_participation,
+            ),
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),

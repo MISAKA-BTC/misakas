@@ -21,7 +21,7 @@ use kaspa_consensus_notify::{
     notifier::ConsensusNotifier,
     {connection::ConsensusChannelConnection, notification::Notification as ConsensusNotification},
 };
-use kaspa_consensusmanager::ConsensusManager;
+use kaspa_consensusmanager::{ConsensusManager, ConsensusSessionOwned};
 use kaspa_core::time::unix_now;
 use kaspa_core::{
     core::Core,
@@ -182,6 +182,22 @@ pub struct RpcCoreService {
 const RPC_CORE: &str = "rpc-core";
 
 impl RpcCoreService {
+    /// The single definition of "this node is synced", behind `is_synced` on getInfo,
+    /// getServerInfo and getSyncStatus.
+    ///
+    /// These three used to disagree — getSyncStatus checked for a transitional IBD state and the
+    /// other two did not — which matters because the caller that acts on the answer is a validator
+    /// deciding whether to sign. Three definitions meant the strictest caller could be told the
+    /// most optimistic answer.
+    ///
+    /// `is_sink_recent_and_connected` already consults the chain-participation gate, so a node in
+    /// IBD, candidate review, or quarantine reports unsynced here regardless of how recent its sink
+    /// looks.
+    async fn is_node_synced(&self, session: &ConsensusSessionOwned, sink_daa_score_timestamp: DaaScoreTimestamp) -> bool {
+        self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
+            && !session.async_is_consensus_in_transitional_ibd_state().await
+    }
+
     pub const IDENT: &'static str = "rpc-core-service";
 
     #[allow(clippy::too_many_arguments)]
@@ -554,14 +570,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     async fn get_info_call(&self, _connection: Option<&DynRpcConnection>, _request: GetInfoRequest) -> RpcResult<GetInfoResponse> {
-        let sink_daa_score_timestamp =
-            self.consensus_manager.consensus().unguarded_session().async_get_sink_daa_score_timestamp().await;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
+        let is_synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
         Ok(GetInfoResponse {
             p2p_id: self.flow_context.node_id.to_string(),
             mempool_size: self.mining_manager.transaction_count_sample(TransactionQuery::TransactionsOnly),
             server_version: version().to_string(),
             is_utxo_indexed: self.config.utxoindex,
-            is_synced: self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp),
+            is_synced,
             has_notify_command: true,
             has_message_id: true,
         })
@@ -1843,7 +1860,11 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
     ) -> RpcResult<GetServerInfoResponse> {
         let session = self.consensus_manager.consensus().unguarded_session();
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
-        let is_synced = self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp);
+        // Same definition as getSyncStatus and getInfo. This one is what `kaspa-pq-validator` polls
+        // before it will attest, and it used to omit the transitional-IBD check the other two had —
+        // so a node mid-IBD whose sink had advanced could report synced to the one caller whose
+        // reaction is to start signing.
+        let is_synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
         let virtual_daa_score = session.get_virtual_daa_score();
 
         Ok(GetServerInfoResponse {
@@ -1865,8 +1886,7 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
         let session = self.consensus_manager.consensus().unguarded_session();
 
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
-        let is_synced = self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
-            && !session.async_is_consensus_in_transitional_ibd_state().await;
+        let is_synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
         Ok(GetSyncStatusResponse { is_synced })
     }
 

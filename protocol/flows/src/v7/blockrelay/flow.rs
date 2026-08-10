@@ -1,3 +1,4 @@
+use crate::flowcontext::recovery_trace::{RecoveryStage, record_stage};
 use crate::{
     flow_context::{BlockLogEvent, FlowContext, RequestScope},
     flow_trait::Flow,
@@ -10,12 +11,32 @@ use kaspa_core::debug;
 use kaspa_p2p_lib::{
     IncomingRoute, Router, SharedIncomingRoute,
     common::ProtocolError,
-    convert::header::{HeaderFormat, Versioned},
+    convert::{
+        header::{HeaderFormat, Versioned},
+        model::ibd_candidate::IbdCandidateSummary,
+    },
     dequeue, dequeue_with_timeout, make_message, make_request,
-    pb::{InvRelayBlockMessage, RequestBlockLocatorMessage, RequestRelayBlocksMessage, kaspad_message::Payload},
+    pb::{
+        InvRelayBlockMessage, RequestBlockLocatorMessage, RequestIbdCandidateSummaryMessage, RequestRelayBlocksMessage,
+        kaspad_message::Payload,
+    },
 };
 use kaspa_utils::channel::{JobSender, JobTrySendError as TrySendError};
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+
+/// How long to wait for a peer to say which chain it is on.
+///
+/// Short on purpose. This runs while an IBD is in flight and its only job is to learn something
+/// useful; a peer that cannot answer promptly is simply not counted this round, and gets asked
+/// again after the cooldown. Waiting longer would let a silent peer stall the relay loop.
+const IBD_CANDIDATE_SUMMARY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often an idle relay flow checks whether its peer is worth asking about.
+///
+/// Only does anything while participation is withheld, and the per-peer cooldown still governs how
+/// often a peer is actually asked — this just stops collection from depending on gossip that a
+/// quiet network never produces.
+const IDLE_CANDIDATE_POLL: Duration = Duration::from_secs(5);
 
 pub struct RelayInvMessage {
     hash: BlockHash,
@@ -75,7 +96,12 @@ impl Flow for HandleRelayInvsFlow {
     }
 
     async fn start(&mut self) -> Result<(), ProtocolError> {
-        self.start_impl().await
+        let result = self.start_impl().await;
+        // This flow ends when the peer goes away. Drop it as a candidate source — but candidates it
+        // shared with other peers survive, because a dropped connection is a source failover, not a
+        // reason to reconsider which chain to follow.
+        self.ctx.forget_ibd_candidate_peer(&self.router.key());
+        result
     }
 }
 
@@ -93,8 +119,23 @@ impl HandleRelayInvsFlow {
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
         loop {
-            // Loop over incoming block inv messages
-            let inv = self.invs_route.dequeue().await?;
+            // Loop over incoming block inv messages — but do not depend on one arriving.
+            //
+            // Candidate collection used to happen only when a peer relayed something. On a quiet
+            // network that never comes: a peer with nothing new to gossip announces its tip once, and
+            // if that single inv is missed or arrives before this node started withholding
+            // participation, the peer is never examined at all. Measured over a delayed link, a
+            // follower offered two chains observed neither — CandidateObserved=0 — and simply kept
+            // whichever it had raced onto.
+            //
+            // So while participation is withheld, ask on a timer as well. A node that is unsure which
+            // chain it is on should be the one doing the asking, not waiting to be told.
+            let inv = loop {
+                match tokio::time::timeout(IDLE_CANDIDATE_POLL, self.invs_route.dequeue()).await {
+                    Ok(inv) => break inv?,
+                    Err(_) => self.poll_for_candidate_summary().await,
+                }
+            };
             let session = self.ctx.consensus().unguarded_session();
             let is_ibd_in_transitional_state = session.async_is_consensus_in_transitional_ibd_state().await;
 
@@ -121,10 +162,83 @@ impl HandleRelayInvsFlow {
                 }
             }
 
+            // Collect candidates whenever this node is withholding participation, not only while an
+            // IBD is in flight.
+            //
+            // Measured gap: with two independently pruned histories on offer, a peer met AFTER the
+            // first IBD finished was never registered as a candidate — the only collection point was
+            // inside the IBD guard below. So nothing verified it, nothing could switch to it, and the
+            // node sat on whichever branch it had raced onto while that peer retried an IBD every 30
+            // seconds forever. That is the testnet-22 deadlock reproduced.
+            //
+            // CandidateReview exists precisely because the chain is not settled, so that is exactly
+            // when a competing offer matters. Recording it here does not process the block or change
+            // the flow's behaviour; it only makes the offer visible to the coordinator.
+            if !self.ctx.is_consensus_participation_allowed() && self.ctx.ibd_peer_key() != Some(self.router.key()) {
+                self.ctx.observe_ibd_candidate_peer(self.router.key());
+                record_stage(
+                    RecoveryStage::CandidateObserved,
+                    None,
+                    None,
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    "participation withheld; this peer has something on offer",
+                );
+                if self.ctx.claim_ibd_summary_request(self.router.key()) {
+                    if let Err(e) = self.request_ibd_candidate_summary().await {
+                        self.ctx.note_ibd_summary_failure(self.router.key());
+                        record_stage(
+                            RecoveryStage::Rejected,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            format!("summary request failed: {e}"),
+                        );
+                        debug!("Could not get a candidate summary from {}: {}", self.router, e);
+                    }
+                } else {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        None,
+                        None,
+                        Some(self.router.to_string()),
+                        self.ctx.chain_participation().state().as_str(),
+                        "summary request rate-limited (per-peer cooldown)",
+                    );
+                }
+            }
+
             if self.ctx.is_ibd_running() && !self.ctx.should_mine(&session).await {
                 // Note: If the node is considered nearly synced we continue processing relay blocks even though an IBD is in progress.
                 // For instance this means that downloading a side-chain from a delayed node does not interop the normal flow of live blocks.
-                debug!("Got relay block {} while in IBD and the node is out of sync, continuing...", inv.hash);
+                //
+                // Returning early here is right — fetching and validating every relayed block mid-IBD
+                // is a DoS — but it used to also ERASE the fact that this peer had anything to offer.
+                // The block is not requested, so it never reaches `try_trigger_ibd`, never enters the
+                // IBD job channel, and leaves no trace: after the running IBD commits, there is
+                // nothing left to reconsider. That is how a node ends up married to whichever peer
+                // happened to relay first (incident 2026-08-08: 86 minutes on a lower-blue-work
+                // branch with a heavier peer connected throughout, zero retry attempts).
+                //
+                // Record that this peer has something, and — under a per-peer rate limit — ask it
+                // WHAT. Not for the peer we are syncing from: its own relay traffic would
+                // otherwise register as a rival offer against itself.
+                //
+                // The question is a candidate summary, not a block. Fetching blocks mid-IBD is the
+                // DoS this guard exists to prevent, and it is why competing chains used to be
+                // dropped unseen; a summary is a header and two hashes, cheap enough to ask every
+                // peer and still learn what is on offer. What comes back is a claim (see
+                // `ClaimedBlueWork`) and orders which candidate to verify first — nothing else.
+                if self.ctx.ibd_peer_key() != Some(self.router.key()) {
+                    self.ctx.observe_ibd_candidate_peer(self.router.key());
+                    if self.ctx.claim_ibd_summary_request(self.router.key())
+                        && let Err(e) = self.request_ibd_candidate_summary().await
+                    {
+                        debug!("Could not get a candidate summary from {}: {}", self.router, e);
+                    }
+                }
+                debug!("Got relay block {} while in IBD and the node is out of sync, recorded as a candidate hint", inv.hash);
                 continue;
             }
 
@@ -232,6 +346,145 @@ impl HandleRelayInvsFlow {
 
     fn enqueue_orphan_roots(&mut self, _orphan: BlockHash, roots: Vec<BlockHash>, known_within_range: bool) {
         self.invs_route.enqueue_indirect_invs(roots, known_within_range)
+    }
+
+    /// Ask an otherwise-silent peer which chain it is on, if this node is in a position to care.
+    ///
+    /// The same work the relay guard does when an inv arrives, on a timer instead. Cheap by
+    /// construction: it returns immediately unless participation is withheld, and the per-peer
+    /// cooldown bounds how often a peer is actually asked.
+    async fn poll_for_candidate_summary(&mut self) {
+        if self.ctx.is_consensus_participation_allowed() {
+            return;
+        }
+        // This used to skip the peer whose IBD is running — don't pester the peer we are already
+        // syncing from, since the IBD will tell us its chain anyway.
+        //
+        // It only tells us if it succeeds. Measured, at seed 2: the heavy peer connected, was
+        // handed the latch within a second, ran an IBD that was refused at the pruning-proof
+        // comparison, and was disconnected — taking its relay flow with it. Thirty seconds later it
+        // reconnected and did the same thing, for seven minutes. It was the IBD peer for almost
+        // every moment it was connected, so it was never once asked which chain it was on, and the
+        // node sat on the lighter branch holding a registry with one candidate in it: its own.
+        //
+        // The peer running a doomed IBD is precisely the peer whose chain most needs describing
+        // independently. Asking costs one small message per peer per cooldown.
+        // Two things have to keep happening while the chain is unsettled, and neither had a driver
+        // once the first IBD finished.
+        //
+        // Expiry ran only at the commit barrier, which runs only during an IBD — so a verification
+        // request whose flow had died held the single nomination slot indefinitely, and nothing was
+        // ever nominated again. And nomination itself was attempted only right after a summary
+        // arrived, so an attempt blocked at that instant was never retried.
+        //
+        // Both now run on this poll, which ticks exactly while participation is withheld.
+        let expired = self.ctx.expire_stale_verifications();
+        if !expired.is_empty() {
+            // Nothing proof-backed is being weighed any more; stop holding the review open.
+            self.ctx.chain_participation().end_decision();
+        }
+        for id in expired {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                None,
+                self.ctx.chain_participation().state().as_str(),
+                "verification lease expired; releasing the nomination slot and the review hold",
+            );
+        }
+        self.ctx.nominate_challenger();
+
+        self.ctx.observe_ibd_candidate_peer(self.router.key());
+        record_stage(
+            RecoveryStage::CandidateObserved,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "participation withheld; asking this peer directly rather than waiting for gossip",
+        );
+        if self.ctx.claim_ibd_summary_request(self.router.key())
+            && let Err(e) = self.request_ibd_candidate_summary().await
+        {
+            self.ctx.note_ibd_summary_failure(self.router.key());
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("polled summary request failed: {e} (retrying with backoff)"),
+            );
+            debug!("Could not get a candidate summary from {}: {}", self.router, e);
+        }
+    }
+
+    /// Ask this peer which chain it is on, and file the answer as a candidate.
+    ///
+    /// Deliberately tolerant: a peer that does not answer, answers late, or answers with something
+    /// unparseable simply does not contribute a candidate. Its offer is still recorded, so it can
+    /// be asked again after the cooldown. Failing to learn about a chain must never take down a
+    /// connection — that would make the coordinator itself an attack surface.
+    async fn request_ibd_candidate_summary(&mut self) -> Result<(), ProtocolError> {
+        record_stage(
+            RecoveryStage::SummaryRequested,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
+        // `make_request!`, not `make_message!`. This flow's `msg_route` subscribes to no payload
+        // types (`router.subscribe(vec![])`) — replies reach it by REQUEST ID, which is how
+        // `request_block` above gets its block back. Sent as a plain message the request carries
+        // BLANK_ROUTE_ID, the peer's reply is addressed to nothing, and the summary is silently
+        // never delivered.
+        //
+        // Which is precisely what the recovery trace showed: SummaryRequested=8, SummaryReceived=0,
+        // and not one rejection. Requests going out, nothing coming back, and no error to explain
+        // it — the signature of a reply with nowhere to go.
+        self.router
+            .enqueue(make_request!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {}, self.msg_route.id()))
+            .await?;
+        let msg = dequeue_with_timeout!(self.msg_route, Payload::IbdCandidateSummary, IBD_CANDIDATE_SUMMARY_TIMEOUT)?;
+        let summary: IbdCandidateSummary = Versioned(self.header_format, msg).try_into()?;
+
+        // Rules first: a chain built under different consensus params or a different genesis is not
+        // a candidate at all, whatever it claims about its weight.
+        if summary.genesis_hash != self.ctx.config.genesis.hash.as_bytes()
+            || summary.consensus_params_id != self.ctx.config.params.consensus_params_id().as_bytes()
+        {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                "summary rejected: different genesis or consensus params",
+            );
+            debug!("Ignoring candidate summary from {}: different genesis or consensus params", self.router);
+            return Ok(());
+        }
+
+        let id = self.ctx.observe_ibd_candidate_summary(self.router.key(), &summary.virtual_selected_parent, summary.pruning_point);
+        debug!(
+            "Candidate {} from {}: pruning point {}, claimed blue work {}",
+            id.virtual_selected_parent, self.router, id.pruning_point, summary.virtual_selected_parent.blue_work
+        );
+        self.ctx.note_ibd_summary_success(self.router.key());
+        record_stage(
+            RecoveryStage::SummaryReceived,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!("claimed_blue_work={} pruning_point={}", summary.virtual_selected_parent.blue_work, id.pruning_point),
+        );
+        // Learning about a chain is only useful if somebody then checks it. Ask for the strongest
+        // unverified candidate to be verified — which may or may not be the one just recorded.
+        self.ctx.nominate_challenger();
+        Ok(())
     }
 
     async fn request_block(

@@ -1,5 +1,9 @@
+pub mod bootstrap_recovery;
 pub mod evm_deposit_claims;
 pub mod evm_transactions;
+pub mod ibd_candidates;
 pub mod orphans;
 pub(crate) mod process_queue;
+pub mod recovery_trace;
 pub mod transactions;
+pub mod verification_trace;

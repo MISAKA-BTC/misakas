@@ -13,7 +13,12 @@ use crate::{
     network::{NetworkId, NetworkType},
     vlt::VltParams,
 };
+/// Domain separator for [`Params::consensus_params_id`]. Versioned so a future encoding change is
+/// a deliberate, visible break rather than a silent one.
+const CONSENSUS_FINGERPRINT_DOMAIN_V1: &[u8] = b"misaka/consensus-fingerprint/v1";
+
 use kaspa_addresses::Prefix;
+use kaspa_hashes::{ConsensusParamsId, Hash};
 use kaspa_math::{Uint256, Uint576};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -406,6 +411,143 @@ pub struct Params {
 }
 
 impl Params {
+    /// A fingerprint of the consensus rules this node runs, for the P2P handshake.
+    ///
+    /// Two nodes that answer the same network name but disagree here cannot reach consensus — this
+    /// struct's own contract says so — and nothing else stops them from peering, syncing from each
+    /// other and forking. testnet-22 forked exactly this way: an older build computing different
+    /// overlay commitments, indistinguishable at handshake from a correct one.
+    ///
+    /// Two properties, both needed, and easy to get only one of:
+    ///
+    /// **Canonical.** The encoding below is fixed, versioned and domain-separated. An earlier cut
+    /// hashed `format!("{self:?}")`, which is not an encoding at all: `Debug` output can change
+    /// with a field rename, a library update, or a formatting change in some nested type, and two
+    /// nodes running identical rules would then refuse to peer. Worse in the other direction, it
+    /// silently covers whatever `Debug` happens to print and nothing else.
+    ///
+    /// **Complete.** The destructuring below is exhaustive — no `..` — so adding a field to
+    /// `Params` fails to compile until somebody decides whether it belongs here. That is the point:
+    /// the failure mode of a hand-maintained list is two nodes that believe they agree and do not,
+    /// and a compile error is a much better way to find that out than a fork.
+    ///
+    /// Fields deliberately excluded are named with a reason at the destructure. Everything else is
+    /// written in declaration order, integers little-endian, with lengths where a value is
+    /// variable, so no two distinct parameter sets can collide by concatenation.
+    ///
+    /// Not an identifier to persist, publish, or compare across versions — a value for separating
+    /// nodes at handshake, and nothing more.
+    pub fn consensus_params_id(&self) -> Hash {
+        // Exhaustive on purpose. If this stops compiling because `Params` gained a field, decide
+        // whether that field changes block validity: if it does, hash it; if it does not, bind it
+        // with a comment saying why, as below.
+        let Params {
+            // Excluded: where to find peers is not a rule about blocks.
+            dns_seeders: _,
+            net,
+            genesis,
+            timestamp_deviation_tolerance,
+            max_difficulty_target,
+            // Excluded: a lossy f64 view of `max_difficulty_target`, which is hashed above. Its bit
+            // pattern is also not stable across the ways it can be computed.
+            max_difficulty_target_f64: _,
+            past_median_time_window_size,
+            difficulty_window_size,
+            min_difficulty_window_size,
+            coinbase_payload_script_public_key_max_len,
+            max_coinbase_payload_len,
+            max_tx_inputs,
+            max_tx_outputs,
+            max_signature_script_len,
+            max_script_public_key_len,
+            mass_per_tx_byte,
+            mass_per_script_pub_key_byte,
+            mass_per_sig_op,
+            max_block_mass,
+            storage_mass_parameter,
+            deflationary_phase_daa_score,
+            pre_deflationary_phase_base_subsidy,
+            skip_proof_of_work,
+            max_block_level,
+            pruning_proof_m,
+            blockrate,
+            pre_crescendo_target_time_per_block,
+            crescendo_activation,
+            dns_params,
+            pow_blake2b_sha3_activation,
+            pq_enforcement,
+            pq_activation_daa_score,
+            evm_activation_daa_score,
+            evm_gas_pool_v2_activation_daa_score,
+            evm_f002_withdraw_cap_activation_daa_score,
+            evm_f003_mldsa_verify_activation_daa_score,
+            evm_typed_receipt_root_activation_daa_score,
+        } = self;
+
+        let mut h = ConsensusParamsId::new();
+        h.write(CONSENSUS_FINGERPRINT_DOMAIN_V1);
+
+        h.write([net.network_type as u8]);
+        h.write(net.suffix.unwrap_or(u32::MAX).to_le_bytes());
+        h.write(genesis.hash.as_bytes());
+        h.write(timestamp_deviation_tolerance.to_le_bytes());
+        h.write(max_difficulty_target.to_le_bytes());
+        h.write((*past_median_time_window_size as u64).to_le_bytes());
+        h.write((*difficulty_window_size as u64).to_le_bytes());
+        h.write((*min_difficulty_window_size as u64).to_le_bytes());
+        h.write([*coinbase_payload_script_public_key_max_len]);
+        h.write((*max_coinbase_payload_len as u64).to_le_bytes());
+        h.write((*max_tx_inputs as u64).to_le_bytes());
+        h.write((*max_tx_outputs as u64).to_le_bytes());
+        h.write((*max_signature_script_len as u64).to_le_bytes());
+        h.write((*max_script_public_key_len as u64).to_le_bytes());
+        h.write(mass_per_tx_byte.to_le_bytes());
+        h.write(mass_per_script_pub_key_byte.to_le_bytes());
+        h.write(mass_per_sig_op.to_le_bytes());
+        h.write(max_block_mass.to_le_bytes());
+        h.write(storage_mass_parameter.to_le_bytes());
+        h.write(deflationary_phase_daa_score.to_le_bytes());
+        h.write(pre_deflationary_phase_base_subsidy.to_le_bytes());
+        h.write([*skip_proof_of_work as u8]);
+        h.write([*max_block_level]);
+        h.write(pruning_proof_m.to_le_bytes());
+
+        h.write(blockrate.target_time_per_block.to_le_bytes());
+        h.write((blockrate.ghostdag_k as u64).to_le_bytes());
+        h.write(blockrate.past_median_time_sample_rate.to_le_bytes());
+        h.write(blockrate.difficulty_sample_rate.to_le_bytes());
+        h.write([blockrate.max_block_parents]);
+        h.write(blockrate.mergeset_size_limit.to_le_bytes());
+        h.write(blockrate.merge_depth.to_le_bytes());
+        h.write(blockrate.finality_depth.to_le_bytes());
+        h.write(blockrate.pruning_depth.to_le_bytes());
+        h.write(blockrate.coinbase_maturity.to_le_bytes());
+
+        h.write(pre_crescendo_target_time_per_block.to_le_bytes());
+        h.write(crescendo_activation.daa_score().to_le_bytes());
+
+        // Length-prefixed: `None` and an empty encoding must not hash alike.
+        match dns_params {
+            Some(dns) => {
+                let bytes = borsh::to_vec(dns).expect("DnsParams is borsh-serializable");
+                h.write((bytes.len() as u64).to_le_bytes());
+                h.write(&bytes);
+            }
+            None => h.write(u64::MAX.to_le_bytes()),
+        };
+
+        h.write(pow_blake2b_sha3_activation.daa_score().to_le_bytes());
+        h.write([*pq_enforcement as u8]);
+        h.write(pq_activation_daa_score.to_le_bytes());
+        h.write(evm_activation_daa_score.to_le_bytes());
+        h.write(evm_gas_pool_v2_activation_daa_score.to_le_bytes());
+        h.write(evm_f002_withdraw_cap_activation_daa_score.to_le_bytes());
+        h.write(evm_f003_mldsa_verify_activation_daa_score.to_le_bytes());
+        h.write(evm_typed_receipt_root_activation_daa_score.to_le_bytes());
+
+        h.finalize()
+    }
+
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
     /// In `Consensus` mode this gates legacy secp256k1 signature opcodes,
     /// P2SH, and non-ML-DSA-87 script classes at the consensus and script-
@@ -1466,3 +1608,103 @@ pub const DEVNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::never(),
 };
+
+#[cfg(test)]
+mod consensus_params_id_tests {
+    use super::*;
+
+    #[test]
+    fn a_different_rule_set_gets_a_different_fingerprint() {
+        // The whole point of the handshake check: two nodes answering the same network name must
+        // not be able to peer while disagreeing about block validity.
+        let base = SIMNET_PARAMS;
+        let mut tweaked = SIMNET_PARAMS;
+        tweaked.ghostdag_k += 1;
+        assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
+    }
+
+    #[test]
+    fn shipped_presets_have_pinned_fingerprints() {
+        // Golden vectors. Any change to what goes into the fingerprint, or to how it is encoded,
+        // breaks these — which is the point. It forces the change to be deliberate, and it lets an
+        // operator tell whether two releases will peer before deploying one of them.
+        //
+        // If you are here because a preset legitimately changed: update the value, and understand
+        // that nodes on the old build will no longer peer with this one. That is usually the
+        // correct outcome. Make sure it is the intended one.
+        for (name, params, expected) in [
+            ("mainnet", MAINNET_PARAMS, "725d6e40ea0cde397331d5b0705a9ac79e0d310304c0ab72f76652afbc24d7fe"),
+            ("testnet", TESTNET_PARAMS, "ffabd639c9e4f34dd674e917fad2060e1cda2dc180485ebb7f99085cc5de727f"),
+            ("simnet", SIMNET_PARAMS, "4a7e38671a2405a79c6a99b2d5a49dd4ffa5ba8e8e1157b07d9b1be5059253c2"),
+            ("devnet", DEVNET_PARAMS, "7ab61a1ada4f41d5d832b55710e30d3b3ae9ffde360438fdb2df93ab3e33284f"),
+        ] {
+            assert_eq!(params.consensus_params_id().to_string(), expected, "{name} consensus fingerprint changed");
+        }
+    }
+
+    #[test]
+    fn the_encoding_cannot_be_confused_by_concatenation() {
+        // Adjacent fields must not be able to trade digits. Moving a value from one field to the
+        // next has to change the fingerprint, or two different rule sets could share one.
+        let mut a = SIMNET_PARAMS;
+        let mut b = SIMNET_PARAMS;
+        a.max_tx_inputs = 10;
+        a.max_tx_outputs = 20;
+        b.max_tx_inputs = 1020;
+        b.max_tx_outputs = 0;
+        assert_ne!(a.consensus_params_id(), b.consensus_params_id());
+    }
+
+    #[test]
+    fn an_absent_dns_overlay_is_not_an_empty_one() {
+        // `None` and a zero-length encoding must differ, or "no overlay" and "an overlay that
+        // happens to encode short" would look like the same rule set.
+        let mut with = SIMNET_PARAMS;
+        let mut without = SIMNET_PARAMS;
+        with.dns_params = Some(GENESIS_ACTIVE_DNS_PARAMS);
+        without.dns_params = None;
+        assert_ne!(with.consensus_params_id(), without.consensus_params_id());
+    }
+
+    #[test]
+    fn a_fork_activation_height_is_part_of_the_rules() {
+        let base = TESTNET_PARAMS;
+        let mut moved = TESTNET_PARAMS;
+        moved.evm_activation_daa_score += 1;
+        assert_ne!(base.consensus_params_id(), moved.consensus_params_id(), "a different activation schedule is a different rule set");
+    }
+
+    #[test]
+    fn identical_params_agree() {
+        assert_eq!(SIMNET_PARAMS.consensus_params_id(), SIMNET_PARAMS.clone().consensus_params_id());
+    }
+
+    #[test]
+    fn every_shipped_preset_is_distinguishable() {
+        let ids = [
+            ("mainnet", MAINNET_PARAMS.consensus_params_id()),
+            ("testnet", TESTNET_PARAMS.consensus_params_id()),
+            ("simnet", SIMNET_PARAMS.consensus_params_id()),
+            ("devnet", DEVNET_PARAMS.consensus_params_id()),
+        ];
+        for (i, (name_a, a)) in ids.iter().enumerate() {
+            for (name_b, b) in ids.iter().skip(i + 1) {
+                assert_ne!(a, b, "{name_a} and {name_b} must not share a fingerprint");
+            }
+        }
+    }
+
+    #[test]
+    fn an_overlay_rule_change_is_caught() {
+        // testnet-22's shape: a build whose overlay behaviour differs while everything visible at
+        // handshake looks identical. The fingerprint covers the whole struct, so it is caught.
+        let base = TESTNET_PARAMS;
+        let mut tweaked = TESTNET_PARAMS;
+        if let Some(dns) = tweaked.dns_params.as_mut() {
+            dns.dns_activation_daa_score += 1;
+        } else {
+            tweaked.dns_params = Some(GENESIS_ACTIVE_DNS_PARAMS);
+        }
+        assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
+    }
+}

@@ -1,13 +1,23 @@
 use crate::{
     flow_context::FlowContext,
     flow_trait::Flow,
+    flowcontext::bootstrap_recovery::{
+        AdoptionError, CandidateAdoptionPermit, CandidateValidationPermit, ChainReviewState, ChainTip, RecoveryRequest,
+        ValidatedCandidate, VerifiedCandidate, authorize_candidate_adoption, authorize_candidate_validation,
+    },
+    flowcontext::ibd_candidates::{
+        CHALLENGER_PROOF_TIMEOUT, CandidateId, CandidateRejectReason, CandidateValidation, ClaimedBlueWork, CommitInputs,
+        CommitVerdict, POST_IBD_CANDIDATE_REVIEW, decide_commit,
+    },
+    flowcontext::recovery_trace::{RecoveryAttemptId, RecoveryStage, describe_comparison, record_stage},
+    flowcontext::verification_trace::{self, SkipReason, VerificationSkip},
     ibd::{HeadersChunkStream, TrustedEntryStream, negotiate::ChainNegotiationOutput},
 };
 use futures::future::{Either, join_all, select, try_join_all};
 use itertools::Itertools;
 use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
-    BlockHashSet,
+    BlockHashSet, BlueWorkType,
     api::BlockValidationFuture,
     block::Block,
     header::Header,
@@ -33,14 +43,50 @@ use kaspa_p2p_lib::{
     },
 };
 use kaspa_utils::channel::JobReceiver;
+use parking_lot::Mutex;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::time::sleep;
+use tokio::{sync::broadcast, time::sleep};
 
 use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
+
+/// How often a waiting proof fetch re-checks that its lease is still its own.
+///
+/// A revoked lease means the candidate has been re-nominated, usually to a different source. The
+/// waiting flow cannot use an answer that arrives after that — `StaleProofResponse` would discard
+/// it — so continuing to hold the flow open costs a source rotation for nothing.
+const LEASE_REVOKE_CHECK_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Time reserved, inside the lease, for validating a proof after it arrives.
+///
+/// Validation runs in this same flow and inside this same lease, so a request allowed to consume
+/// the whole lease would leave nothing to check the answer with — and the check is the point.
+const PROOF_VALIDATION_MARGIN: Duration = Duration::from_secs(20);
+
+/// Below this, starting a request is not worth the slot it would hold.
+///
+/// A request that cannot plausibly finish inside what remains of the lease will be abandoned
+/// half-way, having spent the one verification slot for nothing. Better to leave the slot free for
+/// the next lease, which starts with a full budget. Real-WAN fetch and validation measured
+/// 0.2-1.5s, so this is generous by more than an order of magnitude.
+const MIN_USEFUL_PROOF_BUDGET: Duration = Duration::from_secs(10);
+
+/// How many times this node may abandon a sync for a verified-better candidate before giving up.
+///
+/// Switching on evidence is the recovery path and should not be rationed lightly — but two branches
+/// trading the latch forever is a different failure that looks the same from inside. A node cannot
+/// distinguish "I keep finding better chains" from "I am being played" on its own, so past this
+/// count it stops and says so.
+const MAX_CHAIN_SWITCHES: u32 = 5;
+
+/// How often an idle IBD flow re-examines candidates it has already validated.
+///
+/// Short, because the window it covers is the gap between a proof validating and the latch becoming
+/// free, and a node sitting on a chain it has evidence against should not sit there long.
+const VALIDATED_CANDIDATE_RECHECK: Duration = Duration::from_secs(3);
 
 /// Flow for managing IBD - Initial Block Download
 pub struct IbdFlow {
@@ -52,6 +98,31 @@ pub struct IbdFlow {
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
+
+    /// The permit authorising THIS IBD to cross the node's own provisional pruning point, if it
+    /// holds one. Set when `determine_ibd_type` grants one and cleared when the IBD ends, so the
+    /// authority lasts exactly as long as the attempt it was issued for.
+    active_recovery_permit: Option<CandidateValidationPermit>,
+
+    /// Which connection this flow belongs to. A `PeerKey` is identical across a reconnect, so
+    /// without this a decision made by a flow that has since died is indistinguishable from one
+    /// made by the flow that replaced it — and the peer under diagnosis reconnects every thirty
+    /// seconds.
+    connection_generation: u64,
+
+    /// The adoption permit earned at the commit barrier, carried the few steps to `commit_if` so
+    /// the defender it was judged against can be re-checked under the lock that performs the swap.
+    /// `authorize_commit` takes `&self`, so this is a cell rather than a return value.
+    earned_adoption_permit: Mutex<Option<CandidateAdoptionPermit>>,
+
+    /// Handoffs: a chain this node has decided to sync next. Consumed by whichever flow serves it,
+    /// so a switch does not depend on the winning peer happening to relay something.
+    handoff_receiver: broadcast::Receiver<CandidateId>,
+
+    /// Nominations of chains worth verifying. An IBD flow whose peer is not the syncer is otherwise
+    /// idle, and it is the only flow that can fetch that peer's pruning proof — `PruningPointProof`
+    /// is routed here. So this is where a challenger gets checked.
+    challenger_receiver: broadcast::Receiver<CandidateId>,
 }
 
 #[async_trait::async_trait]
@@ -87,39 +158,1211 @@ impl IbdFlow {
         body_only_ibd_permitted: bool,
         header_format: HeaderFormat,
     ) -> Self {
-        Self { ctx, router, incoming_route, relay_receiver, body_only_ibd_permitted, header_format }
+        let challenger_receiver = ctx.subscribe_challenger_nominations();
+        let handoff_receiver = ctx.subscribe_ibd_handoffs();
+        Self {
+            ctx,
+            router,
+            incoming_route,
+            relay_receiver,
+            body_only_ibd_permitted,
+            header_format,
+            connection_generation: verification_trace::next_connection_generation(),
+            active_recovery_permit: None,
+            earned_adoption_permit: Mutex::new(None),
+            challenger_receiver,
+            handoff_receiver,
+        }
     }
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
-        while let Ok(relay_block) = self.relay_receiver.recv().await {
-            if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_block.header.daa_score) {
+        loop {
+            // Two things can wake this flow. Its peer offering a chain to sync from, or a
+            // nomination to go check what some peer is claiming. Only one IBD runs at a time, but
+            // every other peer's flow is idle meanwhile — and idle is what let the node adopt a
+            // branch without ever asking anyone else for evidence.
+            // A tick, so a validated candidate cannot sit in limbo.
+            //
+            // `consider_post_ibd_switch` runs when a proof validates. If that moment happens to fall
+            // inside a running IBD it defers to the commit barrier — and the barrier compares the
+            // candidate's PRUNING-POINT work against the staged chain's TIP work, which can never
+            // favour it. Measured: a soak round validated two candidates, compared both, reserved
+            // none, and kept the lighter chain.
+            //
+            // So the same evidence is looked at again once the latch is free.
+            let relay_header = tokio::select! {
+                // Why the tick is a sufficient driver for the checks below, when it was NOT for
+                // serving a proof request: those two act only when no IBD is running, and if no IBD
+                // is running then no flow is inside `ibd()` — so every flow is here, ticking.
+                // Serving a proof request is gated on the PEER rather than on global state, and the
+                // one peer that owes a proof is reliably the one whose flow is busy. That is why it
+                // also runs at the top of the loop, where the flow is briefly free.
+                _ = tokio::time::sleep(VALIDATED_CANDIDATE_RECHECK) => {
+                    self.serve_pending_nomination().await;
+                    self.reconsider_validated_candidates().await;
+                    continue;
+                }
+                block = self.relay_receiver.recv() => match block {
+                    Ok(block) => block.header.clone(),
+                    Err(_) => return Ok(()),
+                },
+                handoff = self.handoff_receiver.recv() => {
+                    match handoff {
+                        Ok(id) => {
+                            // Recorded before the claim, so "nobody claimed it" can be told apart
+                            // from "it was never delivered". Those need different fixes and the
+                            // first E2E-B run could not distinguish them.
+                            record_stage(
+                                RecoveryStage::Rejected,
+                                None,
+                                Some(id),
+                                Some(self.router.to_string()),
+                                self.ctx.chain_participation().state().as_str(),
+                                "handoff delivered to this flow; evaluating claim",
+                            );
+                            match self.claim_handoff(id) {
+                                // This flow's peer offers the reserved chain, so it starts the IBD
+                                // from the summary header — no waiting for an inv that may never
+                                // come, and no window for another peer to take the latch instead.
+                                Some(header) => header,
+                                None => continue,
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                }
+                nomination = self.challenger_receiver.recv() => {
+                    match nomination {
+                        Ok(id) => {
+                            self.verify_challenger(id).await;
+                            continue;
+                        }
+                        // Lagged: nominations are hints, and a missed one is re-sent on the next
+                        // summary. Closed: nobody nominates any more, so just serve relay blocks.
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                }
+            };
+
+            // Answer any outstanding proof request naming this peer BEFORE syncing from it.
+            //
+            // This is the only moment this flow is reliably idle. A peer relays its tip within a
+            // second of connecting, so the flow goes select → relay → ibd() → fail → disconnect,
+            // and the idle tick below never fires for it. Measured, soak round 7: two candidates
+            // nominated, one proof request ever sent, and thirty-three "nothing to nominate" while
+            // the unserved request held the single verification slot. The peer that owed the proof
+            // spent every one of those seconds inside an IBD that could not succeed.
+            //
+            // Narrow by construction: it does nothing unless participation is withheld and this
+            // node has already decided it wants this peer's proof.
+            self.serve_pending_nomination().await;
+
+            if let Some(_guard) = self.ctx.try_set_ibd_running(self.router.key(), relay_header.daa_score, relay_header.blue_work) {
                 info!("IBD started with peer {}", self.router);
 
-                match self.ibd(relay_block).await {
-                    Ok(_) => info!("IBD with peer {} completed successfully", self.router),
+                // Whatever happens next, the reservation has had its turn. Leaving it in place would
+                // lock the node out of syncing from anyone else.
+                let served_reservation =
+                    self.ctx.preferred_ibd_candidate().is_some_and(|p| p.preferred_sources.contains(&self.router.key()));
+                if served_reservation {
+                    // It is being used, so it is not waiting. Restart the no-progress clock; the
+                    // absolute lifetime keeps running, which is what bounds a retry loop.
+                    self.ctx.note_preferred_candidate_claimed();
+                }
+
+                let outcome = self.ibd(relay_header).await;
+                // The permit covered exactly this attempt, and so did the hold on the review.
+                if self.active_recovery_permit.is_some() {
+                    self.ctx.chain_participation().end_decision();
+                }
+                self.active_recovery_permit = None;
+                // Release the reservation only when the attempt it authorised actually finished.
+                // Clearing it on failure spends the handoff on one stumble and drops the node back
+                // to the branch it had already decided against — measured: after the first permitted
+                // attempt failed, every retry ran unpermitted.
+                if served_reservation && outcome.is_ok() {
+                    self.ctx.clear_preferred_ibd_candidate();
+                }
+                match outcome {
+                    Ok(_) => {
+                        info!("IBD with peer {} completed successfully", self.router);
+
+                        self.report_unresolved_candidates();
+                        self.ctx.finish_ibd_after_success(POST_IBD_CANDIDATE_REVIEW);
+                        record_stage(
+                            RecoveryStage::IbdStartedForPreferredCandidate,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            if served_reservation { "this IBD served a reservation" } else { "ordinary IBD" },
+                        );
+                    }
                     Err(e) => {
                         info!("IBD with peer {} completed with error: {}", self.router, e);
+                        // `staging.commit()` runs partway through `ibd()`, so a failure here does not
+                        // mean nothing happened — the active consensus may already have been replaced
+                        // with a chain whose sync then failed.
+                        if self.ctx.finish_ibd_after_failure() {
+                            warn!(
+                                "IBD with {} failed AFTER the active consensus had already been replaced. This node is now on a \
+                                 chain whose sync never completed; participation is QUARANTINED until an operator intervenes.",
+                                self.router
+                            );
+                            return Err(e);
+                        }
+                        // While the chain is still under review, a failed IBD does not cost the peer
+                        // its connection.
+                        //
+                        // Returning Err here disconnects it, and the disconnect takes the candidate
+                        // registry entry with it — `forget_peer` drops a candidate whose last source
+                        // is gone. Measured, soak round 7: the peer offering the heavier chain
+                        // connected, relayed, was handed the latch, failed at the pruning-proof
+                        // comparison, and was dropped. The summary that arrived DURING that IBD had
+                        // nominated its chain for verification; the disconnect deleted the
+                        // nomination. Four nominations, one proof request ever sent, seven minutes
+                        // on the lighter branch. The node kept destroying the evidence it needed.
+                        //
+                        // "Your proof does not compare against mine" is not misbehaviour. It is the
+                        // exact situation the candidate machinery exists to resolve, and it cannot
+                        // be resolved without the peer. The DoS argument is weaker here too: a node
+                        // withholding participation is not mining or attesting, and every path this
+                        // keeps open is separately rate-limited — summary cooldown, verification
+                        // lease, per-peer failure count.
+                        if !self.ctx.is_consensus_participation_allowed() {
+                            info!(
+                                "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
+                                 a peer offering a different one is evidence rather than an offence.",
+                                self.router
+                            );
+                            continue;
+                        }
                         return Err(e);
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
-    async fn ibd(&mut self, relay_block: Block) -> Result<(), ProtocolError> {
+    /// Whether this flow should serve a reserved chain, and the header to start from.
+    ///
+    /// The reservation names a chain and its sources, so several flows may see the same handoff;
+    /// only one wins the latch, and the rest fall through harmlessly.
+    fn claim_handoff(&self, id: CandidateId) -> Option<Arc<Header>> {
+        // Every refusal is recorded separately. "The handoff was never claimed" has several
+        // possible causes and they need different fixes, so the trace has to say which one — the
+        // first E2E-B run could only report that nobody claimed it.
+        let Some(preferred) = self.ctx.preferred_ibd_candidate() else {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                "handoff delivered but nothing is reserved any more",
+            );
+            return None;
+        };
+        if preferred.candidate_id != id {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!(
+                    "handoff is for {} but the reservation names {}",
+                    id.virtual_selected_parent, preferred.candidate_id.virtual_selected_parent
+                ),
+            );
+            return None;
+        }
+        if !preferred.preferred_sources.contains(&self.router.key()) {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!(
+                    "this flow's peer is not among the {} reserved source(s) for the candidate",
+                    preferred.preferred_sources.len()
+                ),
+            );
+            return None;
+        }
+        record_stage(
+            RecoveryStage::HandoffReceived,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
+        info!(
+            "Taking over the sync: this peer ({}) offers candidate {}, which this node verified at blue work {}",
+            self.router, id.virtual_selected_parent, preferred.verified_blue_work
+        );
+        Some(preferred.header)
+    }
+
+    /// Ask this peer to back the chain it advertised, and record what comes of it.
+    ///
+    /// This is the step that turns "someone claimed a heavier chain" into evidence the commit
+    /// barrier can act on. Without it the barrier can only ever refuse, which is safe but means an
+    /// operator has to adjudicate every partition by hand — testnet-22's problem, automated only up
+    /// to the point of stopping.
+    ///
+    /// The work recorded is the proof's **pruning point** work, not the tip the peer claims. Proof
+    /// validation takes the pruning-period work from the prover on trust (see `compare_proofs_inner`:
+    /// "this work will eventually be verified if the proof is accepted"), so treating the tip claim
+    /// as verified would let a peer preempt an honest sync with a number it made up — the very
+    /// thing this whole path exists to prevent. What the proof genuinely establishes is the header
+    /// chain down to the pruning point, so that is what gets compared.
+    async fn verify_challenger(&mut self, id: CandidateId) {
+        // Only a peer that actually offers this chain can be asked for its proof — and only the one
+        // designated to serve it. A nomination reaches every flow, so without this every source
+        // fetches and validates the same multi-megabyte proof simultaneously.
+        // Both refusals below are recorded. Three separate diagnoses of one failing soak round were
+        // wrong because this step declining was invisible: the trace showed nominations rising and
+        // proof requests not, and every explanation for the gap had to be inferred. A step that can
+        // refuse silently will be blamed for someone else's bug, or excused for its own.
+        let (designated, sources, state_name) = {
+            let registry = self.ctx.ibd_candidates().read();
+            (registry.designated_prover(&id), registry.sources_of(&id), registry.get(&id).map(|c| c.validation.name()))
+        };
+        // Captures only copies, so it stays usable alongside the `&mut self` fetch below.
+        let (me, conn, state_name_or, source_count, participation) = (
+            self.router.key(),
+            self.connection_generation,
+            state_name.unwrap_or("<gone>"),
+            sources.len(),
+            self.ctx.chain_participation().state().as_str(),
+        );
+        let skip = move |reason| {
+            verification_trace::record_skip(VerificationSkip {
+                reason,
+                candidate_id: id,
+                connection_generation: conn,
+                executing_peer: me,
+                designated_peer: designated,
+                candidate_state: state_name_or,
+                live_sources: source_count,
+                participation_state: participation,
+            })
+        };
+        if state_name.is_none() {
+            skip(SkipReason::CandidateNotFound);
+            return;
+        }
+        if !sources.contains(&me) {
+            skip(SkipReason::PeerNoLongerSource);
+            return;
+        }
+        if designated != Some(me) {
+            skip(if designated.is_none() { SkipReason::NoEligibleProver } else { SkipReason::NotDesignatedProver });
+            return;
+        }
+        // The claim the peer must now back. Read here rather than inside the fetch so a candidate
+        // already settled by another source's flow is skipped instead of re-verified.
+        let validation = self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation);
+        let claimed_blue_work = match validation {
+            Some(CandidateValidation::ProofRequested { claimed_blue_work, .. })
+            | Some(CandidateValidation::SummaryReceived { claimed_blue_work }) => claimed_blue_work,
+            _ => {
+                skip(SkipReason::CandidateStateChanged);
+                return;
+            }
+        };
+
+        // The request may not outlive the lease that owns its slot. Not "a timeout shorter than the
+        // lease" — that still lets a request started late run past the end of one. What is left of
+        // THIS lease is the budget, and if too little is left the request is not started at all.
+        //
+        // The margin covers validating the proof after it arrives, which happens inside this same
+        // flow and inside the same lease.
+        let (attempt_stamp, budget) = {
+            let registry = self.ctx.ibd_candidates().read();
+            let stamp = registry.proof_attempt_stamp(&id);
+            let budget = registry
+                .proof_request_deadline(&id)
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()).saturating_sub(PROOF_VALIDATION_MARGIN));
+            (stamp, budget)
+        };
+        let budget = budget.unwrap_or(CHALLENGER_PROOF_TIMEOUT).min(CHALLENGER_PROOF_TIMEOUT);
+        if budget < MIN_USEFUL_PROOF_BUDGET {
+            skip(SkipReason::LeaseTooShortToStart);
+            return;
+        }
+
+        let attempt = RecoveryAttemptId::next();
+        info!("Verifying chain candidate {} offered by {}", id.virtual_selected_parent, self.router);
+        match self.fetch_and_validate_challenger_proof(attempt, id, claimed_blue_work, budget, attempt_stamp).await {
+            Ok((verified_blue_work, proof_hash)) => {
+                // The answer belongs to the attempt that asked for it. If this candidate has been
+                // re-nominated since — a new lease, most likely to a different source — then the
+                // peer whose reply this is was already judged too slow, and crediting the current
+                // attempt with it would undo that judgement.
+                if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
+                    skip(SkipReason::StaleProofResponse);
+                    return;
+                }
+                record_stage(
+                    RecoveryStage::ProofValidated,
+                    Some(attempt),
+                    Some(id),
+                    Some(self.router.to_string()),
+                    self.ctx.chain_participation().state().as_str(),
+                    format!("verified_blue_work={verified_blue_work}"),
+                );
+                info!(
+                    "Candidate {} from {} is backed by a valid pruning proof; verified blue work at its pruning point is {}",
+                    id.virtual_selected_parent, self.router, verified_blue_work
+                );
+                self.ctx.ibd_candidates().write().set_validated(id, verified_blue_work, proof_hash);
+                // A proof-backed candidate is now in play. Hold the review open past its floor: going
+                // Ready while holding evidence that the chain might be wrong is the failure this
+                // whole path exists to avoid. Released when the candidate is settled either way.
+                self.ctx.chain_participation().begin_decision();
+                self.consider_post_ibd_switch(id, verified_blue_work).await;
+            }
+            Err(e) => {
+                // A chain is condemned only for producing a bad proof — never for a failure of the
+                // conversation that was supposed to carry one.
+                //
+                // `InvalidProof` is permanent: the candidate is refused for the rest of its life in
+                // the registry. That is right for a proof that failed validation and wrong for
+                // everything else. A connection that closed, a deadline that ran out, a lease that
+                // was revoked, a route still carrying the previous IBD's replies — none of those
+                // say anything about the chain, and one of them (a leftover `TrustedData` read as
+                // the answer) is what permanently wrote off the heavier branch in a measured round.
+                //
+                // Transport failures leave the candidate where it was, so the ordinary retry and
+                // source-rotation machinery gets its turn. The lease bounds how long that can go on.
+                let proof_was_judged =
+                    !matches!(e, ProtocolError::ConnectionClosed | ProtocolError::Timeout(_) | ProtocolError::UnexpectedMessage(..))
+                        && !matches!(&e, ProtocolError::Other(m) if m.contains("lease was revoked"));
+                warn!(
+                    "Candidate {} from {} could not be backed by a valid pruning proof: {} ({})",
+                    id.virtual_selected_parent,
+                    self.router,
+                    e,
+                    if proof_was_judged { "refusing the chain" } else { "transport failure — the chain keeps its turn" }
+                );
+                if proof_was_judged {
+                    self.ctx.set_ibd_candidate_validation(
+                        id,
+                        CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
+                    );
+                }
+                // A candidate that cannot back its claim has no hold on this node's time.
+                self.ctx.chain_participation().end_decision();
+            }
+        }
+    }
+
+    /// A permit to cross this node's own pruning point for `syncer_pruning_point`, if one is due.
+    ///
+    /// Gathers the facts and lets `authorize_bootstrap_recovery` judge them, so the policy is
+    /// testable without a peer. Returns `None` on any refusal — including the ordinary case where
+    /// the node has participated and the boundary simply stands.
+    async fn bootstrap_recovery_permit_for(&self, syncer_pruning_point: BlockHash) -> Option<CandidateValidationPermit> {
+        let gate = self.ctx.chain_participation();
+        record_stage(
+            RecoveryStage::RecoveryPermitRequested,
+            None,
+            None,
+            Some(self.router.to_string()),
+            gate.state().as_str(),
+            format!("syncer_pruning_point={syncer_pruning_point}"),
+        );
+        let Some(reserved) = self.ctx.preferred_ibd_candidate() else {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                "no permit: nothing is reserved",
+            );
+            return None;
+        };
+        if reserved.candidate_id.pruning_point != syncer_pruning_point {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(reserved.candidate_id),
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                format!(
+                    "no permit: reservation is for pruning point {} but this syncer offers {syncer_pruning_point}",
+                    reserved.candidate_id.pruning_point
+                ),
+            );
+            return None;
+        }
+
+        let (verified_blue_work, claimed_tip_blue_work, proof_hash) = {
+            let registry = self.ctx.ibd_candidates().read();
+            let candidate = registry.get(&reserved.candidate_id)?;
+            let claimed = candidate.claimed_tip_blue_work()?;
+            match candidate.validation {
+                CandidateValidation::ProofValidated { verified_blue_work } => {
+                    (Some(verified_blue_work), claimed, candidate.proof_hash?)
+                }
+                _ => return None,
+            }
+        };
+
+        let session = self.ctx.consensus().session().await;
+        let provisional_pruning_point = session.async_pruning_point().await;
+        let _ = provisional_pruning_point;
+        // The incumbent's TIP work, not its pruning point: the trigger asks whether the challenger
+        // claims to beat the chain actually held, and pruning-point work cannot tell two branches of
+        // comparable depth apart.
+        let provisional_tip = session.async_get_headers_selected_tip().await;
+        let provisional_blue_work = session.async_get_header(provisional_tip).await.ok().map(|h| h.blue_work)?;
+        let descends_from_checkpoint = match self.ctx.config.trusted_checkpoint {
+            Some(cp) => Some(
+                session
+                    .async_is_chain_ancestor_of(cp.block_hash, reserved.candidate_id.virtual_selected_parent)
+                    .await
+                    .unwrap_or(false),
+            ),
+            None => None,
+        };
+        drop(session);
+
+        let state = ChainReviewState {
+            participation: gate.state(),
+            ever_ready: gate.ever_ready(),
+            adoption_generation: gate.adoption_generation(),
+            switch_count: gate.restored_switches(),
+        };
+        let candidate = VerifiedCandidate {
+            id: reserved.candidate_id,
+            verified_blue_work,
+            claimed_tip_blue_work,
+            proof_hash,
+            genesis_hash: self.ctx.config.genesis.hash,
+            consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            descends_from_checkpoint,
+        };
+        match authorize_candidate_validation(RecoveryRequest {
+            state,
+            candidate,
+            provisional_blue_work,
+            local_genesis: self.ctx.config.genesis.hash,
+            local_consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            checkpoint: self.ctx.config.trusted_checkpoint.as_ref(),
+            reserved_candidate: Some(reserved.candidate_id),
+            switch_limit: MAX_CHAIN_SWITCHES,
+        }) {
+            Ok(permit) => {
+                record_stage(
+                    RecoveryStage::RecoveryPermitGranted,
+                    None,
+                    Some(reserved.candidate_id),
+                    Some(self.router.to_string()),
+                    gate.state().as_str(),
+                    format!("adoption_generation={} switch_generation={}", permit.adoption_generation, permit.switch_generation),
+                );
+                Some(permit)
+            }
+            Err(e) => {
+                record_stage(
+                    RecoveryStage::Rejected,
+                    None,
+                    Some(reserved.candidate_id),
+                    Some(self.router.to_string()),
+                    gate.state().as_str(),
+                    format!("permit refused: {e:?}"),
+                );
+                debug!("No bootstrap-recovery permit for candidate {}: {:?}", reserved.candidate_id.virtual_selected_parent, e);
+                None
+            }
+        }
+    }
+
+    /// Pick up a nomination this flow was too busy to hear.
+    ///
+    /// Nominations are broadcast once. A flow inside `ibd()` does not reach its select, so the
+    /// nomination waits in its receiver — and if that IBD fails, the peer is disconnected and the
+    /// flow dies holding it. The candidate then sits in `ProofRequested` for a whole lease with
+    /// nobody serving it, and the chain that most needed checking is the one least likely to get
+    /// checked: the peer offering it is the one being disconnected every thirty seconds.
+    ///
+    /// So the broadcast is a wake-up, not the only delivery. The registry already holds the request;
+    /// this reads it. `verify_challenger` re-checks the state and the source, so a candidate another
+    /// flow is already serving is skipped rather than fetched twice.
+    async fn serve_pending_nomination(&mut self) {
+        if self.ctx.is_consensus_participation_allowed() {
+            return;
+        }
+        let me = self.router.key();
+        let pending = {
+            let registry = self.ctx.ibd_candidates().read();
+            registry.candidates_awaiting_proof().into_iter().map(|(id, _)| id).find(|id| registry.designated_prover(id) == Some(me))
+        };
+        if let Some(id) = pending {
+            self.verify_challenger(id).await;
+        }
+    }
+
+    /// Look again at candidates that validated while this node was busy.
+    ///
+    /// Cheap and idempotent: it returns immediately unless participation is withheld and the latch
+    /// is free, and `consider_post_ibd_switch` re-applies every condition itself.
+    async fn reconsider_validated_candidates(&self) {
+        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+            return;
+        }
+        // Before anything else: a reservation that has stopped making progress is holding the latch
+        // shut against every other chain, including the ones examined just below. Its sources may
+        // have disconnected minutes ago, and nothing else would ever notice.
+        self.ctx.expire_stale_preferred_candidate();
+        if self.ctx.preferred_ibd_candidate().is_some() {
+            return; // a switch is already reserved
+        }
+        let pending: Vec<_> = self
+            .ctx
+            .ibd_candidates()
+            .read()
+            .validated_awaiting_decision()
+            .iter()
+            .filter_map(|c| c.verified_blue_work().map(|w| (c.id, w)))
+            .collect();
+        for (id, verified) in pending {
+            self.consider_post_ibd_switch(id, verified).await;
+            if self.ctx.preferred_ibd_candidate().is_some() {
+                break;
+            }
+        }
+    }
+
+    /// Switch to a verified-better chain that was found AFTER an IBD already finished.
+    ///
+    /// The commit barrier only runs during an IBD, so without this a challenger discovered while the
+    /// node is in review has nothing to act on it: it would sit on whichever branch it raced onto
+    /// while the better peer retried an IBD forever. Measured against two independently pruned
+    /// histories, that is exactly what happened.
+    ///
+    /// Only while participation is still withheld. Once the node is `Ready` it has committed to its
+    /// chain, and abandoning it then is a reorg — governed by the DNS reorg gate, not by IBD source
+    /// selection.
+    async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) {
+        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                if self.ctx.is_ibd_running() {
+                    "post-IBD switch skipped: an IBD is running (the commit barrier owns this decision)"
+                } else {
+                    "post-IBD switch skipped: node is already participating"
+                },
+            );
+            return;
+        }
+        // What triggers an investigation is the peer's CLAIM about its tip, measured against this
+        // node's own tip. Not the proof's pruning-point work.
+        //
+        // Pruning-point work is a function of depth, not of branch: two histories of comparable
+        // length reach almost the same figure there. Measured across two real hosts, the challenger
+        // and the incumbent came out exactly Equal — 80289507 against 80289507 — so a rule that
+        // required strict superiority at this point could never fire, and the node fail-closed to
+        // quarantine instead of converging.
+        //
+        // Using the claim here is what claims are for: deciding what to look at. It decides nothing
+        // about adoption. `verified_blue_work` is still required to be present — the proof must have
+        // validated — but the number that settles which chain wins is computed later, at the commit
+        // barrier, from headers this node validated to the tip itself.
+        let claimed_tip_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
+            Some(CandidateValidation::ProofValidated { .. }) => {
+                self.ctx.ibd_candidates().read().get(&id).and_then(|c| c.claimed_tip_blue_work())
+            }
+            _ => None,
+        };
+        let Some(claimed_tip_work) = claimed_tip_work else { return };
+
+        let session = self.ctx.consensus().session().await;
+        let our_tip = session.async_get_headers_selected_tip().await;
+        let ours = session.async_get_header(our_tip).await.ok().map(|h| h.blue_work);
+        drop(session);
+
+        let Some(ours) = ours else { return };
+        record_stage(
+            RecoveryStage::CandidateCompared,
+            None,
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!(
+                "trigger (claimed, decides nothing): {} | proof-backed pruning-point work {}",
+                describe_comparison(claimed_tip_work, ours),
+                verified_blue_work
+            ),
+        );
+        if claimed_tip_work <= ours {
+            record_stage(
+                RecoveryStage::Rejected,
+                None,
+                Some(id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("not worth investigating: {}", describe_comparison(claimed_tip_work, ours)),
+            );
+            return;
+        }
+        let switches = {
+            let mut registry = self.ctx.ibd_candidates().write();
+            registry.resume_switches(self.ctx.chain_participation().restored_switches());
+            registry.note_switch();
+            registry.switches()
+        };
+        self.ctx.chain_participation().record_switch(switches);
+        if switches > MAX_CHAIN_SWITCHES {
+            warn!(
+                "Candidate {} is verified-better, but this node has already switched chains {} times; quarantining instead.",
+                id.virtual_selected_parent, switches
+            );
+            self.ctx.chain_participation().quarantine();
+            return;
+        }
+        if self.ctx.reserve_preferred_ibd_candidate(id, verified_blue_work) {
+            warn!(
+                "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving the next \
+                 IBD for it and handing over. (switch {} of {})",
+                id.virtual_selected_parent, verified_blue_work, ours, switches, MAX_CHAIN_SWITCHES
+            );
+        }
+    }
+
+    /// Wait for the proof, and stop waiting the moment waiting stops being useful.
+    ///
+    /// Three ways out, and the deadline is only one of them:
+    ///
+    /// - the peer sends it;
+    /// - the connection closes, which `recv` reports as `None` — no reason to sit out the rest of
+    ///   the budget for a peer that is gone;
+    /// - the lease is revoked, meaning this candidate has been re-nominated (usually to a different
+    ///   source) or settled by someone else. Continuing would hold a flow open for an answer that
+    ///   can no longer be used, and `StaleProofResponse` would discard it on arrival anyway.
+    ///
+    /// The revoke check is polled rather than signalled. A watch channel per attempt would be
+    /// tighter, but the registry is the authority on who owns the lease and polling it a few times
+    /// a lease costs one uncontended read lock — against a wait measured in tens of seconds.
+    async fn await_pruning_point_proof(
+        &mut self,
+        id: CandidateId,
+        budget: Duration,
+        attempt_stamp: Option<Instant>,
+    ) -> Result<kaspa_p2p_lib::pb::PruningPointProofMessage, ProtocolError> {
+        let deadline = Instant::now() + budget;
+        let mut discarded = 0usize;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ProtocolError::Timeout(budget));
+            }
+            let slice = remaining.min(LEASE_REVOKE_CHECK_INTERVAL);
+            match tokio::time::timeout(slice, self.incoming_route.recv()).await {
+                Ok(None) => return Err(ProtocolError::ConnectionClosed),
+                Ok(Some(msg)) => match msg.payload {
+                    Some(Payload::PruningPointProof(proof)) => {
+                        if discarded > 0 {
+                            debug!("discarded {discarded} leftover message(s) from {} before its pruning point proof", self.router);
+                        }
+                        return Ok(proof);
+                    }
+                    // Anything else is the wreckage of the IBD this flow just abandoned.
+                    //
+                    // The route carries every payload the IBD uses, and an aborted sync leaves
+                    // replies it will never read — `TrustedData`, chunks already in flight. Keeping
+                    // the connection after a refused IBD (which is what lets the challenger be
+                    // checked at all) means those arrive on the same route the proof does.
+                    //
+                    // Measured: a challenger dequeued a leftover `TrustedData`, the type mismatch
+                    // was reported as "could not be backed by a valid pruning proof", and the chain
+                    // was marked InvalidProof — PERMANENTLY. A statement about a dirty channel,
+                    // recorded as a verdict on a chain. The node then stayed on the lighter branch
+                    // with the heavier one written off.
+                    //
+                    // So leftovers are discarded rather than mistaken for an answer. The deadline
+                    // still bounds the wait, so a peer cannot stall by sending junk forever.
+                    _ => {
+                        discarded += 1;
+                    }
+                },
+                Err(_) => {
+                    // Nothing arrived in this slice. Still our lease?
+                    if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
+                        return Err(ProtocolError::Other("the verification lease was revoked while waiting for the proof"));
+                    }
+                }
+            }
+        }
+    }
+
+    async fn fetch_and_validate_challenger_proof(
+        &mut self,
+        attempt: RecoveryAttemptId,
+        id: CandidateId,
+        claimed_blue_work: ClaimedBlueWork,
+        budget: Duration,
+        attempt_stamp: Option<Instant>,
+    ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
+        record_stage(
+            RecoveryStage::ProofRequestSent,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
+        self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
+        let msg = self.await_pruning_point_proof(id, budget, attempt_stamp).await?;
+        record_stage(
+            RecoveryStage::ProofReceived,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            "",
+        );
+        let proof: PruningPointProof = Versioned(self.header_format, msg).try_into()?;
+
+        // Validated against CURRENT consensus, exactly as a real IBD would: same rules, same
+        // finality checks, no staging consensus spun up for a chain that may be refused anyway.
+        //
+        // The peer's own claim is what the proof is checked against — that is the point. It has to
+        // produce a proof consistent with the number it asserted, so asserting a large one makes
+        // the proof harder to supply, not easier.
+        let proof_metadata = PruningProofMetadata::new(claimed_blue_work.for_priority_only());
+        let consensus = self.ctx.consensus().session().await;
+        // Validation runs on a blocking pool and can fail in ways that are not a returned Err — a
+        // panic inside it takes the flow's task down with it, leaving neither a success nor a
+        // recorded refusal. The previous E2E-B run showed exactly that shape (ProofReceived=1,
+        // ProofValidated=0, zero rejections), so the attempt is announced before it starts.
+        record_stage(
+            RecoveryStage::Rejected,
+            Some(attempt),
+            Some(id),
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!("validating proof: levels={} claimed_blue_work={}", proof.len(), claimed_blue_work.for_priority_only()),
+        );
+        // Standalone: soundness only, no comparison against the chain this node is holding.
+        //
+        // The comparative form refuses an unrelated history outright ("no shared blocks with the
+        // known level DAGs") before reporting whether it is valid, so it could never establish the
+        // verified work that `decide_commit` and `authorize_bootstrap_recovery` then judge. Those
+        // two ask the superiority question explicitly, on figures derived here — the check is not
+        // skipped, it is moved to where it can be answered.
+        let _ = &proof_metadata;
+        let proof =
+            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof_standalone(&proof).map(|()| proof)).await.inspect_err(
+                |e| {
+                    record_stage(
+                        RecoveryStage::Rejected,
+                        Some(attempt),
+                        Some(id),
+                        None,
+                        "",
+                        format!("validate_pruning_proof returned an error: {e}"),
+                    )
+                },
+            )?;
+        drop(consensus);
+
+        let pruning_point_header = proof[0].last().ok_or(ProtocolError::Other("the challenger's proof has no level-0 headers"))?;
+        if pruning_point_header.hash != id.pruning_point {
+            return Err(ProtocolError::Other("the challenger's proof is anchored at a different pruning point than it advertised"));
+        }
+
+        // Digest the proof so a recovery permit is bound to the exact evidence that justified it.
+        // A permit that merely named a chain could be redeemed against a different, weaker proof for
+        // the same chain later.
+        let mut hasher = kaspa_hashes::ConsensusParamsId::new();
+        for level in proof.iter() {
+            for header in level.iter() {
+                hasher.write(header.hash.as_bytes());
+            }
+        }
+        Ok((pruning_point_header.blue_work, hasher.finalize()))
+    }
+
+    /// Say what was on offer that this node never got to the bottom of.
+    ///
+    /// A candidate still sitting at `Observed` or `SummaryReceived` is one nobody verified: the
+    /// commit barrier could not account for it, so the chain this node is on was not compared
+    /// against it. That is worth saying out loud — the incident this work follows ran for 86
+    /// minutes beside a heavier peer and produced no log line at all.
+    fn report_unresolved_candidates(&self) {
+        let registry = self.ctx.ibd_candidates().read();
+        let unresolved = registry.unresolved();
+        if unresolved.is_empty() {
+            return;
+        }
+        warn!(
+            "IBD with {} finished with {} chain candidate(s) still unverified: {}. Their claims were never backed by a \
+             pruning proof, so this node's chain was not compared against them.",
+            self.router,
+            unresolved.len(),
+            unresolved
+                .iter()
+                .map(|c| format!(
+                    "{} (pruning point {}, {} source(s))",
+                    c.id.virtual_selected_parent,
+                    c.id.pruning_point,
+                    c.sources.len()
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    /// The last check before this node's active consensus is replaced.
+    ///
+    /// `staging.commit()` is the point of no return: after it the old chain's state is gone, the
+    /// new pruning point is adopted, and everything downstream — DNS overlay, validator support —
+    /// follows the branch that was just installed. testnet-22 committed here with a heavier peer
+    /// connected and nothing ever reconsidered.
+    ///
+    /// Two ways this refuses:
+    ///
+    /// - a candidate this node **verified** is strictly better than what staging holds. Verified,
+    ///   not claimed: a peer shouting a large `blue_work` cannot cancel an IBD, or cancelling
+    ///   would be free for anyone willing to lie.
+    /// - a valid candidate exists that nobody could compare. Deciding between them by which peer
+    ///   relayed first is the bug; quarantine and let an operator decide.
+    async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
+        let tip = staging.async_get_headers_selected_tip().await;
+        let staged_blue_work = staging.async_get_header(tip).await?.blue_work;
+
+        // Gather the facts; `decide_commit` applies the policy. Split so the security-critical part
+        // is unit-testable without a consensus, a router, or a peer.
+        let (descends_from_checkpoint, checkpoint_params_match) = match self.ctx.config.trusted_checkpoint {
+            Some(cp) => (
+                Some(staging.async_is_chain_ancestor_of(cp.block_hash, tip).await.unwrap_or(false)),
+                Some(cp.consensus_params_id == self.ctx.config.params.consensus_params_id()),
+            ),
+            None => (None, None),
+        };
+
+        // Separate rival branches from peers on this same chain that have simply moved on.
+        //
+        // Tip containment alone is not that test. A peer at B120 while staging holds B100 is the
+        // same history seen further along, and its tip is unknown to staging precisely because it
+        // is ahead — so "unknown tip means rival" would refuse a healthy sync every time a peer
+        // produced a block during it. Which, over a multi-minute IBD, is always.
+        //
+        // Lineage is the test that survives that. A candidate rooted at the staged pruning point —
+        // or at one of the recent pruning points staging descends through, matching the syncer-lag
+        // tolerance `determine_ibd_type` already applies — is the same history whatever its tip. A
+        // candidate rooted somewhere staging has never heard of is a genuinely different history,
+        // and that is what must not be committed past.
+        // A recovery IBD is an investigation, and this is where it is judged.
+        //
+        // Both figures are now this node's own: the challenger's, from headers it validated to the
+        // tip in staging, and the incumbent's, from the chain it is holding. That is the comparison
+        // pruning-point work could not make — measured across two real hosts, the two branches were
+        // exactly Equal there, and this node quarantined rather than converging.
+        //
+        // Losing is an ordinary outcome, not an impasse: staging is cancelled and the incumbent
+        // stays. Nothing was adopted, so there is nothing to be uncertain about, and quarantining
+        // here would punish the node for having checked.
+        // The second permit. A validation permit bought the right to sync and check this chain; only
+        // an adoption permit lets it replace what is held, and that is earned here, from figures
+        // this node computed on both sides.
+        if let Some(validation_permit) = self.active_recovery_permit {
+            // Read the incumbent as late as possible: it has been taking blocks from its own peers
+            // for the whole of the staging validation, so the figure that mattered when this started
+            // is not the one that matters now.
+            let incumbent = {
+                let session = self.ctx.consensus().session().await;
+                let tip = session.async_get_headers_selected_tip().await;
+                session.async_get_header(tip).await.ok().map(|h| ChainTip { tip, blue_work: h.blue_work })
+            };
+            let Some(incumbent) = incumbent else {
+                return Err(ProtocolError::Other("cannot read the incumbent chain's tip work to judge a recovery candidate"));
+            };
+
+            let gate = self.ctx.chain_participation();
+            let state = ChainReviewState {
+                participation: gate.state(),
+                ever_ready: gate.ever_ready(),
+                adoption_generation: gate.adoption_generation(),
+                switch_count: gate.restored_switches(),
+            };
+            let validated = ValidatedCandidate {
+                id: validation_permit.candidate_id,
+                verified_tip: tip,
+                verified_blue_work: staged_blue_work,
+                proof_hash: validation_permit.proof_hash,
+            };
+            record_stage(
+                RecoveryStage::CandidateCompared,
+                None,
+                Some(validation_permit.candidate_id),
+                Some(self.router.to_string()),
+                gate.state().as_str(),
+                format!("adoption verdict on VERIFIED tip work: {}", describe_comparison(staged_blue_work, incumbent.blue_work)),
+            );
+
+            match authorize_candidate_adoption(&state, &validation_permit, &validated, &incumbent) {
+                Ok(adoption) => {
+                    // Re-checked against the incumbent read a moment ago, so a permit cannot outlive
+                    // the comparison that earned it.
+                    if !adoption.still_applies(&state, &incumbent) {
+                        return Err(ProtocolError::Other("the incumbent chain moved while this candidate was being validated"));
+                    }
+                    *self.earned_adoption_permit.lock() = Some(adoption);
+                    record_stage(
+                        RecoveryStage::RecoveryPermitGranted,
+                        None,
+                        Some(adoption.candidate_id),
+                        Some(self.router.to_string()),
+                        gate.state().as_str(),
+                        format!("adoption permit: verified_blue_work={} tip={}", adoption.verified_blue_work, adoption.verified_tip),
+                    );
+                }
+                // Validated and genuinely worse: an ordinary negative result. Keep the incumbent,
+                // drop staging, do not quarantine — nothing was adopted, so nothing is uncertain,
+                // and quarantining here would punish the node for having checked.
+                Err(AdoptionError::Weaker) => {
+                    warn!(
+                        "Validated the chain offered by {} to its tip and it is weaker than the one held ({}). Keeping the \
+                         incumbent.",
+                        self.router,
+                        describe_comparison(staged_blue_work, incumbent.blue_work)
+                    );
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "recovery candidate from {} is weaker once validated",
+                        self.router
+                    )));
+                }
+                // Two chains this node validated and cannot separate. Not adopted, and not waved
+                // through either: choosing between equals is exactly what it must not do alone.
+                Err(e) => {
+                    self.ctx.chain_participation().quarantine();
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "refusing to adopt the chain from {}: {:?} (verified {} against incumbent {}). This node cannot \
+                         separate these histories and will not pick one by itself.",
+                        self.router, e, staged_blue_work, incumbent.blue_work
+                    )));
+                }
+            }
+        }
+
+        // Refuse candidates whose source never delivered a proof, before counting what is still
+        // unresolved. Otherwise "advertise a chain and go quiet" would hold up every commit — the
+        // denial of service that fail-closed invites if it has no deadline.
+        let timed_out = self.ctx.expire_stale_verifications();
+        if !timed_out.is_empty() {
+            self.ctx.chain_participation().end_decision();
+        }
+        for id in &timed_out {
+            warn!(
+                "Chain candidate {} was nominated for verification but no source produced a pruning proof within its lease. \
+                 It stops holding up the commit; it may still be checked again, since a source cut off mid-proof has said \
+                 nothing about whether its chain is real.",
+                id.virtual_selected_parent
+            );
+        }
+
+        let staged_pruning_point = staging.async_pruning_point().await;
+        let recent_pruning_points = staging.async_get_n_last_pruning_points(4).await;
+        let unresolved_ids: Vec<_> = self.ctx.ibd_candidates().read().unresolved().iter().map(|c| c.id).collect();
+        let mut unresolved_competing = 0usize;
+        for id in unresolved_ids {
+            let same_lineage = id.pruning_point == staged_pruning_point
+                || recent_pruning_points.contains(&id.pruning_point)
+                // Staging knowing the tip settles it outright — same history, at or behind us.
+                || staging.async_get_block_status(id.virtual_selected_parent).await.is_some()
+                // Or the candidate is rooted in staging's future along the same chain.
+                || staging.async_is_chain_ancestor_of(staged_pruning_point, id.pruning_point).await.unwrap_or(false);
+            if !same_lineage {
+                unresolved_competing += 1;
+            }
+        }
+
+        let verdict = {
+            let registry = self.ctx.ibd_candidates().read();
+            // Record the comparison here, where it is actually decided.
+            //
+            // It was only recorded in the post-IBD switch path before, which returns early while an
+            // IBD is running — so a run whose outcome was decided right here reported
+            // CandidateCompared=0 and looked as though no comparison had happened at all. The
+            // measurement has to sit at the decision, not next to it.
+            let best = registry.best_verified();
+            record_stage(
+                RecoveryStage::CandidateCompared,
+                None,
+                best.map(|c| c.id),
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                match best.and_then(|c| c.verified_blue_work()) {
+                    Some(challenger) => {
+                        format!("at commit barrier: {}", describe_comparison(challenger, staged_blue_work))
+                    }
+                    None => format!("at commit barrier: no verified candidate to compare; staged_work={staged_blue_work}"),
+                },
+            );
+            decide_commit(CommitInputs {
+                staged_blue_work,
+                descends_from_checkpoint,
+                checkpoint_params_match,
+                unresolved_competing,
+                registry: &registry,
+            })
+        };
+
+        // A verified-better candidate is not a dead end — it is the answer.
+        //
+        // Abandoning this sync releases the latch, and the relay guard stops discarding that peer's
+        // blocks the moment it does; its next inv triggers a fresh IBD from it. That IBD runs the
+        // ordinary pipeline, so the chain finally adopted has had its headers CONTEXTUALLY
+        // validated all the way to the tip — the thing a pruning proof alone cannot establish, and
+        // which one staging consensus per node means can only be done for the chain being synced.
+        //
+        // The registry survives the handover, so the winner's verification is not repeated and the
+        // loser cannot quietly win the next race.
+        if let CommitVerdict::RefuseVerifiedSuperior { candidate, verified_blue_work } = verdict {
+            let switches = {
+                let mut registry = self.ctx.ibd_candidates().write();
+                // Fold in anything carried over from a previous run before counting this one, so the
+                // cap bounds the node's history rather than this process's.
+                registry.resume_switches(self.ctx.chain_participation().restored_switches());
+                registry.note_switch();
+                registry.switches()
+            };
+            self.ctx.chain_participation().record_switch(switches);
+            if switches <= MAX_CHAIN_SWITCHES {
+                // Reserve the latch for the winner BEFORE releasing it. Without this the next peer
+                // to relay anything takes it — possibly the branch just rejected — and the switch
+                // would be decided by arrival order all over again.
+                let reserved = self.ctx.reserve_preferred_ibd_candidate(candidate, verified_blue_work);
+                if !reserved {
+                    self.ctx.chain_participation().quarantine();
+                    return Err(ProtocolError::OtherOwned(format!(
+                        "candidate {} is verified-better than the chain synced from {}, but no connected peer still offers it, \
+                         so this node cannot switch to it and will not commit the weaker branch either.",
+                        candidate.virtual_selected_parent, self.router
+                    )));
+                }
+                warn!(
+                    "Abandoning the sync from {}: candidate {} (pruning point {}) has a VALIDATED blue work of {} against the \
+                     staged {}. Switching to it — its headers will be contextually validated to the tip by the IBD that \
+                     follows, which is the only way this node can establish that work rather than take it on trust. \
+                     (switch {} of {})",
+                    self.router,
+                    candidate.virtual_selected_parent,
+                    candidate.pruning_point,
+                    verified_blue_work,
+                    staged_blue_work,
+                    switches,
+                    MAX_CHAIN_SWITCHES
+                );
+                // Deliberately no quarantine: the node is not stuck, it is changing its mind on
+                // evidence. Participation stays closed because the gate is still in IbdRunning.
+                return Err(ProtocolError::OtherOwned(format!(
+                    "switching from {} to a verified-better chain candidate {}",
+                    self.router, candidate.virtual_selected_parent
+                )));
+            }
+            self.ctx.chain_participation().quarantine();
+            return Err(ProtocolError::OtherOwned(format!(
+                "refusing to commit the chain synced from {}: candidate {} is verified-better, but this node has already \
+                 switched chains {} times. Two branches trading the latch is a different problem from being on the wrong \
+                 one, and this node cannot tell them apart on its own.",
+                self.router, candidate.virtual_selected_parent, switches
+            )));
+        }
+
+        let refusal = match verdict {
+            CommitVerdict::Allow => return Ok(()),
+            CommitVerdict::RefuseCheckpointParamsMismatch => {
+                let cp = self.ctx.config.trusted_checkpoint.expect("set when this verdict is reachable");
+                format!(
+                    "--trusted-checkpoint was taken under consensus params {} but this node runs {}. A block hash means \
+                     nothing without the rules it was validated under, so this node cannot act on that checkpoint.",
+                    cp.consensus_params_id,
+                    self.ctx.config.params.consensus_params_id()
+                )
+            }
+            CommitVerdict::RefuseCheckpointMissing => {
+                let cp = self.ctx.config.trusted_checkpoint.expect("set when this verdict is reachable");
+                format!(
+                    "refusing to commit the chain synced from {}: it does not descend from the trusted checkpoint {} at DAA \
+                     {}. That is the history this operator vouched for, so a chain without it is not admissible however much \
+                     work it claims.",
+                    self.router, cp.block_hash, cp.daa_score
+                )
+            }
+            // Handled above: a verified-better candidate is a switch, not a refusal.
+            CommitVerdict::RefuseVerifiedSuperior { .. } => unreachable!("handled before this match"),
+            CommitVerdict::RefuseUnresolved { count } => format!(
+                "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
+                 verified in time. Choosing by arrival order is what fixes a partition in place, so this node is \
+                 quarantined until an operator resolves which branch is canonical.",
+                self.router, count
+            ),
+        };
+
+        self.ctx.chain_participation().quarantine();
+        Err(ProtocolError::OtherOwned(refusal))
+    }
+
+    async fn ibd(&mut self, relay_header: Arc<Header>) -> Result<(), ProtocolError> {
         let mut session = self.ctx.consensus().session().await;
+
+        // Claim a recovery permit up front when this peer serves the chain this node has reserved.
+        //
+        // It used to be requested only on the finality-conflict branch of `determine_ibd_type`, but
+        // that branch is not the only way in: two histories sharing nothing but genesis can leave
+        // `highest_known_syncer_chain_hash` empty, in which case the IBD takes the ordinary
+        // headers-proof route, holds no permit, and then fails proof validation comparatively —
+        // against the very provisional chain the permit exists to replace. Measured: E2E-B reached
+        // ProofValidated and PreferredCandidateReserved with FinalityConflictDetected=0.
+        //
+        // The permit governs the chain, so it is claimed for the attempt, not for one code path.
+        if let Some(reserved) = self.ctx.preferred_ibd_candidate()
+            && reserved.preferred_sources.contains(&self.router.key())
+            && self.active_recovery_permit.is_none()
+        {
+            self.active_recovery_permit = self.bootstrap_recovery_permit_for(reserved.candidate_id.pruning_point).await;
+        }
 
         let negotiation_output = self.negotiate_missing_syncer_chain_segment(&session).await?;
         let ibd_type = self
             .determine_ibd_type(
                 &session,
-                &relay_block.header,
+                relay_header.as_ref(),
                 negotiation_output.highest_known_syncer_chain_hash,
                 negotiation_output.syncer_pruning_point,
             )
             .await?;
+        record_stage(
+            RecoveryStage::Rejected,
+            None,
+            None,
+            Some(self.router.to_string()),
+            self.ctx.chain_participation().state().as_str(),
+            format!(
+                "ibd_type={} recovery_permit={}",
+                match &ibd_type {
+                    IbdType::Sync { .. } => "Sync",
+                    IbdType::DownloadHeadersProof => "DownloadHeadersProof",
+                    IbdType::PruningCatchUp { .. } => "PruningCatchUp",
+                },
+                self.active_recovery_permit.is_some()
+            ),
+        );
         match ibd_type {
             IbdType::Sync { highest_known_syncer_chain_hash, is_utxo_stable, is_pp_anticone_synced } => {
                 let pruning_point = session.async_pruning_point().await;
@@ -153,16 +1396,81 @@ impl IbdFlow {
                     &session,
                     negotiation_output.syncer_virtual_selected_parent,
                     highest_known_syncer_chain_hash,
-                    &relay_block,
+                    &relay_header,
                 )
                 .await?;
             }
             IbdType::DownloadHeadersProof => {
                 drop(session); // Avoid holding the previous consensus throughout the staging IBD
                 let staging = self.ctx.consensus_manager.new_staging_consensus();
-                match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_block).await {
+                match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
                     Ok(()) => {
-                        spawn_blocking(|| staging.commit()).await.unwrap();
+                        // The commit barrier. Everything above this line is reversible by
+                        // cancelling staging; nothing below it is.
+                        if let Err(e) = self.authorize_commit(&staging.session().await).await {
+                            warn!("{}", e);
+                            staging.cancel();
+                            return Err(e);
+                        }
+                        record_stage(
+                            RecoveryStage::CandidateCommitted,
+                            None,
+                            None,
+                            Some(self.router.to_string()),
+                            self.ctx.chain_participation().state().as_str(),
+                            "staging committed",
+                        );
+                        // The swap, with the adoption decision re-checked against the defender
+                        // under the same lock that performs it.
+                        //
+                        // The permit was earned from a reading of the active consensus, and the
+                        // active consensus kept taking blocks from its own peers for every step
+                        // between that reading and here — expiring stale verifications, reading
+                        // pruning points, counting unresolved candidates, returning through two
+                        // stack frames. Checking before calling `commit` leaves all of that inside
+                        // the window, and whatever happens in it, the swap goes through anyway.
+                        //
+                        // `commit_if` closes the window rather than narrowing it: the predicate runs
+                        // while the manager is held for writing, so nothing can move the defender
+                        // between the check and the replacement.
+                        let permit = self.earned_adoption_permit.lock().take();
+                        let gate = self.ctx.chain_participation();
+                        let state_now = ChainReviewState {
+                            participation: gate.state(),
+                            ever_ready: gate.ever_ready(),
+                            adoption_generation: gate.adoption_generation(),
+                            switch_count: gate.restored_switches(),
+                        };
+                        let committed = spawn_blocking(move || {
+                            staging.commit_if(|active| {
+                                let Some(permit) = permit else {
+                                    return true; // no adoption decision rode on the defender
+                                };
+                                // Blocking session: this runs inside spawn_blocking, under the
+                                // manager's write lock, so it must not await.
+                                let session = active.unguarded_session_blocking();
+                                let tip = session.get_headers_selected_tip();
+                                match session.get_header(tip) {
+                                    Ok(h) => permit.still_applies(&state_now, &ChainTip { tip, blue_work: h.blue_work }),
+                                    // Unreadable defender: refuse. Committing on a reading that
+                                    // failed is how a permit gets applied to a chain nobody checked.
+                                    Err(_) => false,
+                                }
+                            })
+                        })
+                        .await
+                        .unwrap();
+                        if let Err(staging) = committed {
+                            staging.cancel();
+                            self.ctx.chain_participation().end_decision();
+                            return Err(ProtocolError::Other(
+                                "the incumbent chain moved between earning the adoption permit and the swap; refusing to \
+                                 replace it on a stale comparison",
+                            ));
+                        }
+                        // From here the node runs the new chain regardless of what the rest of the
+                        // IBD does, so a later failure must not be reported and forgotten.
+                        self.ctx.mark_active_consensus_replaced();
                         info!(
                             "Header download stage of IBD with headers proof completed successfully from {}. Committed staging consensus.",
                             self.router
@@ -188,7 +1496,7 @@ impl IbdFlow {
             }
             IbdType::PruningCatchUp { highest_known_syncer_chain_hash } => {
                 info!("catching up to new pruning point {} ", negotiation_output.syncer_pruning_point);
-                match self.pruning_point_catchup(&session, &negotiation_output, &relay_block, highest_known_syncer_chain_hash).await {
+                match self.pruning_point_catchup(&session, &negotiation_output, &relay_header, highest_known_syncer_chain_hash).await {
                     Ok(()) => {
                         info!("header stage of pruning catchup from peer {} completed", self.router);
                         self.sync_missing_trusted_bodies(&session).await?;
@@ -211,7 +1519,7 @@ impl IbdFlow {
 
         // Relay block might be in the antipast of syncer sink, thus
         // check its past for missing bodies as well.
-        self.sync_missing_block_bodies(&session, relay_block.hash()).await?;
+        self.sync_missing_block_bodies(&session, relay_header.hash).await?;
 
         // Following IBD we revalidate orphans since many of them might have been processed during the IBD
         // or are now processable
@@ -235,7 +1543,7 @@ impl IbdFlow {
     }
 
     async fn determine_ibd_type(
-        &self,
+        &mut self,
         consensus: &ConsensusProxy,
         relay_header: &Header,
         highest_known_syncer_chain_hash: Option<BlockHash>,
@@ -299,6 +1607,34 @@ impl IbdFlow {
             //
             // TODO (relaxed): consider performing additional actions on finality conflicts in addition
             // to disconnecting from the peer (e.g., banning, rpc notification)
+            //
+            // Unless this node holds a permit to cross its own pruning point, which it can only do
+            // for a chain it has never acted on. See `bootstrap_recovery`: before the node reaches
+            // `Ready`, the chain under it was chosen by a race and is provisional, so treating it as
+            // a finality boundary is what makes the first peer's chain permanent. After `Ready` this
+            // is unreachable and the conflict stands — reorg policy belongs to the DNS gate.
+            record_stage(
+                RecoveryStage::FinalityConflictDetected,
+                None,
+                None,
+                Some(self.router.to_string()),
+                self.ctx.chain_participation().state().as_str(),
+                format!("syncer_pruning_point={syncer_pruning_point}"),
+            );
+            if let Some(permit) = self.bootstrap_recovery_permit_for(syncer_pruning_point).await {
+                warn!(
+                    "Crossing this node's own pruning point to adopt candidate {} from {}: the chain currently held is \
+                     provisional (this node has never participated on it) and {} is verified-better. Permit is bound to \
+                     adoption generation {} and switch {}.",
+                    permit.candidate_id.virtual_selected_parent,
+                    self.router,
+                    permit.candidate_id.pruning_point,
+                    permit.adoption_generation,
+                    permit.switch_generation
+                );
+                self.active_recovery_permit = Some(permit);
+                return Ok(IbdType::DownloadHeadersProof);
+            }
             return Err(ProtocolError::Other("peer is in a finality conflict with the local pruning point"));
         }
 
@@ -334,14 +1670,14 @@ impl IbdFlow {
         &mut self,
         consensus: &ConsensusProxy,
         negotiation_output: &ChainNegotiationOutput,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
         highest_known_syncer_chain_hash: BlockHash,
     ) -> Result<(), ProtocolError> {
         // Before attempting to update to the syncer's pruning point, sync to the latest headers of the syncer,
         // to ensure that we will locally have sufficient headers on top of the syncer's pruning point
         let syncer_pp = negotiation_output.syncer_pruning_point;
         let syncer_sink = negotiation_output.syncer_virtual_selected_parent;
-        self.sync_headers(consensus, syncer_sink, highest_known_syncer_chain_hash, relay_block).await?;
+        self.sync_headers(consensus, syncer_sink, highest_known_syncer_chain_hash, relay_header).await?;
 
         // This function's main effect is to confirm the syncer's pruning point can be finalized into the consensus, and to update
         // all the relevant stores
@@ -361,23 +1697,32 @@ impl IbdFlow {
         &mut self,
         staging: &StagingConsensus,
         syncer_virtual_selected_parent: BlockHash,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<(), ProtocolError> {
         info!("Starting IBD with headers proof with peer {}", self.router);
 
         let staging_session = staging.session().await;
 
-        let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_block).await?;
-        self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_block).await?;
+        let pruning_point = self.sync_and_validate_pruning_proof(&staging_session, relay_header).await?;
+        self.sync_headers(&staging_session, syncer_virtual_selected_parent, pruning_point, relay_header).await?;
         staging_session.async_validate_pruning_points(syncer_virtual_selected_parent).await?;
-        self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
+        // The third guard of the same family, and the same exception applies.
+        //
+        // It requires the incoming chain's tip to be at least ten minutes newer than the local one —
+        // a sanity check that a peer is not selling an old chain. Against a PROVISIONAL local chain
+        // it asks the wrong question: a genuinely heavier branch mined in parallel is the same age,
+        // not newer, and here it is the heavier one by verified work. Measured: the permitted
+        // attempt cleared both finality gates and died here.
+        if self.active_recovery_permit.is_none() {
+            self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
+        }
         Ok(())
     }
 
     async fn sync_and_validate_pruning_proof(
         &mut self,
         staging: &ConsensusProxy,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<BlockHash, ProtocolError> {
         self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
 
@@ -390,14 +1735,30 @@ impl IbdFlow {
             proof.iter().flatten().unique_by(|h| h.hash).count()
         );
 
-        let proof_metadata = PruningProofMetadata::new(relay_block.header.blue_work);
+        let proof_metadata = PruningProofMetadata::new(relay_header.blue_work);
 
         // Get a new session for current consensus (non staging)
         let consensus = self.ctx.consensus().session().await;
 
-        // The proof is validated in the context of current consensus
-        let proof =
-            consensus.clone().spawn_blocking(move |c| c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)).await?;
+        // The proof is validated in the context of current consensus — comparatively, so a peer
+        // cannot hand this node a worse chain than the one it already has.
+        //
+        // Unless this IBD holds a bootstrap-recovery permit, in which case the chain it is being
+        // compared against is provisional: adopted by a race, never acted upon, and precisely what
+        // the permit authorises replacing. Comparing against it would refuse an unrelated history
+        // before reporting whether it is sound, which is the same wall the challenger check hit.
+        // Superiority was already established on verified figures when the permit was issued.
+        let recovering = self.active_recovery_permit.is_some();
+        let proof = consensus
+            .clone()
+            .spawn_blocking(move |c| {
+                if recovering {
+                    c.validate_pruning_proof_standalone(&proof).map(|()| proof)
+                } else {
+                    c.validate_pruning_proof(&proof, &proof_metadata).map(|()| proof)
+                }
+            })
+            .await?;
 
         let proof_pruning_point = proof[0].last().expect("was just ensured by validation").hash;
 
@@ -426,7 +1787,18 @@ impl IbdFlow {
         }
 
         // Check if past pruning points violate finality of current consensus
-        if self.ctx.consensus().session().await.async_are_pruning_points_violating_finality(pruning_points.clone()).await {
+        //
+        // The second finality gate, and it asks the same question as the first about the same
+        // provisional chain: are this peer's pruning points compatible with mine? For two histories
+        // that share only genesis the answer is no, and a permitted recovery has to be able to say
+        // "that is the point" — otherwise the permit lets the IBD start and this stops it three
+        // steps later. Measured: the first permitted attempt died exactly here with "pruning points
+        // are violating finality".
+        //
+        // Without a permit this is untouched. The distinction it draws is real everywhere else.
+        if !recovering
+            && self.ctx.consensus().session().await.async_are_pruning_points_violating_finality(pruning_points.clone()).await
+        {
             // TODO (relaxed): consider performing additional actions on finality conflicts in addition to disconnecting from the peer (e.g., banning, rpc notification)
             return Err(ProtocolError::Other("pruning points are violating finality"));
         }
@@ -542,10 +1914,10 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         syncer_virtual_selected_parent: BlockHash,
         highest_known_syncer_chain_hash: BlockHash,
-        relay_block: &Block,
+        relay_header: &Arc<Header>,
     ) -> Result<(), ProtocolError> {
         let highest_shared_header_score = consensus.async_get_header(highest_known_syncer_chain_hash).await?.daa_score;
-        let mut progress_reporter = ProgressReporter::new(highest_shared_header_score, relay_block.header.daa_score, "block headers");
+        let mut progress_reporter = ProgressReporter::new(highest_shared_header_score, relay_header.daa_score, "block headers");
 
         self.router
             .enqueue(make_message!(
@@ -598,7 +1970,7 @@ impl IbdFlow {
             )));
         }
 
-        self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_block.hash()).await?;
+        self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_header.hash).await?;
 
         Ok(())
     }
