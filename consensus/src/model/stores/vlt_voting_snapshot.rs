@@ -104,8 +104,8 @@ impl DbVltVotingSnapshotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::vlt::{VLT_VOTING_SNAPSHOT_VERSION_V1, VltValidatorWeight, VltVotingSnapshot};
     use kaspa_consensus_core::tx::TransactionOutpoint;
+    use kaspa_consensus_core::vlt::{VLT_VOTING_SNAPSHOT_VERSION_V1, VltValidatorWeight, VltVotingSnapshot};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
     use kaspa_hashes::Hash64;

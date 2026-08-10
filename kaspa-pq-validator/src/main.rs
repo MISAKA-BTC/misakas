@@ -471,14 +471,8 @@ async fn equivocate(args: EquivocateArgs) -> Result<(), String> {
     let evidence = match args.kind.as_str() {
         "prevote" => {
             // Round 1: one (bond, validator, epoch), two anchors.
-            let a = accused.sign_attestation_unguarded(
-                net_id.as_byte_slice(),
-                target_epoch,
-                anchor,
-                target_daa_score,
-                vsc,
-                bond_outpoint,
-            );
+            let a =
+                accused.sign_attestation_unguarded(net_id.as_byte_slice(), target_epoch, anchor, target_daa_score, vsc, bond_outpoint);
             let b = accused.sign_attestation_unguarded(
                 net_id.as_byte_slice(),
                 target_epoch,

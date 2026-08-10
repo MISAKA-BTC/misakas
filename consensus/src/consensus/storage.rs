@@ -8,6 +8,7 @@ use crate::{
         compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
+        dns_finality_certificate::DbDnsFinalityCertificateStore,
         dns_state::{DbDnsStateStore, DbVltActivationStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
@@ -35,7 +36,6 @@ use crate::{
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
         vlt_credits::DbVltCreditStore,
-        dns_finality_certificate::DbDnsFinalityCertificateStore,
         vlt_voting_snapshot::DbVltVotingSnapshotStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
@@ -361,9 +361,7 @@ impl ConsensusStorage {
             // Same write-once-and-derived discipline as the credit rows: frozen under superseded
             // rules means wrong forever, so discard for re-freezing rather than read as final.
             if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!(
-                    "[vlt-voting-snapshot] could not check the schema version: {err}; leaving existing rows in place"
-                );
+                kaspa_core::warn!("[vlt-voting-snapshot] could not check the schema version: {err}; leaving existing rows in place");
             }
             Arc::new(store)
         };

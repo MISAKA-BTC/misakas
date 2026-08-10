@@ -2416,12 +2416,7 @@ mod tests {
         use super::super::{AttestationDropReason, AttestationShardDecision};
 
         // Same below-fence pin as `eligibility` above.
-        fn classify(
-            tx: &Transaction,
-            view: &ActiveBondView,
-            net: BlockHash,
-            activated: bool,
-        ) -> AttestationShardDecision {
+        fn classify(tx: &Transaction, view: &ActiveBondView, net: BlockHash, activated: bool) -> AttestationShardDecision {
             super::super::classify_attestation_shard_for_template(tx, view, net, activated, true)
         }
         use kaspa_consensus_core::{

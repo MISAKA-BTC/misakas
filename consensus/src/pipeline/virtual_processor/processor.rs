@@ -2908,7 +2908,10 @@ impl VirtualStateProcessor {
         // that silently derived a different denominator would show up in.
         if dns_params.vlt_shadow_active_at(sink_daa) {
             let wall_epoch = sink_blue / epoch_len_blue;
-            if let Ok(row) = self.vlt_voting_snapshot_store.get(wall_epoch) {
+            // Same accessor as the sign and verify paths: an identity line read straight from the
+            // store would report a root this chain no longer uses after a reorg, and two honest
+            // nodes that reorged at different moments would look like they disagreed.
+            if let Some(row) = self.voting_snapshot_for_wall_epoch(sink, wall_epoch, &bonds, net_id.as_byte_slice(), dns_params) {
                 info!(
                     "[vlt-identity] epoch={wall_epoch} finalized_anchor={} snapshot_root={} validator_set_root={} credit_table_root={} capability_root={} model_table={} activation_epoch={} total_weight={}",
                     new_state.last_dns_confirmed_anchor,
@@ -3568,9 +3571,14 @@ impl VirtualStateProcessor {
         }
         let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
         let w = voting_epoch_for_target(target_epoch, epoch_len, dns_params.attestation_lag_blue_score);
-        if let Ok(row) = self.vlt_voting_snapshot_store.get(w) {
-            return Some(row.vote_commitment());
-        }
+        // Through the SAME accessor the credit walk verifies with — never the store directly.
+        //
+        // `voting_snapshot_for_wall_epoch` serves the frozen row only while its pin is still the
+        // anchor this chain derives, and re-derives otherwise. Reading the store here instead
+        // handed signers a row pinned on a chain a reorg had since replaced, while the walk
+        // re-derived a different one: every vote then carried a commitment the walk rejected, and
+        // round 2 stopped dead with `held 0` forever and no error anywhere. A signer and its
+        // verifier must consult one function, not two that agree most of the time.
         let snap = self.voting_snapshot_for_wall_epoch(sink, w, bonds, net_id, dns_params)?;
         if !snap.resolution_complete {
             warn!(
@@ -3579,9 +3587,14 @@ impl VirtualStateProcessor {
             return None;
         }
         let commitment = snap.vote_commitment();
-        Self::log_frozen_snapshot(&snap, w, "lazy sign-path freeze");
-        if let Err(e) = self.vlt_voting_snapshot_store.set(w, snap) {
-            warn!("[vlt-voting-snapshot] lazy freeze of epoch {w} failed: {e}");
+        // Freeze only what is not frozen yet: the row is write-once, so a stale one left by a
+        // since-reorged chain simply stops being served (both paths re-derive) rather than being
+        // rewritten.
+        if !self.vlt_voting_snapshot_store.has(w).unwrap_or(false) {
+            Self::log_frozen_snapshot(&snap, w, "lazy sign-path freeze");
+            if let Err(e) = self.vlt_voting_snapshot_store.set(w, snap) {
+                warn!("[vlt-voting-snapshot] lazy freeze of epoch {w} failed: {e}");
+            }
         }
         Some(commitment)
     }

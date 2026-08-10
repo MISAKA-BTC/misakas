@@ -699,8 +699,12 @@ pub struct PrecommitDuty {
     /// The lock this validator is carrying on this chain, as counted.
     pub held: PrecommitLock,
     /// Epochs whose prevote quorum is met and which this validator has not precommitted yet:
-    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending, so signing them in
-    /// order builds the lock chain the walk expects. The commitment is per entry (§5.1, PR 4):
+    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending.
+    ///
+    /// Ascending because a lock must name a STRICTLY EARLIER epoch, so a validator's own
+    /// precommits can only ever move forward — it may skip entries (and should, when it is far
+    /// behind: see the frontier jump in the validator service) but must never go back. The
+    /// commitment is per entry (§5.1, PR 4):
     /// each precommit binds ITS target epoch's frozen denominator, so a late signature for an
     /// old due epoch carries that epoch's commitment, not whichever happens to be current.
     pub due: Vec<(u64, Hash64, u64, Hash64)>,

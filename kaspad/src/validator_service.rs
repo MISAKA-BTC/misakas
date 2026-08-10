@@ -814,7 +814,41 @@ impl ValidatorService {
             trace!("[{VALIDATOR}] precommit: round 2 is not live at the sink; nothing to lock");
             return;
         };
-        let Some(&(epoch, target_hash, target_daa_score, snapshot_commitment)) = duty.due.first() else {
+        // Oldest first while the backlog is short, and STRAIGHT TO THE FRONTIER when it is not.
+        //
+        // A precommit costs a transaction and an acceptance round-trip before the chain shows it
+        // as this validator's lock, so a validator drains its backlog at roughly one epoch per
+        // round-trip. That is fine at a backlog of one or two. It is a liveness bug at a backlog
+        // of ten: the chain mints new epochs faster than the drain, nobody ever precommits the
+        // epoch the network is actually trying to finalize, and finality stops even though the
+        // prevote round is passing comfortably. A deep reorg — healing a partition, say — puts
+        // every validator exactly there, because the lock chain is a statement about accepted
+        // history and a reorg resets it to "no lock at all".
+        //
+        // Skipping the backlog costs nothing that matters: an old epoch's certificate would
+        // certify an anchor already buried under the one the frontier is finalizing, and the
+        // finalized anchor is the NEWEST certified. Round 2 is about the frontier.
+        //
+        // The threshold is what keeps validators together. Jumping unconditionally would let two
+        // validators whose sinks differ by an epoch precommit different epochs forever, and no
+        // single epoch would accumulate quorum; jumping only when far behind puts everyone within
+        // an epoch of each other, after which oldest-first pulls them onto exactly the same one.
+        const PRECOMMIT_FRONTIER_JUMP_EPOCHS: u64 = 3;
+        let pick = match (duty.due.first(), duty.due.last()) {
+            (Some(oldest), Some(newest)) if newest.0.saturating_sub(oldest.0) > PRECOMMIT_FRONTIER_JUMP_EPOCHS => {
+                info!(
+                    "[{VALIDATOR}] precommit: {} epochs behind the frontier (held {}, due {}..{}); skipping the backlog to epoch {}",
+                    newest.0.saturating_sub(oldest.0),
+                    duty.held.epoch,
+                    oldest.0,
+                    newest.0,
+                    newest.0
+                );
+                Some(newest)
+            }
+            (oldest, _) => oldest,
+        };
+        let Some(&(epoch, target_hash, target_daa_score, snapshot_commitment)) = pick else {
             trace!("[{VALIDATOR}] precommit: nothing due (held lock is epoch {})", duty.held.epoch);
             return;
         };
