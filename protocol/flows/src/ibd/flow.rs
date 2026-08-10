@@ -556,6 +556,14 @@ impl IbdFlow {
                         id,
                         CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
                     );
+                } else {
+                    // Transport failure, not a verdict on the chain. It stays retryable — but it is
+                    // charged an attempt so a source that keeps flapping cannot re-arm
+                    // `ProofRequested { since: now }` on every reconnect and pin the candidate at
+                    // `proof_attempts == 0`, which is the one state that blocks the commit barrier.
+                    // Without this, a ghost candidate from a flapping peer holds the barrier across
+                    // an entire recovery (observed live on testnet-10, 2026-08-10).
+                    self.ctx.note_ibd_candidate_transport_failure(id);
                 }
                 // A candidate that cannot back its claim has no hold on this node's time.
                 self.ctx.chain_participation().end_decision();

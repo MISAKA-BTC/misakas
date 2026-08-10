@@ -471,6 +471,42 @@ impl IbdCandidateRegistry {
         }
     }
 
+    /// A proof fetch ended in a TRANSPORT failure — the connection closed, the deadline elapsed
+    /// under the flow, or the lease was revoked — rather than a proof this node judged. Charge it
+    /// the same retry budget a lease timeout costs, then hand the candidate back to the ordinary
+    /// nomination/rotation machinery.
+    ///
+    /// The reason this exists: a transport failure USED to leave the candidate untouched in
+    /// `ProofRequested`. A source that flaps (a peer running its own failing IBD gets disconnected
+    /// constantly — exactly when its chain most needs checking) is then re-nominated, which rebuilds
+    /// `ProofRequested { since: now }` and resets the lease clock, so `expire_proof_requests` never
+    /// reaches its deadline and `proof_attempts` never moves. The candidate is pinned at
+    /// `proof_attempts == 0`, which is the one state [`Self::unresolved`] counts — so it blocks
+    /// every commit, forever, while never being resolvable. Observed live on testnet-10 (a ghost
+    /// candidate from a flapping peer held the commit barrier across a whole recovery).
+    ///
+    /// Charging the attempt breaks the pin two ways at once: after the FIRST transport failure the
+    /// candidate is no longer at `proof_attempts == 0`, so it stops blocking the commit (a source
+    /// that cannot deliver a proof has spent its right to hold up the decision), and after
+    /// [`MAX_PROOF_ATTEMPTS`] it is written off as `NoSource`. It stays retryable in between —
+    /// being disconnected is still not evidence against the chain — so a genuinely-returning source
+    /// gets its turns; it just cannot block while it flaps.
+    pub fn note_proof_transport_failure(&mut self, id: &CandidateId) {
+        let Some(c) = self.candidates.get_mut(id) else { return };
+        // Only a proof that was actually in flight is charged; a candidate already moved on
+        // (validated, rejected, or renominated by another path) is left as it is.
+        let claimed = match c.validation {
+            CandidateValidation::ProofRequested { claimed_blue_work, .. } => claimed_blue_work,
+            _ => return,
+        };
+        c.proof_attempts += 1;
+        c.validation = if c.proof_attempts < MAX_PROOF_ATTEMPTS {
+            CandidateValidation::SummaryReceived { claimed_blue_work: claimed }
+        } else {
+            CandidateValidation::Rejected { reason: CandidateRejectReason::NoSource }
+        };
+    }
+
     pub fn get(&self, id: &CandidateId) -> Option<&IbdCandidate> {
         self.candidates.get(id)
     }
@@ -864,6 +900,54 @@ mod tests {
         r.set_validation(a, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(10) });
         r.set_validation(b, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
         assert_eq!(r.unresolved().len(), 1, "only the one still unexamined");
+    }
+
+    #[test]
+    fn a_transport_failure_stops_a_flapping_candidate_from_pinning_the_barrier() {
+        // The testnet-10 ghost: a source that keeps disconnecting mid-proof re-arms
+        // `ProofRequested { since: now }` on every reconnect, so the lease deadline is never
+        // reached and `proof_attempts` never moves — pinning the candidate at the one state the
+        // commit barrier waits on. Charging the transport failure breaks the pin.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        assert_eq!(r.unresolved().len(), 1, "an un-checked summary blocks the commit");
+
+        // Nominate: a proof is requested. Simulate the flow's transition.
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        assert_eq!(r.unresolved().len(), 1, "still blocking while genuinely in flight");
+
+        // First transport failure: charged, back to nominatable, but NO LONGER blocking.
+        r.note_proof_transport_failure(&id);
+        assert_eq!(r.unresolved().len(), 0, "a source that could not deliver has spent its right to block");
+        assert!(
+            matches!(r.get(&id).unwrap().validation, CandidateValidation::SummaryReceived { .. }),
+            "but it stays retryable — a disconnect is not a verdict on the chain"
+        );
+
+        // Re-nominated and it flaps again, repeatedly: still never blocks, and is written off at the cap.
+        for _ in 0..MAX_PROOF_ATTEMPTS {
+            r.set_validation(
+                id,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)),
+                },
+            );
+            r.note_proof_transport_failure(&id);
+            assert_eq!(r.unresolved().len(), 0, "a flapping source never regains the power to pin the barrier");
+        }
+        assert!(
+            matches!(r.get(&id).unwrap().validation, CandidateValidation::Rejected { reason: CandidateRejectReason::NoSource }),
+            "and after its retries are spent it is written off as NoSource"
+        );
+
+        // Idempotent / safe on a candidate that already moved on.
+        r.note_proof_transport_failure(&id);
+        assert!(matches!(r.get(&id).unwrap().validation, CandidateValidation::Rejected { .. }));
     }
 
     #[test]
