@@ -41,6 +41,7 @@
 //! delay above that burial depth.
 
 use blake2b_simd::Params as Blake2bParams;
+use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 
@@ -466,6 +467,10 @@ pub struct TokenEmissionSettlement {
     /// The rewards, sorted ascending by owner id (byte-deterministic encoding,
     /// mirroring [`VltEpochCredits`]).
     pub rewards: Vec<TokenEmissionReward>,
+    /// Audit-emission v0.2: the portion of `paid_total` earned by counted verdicts
+    /// (`Σ_i ⌊R·audit_i/W⌋` — exact by construction, see [`emission_rewards_v2`]).
+    /// Zero on v0.1-style epochs (audit vec empty / pre-fence anchors).
+    pub audit_paid: u128,
 }
 
 impl kaspa_utils::mem_size::MemSizeEstimator for TokenEmissionSettlement {}
@@ -513,7 +518,7 @@ pub fn emission_epoch_budget(params: &TokenParams, epoch: u64) -> u128 {
 /// zero-reward (floor) entries are omitted.
 pub fn emission_rewards(budget: u128, credits: &VltEpochCredits, min_network_compute: u128) -> TokenEmissionSettlement {
     let network_compute = credits.credits.iter().fold(0u128, |acc, (_, x)| acc.saturating_add(*x));
-    let mut settlement = TokenEmissionSettlement { budget, network_compute, paid_total: 0, rewards: Vec::new() };
+    let mut settlement = TokenEmissionSettlement { budget, network_compute, paid_total: 0, rewards: Vec::new(), audit_paid: 0 };
     if budget == 0 || network_compute == 0 || network_compute < min_network_compute {
         return settlement;
     }
@@ -532,6 +537,51 @@ pub fn emission_rewards(budget: u128, credits: &VltEpochCredits, min_network_com
     settlement
 }
 
+/// Audit-emission v0.2 (design §2.1): one budget, one measure — execution and counted-verdict
+/// replay divide `R(E)` pro-rata over combined work `W = Σ exec + Σ audit`.
+///
+/// Each validator's reward is paid as **two floor terms**, `⌊R·exec_i/W⌋ + ⌊R·audit_i/W⌋`,
+/// rather than one floor over the sum: the two differ by at most one atomic unit per validator,
+/// and the two-term form is what makes `audit_paid` an exact ledger quantity instead of an
+/// estimate (v0.2 §2.1 implementation note). The `min_network_compute` floor is judged against
+/// **executor** work alone — verification accompanies execution, and letting replays help clear
+/// the vacuous-network floor would count one physical job `1 + committee` times.
+pub fn emission_rewards_v2(
+    budget: u128,
+    exec: &[(Hash64, u128)],
+    audit: &[(Hash64, u128)],
+    min_network_compute: u128,
+) -> TokenEmissionSettlement {
+    let exec_compute = exec.iter().fold(0u128, |acc, (_, x)| acc.saturating_add(*x));
+    let audit_compute = audit.iter().fold(0u128, |acc, (_, x)| acc.saturating_add(*x));
+    let total_work = exec_compute.saturating_add(audit_compute);
+    let mut settlement =
+        TokenEmissionSettlement { budget, network_compute: exec_compute, paid_total: 0, rewards: Vec::new(), audit_paid: 0 };
+    if budget == 0 || exec_compute == 0 || exec_compute < min_network_compute {
+        return settlement;
+    }
+    let mut per_owner: BTreeMap<Hash64, (u128, u128)> = BTreeMap::new();
+    for (owner, x) in exec.iter().filter(|(_, x)| *x > 0) {
+        per_owner.entry(*owner).or_default().0 = per_owner.get(owner).map(|v| v.0).unwrap_or(0).saturating_add(*x);
+    }
+    for (owner, x) in audit.iter().filter(|(_, x)| *x > 0) {
+        per_owner.entry(*owner).or_default().1 = per_owner.get(owner).map(|v| v.1).unwrap_or(0).saturating_add(*x);
+    }
+    for (owner, (exec_i, audit_i)) in per_owner {
+        let exec_pay = mul_div_floor(budget, exec_i, total_work);
+        let audit_pay = mul_div_floor(budget, audit_i, total_work);
+        let amount = exec_pay.saturating_add(audit_pay);
+        if amount == 0 {
+            continue;
+        }
+        settlement.paid_total = settlement.paid_total.saturating_add(amount);
+        settlement.audit_paid = settlement.audit_paid.saturating_add(audit_pay);
+        settlement.rewards.push(TokenEmissionReward { owner, amount });
+    }
+    debug_assert!(settlement.paid_total <= budget, "per-term floors can never exceed the budget");
+    settlement
+}
+
 /// The `getTokenEmissionInfo` read DTO (design §9.3): one epoch's settlement
 /// view plus the two live cursors — the ops gauges that let a harness or a
 /// monitor tell "settling normally" from "stalled" without log access.
@@ -545,6 +595,8 @@ pub struct TokenEmissionInfo {
     pub budget: u128,
     pub network_compute: u128,
     pub paid_total: u128,
+    /// Audit-emission v0.2: the counted-verdict share of `paid_total`.
+    pub audit_paid: u128,
     pub reward_count: u32,
     /// [`TokenEmissionSettlement::digest`] of the row (zero hash when unsettled).
     pub settlement_root: Hash,
@@ -962,6 +1014,58 @@ mod tests {
         assert_eq!(whole.paid_total, 10_000);
         assert_eq!(split.paid_total, 9_999);
         assert!(whole.paid_total - split.paid_total < split.rewards.len() as u128);
+    }
+
+    // ---- emission v0.2 (unified work) -----------------------------------
+
+    /// One µRTE pays the same whether it executed or replayed: equal exec and
+    /// audit work earn equal TOK, and `audit_paid` accounts the audit share
+    /// exactly (two-term floors — design v0.2 §2.1).
+    #[test]
+    fn v2_pays_execution_and_audit_from_one_pie() {
+        let s = emission_rewards_v2(900, &[(id(1), 300)], &[(id(2), 300), (id(1), 300)], 1);
+        assert_eq!(s.network_compute, 300, "network_compute stays the EXEC measure");
+        assert_eq!(s.rewards.len(), 2);
+        assert_eq!(s.rewards[0].owner, id(1));
+        assert_eq!(s.rewards[0].amount, 600, "300 exec + 300 audit of W=900 → 2/3 of 900");
+        assert_eq!(s.rewards[1].amount, 300);
+        assert_eq!(s.paid_total, 900);
+        assert_eq!(s.audit_paid, 600, "a's 300 + b's 300 audit work");
+    }
+
+    /// The vacuous-network floor is judged on executor work alone: replays
+    /// accompany execution and must not help clear it (×(1+c) double-count).
+    #[test]
+    fn v2_floor_ignores_audit_work() {
+        let starved = emission_rewards_v2(1_000, &[(id(1), 40)], &[(id(2), 1_000_000)], 50);
+        assert!(starved.rewards.is_empty(), "exec 40 < floor 50, however large the audit side");
+        let ok = emission_rewards_v2(1_000, &[(id(1), 50)], &[(id(2), 1_000_000)], 50);
+        assert!(!ok.rewards.is_empty());
+        // The documented edge: an all-refuted epoch (exec 0) settles to nothing,
+        // its refuters included.
+        let refuted_only = emission_rewards_v2(1_000, &[], &[(id(2), 500)], 1);
+        assert!(refuted_only.rewards.is_empty());
+    }
+
+    #[test]
+    fn v2_accounting_is_exact_under_flooring() {
+        let s = emission_rewards_v2(1_000, &[(id(1), 700)], &[(id(2), 300), (id(3), 1)], 1);
+        // W = 1001; per-term floors: 1000·700/1001=699, 1000·300/1001=299, 1000·1/1001=0.
+        assert_eq!(s.paid_total, 699 + 299);
+        assert_eq!(s.audit_paid, 299);
+        assert!(s.paid_total <= s.budget);
+        assert_eq!(s.paid_total, s.rewards.iter().map(|r| r.amount).sum::<u128>());
+    }
+
+    /// v1 rows (empty audit) settle identically through v2 — the upgrade path
+    /// for pre-fence epochs.
+    #[test]
+    fn v2_with_empty_audit_matches_v1() {
+        let credits = VltEpochCredits::from_unordered([(id(1), 700u128), (id(2), 300u128)]);
+        let v1 = emission_rewards(1_000, &credits, 1);
+        let v2 = emission_rewards_v2(1_000, &credits.credits, &[], 1);
+        assert_eq!(v1.rewards, v2.rewards);
+        assert_eq!(v2.audit_paid, 0);
     }
 
     // ---- params ---------------------------------------------------------

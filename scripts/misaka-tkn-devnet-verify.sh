@@ -127,6 +127,15 @@ done
 note "$(echo "$epochs" | wc -l | tr -d ' ') epoch(s) settled on node-0; $checked cross-checked identical on >=2 nodes"
 [ "$checked" -ge 1 ] || fail "no epoch was settled by two nodes — nothing was actually cross-checked"
 
+# ---- 1b. AUDIT (v0.2) --------------------------------------------------------------------------
+echo "== 1b. AUDIT: verification pays from R(E), the base-coin fee retired =="
+audit_paid=$(token_lines 0 '^\[token\] epoch [0-9]+ settled: .*audit=[1-9]' | wc -l | tr -d ' ')
+[ "$audit_paid" -ge 1 ] || fail "no settled epoch paid audit work (audit= is always 0)"
+for i in $(seq 0 $((NODES - 1))); do
+  grep -q "audit-fee(base) retired" "$(log_of "$i")" || fail "node-$i never logged the base audit fee's retirement"
+done
+note "$audit_paid settled epoch(s) paid audit work; base audit fee retired on all $NODES nodes"
+
 # ---- 2. SHADOW ---------------------------------------------------------------------------------
 echo "== 2. SHADOW: the below-fence op is void forever =="
 for i in $(seq 0 $((NODES - 1))); do

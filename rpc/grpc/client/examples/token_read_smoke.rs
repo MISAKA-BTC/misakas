@@ -33,13 +33,14 @@ async fn main() {
 
     let emission = client.get_token_emission_info().await.expect("getTokenEmissionInfo");
     println!(
-        "emission  : available={} epoch={} settled={} R={} X={} paid={} rewards={} root={} next={} fold_cursor={}",
+        "emission  : available={} epoch={} settled={} R={} X={} paid={} audit={} rewards={} root={} next={} fold_cursor={}",
         emission.available,
         emission.epoch,
         emission.settled,
         emission.budget,
         emission.network_compute,
         emission.paid_total,
+        emission.audit_paid,
         emission.reward_count,
         emission.settlement_root,
         emission.next_settlement_epoch,

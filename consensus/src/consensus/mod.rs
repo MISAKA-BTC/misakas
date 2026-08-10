@@ -1218,6 +1218,7 @@ impl ConsensusApi for Consensus {
             info.budget = settlement.budget;
             info.network_compute = settlement.network_compute;
             info.paid_total = settlement.paid_total;
+            info.audit_paid = settlement.audit_paid;
             info.reward_count = settlement.rewards.len() as u32;
             info.settlement_root = settlement.digest();
         }

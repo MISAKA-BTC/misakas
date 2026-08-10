@@ -2308,6 +2308,9 @@ pub struct GetTokenEmissionInfoResponse {
     pub budget: String,
     pub network_compute: String,
     pub paid_total: String,
+    /// Audit-emission v0.2: the counted-verdict share of `paid_total` (decimal `u128`).
+    #[serde(default)]
+    pub audit_paid: String,
     pub reward_count: u32,
     /// Hex keyed-BLAKE2b-256 digest of the whole settlement (cross-node comparable).
     pub settlement_root: String,
@@ -2319,13 +2322,14 @@ pub struct GetTokenEmissionInfoResponse {
 
 impl Serializer for GetTokenEmissionInfoResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.epoch, writer)?;
         store!(bool, &self.settled, writer)?;
         store!(String, &self.budget, writer)?;
         store!(String, &self.network_compute, writer)?;
         store!(String, &self.paid_total, writer)?;
+        store!(String, &self.audit_paid, writer)?;
         store!(u32, &self.reward_count, writer)?;
         store!(String, &self.settlement_root, writer)?;
         store!(u64, &self.next_settlement_epoch, writer)?;
@@ -2336,13 +2340,14 @@ impl Serializer for GetTokenEmissionInfoResponse {
 
 impl Deserializer for GetTokenEmissionInfoResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let available = load!(bool, reader)?;
         let epoch = load!(u64, reader)?;
         let settled = load!(bool, reader)?;
         let budget = load!(String, reader)?;
         let network_compute = load!(String, reader)?;
         let paid_total = load!(String, reader)?;
+        let audit_paid = if version >= 2 { load!(String, reader)? } else { String::new() };
         let reward_count = load!(u32, reader)?;
         let settlement_root = load!(String, reader)?;
         let next_settlement_epoch = load!(u64, reader)?;
@@ -2354,6 +2359,7 @@ impl Deserializer for GetTokenEmissionInfoResponse {
             budget,
             network_compute,
             paid_total,
+            audit_paid,
             reward_count,
             settlement_root,
             next_settlement_epoch,
