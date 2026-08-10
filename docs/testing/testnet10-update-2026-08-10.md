@@ -106,6 +106,14 @@ a pre-restart datadir backup (`misaka-testnet-10.pre-t10-restart-backup`) from 2
 Rolling back re-splits the fleet at the handshake (old ↔ new cannot peer), so a rollback
 is also fleet-wide or not at all.
 
+## Known log artifacts the soak baseline inherits
+
+B's log carries exactly one `panicked at` line, 2026-08-10 03:17:12 +02:00
+(`conn_builder.rs:167`, RocksDB LOCK contention): the first candidate start raced the
+`Restart=always` respawn of the old unit and lost the DB lock. It is a deploy-window
+artifact of the discovered watchdog, not candidate runtime behaviour; the soak verdict
+reads count *rises* from this baseline.
+
 ## Evidence status at the moment of the decision
 
 RC7 regression at `23ad1ed`: darwin 120/120 ×2 series + 120/120 (seeds 480–599), linux

@@ -52,9 +52,11 @@ while read -r role target rpc logfile; do
 
     # Counts, not occurrences: a soak asks whether these ever happened, and a rising count is the
     # answer. Cheap enough to run every minute even on a large log.
-    panics=\$(grep -ac 'panicked at' '$logfile' 2>/dev/null || echo 0)
-    quar=\$(grep -ac 'QUARANTINED' '$logfile' 2>/dev/null || echo 0)
-    permits=\$(grep -ac 'RecoveryPermitGranted' '$logfile' 2>/dev/null || echo 0)
+    # grep -c prints a count even when it is 0 (and exits 1), so a '|| echo 0' fallback
+    # would print a SECOND zero and split the TSV row. Default only a truly empty capture.
+    panics=\$(grep -ac 'panicked at' '$logfile' 2>/dev/null | head -1); panics=\${panics:-0}
+    quar=\$(grep -ac 'QUARANTINED' '$logfile' 2>/dev/null | head -1); quar=\${quar:-0}
+    permits=\$(grep -ac 'RecoveryPermitGranted' '$logfile' 2>/dev/null | head -1); permits=\${permits:-0}
     # The pid comes from the RPC port's listener, not from pgrep: these hosts also run
     # regression fixtures named kaspad, and 'newest kaspad' is usually one of those.
     port='$rpc'; port=\${port##*:}
