@@ -11,9 +11,10 @@ use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
     ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PrecommitEvidencePayload, PrecommitLock,
-    SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, StakeAttestationShardPayload, StakeBondPayload,
-    StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record, precommit_fault,
-    single_attestation_shard, stake_precommit_message, unbond_request_message, validator_id_from_pubkey,
+    SignedEpochCheckOutcome, SignedEpochRecord, SlashingEvidencePayload, StakeAttestation, StakeAttestationShardPayload,
+    StakeBondPayload, StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record,
+    precommit_fault, single_attestation_shard, stake_attestation_message, stake_precommit_message, unbond_request_message,
+    validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -21,8 +22,8 @@ use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
-    SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND,
-    SubnetworkId,
+    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
+    SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
@@ -250,6 +251,80 @@ impl ValidatorKey {
             return Err(format!("held lock (epoch {}) is not strictly below the epoch {epoch} being locked", lock.epoch));
         }
         Ok(payload)
+    }
+
+    /// Sign one attestation over an arbitrary target, without the equivocation guard.
+    ///
+    /// **Deliberately guard-free, and the only method here that is.** Every production path signs
+    /// through [`SignedEpochStore`], which refuses a second target in one epoch — that guard is
+    /// what stops an honest node from slashing itself after a restart. This method exists for the
+    /// opposite purpose: producing the two conflicting signatures that PROVE the §9 offence, so a
+    /// devnet can demonstrate that equivocation actually burns a bond. It is called by the
+    /// `equivocate` subcommand and by tests; nothing else may use it.
+    ///
+    /// Signing two targets for one epoch with a bonded key on a live network is a slashable act
+    /// against your own stake. That is the point of the tool, and the reason this doc says so.
+    pub fn sign_attestation_unguarded(
+        &self,
+        network_id: &[u8],
+        epoch: u64,
+        target_hash: Hash64,
+        target_daa_score: u64,
+        validator_set_commitment: Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> StakeAttestation {
+        let message =
+            stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
+        let signature = self.sign_attestation(message.as_bytes().as_slice()).to_vec();
+        StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: self.validator_id,
+            bond_outpoint,
+            epoch,
+            target_hash,
+            target_daa_score,
+            validator_set_commitment,
+            signature,
+        }
+    }
+
+    /// Assemble round-1 (attestation) equivocation evidence: one validator, one bond, one epoch,
+    /// two different anchors.
+    ///
+    /// The reporter signs nothing — the proof is the accused's own two signatures, exactly as in
+    /// [`Self::build_precommit_evidence`]. Refuses a pair that does not contradict, because
+    /// filing one burns a fee to prove nothing.
+    pub fn build_slashing_evidence(
+        a: StakeAttestation,
+        b: StakeAttestation,
+        reporter_reward_spk_payload: [u8; 64],
+    ) -> Result<SlashingEvidencePayload, String> {
+        if a.bond_outpoint != b.bond_outpoint || a.validator_id != b.validator_id || a.epoch != b.epoch {
+            return Err("the two attestations are not one validator, one bond and one epoch".to_string());
+        }
+        if a.target_hash == b.target_hash {
+            return Err("the two attestations approve the same anchor; this proves nothing".to_string());
+        }
+        Ok(SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: a.bond_outpoint,
+            attestation_a: a,
+            attestation_b: b,
+            reporter_reward_spk_payload,
+        })
+    }
+
+    /// Build the fee-funded transaction carrying round-1 slashing evidence. Output-less for the
+    /// same reason as the round-2 one: consensus mints the reporter reward at `(evidence_tx_id, 0)`.
+    pub fn build_slashing_evidence_tx(
+        &self,
+        evidence: &SlashingEvidencePayload,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let bytes = borsh::to_vec(evidence).expect("borsh serialization of well-formed evidence is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, bytes, funding_outpoint, funding, fee, true)
     }
 
     /// Assemble precommit evidence against a validator that cannot have been honest.

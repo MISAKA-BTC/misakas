@@ -17,8 +17,8 @@ use kaspa_addresses::{Address, Prefix};
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::dns_finality::{
-    DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, signature_fingerprint,
-    single_attestation_shard, stake_attestation_message,
+    DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord,
+    SlashingEvidencePayload, StakeAttestation, signature_fingerprint, single_attestation_shard, stake_attestation_message,
 };
 use kaspa_consensus_core::mass::{MassCalculator, UtxoCell, calc_storage_mass};
 use kaspa_consensus_core::network::{EndpointKind, NetworkId, NetworkType};
@@ -75,6 +75,10 @@ enum Command {
     /// EVM_DEPOSIT_LOCK outpoint (`txid:index`). Run against a MINING node so the claim
     /// is included in an accepting chain block, which executes it and credits the EVM address.
     Claim(ClaimArgs),
+    /// DEVNET ADVERSARY: deliberately double-sign with this validator's own key and file the
+    /// resulting §9 evidence, to prove that equivocation actually burns the bond. Refuses to run
+    /// against mainnet/testnet — this destroys the stake it is pointed at.
+    Equivocate(EquivocateArgs),
     /// One-shot headless balance: query the node's `getBalancesByAddresses` for one or more
     /// `misaka:`/`misakatest:` addresses over wRPC and print each balance, then exit (no
     /// interactive wallet needed). The node must run --utxoindex.
@@ -314,6 +318,235 @@ struct DepositLockArgs {
     network: Option<String>,
 }
 
+/// `equivocate` — the PR-5 slashing harness's adversary.
+#[derive(Parser, Debug)]
+struct EquivocateArgs {
+    /// The ACCUSED node's wRPC (borsh) endpoint — the offence is read from, and reported to, the
+    /// network this node is on.
+    #[arg(long = "node-wrpc-borsh", visible_alias = "node-rpc", env = "KASPA_PQ_NODE_RPC")]
+    node_rpc: Option<String>,
+
+    /// The accused validator's signing key. Both conflicting payloads are signed with it — that
+    /// pair IS the proof, which is why the evidence needs no cooperation from anyone else.
+    #[arg(long, env = "KASPA_PQ_VALIDATOR_KEY")]
+    validator_key: String,
+
+    /// The accused's stake-bond outpoint, "txid_hex:index".
+    #[arg(long, env = "KASPA_PQ_STAKE_BOND")]
+    stake_bond: String,
+
+    /// Which provable offence to commit:
+    /// `prevote` (two attestations, one epoch, two anchors),
+    /// `precommit` (two precommits, one epoch, two anchors),
+    /// `lock` (two precommits declaring one locked_epoch with two lock anchors).
+    #[arg(long, value_parser = ["prevote", "precommit", "lock"])]
+    kind: String,
+
+    /// The REPORTER's key — it funds the evidence transaction and receives the reporter reward.
+    /// Defaults to the accused's own key, which is fine on a devnet and keeps the harness to one
+    /// funded address.
+    #[arg(long)]
+    reporter_key: Option<String>,
+
+    /// The reporter's node endpoint, if it differs from the accused's.
+    #[arg(long = "reporter-node-wrpc-borsh")]
+    reporter_node_rpc: Option<String>,
+
+    /// Fee in sompi for the evidence transaction. Default: mass-based.
+    #[arg(long)]
+    fee: Option<u64>,
+
+    /// Expected node network id; refuse on mismatch.
+    #[arg(long, visible_alias = "network-id", env = "KASPA_PQ_NETWORK")]
+    network: Option<String>,
+}
+
+/// File §9 equivocation evidence against a validator whose key this process holds.
+///
+/// **Devnet/simnet only, enforced against the node's own reported network.** The tool's whole
+/// function is to destroy a bond, and a "test" that burns real stake on a public network is not
+/// a test. The refusal is on the network the NODE reports, not on a flag, so pointing it at a
+/// public node cannot be talked around.
+///
+/// The offence is entirely local: both payloads are signed here, and the evidence carries them,
+/// so nothing needs to reach a block except the evidence transaction itself. That is what makes
+/// these three offences *provable* rather than adjudicated — see the ForgedReceipt asymmetry in
+/// §7(c): "I re-ran the job and got something else" can never be checked by consensus, but "here
+/// are two signatures that cannot both be honest" always can.
+async fn equivocate(args: EquivocateArgs) -> Result<(), String> {
+    let accused = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
+    let bond_outpoint = parse_stake_bond_ref(&args.stake_bond)?;
+    let client = connect(&resolve_node_rpc(&args.network, &args.node_rpc)).await?;
+    let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
+    let node_network = server.network_id.to_string();
+    if let Some(expected) = args.network.as_deref()
+        && node_network != expected
+    {
+        return Err(format!("network mismatch: node is '{node_network}' but --network is '{expected}'"));
+    }
+    if !matches!(server.network_id.network_type, NetworkType::Devnet | NetworkType::Simnet) {
+        return Err(format!(
+            "refusing to equivocate on '{node_network}': this tool exists to burn the bond it is pointed at,              and that belongs on a private devnet"
+        ));
+    }
+
+    let prefix = prefix_for(server.network_id.network_type);
+    let params = Params::from(server.network_id);
+    let net_id = params.genesis.hash;
+    let mass_calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
+
+    // Where to point the offence. Both attestation-target endpoints answer "what does this
+    // validator still OWE", so an honest validator that is caught up returns nothing from both —
+    // which is precisely the state a slashing harness runs in. So: use a real canonical anchor
+    // when one is offered, and otherwise synthesize a target at the current DAA.
+    //
+    // Synthesizing is sound, not a shortcut. The §9 offence is "two signatures for one
+    // (bond, validator, epoch) that cannot both be honest", and consensus checks exactly that:
+    // the two payloads' triple, their signatures, the bond's status at the named DAA, and
+    // freshness against the evidence window. Whether the anchor was canonical is not part of it —
+    // a validator that double-signs nonsense is as slashable as one that double-signs the chain,
+    // and it is the *pair* that is the proof either way.
+    let (target_epoch, anchor, target_daa_score, vsc) = {
+        let batch = client
+            .get_validator_attestation_targets(GetValidatorAttestationTargetsRequest {
+                bond_outpoint: args.stake_bond.clone(),
+                from_epoch: 0,
+                limit: 16,
+            })
+            .await
+            .map_err(|e| format!("getValidatorAttestationTargets failed: {e}"))?;
+        match batch.targets.into_iter().max_by_key(|t| t.epoch) {
+            Some(t) => {
+                info!("[{VALIDATOR}] equivocating over the canonical anchor of epoch {} (daa {})", t.epoch, t.target_daa_score);
+                (t.epoch, parse_hash64(&t.target_hash)?, t.target_daa_score, parse_hash64(&t.validator_set_commitment)?)
+            }
+            None => {
+                // Caught up: nothing owed. Name the current tip's DAA so the evidence is fresh,
+                // and derive the epoch from it the same way consensus does.
+                let epoch_len = params
+                    .dns_params
+                    .as_ref()
+                    .map(|d| d.attestation_epoch_length_blue_score.max(1))
+                    .ok_or("this network has no DNS overlay configured")?;
+                let daa = server.virtual_daa_score;
+                let epoch = daa / epoch_len;
+                info!(
+                    "[{VALIDATOR}] this validator owes no attestation, so the offence is pointed at the tip: epoch {epoch} (daa {daa})"
+                );
+                (epoch, Hash64::from_bytes([0xe1; 64]), daa, Hash64::default())
+            }
+        }
+    };
+    // The conflicting anchor. A hash nothing else will ever produce, so the pair is unambiguously
+    // two different targets for one epoch (which is the offence) rather than a near-miss.
+    let mut other_bytes = anchor.as_bytes();
+    other_bytes[0] ^= 0xff;
+    let other_anchor = Hash64::from_bytes(other_bytes);
+
+    // Who pays and gets paid. Defaults to the accused's own key: on a devnet that keeps the
+    // harness to one funded address, and the reward's destination is not what is under test.
+    let reporter = match args.reporter_key.as_deref() {
+        Some(path) => ValidatorKey::from_seed(load_validator_seed(path)?),
+        None => ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?),
+    };
+    let reporter_client = match args.reporter_node_rpc.as_deref() {
+        Some(rpc) if Some(rpc) != args.node_rpc.as_deref() => Some(connect(rpc).await?),
+        _ => None,
+    };
+    let submit_client = reporter_client.as_ref().unwrap_or(&client);
+    let reporter_payload = reporter.reward_spk_payload();
+
+    // The evidence, as a type rather than bytes: the two kinds ride different subnetworks and
+    // different builders, so a byte round-trip would only lose the distinction and reintroduce it
+    // with a string.
+    enum Evidence {
+        Round1(SlashingEvidencePayload),
+        Round2(PrecommitEvidencePayload),
+    }
+    let evidence = match args.kind.as_str() {
+        "prevote" => {
+            // Round 1: one (bond, validator, epoch), two anchors.
+            let a = accused.sign_attestation_unguarded(
+                net_id.as_byte_slice(),
+                target_epoch,
+                anchor,
+                target_daa_score,
+                vsc,
+                bond_outpoint,
+            );
+            let b = accused.sign_attestation_unguarded(
+                net_id.as_byte_slice(),
+                target_epoch,
+                other_anchor,
+                target_daa_score,
+                vsc,
+                bond_outpoint,
+            );
+            Evidence::Round1(ValidatorKey::build_slashing_evidence(a, b, reporter_payload)?)
+        }
+        kind => {
+            // Round 2. `precommit` = two anchors for one epoch; `lock` = one locked_epoch declared
+            // with two different lock anchors. Both are `precommit_fault`-provable.
+            let epoch = if kind == "lock" { target_epoch.max(2) } else { target_epoch };
+            let lock_epoch = epoch - 1;
+            let held_a = (kind == "lock").then_some(PrecommitLock { epoch: lock_epoch, anchor });
+            let held_b = (kind == "lock").then_some(PrecommitLock { epoch: lock_epoch, anchor: other_anchor });
+            let a = accused.sign_precommit(net_id.as_byte_slice(), epoch, anchor, target_daa_score, held_a, vsc, bond_outpoint)?;
+            let b = accused.sign_precommit(
+                net_id.as_byte_slice(),
+                epoch,
+                if kind == "lock" { anchor } else { other_anchor },
+                target_daa_score,
+                held_b,
+                vsc,
+                bond_outpoint,
+            )?;
+            Evidence::Round2(accused.build_precommit_evidence(a, b, reporter_payload)?)
+        }
+    };
+    let kind_label = match evidence {
+        Evidence::Round1(_) => "slashing-evidence",
+        Evidence::Round2(_) => "precommit-evidence",
+    };
+
+    // Both payloads carry two 4627-byte ML-DSA signatures plus a handful of 64-byte digests; the
+    // fee is mass-based off that shape, and a few spare bytes only overpay a devnet fee.
+    const EVIDENCE_PAYLOAD_BYTES: usize = 2 * 4627 + 12 * 64 + 128;
+    let fee = args.fee.unwrap_or_else(|| reporter.estimate_overlay_fee(&mass_calc, prefix, EVIDENCE_PAYLOAD_BYTES, true));
+    let funding_addr = reporter.funding_address(prefix);
+    let coinbase_maturity = params.coinbase_maturity();
+    let (mut candidates, mature_seen) =
+        top_mature_funding_paged(submit_client, &funding_addr, server.virtual_daa_score, coinbase_maturity, 1, Some(bond_outpoint))
+            .await?;
+    let funding = candidates
+        .pop()
+        .filter(|e| e.entry.amount > fee)
+        .ok_or_else(|| format!("no single MATURE funding UTXO > {fee} sompi at {funding_addr} ({mature_seen} mature scanned)"))?;
+
+    let tx = match &evidence {
+        Evidence::Round1(ev) => reporter.build_slashing_evidence_tx(ev, funding.outpoint, &funding.entry, fee)?,
+        Evidence::Round2(ev) => reporter.build_precommit_evidence_tx(ev, funding.outpoint, &funding.entry, fee)?,
+    };
+    let txid = submit_client
+        .submit_transaction(RpcTransaction::from(&tx), false)
+        .await
+        .map_err(|e| format!("submitTransaction failed: {e}"))?;
+    info!(
+        "[{VALIDATOR}] filed {kind_label} ({}) against bond {bond_outpoint} at epoch {} (txid={txid}, fee {fee})",
+        args.kind, target_epoch
+    );
+    println!("evidence_txid: {txid}");
+    println!("evidence_kind: {kind_label} ({})", args.kind);
+    println!("accused_bond: {bond_outpoint}");
+    let _ = client.disconnect().await;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -343,6 +576,10 @@ async fn main() -> ExitCode {
         Command::Claim(args) => {
             kaspa_core::log::init_logger(None, "info");
             claim(args).await
+        }
+        Command::Equivocate(args) => {
+            kaspa_core::log::init_logger(None, "info");
+            equivocate(args).await
         }
         Command::Balance(args) => {
             kaspa_core::log::init_logger(None, "info");
