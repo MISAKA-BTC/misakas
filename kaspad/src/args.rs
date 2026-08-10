@@ -188,6 +188,13 @@ pub struct Args {
     /// production behaviour, and a test that means to exercise the gate has to be able to turn it
     /// on. Never needed on mainnet or testnet, where it is always enforced.
     pub enforce_chain_participation: bool,
+    /// ADR-0025's "until an operator intervenes", as a startup flag: clear a PERSISTED
+    /// `Quarantined` participation state once at boot, loudly. `Quarantined` never clears on its
+    /// own by design, and without this the only exit was deleting the meta-DB key by hand — which
+    /// the 2026-08-10 recovery had to contemplate on two of three fleet nodes at once. Clears
+    /// quarantine ONLY (a pending CandidateReview keeps its deadline), and fires on every boot it
+    /// is present for: remove it from the unit after the node is back.
+    pub clear_quarantine: bool,
 
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
     pub enable_validator: bool,
@@ -299,6 +306,7 @@ impl Default for Args {
             enable_mainnet_mining: true,
             trusted_checkpoint: None,
             enforce_chain_participation: false,
+            clear_quarantine: false,
             enable_validator: false,
             validator_key: None,
             evm_fee_recipient: None,
@@ -407,12 +415,12 @@ impl Args {
             // meaningless anywhere but the devnet it was built for — a constraint that holds even
             // if the feature flag were somehow on in the wrong build.
             let genesis_hash = config.params.genesis.hash;
-            let mut dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_vlt_devnet(
-                shadow_daa,
-                self.vlt_devnet_credit_window_epochs,
-                self.vlt_shadow_only,
-                genesis_hash,
-            );
+            let mut dns = config
+                .params
+                .dns_params
+                .take()
+                .expect("devnet/simnet ship with the DNS overlay configured")
+                .with_vlt_devnet(shadow_daa, self.vlt_devnet_credit_window_epochs, self.vlt_shadow_only, genesis_hash);
             // Flat decay is a devnet CALIBRATION, not a rule change: `is_coherent` admits
             // `credit_decay_bps == 10_000` (d_τ = 1 for every τ). It exists so a job-quota plan
             // like 8/5/3/2/2 lands as exactly 400/250/150/100/100 VLT of weight regardless of
@@ -684,6 +692,10 @@ pub fn cli() -> Command {
         .arg(
             arg!(--"enforce-chain-participation" "kaspa-pq: enforce the post-IBD chain-participation gate on networks where it is off by default (devnet/simnet). Always enforced on mainnet and testnet.")
                 .env("KASPAD_ENFORCE_CHAIN_PARTICIPATION"),
+        )
+        .arg(
+            arg!(--"clear-quarantine" "kaspa-pq (ADR-0025): operator override — clear a persisted Quarantined chain-participation state at startup and resume normal participation. Clears quarantine ONLY (a pending candidate review keeps its deadline). Fires on EVERY boot it is present for; remove it from the service unit once the node is back.")
+                .env("KASPAD_CLEAR_QUARANTINE"),
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
@@ -1056,6 +1068,7 @@ impl Args {
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
+            clear_quarantine: arg_match_unwrap_or::<bool>(&m, "clear-quarantine", defaults.clear_quarantine),
             enforce_chain_participation: arg_match_unwrap_or::<bool>(
                 &m,
                 "enforce-chain-participation",

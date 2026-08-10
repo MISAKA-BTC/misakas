@@ -354,6 +354,31 @@ impl ChainParticipationGate {
         self.state.load(Ordering::SeqCst) == QUARANTINED
     }
 
+    /// The operator intervention `Quarantined` exists to wait for (ADR-0025: "until an operator
+    /// resolves which branch is canonical"). Clears ONLY a quarantine — `CandidateReview` is a
+    /// review with a deadline, not an ambiguity awaiting a human, and letting this skip it would
+    /// turn the operator override into a review-escape hatch. Returns whether anything cleared.
+    ///
+    /// The clear is deliberately partial: `ever_ready`, `switches`, and `adoption_generation`
+    /// survive. A node whose quarantine was resolved by a human has still switched chains as many
+    /// times as it has — the switch cap guards against latch ping-pong, and an operator statement
+    /// about ONE ambiguity is not a statement that the counter should forget the others.
+    ///
+    /// Reached from the `--clear-quarantine` startup flag, which fires once per boot: the flag
+    /// left in place re-clears on every restart (each firing logs at WARN), so remove it from the
+    /// unit once the node is back — the log line says exactly that.
+    pub fn operator_clear_quarantine(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if self.state.compare_exchange(QUARANTINED, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.persist();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Current state, promoting an elapsed review to `Ready` as a side effect.
     pub fn state(&self) -> ChainParticipation {
         match self.state.load(Ordering::SeqCst) {
@@ -724,6 +749,32 @@ mod tests {
         gate.release_after_noop_ibd(lease);
         assert_eq!(gate.state(), ChainParticipation::Quarantined);
         assert!(!gate.allows_participation());
+    }
+
+    #[test]
+    fn the_operator_clear_lifts_exactly_a_quarantine_and_nothing_else() {
+        // The lift: quarantined → Ready, persisted, history preserved.
+        let gate = ChainParticipationGate::new(true);
+        gate.record_switch(3);
+        gate.quarantine();
+        assert!(gate.operator_clear_quarantine(), "a quarantine is exactly what the override clears");
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+        assert!(gate.allows_participation());
+        assert_eq!(gate.restored_switches(), 3, "the switch counter must survive the clear — the cap still guards");
+
+        // Not a review-escape: CandidateReview has a deadline, not an ambiguity awaiting a human.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(u64::MAX);
+        assert!(!gate.operator_clear_quarantine(), "a review is not cleared by the quarantine override");
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
+
+        // A no-op outside quarantine, and inert on a disabled gate.
+        let gate = ChainParticipationGate::new(true);
+        assert!(!gate.operator_clear_quarantine());
+        let gate = ChainParticipationGate::new(false);
+        gate.quarantine();
+        assert!(!gate.operator_clear_quarantine());
     }
 
     #[test]

@@ -833,6 +833,21 @@ Do you confirm? (y/n)";
         )
         .with_persistence(chain_participation_store),
     );
+    // ADR-0025's operator intervention. Placed after restore and before anything consults the
+    // gate, so the clear is indistinguishable from having been resolved before boot. WARN on
+    // every firing on purpose: the flag re-clears each boot it is left in place for, and a unit
+    // file that silently neuters quarantine forever is the exact hazard the log line names.
+    if args.clear_quarantine {
+        if chain_participation.operator_clear_quarantine() {
+            warn!(
+                "--clear-quarantine: a persisted Quarantined participation state was CLEARED by operator override. This \
+                 node resumes normal participation on the chain it is on. Remove the flag from the service unit — left in \
+                 place it re-clears on every restart, and a quarantine that a flag always clears is not a quarantine."
+            );
+        } else {
+            info!("--clear-quarantine: nothing to clear (participation is not quarantined).");
+        }
+    }
     match chain_participation.state() {
         kaspa_core::chain_participation::ChainParticipation::Ready => {}
         state => warn!(
