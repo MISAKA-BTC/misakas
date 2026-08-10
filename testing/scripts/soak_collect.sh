@@ -55,7 +55,11 @@ while read -r role target rpc logfile; do
     panics=\$(grep -ac 'panicked at' '$logfile' 2>/dev/null || echo 0)
     quar=\$(grep -ac 'QUARANTINED' '$logfile' 2>/dev/null || echo 0)
     permits=\$(grep -ac 'RecoveryPermitGranted' '$logfile' 2>/dev/null || echo 0)
-    bin=\$(sha256sum \$(readlink -f /proc/\$(pgrep -n kaspad 2>/dev/null)/exe 2>/dev/null) 2>/dev/null | cut -c1-12)
+    # The pid comes from the RPC port's listener, not from pgrep: these hosts also run
+    # regression fixtures named kaspad, and 'newest kaspad' is usually one of those.
+    port='$rpc'; port=\${port##*:}
+    pid=\$(ss -tlnp 2>/dev/null | grep \":\$port \" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
+    bin=\$(sha256sum \$(readlink -f /proc/\${pid:-0}/exe 2>/dev/null) 2>/dev/null | cut -c1-12)
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       \"\${pp:0:16}\" \"\${bw:-}\" \"\${daa:-}\" \"\${sy:-}\" \"\$gate\" \"\$panics\" \"\$quar\" \"\$permits\" \"\${bin:-unknown}\"

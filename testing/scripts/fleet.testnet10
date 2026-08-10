@@ -1,0 +1,9 @@
+# testnet-10 production fleet — the flag-day update of 2026-08-10 (candidate 00d1294).
+# All three run the candidate: the fingerprint handshake refuses pre-candidate builds,
+# so an in-band 'base' role cannot exist on this network. The pre-update chain identity
+# recorded in docs/testing/testnet10-update-2026-08-10.md is the baseline instead.
+#
+# role  ssh-target              rpc              logfile
+cand    root@95.111.236.186     127.0.0.1:26610  /root/kpq-testnet-t10/misaka-testnet-10/logs/rusty-kaspa.log
+cand    ubuntu@160.16.131.119   127.0.0.1:26610  /home/ubuntu/kpq-testnet/misaka-testnet-10/logs/rusty-kaspa.log
+cand    root@5.104.81.23        127.0.0.1:26610  /root/kpq-testnet-t10/misaka-testnet-10/logs/rusty-kaspa.log
