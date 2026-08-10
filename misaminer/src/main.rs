@@ -64,6 +64,20 @@ struct Args {
     /// multi-datacenter mesh from out-running propagation (GHOSTDAG split-brain) at low difficulty.
     #[arg(long, default_value_t = 1000)]
     min_block_interval_ms: u64,
+    /// F3 (t10): mine even when the node reports `is_synced=false` on the template. By default the
+    /// miner REFUSES such templates: extending an unsynced node's chain at floored difficulty is how
+    /// an isolated node builds a divergent fork forever (and, via its own fresh sink, even reports
+    /// itself synced again ~11 minutes later). Opt in ONLY for bootstrapping an isolated devnet/simnet
+    /// (whose stale genesis timestamp keeps `is_synced=false` until the first block is mined) — or a
+    /// coordinated cold start of a halted network — never in normal public-network operation.
+    #[arg(long, default_value_t = false)]
+    mine_when_not_synced: bool,
+}
+
+/// F3 (t10), ported from `kaspa-pq-miner` (commit 0719a49): whether a fetched template must be
+/// refused instead of mined. Pure so the rule is testable; the caller supplies both inputs.
+fn refuse_unsynced_template(template_is_synced: bool, mine_when_not_synced: bool) -> bool {
+    !template_is_synced && !mine_when_not_synced
 }
 
 /// Whether the unsafe raw-secret CLI override (MISAKA_ALLOW_UNSAFE_CLI_SECRETS=1)
@@ -189,6 +203,10 @@ async fn main() {
     }
     // Initialize so the first block is mined immediately (no startup wait).
     let mut last_block = std::time::Instant::now().checked_sub(min_interval).unwrap_or_else(std::time::Instant::now);
+    // F3: throttle the unsynced-refusal warn to one line per 30 s (the refusal loop spins at 2 s).
+    // Initialized in the past so the FIRST refusal logs immediately.
+    let mut last_unsynced_log =
+        std::time::Instant::now().checked_sub(std::time::Duration::from_secs(30)).unwrap_or_else(std::time::Instant::now);
 
     let mut mined = 0u64;
     loop {
@@ -208,6 +226,22 @@ async fn main() {
                 continue;
             }
         };
+
+        // F3 (t10): refuse to extend an unsynced node's chain. An isolated node at
+        // floored difficulty that keeps mining builds a divergent fork forever and
+        // even self-reports synced again once its own sink is fresh — the exact
+        // testnet-10 runaway. Devnet bootstrap (stale genesis ⇒ is_synced=false
+        // until the first block) opts in explicitly with --mine-when-not-synced.
+        if refuse_unsynced_template(template.is_synced, args.mine_when_not_synced) {
+            if last_unsynced_log.elapsed() >= std::time::Duration::from_secs(30) {
+                log::warn!(
+                    "node reports is_synced=false — refusing to mine on an unsynced template (devnet bootstrap: pass --mine-when-not-synced)"
+                );
+                last_unsynced_log = std::time::Instant::now();
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        }
 
         // Convert the template header to a consensus Header to drive the Layer-0 grind.
         let header: Header = match (&template.block.header).try_into() {
@@ -253,7 +287,19 @@ fn num_threads_label() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::refuse_unsynced_template;
     use super::unsafe_cli_secrets_allowed;
+
+    /// F3 (t10): the refusal is the DEFAULT for an unsynced template, and the override flag is the
+    /// only thing that lifts it. A synced template is never refused, flag or no flag — the flag
+    /// widens what may be mined, it must never narrow it.
+    #[test]
+    fn unsynced_templates_are_refused_unless_overridden() {
+        assert!(refuse_unsynced_template(false, false), "unsynced + no override = refuse (the F3 default)");
+        assert!(!refuse_unsynced_template(false, true), "the override lifts the refusal for a cold start");
+        assert!(!refuse_unsynced_template(true, false), "a synced template mines without any flag");
+        assert!(!refuse_unsynced_template(true, true), "the flag must not affect synced templates");
+    }
 
     // Audit M-6: the raw-secret CLI override must be honored ONLY in dev builds.
     #[test]

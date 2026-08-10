@@ -103,6 +103,17 @@ Restart command lines: each host's `cmdline.new` — the recorded production fla
 kept on purpose: if that host ever returns it is a live straggler, and its refusal at
 handshake is a soak observation.
 
+**Miner-side F3 coverage caveat (found 2026-08-10, fixed same day).** The "tested pair"
+above was true of `kaspa-pq-miner`, where F3 (0719a49) landed — but the binary the
+production unit template actually runs is `misaminer`, which at deploy time had NO
+`is_synced` check at all and mined unconditionally (the exact runaway that built Branch A).
+The staged cold-start miner (`30624eb3…`) therefore needs no override flag to mine the
+halted network — and equally would not have refused to re-mine a dead branch. F3 has now
+been ported to `misaminer` (same refusal, same `--mine-when-not-synced` override, same 30 s
+warn throttle, refusal predicate unit-tested); a miner rebuilt at or after that commit
+requires the explicit flag for the cold start, and the runaway path is closed for both
+miner binaries.
+
 ## Branch M, and why the order below is the order
 
 A's 28.2 M chain is **Branch A** — the difficulty-floor branch it self-mined while
