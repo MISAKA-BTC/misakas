@@ -33,8 +33,12 @@ A third historical peer, `217.178.101.111:26211`, was unreachable.
 Same pruning point, so the split is within one pruning period; A holds the heavier chain
 (+1.37 M DAA, +88 G blue work); B's sink equals its own pruning point — the stuck state the
 F1/F2 fixes exist for. `misaka-kaspad`/`misaka-validator`/`misaka-miner` units: inactive on
-both (the nodes run as raw processes; exact command lines are preserved on each host as
-`cmdline.recorded` next to the binary). `misaka-dnsseeder` units: active on both.
+both. Both production nodes run under systemd as **`kaspad-tn.service`** (`Restart=always` —
+a raw `kill` is answered by a respawn, discovered the hard way during B's cutover; every binary
+swap goes through `systemctl stop`). Exact command lines preserved per host as
+`cmdline.recorded`, unit backups as `kaspad-tn.service.bak-pre-candidate-20260810`.
+`misaka-dnsseeder` units: active on both, running pre-F5 binaries (`daa1143c…`) to be updated
+to the candidate seeder (`b4c71dba…`) once the nodes are stable.
 
 ## What is being installed
 
@@ -45,7 +49,12 @@ chose not to wait, and the residual risk is recorded here rather than hidden). s
 
 | artifact | sha256 |
 |---|---|
-| kaspad (linux x86_64, C-built) | recorded in `cand-build.sha256` on each host at install |
+| kaspad | `5ed2dce364015fdd81ca2412ee0193cf2d5d4cb5737fe4652301687fbf458e8d` |
+| misaka-dnsseeder | `b4c71dba09d1cda0c1347084ae52e89611c1de502f7ce2bda390fb2b504977c7` |
+| misaminer | `30624eb3161e333584942cb2ac4a07c80ff425cd69970e223bcbe5cd5af0dc3a` |
+
+(also in `cand-build.sha256` on each host; the pre-update `kaspad` on A and B was
+`4decb38c9c91e2c9…`, kept as `kaspad.prev` beside the installed candidate)
 
 Restart command lines: each host's `cmdline.new` — the recorded production flags plus
 `--enforce-chain-participation` (the gate under soak) and `--enable-unsynced-mining`
