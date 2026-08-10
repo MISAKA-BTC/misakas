@@ -860,12 +860,17 @@ impl VirtualStateProcessor {
                 Some(i) => {
                     let (a, e) = (&coinbase.outputs[i], &expected_coinbase.outputs[i]);
                     kaspa_core::warn!(
-                        "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; first diff @{i}: value_eq={} script_eq={} payload_eq={} (act_value={} exp_value={})",
+                        "[coinbase-mismatch] outputs act={n_act} exp={n_exp}; first diff @{i}: value_eq={} script_eq={} payload_eq={} (act_value={} exp_value={}); this node generated {} validator-reward output(s) and {} mergeset reward(s)",
                         a.value == e.value,
                         a.script_public_key == e.script_public_key,
                         coinbase.payload == expected_coinbase.payload,
                         a.value,
                         e.value,
+                        // Which HALF of the coinbase disagrees. Without this the shape alone
+                        // cannot say whether the overlay's fan-out or the base mergeset payout is
+                        // the one that differs, and those are different investigations.
+                        validator_reward_outputs.len(),
+                        mergeset_rewards.len(),
                     );
                 }
                 None => {
@@ -945,18 +950,31 @@ impl VirtualStateProcessor {
         // Resolve eligible, recent, CANONICAL attestations (canonical order). Recency
         // (§B.3(c)): an attestation whose target is older than the window earns
         // nothing — keeps the uniqueness walk below bounded.
+        // Why each attestation did NOT earn a reward, for the one caller that needs it: a coinbase
+        // mismatch. Two nodes that disagree about this fan-out disagree about block validity, and
+        // "outputs act=3 exp=2" alone sends the investigation to the wrong half of the subsystem —
+        // it says the sets differ, not which attestation one side dropped or on which test. Kept
+        // as a per-block tally rather than a log, so the mismatch path can print it and every
+        // other path pays nothing.
+        let mut dropped: Vec<(u64, &'static str)> = Vec::new();
         let mut attestations = Vec::new();
         for att in attestations_from_accepted_txs(txs) {
             if daa_score.saturating_sub(att.target_daa_score) > window {
+                dropped.push((att.epoch, "stale_beyond_reward_window"));
                 continue;
             }
             // v3 canonical gate: the epoch must be creditable (ready, non-duplicate) and the
             // attestation must name its canonical anchor exactly.
             let Some(anchor) = creditable.get(&att.epoch) else {
+                dropped.push((att.epoch, "epoch_not_creditable_at_selected_parent"));
                 continue;
             };
             if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
+                dropped.push((att.epoch, "target_is_not_this_chains_canonical_anchor"));
                 continue;
+            }
+            if bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score).is_none() {
+                dropped.push((att.epoch, "bond_not_active_at_target"));
             }
             if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
                 // ADR-0018 §E: carry the bond's stake — the proportional weight in the
@@ -1022,6 +1040,19 @@ impl VirtualStateProcessor {
 
         let (mut outputs, rewarded_keys) =
             validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded);
+        // Eligible but unpaid: the §B.3(c) cross-block dedup already rewarded this (bond, epoch)
+        // in the window, or the whole-output pool cap truncated the tail. Both are legitimate —
+        // and both are also exactly how two nodes end up building different coinbases, so the
+        // gap between "eligible" and "paid" is worth naming when it exists.
+        if rewarded_keys.len() != attestations.len() {
+            info!(
+                "[validator-fanout] daa={daa_score} eligible={} paid={} outputs={} (dedup window holds {} already-rewarded key(s), pool={participation_pool}, expected_stake={expected_stake})",
+                attestations.len(),
+                rewarded_keys.len(),
+                outputs.len(),
+                already_rewarded.len(),
+            );
+        }
 
         // ADR-0018 "本格版" (PoS-v2) §E deferred quality bonus: append the bonus outputs for any
         // epoch THIS block first buries beyond the finalization window (φS-gated), recomputed from
@@ -1029,6 +1060,39 @@ impl VirtualStateProcessor {
         // (buried by `reward_window + max_reorg_horizon`) and disjoint from the participation
         // epochs (recent, within `reward_window`), so the two output sets never double-pay.
         outputs.extend(self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view));
+
+        // An attestation that a block INCLUDED but this node will not reward — for any reason
+        // other than plain staleness — is the precursor to a coinbase mismatch, and until now it
+        // left no trace at all. Staleness is routine (a miner may include an old shard; it simply
+        // earns nothing), so it is counted and not named; the other three mean this node's view
+        // of the chain differs from the includer's, which is exactly what a mismatch is made of.
+        let stale = dropped.iter().filter(|(_, why)| *why == "stale_beyond_reward_window").count();
+        let disagreements: Vec<String> =
+            dropped.iter().filter(|(_, why)| *why != "stale_beyond_reward_window").map(|(e, why)| format!("epoch{e}:{why}")).collect();
+        if !disagreements.is_empty() {
+            info!(
+                "[validator-fanout] daa={daa_score} rewarding {} attestation(s), {} stale, but {} included one(s) this node does not consider rewardable: [{}]",
+                attestations.len(),
+                stale,
+                disagreements.len(),
+                disagreements.join(","),
+            );
+        } else if !attestations.is_empty() && outputs.is_empty() {
+            // Eligible attestations and nobody paid. Either the pool is empty or the denominator
+            // is, and both are silent failures that surface much later as a coinbase mismatch
+            // against a node that did pay — so say it here, where the inputs are still in hand.
+            info!(
+                "[validator-fanout] daa={daa_score} {} eligible attestation(s) earned NOTHING: participation_pool={participation_pool} expected_stake={expected_stake} validator_pool={validator_pool}",
+                attestations.len(),
+            );
+        } else {
+            trace!(
+                "[validator-fanout] daa={daa_score} txs={} eligible={} outputs={} pool={participation_pool} expected_stake={expected_stake} stale={stale}",
+                txs.len(),
+                attestations.len(),
+                outputs.len(),
+            );
+        }
 
         (outputs, rewarded_keys, newly_included_stake, expected_stake)
     }
