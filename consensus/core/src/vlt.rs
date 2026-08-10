@@ -2006,9 +2006,18 @@ pub enum PersistedVltActivationState {
     /// An eligible snapshot was found in `scheduled_at_epoch`; the switch is reserved for
     /// `activation_epoch`. Bootstrap weight remains in force until the boundary re-evaluation.
     ActivationScheduled,
-    /// Weighted finality took effect at `activation_epoch`. Terminal — see
-    /// [`tick_vlt_activation`]: no input sequence returns an `Active` record to an earlier state.
+    /// Weighted finality took effect at `activation_epoch`.
     Active,
+    /// Weighted finality took effect and the snapshot then stopped being eligible (§10.2): the
+    /// last finalized anchor is held, PoW keeps advancing the base ledger, and no NEW anchor is
+    /// finalized until an eligible snapshot returns.
+    ///
+    /// Persisted, and that is the point. "Which side of activation am I on" cannot be re-derived
+    /// once weight has collapsed — an unpersisted recovery would look exactly like a network that
+    /// never activated, which is the one state that may still return to bonded-stake bootstrap.
+    /// From here the only exits are [`Self::ActivationScheduled`] (weight returned, re-prove it at
+    /// a boundary) and back to itself; never [`Self::AwaitingEligibleSnapshot`].
+    Recovery,
 }
 
 impl PersistedVltActivationState {
@@ -2018,7 +2027,15 @@ impl PersistedVltActivationState {
             Self::AwaitingEligibleSnapshot => "awaiting_eligible_snapshot",
             Self::ActivationScheduled => "activation_scheduled",
             Self::Active => "active",
+            Self::Recovery => "recovery",
         }
+    }
+
+    /// Whether weighted finality has ever taken effect on this consensus. `Recovery` counts:
+    /// it is post-activation, so the vote is VLT-denominated and bootstrap is behind us for
+    /// good. This is the predicate that forbids a return to bonded stake.
+    pub fn has_activated(&self) -> bool {
+        matches!(self, Self::Active | Self::Recovery)
     }
 }
 
@@ -2080,8 +2097,9 @@ impl VltActivationRecord {
     }
 
     /// Whether weighted finality has taken effect — the fact that forbids bootstrap fallback.
+    /// True in `Recovery` too: recovery is a pause in finalizing, not an un-activation.
     pub fn is_active(&self) -> bool {
-        self.state == PersistedVltActivationState::Active
+        self.state.has_activated()
     }
 }
 
@@ -2275,6 +2293,20 @@ pub fn vote_snapshot_commitment(snapshot_root: Hash64, validator_set_root: Hash6
 /// be persisted. The caller persists the record iff it differs from `prev` — the step is
 /// idempotent within an epoch, so re-running it (restart, reorg inside one epoch) rewrites
 /// nothing.
+/// The §10.2 report: finality is paused, and this is the anchor the network stays on meanwhile.
+/// One helper because every arm that reaches it must name the same anchor and the same floor —
+/// a recovery that reported a different anchor per call site would be a recovery to nowhere.
+fn recovery_state(last_finalized_anchor: Hash64, total_weight: u128, blocker: VltActivationBlocker) -> VltActivationState {
+    VltActivationState::Recovery {
+        last_finalized_anchor,
+        total_weight,
+        min_network_compute: match blocker {
+            VltActivationBlocker::BelowMinNetworkCompute { min_network_compute, .. } => min_network_compute,
+            _ => 0,
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn tick_vlt_activation(
     shadow_active: bool,
@@ -2296,38 +2328,66 @@ pub fn tick_vlt_activation(
     }
     let (epoch, total_weight) = newest.unwrap_or((0, 0));
     match prev {
-        // Terminal: once weighted finality has taken effect, no input returns the record to a
-        // pre-active state. §4's answer to weight loss is to hold the last finalized anchor
-        // (Recovery), never to re-denominate onto bonded stake — two authorities on one chain,
-        // and a fork free to pick the one it prefers.
-        Some(r) if r.state == P::Active => {
-            let state = match eligibility {
-                Ok(()) => VltActivationState::Active {
-                    epoch,
+        // Active: finalizing, until the snapshot stops being eligible. §4/§10.2's answer to weight
+        // loss is to hold the last finalized anchor and stop finalizing — never to re-denominate
+        // onto bonded stake, which would put two authorities on one chain and let a fork pick the
+        // one it prefers. The record moves to `Recovery` so that fact survives a restart: an
+        // unpersisted recovery is indistinguishable from a network that never activated, and that
+        // network IS allowed back onto bootstrap weight.
+        Some(r) if r.state == P::Active => match eligibility {
+            Ok(()) => (
+                Some(r.clone()),
+                VltActivationState::Active { epoch, snapshot_root, total_weight, quorum_weight: bft_quorum(total_weight) },
+            ),
+            Err(blocker) => (
+                Some(VltActivationRecord { state: P::Recovery, ..r.clone() }),
+                recovery_state(last_finalized_anchor, total_weight, blocker),
+            ),
+        },
+        // §10.2, the return path: weight is back, so RESERVE the switch again rather than
+        // resuming mid-epoch. Coming back from recovery is exactly as dangerous as activating the
+        // first time — a snapshot that just became eligible may stop being so before its boundary
+        // — so it goes through the same reservation and the same boundary re-evaluation. The
+        // record keeps its ORIGINAL `activation_epoch`: that is when this consensus first
+        // finalized under VLT weight, and re-entry does not rewrite history. The new reservation
+        // rides `scheduled_at_epoch`.
+        Some(r) if r.state == P::Recovery => match eligibility {
+            Err(blocker) => (Some(r.clone()), recovery_state(last_finalized_anchor, total_weight, blocker)),
+            Ok(()) => {
+                let record = VltActivationRecord {
+                    state: P::ActivationScheduled,
+                    source_anchor: last_finalized_anchor,
+                    snapshot_epoch: epoch,
                     snapshot_root,
+                    scheduled_at_epoch: current_epoch,
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
-                },
-                Err(blocker) => VltActivationState::Recovery {
-                    last_finalized_anchor,
+                    ..r.clone()
+                };
+                let state = VltActivationState::ActivationScheduled {
+                    activation_epoch: current_epoch + 1,
+                    source_anchor: last_finalized_anchor,
+                    snapshot_root,
                     total_weight,
-                    min_network_compute: match blocker {
-                        VltActivationBlocker::BelowMinNetworkCompute { min_network_compute, .. } => min_network_compute,
-                        _ => 0,
-                    },
-                },
-            };
-            (Some(r.clone()), state)
-        }
+                };
+                (Some(record), state)
+            }
+        },
         // A committed reservation holds until its boundary — unless its snapshot loses
-        // eligibility first (a successful challenge can do that), in which case it cancels back
-        // to Awaiting rather than activating on a proof that no longer holds.
+        // eligibility first (a successful challenge can do that), in which case it cancels rather
+        // than activating on a proof that no longer holds. Where it cancels TO depends on whether
+        // this consensus has ever finalized under VLT weight: a first-time reservation falls back
+        // to Awaiting (bootstrap weight is still in force), a re-entry falls back to Recovery
+        // (bootstrap is behind us for good — §10.2).
         Some(r) if r.state == P::ActivationScheduled => match eligibility {
-            Err(blocker) => (
-                Some(VltActivationRecord::awaiting()),
-                VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker },
+            Err(blocker) if r.activation_epoch != 0 && r.scheduled_at_epoch >= r.activation_epoch => (
+                Some(VltActivationRecord { state: P::Recovery, ..r.clone() }),
+                recovery_state(last_finalized_anchor, total_weight, blocker),
             ),
-            Ok(()) if current_epoch >= r.activation_epoch => {
+            Err(blocker) => {
+                (Some(VltActivationRecord::awaiting()), VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker })
+            }
+            Ok(()) if current_epoch > r.scheduled_at_epoch && current_epoch >= r.activation_epoch => {
                 // The boundary re-evaluation just passed: weighted finality takes effect, at the
                 // epoch that was reserved, stamped with the snapshot the re-evaluation approved.
                 let record = VltActivationRecord {
@@ -2341,12 +2401,7 @@ pub fn tick_vlt_activation(
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
                 };
-                let state = VltActivationState::Active {
-                    epoch,
-                    snapshot_root,
-                    total_weight,
-                    quorum_weight: bft_quorum(total_weight),
-                };
+                let state = VltActivationState::Active { epoch, snapshot_root, total_weight, quorum_weight: bft_quorum(total_weight) };
                 (Some(record), state)
             }
             Ok(()) => (
@@ -2363,10 +2418,9 @@ pub fn tick_vlt_activation(
         // one. The validator set and its weights are fixed within an epoch, and compute
         // finalized in `E` is usable from `E+1` at the earliest.
         _ => match eligibility {
-            Err(blocker) => (
-                Some(VltActivationRecord::awaiting()),
-                VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker },
-            ),
+            Err(blocker) => {
+                (Some(VltActivationRecord::awaiting()), VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker })
+            }
             Ok(()) => {
                 let record = VltActivationRecord {
                     version: VLT_ACTIVATION_RECORD_VERSION_V1,
@@ -3326,7 +3380,10 @@ mod tests {
         };
 
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
-        assert_eq!(tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000).1, VltActivationState::PreShadow);
+        assert_eq!(
+            tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000).1,
+            VltActivationState::PreShadow
+        );
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
             tick_vlt_activation(true, false, None, 10, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000).1,
@@ -3344,10 +3401,7 @@ mod tests {
         // The boundary is the whole point of the floor, and the epoch delay the whole point of the
         // reservation.
         assert!(matches!(tick(Some((4, 999)), 5, true), VltActivationState::AwaitingEligibleSnapshot { .. }));
-        assert!(matches!(
-            tick(Some((4, 1_000)), 5, true),
-            VltActivationState::ActivationScheduled { activation_epoch: 11, .. }
-        ));
+        assert!(matches!(tick(Some((4, 1_000)), 5, true), VltActivationState::ActivationScheduled { activation_epoch: 11, .. }));
 
         // An unconfirmed source anchor never schedules: the snapshot is not yet a fact about the
         // shared prefix, so two branches could still disagree about the denominator.
@@ -3399,7 +3453,15 @@ mod tests {
         let (r, s) = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 0)), root, anchor, e, 5_000);
         assert!(matches!(s, VltActivationState::Recovery { .. }), "got {s:?}");
         assert!(!matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "Active must never fall back to bootstrap");
-        assert_eq!(r.as_ref(), Some(&active), "and the record must not move either");
+        // The record follows the report into Recovery — and keeps every stamped field, because
+        // recovery is a pause in finalizing, not a re-activation.
+        let recovered = r.expect("record");
+        assert_eq!(recovered.state, PersistedVltActivationState::Recovery);
+        assert!(recovered.is_active(), "recovery is still post-activation: bootstrap is behind us");
+        assert_eq!(
+            (recovered.scheduled_at_epoch, recovered.activation_epoch, recovered.snapshot_root),
+            (active.scheduled_at_epoch, active.activation_epoch, active.snapshot_root)
+        );
 
         // With the record Active and the snapshot healthy again ⇒ active, on live values.
         let e = vlt_activation_eligibility(true, 3_000, 5, true, &p);
@@ -3432,7 +3494,12 @@ mod tests {
         assert_eq!(scheduled.quorum_weight, bft_quorum(2_000));
         assert_eq!(
             s,
-            VltActivationState::ActivationScheduled { activation_epoch: 11, source_anchor: anchor, snapshot_root: root, total_weight: 2_000 }
+            VltActivationState::ActivationScheduled {
+                activation_epoch: 11,
+                source_anchor: anchor,
+                snapshot_root: root,
+                total_weight: 2_000
+            }
         );
 
         // Still epoch 10 (a second recompute inside the epoch): the reservation holds, unchanged —
@@ -3463,10 +3530,12 @@ mod tests {
             vlt_activation_eligibility(true, 100, 5, true, &p),
             fence,
         );
-        assert_eq!(r.as_ref(), Some(&active), "Active is terminal");
+        assert_eq!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::Recovery), "weight loss pauses finality");
         assert!(matches!(s, VltActivationState::Recovery { total_weight: 100, min_network_compute: 1_000, .. }));
+        // Eligibility holding while the record is still Active keeps it Active — the pause is
+        // driven by the eligibility verdict, not by the passage of epochs.
         let (r, s) = tick_vlt_activation(true, true, Some(&active), 13, Some((7, 3_000)), h64(13), anchor, ok(3_000), fence);
-        assert_eq!(r.as_ref(), Some(&active), "recovering weight does not re-stamp the activation");
+        assert_eq!(r.as_ref(), Some(&active), "an eligible Active record is not re-stamped");
         assert!(matches!(s, VltActivationState::Active { .. }));
 
         // The cancel path: a reservation whose snapshot loses eligibility before its boundary —
@@ -3482,7 +3551,17 @@ mod tests {
         assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
 
         // From the cancellation, a later eligible snapshot starts a FRESH reservation.
-        let (r, _) = tick_vlt_activation(true, true, Some(&VltActivationRecord::awaiting()), 14, Some((8, 2_000)), root, anchor, ok(2_000), fence);
+        let (r, _) = tick_vlt_activation(
+            true,
+            true,
+            Some(&VltActivationRecord::awaiting()),
+            14,
+            Some((8, 2_000)),
+            root,
+            anchor,
+            ok(2_000),
+            fence,
+        );
         assert_eq!((r.as_ref().unwrap().scheduled_at_epoch, r.as_ref().unwrap().activation_epoch), (14, 15));
 
         // A node that crossed several epochs in one commit (restart, IBD) still activates at the
@@ -3496,6 +3575,84 @@ mod tests {
         let e = vlt_activation_eligibility(true, 2_000, 5, true, &p);
         let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence);
         assert_eq!((r.as_ref(), s), (Some(&active), VltActivationState::Shadow));
+    }
+
+    /// §10.2's return path, which is the whole of PR 6's state machine: weight collapses, the
+    /// network holds its last finalized anchor, and when weight returns it must PROVE itself at a
+    /// boundary again rather than resuming mid-epoch. The one transition that must never exist is
+    /// recovery → awaiting: that is the door back to bonded-stake bootstrap, and it is shut once
+    /// anything has been finalized under VLT weight.
+    #[test]
+    fn recovery_returns_through_a_reservation_and_never_to_bootstrap() {
+        let root = h64(9);
+        let anchor = h64(7);
+        let p = VltParams { min_network_compute: 1_000, min_active_validators: 2, ..VltParams::INERT };
+        let ok = |w: u128| vlt_activation_eligibility(true, w, 5, true, &p);
+        let dead = || vlt_activation_eligibility(true, 0, 0, true, &p);
+        let fence = 5_000u64;
+        let tick = |prev: Option<&VltActivationRecord>, epoch: u64, w: u128, e: Result<(), VltActivationBlocker>| {
+            tick_vlt_activation(true, true, prev, epoch, Some((epoch - 2, w)), root, anchor, e, fence)
+        };
+
+        // Reach Active the ordinary way.
+        let (r, _) = tick(None, 10, 3_000, ok(3_000));
+        let (r, _) = tick(r.as_ref(), 11, 3_000, ok(3_000));
+        let active = r.expect("record");
+        assert_eq!(active.state, PersistedVltActivationState::Active);
+
+        // Weight collapses (every validator's compute aged out, or the network partitioned away):
+        // the record pauses in Recovery and the report names the anchor being held.
+        let (r, s) = tick(Some(&active), 12, 0, dead());
+        let recovering = r.expect("record");
+        assert_eq!(recovering.state, PersistedVltActivationState::Recovery);
+        assert!(matches!(s, VltActivationState::Recovery { last_finalized_anchor, .. } if last_finalized_anchor == anchor));
+        // It stays there while the weight is gone, however many epochs pass.
+        let (r, s) = tick(Some(&recovering), 20, 0, dead());
+        assert_eq!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::Recovery));
+        assert!(matches!(s, VltActivationState::Recovery { .. }));
+
+        // Weight returns ⇒ a RESERVATION, not an immediate resumption. The original
+        // `activation_epoch` is history and stays put; the new reservation rides scheduled_at.
+        let (r, s) = tick(Some(&recovering), 21, 2_000, ok(2_000));
+        let rescheduled = r.expect("record");
+        assert_eq!(rescheduled.state, PersistedVltActivationState::ActivationScheduled);
+        assert_eq!(rescheduled.scheduled_at_epoch, 21);
+        assert_eq!(rescheduled.activation_epoch, active.activation_epoch, "re-entry does not rewrite when this chain first activated");
+        assert!(matches!(s, VltActivationState::ActivationScheduled { activation_epoch: 22, .. }));
+        // Same epoch again: idempotent, no re-stamp.
+        assert_eq!(tick(Some(&rescheduled), 21, 2_500, ok(2_500)).0.as_ref(), Some(&rescheduled));
+
+        // The boundary re-evaluation passes ⇒ finalizing again.
+        let (r, s) = tick(Some(&rescheduled), 22, 2_400, ok(2_400));
+        assert_eq!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::Active));
+        assert!(matches!(s, VltActivationState::Active { total_weight: 2_400, .. }));
+
+        // A re-entry that loses eligibility before its boundary falls back to RECOVERY, not to
+        // Awaiting: bootstrap weight is not an option once anything has been finalized.
+        let (r, s) = tick(Some(&rescheduled), 22, 0, dead());
+        assert_eq!(
+            r.as_ref().map(|r| r.state),
+            Some(PersistedVltActivationState::Recovery),
+            "a cancelled re-entry returns to recovery"
+        );
+        assert!(matches!(s, VltActivationState::Recovery { .. }));
+
+        // Whereas a FIRST-time reservation that loses eligibility does fall back to Awaiting,
+        // because bootstrap finality is still what is in force there.
+        let (r, _) = tick(None, 30, 2_000, ok(2_000));
+        let first = r.expect("record");
+        assert_eq!(first.activation_epoch, 31);
+        let (r, s) = tick(Some(&first), 30, 0, dead());
+        assert_eq!(r, Some(VltActivationRecord::awaiting()), "a pre-activation reservation cancels to awaiting");
+        assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
+
+        // And no input sequence from Recovery reaches Awaiting.
+        for w in [0u128, 1, 999, 5_000] {
+            let e = if w >= 1_000 { ok(w) } else { vlt_activation_eligibility(true, w, 5, true, &p) };
+            let (r, s) = tick(Some(&recovering), 40, w, e);
+            assert!(!matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "w={w} reported awaiting");
+            assert_ne!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::AwaitingEligibleSnapshot), "w={w}");
+        }
     }
 
     /// The frozen snapshot is only a shared denominator if its roots are a pure function of its

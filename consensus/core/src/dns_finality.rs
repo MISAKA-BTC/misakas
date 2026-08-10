@@ -5445,6 +5445,266 @@ pub fn build_finality_certificate(
 // Owned signature vectors ⇒ count-cached only, like the snapshot itself.
 impl MemSizeEstimator for DnsFinalityCertificate {}
 
+/// Persisted schema version for [`BftLlmCheckpoint`].
+pub const BFT_LLM_CHECKPOINT_VERSION_V1: u16 = 1;
+
+/// MISAKA §12.1: the weak-subjectivity package a joining node needs in order to trust a finalized
+/// prefix without replaying the chain that produced it.
+///
+/// A signature-based finality layer has a long-range problem that PoW does not: the signatures
+/// that finalized an old anchor were made by a validator set that may have since unbonded, so a
+/// node syncing from genesis cannot distinguish the real history from one an old key-holder wrote
+/// later. §12 answers it the standard way — the joining node needs a finalized checkpoint newer
+/// than the unbonding horizon — and this is that checkpoint, as one verifiable value.
+///
+/// Every field is either the anchor being vouched for, the proof that it was finalized, or a
+/// COMMITMENT to state the importer receives separately (the pruning snapshot). The commitments
+/// are what make the two halves checkable against each other: rows arrive, roots are re-derived,
+/// and a mismatch names which subsystem disagreed instead of surfacing later as an unexplained
+/// consensus split.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct BftLlmCheckpoint {
+    pub version: u16,
+    /// The network discriminator every signature in this package is bound to — the genesis hash
+    /// (ADR-0009 Addendum A.3). Carried so a checkpoint cannot be replayed onto another network,
+    /// where its signatures would verify against nothing and its roots would mean other things.
+    pub network_id: Hash64,
+    pub finalized_anchor: Hash64,
+    pub finalized_anchor_daa: u64,
+    /// The §7.2 proof that `finalized_anchor` reached its precommit quorum.
+    pub finality_certificate: DnsFinalityCertificate,
+    /// Where the §6 activation machine stood — so an importer resumes the same machine rather
+    /// than deriving a fresh opinion, exactly as a restart does.
+    pub activation_record: crate::vlt::VltActivationRecord,
+    pub snapshot_epoch: u64,
+    pub snapshot_root: Hash64,
+    pub validator_set_root: Hash64,
+    /// Commitments to the overlay state the importer receives with the pruning snapshot.
+    pub bond_state_root: Hash64,
+    pub capability_state_root: Hash64,
+    pub vlt_accumulator_root: Hash64,
+    pub model_table_hash: Hash64,
+    pub reward_state_root: Hash64,
+    /// The DAA score below which a bond may already have unbonded, so its signatures prove
+    /// nothing about the present. A checkpoint older than this is not a trust root — it is a
+    /// story told by keys with nothing at stake.
+    pub unbonding_horizon_start: u64,
+}
+
+/// Why a [`BftLlmCheckpoint`] was rejected. Specific by design: an importer that says only
+/// "invalid checkpoint" sends its operator to read the whole subsystem, and the whole point of
+/// carrying separate roots is to say which one disagreed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckpointError {
+    UnsupportedVersion(u16),
+    /// The package is for a different network than this node runs.
+    NetworkMismatch {
+        expected: Hash64,
+        got: Hash64,
+    },
+    /// The certificate certifies a different anchor (or DAA) than the checkpoint names.
+    AnchorMismatch,
+    /// The certificate was formed under a different denominator than the checkpoint commits to.
+    SnapshotRootMismatch,
+    ValidatorSetRootMismatch,
+    /// `quorum_weight != ⌊2·total/3⌋ + 1`, or the signed weight does not clear it.
+    QuorumArithmetic {
+        total_weight: u128,
+        quorum_weight: u128,
+        signed_weight: u128,
+    },
+    /// The per-signature weights do not sum to `signed_weight`.
+    SignedWeightMismatch {
+        declared: u128,
+        summed: u128,
+    },
+    /// Signatures are not in consensus order, or one signer appears twice.
+    SignatureOrder,
+    /// The checkpoint is not post-activation, so nothing it names was ever finalized by weight.
+    NotActivated,
+    /// The certificate's epoch predates the activation epoch — finality before there was any.
+    CertificatePredatesActivation {
+        certificate_epoch: u64,
+        activation_epoch: u64,
+    },
+    /// The unbonding horizon is not behind the anchor, so the package vouches for a point its
+    /// own signers could already have exited before.
+    HorizonNotBehindAnchor {
+        horizon: u64,
+        anchor_daa: u64,
+    },
+    /// A signer in the certificate is not in the validator set the snapshot carries.
+    UnknownSigner(Hash64),
+    /// A signer's weight in the certificate is not the weight the snapshot gives it.
+    SignerWeightMismatch {
+        validator_id: Hash64,
+        certificate: u128,
+        snapshot: u128,
+    },
+}
+
+impl Display for CheckpointError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedVersion(v) => write!(f, "checkpoint version {v} is not supported"),
+            Self::NetworkMismatch { expected, got } => write!(f, "checkpoint is for network {got}, this node runs {expected}"),
+            Self::AnchorMismatch => write!(f, "the finality certificate certifies a different anchor than the checkpoint names"),
+            Self::SnapshotRootMismatch => write!(f, "the certificate's snapshot_root differs from the checkpoint's"),
+            Self::ValidatorSetRootMismatch => write!(f, "the certificate's validator_set_root differs from the checkpoint's"),
+            Self::QuorumArithmetic { total_weight, quorum_weight, signed_weight } => {
+                write!(f, "quorum arithmetic does not hold: total={total_weight} quorum={quorum_weight} signed={signed_weight}")
+            }
+            Self::SignedWeightMismatch { declared, summed } => {
+                write!(f, "the certificate declares signed_weight {declared} but its signatures sum to {summed}")
+            }
+            Self::SignatureOrder => write!(f, "certificate signatures are out of consensus order or contain a duplicate signer"),
+            Self::NotActivated => {
+                write!(f, "the checkpoint's activation record has never activated, so nothing was finalized by weight")
+            }
+            Self::CertificatePredatesActivation { certificate_epoch, activation_epoch } => {
+                write!(f, "certificate epoch {certificate_epoch} predates the activation epoch {activation_epoch}")
+            }
+            Self::HorizonNotBehindAnchor { horizon, anchor_daa } => {
+                write!(f, "unbonding horizon {horizon} is not below the finalized anchor's DAA {anchor_daa}")
+            }
+            Self::UnknownSigner(id) => write!(f, "certificate signer {id} is not in the committed validator set"),
+            Self::SignerWeightMismatch { validator_id, certificate, snapshot } => {
+                write!(f, "signer {validator_id} weighs {certificate} in the certificate but {snapshot} in the snapshot")
+            }
+        }
+    }
+}
+
+/// One ML-DSA-87 verification the caller must perform: `(public key, digest, signature)` under
+/// [`PRECOMMIT_MLDSA87_CONTEXT`].
+///
+/// Returned rather than performed because `consensus-core` deliberately does not depend on the
+/// signature crate — every rule here stays a pure function of its inputs, and the crypto happens
+/// where the crypto lives. Nothing is skipped: [`BftLlmCheckpoint::signature_checks`] has already
+/// bound each triple to a committed validator row before handing it over.
+pub struct CheckpointSignatureCheck<'a> {
+    pub validator_id: Hash64,
+    pub public_key: &'a [u8],
+    pub digest: Hash,
+    pub signature: &'a [u8],
+}
+
+impl BftLlmCheckpoint {
+    /// Everything checkable from the package alone — no chain, no validator keys, no network.
+    ///
+    /// This is the cheap gate an importer runs before spending anything: a checkpoint that fails
+    /// here is malformed or forged in a way no amount of downloaded state would fix.
+    pub fn verify_structure(&self, expected_network_id: Hash64) -> Result<(), CheckpointError> {
+        if self.version != BFT_LLM_CHECKPOINT_VERSION_V1 {
+            return Err(CheckpointError::UnsupportedVersion(self.version));
+        }
+        if self.network_id != expected_network_id {
+            return Err(CheckpointError::NetworkMismatch { expected: expected_network_id, got: self.network_id });
+        }
+        let cert = &self.finality_certificate;
+        if cert.target_anchor != self.finalized_anchor || cert.target_anchor_daa != self.finalized_anchor_daa {
+            return Err(CheckpointError::AnchorMismatch);
+        }
+        if cert.snapshot_root != self.snapshot_root {
+            return Err(CheckpointError::SnapshotRootMismatch);
+        }
+        if cert.validator_set_root != self.validator_set_root {
+            return Err(CheckpointError::ValidatorSetRootMismatch);
+        }
+        if cert.quorum_weight != crate::vlt::bft_quorum(cert.total_weight)
+            || cert.signed_weight < cert.quorum_weight
+            || cert.total_weight == 0
+        {
+            return Err(CheckpointError::QuorumArithmetic {
+                total_weight: cert.total_weight,
+                quorum_weight: cert.quorum_weight,
+                signed_weight: cert.signed_weight,
+            });
+        }
+        let summed = cert.precommit_signatures.iter().fold(0u128, |acc, s| acc.saturating_add(s.signed_weight));
+        if summed != cert.signed_weight {
+            return Err(CheckpointError::SignedWeightMismatch { declared: cert.signed_weight, summed });
+        }
+        // Strictly ascending: the same order the snapshot's rows follow, and strictness is what
+        // rules out one signer counted twice to reach the bar.
+        if cert.precommit_signatures.windows(2).any(|w| {
+            (w[0].validator_id, w[0].bond_outpoint.transaction_id, w[0].bond_outpoint.index)
+                >= (w[1].validator_id, w[1].bond_outpoint.transaction_id, w[1].bond_outpoint.index)
+        }) {
+            return Err(CheckpointError::SignatureOrder);
+        }
+        if !self.activation_record.is_active() {
+            return Err(CheckpointError::NotActivated);
+        }
+        if cert.epoch < self.activation_record.activation_epoch {
+            return Err(CheckpointError::CertificatePredatesActivation {
+                certificate_epoch: cert.epoch,
+                activation_epoch: self.activation_record.activation_epoch,
+            });
+        }
+        if self.unbonding_horizon_start >= self.finalized_anchor_daa {
+            return Err(CheckpointError::HorizonNotBehindAnchor {
+                horizon: self.unbonding_horizon_start,
+                anchor_daa: self.finalized_anchor_daa,
+            });
+        }
+        Ok(())
+    }
+
+    /// Bind the certificate to the validator set the importer received, and return the ML-DSA
+    /// verifications that remain.
+    ///
+    /// The snapshot is checked against the checkpoint's committed roots FIRST, so the keys the
+    /// signatures are verified against are provably the ones the certificate was formed under —
+    /// otherwise an importer could be handed a set of keys that verify a forged certificate
+    /// perfectly.
+    pub fn signature_checks<'a>(
+        &'a self,
+        snapshot: &'a crate::vlt::VltVotingSnapshot,
+    ) -> Result<Vec<CheckpointSignatureCheck<'a>>, CheckpointError> {
+        if snapshot.snapshot_root != self.snapshot_root || snapshot.compute_snapshot_root() != self.snapshot_root {
+            return Err(CheckpointError::SnapshotRootMismatch);
+        }
+        if snapshot.validator_set_root != self.validator_set_root
+            || crate::vlt::VltVotingSnapshot::compute_validator_set_root(&snapshot.validators) != self.validator_set_root
+        {
+            return Err(CheckpointError::ValidatorSetRootMismatch);
+        }
+        let cert = &self.finality_certificate;
+        let mut checks = Vec::with_capacity(cert.precommit_signatures.len());
+        for sig in &cert.precommit_signatures {
+            let row = snapshot
+                .validators
+                .iter()
+                .find(|v| v.validator_id == sig.validator_id && v.bond_outpoint == sig.bond_outpoint)
+                .ok_or(CheckpointError::UnknownSigner(sig.validator_id))?;
+            if row.effective_weight != sig.signed_weight {
+                return Err(CheckpointError::SignerWeightMismatch {
+                    validator_id: sig.validator_id,
+                    certificate: sig.signed_weight,
+                    snapshot: row.effective_weight,
+                });
+            }
+            checks.push(CheckpointSignatureCheck {
+                validator_id: sig.validator_id,
+                public_key: &row.consensus_key,
+                digest: stake_precommit_message(
+                    self.network_id.as_byte_slice(),
+                    cert.epoch,
+                    cert.target_anchor,
+                    cert.target_anchor_daa,
+                    sig.locked_epoch,
+                    sig.locked_hash,
+                    sig.snapshot_commitment,
+                    sig.bond_outpoint,
+                ),
+                signature: &sig.signature,
+            });
+        }
+        Ok(checks)
+    }
+}
+
 /// Keep only the precommits whose declared lock matches what this chain shows, and turn them into
 /// contributions the ordinary tally can count.
 ///
@@ -8120,7 +8380,8 @@ mod tests {
         let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
         let anchor = Hash64::from_u64_word(77);
 
-        let snap = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &bonds, &vlt);
+        let snap =
+            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &bonds, &vlt);
         assert_eq!(snap.validators.len(), 3, "eligible-with-zero-weight is a committed fact, not an omission");
         for row in &snap.validators {
             let bond = bonds.iter().find(|b| b.validator_pubkey_hash == row.validator_id).unwrap();
@@ -8136,7 +8397,17 @@ mod tests {
         // Bond input order is a collection accident, never consensus content.
         let mut reversed: Vec<StakeBondRecord> = bonds.clone();
         reversed.reverse();
-        let again = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &reversed, &vlt);
+        let again = build_voting_snapshot(
+            anchor,
+            5_000,
+            10,
+            12,
+            Hash64::from_u64_word(88),
+            Hash64::from_u64_word(99),
+            &credits,
+            &reversed,
+            &vlt,
+        );
         assert_eq!(again.snapshot_root, snap.snapshot_root);
         assert_eq!(again.vote_commitment(), snap.vote_commitment());
 
@@ -8144,8 +8415,21 @@ mod tests {
         let mut late = vlt_bond(4, bond_amount);
         late.activation_daa_score = 6_000; // above the 5_000 pin
         let with_late = [bonds.as_slice(), &[late]].concat();
-        let pruned = build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &with_late, &vlt);
-        assert_eq!(pruned.validator_set_root, snap.validator_set_root, "a post-pin bond is on one branch only; the set must not see it");
+        let pruned = build_voting_snapshot(
+            anchor,
+            5_000,
+            10,
+            12,
+            Hash64::from_u64_word(88),
+            Hash64::from_u64_word(99),
+            &credits,
+            &with_late,
+            &vlt,
+        );
+        assert_eq!(
+            pruned.validator_set_root, snap.validator_set_root,
+            "a post-pin bond is on one branch only; the set must not see it"
+        );
     }
 
     /// The quorum is over *weight*, and a compute-less majority of validators cannot block or
@@ -8362,9 +8646,8 @@ mod tests {
             snapshot_commitment: snap.vote_commitment(),
             signature: vec![seed; 8],
         };
-        let cert = |records: &[PrecommitRecord]| {
-            build_finality_certificate(5, Hash64::from_bytes([9; 64]), anchor, 480, records, &snap)
-        };
+        let cert =
+            |records: &[PrecommitRecord]| build_finality_certificate(5, Hash64::from_bytes([9; 64]), anchor, 480, records, &snap);
 
         // B+C+D+E = 600 < 667: four signers and still no certificate — weight, not headcount.
         assert!(cert(&[rec(2, 250), rec(3, 150), rec(4, 100), rec(5, 100)]).is_none());
@@ -8386,6 +8669,155 @@ mod tests {
         let mut other = rec(1, 400);
         other.target_hash = Hash64::from_bytes([0xbb; 64]);
         assert!(cert(&[other, rec(2, 250)]).is_none());
+    }
+
+    /// §12.1: a checkpoint is a trust root, so every way it can lie has to be a named rejection —
+    /// and the roots it carries have to bind the keys the signatures are checked against, or an
+    /// importer can be handed a forged certificate together with the set that verifies it.
+    #[test]
+    fn checkpoint_rejects_every_way_it_can_lie() {
+        let net = Hash64::from_bytes([0x5e; 64]);
+        let row = |id: u8, w: u128| crate::vlt::VltValidatorWeight {
+            validator_id: Hash64::from_bytes([id; 64]),
+            consensus_key: vec![id; 8],
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([id; 64]), 0),
+            raw_recent_compute: w,
+            bond_cap: w,
+            effective_weight: w,
+        };
+        let snap = crate::vlt::VltVotingSnapshot {
+            version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
+            source_finalized_anchor: Hash64::from_bytes([9; 64]),
+            source_anchor_daa: 900,
+            snapshot_epoch: 4,
+            activation_epoch: 6,
+            model_table_hash: Hash64::default(),
+            capability_set_root: Hash64::default(),
+            validator_set_root: Hash64::default(),
+            credit_table_root: Hash64::default(),
+            snapshot_root: Hash64::default(),
+            validators: vec![row(1, 400), row(2, 250), row(3, 150), row(4, 100), row(5, 100)],
+            total_weight: 0,
+            quorum_weight: 0,
+            resolution_complete: true,
+        }
+        .seal();
+        let anchor = Hash64::from_bytes([0xa1; 64]);
+        let sig = |seed: u8, w: u128| WeightedSignature {
+            validator_id: Hash64::from_bytes([seed; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+            signed_weight: w,
+            locked_epoch: 6,
+            locked_hash: Hash64::from_bytes([0xaa; 64]),
+            snapshot_commitment: snap.vote_commitment(),
+            signature: vec![seed; 16],
+        };
+        let cert = DnsFinalityCertificate {
+            version: 1,
+            epoch: 7,
+            round: 0,
+            source_anchor: Hash64::from_bytes([9; 64]),
+            target_anchor: anchor,
+            target_anchor_daa: 4_800,
+            snapshot_root: snap.snapshot_root,
+            validator_set_root: snap.validator_set_root,
+            total_weight: 1000,
+            quorum_weight: 667,
+            signed_weight: 800,
+            precommit_signatures: vec![sig(1, 400), sig(2, 250), sig(3, 150)],
+        };
+        let record = crate::vlt::VltActivationRecord {
+            state: crate::vlt::PersistedVltActivationState::Active,
+            activation_epoch: 6,
+            scheduled_at_epoch: 5,
+            ..crate::vlt::VltActivationRecord::awaiting()
+        };
+        let good = BftLlmCheckpoint {
+            version: BFT_LLM_CHECKPOINT_VERSION_V1,
+            network_id: net,
+            finalized_anchor: anchor,
+            finalized_anchor_daa: 4_800,
+            finality_certificate: cert,
+            activation_record: record,
+            snapshot_epoch: 4,
+            snapshot_root: snap.snapshot_root,
+            validator_set_root: snap.validator_set_root,
+            bond_state_root: Hash64::from_bytes([0xb0; 64]),
+            capability_state_root: Hash64::from_bytes([0xc0; 64]),
+            vlt_accumulator_root: Hash64::from_bytes([0xd0; 64]),
+            model_table_hash: Hash64::from_bytes([0xe0; 64]),
+            reward_state_root: Hash64::from_bytes([0xf0; 64]),
+            unbonding_horizon_start: 1_000,
+        };
+        assert_eq!(good.verify_structure(net), Ok(()));
+
+        let bad = |f: &dyn Fn(&mut BftLlmCheckpoint)| {
+            let mut c = good.clone();
+            f(&mut c);
+            c.verify_structure(net).expect_err("must be rejected")
+        };
+        assert_eq!(bad(&|c| c.version = 9), CheckpointError::UnsupportedVersion(9));
+        assert!(matches!(bad(&|c| c.network_id = Hash64::default()), CheckpointError::NetworkMismatch { .. }));
+        assert_eq!(bad(&|c| c.finalized_anchor = Hash64::default()), CheckpointError::AnchorMismatch);
+        assert_eq!(bad(&|c| c.finalized_anchor_daa = 4_801), CheckpointError::AnchorMismatch);
+        assert_eq!(bad(&|c| c.snapshot_root = Hash64::default()), CheckpointError::SnapshotRootMismatch);
+        assert_eq!(bad(&|c| c.validator_set_root = Hash64::default()), CheckpointError::ValidatorSetRootMismatch);
+        // 600 of 1000 does not certify, however many signatures say it does.
+        assert!(matches!(
+            bad(&|c| {
+                c.finality_certificate.signed_weight = 600;
+                c.finality_certificate.precommit_signatures = vec![sig(2, 250), sig(3, 150), sig(4, 100), sig(5, 100)];
+            }),
+            CheckpointError::QuorumArithmetic { .. }
+        ));
+        // A quorum figure that is not ⌊2W/3⌋+1 is rejected even when the signed weight clears it.
+        assert!(matches!(bad(&|c| c.finality_certificate.quorum_weight = 500), CheckpointError::QuorumArithmetic { .. }));
+        assert!(matches!(bad(&|c| c.finality_certificate.signed_weight = 900), CheckpointError::SignedWeightMismatch { .. }));
+        // One signer counted twice to reach the bar.
+        assert_eq!(
+            bad(&|c| c.finality_certificate.precommit_signatures = vec![sig(1, 400), sig(1, 400)]),
+            CheckpointError::SignatureOrder
+        );
+        assert_eq!(
+            bad(&|c| c.finality_certificate.precommit_signatures = vec![sig(3, 150), sig(1, 400), sig(2, 250)]),
+            CheckpointError::SignatureOrder
+        );
+        assert_eq!(bad(&|c| c.activation_record = crate::vlt::VltActivationRecord::awaiting()), CheckpointError::NotActivated);
+        assert!(matches!(
+            bad(&|c| c.activation_record.activation_epoch = 9),
+            CheckpointError::CertificatePredatesActivation { certificate_epoch: 7, activation_epoch: 9 }
+        ));
+        assert!(matches!(bad(&|c| c.unbonding_horizon_start = 4_800), CheckpointError::HorizonNotBehindAnchor { .. }));
+
+        // The snapshot binding: the keys the signatures verify against must be the committed set.
+        let checks = good.signature_checks(&snap).expect("the committed set binds");
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0].public_key, &[1u8; 8]);
+        assert_eq!(
+            checks[0].digest,
+            stake_precommit_message(
+                net.as_byte_slice(),
+                7,
+                anchor,
+                4_800,
+                6,
+                Hash64::from_bytes([0xaa; 64]),
+                snap.vote_commitment(),
+                TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0)
+            )
+        );
+        // A set that does not hash to the committed root is refused before any key is used.
+        let mut tampered = snap.clone();
+        tampered.validators[0].consensus_key = vec![0xff; 8];
+        assert!(matches!(good.signature_checks(&tampered), Err(CheckpointError::ValidatorSetRootMismatch)));
+        // A signer the set does not contain, and a signer whose weight the set contradicts.
+        let mut unknown = good.clone();
+        unknown.finality_certificate.precommit_signatures = vec![sig(1, 400), sig(2, 250), sig(9, 150)];
+        assert!(matches!(unknown.signature_checks(&snap), Err(CheckpointError::UnknownSigner(_))));
+        let mut inflated = good.clone();
+        inflated.finality_certificate.precommit_signatures = vec![sig(1, 700), sig(2, 250)];
+        inflated.finality_certificate.signed_weight = 950;
+        assert!(matches!(inflated.signature_checks(&snap), Err(CheckpointError::SignerWeightMismatch { .. })));
     }
 
     fn pc(epoch: u64, seed: u8, anchor: u8, lock: (u64, u8), daa: u64, w: u128) -> PrecommitRecord {

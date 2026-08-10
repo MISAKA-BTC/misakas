@@ -21,6 +21,7 @@ use crate::{
             compute_capabilities::DbComputeCapabilityStore,
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
+            dns_finality_certificate::DbDnsFinalityCertificateStore,
             dns_state::{DbDnsStateStore, DbVltActivationStore, DnsStateStoreReader, VltActivationStoreReader},
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
@@ -45,7 +46,6 @@ use crate::{
             utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
             virtual_state::{LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores},
             vlt_credits::DbVltCreditStore,
-            dns_finality_certificate::DbDnsFinalityCertificateStore,
             vlt_voting_snapshot::DbVltVotingSnapshotStore,
         },
     },
@@ -80,19 +80,18 @@ use kaspa_consensus_core::{
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
         PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
         advance_dns_confirmation, aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool,
-        check_dns_reorg_rule, commitment_beacon_epoch, compute_capabilities_from_accepted_txs,
-        compute_capabilities_with_ids_from_accepted_txs, compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs,
-        compute_commitments_from_accepted_txs, compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health,
-        dns_finality_fresh_for_bridge, effective_bond_status, epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, build_finality_certificate, build_voting_snapshot,
+        canonical_lagged_epoch_anchor, capability_candidate_pool, capability_set_root, check_dns_reorg_rule, commitment_beacon_epoch,
+        compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
+        compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
+        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
+        effective_bond_status, epoch_meets_quality_floor, epoch_start_blue_score, held_precommit_lock, is_bond_active_at,
         is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
         precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        build_finality_certificate, build_voting_snapshot, capability_set_root, epoch_start_blue_score,
-        reorg_inputs_since_common_ancestor, voting_epoch_for_target,
-        required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
+        reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
         stake_precommit_message, stake_preference_verdict, total_active_stake_by_epoch, total_voting_weight_by_epoch,
         unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight,
-        verdicts_for_certificate,
+        verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -106,11 +105,10 @@ use kaspa_consensus_core::{
     vlt::{
         COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
         ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltActivationState, VltCreditSkipReason,
-        VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, VltVotingSnapshot,
-        adjudicate_compute_challenge,
-        commitment_dependency_horizon, compute_capability_message, compute_certificate_message, compute_commitment_message,
-        bft_quorum, compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
-        verifier_verdict_message, verify_compute_certificate, tick_vlt_activation, vlt_activation_eligibility,
+        VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, VltVotingSnapshot, adjudicate_compute_challenge,
+        bft_quorum, commitment_dependency_horizon, compute_capability_message, compute_certificate_message,
+        compute_commitment_message, compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt,
+        select_verifiers, tick_vlt_activation, verifier_verdict_message, verify_compute_certificate, vlt_activation_eligibility,
         vlt_epoch_finalized,
     },
 };
@@ -2716,7 +2714,11 @@ impl VirtualStateProcessor {
                 && let Some(snap) = self.voting_snapshot_for_wall_epoch(sink, wall_epoch, &bonds, net_id.as_byte_slice(), dns_params)
             {
                 if snap.resolution_complete {
-                    Self::log_frozen_snapshot(&snap, wall_epoch, &format!("pinned at {} daa={}", snap.source_finalized_anchor, snap.source_anchor_daa));
+                    Self::log_frozen_snapshot(
+                        &snap,
+                        wall_epoch,
+                        &format!("pinned at {} daa={}", snap.source_finalized_anchor, snap.source_anchor_daa),
+                    );
                     self.vlt_voting_snapshot_store.set_batch(batch, wall_epoch, snap).unwrap();
                 } else {
                     info!(
@@ -2895,6 +2897,31 @@ impl VirtualStateProcessor {
             dns_params.min_anchor_attesters,
             anchor_epoch_precommitted,
         );
+        // MISAKA VLT PR 7 (§12): the IDENTITY TUPLE — the values every node kind must agree on
+        // once it has caught up, whichever way it got there: a node that has run since genesis, a
+        // node that restarted, a node that IBD'd from headers, and (once the overlay rows ride the
+        // pruning snapshot) a node that imported a pruning point.
+        //
+        // One line, keyed by epoch, because that is what makes disagreement *findable*. These
+        // values are already committed individually — what was missing was a way to compare five
+        // nodes with one grep instead of five subsystem walks, which is exactly the diff an IBD
+        // that silently derived a different denominator would show up in.
+        if dns_params.vlt_shadow_active_at(sink_daa) {
+            let wall_epoch = sink_blue / epoch_len_blue;
+            if let Ok(row) = self.vlt_voting_snapshot_store.get(wall_epoch) {
+                info!(
+                    "[vlt-identity] epoch={wall_epoch} finalized_anchor={} snapshot_root={} validator_set_root={} credit_table_root={} capability_root={} model_table={} activation_epoch={} total_weight={}",
+                    new_state.last_dns_confirmed_anchor,
+                    row.snapshot_root,
+                    row.validator_set_root,
+                    row.credit_table_root,
+                    row.capability_set_root,
+                    row.model_table_hash,
+                    self.vlt_activation_store.read().get().map(|r| r.activation_epoch).unwrap_or(0),
+                    row.total_weight,
+                );
+            }
+        }
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
