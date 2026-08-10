@@ -27,6 +27,8 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use kaspa_consensus_core::token::{TokenAccount, TokenEmissionSettlement, TokenSupply};
 use kaspa_core::info;
 use kaspa_database::prelude::CachePolicy;
@@ -82,13 +84,20 @@ impl Display for TokenLedgerKey {
 
 /// The Phase A token store family — see the module docs for what each keyspace
 /// holds and which of them need (and do not need) reorg handling.
-#[derive(Clone)]
 pub struct DbTokenStore {
     db: Arc<DB>,
     ledger: CachedDbAccess<TokenLedgerKey, TokenAccount>,
     supply: CachedDbAccess<U64Key, TokenSupply>,
     settlements: CachedDbAccess<U64Key, TokenEmissionSettlement>,
     version: CachedDbItem<u32>,
+    /// Next selected-chain index the ledger fold processes (design §9.2).
+    /// `RwLock` because [`CachedDbItem::write`] needs `&mut` and this store is
+    /// shared as a bare `Arc` — the lock is cursor-local so ledger reads stay
+    /// lock-free.
+    fold_cursor: RwLock<CachedDbItem<u64>>,
+    /// Next epoch emission settlement considers (design §5.3). Same locking
+    /// story as [`Self::fold_cursor`].
+    settlement_cursor: RwLock<CachedDbItem<u64>>,
 }
 
 impl DbTokenStore {
@@ -98,7 +107,9 @@ impl DbTokenStore {
             ledger: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenLedger.into()),
             supply: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenSupply.into()),
             settlements: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenEmissionSettlements.into()),
-            version: CachedDbItem::new(db, DatabaseStorePrefixes::TokenLedgerSchemaVersion.into()),
+            version: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::TokenLedgerSchemaVersion.into()),
+            fold_cursor: RwLock::new(CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::TokenLedgerFoldCursor.into())),
+            settlement_cursor: RwLock::new(CachedDbItem::new(db, DatabaseStorePrefixes::TokenSettlementCursor.into())),
         }
     }
 
@@ -136,8 +147,43 @@ impl DbTokenStore {
             self.ledger.delete_all(DirectDbWriter::new(&self.db))?;
             self.supply.delete_all(DirectDbWriter::new(&self.db))?;
             self.settlements.delete_all(DirectDbWriter::new(&self.db))?;
+            // The cursors describe how far the discarded rows reached; resetting them is what
+            // makes the next commit rebuild rather than resume past the wiped span.
+            self.fold_cursor.write().write(DirectDbWriter::new(&self.db), &0)?;
+            self.settlement_cursor.write().write(DirectDbWriter::new(&self.db), &0)?;
         }
         self.version.write(DirectDbWriter::new(&self.db), &TOKEN_LEDGER_SCHEMA_VERSION)
+    }
+
+    // ---- cursors --------------------------------------------------------
+
+    /// The next selected-chain index the ledger fold should process, or `None`
+    /// before the fold has ever run (the caller lazily initializes it to the
+    /// first chain index past the shadow fence — design §9.2).
+    pub fn fold_cursor(&self) -> Result<Option<u64>, StoreError> {
+        match self.fold_cursor.read().read() {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_fold_cursor_batch(&self, batch: &mut WriteBatch, next_index: u64) -> Result<(), StoreError> {
+        self.fold_cursor.write().write(BatchDbWriter::new(batch), &next_index)
+    }
+
+    /// The next epoch settlement should consider, or `None` before the first
+    /// settlement pass (lazily initialized to `emission_activation_epoch`).
+    pub fn settlement_cursor(&self) -> Result<Option<u64>, StoreError> {
+        match self.settlement_cursor.read().read() {
+            Ok(v) => Ok(Some(v)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_settlement_cursor_batch(&self, batch: &mut WriteBatch, next_epoch: u64) -> Result<(), StoreError> {
+        self.settlement_cursor.write().write(BatchDbWriter::new(batch), &next_epoch)
     }
 
     // ---- ledger ---------------------------------------------------------

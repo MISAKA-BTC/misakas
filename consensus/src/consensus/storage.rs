@@ -36,6 +36,7 @@ use crate::{
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
         vlt_credits::DbVltCreditStore,
+        token_ledger::DbTokenStore,
         vlt_voting_snapshot::DbVltVotingSnapshotStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
@@ -140,6 +141,9 @@ pub struct ConsensusStorage {
     pub vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
     /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates — the persistent quorum proof.
     pub dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
+    /// MISAKA Compute Token Program (design v0.1 §9.1): the TOK ledger/supply/settlement
+    /// family. Inert (never written) while every preset's token fence is `u64::MAX`.
+    pub token_store: Arc<DbTokenStore>,
     pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
@@ -367,6 +371,17 @@ impl ConsensusStorage {
         };
         let dns_finality_certificate_store =
             Arc::new(DbDnsFinalityCertificateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        // MISAKA Compute Token Program: hot set = active accounts + the settlement tail. Untracked
+        // (`Count`) for the same estimator reason as the credit store. Reindex before anything can
+        // read a row — the ledger family is derived state; superseded rules mean rebuild, and the
+        // wipe costs nothing on every current network (the family is empty below the fence).
+        let token_store = {
+            let mut store = DbTokenStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!("[token] could not check the token store schema version: {err}; leaving existing rows in place");
+            }
+            Arc::new(store)
+        };
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -495,6 +510,7 @@ impl ConsensusStorage {
             vlt_credit_store,
             vlt_voting_snapshot_store,
             dns_finality_certificate_store,
+            token_store,
             block_quality_pool_store,
             reserve_balance_store,
             utxo_multisets_store,

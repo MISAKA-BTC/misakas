@@ -1236,6 +1236,12 @@ pub struct DnsParams {
     /// localized; NOT a genesis-block input, so adopting it leaves genesis hashes unchanged.
     pub vlt: VltParams,
 
+    /// MISAKA Compute Token Program (design v0.1 §10): the TOK ledger + compute-backed
+    /// emission fences and schedule. [`crate::token::TokenParams::INERT`] on every shipped
+    /// preset — the ledger fold and emission settlement are a no-op until a per-network hard
+    /// fork moves the fences. Like [`Self::vlt`], NOT a genesis-block input.
+    pub tkn: crate::token::TokenParams,
+
     /// blue_score window the VLT credit walk scans back from the tip when collecting each
     /// validator's per-epoch `X_i(e)` for [`crate::vlt::recent_compute_score`].
     ///
@@ -1604,6 +1610,26 @@ impl DnsParams {
         self.vlt_credit_window_blue_score >= needed_credit_window
             && soak >= needed_credit_window
             && self.unbonding_period_blocks >= self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score)
+    }
+
+    /// MISAKA Compute Token Program (design v0.1 §10): is the token preset self-consistent
+    /// against the VLT preset it settles over? Trivially true while the token fence is inert
+    /// (every shipped preset). Same role as [`Self::vlt_params_consistent`]: a preset
+    /// assertion, not a consensus rule — an incoherent live preset is a fork-planning error
+    /// caught before the fork, not after.
+    pub fn tkn_params_consistent(&self) -> bool {
+        if self.tkn.tkn_activation_daa_score == u64::MAX {
+            return self.tkn.is_coherent().is_ok();
+        }
+        self.tkn
+            .is_coherent_with_vlt(
+                self.vlt.vlt_activation_daa_score,
+                self.vlt.challenge_window_blocks,
+                self.max_reorg_horizon_blocks,
+                self.attestation_epoch_length_blue_score,
+                self.vlt.credit_delay_epochs,
+            )
+            .is_ok()
     }
 
     /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
@@ -9254,6 +9280,11 @@ mod tests {
             assert_eq!(p.vlt.vlt_shadow_activation_daa_score, u64::MAX, "{name} must ship with the overlay dormant too");
             assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
             assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
+            // MISAKA Compute Token Program: same fence story — shipped presets never fold the
+            // ledger and never settle emission, and the inert preset is internally coherent.
+            assert_eq!(p.tkn.tkn_activation_daa_score, u64::MAX, "{name} must ship with the token program dormant");
+            assert!(!p.tkn.shadow_active_at(u64::MAX - 1), "{name}: no ledger row is written, no TOK settled");
+            assert!(p.tkn_params_consistent(), "{name}: the dormant token preset must be coherent");
             assert!(
                 matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
                 "{name} must stay on the graded φS rule below the fence"
@@ -11314,6 +11345,12 @@ mod tests {
                 vlt_activation_daa_score: 12_000_000,
                 credit_window_epochs: 42,
                 ..VltParams::INERT
+            },
+            tkn: crate::token::TokenParams {
+                tkn_shadow_activation_daa_score: 12_500_000,
+                tkn_activation_daa_score: 13_000_000,
+                emission_epoch_budget_r0_atomic: 500 * 100_000_000,
+                ..crate::token::TokenParams::INERT
             },
             vlt_credit_window_blue_score: 13_000_000,
             dns_gate_horizon_blocks: 14_000_000,

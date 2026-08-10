@@ -12,6 +12,7 @@ use crate::{
     },
     network::{NetworkId, NetworkType},
     vlt::VltParams,
+    token::TokenParams,
 };
 /// Domain separator for [`Params::consensus_params_id`]. Versioned so a future encoding change is
 /// a deliberate, visible break rather than a silent one.
@@ -962,6 +963,10 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
     // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
     vlt: VltParams::INERT,
+    // MISAKA Compute Token Program (design v0.1 §10): inert everywhere — the TOK ledger and
+    // emission do not exist until a per-network hard fork moves these fences (and freezes the
+    // TBD R0/H schedule numbers the design deliberately leaves open).
+    tkn: TokenParams::INERT,
     vlt_credit_window_blue_score: 0,
     // Veto reach + release, devnet/simnet flavour. `0` ⇒ the gate horizon tracks
     // `max_reorg_horizon_blocks`, which the DAG fixtures tune directly (several of them raise it so
@@ -1181,6 +1186,10 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // a fence is moved without the rest of the edit. The model table is not optional: an empty
     // one credits every job zero, so the fork would cost a hard fork to discover it did nothing.
     vlt: VltParams::INERT,
+    // MISAKA Compute Token Program (design v0.1 §10): inert everywhere — the TOK ledger and
+    // emission do not exist until a per-network hard fork moves these fences (and freezes the
+    // TBD R0/H schedule numbers the design deliberately leaves open).
+    tkn: TokenParams::INERT,
     // Sized for `VltParams::INERT`'s K = 96 + delay 1 epochs at the 100-blue_score attestation
     // epoch length, plus the 300-block challenge window and a lag/grace margin. This is the walk
     // cost VLT weighting adds per recompute; it is paid only once the fence above is moved.
@@ -1678,22 +1687,22 @@ mod consensus_params_id_tests {
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
         //
-        // Last moved when `coinbase_settlement_consensus_activation_daa_score` (the fold fence, u64::MAX everywhere) joined the settlement/preference pre-flag-day batch (a `DnsParams`
-        // field, and `dns_params` is hashed here as its whole borsh encoding, so every preset that
-        // carries an overlay moved at once — the same shape as the unbond-authorization fence move
-        // before it). Deliberate: the preference decides where a node puts its sink, and two nodes
-        // that disagree about it can mine different branches of the same DAG; the deployed
-        // testnet-10 fleet (00d1294 lineage) does NOT peer with builds carrying this change, so
-        // shipping it is the next coordinated flag day, not a rolling update.
+        // Last moved when the Compute Token Program's `tkn: TokenParams` joined `DnsParams`
+        // (design v0.1 §10, inert `u64::MAX` fences everywhere — same shape as the `vlt` and
+        // settlement-fence appends before it: `dns_params` is hashed as its whole borsh encoding,
+        // so every preset that carries an overlay moved at once). Deliberate: the same release
+        // also admits the 0x30/0x31 token-op subnetworks, which older builds reject per-tx, so
+        // shipping it is the next coordinated flag day, not a rolling update — exactly as it was
+        // for the settlement/preference batch this note previously recorded.
         //
         // Report every preset rather than dying on the first. All four moved together on that
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "fc55b73e9995b62cc1a27eee6ba0234a900b2a8cd359e9a9e7a71b6383632b6b"),
-            ("testnet", TESTNET_PARAMS, "5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571"),
-            ("simnet", SIMNET_PARAMS, "a5860578b2d43e7e5b1d50f3c14e106c716b5388f95f9f5a610a219b394c7ef8"),
-            ("devnet", DEVNET_PARAMS, "6a1cfe59bffb944e67ee5344b7004c2a522905bcf57aafff842f96de3c938423"),
+            ("mainnet", MAINNET_PARAMS, "2b76a4c83c35d0500c130d4bde4e07c3883224ddc1ba567a57a88e119494f07a"),
+            ("testnet", TESTNET_PARAMS, "0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3"),
+            ("simnet", SIMNET_PARAMS, "87d372da26991e1549e9055c0ba3053d1797d738a3f6c88a23ea73976b9267e2"),
+            ("devnet", DEVNET_PARAMS, "40fee8400f4e4b1b2f2b1b471389181d3ce58cb2a8b07e46ccf82f654e13cd7c"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

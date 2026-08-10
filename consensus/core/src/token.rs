@@ -211,6 +211,18 @@ impl std::fmt::Display for TokenTxError {
 
 impl std::error::Error for TokenTxError {}
 
+/// Decode a transfer payload (for the ledger fold, which lives in a crate
+/// without a direct borsh dependency). `None` on malformed bytes — admission
+/// already rejected those, so the fold treats it as a void op, not an error.
+pub fn decode_token_transfer_payload(payload: &[u8]) -> Option<TokenTransferPayload> {
+    borsh::from_slice(payload).ok()
+}
+
+/// Decode a burn payload — see [`decode_token_transfer_payload`].
+pub fn decode_token_burn_payload(payload: &[u8]) -> Option<TokenBurnPayload> {
+    borsh::from_slice(payload).ok()
+}
+
 /// Stateless validation of a [`TokenTransferPayload`]'s bytes — everything
 /// checkable without a chain. Nonce currency, balance sufficiency, and the
 /// ML-DSA-87 signature itself are stateful and belong to the application seam.
@@ -514,7 +526,10 @@ pub fn emission_rewards(budget: u128, credits: &VltEpochCredits, min_network_com
 /// Per-network Token Program parameters. `INERT` (all fences `u64::MAX`, zero
 /// budget) is the shipped default on every network — adopting this module is
 /// not by itself a consensus change; moving a fence is the hard fork.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Borsh-derived because [`crate::dns_finality::DnsParams`] (which embeds this,
+/// appended last like `vlt` before it) rides the ADR-0022 overlay snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct TokenParams {
     /// Below this DAA score the ledger does not exist at all. In `[shadow,
     /// active)` the node computes and logs ledger/emission effects without

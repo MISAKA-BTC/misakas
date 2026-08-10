@@ -323,6 +323,14 @@ pub enum DatabaseStorePrefixes {
     /// [`Self::VltCreditsSchemaVersion`] — a derivation/layout change discards and rebuilds
     /// rather than reading old rows as final.
     TokenLedgerSchemaVersion = 248,
+    /// Singleton `u64`: the next selected-chain **index** the token ledger fold will process
+    /// (design §9.2). The fold applies accepted 0x30/0x31 ops only from chain blocks buried past
+    /// the reorg horizon, in chain order, so the ledger is an append-only fold with no undo — the
+    /// cursor is where the fold resumes.
+    TokenLedgerFoldCursor = 249,
+    /// Singleton `u64`: the next epoch emission settlement will consider (design §5.3). Advances
+    /// in epoch order; a settled (or deliberately skipped) epoch is never revisited.
+    TokenSettlementCursor = 250,
 
     // ---- Separator ----
     /// Reserved as a separator

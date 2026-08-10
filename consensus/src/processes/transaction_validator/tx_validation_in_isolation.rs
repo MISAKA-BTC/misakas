@@ -6,6 +6,8 @@ use kaspa_consensus_core::dns_finality::{
     validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
     validate_stake_unbond_payload,
 };
+use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
+use kaspa_consensus_core::token::{validate_token_burn_payload, validate_token_transfer_payload};
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
 use std::collections::HashSet;
@@ -278,6 +280,19 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER {
+        // MISAKA Compute Token Program (design v0.1 §4.3): the token-op band is
+        // routed + stateless-validated like every overlay band — admitting the
+        // ids is part of the coordinated release, exactly as 0x10-0x1a and
+        // 0x20-0x22 were. What the DAA fence governs is the *effect*: the
+        // ledger fold binds an op only past `tkn_activation_daa_score`, and a
+        // stateless-valid op that fails statefully (nonce, balance, signature)
+        // is void, not consensus-fatal.
+        validate_token_transfer_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
+        validate_token_burn_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
     }
@@ -442,6 +457,76 @@ mod tests {
         let mut tx = valid_tx;
         tx.version = TX_VERSION + 1;
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::UnknownTxVersion(_)));
+    }
+
+    /// MISAKA Compute Token Program (design v0.1 §4.3): a transaction on the
+    /// token-op band is routed to the token validators — accepted when the
+    /// payload passes stateless validation, rejected with `InvalidTokenPayload`
+    /// (not the blanket `SubnetworksDisabled`) when it does not. Per-field
+    /// coverage lives in `kaspa_consensus_core::token`; this confirms the wiring.
+    #[test]
+    fn validate_token_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
+        use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed transfer payload → accepted (the effect stays fenced; this
+        // is admission only).
+        let transfer = TokenTransferPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: TOK_ASSET_ID,
+            from_pubkey: vec![0x11u8; STAKE_VALIDATOR_PUBKEY_LEN],
+            to: Hash64::from_bytes([0x22u8; 64]),
+            amount: 1_000,
+            nonce: 1,
+            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
+        tx.payload = borsh::to_vec(&transfer).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Phase A knows only TOK — any other asset id is rejected at the door.
+        let mut alien = transfer.clone();
+        alien.asset_id = 7;
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
+        tx.payload = borsh::to_vec(&alien).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::UnknownAsset(7))));
+
+        // Undecodable bytes on the burn subnetwork → InvalidTokenPayload(Decode),
+        // proving 0x31 is routed to the validator rather than rejected outright.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_BURN;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::Decode)));
     }
 
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality

@@ -45,6 +45,7 @@ use crate::{
             utxo_diffs::{DbUtxoDiffsStore, UtxoDiffsStoreReader},
             utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
             virtual_state::{LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores},
+            token_ledger::DbTokenStore,
             vlt_credits::DbVltCreditStore,
             vlt_voting_snapshot::DbVltVotingSnapshotStore,
         },
@@ -94,6 +95,12 @@ use kaspa_consensus_core::{
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
+    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
+    token::{
+        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement,
+        TokenSupply, apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload,
+        emission_epoch_budget, emission_rewards, token_burn_message, token_transfer_message,
+    },
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
@@ -395,6 +402,10 @@ pub struct VirtualStateProcessor {
     // `pos_v2_activation_daa_score` (`u64::MAX` today).
     pub(super) epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
     pub(super) vlt_credit_store: Arc<DbVltCreditStore>,
+    /// MISAKA Compute Token Program (design v0.1 §9.2): the TOK ledger/supply/settlement
+    /// family the buried-chain fold and the emission settlement write. Inert while every
+    /// preset's token fence is `u64::MAX`.
+    pub(super) token_store: Arc<DbTokenStore>,
     /// MISAKA VLT PR 2: per-epoch frozen voting snapshots (§5). Frozen write-once at each wall
     /// epoch's boundary recompute; a cache and audit surface for the chain-derived denominator,
     /// never a verification source on branches whose derivation pins elsewhere.
@@ -574,6 +585,7 @@ impl VirtualStateProcessor {
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             vlt_credit_store: storage.vlt_credit_store.clone(),
+            token_store: storage.token_store.clone(),
             vlt_voting_snapshot_store: storage.vlt_voting_snapshot_store.clone(),
             dns_finality_certificate_store: storage.dns_finality_certificate_store.clone(),
             vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool::new(false),
@@ -1941,6 +1953,10 @@ impl VirtualStateProcessor {
         if let Some(dns_params) = self.dns_params.as_ref() {
             let sink_daa = self.headers_store.get_daa_score(dns_sink).unwrap_or_default();
             self.stage_vlt_credits(&mut batch, dns_sink, sink_daa, dns_params);
+            // MISAKA Compute Token Program (design v0.1 §9.2): fold newly-buried token ops
+            // into the TOK ledger and settle emission for finalized epochs. Inert below the
+            // token shadow fence (`u64::MAX` on every shipped preset).
+            self.stage_token(&mut batch, dns_sink, sink_daa, dns_params);
         }
 
         // Flush the batch changes
@@ -4579,6 +4595,264 @@ impl VirtualStateProcessor {
                 VltEpochCredits::from_unordered(credits.iter().filter_map(|(v, per_epoch)| per_epoch.get(&epoch).map(|x| (*v, *x))));
             self.vlt_credit_store.set_batch(batch, epoch, row).unwrap();
         }
+    }
+
+    /// MISAKA Compute Token Program (design v0.1 §9.2): fold accepted token ops from
+    /// newly-buried selected-chain blocks into the TOK ledger, then settle emission for
+    /// epochs whose credits are finalized. One function, one staging view — fold and
+    /// settlement may touch the same account row in one commit, and two independent
+    /// writers into one `WriteBatch` would silently drop the earlier delta (last write
+    /// per key wins).
+    ///
+    /// The ledger is an append-only fold with **no undo machinery**. An op applies only
+    /// once its accepting chain block is buried past `max_reorg_horizon_blocks` — the
+    /// same depth below which the credit accumulator trusts an epoch and the DNS reorg
+    /// gate refuses to rewind — so the fold never touches a block a reorg can still
+    /// remove, and "rollback" is a state this design cannot reach. The cost is latency
+    /// (an op binds ~one horizon after acceptance), which is the §9.2 trade taken
+    /// deliberately: at 10 bps the horizon is ~30 s, a payment-finality delay, not a
+    /// liveness problem.
+    ///
+    /// Every effect is fenced. Below `tkn_shadow_activation_daa_score` this returns at
+    /// once (every shipped preset, forever). In `[shadow, active)` it walks, verifies
+    /// and logs but stages nothing — and the cursors still advance, which is what makes
+    /// shadow ops void *forever* rather than retroactively binding at the fork.
+    fn stage_token(&self, batch: &mut WriteBatch, sink: BlockHash, sink_daa: u64, dns_params: &DnsParams) {
+        let tkn = &dns_params.tkn;
+        if !tkn.shadow_active_at(sink_daa) {
+            return;
+        }
+        // Read-through staging: later ops (and settlement) see earlier effects within
+        // this commit, and each touched key is written to the batch exactly once.
+        let mut accounts: HashMap<(u64, Hash64), TokenAccount> = HashMap::new();
+        let mut supplies: HashMap<u64, TokenSupply> = HashMap::new();
+
+        self.fold_token_ledger(batch, sink, sink_daa, dns_params, &mut accounts, &mut supplies);
+        self.settle_token_emission(batch, sink, sink_daa, dns_params, &mut accounts, &mut supplies);
+
+        for ((asset, owner), account) in accounts {
+            self.token_store.set_account_batch(batch, asset, owner, account).unwrap();
+        }
+        for (asset, supply) in supplies {
+            self.token_store.set_supply_batch(batch, asset, supply).unwrap();
+        }
+    }
+
+    /// The staged view of one `(asset, owner)` row: this commit's pending value if the
+    /// fold already touched it, else the store's.
+    fn staged_token_account(&self, staged: &HashMap<(u64, Hash64), TokenAccount>, asset: u64, owner: Hash64) -> TokenAccount {
+        staged.get(&(asset, owner)).copied().unwrap_or_else(|| self.token_store.get_account(asset, owner).unwrap())
+    }
+
+    /// Walk the selected chain from the fold cursor while blocks are buried past the
+    /// reorg horizon, applying each buried block's accepted 0x30/0x31 ops in acceptance
+    /// order. Bounded per commit so a node that was down for a week amortizes the
+    /// catch-up instead of stalling one commit on it.
+    fn fold_token_ledger(
+        &self,
+        batch: &mut WriteBatch,
+        sink: BlockHash,
+        sink_daa: u64,
+        dns_params: &DnsParams,
+        accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
+        supplies: &mut HashMap<u64, TokenSupply>,
+    ) {
+        const MAX_FOLD_BLOCKS_PER_COMMIT: u64 = 4096;
+        let tkn = &dns_params.tkn;
+        let Ok(sink_index) = self.selected_chain_store.read().get_by_hash(sink) else { return };
+        let mut next = match self.token_store.fold_cursor().unwrap() {
+            Some(v) => v,
+            // First run: nothing below the shadow fence can carry a bindable op, so start
+            // the fold there instead of walking the whole pre-program history.
+            None => self.first_chain_index_at_daa(tkn.tkn_shadow_activation_daa_score, sink_index),
+        };
+        let net_id = self.genesis.hash;
+        let horizon = dns_params.max_reorg_horizon_blocks;
+        let end = sink_index.min(next.saturating_add(MAX_FOLD_BLOCKS_PER_COMMIT));
+        while next <= end {
+            let Ok(block) = self.selected_chain_store.read().get_by_index(next) else { break };
+            let Ok(block_daa) = self.headers_store.get_daa_score(block) else { break };
+            if sink_daa.saturating_sub(block_daa) <= horizon {
+                break; // not buried yet — resume on a later commit
+            }
+            let live = tkn.active_at(block_daa);
+            for tx in self.accepted_txs_of_chain_block(block) {
+                if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER {
+                    self.fold_token_transfer(&tx, live, net_id.as_byte_slice(), accounts);
+                } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
+                    self.fold_token_burn(&tx, live, net_id.as_byte_slice(), accounts, supplies);
+                }
+            }
+            next += 1;
+        }
+        self.token_store.set_fold_cursor_batch(batch, next).unwrap();
+    }
+
+    /// The first selected-chain index whose block DAA is at/above `daa` — binary search
+    /// over the chain index (DAA is non-decreasing along the selected chain). Holes
+    /// (pruned rows) push the bound up, which errs toward re-scanning, never skipping.
+    fn first_chain_index_at_daa(&self, daa: u64, hi_index: u64) -> u64 {
+        let (mut lo, mut hi) = (0u64, hi_index);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.selected_chain_store.read().get_by_index(mid).ok().and_then(|h| self.headers_store.get_daa_score(h).ok()) {
+                Some(d) if d < daa => lo = mid + 1,
+                Some(_) => hi = mid,
+                None => lo = mid + 1,
+            }
+        }
+        lo
+    }
+
+    /// One accepted transfer op. Stateless shape was enforced at admission
+    /// (`validate_token_transfer_payload`); everything stateful is judged here, and a
+    /// failing op is **void** — logged and skipped, never consensus-fatal (design §4.4:
+    /// the skip-class stance).
+    fn fold_token_transfer(&self, tx: &Transaction, live: bool, net_id: &[u8], accounts: &mut HashMap<(u64, Hash64), TokenAccount>) {
+        let Some(p) = decode_token_transfer_payload(&tx.payload) else {
+            trace!("[token] transfer {} void: payload does not decode", tx.id());
+            return;
+        };
+        let from = validator_id_from_pubkey(&p.from_pubkey);
+        let digest = token_transfer_message(net_id, p.asset_id, from, p.to, p.amount, p.nonce);
+        if !matches!(
+            verify_mldsa87_with_context(&p.from_pubkey, &digest.as_bytes(), &p.signature, TOKEN_TRANSFER_MLDSA87_CONTEXT),
+            Ok(true)
+        ) {
+            trace!("[token] transfer {} void: signature does not verify", tx.id());
+            return;
+        }
+        let from_acc = self.staged_token_account(accounts, p.asset_id, from);
+        let to_acc = self.staged_token_account(accounts, p.asset_id, p.to);
+        match apply_token_transfer(from_acc, to_acc, p.amount, p.nonce) {
+            Ok((from2, to2)) if live => {
+                accounts.insert((p.asset_id, from), from2);
+                accounts.insert((p.asset_id, p.to), to2);
+                info!("[token] transfer {}: {from} -> {} amount {} (asset {})", tx.id(), p.to, p.amount, p.asset_id);
+            }
+            Ok(_) => info!("[token-shadow] transfer {} would move {} (asset {})", tx.id(), p.amount, p.asset_id),
+            Err(e) => trace!("[token] transfer {} void: {e}", tx.id()),
+        }
+    }
+
+    /// One accepted burn op — same void-not-fatal stance as the transfer fold.
+    fn fold_token_burn(
+        &self,
+        tx: &Transaction,
+        live: bool,
+        net_id: &[u8],
+        accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
+        supplies: &mut HashMap<u64, TokenSupply>,
+    ) {
+        let Some(p) = decode_token_burn_payload(&tx.payload) else {
+            trace!("[token] burn {} void: payload does not decode", tx.id());
+            return;
+        };
+        let owner = validator_id_from_pubkey(&p.owner_pubkey);
+        let digest = token_burn_message(net_id, p.asset_id, owner, p.amount, p.nonce);
+        if !matches!(
+            verify_mldsa87_with_context(&p.owner_pubkey, &digest.as_bytes(), &p.signature, TOKEN_BURN_MLDSA87_CONTEXT),
+            Ok(true)
+        ) {
+            trace!("[token] burn {} void: signature does not verify", tx.id());
+            return;
+        }
+        let owner_acc = self.staged_token_account(accounts, p.asset_id, owner);
+        let supply = supplies.get(&p.asset_id).copied().unwrap_or_else(|| self.token_store.get_supply(p.asset_id).unwrap());
+        match apply_token_burn(owner_acc, supply, p.amount, p.nonce) {
+            Ok((owner2, supply2)) if live => {
+                accounts.insert((p.asset_id, owner), owner2);
+                supplies.insert(p.asset_id, supply2);
+                info!("[token] burn {}: {owner} destroyed {} (asset {})", tx.id(), p.amount, p.asset_id);
+            }
+            Ok(_) => info!("[token-shadow] burn {} would destroy {} (asset {})", tx.id(), p.amount, p.asset_id),
+            Err(e) => trace!("[token] burn {} void: {e}", tx.id()),
+        }
+    }
+
+    /// Settle emission strictly in epoch order from the **finalized** credit rows
+    /// (design §5): `reward_i(E) = ⌊R(E)·X_i(E)/X(E)⌋`, `settlement_delay_epochs`
+    /// behind the wall clock. Reading only `vlt_credit_store` rows is the whole §5.3
+    /// fork-invariance argument: those rows exist only for epochs buried past the
+    /// challenge window and the reorg horizon, where every branch already agrees —
+    /// which is also why settlement, like the fold, needs no undo.
+    fn settle_token_emission(
+        &self,
+        batch: &mut WriteBatch,
+        sink: BlockHash,
+        sink_daa: u64,
+        dns_params: &DnsParams,
+        accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
+        supplies: &mut HashMap<u64, TokenSupply>,
+    ) {
+        const MAX_SETTLEMENTS_PER_COMMIT: u64 = 256;
+        let tkn = &dns_params.tkn;
+        if tkn.emission_epoch_budget_r0_atomic == 0 {
+            return;
+        }
+        let epoch_len = dns_params.attestation_epoch_length_blue_score;
+        if epoch_len == 0 {
+            return;
+        }
+        let Ok(sink_blue) = self.headers_store.get_blue_score(sink) else { return };
+        let current_epoch = sink_blue / epoch_len;
+        let live = tkn.active_at(sink_daa);
+        // An epoch this deep past the credit window will never gain a credit row (its
+        // history predates the walkable window); recording an empty settlement and moving
+        // on is what keeps the cursor from stalling forever on pre-program history.
+        let never_slack = (dns_params.vlt_credit_window_blue_score / epoch_len).saturating_add(16);
+        let mut next = self.token_store.settlement_cursor().unwrap().unwrap_or(tkn.emission_activation_epoch);
+        let start = next;
+        while next.saturating_add(tkn.settlement_delay_epochs as u64) <= current_epoch
+            && next.saturating_sub(start) < MAX_SETTLEMENTS_PER_COMMIT
+        {
+            if self.token_store.has_settlement(next).unwrap() {
+                next += 1;
+                continue;
+            }
+            let credits = match self.vlt_credit_store.get(next) {
+                Ok(credits) => credits,
+                Err(StoreError::KeyNotFound(_)) => {
+                    if current_epoch.saturating_sub(next) > never_slack {
+                        if live {
+                            let skipped =
+                                TokenEmissionSettlement { budget: emission_epoch_budget(tkn, next), ..Default::default() };
+                            self.token_store.set_settlement_batch(batch, next, skipped).unwrap();
+                        }
+                        next += 1;
+                        continue;
+                    }
+                    break; // young enough that the credit row may still be sealed — wait
+                }
+                Err(e) => panic!("settle_token_emission: vlt_credit_store.get({next}) failed: {e}"),
+            };
+            let settlement = emission_rewards(emission_epoch_budget(tkn, next), &credits, tkn.emission_min_network_compute);
+            if live {
+                for reward in settlement.rewards.iter() {
+                    let mut account = self.staged_token_account(accounts, TOK_ASSET_ID, reward.owner);
+                    account.balance = account.balance.saturating_add(reward.amount);
+                    accounts.insert((TOK_ASSET_ID, reward.owner), account);
+                }
+                let mut supply = supplies.get(&TOK_ASSET_ID).copied().unwrap_or_else(|| self.token_store.get_supply(TOK_ASSET_ID).unwrap());
+                supply.minted = supply.minted.saturating_add(settlement.paid_total);
+                supplies.insert(TOK_ASSET_ID, supply);
+                info!(
+                    "[token] epoch {next} settled: R={} X={} paid={} to {} executor(s)",
+                    settlement.budget,
+                    settlement.network_compute,
+                    settlement.paid_total,
+                    settlement.rewards.len()
+                );
+                self.token_store.set_settlement_batch(batch, next, settlement).unwrap();
+            } else {
+                info!(
+                    "[token-shadow] epoch {next} would settle: R={} X={} paid={}",
+                    settlement.budget, settlement.network_compute, settlement.paid_total
+                );
+            }
+            next += 1;
+        }
+        self.token_store.set_settlement_cursor_batch(batch, next).unwrap();
     }
 
     /// kaspa-pq Phase 13 (ADR-0018 §H): the selected-chain common ancestor of `candidate` and
