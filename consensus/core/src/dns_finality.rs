@@ -698,14 +698,12 @@ pub struct PrecommitDuty {
     pub sink_daa_score: u64,
     /// The lock this validator is carrying on this chain, as counted.
     pub held: PrecommitLock,
-    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet, with
-    /// the canonical anchor to lock on. Ascending, so signing them in order builds the lock chain
-    /// the walk expects.
-    pub due: Vec<(u64, Hash64, u64)>,
-    /// §5.1: the [`crate::vlt::vote_snapshot_commitment`] of the frozen voting snapshot in force
-    /// at the sink — what every precommit signed off this duty must carry. Zero when the round is
-    /// not live (below the VLT weight fence) or no snapshot is frozen yet.
-    pub snapshot_commitment: Hash64,
+    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet:
+    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending, so signing them in
+    /// order builds the lock chain the walk expects. The commitment is per entry (§5.1, PR 4):
+    /// each precommit binds ITS target epoch's frozen denominator, so a late signature for an
+    /// old due epoch carries that epoch's commitment, not whichever happens to be current.
+    pub due: Vec<(u64, Hash64, u64, Hash64)>,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
@@ -1390,6 +1388,21 @@ pub fn ready_epoch_from_tip_blue_score(tip_blue_score: u64, epoch_len_blue_score
     let safe = tip_blue_score.checked_sub(lag_blue_score)?;
     let completed = safe.checked_add(1)? / epoch_len;
     if completed == 0 { None } else { Some(completed - 1) }
+}
+
+/// MISAKA VLT PR 4: the wall epoch in which target epoch `e` becomes votable — where its
+/// canonical anchor first satisfies the readiness lag, and therefore whose FROZEN voting
+/// snapshot is the denominator every vote on `e` is weighed against (§5/§7.1: one `W(E)` per
+/// epoch, fixed for the epoch).
+///
+/// `w(e) = ⌊((e+1)·L + lag) / L⌋` — pure arithmetic, no chain access, so signer and verifier
+/// cannot disagree on which snapshot a vote for `e` must bind. Keying the denominator on the
+/// TARGET (rather than on whichever wall epoch a vote happened to land in) is what makes late
+/// votes for `e` count against the same `W` as prompt ones: one epoch, one denominator, no
+/// grace windows.
+pub fn voting_epoch_for_target(target_epoch: u64, epoch_len_blue_score: u64, lag_blue_score: u64) -> u64 {
+    let epoch_len = epoch_len_blue_score.max(1);
+    epoch_start_blue_score(target_epoch.saturating_add(1), epoch_len).saturating_add(lag_blue_score) / epoch_len
 }
 
 /// Pure core of canonical-anchor selection (testable without a store). `ancestors` is the tip's
@@ -5307,7 +5320,130 @@ pub struct PrecommitRecord {
     /// The bond's weight for this epoch, in whatever unit the round is denominated in — the same
     /// number the prevote round used, from the same pinned snapshot.
     pub signed_weight: u128,
+    /// The §5.1 snapshot commitment the payload carried (and its signature covers). Kept so a
+    /// [`DnsFinalityCertificate`] built from this record is verifiable without the original tx.
+    pub snapshot_commitment: Hash64,
+    /// The raw ML-DSA-87 signature bytes, for the same reason. Empty in contexts that only
+    /// tally weight (tests, duty views) — a certificate builder must be given real ones.
+    pub signature: Vec<u8>,
 }
+
+/// One signer's contribution inside a [`DnsFinalityCertificate`] (§7.2): everything needed to
+/// re-derive that signer's precommit digest and verify `signature` against the validator set the
+/// certificate's `validator_set_root` commits — no chain walk, no original transaction.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct WeightedSignature {
+    pub validator_id: Hash64,
+    pub bond_outpoint: TransactionOutpoint,
+    /// `W_i` under the certificate's snapshot — the number this signature added to `signed_weight`.
+    pub signed_weight: u128,
+    /// The lock the precommit declared (inside its digest).
+    pub locked_epoch: u64,
+    pub locked_hash: Hash64,
+    /// The §5.1 snapshot commitment the precommit bound (inside its digest).
+    pub snapshot_commitment: Hash64,
+    /// 4627-byte ML-DSA-87 signature over [`stake_precommit_message`].
+    pub signature: Vec<u8>,
+}
+
+/// MISAKA §7.2: the persistent proof that one epoch's anchor reached the precommit quorum —
+/// "enough weight locked on this anchor, under this frozen denominator, and here are the
+/// signatures."
+///
+/// This is what makes DNS finality an ARTIFACT rather than a recomputation: the credit walk that
+/// established the quorum sees only the current window, so once the window slides past the
+/// epoch, the fact that it finalized would otherwise survive only as `last_dns_confirmed_anchor`
+/// — one hash, no evidence. The certificate carries the whole §5.1 chain of custody: the
+/// denominator roots the votes bound, the weight arithmetic, and every signature, so a §12
+/// checkpoint consumer can verify finality with nothing but this record and the validator set it
+/// names.
+///
+/// `round` is 0 in v1: the chain proposes and there is one prevote/precommit pair per epoch —
+/// the field exists so v2's round-based certificates share the layout.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct DnsFinalityCertificate {
+    pub version: u16,
+    pub epoch: u64,
+    pub round: u32,
+    /// The DNS-confirmed anchor in force when this certificate formed (§5.1's source).
+    pub source_anchor: Hash64,
+    /// The canonical lagged anchor this epoch's quorum locked on.
+    pub target_anchor: Hash64,
+    pub target_anchor_daa: u64,
+    /// Roots of the frozen [`crate::vlt::VltVotingSnapshot`] the votes were weighed under.
+    pub snapshot_root: Hash64,
+    pub validator_set_root: Hash64,
+    pub total_weight: u128,
+    /// `Q = ⌊2·total/3⌋ + 1`, restated so the certificate is checkable arithmetic in isolation.
+    pub quorum_weight: u128,
+    /// Σ of the distinct signers' weights below. `>= quorum_weight` by construction.
+    pub signed_weight: u128,
+    /// Ascending by `validator_id` — consensus order, the same rule the snapshot's rows follow.
+    pub precommit_signatures: Vec<WeightedSignature>,
+}
+
+/// Assemble the §7.2 certificate for `epoch` from the lock-consistent precommits the walk
+/// counted, under the frozen snapshot those precommits were weighed against.
+///
+/// Pure, so the arithmetic is testable without a chain: dedups one signature per
+/// `(validator, bond)` (the tally's own uniqueness rule), sums the weights, sorts into
+/// consensus order, and returns `None` unless the summed weight actually clears
+/// `snapshot.quorum_weight` — a certificate that does not certify is not an artifact worth
+/// writing.
+pub fn build_finality_certificate(
+    epoch: u64,
+    source_anchor: Hash64,
+    target_anchor: Hash64,
+    target_anchor_daa: u64,
+    records: &[PrecommitRecord],
+    snapshot: &crate::vlt::VltVotingSnapshot,
+) -> Option<DnsFinalityCertificate> {
+    let mut seen: HashSet<(Hash64, TransactionOutpoint)> = HashSet::new();
+    let mut signatures: Vec<WeightedSignature> = Vec::new();
+    let mut signed_weight: u128 = 0;
+    for r in records.iter().filter(|r| r.epoch == epoch && r.target_hash == target_anchor) {
+        if !seen.insert((r.validator_id, r.bond_outpoint)) {
+            continue;
+        }
+        signed_weight = signed_weight.saturating_add(r.signed_weight);
+        signatures.push(WeightedSignature {
+            validator_id: r.validator_id,
+            bond_outpoint: r.bond_outpoint,
+            signed_weight: r.signed_weight,
+            locked_epoch: r.declared_lock.epoch,
+            locked_hash: r.declared_lock.anchor,
+            snapshot_commitment: r.snapshot_commitment,
+            signature: r.signature.clone(),
+        });
+    }
+    if signed_weight < snapshot.quorum_weight || snapshot.total_weight == 0 {
+        return None;
+    }
+    signatures.sort_by(|a, b| {
+        (a.validator_id, a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(
+            b.validator_id,
+            b.bond_outpoint.transaction_id,
+            b.bond_outpoint.index,
+        ))
+    });
+    Some(DnsFinalityCertificate {
+        version: crate::vlt::VLT_PAYLOAD_VERSION_V1,
+        epoch,
+        round: 0,
+        source_anchor,
+        target_anchor,
+        target_anchor_daa,
+        snapshot_root: snapshot.snapshot_root,
+        validator_set_root: snapshot.validator_set_root,
+        total_weight: snapshot.total_weight,
+        quorum_weight: snapshot.quorum_weight,
+        signed_weight,
+        precommit_signatures: signatures,
+    })
+}
+
+// Owned signature vectors ⇒ count-cached only, like the snapshot itself.
+impl MemSizeEstimator for DnsFinalityCertificate {}
 
 /// Keep only the precommits whose declared lock matches what this chain shows, and turn them into
 /// contributions the ordinary tally can count.
@@ -8165,6 +8301,93 @@ mod tests {
 
     // ---- MISAKA §5 round 2: prevote / precommit ----
 
+    /// One target epoch, one denominator: `w(e)` is arithmetic on consensus constants, so the
+    /// signer of a late vote and the verifier of a prompt one cannot disagree about which frozen
+    /// snapshot epoch `e` binds.
+    #[test]
+    fn voting_epoch_for_target_is_the_readiness_wall_epoch() {
+        // Devnet shape: L=100, lag=40 ⇒ e becomes votable in wall epoch e+1.
+        for e in [0u64, 1, 7, 41] {
+            assert_eq!(voting_epoch_for_target(e, 100, 40), e + 1);
+        }
+        // Production shape: L=100, lag=100 ⇒ e+2 (readiness lands exactly on a boundary).
+        assert_eq!(voting_epoch_for_target(9, 100, 100), 11);
+        // Lag longer than an epoch pushes further out; zero-length epochs are clamped sane.
+        assert_eq!(voting_epoch_for_target(9, 100, 250), 12);
+        assert_eq!(voting_epoch_for_target(0, 0, 0), 1);
+    }
+
+    /// The certificate is checkable arithmetic: dedup per (validator, bond), Σ weights against
+    /// the frozen quorum, consensus ordering — and no certificate at all below the bar, because
+    /// an artifact that does not certify must not exist to be mistaken for one.
+    #[test]
+    fn finality_certificate_certifies_exactly_at_the_frozen_quorum() {
+        let row = |id: u8, w: u128| crate::vlt::VltValidatorWeight {
+            validator_id: Hash64::from_bytes([id; 64]),
+            consensus_key: vec![id; 4],
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([id; 64]), 0),
+            raw_recent_compute: w,
+            bond_cap: w,
+            effective_weight: w,
+        };
+        // The §8 plan: A=400 B=250 C=150 D=100 E=100, W=1000, Q=667.
+        let snap = crate::vlt::VltVotingSnapshot {
+            version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
+            source_finalized_anchor: Hash64::from_bytes([9; 64]),
+            source_anchor_daa: 900,
+            snapshot_epoch: 4,
+            activation_epoch: 6,
+            model_table_hash: Hash64::default(),
+            capability_set_root: Hash64::default(),
+            validator_set_root: Hash64::default(),
+            credit_table_root: Hash64::default(),
+            snapshot_root: Hash64::default(),
+            validators: vec![row(1, 400), row(2, 250), row(3, 150), row(4, 100), row(5, 100)],
+            total_weight: 0,
+            quorum_weight: 0,
+            resolution_complete: true,
+        }
+        .seal();
+        assert_eq!((snap.total_weight, snap.quorum_weight), (1000, 667));
+
+        let anchor = Hash64::from_bytes([0xa1; 64]);
+        let rec = |seed: u8, w: u128| PrecommitRecord {
+            epoch: 5,
+            validator_id: Hash64::from_bytes([seed; 64]),
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+            target_hash: anchor,
+            declared_lock: PrecommitLock::default(),
+            accepted_daa_score: 500,
+            signed_weight: w,
+            snapshot_commitment: snap.vote_commitment(),
+            signature: vec![seed; 8],
+        };
+        let cert = |records: &[PrecommitRecord]| {
+            build_finality_certificate(5, Hash64::from_bytes([9; 64]), anchor, 480, records, &snap)
+        };
+
+        // B+C+D+E = 600 < 667: four signers and still no certificate — weight, not headcount.
+        assert!(cert(&[rec(2, 250), rec(3, 150), rec(4, 100), rec(5, 100)]).is_none());
+        // A+B = 650 < 667: no.
+        assert!(cert(&[rec(1, 400), rec(2, 250)]).is_none());
+        // A+B+C = 800 >= 667: three signers certify.
+        let c = cert(&[rec(3, 150), rec(1, 400), rec(2, 250)]).expect("800 certifies");
+        assert_eq!((c.signed_weight, c.total_weight, c.quorum_weight), (800, 1000, 667));
+        assert_eq!(c.precommit_signatures.len(), 3);
+        assert!(c.precommit_signatures.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
+        assert_eq!((c.snapshot_root, c.validator_set_root), (snap.snapshot_root, snap.validator_set_root));
+        // A+C+D+E = 750 >= 667: four signers certify too.
+        assert!(cert(&[rec(1, 400), rec(3, 150), rec(4, 100), rec(5, 100)]).is_some());
+
+        // A duplicated signer counts once — the tally's own uniqueness rule, restated here so a
+        // replayed precommit cannot inflate a certificate over the bar.
+        assert!(cert(&[rec(2, 250), rec(2, 250), rec(2, 250), rec(3, 150)]).is_none());
+        // A precommit for a DIFFERENT anchor certifies nothing of this one.
+        let mut other = rec(1, 400);
+        other.target_hash = Hash64::from_bytes([0xbb; 64]);
+        assert!(cert(&[other, rec(2, 250)]).is_none());
+    }
+
     fn pc(epoch: u64, seed: u8, anchor: u8, lock: (u64, u8), daa: u64, w: u128) -> PrecommitRecord {
         PrecommitRecord {
             epoch,
@@ -8177,6 +8400,8 @@ mod tests {
             },
             accepted_daa_score: daa,
             signed_weight: w,
+            snapshot_commitment: Hash64::from_bytes([0x5a; 64]),
+            signature: Vec::new(),
         }
     }
 

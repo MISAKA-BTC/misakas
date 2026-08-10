@@ -35,6 +35,7 @@ use crate::{
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
         vlt_credits::DbVltCreditStore,
+        dns_finality_certificate::DbDnsFinalityCertificateStore,
         vlt_voting_snapshot::DbVltVotingSnapshotStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
@@ -137,6 +138,8 @@ pub struct ConsensusStorage {
     /// MISAKA VLT PR 2: per-epoch frozen voting snapshots (§5) — the denominator a vote's signed
     /// commitment binds. Write-once per wall epoch, frozen at the boundary recompute.
     pub vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
+    /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates — the persistent quorum proof.
+    pub dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
     pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
@@ -364,6 +367,8 @@ impl ConsensusStorage {
             }
             Arc::new(store)
         };
+        let dns_finality_certificate_store =
+            Arc::new(DbDnsFinalityCertificateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -491,6 +496,7 @@ impl ConsensusStorage {
             epoch_accumulator_store,
             vlt_credit_store,
             vlt_voting_snapshot_store,
+            dns_finality_certificate_store,
             block_quality_pool_store,
             reserve_balance_store,
             utxo_multisets_store,

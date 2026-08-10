@@ -296,6 +296,15 @@ pub enum DatabaseStorePrefixes {
     /// change must discard rows recorded under the old rules rather than read them as final.
     VltVotingSnapshotsSchemaVersion = 243,
 
+    /// Per-epoch `DnsFinalityCertificate` rows (§7.2), keyed by `u64` target epoch: the
+    /// persistent proof that the epoch's anchor reached its precommit quorum — denominator
+    /// roots, weight arithmetic, and every ML-DSA-87 signature. Written once when the quorum
+    /// first counts on the selected chain; never reindexed away, because unlike the frozen
+    /// snapshots these stop being re-derivable the moment the vote window slides past the
+    /// epoch — the certificate IS the surviving evidence, and the §12 checkpoint package's
+    /// payload.
+    DnsFinalityCertificates = 244,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

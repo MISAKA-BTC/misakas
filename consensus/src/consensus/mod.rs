@@ -1012,9 +1012,12 @@ impl Consensus {
             .and_then(|dns_params| {
                 let sink = self.get_sink();
                 let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
-                self.virtual_processor.frozen_vote_commitment_at_sink(
+                // PR 4: keyed by the TARGET epoch — a late signature for an older due epoch
+                // must bind that epoch's frozen denominator, not whichever is current.
+                self.virtual_processor.vote_commitment_for_target(
                     sink,
                     sink_daa,
+                    anchor.epoch,
                     &self.all_stake_bond_records(),
                     self.config.params.genesis.hash.as_byte_slice(),
                     dns_params,

@@ -814,7 +814,7 @@ impl ValidatorService {
             trace!("[{VALIDATOR}] precommit: round 2 is not live at the sink; nothing to lock");
             return;
         };
-        let Some(&(epoch, target_hash, target_daa_score)) = duty.due.first() else {
+        let Some(&(epoch, target_hash, target_daa_score, snapshot_commitment)) = duty.due.first() else {
             trace!("[{VALIDATOR}] precommit: nothing due (held lock is epoch {})", duty.held.epoch);
             return;
         };
@@ -825,7 +825,7 @@ impl ValidatorService {
             target_hash,
             target_daa_score,
             held,
-            duty.snapshot_commitment,
+            snapshot_commitment,
             bond_outpoint,
         ) {
             Ok(p) => p,

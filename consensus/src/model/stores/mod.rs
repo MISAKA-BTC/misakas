@@ -31,6 +31,7 @@ pub mod utxo_set;
 pub mod virtual_state;
 pub mod vlt_credits;
 pub mod vlt_voting_snapshot;
+pub mod dns_finality_certificate;
 
 pub use kaspa_database;
 pub use kaspa_database::prelude::DB;

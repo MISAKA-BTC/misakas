@@ -45,6 +45,7 @@ use crate::{
             utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
             virtual_state::{LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores},
             vlt_credits::DbVltCreditStore,
+            dns_finality_certificate::DbDnsFinalityCertificateStore,
             vlt_voting_snapshot::DbVltVotingSnapshotStore,
         },
     },
@@ -86,7 +87,8 @@ use kaspa_consensus_core::{
         dns_finality_fresh_for_bridge, effective_bond_status, epoch_meets_quality_floor, held_precommit_lock, is_bond_active_at,
         is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
         precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        build_voting_snapshot, capability_set_root, epoch_start_blue_score, reorg_inputs_since_common_ancestor,
+        build_finality_certificate, build_voting_snapshot, capability_set_root, epoch_start_blue_score,
+        reorg_inputs_since_common_ancestor, voting_epoch_for_target,
         required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
         stake_precommit_message, stake_preference_verdict, total_active_stake_by_epoch, total_voting_weight_by_epoch,
         unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight,
@@ -107,7 +109,7 @@ use kaspa_consensus_core::{
         VltCreditTally, VltEpochCredits, VltEpochSnapshot, VltMetrics, VltRejection, VltVotingSnapshot,
         adjudicate_compute_challenge,
         commitment_dependency_horizon, compute_capability_message, compute_certificate_message, compute_commitment_message,
-        compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
+        bft_quorum, compute_receipt_hash, job_input_commitment, job_spec_id, meets_bft_quorum, normalize_vlt, select_verifiers,
         verifier_verdict_message, verify_compute_certificate, tick_vlt_activation, vlt_activation_eligibility,
         vlt_epoch_finalized,
     },
@@ -399,6 +401,9 @@ pub struct VirtualStateProcessor {
     /// epoch's boundary recompute; a cache and audit surface for the chain-derived denominator,
     /// never a verification source on branches whose derivation pins elsewhere.
     pub(super) vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
+    /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates, written once when an epoch's
+    /// precommit quorum first counts on the selected chain.
+    pub(super) dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
     /// MISAKA VLT PR 3: whether this process has logged the frozen snapshot it RESUMED with.
     /// One line per process start, so a restart leaves grep-able proof that the persisted roots
     /// equal the ones the previous run froze.
@@ -572,6 +577,7 @@ impl VirtualStateProcessor {
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             vlt_credit_store: storage.vlt_credit_store.clone(),
             vlt_voting_snapshot_store: storage.vlt_voting_snapshot_store.clone(),
+            dns_finality_certificate_store: storage.dns_finality_certificate_store.clone(),
             vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool::new(false),
             vlt_state: Arc::new(Mutex::new(None)),
             vlt_metrics: Arc::new(VltMetrics::default()),
@@ -2543,7 +2549,7 @@ impl VirtualStateProcessor {
         let (contributions, epoch_anchor_daa) =
             self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, weight);
 
-        let totals = self.total_weight_by_epoch(&bonds, &epoch_anchor_daa, weight);
+        let totals = self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &epoch_anchor_daa, weight);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         let stake_depth = compute_stake_score(&per_epoch, credit_rule);
 
@@ -2583,7 +2589,8 @@ impl VirtualStateProcessor {
                 let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
                 let (shadow_contribs, shadow_anchor_daa) =
                     self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
-                let shadow_totals = self.total_weight_by_epoch(&bonds, &shadow_anchor_daa, shadow_weight);
+                let shadow_totals =
+                    self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &shadow_anchor_daa, shadow_weight);
                 aggregate_epoch_tallies(&shadow_contribs, &shadow_totals)
             } else {
                 Vec::new()
@@ -2793,7 +2800,62 @@ impl VirtualStateProcessor {
         // keeps its single-round confirmation byte-for-byte.
         let anchor_epoch_precommitted = if dns_params.vlt_weighting_active_at(sink_daa) {
             let prevoted = quorum_epochs(&per_epoch, dns_params.vlt.min_network_compute);
-            let precommitted = self.precommitted_epochs(sink, &bonds, net_id.as_byte_slice(), dns_params, weight, &totals, &prevoted);
+            let (precommitted, counted_records) =
+                self.precommitted_epochs(sink, &bonds, net_id.as_byte_slice(), dns_params, weight, &totals, &prevoted);
+            // PR 4: quorum lines for the newest few tallied epochs — signed weight against the
+            // frozen W and Q, and where the two rounds stand. The newest epoch's votes are still
+            // landing when its boundary prints, so the SETTLED picture an operator (and the §8
+            // four-case experiment) needs is in the epochs just behind it — three lines covers
+            // both without turning the recompute into a table dump.
+            for t in per_epoch.iter().rev().take(3).rev() {
+                info!(
+                    "[vlt-quorum] epoch={} signed={} total={} quorum={} prevote={} precommit={}",
+                    t.epoch,
+                    t.signed_weight,
+                    t.total_weight,
+                    bft_quorum(t.total_weight),
+                    if prevoted.contains(&t.epoch) { "met" } else { "no" },
+                    if precommitted.contains(&t.epoch) { "met" } else { "no" },
+                );
+            }
+            // §7.2: persist the finality certificate for every epoch whose precommit quorum is
+            // newly counted — the durable proof, with signatures, that outlives the vote window.
+            // Ascending order + write-once makes the certified sequence monotone by construction.
+            for &epoch in precommitted.iter() {
+                if self.dns_finality_certificate_store.has(epoch).unwrap_or(false) {
+                    continue;
+                }
+                let Some(anchor) = self.canonical_anchor_by_blue_score(epoch, sink, dns_params) else {
+                    continue;
+                };
+                let Some(snap) = self
+                    .frozen_snapshots_for_targets(sink, std::iter::once(epoch), &bonds, net_id.as_byte_slice(), dns_params)
+                    .remove(&epoch)
+                else {
+                    continue;
+                };
+                let source_anchor = prev_dns_state.as_ref().map_or(Hash64::default(), |p| p.last_dns_confirmed_anchor);
+                if let Some(cert) = build_finality_certificate(
+                    epoch,
+                    source_anchor,
+                    anchor.anchor_hash,
+                    anchor.anchor_daa_score,
+                    &counted_records,
+                    &snap,
+                ) {
+                    info!(
+                        "[dns-finality-certificate] persisted epoch={} target_anchor={} signed={}/{} quorum={} signers={} snapshot_root={}",
+                        cert.epoch,
+                        cert.target_anchor,
+                        cert.signed_weight,
+                        cert.total_weight,
+                        cert.quorum_weight,
+                        cert.precommit_signatures.len(),
+                        cert.snapshot_root,
+                    );
+                    self.dns_finality_certificate_store.set_batch(batch, epoch, cert).unwrap();
+                }
+            }
             confirmable.is_some_and(|a| precommitted.contains(&a.epoch))
         } else {
             true
@@ -3068,10 +3130,17 @@ impl VirtualStateProcessor {
         weight: ContributionWeight<'_>,
         totals: &BTreeMap<u64, u128>,
         prevote_quorum: &BTreeSet<u64>,
-    ) -> BTreeSet<u64> {
+    ) -> (BTreeSet<u64>, Vec<PrecommitRecord>) {
         let records = self.collect_precommits(tip, bonds, net_id, dns_params, weight, prevote_quorum);
-        let counted = lock_consistent_precommits(&records);
-        quorum_epochs(&aggregate_epoch_tallies(&counted, totals), dns_params.vlt.min_network_compute)
+        let counted_contribs = lock_consistent_precommits(&records);
+        let quorum = quorum_epochs(&aggregate_epoch_tallies(&counted_contribs, totals), dns_params.vlt.min_network_compute);
+        // The records behind the counted contributions, for §7.2 certificate assembly: keep a
+        // record iff its (validator, bond, epoch) survived the lock-consistency filter.
+        let counted_keys: HashSet<(Hash64, TransactionOutpoint, u64)> =
+            counted_contribs.iter().map(|c| (c.validator_id, c.bond_outpoint, c.epoch)).collect();
+        let counted_records =
+            records.into_iter().filter(|r| counted_keys.contains(&(r.validator_id, r.bond_outpoint, r.epoch))).collect();
+        (quorum, counted_records)
     }
 
     /// The eligibility-checked precommits on this chain, in no particular order —
@@ -3090,9 +3159,10 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         let mut records: Vec<PrecommitRecord> = Vec::new();
-        // §5.1 memo, per walk and on THIS walk's chain — see `collect_stake_contributions_v2`.
-        let epoch_len_blue = dns_params.attestation_epoch_length_blue_score.max(1);
-        let mut snapshot_memo: HashMap<u64, Option<VltVotingSnapshot>> = HashMap::new();
+        // §5.1/§7.1: one frozen denominator per target epoch, on THIS walk's chain — the round
+        // only exists above the weight fence, so unlike the prevote walk there is no below-fence
+        // arm. See `collect_stake_contributions_v2`.
+        let frozen_by_target = self.frozen_snapshots_for_targets(tip, anchors.keys().copied(), bonds, net_id, dns_params);
         for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
             let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
                 break;
@@ -3129,20 +3199,14 @@ impl VirtualStateProcessor {
                 if p.validator_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
                     continue;
                 }
-                // §5.1: a lock is a lock under one denominator. The round only exists above the
-                // weight fence, so unlike the prevote walk there is no fixed-zero arm — the
-                // carried commitment must be the frozen one for the wall epoch the precommit
-                // landed in (one epoch of boundary grace), and it is inside the signed digest
-                // below, so a mismatched one is unusable rather than merely uncounted.
-                if !self.vote_commitment_acceptable(
-                    p.snapshot_commitment,
-                    bs / epoch_len_blue,
-                    tip,
-                    bonds,
-                    net_id,
-                    dns_params,
-                    &mut snapshot_memo,
-                ) {
+                // §5.1: a lock is a lock under ONE denominator — its target epoch's frozen
+                // snapshot. The commitment is inside the signed digest below, so a mismatched
+                // one is unusable rather than merely uncounted. No frozen snapshot derivable for
+                // the target ⇒ the same deterministic abstention as the prevote walk.
+                let frozen = frozen_by_target.get(&p.epoch);
+                if let Some(snap) = frozen
+                    && p.snapshot_commitment != snap.vote_commitment()
+                {
                     continue;
                 }
                 let digest = stake_precommit_message(
@@ -3169,7 +3233,17 @@ impl VirtualStateProcessor {
                     target_hash: p.target_hash,
                     declared_lock: PrecommitLock { epoch: p.locked_epoch, anchor: p.locked_hash },
                     accepted_daa_score: block_daa,
-                    signed_weight: weight.of(bond, p.epoch),
+                    // Numerator from the same frozen snapshot the vote signed — see the prevote walk.
+                    signed_weight: match frozen {
+                        Some(snap) => snap
+                            .validators
+                            .iter()
+                            .find(|v| v.validator_id == p.validator_id && v.bond_outpoint == p.bond_outpoint)
+                            .map_or(0, |v| v.effective_weight),
+                        None => weight.of(bond, p.epoch),
+                    },
+                    snapshot_commitment: p.snapshot_commitment,
+                    signature: p.signature.clone(),
                 });
             }
         }
@@ -3199,14 +3273,12 @@ impl VirtualStateProcessor {
         if !duty.round_active {
             return duty;
         }
-        // §5.1: the denominator every precommit signed off this duty must bind. Zero (⇒ the
-        // client's signature will not count) only when no complete snapshot is derivable yet.
-        duty.snapshot_commitment = self.frozen_vote_commitment_at_sink(tip, sink_daa, bonds, net_id, dns_params).unwrap_or_default();
+
         let snapshot =
             self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa), false);
         let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
         let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
-        let totals = self.total_weight_by_epoch(bonds, &epoch_anchor_daa, weight);
+        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight);
         let prevoted = quorum_epochs(&aggregate_epoch_tallies(&contributions, &totals), dns_params.vlt.min_network_compute);
 
         let records = self.collect_precommits(tip, bonds, net_id, dns_params, weight, &prevoted);
@@ -3218,7 +3290,15 @@ impl VirtualStateProcessor {
         duty.due = prevoted
             .iter()
             .filter(|&&e| e > duty.held.epoch)
-            .filter_map(|&e| anchors.get(&e).map(|a| (e, a.anchor_hash, a.anchor_daa_score)))
+            .filter_map(|&e| {
+                let a = anchors.get(&e)?;
+                // §5.1, per TARGET epoch: each due precommit binds ITS epoch's frozen
+                // denominator. An epoch whose commitment cannot be derived yet is simply not
+                // due — signing it with a wrong (or zero) commitment would burn a fee on a
+                // signature that counts nowhere.
+                let commitment = self.vote_commitment_for_target(tip, sink_daa, e, bonds, net_id, dns_params)?;
+                Some((e, a.anchor_hash, a.anchor_daa_score, commitment))
+            })
             .collect();
         duty
     }
@@ -3261,7 +3341,7 @@ impl VirtualStateProcessor {
         };
         let (contributions, epoch_anchor_daa) =
             self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params, weight);
-        let totals = self.total_weight_by_epoch(bonds, &epoch_anchor_daa, weight);
+        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule(pov_daa_score))
     }
@@ -3270,16 +3350,30 @@ impl VirtualStateProcessor {
     ///
     /// Both branches consume the same `epoch_anchor_daa` and the same bond set, so switching the
     /// VLT fence changes only what a validator's weight *is*, never which validators are counted.
+    ///
+    /// MISAKA VLT PR 4: above the weight fence (judged at `tip`, the same pov the weight source
+    /// keys on) each target epoch's denominator IS its frozen snapshot's `total_weight` — the
+    /// §7.1 `W(E)` the votes signed. A target with no derivable complete snapshot keeps the
+    /// pinned-table total, matching the numerator fallback in the vote walks.
     fn total_weight_by_epoch(
         &self,
+        tip: BlockHash,
         bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
         epoch_anchor_daa: &BTreeMap<u64, u64>,
         weight: ContributionWeight<'_>,
     ) -> BTreeMap<u64, u128> {
-        match weight {
+        let base = match weight {
             ContributionWeight::BondedStake => total_active_stake_by_epoch(bonds, epoch_anchor_daa),
             ContributionWeight::Vlt { snapshot, vlt } => total_voting_weight_by_epoch(bonds, epoch_anchor_daa, snapshot, vlt),
+        };
+        let pov_daa = self.headers_store.get_daa_score(tip).unwrap_or(0);
+        if !dns_params.vlt_weighting_active_at(pov_daa) || matches!(weight, ContributionWeight::BondedStake) {
+            return base;
         }
+        let frozen = self.frozen_snapshots_for_targets(tip, base.keys().copied(), bonds, net_id, dns_params);
+        base.into_iter().map(|(e, old)| (e, frozen.get(&e).map_or(old, |s| s.total_weight))).collect()
     }
 
     /// §5's `capability_set_root` at a pin: every declaration live at the pin's DAA **and**
@@ -3387,18 +3481,57 @@ impl VirtualStateProcessor {
         );
     }
 
-    /// The commitment every vote signed at the CURRENT sink must carry (§5.1), or `None` below
-    /// the weight fence / when no complete snapshot can be derived yet.
+    /// MISAKA VLT PR 4: the frozen denominators for a set of target epochs, on `tip`'s chain —
+    /// `e → frozen(w(e))` with `w` = [`voting_epoch_for_target`]. One derivation per DISTINCT
+    /// voting epoch (long lags make several targets share one), store-served after the boundary
+    /// freeze, and **complete resolutions only**: an incomplete table is a fact about this
+    /// node's storage, and a denominator built from one would make quorum a function of local
+    /// loading limits. A target absent from the result gets the deterministic fallback its
+    /// caller documents.
+    fn frozen_snapshots_for_targets<I: IntoIterator<Item = u64>>(
+        &self,
+        tip: BlockHash,
+        targets: I,
+        bonds: &[StakeBondRecord],
+        net_id: &[u8],
+        dns_params: &DnsParams,
+    ) -> HashMap<u64, Arc<VltVotingSnapshot>> {
+        let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
+        let lag = dns_params.attestation_lag_blue_score;
+        let mut by_wall: HashMap<u64, Option<Arc<VltVotingSnapshot>>> = HashMap::new();
+        let mut out = HashMap::new();
+        for e in targets {
+            let w = voting_epoch_for_target(e, epoch_len, lag);
+            let snap = by_wall
+                .entry(w)
+                .or_insert_with(|| {
+                    self.voting_snapshot_for_wall_epoch(tip, w, bonds, net_id, dns_params)
+                        .filter(|s| s.resolution_complete)
+                        .map(Arc::new)
+                })
+                .clone();
+            if let Some(s) = snap {
+                out.insert(e, s);
+            }
+        }
+        out
+    }
+
+    /// The §5.1 commitment a vote on `target_epoch` must sign — the frozen denominator of that
+    /// epoch's voting wall — or `None` below the weight fence / when no complete snapshot can be
+    /// derived yet.
     ///
     /// The sign path's read: serves the frozen row when one exists, and otherwise derives and
     /// **lazily freezes** it (direct write-once) — a node that restarted mid-epoch, or whose
     /// boundary derivation was incomplete, still pins the epoch the first time it needs to sign.
     /// Withholds the commitment rather than returning one from an incomplete table: votes signed
-    /// under a table this node could not fully load would be uncountable everywhere else.
-    pub(crate) fn frozen_vote_commitment_at_sink(
+    /// under a table this node could not fully load would be uncountable everywhere else. Only
+    /// ever called with the SINK (the lazy freeze must not write branch-pinned rows).
+    pub(crate) fn vote_commitment_for_target(
         &self,
         sink: BlockHash,
         sink_daa: u64,
+        target_epoch: u64,
         bonds: &[StakeBondRecord],
         net_id: &[u8],
         dns_params: &DnsParams,
@@ -3407,65 +3540,23 @@ impl VirtualStateProcessor {
             return None;
         }
         let epoch_len = dns_params.attestation_epoch_length_blue_score.max(1);
-        let wall_epoch = self.headers_store.get_blue_score(sink).ok()? / epoch_len;
-        if let Ok(row) = self.vlt_voting_snapshot_store.get(wall_epoch) {
+        let w = voting_epoch_for_target(target_epoch, epoch_len, dns_params.attestation_lag_blue_score);
+        if let Ok(row) = self.vlt_voting_snapshot_store.get(w) {
             return Some(row.vote_commitment());
         }
-        let snap = self.voting_snapshot_for_wall_epoch(sink, wall_epoch, bonds, net_id, dns_params)?;
+        let snap = self.voting_snapshot_for_wall_epoch(sink, w, bonds, net_id, dns_params)?;
         if !snap.resolution_complete {
             warn!(
-                "[vlt-voting-snapshot] epoch={wall_epoch}: table resolution incomplete; votes signed now would count nowhere — withholding the commitment"
+                "[vlt-voting-snapshot] epoch={w}: table resolution incomplete; votes signed now would count nowhere — withholding the commitment"
             );
             return None;
         }
         let commitment = snap.vote_commitment();
-        Self::log_frozen_snapshot(&snap, wall_epoch, "lazy sign-path freeze");
-        if let Err(e) = self.vlt_voting_snapshot_store.set(wall_epoch, snap) {
-            warn!("[vlt-voting-snapshot] lazy freeze of epoch {wall_epoch} failed: {e}");
+        Self::log_frozen_snapshot(&snap, w, "lazy sign-path freeze");
+        if let Err(e) = self.vlt_voting_snapshot_store.set(w, snap) {
+            warn!("[vlt-voting-snapshot] lazy freeze of epoch {w} failed: {e}");
         }
         Some(commitment)
-    }
-
-    /// §5.1 enforcement for one vote: does `claimed` match the frozen commitment of the wall
-    /// epoch the vote landed in, or of the epoch before (a vote signed near a boundary may be
-    /// accepted just after it — one epoch of grace, the same staleness bound the E→E+1
-    /// activation delay already accepts)?
-    ///
-    /// Only commitments this node can derive **completely** constrain the vote. An incomplete
-    /// table is a fact about this node's storage, not about the chain, and a vote dropped over
-    /// it would make StakeScore a function of local loading limits — the split
-    /// [`VltCreditSeverity::Incomplete`] exists to prevent. No derivable candidate at all ⇒ the
-    /// check abstains entirely.
-    #[allow(clippy::too_many_arguments)]
-    fn vote_commitment_acceptable(
-        &self,
-        claimed: Hash64,
-        wall_epoch: u64,
-        tip: BlockHash,
-        bonds: &[StakeBondRecord],
-        net_id: &[u8],
-        dns_params: &DnsParams,
-        memo: &mut HashMap<u64, Option<VltVotingSnapshot>>,
-    ) -> bool {
-        let mut candidates: Vec<Hash64> = Vec::new();
-        for w in [wall_epoch, wall_epoch.saturating_sub(1)] {
-            let snap = memo
-                .entry(w)
-                .or_insert_with(|| self.voting_snapshot_for_wall_epoch(tip, w, bonds, net_id, dns_params))
-                .as_ref();
-            if let Some(s) = snap
-                && s.resolution_complete
-            {
-                let c = s.vote_commitment();
-                if !candidates.contains(&c) {
-                    candidates.push(c);
-                }
-            }
-        }
-        if candidates.is_empty() {
-            return true;
-        }
-        candidates.contains(&claimed)
     }
 
     /// MISAKA Verified LLM Token-Weighted BFT (§3, §6): walk the chain ending at `pin` and fold
@@ -4712,11 +4803,21 @@ impl VirtualStateProcessor {
         let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
             return (contributions, epoch_anchor_daa);
         };
-        // MISAKA VLT PR 2 (§5.1): one frozen-snapshot memo per walk. Commitments are derived on
-        // THIS walk's chain (`tip`), so a candidate branch is judged against its own derivation —
-        // never against a row the selected chain froze.
-        let epoch_len_blue = dns_params.attestation_epoch_length_blue_score.max(1);
-        let mut snapshot_memo: HashMap<u64, Option<VltVotingSnapshot>> = HashMap::new();
+        // MISAKA VLT PR 4 (§5.1/§7.1): one frozen denominator per TARGET epoch — `e → frozen(w(e))`
+        // — derived on THIS walk's chain (`tip`), so a candidate branch is judged against its own
+        // derivation, never against a row the selected chain froze. Target-keyed rather than
+        // accepting-block-keyed: one epoch has ONE denominator, so a late vote for `e` binds and
+        // is weighed by the same snapshot as a prompt one, with no grace window to reason about.
+        // A target with no derivable complete snapshot falls back to the pinned-table weight,
+        // unchecked — the same deterministic abstention as before (a chain too young to have
+        // frozen `w(e)` is a chain where nothing was ever signed under it).
+        let pov_daa = self.headers_store.get_daa_score(tip).unwrap_or(0);
+        let weighting_active = dns_params.vlt_weighting_active_at(pov_daa);
+        let frozen_by_target = if weighting_active {
+            self.frozen_snapshots_for_targets(tip, creditable.keys().copied(), bonds, net_id, dns_params)
+        } else {
+            HashMap::new()
+        };
         for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
             if Some(chain_block) == stop_at {
                 break;
@@ -4727,9 +4828,6 @@ impl VirtualStateProcessor {
             if tip_blue.saturating_sub(bs) > dns_params.stake_score_window_blue_score {
                 break;
             }
-            let Ok(block_daa) = self.headers_store.get_daa_score(chain_block) else {
-                break;
-            };
             let txs = self.accepted_txs_of_chain_block(chain_block);
             for att in attestations_from_accepted_txs(&txs) {
                 // v3 canonical gate: the attestation must name THIS chain's canonical anchor
@@ -4754,24 +4852,15 @@ impl VirtualStateProcessor {
                 if !is_bond_active_at(bond, anchor.anchor_daa_score) {
                     continue;
                 }
-                // §5.1, keyed per ACCEPTING block so a window straddling the weight fence is
-                // judged deterministically: above the fence the signed VSC must be the frozen
-                // commitment of the wall epoch the vote landed in (one epoch of boundary grace);
+                // §5.1: above the weight fence a vote must have signed ITS epoch's denominator;
                 // below it the audit-#4 fixed-zero invariant holds, now stateful. A vote under a
                 // different denominator is not a smaller vote — it is no vote.
-                if dns_params.vlt_weighting_active_at(block_daa) {
-                    if !self.vote_commitment_acceptable(
-                        att.validator_set_commitment,
-                        bs / epoch_len_blue,
-                        tip,
-                        bonds,
-                        net_id,
-                        dns_params,
-                        &mut snapshot_memo,
-                    ) {
+                let frozen = if weighting_active { frozen_by_target.get(&att.epoch) } else { None };
+                if let Some(snap) = frozen {
+                    if att.validator_set_commitment != snap.vote_commitment() {
                         continue;
                     }
-                } else if att.validator_set_commitment != Hash64::default() {
+                } else if !weighting_active && att.validator_set_commitment != Hash64::default() {
                     continue;
                 }
                 let digest = stake_attestation_message(
@@ -4787,7 +4876,17 @@ impl VirtualStateProcessor {
                     verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
                     Ok(true)
                 ) {
-                    let signed_weight = weight.of(bond, att.epoch);
+                    // Numerator from the SAME frozen snapshot the vote signed (its rows, not the
+                    // live pinned table): §7.1's quorum is a fraction of one fixed `W(E)`, and a
+                    // numerator from a different table than the denominator is not a fraction.
+                    let signed_weight = match frozen {
+                        Some(snap) => snap
+                            .validators
+                            .iter()
+                            .find(|v| v.validator_id == att.validator_id && v.bond_outpoint == att.bond_outpoint)
+                            .map_or(0, |v| v.effective_weight),
+                        None => weight.of(bond, att.epoch),
+                    };
                     contributions.push(AttestationContribution {
                         epoch: att.epoch,
                         validator_id: att.validator_id,
