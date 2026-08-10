@@ -198,6 +198,15 @@ mod tests {
     use std::net::IpAddr;
     use uuid::Uuid;
 
+    /// The ring and counters are process-global, and the test runner is parallel, so any two
+    /// tests that `clear()` and then assert on contents race each other — one's entry is the
+    /// other's eviction. Serialized here rather than fixed in the trace itself: production only
+    /// appends, and a lock on the recording path would be paying for a problem only tests have.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn peer(n: u8) -> PeerKey {
         PeerKey::new(PeerId::new(Uuid::from_u128(n as u128)), IpAddress::new(IpAddr::from([10, 0, 0, n])))
     }
@@ -220,6 +229,7 @@ mod tests {
 
     #[test]
     fn the_ring_is_bounded_and_keeps_the_most_recent() {
+        let _serial = serial();
         clear();
         for _ in 0..RING + 50 {
             record_skip(skip(SkipReason::NotDesignatedProver));
@@ -238,6 +248,7 @@ mod tests {
 
     #[test]
     fn a_dump_names_the_reason_and_the_connection() {
+        let _serial = serial();
         clear();
         record_skip(skip(SkipReason::NoEligibleProver));
         let out = dump();

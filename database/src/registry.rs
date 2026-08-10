@@ -264,7 +264,15 @@ pub enum DatabaseStorePrefixes {
     /// that was right", so storing it inside a consensus that a `staging.commit()` can swap out
     /// would lose it exactly when it matters. Held across restarts because a quarantine that a
     /// process restart clears is not a quarantine.
-    ChainParticipation = 236,
+    ///
+    /// 236 on the branch this arrived on, which [`Self::VltCreditsSchemaVersion`] had already taken
+    /// on the branch it merged with. The two never share a keyspace — this one is in the meta DB
+    /// and that one in a consensus DB — so nothing on disk was ever ambiguous, but the enum cannot
+    /// carry the value twice. This side moved because its only on-disk instances are regression
+    /// fixtures that are rebuilt per round, whereas the VLT rows may already exist under 236 in a
+    /// deployed consensus DB. A node upgrading across this change finds no row at 240 and starts
+    /// from the unset default, which is the same state a first boot presents.
+    ChainParticipation = 240,
 
     // ---- Separator ----
     /// Reserved as a separator

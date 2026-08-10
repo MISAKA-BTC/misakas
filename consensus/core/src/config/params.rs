@@ -1632,14 +1632,29 @@ mod consensus_params_id_tests {
         // If you are here because a preset legitimately changed: update the value, and understand
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
-        for (name, params, expected) in [
-            ("mainnet", MAINNET_PARAMS, "725d6e40ea0cde397331d5b0705a9ac79e0d310304c0ab72f76652afbc24d7fe"),
-            ("testnet", TESTNET_PARAMS, "ffabd639c9e4f34dd674e917fad2060e1cda2dc180485ebb7f99085cc5de727f"),
-            ("simnet", SIMNET_PARAMS, "4a7e38671a2405a79c6a99b2d5a49dd4ffa5ba8e8e1157b07d9b1be5059253c2"),
-            ("devnet", DEVNET_PARAMS, "7ab61a1ada4f41d5d832b55710e30d3b3ae9ffde360438fdb2df93ab3e33284f"),
-        ] {
-            assert_eq!(params.consensus_params_id().to_string(), expected, "{name} consensus fingerprint changed");
-        }
+        //
+        // Last moved when the unbond-authorization fence merged in: it is a
+        // `DnsParams` field, `dns_params` is hashed here as its whole borsh encoding, and so every
+        // preset that carries an overlay moved at once. Deliberate — the fence decides which bond
+        // mutations a block produces, so two nodes that disagree about it disagree about validity,
+        // which is exactly what this fingerprint exists to keep apart.
+        //
+        // Report every preset rather than dying on the first. All four moved together on that
+        // merge, and a first-failure assert showed one of them, which reads as a narrower change
+        // than it was.
+        let changed: Vec<String> = [
+            ("mainnet", MAINNET_PARAMS, "ef996e354885ce39358914e86fba42adaa9688659738aaa184191dcd9f60f022"),
+            ("testnet", TESTNET_PARAMS, "41cb37ae67b1a2aca3c19721bb0c8c8bd8e3f76959951523b7953c18546004ac"),
+            ("simnet", SIMNET_PARAMS, "e7f9ccf9d80eab801daaf2189bf17a06691c54f92568673f63eef0996abdd63f"),
+            ("devnet", DEVNET_PARAMS, "d3f0abe1bd5c07fb2b8808c5296c4b91993d2c61a6adedf612de043c10c25489"),
+        ]
+        .into_iter()
+        .filter_map(|(name, params, expected)| {
+            let actual = params.consensus_params_id().to_string();
+            (actual != expected).then(|| format!("  {name}: pinned {expected}, got {actual}"))
+        })
+        .collect();
+        assert!(changed.is_empty(), "consensus fingerprint changed for {} preset(s):\n{}", changed.len(), changed.join("\n"));
     }
 
     #[test]
