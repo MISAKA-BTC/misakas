@@ -35,7 +35,7 @@ series history — every RC superseded by a defect found, none by a green run:
                     an incomplete run is not a result. The machine's ceiling
                     for this test is roughly a hundred rounds per process.
                   seeds 100..299  linux   in progress
-                  seeds 300..479  linux   in progress
+                  seeds 300..479  linux   180/180, 0 failures
 
 VPS fixture re-mined from genesis, both branches, same preset:
   light 3500 blocks  pp f92cf4225f55e4c1  work 1,584,845,011
