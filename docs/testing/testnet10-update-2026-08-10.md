@@ -72,9 +72,25 @@ chose not to wait, and the residual risk is recorded here rather than hidden). s
 
 The same-day supersede (operator-directed) carries the stake preference (testnet 2), the
 settlement policy layer (testnet 30_000 DAA), the wallet pending display, and the
-consensus-settlement fence (`u64::MAX`, inert). Binary trail per host: `kaspad.prev` =
-`5ed2dce…`, `kaspad.prev-4decb38c` = the pre-flag-day build. During the recovery all three
+consensus-settlement fence (`u64::MAX`, inert). During the recovery all three
 additions are inert or abstaining on the live fork by construction.
+
+**Third build the same day — the EVM feature had been dropped.** Batches 1 and 2 were
+built plain (`cargo build --release -p kaspad`), but the production nodes have always run
+`--features evm` builds; the deficient builds parsed the EVM flags and then served no EVM
+lane at all. The visible symptom was already in the wild before the flag day and got
+reported by a community operator as the pruned-IBD loop — `peer cannot serve the pruning
+point EVM state required for pruned IBD on this network` — and reproduced inside the island
+(A refused by B, 84 handshake-adjacent refusals). Batch 3 (`1b5de1376e37f3ae…`, commit
+`2221e8a`, WITH `--features evm`) replaced batches 1/2 on all three hosts; the binary
+parity check now includes the feature set, not just the digest. With the EVM build in
+place, `--evm-materialize-pp-anchor` (F2c) ran its one-shot backfill: **A** reverse-replayed
+1.37 M diffs and reports the pruning-point anchor **materialized and VERIFIED**, so A can
+serve pruned IBD — the community operator's loop resolves against A. **B** reports the
+honest terminal state `no committed EVM header at the pruning point` (its wedged datadir
+never processed EVM up to the pp): B cannot anchor and will simply resync via A2 like
+everyone else. Binary trail per host now: `kaspad.prev-noevm-1cfcf4a0`, `kaspad.prev` =
+`5ed2dce…`, `kaspad.prev-4decb38c` = pre-flag-day.
 
 (also in `cand-build.sha256` on each host; the pre-update `kaspad` on A and B was
 `4decb38c9c91e2c9…`, kept as `kaspad.prev` beside the installed candidate)
