@@ -37,7 +37,11 @@ must therefore be introduced AFTER that, in the chain at `daemon.rs:433`:
 ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|c| args.apply_to_config(c)).build()
 ```
 
-**Next step:** determine which of `adjust_perf_params_to_consensus_params`, `apply_args` or
+`apply_args` is eliminated too: every `config.params` mutation in `apply_to_config` sits inside
+the `--vlt-devnet` / `--tkn-devnet` guards, which a testnet run never enters. That leaves
+`adjust_perf_params_to_consensus_params()` and `build()`.
+
+**Next step:** determine which of `adjust_perf_params_to_consensus_params` or
 `build` mutates a field that `consensus_params_id` hashes, then either stop it doing so or pin
 the post-`build()` value (which is what the node announces and therefore what peers compare).
 A one-line probe settles it: print `config.params.consensus_params_id()` right after `build()`
