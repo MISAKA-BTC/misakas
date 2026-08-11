@@ -46,7 +46,19 @@ Reference (Apple M4 Pro, aarch64):
 MISAKA-PALW-CPU-CALIBRATION-v1 arch=arm64 os=Darwin class=8825d03e4da7faa1 runtime=f561dd30b7b69d31 cu=414 output=a78c75a364c074799261b9f2776639c4 trace=f96abaeee120a3e5f5f444528d4681ae
 ```
 
-## 2. Verify the release binary is not stale
+## 2. Verify the release binary is not stale — and build it in a PRIVATE target dir
+
+**Build with `CARGO_TARGET_DIR` set to a directory nothing else writes.** A release binary built
+into a shared `target/` cannot be trusted: on 2026-08-11 a freshly built kaspad reported
+`5fabb683…` at the handshake instead of the `62e299b6…` its own source pins, because a concurrent
+build in the same tree overwrote the artifact between the build finishing and the check running.
+The check below is what caught it — which is the argument for running it every time.
+
+```bash
+CARGO_TARGET_DIR=/tmp/misaka-release cargo build --release --features evm   --bin kaspad --bin misaminer --bin kaspa-pq-validator --bin misaka
+```
+
+
 
 ```bash
 ./kaspad --testnet --netsuffix=10 --appdir=/tmp/probe --addpeer=<any fleet IP>:26211 2>&1 | grep -m1 "params mismatch"
