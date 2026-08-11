@@ -113,6 +113,34 @@ stall the base ledger, which is why shadow may proceed without them.
    is the honest-refutes-honest failure, demonstrated; `select_verifiers` drawing only within a
    class is what prevents it.
 
+## The flag day is BIGGER than this fence — measured against the live network 2026-08-11
+
+A node built from this branch was pointed at the live t10 fleet (peers resolved from the seeder
+records; no credentials involved). Genesis matched — so this is the same network — and the
+handshake was then rejected on **consensus params**:
+
+```
+local: 5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571   (this branch's build)
+remote: 0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3  (the live fleet)
+```
+
+`0e3914b0…` is the testnet fingerprint this repository pinned **before** today's merges. So the
+fleet is running the pre-token-program ruleset, and the branch has moved past it at least twice
+already — PR #62 appended `TokenParams` to `DnsParams` (0x30/0x31 admission), and the concurrent
+PoW work moved it again. (The branch's own binary reported `5fabb683…` rather than the currently
+pinned `1f79bd30…` because it was built before the last params edit; rebuild before the cut.)
+
+**Consequence for the schedule, and it is the useful kind of surprise:** the shadow fork cannot
+be shipped as "one constant" on top of what the fleet runs today. The release that carries
+`TESTNET_VLT_SHADOW_FORK_DAA_SCORE` also carries the token program's admission rules and the PoW
+changes — one flag day, three rule changes, and every one of them rejects an un-updated peer at
+the handshake rather than silently forking it (which is the good failure). Plan the fleet update
+as an A2-pattern rollout of the whole branch, not of a fence.
+
+Verify before cutting: build the release binary, point it at a fleet peer with `--addpeer`, and
+confirm the params-mismatch line NAMES the fingerprint the release pins. That is a five-minute
+check that catches a stale build, and it is how these two numbers were obtained.
+
 ## Choosing `H`
 
 Same A2 pattern as the 2026-08-10 flag day: `H` ≥ current tip + (fleet update window × safety
