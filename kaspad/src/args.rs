@@ -479,12 +479,11 @@ impl Args {
                      inert compute overlay is undefined (design v0.1 §10)."
                 );
             }
-            let dns = config
-                .params
-                .dns_params
-                .take()
-                .expect("devnet/simnet ship with the DNS overlay configured")
-                .with_tkn_devnet(active_daa, self.tkn_devnet_shadow_span, self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000);
+            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_tkn_devnet(
+                active_daa,
+                self.tkn_devnet_shadow_span,
+                self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
+            );
             // Fail loudly rather than start a node whose fold or settlement would silently refuse
             // to run — the devnet symptom would be "no [token] line, ever", which reads as a bug.
             assert!(

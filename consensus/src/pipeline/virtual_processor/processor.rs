@@ -42,10 +42,10 @@ use crate::{
             stake_bonds::{DbStakeBondsStore, StakeBondsStoreReader},
             statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
             tips::{DbTipsStore, TipsStoreReader},
+            token_ledger::DbTokenStore,
             utxo_diffs::{DbUtxoDiffsStore, UtxoDiffsStoreReader},
             utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
             virtual_state::{LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores},
-            token_ledger::DbTokenStore,
             vlt_credits::DbVltCreditStore,
             vlt_voting_snapshot::DbVltVotingSnapshotStore,
         },
@@ -95,15 +95,15 @@ use kaspa_consensus_core::{
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
-    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
-    token::{
-        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement,
-        TokenSupply, apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload,
-        emission_epoch_budget, emission_rewards, token_burn_message, token_transfer_message,
-    },
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
+    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
+    token::{
+        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement, TokenSupply,
+        apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload, emission_epoch_budget,
+        emission_rewards, token_burn_message, token_transfer_message,
+    },
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
     utxo::{
         utxo_diff::UtxoDiff,
@@ -4675,7 +4675,9 @@ impl VirtualStateProcessor {
             Some(v) => v,
             // First run: nothing below the shadow fence can carry a bindable op, so start
             // the fold there instead of walking the whole pre-program history.
-            None => Self::first_chain_index_at_daa(&self.headers_store, selected_chain, tkn.tkn_shadow_activation_daa_score, sink_index),
+            None => {
+                Self::first_chain_index_at_daa(&self.headers_store, selected_chain, tkn.tkn_shadow_activation_daa_score, sink_index)
+            }
         };
         let net_id = self.genesis.hash;
         let horizon = dns_params.max_reorg_horizon_blocks;
@@ -4836,8 +4838,7 @@ impl VirtualStateProcessor {
                 Err(StoreError::KeyNotFound(_)) => {
                     if current_epoch.saturating_sub(next) > never_slack {
                         if live {
-                            let skipped =
-                                TokenEmissionSettlement { budget: emission_epoch_budget(tkn, next), ..Default::default() };
+                            let skipped = TokenEmissionSettlement { budget: emission_epoch_budget(tkn, next), ..Default::default() };
                             self.token_store.set_settlement_batch(batch, next, skipped).unwrap();
                         }
                         next += 1;
@@ -4854,7 +4855,8 @@ impl VirtualStateProcessor {
                     account.balance = account.balance.saturating_add(reward.amount);
                     accounts.insert((TOK_ASSET_ID, reward.owner), account);
                 }
-                let mut supply = supplies.get(&TOK_ASSET_ID).copied().unwrap_or_else(|| self.token_store.get_supply(TOK_ASSET_ID).unwrap());
+                let mut supply =
+                    supplies.get(&TOK_ASSET_ID).copied().unwrap_or_else(|| self.token_store.get_supply(TOK_ASSET_ID).unwrap());
                 supply.minted = supply.minted.saturating_add(settlement.paid_total);
                 supplies.insert(TOK_ASSET_ID, supply);
                 info!(

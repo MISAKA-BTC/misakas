@@ -1211,12 +1211,8 @@ impl ConsensusApi for Consensus {
         // `None` asks for the most recently settled epoch — one below the cursor,
         // saturating so a never-settled program reads epoch 0 / settled=false.
         let epoch = epoch.unwrap_or_else(|| next_settlement_epoch.saturating_sub(1));
-        let mut info = kaspa_consensus_core::token::TokenEmissionInfo {
-            epoch,
-            next_settlement_epoch,
-            fold_cursor,
-            ..Default::default()
-        };
+        let mut info =
+            kaspa_consensus_core::token::TokenEmissionInfo { epoch, next_settlement_epoch, fold_cursor, ..Default::default() };
         if let Ok(settlement) = store.get_settlement(epoch) {
             info.settled = true;
             info.budget = settlement.budget;

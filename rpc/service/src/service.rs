@@ -726,11 +726,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let session = self.consensus_manager.consensus().unguarded_session();
         let response = match session.async_get_token_account(request.asset_id, owner).await {
-            Some(account) => GetTokenLedgerEntryResponse {
-                available: true,
-                balance: account.balance.to_string(),
-                nonce: account.nonce,
-            },
+            Some(account) => {
+                GetTokenLedgerEntryResponse { available: true, balance: account.balance.to_string(), nonce: account.nonce }
+            }
             None => GetTokenLedgerEntryResponse::default(),
         };
         Ok(response)

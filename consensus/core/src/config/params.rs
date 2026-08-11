@@ -11,8 +11,8 @@ use crate::{
         RewardParams, STAKE_SCORE_SCALE, StakeScore,
     },
     network::{NetworkId, NetworkType},
-    vlt::VltParams,
     token::TokenParams,
+    vlt::VltParams,
 };
 /// Domain separator for [`Params::consensus_params_id`]. Versioned so a future encoding change is
 /// a deliberate, visible break rather than a silent one.

@@ -178,9 +178,7 @@ impl TokenFixtureOp {
         let [to, amount, nonce, at_daa] = parts.as_slice() else {
             return Err(format!("--tkn-fixture-transfer '{spec}': expected to_hex128:amount_atomic:nonce:at_daa"));
         };
-        let to = to
-            .parse::<Hash64>()
-            .map_err(|_| format!("--tkn-fixture-transfer '{spec}': 'to' must be 128 hex chars"))?;
+        let to = to.parse::<Hash64>().map_err(|_| format!("--tkn-fixture-transfer '{spec}': 'to' must be 128 hex chars"))?;
         Ok(Self::Transfer {
             to,
             amount: amount.parse().map_err(|_| format!("--tkn-fixture-transfer '{spec}': bad amount"))?,

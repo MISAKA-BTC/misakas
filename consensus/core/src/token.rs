@@ -492,10 +492,7 @@ impl TokenEmissionSettlement {
 /// `R(E) = r0 >> ⌊(E − emission_activation_epoch) / H⌋`, and 0 before
 /// activation or on an inert preset.
 pub fn emission_epoch_budget(params: &TokenParams, epoch: u64) -> u128 {
-    if params.emission_epoch_budget_r0_atomic == 0
-        || params.emission_halving_epochs == 0
-        || epoch < params.emission_activation_epoch
-    {
+    if params.emission_epoch_budget_r0_atomic == 0 || params.emission_halving_epochs == 0 || epoch < params.emission_activation_epoch {
         return 0;
     }
     let halvings = (epoch - params.emission_activation_epoch) / params.emission_halving_epochs;
@@ -516,8 +513,7 @@ pub fn emission_epoch_budget(params: &TokenParams, epoch: u64) -> u128 {
 /// zero-reward (floor) entries are omitted.
 pub fn emission_rewards(budget: u128, credits: &VltEpochCredits, min_network_compute: u128) -> TokenEmissionSettlement {
     let network_compute = credits.credits.iter().fold(0u128, |acc, (_, x)| acc.saturating_add(*x));
-    let mut settlement =
-        TokenEmissionSettlement { budget, network_compute, paid_total: 0, rewards: Vec::new() };
+    let mut settlement = TokenEmissionSettlement { budget, network_compute, paid_total: 0, rewards: Vec::new() };
     if budget == 0 || network_compute == 0 || network_compute < min_network_compute {
         return settlement;
     }
@@ -641,10 +637,14 @@ impl TokenParams {
                 return Err("settlement_delay_epochs must be >= 1 when R0 > 0 (settling the live epoch mints on a fork)");
             }
             if self.emission_activation_epoch == u64::MAX {
-                return Err("emission_activation_epoch must be set when R0 > 0 (a budget that never starts is a misconfiguration, not a policy)");
+                return Err(
+                    "emission_activation_epoch must be set when R0 > 0 (a budget that never starts is a misconfiguration, not a policy)",
+                );
             }
             if self.emission_min_network_compute == 0 {
-                return Err("emission_min_network_compute must be > 0 when R0 > 0 (design §5.1: no whole-budget mint on a near-empty network)");
+                return Err(
+                    "emission_min_network_compute must be > 0 when R0 > 0 (design §5.1: no whole-budget mint on a near-empty network)",
+                );
             }
         }
         Ok(())
@@ -689,7 +689,9 @@ impl TokenParams {
         // state machine, which is exactly the dependency the 2026-08-10 devnet run
         // showed stalls it (design §10, revised).
         if self.tkn_activation_daa_score < vlt_shadow_activation_daa_score {
-            return Err("tkn_activation_daa_score must be >= vlt_shadow_activation_daa_score (design §10: no token program on an inert compute overlay)");
+            return Err(
+                "tkn_activation_daa_score must be >= vlt_shadow_activation_daa_score (design §10: no token program on an inert compute overlay)",
+            );
         }
         if self.emission_epoch_budget_r0_atomic > 0 {
             let floor = Self::min_settlement_delay_epochs(
@@ -699,7 +701,9 @@ impl TokenParams {
                 credit_delay_epochs,
             );
             if self.settlement_delay_epochs < floor {
-                return Err("settlement_delay_epochs is below the credit-finalization depth (design §5.3: settlement must read only finalized epochs)");
+                return Err(
+                    "settlement_delay_epochs is below the credit-finalization depth (design §5.3: settlement must read only finalized epochs)",
+                );
             }
         }
         Ok(())
@@ -777,10 +781,7 @@ mod tests {
     fn stateless_validation_rejects_each_bad_shape() {
         let mut p = transfer_payload();
         p.version = 2;
-        assert_eq!(
-            validate_token_transfer_payload(&borsh::to_vec(&p).unwrap()),
-            Err(TokenTxError::UnsupportedVersion(2))
-        );
+        assert_eq!(validate_token_transfer_payload(&borsh::to_vec(&p).unwrap()), Err(TokenTxError::UnsupportedVersion(2)));
 
         let mut p = transfer_payload();
         p.asset_id = 7;
