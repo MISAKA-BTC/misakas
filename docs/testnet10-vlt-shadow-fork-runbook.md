@@ -80,8 +80,29 @@ stall the base ledger, which is why shadow may proceed without them.
       matching identity from the same cfg, so a manifest hash cannot describe a binary that is
       not the one running. Measured on Apple Silicon: 1.7 s per 64-token job (faster than the
       Metal path at this size), and byte-identical across rerun, `verify` mode and five
-      concurrent replicas. **This is the profile a Linux fleet runs**; it needs one calibration
-      run on the actual fleet hardware before the fence is scheduled.
+      concurrent replicas. **This is the profile a Linux fleet runs.**
+
+      **Calibration — the last unchecked box, and it is one command per machine.**
+      `scripts/misaka-palw-cpu-calibrate.sh` runs a fixed job three times (once as `self-job`,
+      twice as `verify`, the mode a committee actually uses), refuses a machine that cannot
+      reproduce its own result — so a cross-machine mismatch can never be blamed on the class by
+      a host that was simply broken — and prints one copy-pasteable line. Run it on every
+      candidate fleet machine; identical lines on two machines of the SAME architecture calibrate
+      that architecture's class. A difference means the class is not real on that hardware and
+      the fence must not be scheduled for it: an executor and its committee would refute each
+      other while both were honest.
+
+      Reference line from the development machine (Apple M4 Pro, 12 cores), for the aarch64
+      class. A second aarch64 machine matching this calibrates it:
+
+      ```
+      MISAKA-PALW-CPU-CALIBRATION-v1 arch=arm64 os=Darwin class=8825d03e4da7faa1 runtime=f561dd30b7b69d31 cu=414 output=a78c75a364c074799261b9f2776639c4 trace=f96abaeee120a3e5f5f444528d4681ae
+      ```
+
+      An `x86_64` line is EXPECTED to differ — different class, different SIMD kernels — so the
+      x86 fleet calibrates against another x86 machine, not against this one. Locally verified as
+      invariant to the main cross-machine variable a fixed-arch build still has: identical output
+      under 12-way CPU contention, so scheduling and core availability do not enter the result.
    b. count ≥ 4 Apple-Silicon validators into the fleet (only if the fleet is Apple);
    c. run shadow with zero compute (legal; proves only the fork mechanics).
 
