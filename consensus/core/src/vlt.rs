@@ -2375,6 +2375,13 @@ impl VltVotingSnapshot {
                 b.bond_outpoint.index,
             ))
         });
+        // One row per validator, enforced at the sealing boundary rather than trusted from the
+        // builder. `C_i(E)` is per-validator, so two rows for one identity would freeze that
+        // credit into the denominator twice and let the same compute vote twice — the bond-split
+        // inflation `dns_finality::active_bond_total_sompi` exists to prevent. The rows are
+        // already sorted, so keeping the first is deterministic on every node; a builder that
+        // produced duplicates would otherwise ship a denominator no honest node can reproduce.
+        self.validators.dedup_by(|a, b| a.validator_id == b.validator_id);
         self.total_weight = self.validators.iter().fold(0u128, |acc, v| acc.saturating_add(v.effective_weight));
         self.quorum_weight = bft_quorum(self.total_weight);
         self.validator_set_root = Self::compute_validator_set_root(&self.validators);

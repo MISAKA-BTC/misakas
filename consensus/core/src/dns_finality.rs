@@ -5358,11 +5358,15 @@ pub fn aggregate_epoch_tallies(
     contributions: &[AttestationContribution],
     total_weight_by_epoch: &BTreeMap<u64, u128>,
 ) -> Vec<EpochStakeTally> {
-    let mut seen: HashSet<(TransactionOutpoint, Hash64, u64)> = HashSet::new();
+    let mut seen: HashSet<(Hash64, u64)> = HashSet::new();
     let mut signed_by_epoch: BTreeMap<u64, u128> = BTreeMap::new();
     for c in contributions {
-        // Dedup the (bond, validator, epoch) triple; count its weight once.
-        if seen.insert((c.bond_outpoint, c.validator_id, c.epoch)) {
+        // Dedup on (VALIDATOR, epoch) — not on the bond. A validator's weight is `min{C_i, λ·ΣB}`
+        // over its aggregate bond (`active_bond_total_sompi`), so counting one attestation per
+        // bond would add that whole aggregate weight once per bond: the numerator half of the
+        // bond-split inflation, and the half that actually manufactures a quorum. One identity,
+        // one vote per epoch, whichever of its bonds signed it.
+        if seen.insert((c.validator_id, c.epoch)) {
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
             *entry = entry.saturating_add(c.signed_weight);
         }
@@ -5989,33 +5993,78 @@ pub fn total_voting_weight_by_epoch(
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
+            // One term per VALIDATOR, never per bond — see `active_bond_total_sompi`. Summing
+            // per-bond terms is how the same `C_i` becomes `n` votes.
+            let mut seen: BTreeSet<Hash64> = BTreeSet::new();
             let total = bonds
                 .iter()
                 .filter(|b| is_bond_active_at(b, anchor_daa))
-                .fold(0u128, |acc, b| acc.saturating_add(validator_voting_weight(b, epoch, snapshot, vlt)));
+                .filter(|b| seen.insert(b.validator_pubkey_hash))
+                .fold(0u128, |acc, b| {
+                    let bonded = active_bond_total_sompi(bonds, &b.validator_pubkey_hash, anchor_daa, snapshot.pin_daa_score());
+                    acc.saturating_add(validator_voting_weight(&b.validator_pubkey_hash, bonded, epoch, snapshot, vlt))
+                });
             (epoch, total)
         })
         .collect()
 }
 
-/// `W_i(E) = min{C_i(E), λ·B_i(E)}` for one bond at one epoch (VLT paper §4 eq. 5 + 6).
+/// `λ·B_i(E)`'s input: the total sompi validator `validator_id` has bonded and eligible at
+/// `anchor_daa`, under the snapshot's pin.
 ///
-/// Shared by the denominator ([`total_voting_weight_by_epoch`]) and the numerator (the per-
-/// attestation contribution weight) so a validator's weight is by construction the same number on
-/// both sides of the quorum comparison. Computing them separately would be a latent consensus split.
+/// **Aggregated per validator, and that is a security rule, not a convenience.** `C_i(E)` is
+/// keyed by validator (one identity's verified compute), so applying the collateral cap to each
+/// bond separately converts the SAME credit once per bond: a validator holding `n` bonds would
+/// weigh `n·min{C_i, λ·B}` instead of `min{C_i, λ·ΣB}`. Nothing in consensus binds a validator key
+/// to a single bond, so that is not a corner case — it is "split your bond into n outputs and
+/// multiply your vote", which collapses the whole design back onto purchased stake
+/// ([`crate::vlt::effective_voting_weight`]'s first bullet: buying stake must buy no voting power).
 ///
-/// A bond that did not exist at the snapshot's pin weighs **zero on both sides**. It has no
+/// A bond that did not exist at the snapshot's pin contributes **zero on both sides**. It has no
 /// compute in the pinned table, so it is not in that denominator; letting it into the numerator
 /// anyway would hand a branch a quorum it never had, because [`crate::vlt::meets_bft_quorum`]
 /// clamps the signed weight up to the total and `total ≥ Q(total)` always holds. The rule this
 /// states is the same one the pin states: voting weight comes from what the branches agreed on,
 /// and a bond minted after the fork is not that.
-pub fn validator_voting_weight(bond: &StakeBondRecord, epoch: u64, snapshot: &VltEpochSnapshot, vlt: &VltParams) -> u128 {
-    if bond.activation_daa_score > snapshot.pin_daa_score() {
-        return 0;
-    }
-    let recent = snapshot.recent_compute(&bond.validator_pubkey_hash, epoch, vlt);
-    crate::vlt::effective_voting_weight(recent, bond.amount, vlt.lambda_vlt_per_kas)
+pub fn active_bond_total_sompi(bonds: &[StakeBondRecord], validator_id: &Hash64, anchor_daa: u64, pin_daa: u64) -> u64 {
+    bonds
+        .iter()
+        .filter(|b| {
+            b.validator_pubkey_hash == *validator_id && b.activation_daa_score <= pin_daa && is_bond_active_at(b, anchor_daa)
+        })
+        .fold(0u64, |acc, b| acc.saturating_add(b.amount))
+}
+
+/// `W_i(E) = min{C_i(E), λ·B_i(E)}` for one VALIDATOR at one epoch (VLT paper §4 eq. 5 + 6),
+/// against an already-aggregated bond total (see [`active_bond_total_sompi`]).
+///
+/// Shared by the denominator ([`total_voting_weight_by_epoch`]) and the numerator (the per-
+/// attestation contribution weight) so a validator's weight is by construction the same number on
+/// both sides of the quorum comparison. Computing them separately would be a latent consensus split.
+pub fn validator_voting_weight(
+    validator_id: &Hash64,
+    bond_total_sompi: u64,
+    epoch: u64,
+    snapshot: &VltEpochSnapshot,
+    vlt: &VltParams,
+) -> u128 {
+    let recent = snapshot.recent_compute(validator_id, epoch, vlt);
+    crate::vlt::effective_voting_weight(recent, bond_total_sompi, vlt.lambda_vlt_per_kas)
+}
+
+/// [`validator_voting_weight`] for a validator identified by one of its bonds — the aggregate is
+/// resolved from `bonds` first. The per-bond entry point exists so callers that hold a single
+/// record (an attestation's bond, a precommit's bond) cannot accidentally weigh that record alone.
+pub fn validator_voting_weight_of_bond(
+    bond: &StakeBondRecord,
+    bonds: &[StakeBondRecord],
+    anchor_daa: u64,
+    epoch: u64,
+    snapshot: &VltEpochSnapshot,
+    vlt: &VltParams,
+) -> u128 {
+    let total = active_bond_total_sompi(bonds, &bond.validator_pubkey_hash, anchor_daa, snapshot.pin_daa_score());
+    validator_voting_weight(&bond.validator_pubkey_hash, total, epoch, snapshot, vlt)
 }
 
 /// Assemble and seal the §5 frozen [`VltVotingSnapshot`] for one wall epoch, from the same pinned
@@ -6044,19 +6093,38 @@ pub fn build_voting_snapshot(
     bonds: &[StakeBondRecord],
     vlt: &VltParams,
 ) -> VltVotingSnapshot {
+    let mut seen: BTreeSet<Hash64> = BTreeSet::new();
     let validators = bonds
         .iter()
         .filter(|b| is_bond_active_at(b, source_anchor_daa))
+        // One row per VALIDATOR. The rows are what `seal` sums into the frozen denominator, so a
+        // row per bond would freeze `n·min{C_i, λ·B}` as the number every vote is measured
+        // against — the same inflation `active_bond_total_sompi` exists to stop, made durable.
+        .filter(|b| seen.insert(b.validator_pubkey_hash))
         .map(|b| {
             let raw = table.recent_compute(&b.validator_pubkey_hash, snapshot_epoch, vlt);
-            let cap = crate::vlt::collateral_weight_cap(b.amount, vlt.lambda_vlt_per_kas);
+            let bonded = active_bond_total_sompi(bonds, &b.validator_pubkey_hash, source_anchor_daa, table.pin_daa_score());
+            let cap = crate::vlt::collateral_weight_cap(bonded, vlt.lambda_vlt_per_kas);
             VltValidatorWeight {
                 validator_id: b.validator_pubkey_hash,
                 consensus_key: b.validator_pubkey.clone(),
-                bond_outpoint: b.bond_outpoint,
+                // The validator's CANONICAL voting bond: lowest outpoint among the bonds that
+                // make up the aggregate above. A vote signed under any of this validator's bonds
+                // is matched to this row by `validator_id` — the field names which bond the row's
+                // identity is anchored to, it does not select which one may vote.
+                bond_outpoint: bonds
+                    .iter()
+                    .filter(|o| {
+                        o.validator_pubkey_hash == b.validator_pubkey_hash
+                            && o.activation_daa_score <= table.pin_daa_score()
+                            && is_bond_active_at(o, source_anchor_daa)
+                    })
+                    .map(|o| o.bond_outpoint)
+                    .min_by_key(|o| (o.transaction_id, o.index))
+                    .unwrap_or(b.bond_outpoint),
                 raw_recent_compute: raw,
                 bond_cap: cap,
-                effective_weight: validator_voting_weight(b, snapshot_epoch, table, vlt),
+                effective_weight: validator_voting_weight(&b.validator_pubkey_hash, bonded, snapshot_epoch, table, vlt),
             }
         })
         .collect();
@@ -8484,8 +8552,8 @@ mod tests {
         // Validators 1 and 2 produced compute in epoch 9; validator 3 produced none.
         let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
 
-        let w1 = validator_voting_weight(&bonds[0], 10, &credits, &vlt);
-        let w3 = validator_voting_weight(&bonds[2], 10, &credits, &vlt);
+        let w1 = validator_voting_weight_of_bond(&bonds[0], &bonds, u64::MAX, 10, &credits, &vlt);
+        let w3 = validator_voting_weight_of_bond(&bonds[2], &bonds, u64::MAX, 10, &credits, &vlt);
         assert_eq!(w1, 1_000 * crate::vlt::VLT_MICRO, "compute at epoch 9 weights epoch 10 undecayed");
         assert_eq!(w3, 0, "a fully-bonded validator with no verified compute has NO voting power");
 
@@ -8494,6 +8562,70 @@ mod tests {
     }
 
     /// The §5 frozen snapshot must freeze THE denominator, not a parallel one: every row's
+    /// **Splitting a bond must not move any weight.** `C_i(E)` is one identity's verified compute,
+    /// so the collateral cap has to close over that identity's ENTIRE bond — apply it per bond and
+    /// the same credit converts once per output, which is "buy a second bond, vote twice" and
+    /// collapses VLT back onto purchased stake. Nothing in consensus binds a validator key to a
+    /// single bond, so this is the shape of the attack, not a hypothetical: one key, two bonds.
+    ///
+    /// Checked on every surface the number reaches, because fixing one and not the others is a
+    /// consensus split rather than a partial fix: the live denominator, the frozen snapshot's
+    /// per-row weight, the frozen total, and the sealed row count.
+    #[test]
+    fn splitting_a_bond_moves_no_weight() {
+        let vlt = vlt_params_active();
+        let cap_per_bond = 10_000_000 * crate::constants::SOMPI_PER_KASPA;
+        // λ·(2 × cap_per_bond) is well above this compute, so the cap never binds and the weight
+        // is `C_i` on both sides — the arithmetic the inflation would double.
+        let compute = 1_000 * crate::vlt::VLT_MICRO;
+        let credits = credits_for(&[(1, &[9, 10], compute)]);
+        let epochs = BTreeMap::from([(10u64, 0u64)]);
+
+        let whole = vec![vlt_bond(1, 2 * cap_per_bond)];
+        // The SAME validator key (mk_bond derives it from the seed), a different outpoint: the
+        // exact split an attacker performs. `vlt_bond(1, ..)` and this share `validator_pubkey_hash`.
+        let split = vec![
+            vlt_bond(1, cap_per_bond),
+            StakeBondRecord {
+                bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(1_000_001), 0),
+                ..vlt_bond(1, cap_per_bond)
+            },
+        ];
+        assert_eq!(split[0].validator_pubkey_hash, split[1].validator_pubkey_hash, "the fixture must model ONE identity");
+
+        let w_whole = total_voting_weight_by_epoch(&whole, &epochs, &credits, &vlt);
+        let w_split = total_voting_weight_by_epoch(&split, &epochs, &credits, &vlt);
+        assert_eq!(w_split[&10], w_whole[&10], "the live denominator must not grow when a bond is split");
+        assert_eq!(w_split[&10], compute, "and it is C_i — the cap does not bind here");
+
+        let anchor = Hash64::from_u64_word(77);
+        let snap_whole =
+            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &whole, &vlt);
+        let snap_split =
+            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &split, &vlt);
+        assert_eq!(snap_split.validators.len(), 1, "one row per VALIDATOR, whatever its bonds");
+        assert_eq!(snap_split.total_weight, snap_whole.total_weight, "the frozen denominator must not grow either");
+        assert_eq!(snap_split.validators[0].effective_weight, compute);
+        assert_eq!(snap_split.validators[0].bond_cap, snap_whole.validators[0].bond_cap, "the cap is over the AGGREGATE bond");
+        assert_eq!(snap_split.quorum_weight, snap_whole.quorum_weight);
+
+        // The numerator half: one identity votes once per epoch, whichever of its bonds signed.
+        let contribs = vec![
+            AttestationContribution { epoch: 10, validator_id: split[0].validator_pubkey_hash, bond_outpoint: split[0].bond_outpoint, signed_weight: compute },
+            AttestationContribution { epoch: 10, validator_id: split[1].validator_pubkey_hash, bond_outpoint: split[1].bond_outpoint, signed_weight: compute },
+        ];
+        let tallies = aggregate_epoch_tallies(&contribs, &w_split);
+        assert_eq!(tallies[0].signed_weight, compute, "two bonds, one identity, one vote's worth of weight");
+        assert_eq!(tallies[0].total_weight, compute);
+
+        // And the sealing boundary refuses a hand-built snapshot that carries the identity twice.
+        let mut forged = snap_split.clone();
+        forged.validators.push(forged.validators[0].clone());
+        let forged = forged.seal();
+        assert_eq!(forged.validators.len(), 1, "seal must collapse a duplicated validator row");
+        assert_eq!(forged.total_weight, snap_split.total_weight, "and not count its weight twice");
+    }
+
     /// `effective_weight` is byte-for-byte [`validator_voting_weight`], the total is the same sum
     /// the live quorum divides by, zero-weight-but-eligible validators are committed rows (the
     /// set root is about eligibility), and bond input order cannot move a root.
@@ -8510,7 +8642,7 @@ mod tests {
         assert_eq!(snap.validators.len(), 3, "eligible-with-zero-weight is a committed fact, not an omission");
         for row in &snap.validators {
             let bond = bonds.iter().find(|b| b.validator_pubkey_hash == row.validator_id).unwrap();
-            assert_eq!(row.effective_weight, validator_voting_weight(bond, 10, &credits, &vlt));
+            assert_eq!(row.effective_weight, validator_voting_weight_of_bond(&bond, &bonds, u64::MAX, 10, &credits, &vlt));
             assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
         }
         let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
@@ -8591,7 +8723,7 @@ mod tests {
             epoch,
             validator_id: b.validator_pubkey_hash,
             bond_outpoint: b.bond_outpoint,
-            signed_weight: validator_voting_weight(b, epoch, &credits, &vlt),
+            signed_weight: validator_voting_weight_of_bond(&b, &bonds, u64::MAX, epoch, &credits, &vlt),
         };
         // Epoch 10: all three sign → quorum. Epoch 11: only two of three → 2/3 exactly, which is
         // NOT strictly above two thirds, so it earns nothing.
@@ -8646,7 +8778,7 @@ mod tests {
                     epoch: 10,
                     validator_id: b.validator_pubkey_hash,
                     bond_outpoint: b.bond_outpoint,
-                    signed_weight: validator_voting_weight(b, 10, snapshot, &vlt),
+                    signed_weight: validator_voting_weight_of_bond(b, &bonds, u64::MAX, 10, snapshot, &vlt),
                 })
                 .collect();
             let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, snapshot, &vlt);
@@ -8686,8 +8818,8 @@ mod tests {
         assert_eq!(snapshot.pin_daa_score(), 0);
         assert_eq!(snapshot.credited(&post_fork.validator_pubkey_hash, 9), x, "the compute itself is in the shared table");
 
-        assert_eq!(validator_voting_weight(&pre_fork, 10, &snapshot, &vlt), x, "the bond the branches agreed on votes");
-        assert_eq!(validator_voting_weight(&post_fork, 10, &snapshot, &vlt), 0, "a bond only one branch has does not");
+        assert_eq!(validator_voting_weight_of_bond(&pre_fork, std::slice::from_ref(&pre_fork), u64::MAX, 10, &snapshot, &vlt), x, "the bond the branches agreed on votes");
+        assert_eq!(validator_voting_weight_of_bond(&post_fork, std::slice::from_ref(&post_fork), u64::MAX, 10, &snapshot, &vlt), 0, "a bond only one branch has does not");
 
         // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
         // the other side's recent bonds either.
@@ -8704,7 +8836,7 @@ mod tests {
         let bond = vlt_bond(1, 20_000_000 * crate::constants::SOMPI_PER_KASPA);
         let inert = VltEpochSnapshot::inert();
         assert!(inert.is_empty());
-        assert_eq!(validator_voting_weight(&bond, 10, &inert, &vlt), 0);
+        assert_eq!(validator_voting_weight_of_bond(&bond, std::slice::from_ref(&bond), u64::MAX, 10, &inert, &vlt), 0);
         assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt)[&10], 0);
     }
 

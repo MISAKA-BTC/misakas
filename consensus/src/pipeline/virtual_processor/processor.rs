@@ -91,7 +91,7 @@ use kaspa_consensus_core::{
         precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
         reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
         stake_precommit_message, stake_preference_verdict, total_active_stake_by_epoch, total_voting_weight_by_epoch,
-        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight_of_bond,
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
@@ -218,11 +218,20 @@ pub(crate) enum ContributionWeight<'a> {
 }
 
 impl ContributionWeight<'_> {
-    /// This bond's weight for `epoch`, in whichever unit the variant denotes.
-    fn of(&self, bond: &StakeBondRecord, epoch: u64) -> u128 {
+    /// The weight this bond's VALIDATOR carries for `epoch`, in whichever unit the variant
+    /// denotes.
+    ///
+    /// Under `Vlt` the answer is a property of the validator, not of the bond handed in: the
+    /// collateral cap applies once to the validator's aggregate bond, so `bonds` (the set the
+    /// caller is walking) and `anchor_daa` are required to resolve it. Weighing the single record
+    /// would let one identity's `C_i` be converted once per bond it holds.
+    ///
+    /// `BondedStake` stays per-bond: below the VLT fence the weight IS the stake, and stake does
+    /// not double-count when it is split — each output is counted once wherever it appears.
+    fn of(&self, bond: &StakeBondRecord, bonds: &[StakeBondRecord], anchor_daa: u64, epoch: u64) -> u128 {
         match self {
             Self::BondedStake => bond.amount as u128,
-            Self::Vlt { snapshot, vlt } => validator_voting_weight(bond, epoch, snapshot, vlt),
+            Self::Vlt { snapshot, vlt } => validator_voting_weight_of_bond(bond, bonds, anchor_daa, epoch, snapshot, vlt),
         }
     }
 }
@@ -2103,6 +2112,18 @@ impl VirtualStateProcessor {
         let mut bonds: Vec<StakeBondRecord> =
             self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let net_id = self.genesis.hash;
+
+        // Derive every added block's bond mutations BEFORE the write guard, for exactly the reason
+        // `stage_dns_bond_mutations` derives its own up front: the derivation reaches
+        // `compute_challenge_adjudication_slashes` → `resolve_certificate`, which READS this very
+        // store to draw a committee, and `parking_lot::RwLock` is not reentrant. Deriving inside
+        // the guard parks the virtual processor against itself the first time a challenge crosses
+        // its window under an active shadow fence — no thread visibly holding anything, the chain
+        // simply stops. (The apply loop below still folds them in block by block: the ORDER is
+        // what the strict-prefix rule needs, not the moment of derivation.)
+        let added_muts: Vec<Vec<BondMutation>> =
+            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+
         let mut store = self.compute_capability_store.write();
 
         // A database whose chain predates this store has declarations accepted and no rows for
@@ -2158,7 +2179,7 @@ impl VirtualStateProcessor {
         if reverted > 0 {
             info!("[capability-store] reverted {reverted} declaration(s) that left the selected chain");
         }
-        for added in chain_path.added.iter() {
+        for (i, added) in chain_path.added.iter().enumerate() {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };
             for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*added)) {
                 // The same bond-binding and signature checks the walk applied, so a row can only
@@ -2175,16 +2196,16 @@ impl VirtualStateProcessor {
             // THIS block's bond mutations join the set only after its own declarations were
             // judged: a same-block bond must not validate a same-block declaration on a replayer
             // when it could not on a present node.
-            for mutation in self.dns_bond_mutations_for_chain_block(*added) {
+            for mutation in added_muts.get(i).map(Vec::as_slice).unwrap_or_default() {
                 match mutation {
                     BondMutation::Insert(outpoint, record) => {
-                        if !bonds.iter().any(|b| b.bond_outpoint == outpoint) {
-                            bonds.push(record);
+                        if !bonds.iter().any(|b| b.bond_outpoint == *outpoint) {
+                            bonds.push(record.clone());
                         }
                     }
                     BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
-                        if let Some(existing) = bonds.iter_mut().find(|b| b.bond_outpoint == outpoint) {
-                            apply_bond_stamp(existing, &mutation);
+                        if let Some(existing) = bonds.iter_mut().find(|b| b.bond_outpoint == *outpoint) {
+                            apply_bond_stamp(existing, mutation);
                         }
                     }
                 }
@@ -3375,9 +3396,9 @@ impl VirtualStateProcessor {
                         Some(snap) => snap
                             .validators
                             .iter()
-                            .find(|v| v.validator_id == p.validator_id && v.bond_outpoint == p.bond_outpoint)
+                            .find(|v| v.validator_id == p.validator_id)
                             .map_or(0, |v| v.effective_weight),
-                        None => weight.of(bond, p.epoch),
+                        None => weight.of(bond, bonds, anchor.anchor_daa_score, p.epoch),
                     },
                     snapshot_commitment: p.snapshot_commitment,
                     signature: p.signature.clone(),
@@ -5366,13 +5387,16 @@ impl VirtualStateProcessor {
                     // Numerator from the SAME frozen snapshot the vote signed (its rows, not the
                     // live pinned table): §7.1's quorum is a fraction of one fixed `W(E)`, and a
                     // numerator from a different table than the denominator is not a fraction.
+                    // By `validator_id` alone: a frozen row is per VALIDATOR (its aggregate
+                    // bond), so requiring the vote's bond to be the row's canonical one would
+                    // silently zero every vote signed under a validator's other bond.
                     let signed_weight = match frozen {
                         Some(snap) => snap
                             .validators
                             .iter()
-                            .find(|v| v.validator_id == att.validator_id && v.bond_outpoint == att.bond_outpoint)
+                            .find(|v| v.validator_id == att.validator_id)
                             .map_or(0, |v| v.effective_weight),
-                        None => weight.of(bond, att.epoch),
+                        None => weight.of(bond, bonds, anchor.anchor_daa_score, att.epoch),
                     };
                     contributions.push(AttestationContribution {
                         epoch: att.epoch,
