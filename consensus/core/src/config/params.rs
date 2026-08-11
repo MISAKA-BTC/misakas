@@ -646,11 +646,18 @@ impl Params {
         self.blockrate.target_time_per_block
     }
 
-    /// Returns the expected number of blocks per second
+    /// Returns the expected number of blocks per second, **floored at 1**.
+    ///
+    /// Every remaining consumer uses this as a sizing/bounds heuristic (relay-flow counts, log
+    /// chunk limits, orphan-pool ranges, an IBD warn threshold, a gRPC throughput hint), where 1
+    /// is the correct degenerate value on a sub-1-bps network — the un-floored integer division
+    /// is 0 at 0.1 bps (10_000 ms blocks) and 0-sized bounds panic (`chunks_timeout`). Exact
+    /// rate arithmetic must use [`Params::target_time_per_block_history`] instead (as the
+    /// coinbase emission schedule does).
     #[inline]
     #[must_use]
     pub fn bps(&self) -> u64 {
-        1000 / self.blockrate.target_time_per_block
+        (1000 / self.blockrate.target_time_per_block).max(1)
     }
 
     /// Returns the expected number of blocks per second throughout history (currently represented as [`ForkedParam`]).
@@ -659,8 +666,8 @@ impl Params {
     #[must_use]
     pub fn bps_history(&self) -> ForkedParam<u64> {
         ForkedParam::new(
-            1000 / self.pre_crescendo_target_time_per_block,
-            1000 / self.blockrate.target_time_per_block,
+            (1000 / self.pre_crescendo_target_time_per_block).max(1),
+            (1000 / self.blockrate.target_time_per_block).max(1),
             self.crescendo_activation,
         )
     }
@@ -1359,21 +1366,57 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // silently off, not merely weaker. Keep the original "≥1 credited attestation in the anchor's
     // own epoch" guard. Raise this in lockstep with `min_active_validators`, never before.
     min_anchor_attesters: 1,
-    // Reach + TTL are inherited from PRODUCTION (18_000 blocks / 6_000 DAA). Deliberately NOT
-    // retuned for this net's slower real block rate: at the measured ~110 DAA/min of the live mesh
-    // they buy ~2.5 h of rewind protection and auto-release a dead-branch wedge in ~55 min, versus
-    // the 3.5 h (2026-07-19) and ~15 h (2026-08-03) that needed manual arbitration. A shorter TTL
-    // here would trip on ordinary attestation hiccups, which this mesh has plenty of.
+    // ── PALW 0.1-bps re-sizing of every block/DAA/blue-score-denominated window ─────────────────
+    // PRODUCTION's windows are sized for 10 bps; inherited unchanged onto a 0.1-bps chain their
+    // wall-clock stretches ×100 (the 14-day unbond becomes ~3.8 YEARS, the ~55-min dead-branch
+    // auto-release becomes days). Every override below preserves the SECURITY semantics in wall
+    // clock, with two deliberate deviations noted inline. Mainnet (10 bps) keeps PRODUCTION as-is.
+    //
+    //   field                                PRODUCTION @10bps        here @0.1bps       wall clock
+    //   epoch_length_blocks                  100        (10 s)        10    (100 s)      ×10: 1-block
+    //     epochs would be degenerate (every block an epoch boundary); 100 s epochs keep the
+    //     attestation/snapshot cadence meaningful. attestation_* below move in lockstep.
+    //   max_reorg_horizon_blocks             300        (30 s)        30    (300 s)      ×10: a
+    //     3-block horizon is below plausible anticone depth even at k = 4; 30 blocks errs long.
+    //   evidence_window_blocks               12_096_000 (14 d)        120_960 (14 d)     exact
+    //   unbonding_period_blocks              +300                     120_990            U ≥ R+E ✓
+    //   dns_gate_horizon_blocks              18_000     (30 min)      1_800  (5 h)       3×TTL kept
+    //   dns_veto_ttl_daa_score               6_000      (10 min)      600    (100 min)   30× the
+    //     healthy anchor-to-tip distance (lag 10 + epoch 10 = 20), the same headroom ratio the
+    //     PRODUCTION comment derives (6_000 ≈ 30 × 200).
+    //   attestation_epoch_length_blue_score  100                      10
+    //   attestation_lag_blue_score           100                      10
+    //   attestation_anchor_backoff_blue_score 20                      2
+    //   stake_score_window_blue_score        1_500                    150   (= 15 epochs, the
+    //     window-ceiling ratio the emergency_stake_margin calibration relies on)
+    //   bridge_finality_max_staleness        1_500      (150 s)       15    (150 s)      exact
+    //   coinbase_settlement_long_maturity    30_000     (~4.5 h)      3_000 (8.3 h)      > horizon
+    //     + TTL with the same margin shape (3_000 > 1_800 + 600).
+    //   reward_uniqueness_window_blocks      600 — INHERITED unchanged (block-count semantics; the
+    //     scan bound is cheap and shrinking it toward the mergeset limit would weaken it).
+    epoch_length_blocks: 10,
+    max_reorg_horizon_blocks: 30,
+    evidence_window_blocks: 120_960,
+    unbonding_period_blocks: 120_990,
+    dns_gate_horizon_blocks: 1_800,
+    dns_veto_ttl_daa_score: 600,
+    attestation_epoch_length_blue_score: 10,
+    attestation_lag_blue_score: 10,
+    attestation_anchor_backoff_blue_score: 2,
+    stake_score_window_blue_score: 150,
+    bridge_finality_max_staleness_daa_score: 15,
+    // (superseded by the PALW table above; the historical rationale for inheriting 18_000/6_000
+    // at 10 bps — measured ~110 DAA/min, ~2.5 h protection, ~55 min auto-release — is preserved
+    // in the PRODUCTION_DNS_PARAMS comment.)
     // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
     // Settlement soaks here first too, POLICY layer only (the consensus layer is unwired until
-    // the anchor gets its sequential per-chain-block view — see the field doc). 30_000 DAA >
-    // gate horizon (18_000) + veto TTL (6_000) with margin: a contested fork should resolve
-    // before either side's rewards go liquid through the fallback. At the mesh's measured
-    // ~110 DAA/min this is ~4.5 h — long enough to bite, short enough to tolerate while the
-    // validator set is being restored.
-    coinbase_settlement_long_maturity_daa: 30_000,
+    // the anchor gets its sequential per-chain-block view — see the field doc). 3_000 DAA >
+    // gate horizon (1_800) + veto TTL (600) with margin: a contested fork should resolve
+    // before either side's rewards go liquid through the fallback. At 0.1 bps this is ~8.3 h —
+    // long enough to bite, short enough to tolerate while the validator set is being restored.
+    coinbase_settlement_long_maturity_daa: 3_000,
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
@@ -1505,7 +1548,10 @@ pub const TESTNET_PARAMS: Params = Params {
     max_difficulty_target: MAX_DIFFICULTY_TARGET,
     max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
     past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
-    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    // PALW 0.1 bps: with `difficulty_sample_rate = 1` the window size IS the window duration in
+    // blocks — 264 × 10 s ≈ the same 2 641 s DAA window the sampled 661-slot window models on
+    // ≥1-bps networks (see the devnet preset for the full rationale).
+    difficulty_window_size: 264,
     min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
     coinbase_payload_script_public_key_max_len: 150,
     max_coinbase_payload_len: 204,
@@ -1548,15 +1594,21 @@ pub const TESTNET_PARAMS: Params = Params {
     max_block_level: 250,
     pruning_proof_m: 1000,
 
-    blockrate: BlockrateParams::new::<10>(),
+    // PALW re-genesis: testnet-10 runs the 0.1-bps LLM-PoW blockrate — one block per 10 s,
+    // sized so one deterministic Qwen3.5-2B inference (~1-3 s/attempt) is a meaningful
+    // fraction of the block interval. See docs/testnet10-palw-rollout-runbook.md for the
+    // coordinated public rollout this implies.
+    blockrate: BlockrateParams::new_deci_bps(),
 
-    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
-    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
-    // schedule throughout, independent of the (legacy) crescendo activation score.
+    // kaspa-pq: this field only feeds the subsidy-month calc's pre-activation arm, which the
+    // always-active crescendo below makes unreachable on this chain.
     pre_crescendo_target_time_per_block: 100,
 
-    // 18:30 UTC, March 6, 2025
-    crescendo_activation: ForkActivation::new(88_657_000),
+    // PALW re-genesis: the chain restarts at DAA 0 with a single 10 s/block era, so the emission
+    // schedule is on the post-activation (0.1-bps) arm from genesis — the historical score
+    // 88_657_000 belonged to the superseded pre-PALW chain and would have kept emission on the
+    // 10-bps table for the first ~28 years of the new chain.
+    crescendo_activation: ForkActivation::always(),
     // kaspa-pq: TESTNET inherits mainnet's production overlay economics (14-day
     // unbonding/evidence window, PoS-v2 active, 2-D dominance reorg gate) but with
     // testnet-friendly thresholds (see TESTNET_DNS_PARAMS): a lowered
@@ -1566,9 +1618,11 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
-    // PALW LLM PoW: inert on testnet-10 until its own fork (the shadow-fork runbook pattern:
-    // scheduling it is one ForkActivation constant on a coordinated build).
-    pow_palw_activation: ForkActivation::never(),
+    // PALW LLM PoW from genesis: the public testnet-10 IS the 0.1-bps LLM-PoW network as of the
+    // "-palw" re-genesis (docs/testnet10-palw-rollout-runbook.md). Every post-genesis header
+    // declares algo_id = 4; validators need the pinned worker (`PALW_WORKER` +
+    // `MISAKA_PALW_GGUF`) — the fixture env is refused outside devnet by the kaspad startup rail.
+    pow_palw_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
@@ -1802,9 +1856,9 @@ mod consensus_params_id_tests {
         // The devnet preset actually runs these params with PALW active from genesis.
         assert_eq!(DEVNET_PARAMS.blockrate.target_time_per_block, 10_000);
         assert!(DEVNET_PARAMS.pow_palw_activation.is_active(0));
-        // And the integer-bps view truncates to zero — the reason emission consumes
-        // `target_time_per_block_history` instead (see CoinbaseManager).
-        assert_eq!(DEVNET_PARAMS.bps(), 0);
+        // And the integer-bps view floors at 1 (the raw division is 0 — the reason emission
+        // consumes `target_time_per_block_history` and sizing consumers get the floored view).
+        assert_eq!(DEVNET_PARAMS.bps(), 1);
         assert_eq!(DEVNET_PARAMS.target_time_per_block_history().after(), 10_000);
     }
 
@@ -1847,7 +1901,10 @@ mod consensus_params_id_tests {
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            ("testnet", TESTNET_PARAMS, "1f79bd30272401a6cb63004bbcb07a453329638b310d215c91985830b9f91136"),
+            // Moved again by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
+            // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
+            // see docs/testnet10-palw-rollout-runbook.md.
+            ("testnet", TESTNET_PARAMS, "32cbf80f4264dd1336b3d02664baf2595fbdf21d37fa6f83f324b241306ad158"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]

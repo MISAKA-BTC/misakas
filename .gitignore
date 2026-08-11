@@ -50,3 +50,6 @@ rothschild-generated-key.hex
 .misaka-vlt-real/
 .misaka-tkn-devnet/
 .soak-t10/
+
+# PALW worker per-cwd GGUF sha cache (generated wherever a worker runs)
+.palw-gguf-sha.json

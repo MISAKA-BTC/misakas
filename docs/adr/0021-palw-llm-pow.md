@@ -1,0 +1,117 @@
+# ADR-0021: PALW LLM proof-of-work (`algo_id = 4`) at 0.1 bps
+
+Status: accepted (devnet AND public testnet-10 genesis-active on the `palw-llm-pow` branch —
+t10 via the "-palw" re-genesis, docs/testnet10-palw-rollout-runbook.md; mainnet inert)
+Date: 2026-08-11
+Relates to: ADR-0007 (layered PoW), ADR-0008 (64-byte pre-PoW hash), ADR-0024 (verified-LLM
+token-weighted BFT), `docs/PALW` Open-then-Audit paper (rev 1.3), `misaka-palw-worker`
+
+## Context
+
+The chain already trusts deterministic pinned-LLM computation for consensus weight: the VLT
+overlay's voting power is real Qwen3.5-2B inference, replay-verified byte-for-byte by committees
+(78/78 replays reproduced `R_j` on the live 5-node devnet). The PoW itself, however, was still a
+hash race (`algo_id = 3` BLAKE2b∥SHA3 on t10, kHeavyHash on devnet): the electricity buys
+nothing but lottery tickets.
+
+The Open-then-Audit paper's accounting gives the missing piece: a worker bound to **one
+execution**, committing to a checkpointed trace whose forgery is as hard as the computation, with
+full replay as the verification regime when the interval count is small (`q ≤ 18` ⇒ verify
+everything). A PoW attempt is exactly that degenerate case: a tiny, fixed-shape job whose entire
+trace is cheap to replay relative to block time — no sampling, no beacon, no bonded-replayer
+machinery needed, because every validating node replays every attempt that becomes a block.
+
+## Decision
+
+**Layer-1 tag = one deterministic inference.** `POW_ALGO_ID_PALW_LLM = 4` slots into the ADR-0007
+layered PoW unchanged: the Layer-0 BLAKE2b-512 finalizer still binds
+`(network, algo_id, pre_pow_hash, timestamp, bits, nonce, l1_tag)` and compares against the
+512-bit lifted target. The tag is the replay-stable projection of one `misaka-palw-worker` run —
+
+```
+seed    = BLAKE2b-256(key=misaka-l1-palw-llm-v1,
+                      "seed" ∥ netid_len ∥ network_id ∥ pre_pow_hash64 ∥ timestamp ∥ nonce)
+prompt  = "MISAKA PALW proof-of-work v1\nseed: <hex64>\ncontinue:"
+run     = pinned Qwen3.5-2B, greedy argmax, n_predict = 128 (frozen consensus constant)
+l1_tag  = output_commitment ∥ gemm_trace_root ∥ operation_schedule_commitment
+          ∥ prefill_tokens ∥ decode_tokens                  (200 bytes)
+```
+
+`gemm_trace_root` chains a digest of the full logits vector of every decode call; nothing short
+of running the pinned model on the pinned kernels reproduces it. Mining is inference; a verifier
+re-runs the worker (`verify` **is** `self-job` recomputed) and recomputes the finalizer.
+
+**Grinding closure — why the seed binds `timestamp`.** For cheap tags the finalizer's own
+`timestamp`/`nonce` binding suffices: re-hashing after a timestamp tweak costs the same as a new
+attempt. At a ~10⁹× tag-to-finalizer cost ratio, any header input adjustable *without*
+re-inference becomes a free BLAKE2b grinding dimension (millisecond timestamps × ±132 s tolerance
+≈ 2·10⁵ free attempts per inference) that collapses the PoW back to hashing. The two
+miner-grindable inputs zeroed out of the pre-PoW hash are exactly `nonce` and `timestamp`; the
+seed therefore binds both. `bits` is DAA-fixed, everything else is inside `pre_pow_hash`.
+
+**Difficulty, work, and levels are untouched.** The finalizer output is uniform, so compact-bits
+targets, the DAA, blue-work accounting (still the legacy 256-bit `calc_work`), and block levels
+(top-256 projection) all work unmodified. One attempt simply costs ~1–3 s of Metal inference
+instead of nanoseconds, so the equilibrium difficulty is ~p≈1/attempts-per-10 s.
+
+**0.1 bps.** One block per 10 seconds, so one inference is a meaningful fraction of the block
+interval. `Bps<const BPS>` cannot express sub-integer rates; `BlockrateParams::new_deci_bps()`
+spells out the same formulas at λ = 0.1 (k = 4, every-block window sampling, merge 360 /
+finality 4 320 / pruning 10 800 blocks, maturity 10 — wall-clock durations identical to the
+10-bps net). The devnet difficulty window is 264 blocks ≈ the same 2 641 s duration the sampled
+661-slot window models at ≥1 bps. Integer `bps()` truncates to 0 at this rate, so the coinbase
+emission schedule was generalized from `per_second.div_ceil(bps)` to
+`(per_second × ttpb).div_ceil(1000)` — bit-identical on every integer-bps network, exact ×10
+here (~370.47 KAS per 10 s block = the same 37.047 KAS/s rate). Genesis bits drop to
+`0x207fffff` (p ≈ 1/2 per inference; the old `0x1e21bc1c` is 2⁻⁴³ per attempt — unreachable),
+which re-genesises devnet.
+
+**Fail loud, not wrong.** PALW worker errors are never header-dependent (the prompt is a fixed
+frame far below the ceiling), so a missing/broken worker means the node cannot judge *any*
+header. `calc_block_level_check_pow_layer0` panics on `PalwUnavailable`/`PalwWorkerFailed`
+instead of returning `false` — silently rejecting every valid block would stall the node and ban
+honest peers. This is the same stance as the VLT devnet fence (a kaspad missing its runtime
+panics at the first template).
+
+**Fixture mode.** `MISAKA_PALW_POW_FIXTURE=1` derives the 200-byte tag in-process from the seed
+(the `devnet-vlt-fixture` precedent): CI and harnesses exercise the whole dispatch surface with
+no 1.2 GB model. A fixture node and a real-model node compute different tags — different rule
+sets that must not share a mesh, by design.
+
+**Resource control.** Worker spawns are serialized process-wide (each loads the 1.2 GB model;
+the pruning-proof path validates headers in parallel and would otherwise be a memory cliff), the
+pipe-drain-before-wait pattern from the VLT runtime is applied (llama.cpp's model-load stderr
+alone overflows the 64 KiB pipe buffer), and completed tags are cached by seed so the header
+pipeline, block-level derivation and proof validation pay one inference per attempt.
+
+**Mining.** `misaminer` branches on the template's `algo_id`: PALW mines sequentially (one
+worker inference per nonce, clock-derived start so rigs don't duplicate attempts, 20 s template
+refresh to stay ahead of the moving past-median) — the rayon all-nonce scan would fork-bomb
+worker subprocesses.
+
+## Consequences
+
+* Devnet is re-genesised (bits) and its consensus fingerprint moves; all four presets' pinned
+  fingerprints moved because `pow_palw_activation` entered the params hash. Simnet/mainnet stay
+  `never()`.
+* **testnet-10 is re-genesised too** (the "-bs3" precedent, now "-palw"): trivial genesis bits,
+  0.1-bps blockrate, `crescendo_activation = always` (the legacy 88_657_000 emission fork score
+  belonged to the superseded chain), and a wall-clock-preserving ÷100 re-sizing of every
+  block/DAA/blue-score-denominated `TESTNET_DNS_PARAMS` window (inherited unchanged, the
+  "14-day" unbond would have become ~3.8 years). A mid-chain BPS change was rejected: unlike
+  the algo-id cut-offs, the blockrate has no forked-params machinery, and building it
+  (crescendo-style) is far heavier than a testnet re-genesis.
+* kaspad refuses to start on a PALW network without the worker runtime (actionable startup
+  error instead of a first-header panic), and refuses `MISAKA_PALW_POW_FIXTURE=1` outside
+  devnet — a mis-exported fixture var must not mint a private fork of the public testnet.
+* IBD replays one inference per header (~1–3 s): a full day of chain is ~8 640 blocks ≈ hours of
+  inference. Acceptable for devnet; a public rollout needs the paper's sampled-audit tier or
+  trusted-checkpoint IBD before the chain is long.
+* VLT `DnsParams` windows are block counts, so their wall-clock stretches 100× (epoch 100 blocks
+  ≈ 17 min). Consensus invariants (U ≥ R+E) are unchanged; harness timings must budget for it.
+* Determinism is pinned to the Metal runtime class (the VLT precondition stands: ≥4
+  Apple-Silicon machines, or build the Linux/CPU deterministic profile before widening the
+  hardware set).
+* One nonce = one subprocess = one model load (~1–2 s) even before inference. A resident-worker
+  protocol (keep the model hot across attempts) is the obvious miner optimization; it changes no
+  consensus rule and can ship later.
