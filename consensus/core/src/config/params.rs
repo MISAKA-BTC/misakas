@@ -832,20 +832,44 @@ impl DerefMut for Params {
     }
 }
 
+/// Install the registered compute profiles into a preset that has SCHEDULED its VLT shadow fence
+/// (ADR-0024 step 3).
+///
+/// The table cannot live in the `const` preset: its entries are keyed BLAKE2b digests of the
+/// pinned artifact strings, which no `const fn` can produce. It therefore has to be attached
+/// where the preset is materialized — and it has to be attached HERE, at the `From` impls every
+/// consumer passes through, rather than in one binary's argument parsing. A node built on
+/// `kaspad`'s CLI is not the only thing that reads a preset: simpa, the integration harnesses and
+/// any embedder read them too, and a scheduled fence over an empty table is a coordinated hard
+/// fork in which every job normalizes to zero VLT — the one mistake
+/// `shipped_presets_are_either_dormant_or_fully_forkable` exists to make impossible.
+///
+/// A dormant preset (`u64::MAX`) is left untouched, so every shipped network is byte-identical to
+/// before this function existed.
+fn with_registered_models(mut params: Params) -> Params {
+    if let Some(dns) = params.dns_params.as_mut()
+        && dns.vlt.vlt_shadow_activation_daa_score != u64::MAX
+        && dns.vlt.model_cost_table.len == 0
+    {
+        dns.vlt.model_cost_table = crate::vlt::ModelCostTable::palw_metal_registered();
+    }
+    params
+}
+
 impl From<NetworkType> for Params {
     fn from(value: NetworkType) -> Self {
-        match value {
+        with_registered_models(match value {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => TESTNET_PARAMS,
             NetworkType::Devnet => DEVNET_PARAMS,
             NetworkType::Simnet => SIMNET_PARAMS,
-        }
+        })
     }
 }
 
 impl From<NetworkId> for Params {
     fn from(value: NetworkId) -> Self {
-        match value.network_type {
+        with_registered_models(match value.network_type {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
@@ -854,7 +878,7 @@ impl From<NetworkId> for Params {
             },
             NetworkType::Devnet => DEVNET_PARAMS,
             NetworkType::Simnet => SIMNET_PARAMS,
-        }
+        })
     }
 }
 
@@ -1352,11 +1376,9 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// Choosing the height, the fleet-update procedure and the exit criteria are in
 /// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
-pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = u64::MAX;
+pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 30_200_000;
 
-// READY TO SCHEDULE AT 30_200_000 — measured, and blocked on one layering fix.
-//
-// The height is computed: live tip 29_981_862 on 2026-08-11 (`/info/blockdag` on the public
+// SCHEDULED 2026-08-11. Live tip measured at 29_981_862 (`/info/blockdag` on the public
 // explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
 // ~2.5 days — twice the end-to-end duration of the 2026-08-10 flag day, so an operator who starts
 // the rollout when this release lands still finishes with a day to spare.
@@ -1367,20 +1389,13 @@ pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = u64::MAX;
 // coinbase. `docs/testnet10-vlt-shadow-fork-runbook.md` has the procedure and the five-minute
 // staleness check.
 //
-// WHY IT IS NOT SET YET. Setting it fails
-// `shipped_presets_are_either_dormant_or_fully_forkable` with exactly the right complaint:
-// "fences moved with an empty model table — every job would mint zero and the fork would be a
-// no-op". The table cannot live in a `const` preset (its entries are keyed BLAKE2b digests of
-// the pinned artifact strings), and installing it in `kaspad`'s `apply_to_config` — as this
-// branch currently does — only covers consumers that go through kaspad's argument path. simpa,
-// the integration harnesses and any other embedder would get a SCHEDULED fence over an EMPTY
-// table, which is the precise failure the guard exists to prevent.
+// The model table rides along automatically: `with_registered_models` attaches the registered
+// profiles at every `From<NetworkType/NetworkId> for Params`, so a scheduled fence can never
+// reach a consumer over an empty table (which would be a coordinated hard fork crediting every
+// job zero — see `shipped_presets_are_either_dormant_or_fully_forkable`).
 //
-// The fix is to install it where every consumer passes: `Params`/`Config` materialization in
-// consensus-core (a `OnceLock`-backed accessor beside the preset, so the digests are computed
-// once and the preset stays `const`). Then set the constant above to 30_200_000 — recomputing it
-// first if the release has slipped — and update the testnet fingerprint pin, which this change
-// legitimately moves.
+// The WEIGHT fence stays dormant. This release only starts the overlay running and policing;
+// moving the vote is step 4, after the soak has measured what the weight is made of.
 
 pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
@@ -1908,7 +1923,7 @@ mod consensus_params_id_tests {
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            ("testnet", TESTNET_PARAMS, "1f79bd30272401a6cb63004bbcb07a453329638b310d215c91985830b9f91136"),
+            ("testnet", TESTNET_PARAMS, "62e299b64504162037443baf1e52411c28323b5ac06ec000d229f972f43d3206"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]

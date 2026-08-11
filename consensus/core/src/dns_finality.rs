@@ -9244,10 +9244,24 @@ mod tests {
     /// fork a no-op that costs a hard fork to discover.
     #[test]
     fn shipped_presets_are_either_dormant_or_fully_forkable() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        for (name, p) in
-            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
-        {
+        use crate::config::params::Params;
+        use crate::network::NetworkType;
+        // Checked on the MATERIALIZED presets, not on the raw consts. The model table cannot be a
+        // `const` — its entries are keyed BLAKE2b digests — so it is attached at every
+        // `From<NetworkType> for Params`, which is the form every consumer actually receives.
+        // Reading the const here would fail a correctly-configured fork, and (worse) would pass
+        // one whose table was attached in a single binary's argument parsing while simpa, the
+        // harnesses and any embedder got a scheduled fence over nothing.
+        let presets: Vec<(&str, DnsParams)> = [
+            ("devnet", NetworkType::Devnet),
+            ("simnet", NetworkType::Simnet),
+            ("mainnet", NetworkType::Mainnet),
+            ("testnet", NetworkType::Testnet),
+        ]
+        .into_iter()
+        .filter_map(|(n, t)| Params::from(t).dns_params.map(|d| (n, d)))
+        .collect();
+        for (name, p) in presets {
             let dormant = p.vlt.vlt_shadow_activation_daa_score == u64::MAX && p.vlt.vlt_activation_daa_score == u64::MAX;
             if dormant {
                 continue;
@@ -9503,10 +9517,26 @@ mod tests {
         for (name, p) in
             [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
         {
+            // The WEIGHT fence is dormant on every shipped preset, always: moving the vote is
+            // ADR-0024 step 4 and it has its own release. This assertion is the one that must
+            // never be relaxed, so it stays unconditional.
             assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name} must ship with VLT dormant");
-            assert_eq!(p.vlt.vlt_shadow_activation_daa_score, u64::MAX, "{name} must ship with the overlay dormant too");
             assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
-            assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
+
+            // The SHADOW fence is dormant everywhere EXCEPT where a release has deliberately
+            // scheduled step 3 — testnet, at `TESTNET_VLT_SHADOW_FORK_DAA_SCORE`. Below that
+            // height the preset is still byte-identical to the legacy rule, which is what this
+            // test is really about; above it the overlay runs and is policed, with finality
+            // untouched. A preset that scheduled its shadow fence is separately required to be
+            // fully forkable by `shipped_presets_are_either_dormant_or_fully_forkable`.
+            let shadow = p.vlt.vlt_shadow_activation_daa_score;
+            if shadow == u64::MAX {
+                assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
+            } else {
+                assert_eq!(name, "testnet", "only testnet has a scheduled shadow fork ({name} moved one unexpectedly)");
+                assert!(!p.vlt_shadow_active_at(shadow - 1), "{name}: the legacy rule holds right up to the fence");
+                assert!(p.vlt_shadow_active_at(shadow), "{name}: and the overlay starts exactly at it");
+            }
             // MISAKA Compute Token Program: same fence story — shipped presets never fold the
             // ledger and never settle emission, and the inert preset is internally coherent.
             assert_eq!(p.tkn.tkn_activation_daa_score, u64::MAX, "{name} must ship with the token program dormant");
