@@ -27,11 +27,23 @@ is not on the node's actual path. Until it is explained, the number this card te
 to verify is not the number their node will print, and a flag day whose verification step is
 wrong is worse than one with no verification step.
 
-**Next step for whoever picks this up:** find where `kaspad` materializes `config.params` for a
-`--testnet --netsuffix=10` run (it is evidently not `From<NetworkId> for Params`), and either
-route it through `with_registered_models` or move that install to whatever that path is. Then
-re-pin, and re-run the check below — it has now caught two real defects, which is the argument
-for keeping it first in this document.
+**Narrowed, 2026-08-11.** `kaspad/src/daemon.rs:410` is `let params: Params = network.into();`
+— so it DOES go through `From<NetworkId> for Params`, and `with_registered_models` does run. The
+release commit's preset genuinely carries `vlt_shadow_activation_daa_score:
+TESTNET_VLT_SHADOW_FORK_DAA_SCORE` = 30_200_000 (verified in the clean worktree). The divergence
+must therefore be introduced AFTER that, in the chain at `daemon.rs:433`:
+
+```rust
+ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|c| args.apply_to_config(c)).build()
+```
+
+**Next step:** determine which of `adjust_perf_params_to_consensus_params`, `apply_args` or
+`build` mutates a field that `consensus_params_id` hashes, then either stop it doing so or pin
+the post-`build()` value (which is what the node announces and therefore what peers compare).
+A one-line probe settles it: print `config.params.consensus_params_id()` right after `build()`
+and compare with `Params::from(network).consensus_params_id()` before the builder.
+
+The check below has now caught two real defects. It stays first in this document.
 
 ## 0. Staleness check — 10 seconds, do it first
 
