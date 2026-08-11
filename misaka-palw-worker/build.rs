@@ -10,7 +10,21 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISAKA_LLAMA_SRC");
     println!("cargo:rerun-if-changed=src/shim.c");
 
-    cc::Build::new()
+    // The CPU profile is a different consensus identity, not a runtime toggle: it must be chosen
+    // at BUILD time so `runtime_manifest_hash` cannot disagree with what the process actually
+    // does. `MISAKA_PALW_CPU=1` selects it, and the Rust side keys its reported identity on the
+    // same cfg.
+    println!("cargo:rustc-check-cfg=cfg(misaka_palw_cpu)");
+    let cpu_only = std::env::var("MISAKA_PALW_CPU").is_ok_and(|v| v == "1");
+    println!("cargo:rerun-if-env-changed=MISAKA_PALW_CPU");
+    if cpu_only {
+        println!("cargo:rustc-cfg=misaka_palw_cpu");
+    }
+    let mut build = cc::Build::new();
+    if cpu_only {
+        build.define("MISAKA_PALW_CPU_ONLY", None);
+    }
+    build
         .file("src/shim.c")
         .include(format!("{src}/include"))
         .include(format!("{src}/ggml/include"))
@@ -20,13 +34,23 @@ fn main() {
     let build = format!("{src}/build");
     println!("cargo:rustc-link-search=native={build}/src");
     println!("cargo:rustc-link-search=native={build}/ggml/src");
-    println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-metal");
-    println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-blas");
-    for lib in ["llama", "ggml", "ggml-base", "ggml-cpu", "ggml-metal", "ggml-blas"] {
+    // The CPU profile links NO GPU or BLAS backend — its identity says `gpu-off`/`no-blas`, and
+    // linking them anyway would make the manifest hash a claim about a binary that is not this
+    // one. It therefore needs its own llama.cpp build (`-DGGML_METAL=OFF -DGGML_BLAS=OFF`);
+    // point `MISAKA_LLAMA_SRC` at that tree when building with `MISAKA_PALW_CPU=1`.
+    if !cpu_only {
+        println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-metal");
+        println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-blas");
+    }
+    let libs: &[&str] =
+        if cpu_only { &["llama", "ggml", "ggml-base", "ggml-cpu"] } else { &["llama", "ggml", "ggml-base", "ggml-cpu", "ggml-metal", "ggml-blas"] };
+    for lib in libs {
         println!("cargo:rustc-link-lib=static={lib}");
     }
-    for framework in ["Metal", "MetalKit", "Foundation", "Accelerate", "CoreGraphics"] {
-        println!("cargo:rustc-link-lib=framework={framework}");
+    if !cpu_only {
+        for framework in ["Metal", "MetalKit", "Foundation", "Accelerate", "CoreGraphics"] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
     }
     println!("cargo:rustc-link-lib=c++");
 }

@@ -104,11 +104,24 @@ directly with the hardware-class precondition below.
    classes. Compute participation needs ≥ 1 executor + 3 same-class verifiers **per class**, or
    every certificate stalls below `min_verifier_confirmations` and mints nothing (safe, but a
    shadow that measures nothing defers step 4 indefinitely). Options, in order of preference:
-   a. count ≥ 4 Apple-Silicon validators into the fleet (M-series minis are the cheap path);
-   b. add a pinned **Linux/CPU deterministic profile** (fixed threads, `GGML_NATIVE=OFF`,
-      same worker contract — a new `ModelCostEntry` + class, its own calibration run);
+   a. **BUILT (2026-08-11): the portable CPU profile.** `qwen35_pins::CPU_BUILD_PROFILE` /
+      `CPU_RUNTIME_CLASS` + `palw_qwen35_2b_cpu_entry()`, registered alongside the two Metal
+      entries. The worker selects the backend at BUILD time (`MISAKA_PALW_CPU=1` against a
+      llama.cpp built `-DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF`) and reports the
+      matching identity from the same cfg, so a manifest hash cannot describe a binary that is
+      not the one running. Measured on Apple Silicon: 1.7 s per 64-token job (faster than the
+      Metal path at this size), and byte-identical across rerun, `verify` mode and five
+      concurrent replicas. **This is the profile a Linux fleet runs**; it needs one calibration
+      run on the actual fleet hardware before the fence is scheduled.
+   b. count ≥ 4 Apple-Silicon validators into the fleet (only if the fleet is Apple);
    c. run shadow with zero compute (legal; proves only the fork mechanics).
-   The choice is step 4's hardware-class decision; (a) unblocks measurement soonest.
+
+   **Why the class split is not optional — now measured, not assumed.** Running the identical
+   job under the CPU and Metal profiles produced the SAME `output_commitment` (the decoded
+   tokens agree) and a DIFFERENT `gemm_trace_root` (the logits differ in the low bits). A
+   cross-class verifier would therefore reproduce the answer and still refute the receipt. That
+   is the honest-refutes-honest failure, demonstrated; `select_verifiers` drawing only within a
+   class is what prevents it.
 
 ## Choosing `H`
 

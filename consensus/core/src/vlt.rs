@@ -1056,6 +1056,33 @@ pub mod qwen35_pins {
     /// the patched 35B one would be meaningless, and [`super::select_verifiers`] must never draw
     /// such a pair.
     pub const METAL_RUNTIME_CLASS: &str = "misaka-palw-lite-fp/apple-metal-arm64/v1";
+
+    /// The **CPU** build profile of the same worker against the same GGUF: no GPU backend at all,
+    /// a pinned thread count, and `GGML_NATIVE` off so the compiler may not select instructions
+    /// from the build host. Every one of those is part of the identity because every one of them
+    /// can change a reduction order and therefore the logits.
+    ///
+    /// This profile exists because a public fleet is Linux servers, not Apple laptops, and a
+    /// committee can only be drawn from validators sharing a determinism class — a network whose
+    /// only registered classes are Metal ones is a network whose fleet cannot verify anything.
+    pub const CPU_BUILD_PROFILE: &str = "release/cpu-only/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
+
+    /// The CPU determinism class. Deliberately **not** vendor-scoped the way the Metal classes
+    /// are: with `GGML_NATIVE` off and no BLAS the worker runs the portable ggml kernels, whose
+    /// arithmetic is fixed by the source and the thread count rather than by the host's
+    /// microarchitecture. That is the property that lets a heterogeneous fleet audit each other
+    /// at all, and it is the reason to prefer this profile over the Metal ones in production
+    /// despite it being slower.
+    ///
+    /// It is still a CLASS, not a promise about every machine: a build with different flags is a
+    /// different `runtime_hash` and simply will not match the registered entry, which is the
+    /// failure mode we want (refuse to participate) rather than the one we do not (refute honest
+    /// peers).
+    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-int/portable-cpu/v1";
+
+    /// Threads the CPU profile pins. In the identity string above as well, so a worker built to
+    /// run wider cannot claim this profile — thread count changes how ggml splits a reduction.
+    pub const CPU_THREADS: i32 = 4;
 }
 
 /// `h_M` for a GGUF-distributed model: keyed digest over the content digest, size, filename, and
@@ -1270,6 +1297,35 @@ pub fn palw_qwen35_2b_metal_entry() -> ModelCostEntry {
     }
 }
 
+/// The registered [`ModelCostEntry`] for the pinned Qwen3.5-2B palw-lite **CPU** profile — the
+/// same weights and the same worker as [`palw_qwen35_2b_metal_entry`], built without a GPU
+/// backend and therefore in its own determinism class ([`qwen35_pins::CPU_RUNTIME_CLASS`]).
+///
+/// This is the profile a public fleet actually runs: `select_verifiers` draws a committee only
+/// from validators declaring the job's class, so a network registering Metal profiles alone can
+/// never assemble one out of Linux servers. `ρ` stays 1.0 — it prices a reference-token-equivalent,
+/// and the same model doing the same job is the same amount of work however slowly it is done.
+pub fn palw_qwen35_2b_cpu_entry() -> ModelCostEntry {
+    ModelCostEntry {
+        model_weights_hash: derive_model_weights_hash(
+            qwen35_pins::GGUF_SHA256,
+            qwen35_pins::GGUF_SIZE,
+            qwen35_pins::GGUF_FILENAME,
+            qwen35_pins::BASE_REPO_ID,
+            qwen35_pins::BASE_REVISION,
+        ),
+        runtime_hash: derive_runtime_hash(
+            qwen35_pins::LLAMA_COMMIT,
+            qwen35_pins::LLAMA_PATCH_SHA256,
+            qwen35_pins::LLAMA_BUILD_NUMBER,
+            qwen35_pins::CPU_BUILD_PROFILE,
+        ),
+        runtime_class_id: derive_runtime_class_id(qwen35_pins::CPU_RUNTIME_CLASS),
+        rho_micro: VLT_MICRO as u64,
+        max_tokens: PALW_QWEN35_2B_MAX_TOKENS,
+    }
+}
+
 /// The floor job a real-compute devnet's `min_network_compute` is sized against: 8 prefill and
 /// 8 decode tokens, in µRTE under `(a, b)` — deliberately smaller than any real prompt+decode, so
 /// the activation gate asks for "a committee's worth of modest real jobs", not for a 35B-sized
@@ -1470,9 +1526,13 @@ impl ModelCostTable {
     /// reach `min_verifier_confirmations`.
     pub fn palw_metal_registered() -> Self {
         let mut table = Self::EMPTY;
-        table.len = 2;
+        table.len = 3;
         table.entries[0] = palw_qwen36_metal_entry();
         table.entries[1] = palw_qwen35_2b_metal_entry();
+        // The CPU profile is what a public fleet can actually run — see `palw_qwen35_2b_cpu_entry`.
+        // Registered alongside rather than instead: an operator with Apple hardware keeps its
+        // faster path, and the two never audit each other because they are different classes.
+        table.entries[2] = palw_qwen35_2b_cpu_entry();
         table
     }
 
@@ -4675,11 +4735,24 @@ mod tests {
 
         // The devnet registry resolves each worker to exactly its own profile.
         let table = ModelCostTable::palw_metal_registered();
-        assert_eq!(table.live().len(), 2);
+        assert_eq!(table.live().len(), 3);
         assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
         assert!(table.lookup(q36.model_weights_hash, q36.runtime_hash).is_some());
         assert!(table.lookup(e.model_weights_hash, q36.runtime_hash).is_none(), "cross-pairing must not resolve");
         assert_eq!(table.live().iter().filter(|entry| entry.runtime_hash == e.runtime_hash).count(), 1);
+
+        // The CPU profile: SAME weights (the registry keys on the pair, so the model half must
+        // match the Metal entry exactly), different runtime, different CLASS. The class is the
+        // load-bearing one — `select_verifiers` draws only within a class, so a CPU validator
+        // auditing a Metal executor would refute an honest receipt over kernel differences.
+        let cpu = palw_qwen35_2b_cpu_entry();
+        assert_eq!(cpu.model_weights_hash, e.model_weights_hash, "same GGUF, same model identity");
+        assert_ne!(cpu.runtime_hash, e.runtime_hash, "a GPU-less build is a different runtime");
+        assert_ne!(cpu.runtime_class_id, e.runtime_class_id, "and a different determinism class");
+        assert_ne!(cpu.runtime_class_id, q36.runtime_class_id);
+        assert!(table.lookup(cpu.model_weights_hash, cpu.runtime_hash).is_some(), "the fleet's profile must be registered");
+        assert_eq!(cpu.rho_micro, VLT_MICRO as u64);
+        assert_eq!(cpu.max_tokens, PALW_QWEN35_2B_MAX_TOKENS);
 
         // The activation floor is a couple of modest real jobs, not a 35B-sized window.
         let floor = palw_devnet_floor_job_vlt(VLT_MICRO as u64, 8 * VLT_MICRO as u64);
