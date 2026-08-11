@@ -1576,12 +1576,23 @@ async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
     let spend_tx = dns_harness::funded_signed_p2pkh_spend(seed, bond_outpoint, bond_amount, bond_daa, storage);
 
     // ONE block carries BOTH: the slash (which would remove output-0) AND the self-spend of output-0.
-    // The Active bond is not releasable ⇒ the spend-gate disqualifies the whole block.
+    //
+    // Since the 2026-08-11 audit P0 the devnet preset activates the MERGESET spend gate at
+    // genesis, which replaces the own-body REJECT with an acceptance-time SKIP: the block stays
+    // valid and the spend simply is not accepted. That is the deliberate trade — an own-body
+    // reject makes an honest miner self-reject for merely MERGING someone else's forbidden
+    // spend, while the skip protects the collateral in both cases. What must remain true either
+    // way is the property this test exists for: the locked output is NOT spendable while the
+    // bond is unreleasable.
     let race_block = ctx.mine_block(new_miner_data(), vec![slash_tx, spend_tx]).await;
-    assert_ne!(
+    assert_eq!(
         ctx.consensus.block_status(race_block.header.hash),
         BlockStatus::StatusUTXOValid,
-        "spending the locked bond output-0 must disqualify the block (the spend-gate wins over the slash)"
+        "the mergeset skip keeps the block valid — an honest miner must not self-reject over a merged spend"
+    );
+    assert!(
+        !ctx.consensus.get_virtual_utxos(Some(bond_outpoint), 2, true).iter().any(|(o, _)| *o == bond_outpoint),
+        "the locked bond output-0 must not survive as a spendable UTXO"
     );
 
     // The block had NO effect: the locked stake survives (neither spent nor slashed-away) and no

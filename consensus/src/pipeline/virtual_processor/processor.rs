@@ -301,6 +301,9 @@ pub struct VirtualStateProcessor {
     /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
     /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
     pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation — supersedes the
+    /// BLAKE2b-SHA3 rule for the template's `pow_algo_id` where active.
+    pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -545,6 +548,7 @@ impl VirtualStateProcessor {
 
             genesis: params.genesis.clone(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
+            pow_palw_activation: params.pow_palw_activation,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             max_block_mass: params.max_block_mass,
@@ -867,7 +871,7 @@ impl VirtualStateProcessor {
             if track_bonds {
                 // Mirror the reverse on the bond view. `current` is leaving the
                 // selected chain, so its acceptance data is committed.
-                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current));
+                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
             }
         }
 
@@ -906,7 +910,7 @@ impl VirtualStateProcessor {
                     if track_bonds {
                         // `current` is an already-validated chain block joining
                         // the diff; its acceptance data is committed.
-                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current));
+                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {
@@ -979,7 +983,7 @@ impl VirtualStateProcessor {
                             // derived from the in-memory acceptance data (its
                             // store entry is written by the commit just below).
                             let bond_muts =
-                                self.dns_bond_mutations_from_acceptance(current, &ctx.mergeset_acceptance_data, pov_daa_score);
+                                self.dns_bond_mutations_from_acceptance(current, &ctx.mergeset_acceptance_data, &bond_view, pov_daa_score);
                             bond_view.apply(&bond_muts);
                         }
                         // Commit UTXO data for current chain block
@@ -2017,10 +2021,15 @@ impl VirtualStateProcessor {
         // behaviour change worth guarding: the adjudication judges a challenge at its
         // certificate's anchor, and a bond created inside this same chain path cannot be `Active`
         // at an anchor that old.
+        // The evidence view for the SKIP filter. Immutable identity fields plus a strictly-older
+        // status query, so any view holding the bond answers identically — see
+        // `proved_slash_targets`. The store's current set is the cheapest such view, and it is
+        // the same one on both the removed and added passes.
+        let evidence_view = self.initial_active_bond_view();
         let removed_muts: Vec<Vec<BondMutation>> =
-            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
         let added_muts: Vec<Vec<BondMutation>> =
-            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
 
         let mut store = self.stake_bonds_store.write();
 
@@ -2121,8 +2130,9 @@ impl VirtualStateProcessor {
         // its window under an active shadow fence — no thread visibly holding anything, the chain
         // simply stops. (The apply loop below still folds them in block by block: the ORDER is
         // what the strict-prefix rule needs, not the moment of derivation.)
+        let evidence_view = self.initial_active_bond_view();
         let added_muts: Vec<Vec<BondMutation>> =
-            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h)).collect();
+            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
 
         let mut store = self.compute_capability_store.write();
 
@@ -2216,11 +2226,11 @@ impl VirtualStateProcessor {
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
     /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
     /// serves both apply (added) and revert (removed).
-    fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash) -> Vec<BondMutation> {
+    fn dns_bond_mutations_for_chain_block(&self, chain_block: BlockHash, bond_view: &ActiveBondView) -> Vec<BondMutation> {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_of_chain_block(chain_block);
-        let mut muts = self.dns_bond_mutations_from_txs(&txs, accepted_daa_score, min_bond, unbonding_floor);
+        let mut muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
         // §7(b)/(c): the mutations a challenge ADJUDICATION implies at this block. Appended after
         // the transaction-derived ones so the order is deterministic, and derived from the same
         // chain data on both apply and revert.
@@ -2342,12 +2352,34 @@ impl VirtualStateProcessor {
     fn dns_bond_mutations_from_txs(
         &self,
         txs: &[Transaction],
+        bond_view: &ActiveBondView,
         accepted_daa_score: u64,
         min_bond: u64,
         unbonding_floor: u64,
     ) -> Vec<BondMutation> {
         let enforce = self.dns_params.as_ref().is_some_and(|p| accepted_daa_score >= p.unbond_authz_mergeset_activation_daa_score);
         let mut muts = bond_mutations_from_accepted_txs(txs, accepted_daa_score, min_bond, unbonding_floor, enforce);
+
+        // 2026-08-11 audit P0: evidence that arrives by MERGE was never signature-checked — the
+        // three genuineness rules are block-validity gates over the block's OWN body, while these
+        // mutations come from everything it ACCEPTS. Drop any `Slash` whose evidence is not
+        // proved, exactly as the H-05 half above drops an unauthorized `Unbond`. See
+        // `proved_slash_targets` for why this is symmetric between apply and revert.
+        if let Some(params) = self.dns_params.as_ref()
+            && accepted_daa_score >= params.dns_activation_daa_score
+        {
+            let proved = super::utxo_validation::proved_slash_targets(
+                txs,
+                bond_view,
+                self.genesis.hash,
+                accepted_daa_score,
+                params.evidence_window_blocks,
+            );
+            muts.retain(|m| match m {
+                BondMutation::Slash(outpoint, _) => proved.contains(outpoint),
+                _ => true,
+            });
+        }
         if enforce {
             let net_id = self.genesis.hash;
             let signed: std::collections::HashSet<(TransactionOutpoint, Hash64)> = unbond_requests_from_accepted_txs(txs)
@@ -2448,11 +2480,12 @@ impl VirtualStateProcessor {
         &self,
         chain_block: BlockHash,
         acceptance_data: &AcceptanceData,
+        bond_view: &ActiveBondView,
         accepted_daa_score: u64,
     ) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_from_acceptance_data(acceptance_data);
-        let mut muts = self.dns_bond_mutations_from_txs(&txs, accepted_daa_score, min_bond, unbonding_floor);
+        let mut muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
         // The adjudication reads only the SELECTED PARENT's chain, never this block's own
         // acceptance data, so it produces the same mutations here as it does from the store — which
         // it must, or the in-memory bond view and the persisted one would drift apart.
@@ -6803,9 +6836,13 @@ impl VirtualStateProcessor {
             u64::max(min_block_time, unix_now()),
             virtual_state.bits,
             0,
-            // kaspa-pq Phase 3 (ADR-0007): the template declares the network-correct Layer-1 algo
-            // for this DAA score — BLAKE2b-512 ∥ SHA3-512 (algo_id = 3) once activated, else kHeavyHash (1).
-            kaspa_consensus_core::pow_layer0::required_algo_id(self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score)),
+            // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this
+            // DAA score — PALW LLM (algo_id = 4) once activated, else BLAKE2b-512 ∥ SHA3-512 (3)
+            // once activated, else kHeavyHash (1).
+            kaspa_consensus_core::pow_layer0::required_algo_id(
+                self.pow_palw_activation.is_active(virtual_state.daa_score),
+                self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
+            ),
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
             virtual_state.ghostdag_data.blue_score,

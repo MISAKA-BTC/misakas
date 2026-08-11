@@ -1926,6 +1926,68 @@ fn attestation_reward_eligibility(
 /// [`stake_attestation_message`] digests. On the first failure returns
 /// `Err(bond_tx_id)`; the caller maps it to
 /// [`UnverifiableSlashingEvidenceInBlock`].
+/// The bonds a chain block's ACCEPTED transactions may actually slash — the acceptance-time half
+/// of the three evidence rules (2026-08-11 audit P0).
+///
+/// The block-validity rules above judge the block's OWN body, but `BondMutation::Slash` is derived
+/// from everything the block ACCEPTS, so evidence riding in a merge-blue block was never
+/// signature-checked and still burned a bond. This is the same own-body/mergeset asymmetry H-05
+/// closed for unbond requests, closed the same way: a SKIP at acceptance rather than a block
+/// reject, so an honest miner that merely MERGES forged evidence does not self-reject.
+///
+/// # Why this is symmetric between apply and revert
+///
+/// The filter must return the same answer whichever direction the bond view was walked from, or
+/// a mutation kept on apply and dropped on revert leaves a stamp nothing removes. It does, for
+/// two reasons that hold together:
+///
+/// * The identity fields it reads (`validator_pubkey`, `validator_pubkey_hash`) are immutable.
+/// * The status it reads is `effective_bond_status(bond, target_daa)`, and that function is
+///   strictly DAA-monotone — a stamp written at DAA `s` only affects queries at `pov >= s`. Every
+///   stamp this block writes carries the block's own DAA, and `require_older` below rejects any
+///   evidence whose target is not strictly older than that. So no mutation of this block can
+///   change this block's own filter result.
+///
+/// The remaining case — a bond CREATED and slashed within one chain path — cannot produce a kept
+/// mutation in either direction: such a bond's `activation_daa_score` is at or above its creating
+/// block's DAA, so at any strictly-older target its status is `Pending`, which the rules refuse.
+pub(super) fn proved_slash_targets(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    including_daa: u64,
+    evidence_window_blocks: u64,
+) -> std::collections::HashSet<TransactionOutpoint> {
+    let mut proved = std::collections::HashSet::new();
+    for tx in txs {
+        // One transaction at a time: the rules answer "is this block's evidence all genuine",
+        // and here the question is per-tx — a forged one must not condemn a genuine sibling.
+        let one = std::slice::from_ref(tx);
+        for ev in slashing_evidence_from_accepted_txs(one) {
+            let older = ev.attestation_a.target_daa_score < including_daa && ev.attestation_b.target_daa_score < including_daa;
+            if older && slashing_evidence_genuine(one, bond_view, net_id, including_daa, evidence_window_blocks, true).is_ok() {
+                proved.insert(ev.bond_outpoint);
+            }
+        }
+        for ev in precommit_evidence_from_accepted_txs(one) {
+            let older = ev.precommit_a.target_daa_score < including_daa && ev.precommit_b.target_daa_score < including_daa;
+            if older && precommit_evidence_genuine(one, bond_view, net_id, including_daa, evidence_window_blocks, true).is_ok() {
+                proved.insert(ev.bond_outpoint);
+            }
+        }
+        for (_, c) in compute_challenges_with_ids(one) {
+            // A compute challenge names no target DAA of its own; it is judged against the
+            // including block, and only `ContradictoryVerification` slashes at acceptance at all.
+            if c.kind == kaspa_consensus_core::vlt::ComputeFraudKind::ContradictoryVerification
+                && compute_challenge_genuine(one, bond_view, net_id, including_daa, true).is_ok()
+            {
+                proved.insert(c.target_bond_outpoint);
+            }
+        }
+    }
+    proved
+}
+
 fn slashing_evidence_genuine(
     txs: &[Transaction],
     bond_view: &ActiveBondView,
