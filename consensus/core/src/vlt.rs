@@ -2410,6 +2410,20 @@ fn recovery_state(last_finalized_anchor: Hash64, total_weight: u128, blocker: Vl
     }
 }
 
+/// How far back the caller's canonical-reservation scan looks for the start of the current
+/// contiguous run of magnitude-eligible frozen snapshots. A constant, because the scan bound is
+/// part of what makes the derived epoch canonical: two nodes with different bounds could name
+/// different run starts for one chain.
+pub const CANONICAL_RESERVATION_SCAN_CAP: u64 = 64;
+
+/// The **magnitude** half of [`vlt_activation_eligibility`], over a persisted
+/// [`VltVotingSnapshot`] row: weight at/above the floor, spread over enough validators. The
+/// local-availability half (resolution completeness, a finalized source anchor) is deliberately
+/// absent — those gate when THIS node may act, and canonical history must not depend on them.
+pub fn snapshot_row_magnitude_eligible(total_weight: u128, credited_validators: usize, params: &VltParams) -> bool {
+    total_weight > 0 && total_weight >= params.min_network_compute && credited_validators >= params.min_active_validators as usize
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn tick_vlt_activation(
     shadow_active: bool,
@@ -2421,7 +2435,19 @@ pub fn tick_vlt_activation(
     last_finalized_anchor: Hash64,
     eligibility: Result<(), VltActivationBlocker>,
     weight_fence_daa: u64,
+    // The chain-canonical epoch a reservation must be stamped with: the start of the current
+    // contiguous run of magnitude-eligible frozen snapshots (the caller derives it from the
+    // write-once per-epoch rows). `current_epoch` is when this node OBSERVED eligibility — a
+    // recompute-cadence fact that trails the chain by a sync-path-dependent amount, so stamping
+    // it into the record made `activation_epoch` differ between a node that lived the epoch and
+    // one that replayed or imported it: the §12 identity tuple then disagreed on its one
+    // machine-derived field while every root matched. Found live: five present nodes said 37, a
+    // pruning-imported sixth said 36 — and 36 is the canonical answer.
+    canonical_scheduled_epoch: u64,
 ) -> (Option<VltActivationRecord>, VltActivationState) {
+    // Never schedule the future: the canonical epoch comes from persisted rows so it cannot
+    // exceed the wall epoch, but the machine's invariants should not rest on a caller's walk.
+    let canonical_scheduled_epoch = canonical_scheduled_epoch.min(current_epoch);
     use PersistedVltActivationState as P;
     if !shadow_active {
         return (prev.cloned(), VltActivationState::PreShadow);
@@ -2457,18 +2483,22 @@ pub fn tick_vlt_activation(
         Some(r) if r.state == P::Recovery => match eligibility {
             Err(blocker) => (Some(r.clone()), recovery_state(last_finalized_anchor, total_weight, blocker)),
             Ok(()) => {
+                // The re-reservation is stamped with the start of the CURRENT eligibility run —
+                // the epoch weight came back, not the epoch this node noticed. Same canonical
+                // coordinate as first activation, same reason: a replayer must derive the same
+                // record.
                 let record = VltActivationRecord {
                     state: P::ActivationScheduled,
                     source_anchor: last_finalized_anchor,
                     snapshot_epoch: epoch,
                     snapshot_root,
-                    scheduled_at_epoch: current_epoch,
+                    scheduled_at_epoch: canonical_scheduled_epoch,
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
                     ..r.clone()
                 };
                 let state = VltActivationState::ActivationScheduled {
-                    activation_epoch: current_epoch + 1,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     source_anchor: last_finalized_anchor,
                     snapshot_root,
                     total_weight,
@@ -2517,9 +2547,13 @@ pub fn tick_vlt_activation(
                 },
             ),
         },
-        // No record yet, or Awaiting: an eligible snapshot reserves the NEXT epoch, never this
-        // one. The validator set and its weights are fixed within an epoch, and compute
-        // finalized in `E` is usable from `E+1` at the earliest.
+        // No record yet, or Awaiting: an eligible snapshot reserves the epoch AFTER the run of
+        // eligible snapshots began — never the run-start itself. The validator set and its
+        // weights are fixed within an epoch, and compute finalized in `E` is usable from `E+1`
+        // at the earliest. The stamp is the CANONICAL epoch, not this node's observation epoch:
+        // a node whose recompute noticed the run late still records the same reservation a
+        // replaying or importing node derives, and the `>=` activation gates below mean lateness
+        // costs it nothing but the delay it already had.
         _ => match eligibility {
             Err(blocker) => {
                 (Some(VltActivationRecord::awaiting()), VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker })
@@ -2531,13 +2565,13 @@ pub fn tick_vlt_activation(
                     source_anchor: last_finalized_anchor,
                     snapshot_epoch: epoch,
                     snapshot_root,
-                    scheduled_at_epoch: current_epoch,
-                    activation_epoch: current_epoch + 1,
+                    scheduled_at_epoch: canonical_scheduled_epoch,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
                 };
                 let state = VltActivationState::ActivationScheduled {
-                    activation_epoch: current_epoch + 1,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     source_anchor: last_finalized_anchor,
                     snapshot_root,
                     total_weight,
@@ -3479,17 +3513,17 @@ mod tests {
         let tick = |newest: Option<(u64, u128)>, validators: usize, confirmed: bool| {
             let e = vlt_activation_eligibility(true, newest.map_or(0, |(_, w)| w), validators, confirmed, &p);
             let last = if confirmed { anchor } else { Hash64::default() };
-            tick_vlt_activation(true, true, None, 10, newest, root, last, e, 5_000).1
+            tick_vlt_activation(true, true, None, 10, newest, root, last, e, 5_000, 10).1
         };
 
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
-            tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000).1,
+            tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000, 10).1,
             VltActivationState::PreShadow
         );
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
-            tick_vlt_activation(true, false, None, 10, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000).1,
+            tick_vlt_activation(true, false, None, 10, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000, 10).1,
             VltActivationState::Shadow
         );
 
@@ -3532,7 +3566,8 @@ mod tests {
                 root,
                 anchor,
                 vlt_activation_eligibility(false, 9_000, 5, true, &p),
-                5_000
+                5_000,
+                10
             )
             .1,
             VltActivationState::AwaitingEligibleSnapshot { blocker: VltActivationBlocker::ResolutionIncomplete, .. }
@@ -3553,7 +3588,7 @@ mod tests {
             ..VltActivationRecord::awaiting()
         };
         let e = vlt_activation_eligibility(true, 0, 0, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 0)), root, anchor, e, 5_000);
+        let (r, s) = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 0)), root, anchor, e, 5_000, 10);
         assert!(matches!(s, VltActivationState::Recovery { .. }), "got {s:?}");
         assert!(!matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "Active must never fall back to bootstrap");
         // The record follows the report into Recovery — and keeps every stamped field, because
@@ -3568,7 +3603,7 @@ mod tests {
 
         // With the record Active and the snapshot healthy again ⇒ active, on live values.
         let e = vlt_activation_eligibility(true, 3_000, 5, true, &p);
-        let s = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 3_000)), root, anchor, e, 5_000).1;
+        let s = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 3_000)), root, anchor, e, 5_000, 10).1;
         assert_eq!(
             s,
             VltActivationState::Active { epoch: 4, snapshot_root: root, total_weight: 3_000, quorum_weight: bft_quorum(3_000) }
@@ -3589,7 +3624,7 @@ mod tests {
         let fence = 5_000u64;
 
         // Epoch 10: eligible ⇒ a reservation for 11, persisted as such.
-        let (r, s) = tick_vlt_activation(true, true, None, 10, Some((4, 2_000)), root, anchor, ok(2_000), fence);
+        let (r, s) = tick_vlt_activation(true, true, None, 10, Some((4, 2_000)), root, anchor, ok(2_000), fence, 10);
         let scheduled = r.expect("above the weight fence the machine always yields a record");
         assert_eq!(scheduled.state, PersistedVltActivationState::ActivationScheduled);
         assert_eq!((scheduled.scheduled_at_epoch, scheduled.activation_epoch), (10, 11));
@@ -3607,13 +3642,13 @@ mod tests {
 
         // Still epoch 10 (a second recompute inside the epoch): the reservation holds, unchanged —
         // the step is idempotent within an epoch, so a restart that replays it rewrites nothing.
-        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 2_500)), h64(10), anchor, ok(2_500), fence);
+        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 2_500)), h64(10), anchor, ok(2_500), fence, 10);
         assert_eq!(r.as_ref(), Some(&scheduled), "a committed reservation is not re-stamped while it waits");
 
         // Epoch 11, the boundary: the re-evaluation passes ⇒ Active, stamped with the LIVE
         // snapshot the re-evaluation approved (epoch 5, new root), at the reserved epoch.
         let live_root = h64(11);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 2_400)), live_root, anchor, ok(2_400), fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 2_400)), live_root, anchor, ok(2_400), fence, 11);
         let active = r.expect("record");
         assert_eq!(active.state, PersistedVltActivationState::Active);
         assert_eq!((active.scheduled_at_epoch, active.activation_epoch), (10, 11));
@@ -3632,12 +3667,13 @@ mod tests {
             anchor,
             vlt_activation_eligibility(true, 100, 5, true, &p),
             fence,
+            12,
         );
         assert_eq!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::Recovery), "weight loss pauses finality");
         assert!(matches!(s, VltActivationState::Recovery { total_weight: 100, min_network_compute: 1_000, .. }));
         // Eligibility holding while the record is still Active keeps it Active — the pause is
         // driven by the eligibility verdict, not by the passage of epochs.
-        let (r, s) = tick_vlt_activation(true, true, Some(&active), 13, Some((7, 3_000)), h64(13), anchor, ok(3_000), fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&active), 13, Some((7, 3_000)), h64(13), anchor, ok(3_000), fence, 13);
         assert_eq!(r.as_ref(), Some(&active), "an eligible Active record is not re-stamped");
         assert!(matches!(s, VltActivationState::Active { .. }));
 
@@ -3645,11 +3681,11 @@ mod tests {
         // a successful challenge can do that — cancels back to Awaiting rather than activating on
         // a proof that no longer holds. Same rule AT the boundary: re-evaluation failed, no switch.
         let refuted = vlt_activation_eligibility(true, 500, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 500)), root, anchor, refuted, fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 500)), root, anchor, refuted, fence, 10);
         assert_eq!(r, Some(VltActivationRecord::awaiting()), "cancelled, not silently kept");
         assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
         let refuted = vlt_activation_eligibility(true, 500, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 500)), root, anchor, refuted, fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 500)), root, anchor, refuted, fence, 11);
         assert_eq!(r, Some(VltActivationRecord::awaiting()), "the boundary re-evaluation really evaluates");
         assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
 
@@ -3664,20 +3700,53 @@ mod tests {
             anchor,
             ok(2_000),
             fence,
+            14,
         );
         assert_eq!((r.as_ref().unwrap().scheduled_at_epoch, r.as_ref().unwrap().activation_epoch), (14, 15));
 
         // A node that crossed several epochs in one commit (restart, IBD) still activates at the
         // reserved epoch: `>=`, not `==`, but only through the same re-evaluation.
-        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 19, Some((12, 2_000)), h64(19), anchor, ok(2_000), fence);
+        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 19, Some((12, 2_000)), h64(19), anchor, ok(2_000), fence, 19);
         let late = r.unwrap();
         assert_eq!((late.state, late.activation_epoch), (PersistedVltActivationState::Active, 11));
 
         // Below the fences the record passes through untouched — fences are a fact about the DAA
         // score, not about the machine, and lowering them back must not lose history.
         let e = vlt_activation_eligibility(true, 2_000, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence);
+        let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence, 20);
         assert_eq!((r.as_ref(), s), (Some(&active), VltActivationState::Shadow));
+    }
+
+    /// The reservation is stamped with the CHAIN's epoch, not this node's observation epoch. A
+    /// recompute that first notices an eligible run late — or a replayer that steps through
+    /// history coarsely — must derive the record a node that lived every boundary derives: same
+    /// `scheduled_at_epoch`, same `activation_epoch`. Found live as the §12 identity tuple's one
+    /// disagreeing field: five present nodes said `activation_epoch=37`, a pruning-imported
+    /// sixth said 36 — and 36, the epoch after the eligible run began, is the canonical answer.
+    #[test]
+    fn late_observation_stamps_the_canonical_reservation() {
+        let root = h64(9);
+        let anchor = h64(7);
+        let p = VltParams { min_network_compute: 1_000, min_active_validators: 2, ..VltParams::INERT };
+        let ok = |w: u128| vlt_activation_eligibility(true, w, 5, true, &p);
+
+        // The run of eligible snapshots began at epoch 35; this node first observes at 37.
+        let (r, s) = tick_vlt_activation(true, true, None, 37, Some((35, 2_000)), root, anchor, ok(2_000), 5_000, 35);
+        let scheduled = r.unwrap();
+        assert_eq!((scheduled.scheduled_at_epoch, scheduled.activation_epoch), (35, 36));
+        assert!(matches!(s, VltActivationState::ActivationScheduled { activation_epoch: 36, .. }));
+
+        // The very next recompute activates — lateness costs nothing further, and the record
+        // carries the canonical epoch, never observation+1.
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 37, Some((36, 2_400)), h64(11), anchor, ok(2_400), 5_000, 35);
+        let active = r.unwrap();
+        assert_eq!((active.state, active.activation_epoch), (PersistedVltActivationState::Active, 36));
+        assert!(matches!(s, VltActivationState::Active { .. }));
+
+        // A canonical epoch from a broken caller can never postdate the wall epoch: the machine
+        // clamps rather than scheduling the future.
+        let (r, _) = tick_vlt_activation(true, true, None, 10, Some((9, 2_000)), root, anchor, ok(2_000), 5_000, 99);
+        assert_eq!((r.as_ref().unwrap().scheduled_at_epoch, r.as_ref().unwrap().activation_epoch), (10, 11));
     }
 
     /// §10.2's return path, which is the whole of PR 6's state machine: weight collapses, the
@@ -3694,7 +3763,7 @@ mod tests {
         let dead = || vlt_activation_eligibility(true, 0, 0, true, &p);
         let fence = 5_000u64;
         let tick = |prev: Option<&VltActivationRecord>, epoch: u64, w: u128, e: Result<(), VltActivationBlocker>| {
-            tick_vlt_activation(true, true, prev, epoch, Some((epoch - 2, w)), root, anchor, e, fence)
+            tick_vlt_activation(true, true, prev, epoch, Some((epoch - 2, w)), root, anchor, e, fence, epoch)
         };
 
         // Reach Active the ordinary way.
