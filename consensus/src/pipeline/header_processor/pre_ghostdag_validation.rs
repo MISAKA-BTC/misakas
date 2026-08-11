@@ -62,16 +62,18 @@ impl HeaderProcessor {
     }
 
     /// kaspa-pq Layer-0 (PR-9.5d / ADR-0007): a header MUST declare the exact Layer-1 `algo_id` the
-    /// network mandates at its DAA score — `algo_id = 3` (BLAKE2b-512 ∥ SHA3-512) once the Phase-3 fork
-    /// is active, else `algo_id = 1` (kHeavyHash). Enforces the single-algo invariant (no mixed-`algo_id`
+    /// network mandates at its DAA score — `algo_id = 4` (PALW deterministic LLM) once the Phase-4
+    /// fork is active, else `algo_id = 3` (BLAKE2b-512 ∥ SHA3-512) once the Phase-3 fork is active,
+    /// else `algo_id = 1` (kHeavyHash). Enforces the single-algo invariant (no mixed-`algo_id`
     /// DAG) and is checked before the PoW seed (which consumes `algo_id`) is derived. Genesis — the
     /// parentless trusted root — is exempt (its PoW is never validated; it may carry either id).
     fn check_pow_algo_id(&self, header: &Header) -> BlockProcessResult<()> {
         if header.direct_parents().is_empty() {
             return Ok(());
         }
+        let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, blake2b_sha3_active)
+        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_active, blake2b_sha3_active)
             .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))
     }
 

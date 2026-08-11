@@ -252,12 +252,23 @@ async fn main() {
             }
         };
 
-        // Grind the Layer-0 nonce (multi-threaded). `StateLayer0` caches the
-        // nonce-independent pre-PoW state; `check_pow_layer0(n)` varies n.
+        // Grind the nonce. Two regimes:
+        //
+        // * PALW LLM PoW (algo_id = 4): ONE ATTEMPT = ONE FULL INFERENCE (seconds). The rayon
+        //   all-nonce scan below would fork-bomb LLM worker subprocesses, so PALW mines
+        //   sequentially: a handful of attempts against this template, then a refetch so the
+        //   timestamp stays ahead of the moving past-median (the seed binds the timestamp, so a
+        //   refetched template legitimately re-prices every nonce).
+        // * Hash algos (1/2/3): the multi-threaded Layer-0 scan. `StateLayer0` caches the
+        //   nonce-independent pre-PoW state; `check_pow_layer0(n)` varies n.
         let state = kaspa_pow::StateLayer0::new(&header, &network_id);
-        let found = (0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok, _)| ok).unwrap_or(false));
+        let found = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM {
+            mine_palw_sequential(&state, PALW_TEMPLATE_REFRESH)
+        } else {
+            (0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok, _)| ok).unwrap_or(false))
+        };
         let Some(nonce) = found else {
-            log::warn!("no nonce found in range; refetching template");
+            log::debug!("no nonce found for this template; refetching");
             continue;
         };
 
@@ -283,6 +294,50 @@ fn num_threads_label() -> String {
         Ok(n) => format!("{} (all cores)", n.get()),
         Err(_) => "all cores".to_string(),
     }
+}
+
+/// How long to keep attempting nonces on one PALW template before refetching. At ~1-3 s per
+/// inference this is a handful of attempts; refetching keeps the template timestamp ahead of the
+/// chain's moving past-median while other miners land blocks.
+const PALW_TEMPLATE_REFRESH: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// PALW (algo_id = 4) sequential grind: one worker inference per nonce until the target passes or
+/// the refresh deadline lapses. The nonce walk starts at a clock-derived point so independent rigs
+/// don't all re-execute the same (cheapest-first) attempts — with a deterministic tag, duplicated
+/// nonces are duplicated work with zero new lottery tickets.
+fn mine_palw_sequential(state: &kaspa_pow::StateLayer0, refresh: std::time::Duration) -> Option<u64> {
+    let deadline = std::time::Instant::now() + refresh;
+    let mut nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    let mut attempts = 0u64;
+    while std::time::Instant::now() < deadline {
+        let started = std::time::Instant::now();
+        match state.check_pow_layer0(nonce) {
+            Ok((true, _)) => {
+                log::info!("PALW attempt {} accepted (nonce={nonce}, inference {:?})", attempts + 1, started.elapsed());
+                return Some(nonce);
+            }
+            Ok((false, _)) => {
+                attempts += 1;
+                log::debug!("PALW attempt {attempts} rejected by target (inference {:?})", started.elapsed());
+            }
+            Err(e @ kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwUnavailable(_)) => {
+                // Configuration error — retrying cannot help. Fail loud like the node does.
+                eprintln!(
+                    "refusing to mine: {e}\nSet PALW_WORKER (+ MISAKA_PALW_GGUF) to the pinned worker, or export \
+                     MISAKA_PALW_POW_FIXTURE=1 to mine the model-free fixture rules."
+                );
+                std::process::exit(1);
+            }
+            Err(e) => {
+                // Transient worker trouble (timeout, crash): log and keep trying — each nonce is
+                // its own subprocess, so one bad run does not poison the next.
+                log::warn!("PALW attempt failed (nonce={nonce}): {e}; continuing");
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        nonce = nonce.wrapping_add(1);
+    }
+    None
 }
 
 #[cfg(test)]

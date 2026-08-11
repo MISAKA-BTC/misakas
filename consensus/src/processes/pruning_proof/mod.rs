@@ -124,6 +124,8 @@ pub struct PruningProofManager {
     /// pruning-proof path enforces the SAME per-DAA required-algo rule as the main
     /// header pipeline (`check_pow_algo_id`) — not merely "any known algo id".
     pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4: PALW LLM (`algo_id = 4`) activation — same POW-01 rationale as above.
+    pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -146,6 +148,7 @@ impl PruningProofManager {
         ghostdag_k: KType,
         skip_proof_of_work: bool,
         pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
+        pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -182,6 +185,7 @@ impl PruningProofManager {
             ghostdag_k,
             skip_proof_of_work,
             pow_blake2b_sha3_activation,
+            pow_palw_activation,
 
             is_consensus_exiting,
         }

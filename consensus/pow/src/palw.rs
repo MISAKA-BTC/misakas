@@ -1,0 +1,234 @@
+//! PALW (`algo_id = 4`) Layer-1 tag runner — the bridge between the Layer-0 PoW verifier and the
+//! pinned deterministic LLM worker (`misaka-palw-worker`).
+//!
+//! One PoW attempt = one full inference: the 32-byte seed
+//! (`pow_layer0::palw_pow_seed_v1` over network ∥ pre-PoW hash ∥ timestamp ∥ nonce) renders the
+//! canonical prompt, the worker greedily decodes under the frozen
+//! [`POW_L1_PALW_N_PREDICT_V1`] ceiling, and the replay-stable projection fields
+//! (`output_commitment ∥ gemm_trace_root ∥ operation_schedule_commitment ∥ counts`) become the
+//! 200-byte Layer-1 tag. Verification IS re-execution (the worker's `verify` mode is `self-job`
+//! recomputed), which is the Open-then-Audit small-`q` full-replay regime.
+//!
+//! Modes, in resolution order:
+//!  1. `MISAKA_PALW_POW_FIXTURE=1` — the in-process fixture tag
+//!     (`pow_layer0::palw_fixture_l1_tag_v1`): CI/harness runs without the 1.2 GB model. A
+//!     fixture node and a real-model node are DIFFERENT rule sets (different tags) and must not
+//!     share a mesh — the `devnet-vlt-fixture` precedent.
+//!  2. `PALW_WORKER=<path>` (+ `MISAKA_PALW_GGUF` consumed by the worker itself) — the real
+//!     pinned runtime.
+//!  3. Neither — [`PowLayer0Error::PalwUnavailable`]. On a PALW-active network this is a node
+//!     configuration error, not a bad block: the consensus wrapper
+//!     (`calc_block_level_check_pow_layer0`) escalates it to a panic rather than silently
+//!     rejecting every valid header (the same fail-loud stance as the VLT devnet fence).
+//!
+//! Worker failures are never header-dependent: the prompt is a fixed ASCII frame around 64 hex
+//! chars (comfortably under the ceiling — the worker's "prompt exceeds n_predict" death cannot
+//! trigger), so a timeout / non-zero exit / unparseable document is environmental and surfaces
+//! as [`PowLayer0Error::PalwWorkerFailed`], also escalated at the consensus boundary.
+
+use kaspa_consensus_core::pow_layer0::{
+    POW_L1_PALW_OUT_BYTES, PowLayer0Error, palw_fixture_l1_tag_v1, palw_pow_seed_v1,
+};
+use kaspa_hashes::Hash64;
+
+/// Path to the `palw-worker` binary (the same variable the VLT compute runtime uses).
+pub const PALW_WORKER_ENV: &str = "PALW_WORKER";
+/// `"1"` selects the in-process fixture tag (no model, no subprocess).
+pub const PALW_FIXTURE_ENV: &str = "MISAKA_PALW_POW_FIXTURE";
+/// Per-inference wall-clock budget in seconds (default [`DEFAULT_TIMEOUT_SECS`]). Generous vs the
+/// ~1-3 s a pinned Qwen3.5-2B attempt takes — it exists to reap a wedged worker, not to pace one.
+pub const PALW_TIMEOUT_ENV: &str = "MISAKA_PALW_POW_TIMEOUT_SECS";
+pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Whether the fixture tag is selected in this process.
+pub fn fixture_enabled() -> bool {
+    std::env::var(PALW_FIXTURE_ENV).as_deref() == Ok("1")
+}
+
+/// The PALW Layer-1 tag for one (header, nonce) attempt. Deterministic across every conforming
+/// node: fixture nodes derive it from the seed alone; real nodes replay the pinned inference.
+/// Real-mode results are cached by seed, so the header pipeline, block-level derivation and
+/// pruning-proof path pay for a given attempt's inference once per process.
+pub fn palw_l1_tag(
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    network_id: &[u8],
+) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+    let seed = palw_pow_seed_v1(pre_pow_hash, timestamp, nonce, network_id);
+    if fixture_enabled() {
+        return Ok(palw_fixture_l1_tag_v1(&seed));
+    }
+    native::tag_for_seed(&seed)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use super::*;
+    use kaspa_consensus_core::pow_layer0::{POW_L1_PALW_N_PREDICT_V1, palw_l1_tag_from_projection, palw_pow_prompt_v1};
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    /// Completed tags by seed. Bounded by wholesale clearing: tags are pure functions of the seed
+    /// and recomputable, so eviction precision is not worth an LRU here.
+    static TAG_CACHE: OnceLock<Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OUT_BYTES]>>> = OnceLock::new();
+    const TAG_CACHE_MAX: usize = 8_192;
+
+    /// Serializes worker spawns. Header validation fans out across thread pools (and the
+    /// pruning-proof path validates headers in parallel); each worker process loads the 1.2 GB
+    /// model, so unbounded concurrency is a memory cliff, not a speedup. Metal-side determinism
+    /// is concurrency-safe (verified 5-way in the VLT work) — this gate is purely resource
+    /// control. Duplicate concurrent computations of the SAME seed are not deduplicated (rare —
+    /// callers are validating distinct headers), merely serialized.
+    static SPAWN_GATE: Mutex<()> = Mutex::new(());
+
+    fn cache() -> &'static Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OUT_BYTES]>> {
+        TAG_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub(super) fn tag_for_seed(seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        if let Some(tag) = cache().lock().unwrap().get(seed) {
+            return Ok(*tag);
+        }
+        let worker = std::env::var(PALW_WORKER_ENV).map_err(|_| {
+            PowLayer0Error::PalwUnavailable(format!(
+                "{PALW_WORKER_ENV} is not set; point it at target/release/palw-worker (and set MISAKA_PALW_GGUF), \
+                 or run with {PALW_FIXTURE_ENV}=1 for the model-free fixture"
+            ))
+        })?;
+        let tag = {
+            let _gate = SPAWN_GATE.lock().unwrap();
+            // Re-check under the gate: the seed may have been computed while we queued.
+            if let Some(tag) = cache().lock().unwrap().get(seed) {
+                return Ok(*tag);
+            }
+            run_worker(&worker, seed)?
+        };
+        let mut cache = cache().lock().unwrap();
+        if cache.len() >= TAG_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(*seed, tag);
+        Ok(tag)
+    }
+
+    fn timeout() -> Duration {
+        Duration::from_secs(
+            std::env::var(PALW_TIMEOUT_ENV).ok().and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_TIMEOUT_SECS),
+        )
+    }
+
+    fn run_worker(worker: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        let prompt = palw_pow_prompt_v1(seed);
+        let started = Instant::now();
+        let mut child = Command::new(worker)
+            .args(["--mode", "verify", "--prompt-stdin", "--n-predict", &POW_L1_PALW_N_PREDICT_V1.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| PowLayer0Error::PalwUnavailable(format!("cannot spawn PALW worker at {worker}: {e}")))?;
+
+        // Feed the prompt and close stdin so the worker sees EOF.
+        {
+            let mut stdin = child.stdin.take().expect("stdin was piped above");
+            stdin
+                .write_all(prompt.as_bytes())
+                .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot write the prompt to the worker: {e}")))?;
+        }
+
+        // Drain both pipes on threads BEFORE waiting. llama.cpp's model-load stderr alone can
+        // exceed the 64 KiB pipe buffer; polling `try_wait` without draining deadlocks the worker
+        // in write() — the exact pipe-buffer trap that cost the first real-model VLT run.
+        let mut stdout_pipe = child.stdout.take().expect("stdout was piped above");
+        let mut stderr_pipe = child.stderr.take().expect("stderr was piped above");
+        let stdout_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
+
+        let deadline = started + timeout();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(PowLayer0Error::PalwWorkerFailed(format!(
+                            "PALW worker exceeded the {:?} budget and was killed (raise {PALW_TIMEOUT_ENV} if the \
+                             machine is genuinely this slow)",
+                            timeout()
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(e) => return Err(PowLayer0Error::PalwWorkerFailed(format!("wait on the PALW worker failed: {e}"))),
+            }
+        };
+        let stdout = stdout_reader.join().unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_default();
+
+        if !status.success() {
+            let tail: String = String::from_utf8_lossy(&stderr).chars().rev().take(400).collect::<Vec<_>>().into_iter().rev().collect();
+            return Err(PowLayer0Error::PalwWorkerFailed(format!("worker exited with {status}: …{}", tail.trim())));
+        }
+        let tag = parse_projection(&stdout)?;
+        log::debug!("palw-pow: inference attempt completed in {:?}", started.elapsed());
+        Ok(tag)
+    }
+
+    /// Parse the worker's `misaka.palw.testnet-submission.v3` document (the LAST non-empty stdout
+    /// line) into the 200-byte tag.
+    fn parse_projection(stdout: &[u8]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        let text = String::from_utf8_lossy(stdout);
+        let line = text
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("worker produced no stdout document".into()))?;
+        let doc: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse the worker document: {e}")))?;
+        let hash_field = |name: &str| -> Result<Hash64, PowLayer0Error> {
+            let hex = doc
+                .get(name)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| PowLayer0Error::PalwWorkerFailed(format!("worker document lacks the {name} field")))?;
+            let mut bytes = [0u8; 64];
+            faster_hex::hex_decode(hex.as_bytes(), &mut bytes)
+                .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("worker {name} is not 64-byte hex: {e}")))?;
+            Ok(Hash64::from_bytes(bytes))
+        };
+        let count_field = |name: &str| -> Result<u32, PowLayer0Error> {
+            doc.get(name)
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(|| PowLayer0Error::PalwWorkerFailed(format!("worker document lacks a u32 {name} field")))
+        };
+        Ok(palw_l1_tag_from_projection(
+            &hash_field("output_commitment")?,
+            &hash_field("gemm_trace_root")?,
+            &hash_field("operation_schedule_commitment")?,
+            count_field("prefill_tokens")?,
+            count_field("decode_tokens")?,
+        ))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod native {
+    use super::*;
+
+    pub(super) fn tag_for_seed(_seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        Err(PowLayer0Error::PalwUnavailable("PALW (algo_id = 4) PoW cannot run in a wasm build".into()))
+    }
+}

@@ -126,7 +126,7 @@ impl ConsensusServices {
             params.max_coinbase_payload_len,
             params.deflationary_phase_daa_score,
             params.pre_deflationary_phase_base_subsidy,
-            params.bps_history(),
+            params.target_time_per_block_history(),
         );
 
         let mass_calculator = MassCalculator::new(
@@ -187,6 +187,7 @@ impl ConsensusServices {
             params.ghostdag_k(),
             params.skip_proof_of_work,
             params.pow_blake2b_sha3_activation,
+            params.pow_palw_activation,
             is_consensus_exiting,
         ));
 

@@ -37,7 +37,12 @@ pub struct CoinbaseManager {
     max_coinbase_payload_len: usize,
     deflationary_phase_daa_score: u64,
     pre_deflationary_phase_base_subsidy: u64,
-    bps_history: ForkedParam<u64>,
+    /// Target time per block throughout history, in **milliseconds**. The emission schedule used
+    /// to consume integer blocks-per-second, which truncates to 0 on the 0.1-bps PALW network;
+    /// every rate conversion below scales by `ttpb / 1000` instead (bit-identical on the
+    /// integer-bps networks: `(v * 100).div_ceil(1000) == v.div_ceil(10)` and
+    /// `daa * 100 / 1000 == daa / 10`).
+    ttpb_history: ForkedParam<u64>,
 
     /// Precomputed subsidy by month tables (for before and after the Crescendo hardfork)
     subsidy_by_month_table_before: SubsidyByMonthTable,
@@ -45,7 +50,7 @@ pub struct CoinbaseManager {
 
     /// The crescendo activation DAA score where BPS increased from 1 to 10.
     /// This score is required here long-term (and not only for the actual forking), in
-    /// order to correctly determine the subsidy month from the live DAA score of the network   
+    /// order to correctly determine the subsidy month from the live DAA score of the network
     crescendo_activation_daa_score: u64,
 }
 
@@ -73,31 +78,34 @@ impl CoinbaseManager {
         max_coinbase_payload_len: usize,
         deflationary_phase_daa_score: u64,
         pre_deflationary_phase_base_subsidy: u64,
-        bps_history: ForkedParam<u64>,
+        ttpb_history: ForkedParam<u64>,
     ) -> Self {
-        // Precomputed subsidy by month table for the actual block per second rate
-        // Here values are rounded up so that we keep the same number of rewarding months as in the original 1 BPS table.
-        // In a 10 BPS network, the induced increase in total rewards is 51 KAS (see tests::calc_high_bps_total_rewards_delta())
+        // Precomputed subsidy by month table for the actual block rate. The const table holds
+        // reward-per-second values; the per-block reward is `value * ttpb / 1000`, rounded UP so
+        // we keep the same number of rewarding months as in the original 1 BPS table (on a 10 BPS
+        // network the induced increase in total rewards is ~51 KAS — see
+        // tests::calc_high_bps_total_rewards_delta; on a sub-1-bps network the product is exact
+        // and there is no rounding surplus at all).
         let subsidy_by_month_table_before: SubsidyByMonthTable =
-            core::array::from_fn(|i| SUBSIDY_BY_MONTH_TABLE[i].div_ceil(bps_history.before()));
+            core::array::from_fn(|i| (SUBSIDY_BY_MONTH_TABLE[i] * ttpb_history.before()).div_ceil(1000));
         let subsidy_by_month_table_after: SubsidyByMonthTable =
-            core::array::from_fn(|i| SUBSIDY_BY_MONTH_TABLE[i].div_ceil(bps_history.after()));
+            core::array::from_fn(|i| (SUBSIDY_BY_MONTH_TABLE[i] * ttpb_history.after()).div_ceil(1000));
         Self {
             coinbase_payload_script_public_key_max_len,
             max_coinbase_payload_len,
             deflationary_phase_daa_score,
             pre_deflationary_phase_base_subsidy,
-            bps_history,
+            ttpb_history,
             subsidy_by_month_table_before,
             subsidy_by_month_table_after,
-            crescendo_activation_daa_score: bps_history.activation().daa_score(),
+            crescendo_activation_daa_score: ttpb_history.activation().daa_score(),
         }
     }
 
     #[cfg(test)]
     #[inline]
-    pub fn bps(&self) -> ForkedParam<u64> {
-        self.bps_history
+    pub fn ttpb(&self) -> ForkedParam<u64> {
+        self.ttpb_history
     }
 
     pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
@@ -361,7 +369,7 @@ impl CoinbaseManager {
         }
 
         let subsidy_month = self.subsidy_month(daa_score) as usize;
-        let subsidy_table = if self.bps_history.activation().is_active(daa_score) {
+        let subsidy_table = if self.ttpb_history.activation().is_active(daa_score) {
             &self.subsidy_by_month_table_after
         } else {
             &self.subsidy_by_month_table_before
@@ -371,19 +379,21 @@ impl CoinbaseManager {
 
     /// Get the subsidy month as function of the current DAA score.
     ///
-    /// Note that this function is called only if daa_score >= self.deflationary_phase_daa_score
+    /// Note that this function is called only if daa_score >= self.deflationary_phase_daa_score.
+    /// Elapsed seconds are `blocks * ttpb / 1000` (floor) — identical to the old `blocks / bps`
+    /// wherever bps was an integer dividing 1000, and exact (×10) on the 10 s-per-block network.
     fn subsidy_month(&self, daa_score: u64) -> u64 {
         let seconds_since_deflationary_phase_started = if self.crescendo_activation_daa_score < self.deflationary_phase_daa_score {
             // crescendo_activation < deflationary_phase <= daa_score (activated before deflation)
-            (daa_score - self.deflationary_phase_daa_score) / self.bps_history.after()
+            (daa_score - self.deflationary_phase_daa_score) * self.ttpb_history.after() / 1000
         } else if daa_score < self.crescendo_activation_daa_score {
             // deflationary_phase <= daa_score < crescendo_activation (pre activation)
-            (daa_score - self.deflationary_phase_daa_score) / self.bps_history.before()
+            (daa_score - self.deflationary_phase_daa_score) * self.ttpb_history.before() / 1000
         } else {
             // Else - deflationary_phase <= crescendo_activation <= daa_score.
             // Count seconds differently before and after Crescendo activation
-            (self.crescendo_activation_daa_score - self.deflationary_phase_daa_score) / self.bps_history.before()
-                + (daa_score - self.crescendo_activation_daa_score) / self.bps_history.after()
+            (self.crescendo_activation_daa_score - self.deflationary_phase_daa_score) * self.ttpb_history.before() / 1000
+                + (daa_score - self.crescendo_activation_daa_score) * self.ttpb_history.after() / 1000
         };
 
         seconds_since_deflationary_phase_started / SECONDS_PER_MONTH
@@ -438,13 +448,16 @@ mod tests {
         let legacy_cbm = create_legacy_manager();
         let pre_deflationary_rewards = legacy_cbm.pre_deflationary_phase_base_subsidy * legacy_cbm.deflationary_phase_daa_score;
         let total_rewards: u64 = pre_deflationary_rewards + SUBSIDY_BY_MONTH_TABLE.iter().map(|x| x * SECONDS_PER_MONTH).sum::<u64>();
-        let testnet_11_bps = SIMNET_PARAMS.bps();
+        // Simnet runs 10 bps (100 ms blocks); derive the integer bps from ttpb for the legacy
+        // round-trip identity below.
+        let testnet_11_bps = 1000 / SIMNET_PARAMS.target_time_per_block_history().before();
         let total_high_bps_rewards_rounded_up: u64 = pre_deflationary_rewards
             + SUBSIDY_BY_MONTH_TABLE.iter().map(|x| (x.div_ceil(testnet_11_bps) * testnet_11_bps) * SECONDS_PER_MONTH).sum::<u64>();
 
         let cbm = create_manager(&SIMNET_PARAMS);
+        let blocks_per_second = 1000 / cbm.ttpb().before();
         let total_high_bps_rewards: u64 = pre_deflationary_rewards
-            + cbm.subsidy_by_month_table_before.iter().map(|x| x * SECONDS_PER_MONTH * cbm.bps().before()).sum::<u64>();
+            + cbm.subsidy_by_month_table_before.iter().map(|x| x * SECONDS_PER_MONTH * blocks_per_second).sum::<u64>();
         assert_eq!(total_high_bps_rewards_rounded_up, total_high_bps_rewards, "subsidy adjusted to bps must be rounded up");
 
         let delta = total_high_bps_rewards as i64 - total_rewards as i64;
@@ -465,7 +478,7 @@ mod tests {
             let cbm = create_manager(&network_id.into());
             cbm.subsidy_by_month_table_before.iter().enumerate().for_each(|(i, x)| {
                 assert_eq!(
-                    SUBSIDY_BY_MONTH_TABLE[i].div_ceil(cbm.bps().before()),
+                    (SUBSIDY_BY_MONTH_TABLE[i] * cbm.ttpb().before()).div_ceil(1000),
                     *x,
                     "{}: locally computed and precomputed values must match",
                     network_id
@@ -473,7 +486,7 @@ mod tests {
             });
             cbm.subsidy_by_month_table_after.iter().enumerate().for_each(|(i, x)| {
                 assert_eq!(
-                    SUBSIDY_BY_MONTH_TABLE[i].div_ceil(cbm.bps().after()),
+                    (SUBSIDY_BY_MONTH_TABLE[i] * cbm.ttpb().after()).div_ceil(1000),
                     *x,
                     "{}: locally computed and precomputed values must match",
                     network_id
@@ -505,44 +518,52 @@ mod tests {
         // div_ceil rounding surplus: at most (bps-1) sompi/month * SECONDS_PER_MONTH *
         // 240 months ≈ 57 KAS at 10 BPS (cf. the upstream "+51 KAS" note). Negligible
         // against the 28B supply (1 part in ~5e8) and far below the MAX_SOMPI cap.
+        // Sub-1-bps networks (devnet: 10_000 ms/block) have an EXACT per-block product
+        // (×10) and therefore a surplus of exactly 0.
         for network_id in NetworkId::iter() {
             let cbm = create_manager(&network_id.into());
-            let bps = Params::from(network_id).bps();
-            let net_total: u128 =
-                cbm.subsidy_by_month_table_after.iter().map(|&x| x as u128 * SECONDS_PER_MONTH as u128 * bps as u128).sum();
+            let ttpb = Params::from(network_id).target_time_per_block_history().after();
+            // Blocks per month = seconds-per-month * 1000 / ttpb (exact for every shipped ttpb).
+            let blocks_per_month = SECONDS_PER_MONTH as u128 * 1000 / ttpb as u128;
+            let net_total: u128 = cbm.subsidy_by_month_table_after.iter().map(|&x| x as u128 * blocks_per_month).sum();
             let surplus_kas = net_total as i128 / SOMPI_PER_KASPA as i128 - total_kas as i128;
-            assert!((0..=64).contains(&surplus_kas), "{network_id}: bps rounding surplus {surplus_kas} KAS out of range");
+            assert!((0..=64).contains(&surplus_kas), "{network_id}: rate rounding surplus {surplus_kas} KAS out of range");
         }
     }
 
     #[test]
     fn subsidy_test() {
-        // Year-1 per-block subsidy at 10 BPS = table[0].div_ceil(10) ≈ 3.70468 KAS.
+        // Year-1 per-block subsidy at 10 BPS (100 ms) = table[0].div_ceil(10) ≈ 3.70468 KAS.
         const YEAR1_PER_BLOCK_10BPS: u64 = 370468345;
+        // Year-1 per-block subsidy at 0.1 BPS (10 s) = table[0] * 10 ≈ 370.468 KAS — the same
+        // 3.70468.. KAS/s emission RATE, paid in 100×-larger, 100×-rarer blocks.
+        const YEAR1_PER_BLOCK_DECI_BPS: u64 = 37046834500;
 
         for network_id in NetworkId::iter() {
             let params: Params = network_id.into();
             let cbm = create_manager(&params);
-            let bps = params.bps();
-            let blocks_per_month = SECONDS_PER_MONTH * bps;
+            let ttpb = params.target_time_per_block_history().after();
+            let blocks_per_month = SECONDS_PER_MONTH * 1000 / ttpb;
 
             // kaspa-pq has no flat pre-deflationary phase: the decay table applies from genesis.
             assert_eq!(params.deflationary_phase_daa_score, 0, "{network_id}: expected no pre-deflationary phase");
 
             // Genesis / year-1 subsidy.
-            let expected_year1 = SUBSIDY_BY_MONTH_TABLE[0].div_ceil(bps);
+            let expected_year1 = (SUBSIDY_BY_MONTH_TABLE[0] * ttpb).div_ceil(1000);
             assert_eq!(cbm.calc_block_subsidy(0), expected_year1, "{network_id}: genesis subsidy");
-            if bps == 10 {
-                assert_eq!(expected_year1, YEAR1_PER_BLOCK_10BPS, "{network_id}: year-1 per-block subsidy");
+            match ttpb {
+                100 => assert_eq!(expected_year1, YEAR1_PER_BLOCK_10BPS, "{network_id}: year-1 per-block subsidy"),
+                10_000 => assert_eq!(expected_year1, YEAR1_PER_BLOCK_DECI_BPS, "{network_id}: year-1 per-block subsidy"),
+                other => panic!("{network_id}: unexpected target time per block {other}"),
             }
 
-            // Every emission month pays table[m].div_ceil(bps), flat within the month
+            // Every emission month pays table[m] * ttpb / 1000 (rounded up), flat within the month
             // (stepped schedule: the same rate holds from the first to the last block of the month).
             // Index-based: `m` is both a table index and a DAA-score multiplier below.
             #[allow(clippy::needless_range_loop)]
             for m in 0..SUBSIDY_BY_MONTH_TABLE_SIZE - 1 {
                 let daa = m as u64 * blocks_per_month;
-                let expected = SUBSIDY_BY_MONTH_TABLE[m].div_ceil(bps);
+                let expected = (SUBSIDY_BY_MONTH_TABLE[m] * ttpb).div_ceil(1000);
                 assert_eq!(cbm.calc_block_subsidy(daa), expected, "{network_id}: month {m} start");
                 assert_eq!(cbm.calc_block_subsidy(daa + blocks_per_month - 1), expected, "{network_id}: month {m} end");
             }
@@ -668,12 +689,12 @@ mod tests {
             params.max_coinbase_payload_len,
             params.deflationary_phase_daa_score,
             params.pre_deflationary_phase_base_subsidy,
-            params.bps_history(),
+            params.target_time_per_block_history(),
         )
     }
 
-    /// Return a CoinbaseManager with legacy golang 1 BPS properties
+    /// Return a CoinbaseManager with legacy golang 1 BPS (1000 ms/block) properties
     fn create_legacy_manager() -> CoinbaseManager {
-        CoinbaseManager::new(150, 204, 15778800 - 259200, 50000000000, ForkedParam::new_const(1))
+        CoinbaseManager::new(150, 204, 15778800 - 259200, 50000000000, ForkedParam::new_const(1000))
     }
 }

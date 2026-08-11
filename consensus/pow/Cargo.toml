@@ -26,6 +26,10 @@ kaspa-utils.workspace = true
 wasm-bindgen.workspace = true
 workflow-wasm.workspace = true
 num.workspace = true
+# PALW (algo_id = 4) Layer-1 runner: subprocess projection parsing + logging.
+faster-hex.workspace = true
+log.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

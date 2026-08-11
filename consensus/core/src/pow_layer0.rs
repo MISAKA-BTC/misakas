@@ -30,6 +30,9 @@
 //!     proofs, but no live network selects it).
 //!   - `3` [`POW_ALGO_ID_BLAKE2B_SHA3`] — Phase 3 compute-only
 //!     BLAKE2b-512 ∥ SHA3-512 (the active testnet/mainnet algo).
+//!   - `4` [`POW_ALGO_ID_PALW_LLM`] — Phase 4 PALW deterministic
+//!     pinned-LLM inference (the active devnet algo; the mining
+//!     work is one greedy Qwen3.5-2B transcript per attempt).
 //! There is **no** mixed-`algo_id` difficulty arithmetic;
 //! transitions are hard cut-offs at a specific DAA score, and a
 //! header must declare exactly the id its network mandates
@@ -94,6 +97,49 @@ pub const POW_L1_ARGON2ID_OUT_BYTES: usize = 32;
 /// Domain separator (BLAKE2b key) for the algo_id = 2 Argon2id password + salt derivation.
 pub const POW_L1_ARGON2ID_V1_DOMAIN: &[u8] = b"kaspa-pq-l1-argon2id-v1";
 
+/// MISAKA Phase 4 Layer 1 algorithm id: **PALW LLM inference** ("Proof of
+/// Artificial-LLM Work"; see docs/adr/0021-palw-llm-pow.md and the
+/// Open-then-Audit paper).
+///
+/// The Layer-1 tag is the replay-stable projection of ONE deterministic
+/// pinned-LLM inference (`misaka-palw-worker`: greedy argmax on the pinned
+/// Qwen3.5-2B GGUF, `gemm_trace_root` chaining the full logits vector of every
+/// decode call) whose prompt is derived from
+/// [`palw_pow_seed_v1`]`(network_id, pre_pow_hash, timestamp, nonce)`. Nothing
+/// short of running the pinned model reproduces the tag, so the mining "work"
+/// IS the inference; verification is the paper's small-`q` full replay (the
+/// worker's `verify` mode is `self-job` recomputed).
+///
+/// **Grinding closure** (this is why the seed takes `timestamp` even though
+/// the Layer-0 finalizer already binds it): for the cheap-tag algos (1/2/3)
+/// re-hashing the finalizer over a grindable input costs the same as a fresh
+/// attempt, so binding `timestamp`/`nonce` only at the finalizer is fine. For
+/// PALW the tag is ~10^9× more expensive than the finalizer, so any header
+/// input that is miner-adjustable WITHOUT changing the tag becomes a free
+/// hash-grinding dimension that collapses the PoW back to BLAKE2b. The two
+/// miner-grindable inputs zeroed out of `pre_pow_hash` are exactly `nonce`
+/// and `timestamp`; the seed therefore binds both, leaving no header degree
+/// of freedom outside the inference.
+pub const POW_ALGO_ID_PALW_LLM: u8 = 4;
+
+/// Output width of the `algo_id = 4` PALW Layer-1 tag:
+/// `output_commitment (64) ∥ gemm_trace_root (64) ∥
+/// operation_schedule_commitment (64) ∥ prefill_tokens (4, LE) ∥
+/// decode_tokens (4, LE)` = 200 bytes. Within [`POW_L1_TAG_MAX_BYTES`].
+pub const POW_L1_PALW_OUT_BYTES: usize = 200;
+
+/// Domain separator for every PALW-PoW v1 derivation (seed, prompt frame,
+/// fixture tag).
+pub const POW_L1_PALW_V1_DOMAIN: &[u8] = b"misaka-l1-palw-llm-v1";
+
+/// The `--n-predict` ceiling handed to the PALW worker for every PoW
+/// inference. A **frozen consensus constant** of the v1 algorithm (NOT a
+/// tunable `Params` field): the worker treats it as the total token budget
+/// (`decode budget = n_predict - prefill_tokens`), so two nodes disagreeing
+/// here compute different tags for the same header. Changing it is a
+/// hard fork = a new algo id, exactly like the other Layer-1 parameters.
+pub const POW_L1_PALW_N_PREDICT_V1: u32 = 128;
+
 /// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
 ///
 /// Replaces Argon2id (`algo_id = 2`) on the networks where it is activated (testnet/mainnet) to make
@@ -118,6 +164,17 @@ pub enum PowLayer0Error {
     L1TagTooLong(usize),
     #[error("kaspa-pq Layer 0: pow_algo_id = {0} is unrecognised or wrong for this network's active PoW phase")]
     UnknownAlgoId(u8),
+    /// The PALW (`algo_id = 4`) Layer-1 tag needs the pinned LLM worker and it is not usable in
+    /// this process — `PALW_WORKER`/`MISAKA_PALW_GGUF` unset, the binary missing, or a wasm build.
+    /// Carries an operator-actionable reason; validating a PALW header without a worker is a node
+    /// configuration error, not a bad block.
+    #[error("PALW Layer-1 unavailable: {0}")]
+    PalwUnavailable(String),
+    /// The PALW worker ran but did not produce a usable projection (non-zero exit, timeout, or an
+    /// unparseable/short document). Deterministic-compute contract means a *disagreeing* projection
+    /// simply yields a tag that fails the target; this variant is for runs that yielded no tag.
+    #[error("PALW worker failed: {0}")]
+    PalwWorkerFailed(String),
 }
 
 /// Validate that an `algo_id` is recognised by this binary at
@@ -127,32 +184,47 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
 }
 
-/// The Layer-1 algorithm a header MUST declare, given whether the Phase-3 BLAKE2b-512 ∥ SHA3-512 fork
-/// is active at the header's DAA score. A network that has activated it requires `algo_id = 3`;
-/// otherwise the Phase-1 `algo_id = 1` (kHeavyHash). This is a hard cut-off — there is no mixed-algo
-/// arithmetic. (Argon2id, `algo_id = 2`, is the superseded Phase-2 algorithm: still *verifiable*
-/// via [`check_algo_id_known`] for historical pruning proofs, but no live network selects it.)
+/// The Layer-1 algorithm a header MUST declare, given which PoW forks are active at the header's
+/// DAA score. The PALW LLM fork (`algo_id = 4`) supersedes everything where activated; then the
+/// Phase-3 BLAKE2b-512 ∥ SHA3-512 fork (`algo_id = 3`); otherwise the Phase-1 `algo_id = 1`
+/// (kHeavyHash). This is a hard cut-off — there is no mixed-algo arithmetic. (Argon2id,
+/// `algo_id = 2`, is the superseded Phase-2 algorithm: still *verifiable* via
+/// [`check_algo_id_known`] for historical pruning proofs, but no live network selects it.)
 #[inline]
-pub fn required_algo_id(blake2b_sha3_active: bool) -> u8 {
-    if blake2b_sha3_active { POW_ALGO_ID_BLAKE2B_SHA3 } else { POW_ALGO_ID_KHEAVYHASH }
+pub fn required_algo_id(palw_llm_active: bool, blake2b_sha3_active: bool) -> u8 {
+    if palw_llm_active {
+        POW_ALGO_ID_PALW_LLM
+    } else if blake2b_sha3_active {
+        POW_ALGO_ID_BLAKE2B_SHA3
+    } else {
+        POW_ALGO_ID_KHEAVYHASH
+    }
 }
 
 /// Validate a header's `algo_id` against the network's PoW state: it must equal
 /// [`required_algo_id`]. Rejects both unknown ids and the *wrong-but-known* id (e.g. a miner trying
-/// the cheap kHeavyHash on a BLAKE2b-SHA3 network, or vice-versa).
+/// the cheap kHeavyHash on a BLAKE2b-SHA3 or PALW network, or vice-versa).
 #[inline]
-pub fn check_algo_id(algo_id: u8, blake2b_sha3_active: bool) -> Result<(), PowLayer0Error> {
-    if algo_id == required_algo_id(blake2b_sha3_active) { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
+pub fn check_algo_id(algo_id: u8, palw_llm_active: bool, blake2b_sha3_active: bool) -> Result<(), PowLayer0Error> {
+    if algo_id == required_algo_id(palw_llm_active, blake2b_sha3_active) {
+        Ok(())
+    } else {
+        Err(PowLayer0Error::UnknownAlgoId(algo_id))
+    }
 }
 
-/// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3}). Used
-/// where the PoW itself is independently verified and only an unknown/garbage id must be rejected
-/// (e.g. the pruning-proof path); the exact per-network/per-DAA rule is enforced by [`check_algo_id`]
-/// in the main header pipeline. Argon2id (2) stays accepted so historical proofs spanning the
-/// Phase-2 era still validate.
+/// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3,
+/// PALW LLM}). Used where the PoW itself is independently verified and only an unknown/garbage id
+/// must be rejected (e.g. the pruning-proof path); the exact per-network/per-DAA rule is enforced
+/// by [`check_algo_id`] in the main header pipeline. Argon2id (2) stays accepted so historical
+/// proofs spanning the Phase-2 era still validate.
 #[inline]
 pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
-    if algo_id == POW_ALGO_ID_KHEAVYHASH || algo_id == POW_ALGO_ID_ARGON2ID || algo_id == POW_ALGO_ID_BLAKE2B_SHA3 {
+    if algo_id == POW_ALGO_ID_KHEAVYHASH
+        || algo_id == POW_ALGO_ID_ARGON2ID
+        || algo_id == POW_ALGO_ID_BLAKE2B_SHA3
+        || algo_id == POW_ALGO_ID_PALW_LLM
+    {
         Ok(())
     } else {
         Err(PowLayer0Error::UnknownAlgoId(algo_id))
@@ -343,6 +415,87 @@ pub fn blake2b_sha3_l1_tag_v1(pre_pow_hash: Hash64, nonce: u64, network_id: &[u8
     out
 }
 
+/// MISAKA Phase 4 (`algo_id = 4`): the 32-byte PALW-PoW seed.
+///
+/// ```text
+/// seed = BLAKE2b-256(
+///     key   = POW_L1_PALW_V1_DOMAIN,
+///     input = "seed" || netid_len_le16 || network_id || pre_pow_hash64 ||
+///             timestamp_le || nonce_le,
+/// )
+/// ```
+///
+/// Binds the block (`pre_pow_hash`), the network (length-prefixed id), and BOTH miner-grindable
+/// header inputs (`timestamp`, `nonce`) — see the [`POW_ALGO_ID_PALW_LLM`] doc for why `timestamp`
+/// must be inside the expensive computation and not merely inside the Layer-0 finalizer.
+pub fn palw_pow_seed_v1(pre_pow_hash: Hash64, timestamp: u64, nonce: u64, network_id: &[u8]) -> [u8; 32] {
+    let digest = Params::new()
+        .hash_length(32)
+        .key(POW_L1_PALW_V1_DOMAIN)
+        .to_state()
+        .update(b"seed")
+        .update(&(network_id.len() as u16).to_le_bytes())
+        .update(network_id)
+        .update(pre_pow_hash.as_byte_slice())
+        .update(&timestamp.to_le_bytes())
+        .update(&nonce.to_le_bytes())
+        .finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest.as_bytes());
+    out
+}
+
+/// MISAKA Phase 4 (`algo_id = 4`): the canonical prompt bytes fed to the PALW worker's stdin for a
+/// given PoW seed. Pure printable ASCII (a fixed frame + 64 lowercase-hex chars) so the pinned
+/// tokenizer's behavior is exercised only on a stable alphabet; the semantic content is irrelevant
+/// — determinism of the transcript is everything. The prompt tokenizes well under
+/// [`POW_L1_PALW_N_PREDICT_V1`], leaving a real greedy-decode budget (the actual work).
+pub fn palw_pow_prompt_v1(seed: &[u8; 32]) -> String {
+    format!("MISAKA PALW proof-of-work v1\nseed: {}\ncontinue:", faster_hex::hex_string(seed))
+}
+
+/// MISAKA Phase 4 (`algo_id = 4`): the **fixture** Layer-1 tag — the shape of a real PALW
+/// projection, synthesized in-process from the seed alone. Selected (in `kaspa-pow`) by
+/// `MISAKA_PALW_POW_FIXTURE=1`, mirroring the `devnet-vlt-fixture` precedent: CI and harness runs
+/// exercise the whole PALW dispatch/consensus surface without the 1.2 GB pinned model. A fixture
+/// node and a real-model node compute DIFFERENT tags — that is correct (they are different rule
+/// sets and must not share a mesh), exactly like fixture VLT tables.
+pub fn palw_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OUT_BYTES] {
+    let part = |label: &[u8]| -> [u8; 64] {
+        let digest = Params::new().hash_length(64).key(POW_L1_PALW_V1_DOMAIN).to_state().update(b"fixture").update(label).update(seed).finalize();
+        let mut out = [0u8; 64];
+        out.copy_from_slice(digest.as_bytes());
+        out
+    };
+    let mut tag = [0u8; POW_L1_PALW_OUT_BYTES];
+    tag[..64].copy_from_slice(&part(b"output"));
+    tag[64..128].copy_from_slice(&part(b"gemm"));
+    tag[128..192].copy_from_slice(&part(b"schedule"));
+    // Fixture "token counts": stable, obviously synthetic values (prefill = 47, decode = 81)
+    // keeping the count field layout identical to a real projection.
+    tag[192..196].copy_from_slice(&47u32.to_le_bytes());
+    tag[196..200].copy_from_slice(&81u32.to_le_bytes());
+    tag
+}
+
+/// Assemble the 200-byte PALW Layer-1 tag from a worker projection's replay-stable fields. Shared
+/// by the real subprocess runner (`kaspa-pow`) and tests so the byte layout has one definition.
+pub fn palw_l1_tag_from_projection(
+    output_commitment: &Hash64,
+    gemm_trace_root: &Hash64,
+    operation_schedule_commitment: &Hash64,
+    prefill_tokens: u32,
+    decode_tokens: u32,
+) -> [u8; POW_L1_PALW_OUT_BYTES] {
+    let mut tag = [0u8; POW_L1_PALW_OUT_BYTES];
+    tag[..64].copy_from_slice(&output_commitment.as_bytes());
+    tag[64..128].copy_from_slice(&gemm_trace_root.as_bytes());
+    tag[128..192].copy_from_slice(&operation_schedule_commitment.as_bytes());
+    tag[192..196].copy_from_slice(&prefill_tokens.to_le_bytes());
+    tag[196..200].copy_from_slice(&decode_tokens.to_le_bytes());
+    tag
+}
+
 /// Difficulty-lift helper. Maps a 256-bit upstream-style target to
 /// a 512-bit kaspa-pq target while preserving block-finding
 /// probability under the ideal uniform-hash model:
@@ -405,26 +558,97 @@ mod tests {
     fn check_algo_id_enforces_exact_network_algo() {
         // BLAKE2b-SHA3-active network: must be 3; kHeavyHash (1) and the superseded Argon2id (2) are
         // both WRONG (not just unknown) on the active path.
-        assert!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, true).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, true), Err(PowLayer0Error::UnknownAlgoId(1)));
-        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, true), Err(PowLayer0Error::UnknownAlgoId(2)));
+        assert!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, true).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, true), Err(PowLayer0Error::UnknownAlgoId(1)));
+        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, false, true), Err(PowLayer0Error::UnknownAlgoId(2)));
         // kHeavyHash network: must be 1, 3 is rejected.
-        assert!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false), Err(PowLayer0Error::UnknownAlgoId(3)));
-        assert_eq!(required_algo_id(true), 3);
-        assert_eq!(required_algo_id(false), 1);
+        assert!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, false).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, false), Err(PowLayer0Error::UnknownAlgoId(3)));
+        // PALW-active network: must be 4, and PALW takes precedence over BLAKE2b-SHA3.
+        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, true, false).is_ok());
+        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, true, true).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, true, true), Err(PowLayer0Error::UnknownAlgoId(3)));
+        assert_eq!(check_algo_id(POW_ALGO_ID_PALW_LLM, false, false), Err(PowLayer0Error::UnknownAlgoId(4)));
+        assert_eq!(required_algo_id(false, true), 3);
+        assert_eq!(required_algo_id(false, false), 1);
+        assert_eq!(required_algo_id(true, false), 4);
+        assert_eq!(required_algo_id(true, true), 4);
     }
 
     /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can verify —
-    /// kHeavyHash (1), the superseded Argon2id (2), and BLAKE2b-SHA3 (3) — and rejects the rest.
+    /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), and PALW LLM (4) — and
+    /// rejects the rest.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
-        for ok in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3] {
+        for ok in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 4, 7, 0xff] {
+        for bad in [0u8, 5, 7, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
+    }
+
+    /// PALW-PoW seed (algo_id = 4): deterministic, and sensitive to EVERY grindable input — block,
+    /// network, nonce, and (unlike the other algos' tags) the timestamp. Timestamp sensitivity is
+    /// the grinding-closure property: a miner re-stamping a header must pay a fresh inference.
+    #[test]
+    fn palw_pow_seed_deterministic_and_binds_timestamp() {
+        let net = b"kaspa-devnet";
+        let a = palw_pow_seed_v1(h(0x11), 1_000, 42, net);
+        assert_eq!(a, palw_pow_seed_v1(h(0x11), 1_000, 42, net), "seed must be deterministic");
+        assert_ne!(a, palw_pow_seed_v1(h(0x12), 1_000, 42, net), "pre_pow_hash must change the seed");
+        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_001, 42, net), "timestamp must change the seed (grinding closure)");
+        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 43, net), "nonce must change the seed");
+        assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 42, b"mainnet"), "network must change the seed");
+    }
+
+    /// The canonical PALW prompt is a pure-ASCII stable frame around the hex seed, and two seeds
+    /// never render the same prompt.
+    #[test]
+    fn palw_pow_prompt_is_ascii_and_seed_bound() {
+        let s1 = palw_pow_seed_v1(h(0x11), 1, 2, b"devnet");
+        let s2 = palw_pow_seed_v1(h(0x11), 1, 3, b"devnet");
+        let p1 = palw_pow_prompt_v1(&s1);
+        assert!(p1.is_ascii(), "prompt must be pure ASCII for tokenizer stability");
+        assert!(p1.contains(&faster_hex::hex_string(&s1)), "prompt must embed the seed hex");
+        assert_ne!(p1, palw_pow_prompt_v1(&s2));
+        assert_eq!(p1, palw_pow_prompt_v1(&s1), "prompt must be deterministic");
+    }
+
+    /// The fixture tag has the exact projection layout (200 bytes, counts in the tail),
+    /// is deterministic, seed-sensitive, and — critically — differs from what
+    /// `palw_l1_tag_from_projection` would assemble from any real worker fields (the fixture's
+    /// three 64-byte parts are domain-keyed on the seed, not on model output).
+    #[test]
+    fn palw_fixture_tag_layout_and_determinism() {
+        let seed_a = palw_pow_seed_v1(h(0x11), 1, 2, b"devnet");
+        let seed_b = palw_pow_seed_v1(h(0x11), 1, 9, b"devnet");
+        let a = palw_fixture_l1_tag_v1(&seed_a);
+        assert_eq!(a.len(), POW_L1_PALW_OUT_BYTES);
+        assert!(POW_L1_PALW_OUT_BYTES <= POW_L1_TAG_MAX_BYTES, "tag must fit the finalizer's max");
+        assert_eq!(a, palw_fixture_l1_tag_v1(&seed_a), "fixture tag must be deterministic");
+        assert_ne!(a, palw_fixture_l1_tag_v1(&seed_b), "fixture tag must be seed-sensitive");
+        assert_eq!(&a[192..196], &47u32.to_le_bytes(), "fixture prefill count field");
+        assert_eq!(&a[196..200], &81u32.to_le_bytes(), "fixture decode count field");
+        // The three 64-byte parts are pairwise distinct (distinct sub-domains).
+        assert_ne!(&a[..64], &a[64..128]);
+        assert_ne!(&a[64..128], &a[128..192]);
+    }
+
+    /// `palw_l1_tag_from_projection` writes each replay-stable field at its documented offset.
+    #[test]
+    fn palw_projection_tag_layout() {
+        let oc = h(0xaa);
+        let gt = h(0xbb);
+        let sc = h(0xcc);
+        let tag = palw_l1_tag_from_projection(&oc, &gt, &sc, 29, 99);
+        assert_eq!(&tag[..64], oc.as_byte_slice());
+        assert_eq!(&tag[64..128], gt.as_byte_slice());
+        assert_eq!(&tag[128..192], sc.as_byte_slice());
+        assert_eq!(&tag[192..196], &29u32.to_le_bytes());
+        assert_eq!(&tag[196..200], &99u32.to_le_bytes());
+        // The finalizer accepts the 200-byte tag with algo_id = 4.
+        assert!(pow_finalizer_blake2b_512(b"devnet", POW_ALGO_ID_PALW_LLM, h(0x01), 1, 2, 3, &tag).is_ok());
     }
 
     /// BLAKE2b-SHA3 Layer-1 (algo_id = 3) must be DETERMINISTIC (miner and every verifier agree on
