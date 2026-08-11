@@ -2234,7 +2234,7 @@ impl VirtualStateProcessor {
         // §7(b)/(c): the mutations a challenge ADJUDICATION implies at this block. Appended after
         // the transaction-derived ones so the order is deterministic, and derived from the same
         // chain data on both apply and revert.
-        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, accepted_daa_score));
+        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, bond_view, accepted_daa_score));
         muts
     }
 
@@ -2261,7 +2261,12 @@ impl VirtualStateProcessor {
     /// Shadow, not weight: a credit table accumulated without slashing is a table nobody was
     /// policed for producing, and switching the vote onto it later would weight exactly that. The
     /// overlay's enforcement has to be live for the whole soak, not switched on with the vote.
-    fn compute_challenge_adjudication_slashes(&self, chain_block: BlockHash, daa_score: u64) -> Vec<BondMutation> {
+    fn compute_challenge_adjudication_slashes(
+        &self,
+        chain_block: BlockHash,
+        bond_view: &ActiveBondView,
+        daa_score: u64,
+    ) -> Vec<BondMutation> {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return Vec::new();
         };
@@ -2277,8 +2282,12 @@ impl VirtualStateProcessor {
         };
         let net_id_hash = self.genesis.hash;
         let net_id = net_id_hash.as_byte_slice();
-        let bonds: Vec<StakeBondRecord> =
-            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+        // The bond set as the CALLER's chain view holds it, never the live store: a replayer
+        // batches many blocks into one virtual advance, so its store lacks every bond created
+        // earlier in that batch, and an adjudication that cannot resolve a bond silently reaches
+        // a different verdict than a node that lived the blocks one at a time. That is the same
+        // IBD/live divergence class the capability staging fix closed (86 disqualified blocks).
+        let bonds: Vec<StakeBondRecord> = bond_view.records();
         let window = dns_params.vlt.challenge_window_blocks;
         let anchors = self.canonical_anchors_in_window(parent, dns_params, dns_params.vlt_credit_window_blue_score);
         let oldest_blue = parent_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
@@ -2489,7 +2498,7 @@ impl VirtualStateProcessor {
         // The adjudication reads only the SELECTED PARENT's chain, never this block's own
         // acceptance data, so it produces the same mutations here as it does from the store — which
         // it must, or the in-memory bond view and the persisted one would drift apart.
-        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, accepted_daa_score));
+        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, bond_view, accepted_daa_score));
         muts
     }
 
