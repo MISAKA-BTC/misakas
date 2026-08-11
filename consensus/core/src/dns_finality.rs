@@ -1611,7 +1611,7 @@ impl DnsParams {
     /// Devnet DAA and blue score track closely on a private mesh, so the epoch origin derived from
     /// the DAA fence is the right epoch ±1 — and with a flat budget, being one epoch early or late
     /// moves nothing a harness asserts.
-    pub fn with_tkn_devnet(mut self, active_daa: u64, shadow_span: u64, r0_atomic: u128) -> Self {
+    pub fn with_tkn_devnet(mut self, active_daa: u64, shadow_span: u64, r0_atomic: u128, phase_b_span: u64) -> Self {
         let epoch_len = self.attestation_epoch_length_blue_score.max(1);
         self.tkn = crate::token::TokenParams {
             tkn_shadow_activation_daa_score: active_daa.saturating_sub(shadow_span),
@@ -1626,6 +1626,10 @@ impl DnsParams {
                 self.vlt.credit_delay_epochs,
             ),
             emission_min_network_compute: 1,
+            // Phase B opens a further `phase_b_span` above the Phase A fence (0 = never on
+            // this devnet), so a harness can watch permissionless mints stay void until
+            // their own fence and bind after it.
+            tkn_phase_b_activation_daa_score: if phase_b_span == 0 { u64::MAX } else { active_daa.saturating_add(phase_b_span) },
         };
         self
     }

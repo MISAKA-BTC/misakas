@@ -181,7 +181,7 @@ TokenSupply:  asset_id → { minted: u128, burned: u128 }
 
 ### 4.6 Phase B: 一般 mint（SPL 完全対応）
 
-Phase A の台帳・転送・burn がそのまま使われ、`CreateMint`（asset_id = carrier tx id の `Hash64`、衝突フリー・レジストリ不要）と authority 付き `MintTo` を解禁する。これにより「ユーザー発行トークンも単一共通実装」という SPL 対応が完成する。freeze / clawback authority は導入しない（非目標、§11）。Phase B の activation は Phase A と独立の DAA fence とする（SHOULD）。
+Phase A の台帳・転送・burn がそのまま使われ、`CreateMint` と authority 付き `MintTo` を解禁する。**実装改（2026-08-11）**: asset_id は carrier tx id 由来ではなく `H(creator_id, create_nonce)` 由来（`asset_id_for_mint`）。carrier 由来だと、nonce 設計が意図的に許す「同一署名 payload の別 fee tx への再搬送」が別資産を二重生成する — creator+nonce 由来なら再搬送は同一 id を再主張して nonce void で終わり、Phase A の replay 意味論に完全整合する。create は creator の TOK 行 nonce を消費し、mint-to は当該資産行の nonce を消費する。cap は不変・`u128::MAX` = 無上限・0 は stateless 拒否。TOK への MintTo は stateless 拒否（§4.1 の絶対規則）。これにより「ユーザー発行トークンも単一共通実装」という SPL 対応が完成する。freeze / clawback authority は導入しない（非目標、§11）。Phase B の activation は Phase A と独立の DAA fence とする（SHOULD）。
 
 ---
 
@@ -365,7 +365,7 @@ emission_activation_epoch         … R(E) の E_a 原点
 | 1 | 資産名・ticker | **決定（2026-08-10）: Token / TOK** |
 | 2 | `R0` / `H` / `D_settle` の凍結値（TBD 維持を 2026-08-10 確認。§5.2 の数値は引き続き候補例示） | testnet shadow 後 |
 | 3 | audit fee の財源 | **設計済み（2026-08-11）**: 統一仕事量 emission — `misaka-audit-emission-v0.2-design.md`。実装は後続 PR |
-| 4 | Phase B（一般 mint）の activation 時期 | Phase A 安定後 |
+| 4 | Phase B（一般 mint） | **実装済み（2026-08-11）**: 0x32/0x33・`tkn_phase_b_activation_daa_score`（全 preset INERT）。activation 時期は運用判断のまま |
 | 5 | pruned IBD 向け台帳 snapshot 方式（ADR-0022 準拠の詳細） | Phase A 実装中 |
 | 6 | certificate への payout 先フィールド追加（§5.4 の MAY） | 需要を見て |
 | 7 | 台帳 root の header commitment（light client 対応） | 将来 fork |

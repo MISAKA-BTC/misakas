@@ -76,6 +76,39 @@ pub const TOKEN_TRANSFER_MLDSA87_CONTEXT: &[u8] = b"misaka-tkn-v1/transfer/mldsa
 /// libcrux ML-DSA-87 `ctx` for a burn signature.
 pub const TOKEN_BURN_MLDSA87_CONTEXT: &[u8] = b"misaka-tkn-v1/burn/mldsa87";
 
+// Phase B (design §4.6, revised): permissionless mints. Domains/contexts follow the
+// same one-key-per-role discipline.
+/// Keyed-BLAKE2b-256 domain for [`token_create_mint_message`].
+pub const TOKEN_CREATE_MINT_MESSAGE_DOMAIN: &[u8] = b"misaka-tkn-v1/create-mint";
+/// Keyed-BLAKE2b-256 domain for [`token_mint_to_message`].
+pub const TOKEN_MINT_TO_MESSAGE_DOMAIN: &[u8] = b"misaka-tkn-v1/mint-to";
+/// libcrux ML-DSA-87 `ctx` for a create-mint signature.
+pub const TOKEN_CREATE_MINT_MLDSA87_CONTEXT: &[u8] = b"misaka-tkn-v1/create-mint/mldsa87";
+/// libcrux ML-DSA-87 `ctx` for a mint-to signature.
+pub const TOKEN_MINT_TO_MLDSA87_CONTEXT: &[u8] = b"misaka-tkn-v1/mint-to/mldsa87";
+/// Keyed-BLAKE2b-256 domain for [`asset_id_for_mint`].
+pub const TOKEN_ASSET_ID_KEY: &[u8] = b"misaka-tkn-v1/asset-id";
+
+/// The asset id a `CreateMint` by `creator` at `create_nonce` claims — Phase B, design §4.6
+/// **revised**: derived from `(creator, nonce)` rather than the carrier transaction id, so
+/// re-carrying the same signed payload on a fresh fee tx (which the nonce design deliberately
+/// permits) re-claims the SAME asset and voids on the nonce, instead of double-creating.
+///
+/// `max(1)` keeps the result off [`TOK_ASSET_ID`]; the residual chance of two honest mints
+/// colliding on one id is a birthday bound over 2^64, and a collision is merely the second
+/// create voiding under first-wins — the same outcome any duplicate gets.
+pub fn asset_id_for_mint(creator: Hash64, create_nonce: u64) -> u64 {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(TOKEN_ASSET_ID_KEY).to_state();
+    hasher.update(creator.as_byte_slice());
+    hasher.update(&create_nonce.to_le_bytes());
+    let bytes = hasher.finalize();
+    u64::from_le_bytes(bytes.as_bytes()[..8].try_into().expect("8 bytes")).max(1)
+}
+
+/// Sentinel for an uncapped mint (design: `supply_cap = u128::MAX`); a zero cap is rejected
+/// statelessly — a mint that can never issue is a misconfiguration, not a policy.
+pub const TOKEN_SUPPLY_CAP_UNCAPPED: u128 = u128::MAX;
+
 // ---------------------------------------------------------------------
 // Payloads (design §4.3 — subnetworks 0x30/0x31).
 // ---------------------------------------------------------------------
@@ -166,6 +199,91 @@ pub fn token_burn_message(network_id: &[u8], asset_id: u64, owner: Hash64, amoun
     Hash::from_bytes(out)
 }
 
+/// A `SUBNETWORK_ID_TOKEN_CREATE_MINT` (0x32) payload — Phase B: claim
+/// [`asset_id_for_mint`]`(creator, nonce)` and fix its immutable mint policy.
+///
+/// The nonce is the creator's **TOK-line** nonce (`(TOK_ASSET_ID, creator)`):
+/// a create is assetless until it succeeds, and binding it to the one nonce
+/// line every identity already has keeps replay protection uniform.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TokenCreateMintPayload {
+    pub version: u16,
+    /// The creator's ML-DSA-87 verifying key; creator id (and mint authority) is its
+    /// [`validator_id_from_pubkey`] hash.
+    pub creator_pubkey: Vec<u8>,
+    /// Immutable issuance ceiling in atomic units ([`TOKEN_SUPPLY_CAP_UNCAPPED`] = none;
+    /// zero rejected statelessly).
+    pub supply_cap: u128,
+    /// Display metadata only — no consensus meaning.
+    pub decimals: u8,
+    /// Must equal the creator's stored `(TOK, creator)` nonce + 1 at application.
+    pub nonce: u64,
+    /// ML-DSA-87 over [`token_create_mint_message`] under
+    /// [`TOKEN_CREATE_MINT_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+/// A `SUBNETWORK_ID_TOKEN_MINT_TO` (0x33) payload — Phase B: issue `amount` of `asset_id`
+/// to `to`, signed by the mint authority. [`TOK_ASSET_ID`] is rejected statelessly: TOK has
+/// no mint authority, and no payload may claim otherwise (design §4.1).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TokenMintToPayload {
+    pub version: u16,
+    pub asset_id: u64,
+    /// The mint authority's ML-DSA-87 verifying key.
+    pub authority_pubkey: Vec<u8>,
+    pub to: Hash64,
+    /// Atomic units. Zero rejected statelessly.
+    pub amount: u128,
+    /// Must equal the authority's stored `(asset_id, authority)` nonce + 1 at application —
+    /// the minted asset's own nonce line, like a transfer's.
+    pub nonce: u64,
+    /// ML-DSA-87 over [`token_mint_to_message`] under [`TOKEN_MINT_TO_MLDSA87_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+/// Digest a creator signs to claim a mint.
+pub fn token_create_mint_message(network_id: &[u8], creator: Hash64, supply_cap: u128, decimals: u8, nonce: u64) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(TOKEN_CREATE_MINT_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
+    hasher.update(creator.as_byte_slice());
+    hasher.update(&supply_cap.to_le_bytes());
+    hasher.update(&[decimals]);
+    hasher.update(&nonce.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// Digest a mint authority signs to issue.
+pub fn token_mint_to_message(network_id: &[u8], asset_id: u64, authority: Hash64, to: Hash64, amount: u128, nonce: u64) -> Hash {
+    let mut hasher = Blake2bParams::new().hash_length(32).key(TOKEN_MINT_TO_MESSAGE_DOMAIN).to_state();
+    hasher.update(network_id);
+    hasher.update(&asset_id.to_le_bytes());
+    hasher.update(authority.as_byte_slice());
+    hasher.update(to.as_byte_slice());
+    hasher.update(&amount.to_le_bytes());
+    hasher.update(&nonce.to_le_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash::from_bytes(out)
+}
+
+/// A mint's immutable policy row — Phase B, keyed by asset id in the token store family.
+/// No freeze, no clawback, no authority rotation (design §11): what CreateMint fixed is
+/// what the asset is.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct TokenMintMeta {
+    pub creator: Hash64,
+    /// The only key that may sign [`TokenMintToPayload`]s for this asset. Phase B fixes it
+    /// to the creator; a distinct-authority variant is a later extension if ever needed.
+    pub mint_authority: Hash64,
+    pub supply_cap: u128,
+    pub decimals: u8,
+}
+
+impl kaspa_utils::mem_size::MemSizeEstimator for TokenMintMeta {}
+
 // ---------------------------------------------------------------------
 // Stateless validation (design §4.3: two-stage, like every overlay band).
 // ---------------------------------------------------------------------
@@ -194,6 +312,11 @@ pub enum TokenTxError {
     /// only to bump a nonce. Rejecting it statelessly also spares the
     /// application seam from aliasing a debit and a credit of one account.
     SelfTransfer,
+    /// Phase B: a `CreateMint` with `supply_cap == 0` — a mint that can never issue.
+    ZeroSupplyCap,
+    /// Phase B: a `MintTo` naming [`TOK_ASSET_ID`]. TOK has no mint authority, and no
+    /// payload may claim otherwise (design §4.1) — rejected at the door, not just voided.
+    TokMintForbidden,
 }
 
 impl std::fmt::Display for TokenTxError {
@@ -206,6 +329,8 @@ impl std::fmt::Display for TokenTxError {
             Self::InvalidSignatureLen(l) => write!(f, "invalid signature length {l} (expected {STAKE_ATTESTATION_SIG_LEN})"),
             Self::ZeroAmount => write!(f, "token op amount must be non-zero"),
             Self::SelfTransfer => write!(f, "token transfer to self is rejected"),
+            Self::ZeroSupplyCap => write!(f, "create-mint supply cap must be non-zero (u128::MAX = uncapped)"),
+            Self::TokMintForbidden => write!(f, "TOK ({TOK_ASSET_ID}) has no mint authority; mint-to is forbidden"),
         }
     }
 }
@@ -224,6 +349,16 @@ pub fn decode_token_burn_payload(payload: &[u8]) -> Option<TokenBurnPayload> {
     borsh::from_slice(payload).ok()
 }
 
+/// Decode a create-mint payload (Phase B) — see [`decode_token_transfer_payload`].
+pub fn decode_token_create_mint_payload(payload: &[u8]) -> Option<TokenCreateMintPayload> {
+    borsh::from_slice(payload).ok()
+}
+
+/// Decode a mint-to payload (Phase B) — see [`decode_token_transfer_payload`].
+pub fn decode_token_mint_to_payload(payload: &[u8]) -> Option<TokenMintToPayload> {
+    borsh::from_slice(payload).ok()
+}
+
 /// Stateless validation of a [`TokenTransferPayload`]'s bytes — everything
 /// checkable without a chain. Nonce currency, balance sufficiency, and the
 /// ML-DSA-87 signature itself are stateful and belong to the application seam.
@@ -231,9 +366,6 @@ pub fn validate_token_transfer_payload(payload: &[u8]) -> Result<(), TokenTxErro
     let p: TokenTransferPayload = borsh::from_slice(payload).map_err(|_| TokenTxError::Decode)?;
     if p.version != TOKEN_PAYLOAD_VERSION_V1 {
         return Err(TokenTxError::UnsupportedVersion(p.version));
-    }
-    if p.asset_id != TOK_ASSET_ID {
-        return Err(TokenTxError::UnknownAsset(p.asset_id));
     }
     if p.from_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(TokenTxError::InvalidPubKeyLen(p.from_pubkey.len()));
@@ -256,11 +388,47 @@ pub fn validate_token_burn_payload(payload: &[u8]) -> Result<(), TokenTxError> {
     if p.version != TOKEN_PAYLOAD_VERSION_V1 {
         return Err(TokenTxError::UnsupportedVersion(p.version));
     }
-    if p.asset_id != TOK_ASSET_ID {
-        return Err(TokenTxError::UnknownAsset(p.asset_id));
-    }
     if p.owner_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(TokenTxError::InvalidPubKeyLen(p.owner_pubkey.len()));
+    }
+    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(TokenTxError::InvalidSignatureLen(p.signature.len()));
+    }
+    if p.amount == 0 {
+        return Err(TokenTxError::ZeroAmount);
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`TokenCreateMintPayload`]'s bytes (Phase B).
+pub fn validate_token_create_mint_payload(payload: &[u8]) -> Result<(), TokenTxError> {
+    let p: TokenCreateMintPayload = borsh::from_slice(payload).map_err(|_| TokenTxError::Decode)?;
+    if p.version != TOKEN_PAYLOAD_VERSION_V1 {
+        return Err(TokenTxError::UnsupportedVersion(p.version));
+    }
+    if p.creator_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(TokenTxError::InvalidPubKeyLen(p.creator_pubkey.len()));
+    }
+    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        return Err(TokenTxError::InvalidSignatureLen(p.signature.len()));
+    }
+    if p.supply_cap == 0 {
+        return Err(TokenTxError::ZeroSupplyCap);
+    }
+    Ok(())
+}
+
+/// Stateless validation of a [`TokenMintToPayload`]'s bytes (Phase B).
+pub fn validate_token_mint_to_payload(payload: &[u8]) -> Result<(), TokenTxError> {
+    let p: TokenMintToPayload = borsh::from_slice(payload).map_err(|_| TokenTxError::Decode)?;
+    if p.version != TOKEN_PAYLOAD_VERSION_V1 {
+        return Err(TokenTxError::UnsupportedVersion(p.version));
+    }
+    if p.asset_id == TOK_ASSET_ID {
+        return Err(TokenTxError::TokMintForbidden);
+    }
+    if p.authority_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
+        return Err(TokenTxError::InvalidPubKeyLen(p.authority_pubkey.len()));
     }
     if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(TokenTxError::InvalidSignatureLen(p.signature.len()));
@@ -329,6 +497,14 @@ pub enum TokenOpError {
     BalanceOverflow,
     /// The nonce counter itself would overflow (2^64 applied ops on one row).
     NonceOverflow,
+    /// Phase B: transfer/burn/mint on an asset no accepted `CreateMint` has claimed.
+    UnknownAsset { asset_id: u64 },
+    /// Phase B: a `CreateMint` whose derived id an earlier create already claimed (first-wins).
+    AssetExists { asset_id: u64 },
+    /// Phase B: a `MintTo` signed by a key that is not the mint authority.
+    NotMintAuthority,
+    /// Phase B: a `MintTo` that would push `minted` past the immutable supply cap.
+    SupplyCapExceeded { cap: u128, minted: u128, amount: u128 },
 }
 
 impl std::fmt::Display for TokenOpError {
@@ -340,6 +516,12 @@ impl std::fmt::Display for TokenOpError {
             }
             Self::BalanceOverflow => write!(f, "token credit would overflow the recipient balance"),
             Self::NonceOverflow => write!(f, "token nonce counter exhausted"),
+            Self::UnknownAsset { asset_id } => write!(f, "asset {asset_id} does not exist (no accepted create-mint)"),
+            Self::AssetExists { asset_id } => write!(f, "asset {asset_id} already exists (create-mint is first-wins)"),
+            Self::NotMintAuthority => write!(f, "signer is not this asset's mint authority"),
+            Self::SupplyCapExceeded { cap, minted, amount } => {
+                write!(f, "mint of {amount} would exceed the supply cap ({minted} of {cap} already minted)")
+            }
         }
     }
 }
@@ -386,6 +568,79 @@ pub fn apply_token_burn(
     Ok((
         TokenAccount { balance: owner.balance - amount, nonce: expected },
         TokenSupply { minted: supply.minted, burned: supply.burned.saturating_add(amount) },
+    ))
+}
+
+/// Phase B: apply a `CreateMint` — bump the creator's TOK-line nonce and produce the
+/// immutable policy row. `existing` is the ledger's current row for the derived id;
+/// `Some` means an earlier create claimed it and this one is void (first-wins).
+pub fn apply_token_create_mint(
+    existing: Option<&TokenMintMeta>,
+    creator_tok_account: TokenAccount,
+    creator: Hash64,
+    supply_cap: u128,
+    decimals: u8,
+    nonce: u64,
+) -> Result<(TokenAccount, TokenMintMeta), TokenOpError> {
+    let expected = creator_tok_account.nonce.checked_add(1).ok_or(TokenOpError::NonceOverflow)?;
+    if nonce != expected {
+        return Err(TokenOpError::BadNonce { expected, got: nonce });
+    }
+    if existing.is_some() {
+        return Err(TokenOpError::AssetExists { asset_id: asset_id_for_mint(creator, nonce) });
+    }
+    Ok((
+        TokenAccount { balance: creator_tok_account.balance, nonce: expected },
+        TokenMintMeta { creator, mint_authority: creator, supply_cap, decimals },
+    ))
+}
+
+/// Phase B: apply a `MintTo` **atomically** — authority, nonce, cap, credit, supply, in one
+/// all-or-nothing step.
+///
+/// One function rather than a nonce step and a credit step, because a two-step form invites
+/// the exact bug the devnet caught: a cap-breaching issuance whose nonce bump had already
+/// been staged consumed a nonce it was not entitled to, and the next honest mint then failed
+/// as a replay. A void op must consume nothing — the same invariant the Phase A overdraft
+/// proves by leaving its nonce for the burn that follows it.
+///
+/// `to_account` is the recipient's staged row. When `to == authority` the caller passes the
+/// authority's own row (they are the same row); the alias is resolved here, so the caller
+/// never has to sequence two writes to one account.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_token_mint_to(
+    meta: &TokenMintMeta,
+    authority: Hash64,
+    authority_account: TokenAccount,
+    to: Hash64,
+    to_account: TokenAccount,
+    supply: TokenSupply,
+    amount: u128,
+    nonce: u64,
+) -> Result<(TokenAccount, TokenAccount, TokenSupply), TokenOpError> {
+    if authority != meta.mint_authority {
+        return Err(TokenOpError::NotMintAuthority);
+    }
+    let expected = authority_account.nonce.checked_add(1).ok_or(TokenOpError::NonceOverflow)?;
+    if nonce != expected {
+        return Err(TokenOpError::BadNonce { expected, got: nonce });
+    }
+    let minted = supply.minted.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
+    if minted > meta.supply_cap {
+        return Err(TokenOpError::SupplyCapExceeded { cap: meta.supply_cap, minted: supply.minted, amount });
+    }
+    let supply2 = TokenSupply { minted, burned: supply.burned };
+    if to == authority {
+        // Self-mint: one row carries both the nonce bump and the credit.
+        let balance = authority_account.balance.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
+        let merged = TokenAccount { balance, nonce: expected };
+        return Ok((merged, merged, supply2));
+    }
+    let to_balance = to_account.balance.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
+    Ok((
+        TokenAccount { balance: authority_account.balance, nonce: expected },
+        TokenAccount { balance: to_balance, nonce: to_account.nonce },
+        supply2,
     ))
 }
 
@@ -649,6 +904,10 @@ pub struct TokenParams {
     /// `VltParams::min_network_compute` — a separate knob because emission may
     /// want a higher floor than quorum legitimacy does.
     pub emission_min_network_compute: u128,
+    /// Phase B (design §4.6): at/above this DAA score, accepted `CreateMint` /
+    /// `MintTo` ops bind — permissionless mints exist. Independent of (and never
+    /// below) the Phase A fence; `u64::MAX` on every shipped preset.
+    pub tkn_phase_b_activation_daa_score: u64,
 }
 
 impl TokenParams {
@@ -662,6 +921,7 @@ impl TokenParams {
         emission_halving_epochs: 0,
         settlement_delay_epochs: 0,
         emission_min_network_compute: 0,
+        tkn_phase_b_activation_daa_score: u64::MAX,
     };
 
     /// Whether the ledger machinery runs (shadow or live) at `daa_score`.
@@ -673,6 +933,11 @@ impl TokenParams {
     /// `daa_score`.
     pub fn active_at(&self, daa_score: u64) -> bool {
         daa_score >= self.tkn_activation_daa_score
+    }
+
+    /// Phase B: whether permissionless mints bind at `daa_score`.
+    pub fn phase_b_active_at(&self, daa_score: u64) -> bool {
+        daa_score >= self.tkn_phase_b_activation_daa_score
     }
 
     /// Internal-consistency check for a preset — a startup/test assertion in
@@ -698,6 +963,9 @@ impl TokenParams {
                     "emission_min_network_compute must be > 0 when R0 > 0 (design §5.1: no whole-budget mint on a near-empty network)",
                 );
             }
+        }
+        if self.tkn_phase_b_activation_daa_score < self.tkn_activation_daa_score {
+            return Err("tkn_phase_b_activation_daa_score must be >= tkn_activation_daa_score (mints need a live ledger)");
         }
         Ok(())
     }
@@ -835,9 +1103,11 @@ mod tests {
         p.version = 2;
         assert_eq!(validate_token_transfer_payload(&borsh::to_vec(&p).unwrap()), Err(TokenTxError::UnsupportedVersion(2)));
 
+        // Phase B relaxed admission: any asset id passes statelessly (an absent mint
+        // voids statefully) — asset 7 is now a valid SHAPE.
         let mut p = transfer_payload();
         p.asset_id = 7;
-        assert_eq!(validate_token_transfer_payload(&borsh::to_vec(&p).unwrap()), Err(TokenTxError::UnknownAsset(7)));
+        validate_token_transfer_payload(&borsh::to_vec(&p).unwrap()).unwrap();
 
         let mut p = transfer_payload();
         p.from_pubkey = vec![0; 32];
@@ -1016,6 +1286,128 @@ mod tests {
         assert!(whole.paid_total - split.paid_total < split.rewards.len() as u128);
     }
 
+    // ---- Phase B: permissionless mints ----------------------------------
+
+    /// The id is a pure function of (creator, nonce) — re-carrying a payload
+    /// re-claims the same id — never TOK's, and creator-scoped.
+    #[test]
+    fn asset_id_is_deterministic_creator_scoped_and_never_tok() {
+        assert_eq!(asset_id_for_mint(id(1), 4), asset_id_for_mint(id(1), 4));
+        assert_ne!(asset_id_for_mint(id(1), 4), asset_id_for_mint(id(1), 5));
+        assert_ne!(asset_id_for_mint(id(1), 4), asset_id_for_mint(id(2), 4));
+        assert_ne!(asset_id_for_mint(id(1), 4), TOK_ASSET_ID);
+    }
+
+    #[test]
+    fn create_mint_consumes_the_tok_nonce_line_and_is_first_wins() {
+        let creator_tok = TokenAccount { balance: 77, nonce: 3 };
+        let (creator2, meta) = apply_token_create_mint(None, creator_tok, id(1), 5_000_000, 8, 4).unwrap();
+        assert_eq!(creator2, TokenAccount { balance: 77, nonce: 4 }, "balance untouched, TOK nonce consumed");
+        assert_eq!(meta.mint_authority, id(1));
+        // Wrong nonce: void without consuming anything.
+        assert!(matches!(
+            apply_token_create_mint(None, creator_tok, id(1), 1, 0, 9),
+            Err(TokenOpError::BadNonce { expected: 4, got: 9 })
+        ));
+        // First-wins: an existing meta voids the claim.
+        assert!(matches!(apply_token_create_mint(Some(&meta), creator_tok, id(1), 1, 0, 4), Err(TokenOpError::AssetExists { .. })));
+    }
+
+    #[test]
+    fn mint_to_enforces_authority_cap_and_pays_exactly_to_the_cap() {
+        let meta = TokenMintMeta { creator: id(1), mint_authority: id(1), supply_cap: 5_000_000, decimals: 8 };
+        let auth = TokenAccount::default();
+        // Authority check.
+        assert!(matches!(
+            apply_token_mint_to(&meta, id(2), auth, id(3), TokenAccount::default(), TokenSupply::default(), 1, 1),
+            Err(TokenOpError::NotMintAuthority)
+        ));
+        // 3M to a third party.
+        let (auth1, to1, supply1) =
+            apply_token_mint_to(&meta, id(1), auth, id(3), TokenAccount::default(), TokenSupply::default(), 3_000_000, 1).unwrap();
+        assert_eq!(auth1, TokenAccount { balance: 0, nonce: 1 });
+        assert_eq!(to1.balance, 3_000_000);
+        assert_eq!(supply1.minted, 3_000_000);
+        // The cap is reachable exactly, and a self-mint merges the bump and the credit.
+        let (auth2, to2, supply2) = apply_token_mint_to(&meta, id(1), auth1, id(1), auth1, supply1, 2_000_000, 2).unwrap();
+        assert_eq!(auth2, to2, "a self-mint is one row");
+        assert_eq!(auth2, TokenAccount { balance: 2_000_000, nonce: 2 });
+        assert_eq!(supply2.minted, 5_000_000, "the cap itself is reachable");
+        // Conservation for the minted asset.
+        assert_eq!(to1.balance + auth2.balance, supply2.minted - supply2.burned);
+    }
+
+    /// The devnet caught this one: a cap-breaching mint whose nonce bump had already been
+    /// staged consumed a nonce it never earned, and the next honest mint failed as a replay.
+    /// A void op consumes NOTHING — the same invariant the Phase A overdraft proves by
+    /// leaving its nonce for the burn behind it.
+    #[test]
+    fn a_cap_breaching_mint_consumes_no_nonce() {
+        let meta = TokenMintMeta { creator: id(1), mint_authority: id(1), supply_cap: 5_000_000, decimals: 8 };
+        let (auth1, _to1, supply1) = apply_token_mint_to(
+            &meta,
+            id(1),
+            TokenAccount::default(),
+            id(3),
+            TokenAccount::default(),
+            TokenSupply::default(),
+            3_000_000,
+            1,
+        )
+        .unwrap();
+        // The breach: nonce 2 is the correct successor, but the cap refuses it.
+        assert!(matches!(
+            apply_token_mint_to(&meta, id(1), auth1, id(3), _to1, supply1, 2_000_001, 2),
+            Err(TokenOpError::SupplyCapExceeded { .. })
+        ));
+        // Nonce 2 is therefore still unspent, and the honest mint that follows uses it.
+        let (auth2, _to2, supply2) = apply_token_mint_to(&meta, id(1), auth1, id(3), _to1, supply1, 2_000_000, 2).unwrap();
+        assert_eq!(auth2.nonce, 2);
+        assert_eq!(supply2.minted, 5_000_000);
+    }
+
+    /// The absolute rule a payload can violate on its face: TOK cannot be minted.
+    #[test]
+    fn tok_mint_to_is_rejected_statelessly() {
+        let p = TokenMintToPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: TOK_ASSET_ID,
+            authority_pubkey: vec![0x11; STAKE_VALIDATOR_PUBKEY_LEN],
+            to: id(2),
+            amount: 1,
+            nonce: 1,
+            signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+        };
+        assert_eq!(validate_token_mint_to_payload(&borsh::to_vec(&p).unwrap()), Err(TokenTxError::TokMintForbidden));
+        // And a zero-cap mint is a misconfiguration, not a policy.
+        let c = TokenCreateMintPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            creator_pubkey: vec![0x11; STAKE_VALIDATOR_PUBKEY_LEN],
+            supply_cap: 0,
+            decimals: 8,
+            nonce: 1,
+            signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+        };
+        assert_eq!(validate_token_create_mint_payload(&borsh::to_vec(&c).unwrap()), Err(TokenTxError::ZeroSupplyCap));
+        // Phase B admission relax: a transfer naming a non-TOK asset now passes statelessly
+        // (statefully it voids until its mint exists).
+        let mut t = transfer_payload();
+        t.asset_id = 7;
+        validate_token_transfer_payload(&borsh::to_vec(&t).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn phase_b_fence_is_coherent_only_at_or_above_phase_a() {
+        let mut p = TokenParams::INERT;
+        p.is_coherent().unwrap();
+        p.tkn_shadow_activation_daa_score = 1_000;
+        p.tkn_activation_daa_score = 2_000;
+        p.tkn_phase_b_activation_daa_score = 1_500;
+        assert!(p.is_coherent().is_err(), "mints below the ledger fence");
+        p.tkn_phase_b_activation_daa_score = 2_000;
+        p.is_coherent().unwrap();
+    }
+
     // ---- emission v0.2 (unified work) -----------------------------------
 
     /// One µRTE pays the same whether it executed or replayed: equal exec and
@@ -1087,6 +1479,7 @@ mod tests {
             emission_halving_epochs: 315_360,
             settlement_delay_epochs: 8,
             emission_min_network_compute: 100_000_000_000,
+            tkn_phase_b_activation_daa_score: u64::MAX,
         };
         live.is_coherent().unwrap();
 
@@ -1123,6 +1516,7 @@ mod tests {
             emission_halving_epochs: 1,
             settlement_delay_epochs: 7,
             emission_min_network_compute: 1,
+            tkn_phase_b_activation_daa_score: u64::MAX,
         };
         p.is_coherent_with_vlt(2_000, 300, 300, 100, 1).unwrap();
         p.settlement_delay_epochs = 6;

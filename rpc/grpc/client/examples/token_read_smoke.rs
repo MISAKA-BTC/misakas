@@ -22,10 +22,11 @@ async fn main() {
     let mut args = std::env::args().skip(1);
     let url = args.next().unwrap_or_else(|| "grpc://127.0.0.1:27110".into());
     let owner = args.next();
+    let asset: u64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(0);
 
     let client = GrpcClient::connect(url.clone()).await.unwrap_or_else(|e| panic!("connect {url}: {e}"));
 
-    let supply = client.get_token_supply(0).await.expect("getTokenSupply");
+    let supply = client.get_token_supply(asset).await.expect("getTokenSupply");
     println!(
         "supply    : available={} minted={} burned={} circulating={}",
         supply.available, supply.minted, supply.burned, supply.circulating
@@ -48,7 +49,7 @@ async fn main() {
     );
 
     if let Some(owner) = owner {
-        let entry = client.get_token_ledger_entry(0, owner.clone()).await.expect("getTokenLedgerEntry");
+        let entry = client.get_token_ledger_entry(asset, owner.clone()).await.expect("getTokenLedgerEntry");
         println!("ledger    : owner={owner} available={} balance={} nonce={}", entry.available, entry.balance, entry.nonce);
     }
 
