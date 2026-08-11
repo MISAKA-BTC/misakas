@@ -200,7 +200,19 @@ pub const POW_L1_PALW_OLLAMA_NUM_GPU_V1: u32 = 0;
 /// (`kaspa_pow::palw::verify_ollama_model_pin`, called eagerly by the kaspad startup rail and
 /// lazily, once per process, by the tag runner). Same stance as the worker's GGUF size+sha check.
 ///
-/// `qwen3.5:2b` as pulled from the Ollama registry (verified 2026-08-11).
+/// The **F16 profile** of Qwen3.5-2B — `misaka-palw-2b-f16`, created via `ollama create` from
+/// the canonical F16 GGUF (sha256 `575eddc35774…`, requantized from unsloth's BF16 export of
+/// the base model; NOT the registry's `qwen3.5:2b`, whose Q8_0 blob was measured non-portable).
+///
+/// Why F16 (measured 2026-08-11→12, 8-seed canonical probe): with the Q8_0 blob the greedy
+/// stream diverged between Metal and CPU on one host AND between AMD EPYC and Intel Broadwell
+/// within x86-64 (4/8 seeds — quantized dot kernels differ per ISA feature set). With the F16
+/// blob every backend runs the f16→fp32-accumulate path and the same eight seeds agree across
+/// Metal, arm64 CPU, EPYC and Broadwell — except one seed (3/8) that still splits arm64-vs-x86
+/// in the batched prefill GEMM. The class this pins is therefore **x86-64 CPU** (8/8 across
+/// vendors); arm64/NVIDIA join only after the 35B PALW runtime's patched-llama.cpp
+/// serial-execution policy is ported to the 2B worker (its whole point is closing exactly that
+/// residual), or after a probe proves their calibration line equal.
 ///
 /// The OTHER determinism-class dimensions — Ollama version and CPU architecture — deliberately
 /// are NOT pinned here: pinning a version would break the fleet on every patch release, and the
@@ -208,10 +220,10 @@ pub const POW_L1_PALW_OLLAMA_NUM_GPU_V1: u32 = 0;
 /// calibration line `scripts/misaka-palw-ollama-setup.sh` prints and compared across the fleet
 /// before deployment. Pinning the blob closes the one dimension an operator can get wrong by
 /// typing a different model name.
-pub const POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1: &str = "324d162be6ca5629ae4517c8710434d0bd2d665bc94dbad46e9af8fbf8a2f0df";
+pub const POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1: &str = "d5d0bc552430fc72c69d52583d722a43b8048fa9faf05c2faebabc204f4d13dc";
 /// Size in bytes of the pinned blob, checked alongside the digest (cheap defense against a
 /// truncated or re-tagged pull).
-pub const POW_L1_PALW_OLLAMA_MODEL_SIZE_V1: u64 = 2_741_192_820;
+pub const POW_L1_PALW_OLLAMA_MODEL_SIZE_V1: u64 = 3_775_709_366;
 
 /// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
 ///

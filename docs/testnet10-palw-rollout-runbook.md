@@ -10,6 +10,7 @@ startup genesis-mismatch guard, and nothing of the old chain (balances included)
 | what | value |
 |---|---|
 | genesis hash | `477f85fc a51674f5 …` (`TESTNET_GENESIS`, "-palw" payload marker) |
+| PoW model | `misaka-palw-2b-f16` digest `d5d0bc552430…` (F16 profile; canonical GGUF sha `575eddc35774…` — created from the file, NOT pulled; the registry Q8_0 blob is non-portable across ISAs) |
 | consensus fingerprint | `2d2258cc51a3b2216bab6d93b0aec2332322903e5e7414db15ad8112adced671` (pin it MATERIALIZED — `Params::from(net)` — per the 8208cd6 lesson) |
 | PoW | `algo_id = 5` (PALW via **Ollama**) from genesis; fixture env **refused** on this network |
 | block rate | 0.1 bps (`target_time_per_block = 10 s`, ghostdag k = 4) |
@@ -110,12 +111,18 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 * **Verified**: solo mining (`misaminer`), independent per-header replay validation by peers, the
   fail-fast rails, and **from-genesis headers-first IBD** — all exercised end-to-end on t10 params
   with the real model.
-* **NOT exercised: cross-machine agreement.** Every "independent replay" so far was a separate
-  PROCESS on ONE host — same CPU, same Ollama build, same blob. The load-bearing assumption of the
-  whole design (two machines of one class agree byte-for-byte) has never been demonstrated,
-  because no second host was reachable. **This is the gate before any public launch**: run
-  `scripts/misaka-palw-ollama-setup.sh` on two fleet VPSes and compare the calibration lines. An
-  arm64 dev box is its own class — do NOT assume it matches the x86-64 fleet; measure it.
+* **Cross-machine agreement: MEASURED (2026-08-12), and it is what forced the F16 profile.**
+  8-seed canonical probes across five surfaces — M4 Pro Metal, M4 Pro CPU (arm64), AMD EPYC ×2
+  and Intel Broadwell (x86-64, one without f16c):
+  - registry Q8_0 blob: EPYC ≡ EPYC but ≠ Broadwell on 4/8 seeds, and ≠ Metal, ≠ arm64-CPU —
+    unusable as a class (the single-seed probe that once "passed" was luck).
+  - F16 profile: **x86-64 8/8 across vendors** (the fleet class this release pins), and Metal ≡
+    arm64-CPU ≡ x86 on 7/8 — one seed still flips arm64-vs-x86 in the batched prefill GEMM, so
+    **arm64 is NOT in the class** (7/8 is a fork, not a pass). NVIDIA is unmeasured here.
+  - Bringing Mac/NVIDIA into one class is exactly what the Qwen3.6-35B PALW runtime's patched
+    llama.cpp (serial n_batch=1 execution policy, fp32 accumulation) exists for; porting that
+    runtime to the 2B worker is the follow-up phase. Stock Ollama cannot express it
+    (`num_batch=1` asserts in its server).
 * **NOT exercised: pruning-proof IBD.** Once the chain passes the pruning depth (10_800 blocks ≈
   30 h), a new node syncs via a pruning proof instead, and `calc_block_level_check_pow_layer0`
   runs **one inference per proof header** (`pruning_proof_m = 1000` per level). That path has not

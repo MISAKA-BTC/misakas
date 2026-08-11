@@ -16,8 +16,14 @@
 #   export MISAKA_PALW_OLLAMA_URL=http://127.0.0.1:11434   # (default; only set if changed)
 set -euo pipefail
 
-MODEL="${MODEL:-qwen3.5:2b}"
+MODEL="${MODEL:-misaka-palw-2b-f16}"
 URL="${URL:-http://127.0.0.1:11434}"
+# The v1 class model is CREATED from the canonical F16 GGUF, not pulled from the registry (the
+# registry Q8_0 blob was measured non-portable across ISAs). Place the file at $GGUF first —
+# distribution is out-of-band (rsync from the release host) — and this script verifies its sha
+# and creates the model. `MODEL=qwen3.5:2b` style registry pulls remain supported for probes.
+GGUF="${GGUF:-/tmp/qwen35-2b-f16.gguf}"
+GGUF_SHA_PIN="575eddc35774ca9ea250541bb7ba4c639e2502941ea6826b52208483b0a42788"
 
 if ! command -v ollama >/dev/null 2>&1; then
   echo "== installing Ollama =="
@@ -33,8 +39,18 @@ fi
 for _ in $(seq 1 30); do curl -s "$URL/api/version" >/dev/null && break; sleep 1; done
 echo "== ollama: $(curl -s "$URL/api/version")"
 
-echo "== pulling $MODEL =="
-ollama pull "$MODEL"
+if [ "$MODEL" = "misaka-palw-2b-f16" ]; then
+  echo "== creating $MODEL from $GGUF =="
+  [ -f "$GGUF" ] || { echo "no GGUF at $GGUF — rsync the canonical F16 file here first" >&2; exit 1; }
+  SHA=$(sha256sum "$GGUF" | cut -d" " -f1)
+  [ "$SHA" = "$GGUF_SHA_PIN" ] || { echo "GGUF sha $SHA != pinned $GGUF_SHA_PIN — refusing" >&2; exit 1; }
+  printf 'FROM %s
+' "$GGUF" > /tmp/Modelfile.palw-f16
+  ollama create "$MODEL" -f /tmp/Modelfile.palw-f16
+else
+  echo "== pulling $MODEL =="
+  ollama pull "$MODEL"
+fi
 DIGEST=$(curl -s "$URL/api/show" -d "{\"model\":\"$MODEL\"}" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
