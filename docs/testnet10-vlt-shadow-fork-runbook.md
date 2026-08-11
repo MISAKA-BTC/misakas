@@ -99,6 +99,19 @@ stall the base ledger, which is why shadow may proceed without them.
       MISAKA-PALW-CPU-CALIBRATION-v1 arch=arm64 os=Darwin class=8825d03e4da7faa1 runtime=f561dd30b7b69d31 cu=414 output=a78c75a364c074799261b9f2776639c4 trace=f96abaeee120a3e5f5f444528d4681ae
       ```
 
+      **Static finding 2026-08-11 — the calibration is not a formality.** Disassembling the
+      aarch64 CPU worker shows 1040 `sdot` and 4 `udot` instructions: the ARMv8.2 **dotprod**
+      extension, not baseline ARMv8-A. So `GGML_NATIVE=OFF` did not reduce this build to the
+      baseline ISA — it reduced it to the toolchain's default target, which assumes dotprod.
+      Two consequences the calibration must settle:
+      * a fleet machine WITHOUT dotprod cannot run this binary at all (SIGILL), and
+      * if ggml selects between dotprod and non-dotprod kernels at RUNTIME, one binary takes
+        different arithmetic paths on different machines — and the class is over-claiming in
+        exactly the way the single portable tag was, one level down.
+      Check `ggml_cpu_has_dotprod`-style runtime dispatch in the pinned tree before scheduling
+      the fence, and if it dispatches, pin the feature set into `CPU_BUILD_PROFILE` and split
+      the class the way the architectures were split. This is what the second machine is FOR.
+
       An `x86_64` line is EXPECTED to differ — different class, different SIMD kernels — so the
       x86 fleet calibrates against another x86 machine, not against this one. Locally verified as
       invariant to the main cross-machine variable a fixed-arch build still has: identical output
