@@ -40,7 +40,10 @@ use sha2::Digest;
 // ---------------------------------------------------------------------------------------------
 const N_CTX: i32 = 4096;
 const N_BATCH: i32 = 512;
-const N_THREADS: i32 = 4;
+const N_THREADS: i32 = qwen35_pins::CPU_THREADS;
+#[cfg(misaka_palw_cpu)]
+const SHAPE_STRING: &str = "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=none/greedy-argmax-first-index/v1";
+#[cfg(not(misaka_palw_cpu))]
 const SHAPE_STRING: &str = "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/v1";
 const CU_RULESET: &str = "cu = prefill + 8*decode";
 const TRACE_SCHEME: &str = "full-logits-per-decode-call/keyed-blake2b-512/v1";
@@ -143,17 +146,29 @@ fn pinned_model_path() -> PathBuf {
 // entry from — one source of truth, so drift is a compile error, not a refutation).
 // ---------------------------------------------------------------------------------------------
 
+/// The build profile this binary actually IS. Selected by the same cfg `build.rs` uses to
+/// compile the shim, so the identity a node reports cannot drift from the kernels it runs — the
+/// one failure that would make an honest worker refute honest peers.
+#[cfg(misaka_palw_cpu)]
+const BUILD_PROFILE: &str = qwen35_pins::CPU_BUILD_PROFILE;
+#[cfg(not(misaka_palw_cpu))]
+const BUILD_PROFILE: &str = qwen35_pins::METAL_BUILD_PROFILE;
+#[cfg(misaka_palw_cpu)]
+const RUNTIME_CLASS: &str = qwen35_pins::CPU_RUNTIME_CLASS;
+#[cfg(not(misaka_palw_cpu))]
+const RUNTIME_CLASS: &str = qwen35_pins::METAL_RUNTIME_CLASS;
+
 fn runtime_manifest_hash() -> Hash64 {
     derive_runtime_hash(
         qwen35_pins::LLAMA_COMMIT,
         qwen35_pins::LLAMA_PATCH_SHA256,
         qwen35_pins::LLAMA_BUILD_NUMBER,
-        qwen35_pins::METAL_BUILD_PROFILE,
+        BUILD_PROFILE,
     )
 }
 
 fn runtime_class_id() -> Hash64 {
-    derive_runtime_class_id(qwen35_pins::METAL_RUNTIME_CLASS)
+    derive_runtime_class_id(RUNTIME_CLASS)
 }
 
 fn model_profile_id() -> Hash64 {

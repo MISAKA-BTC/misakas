@@ -13,7 +13,7 @@ One release moves **both** of these, together, for `TESTNET_DNS_PARAMS`:
 | knob | from | to |
 |---|---|---|
 | `vlt.vlt_shadow_activation_daa_score` | `u64::MAX` | `H` (scheduled) |
-| `vlt.model_cost_table` | `EMPTY` | `[palw_qwen36_metal_entry, palw_qwen35_2b_metal_entry]` |
+| `vlt.model_cost_table` | `EMPTY` | `ModelCostTable::palw_metal_registered()` — the 35B Metal, 2B Metal and 2B **CPU** entries |
 
 They ship together because separately each is pointless or misleading: a fence with no
 registered model runs an overlay in which every job mints zero; a table with no fence changes
@@ -31,65 +31,34 @@ fork's blast radius** — that is the entire point of taking shadow first. What 
 So it is a true hard fork — old builds reject the first block whose coinbase pays an audit fee
 — with compute-overlay-sized consequences and finality-sized none.
 
-## BLOCKERS from the 2026-08-11 audit — the fence may not be scheduled until these close
+## The 2026-08-11 audit — all 8 criticals are closed in code
 
 An external multi-agent audit (89 surviving findings, 8 critical) landed after this runbook was
-first written. Three of its P0s are fixed (`dca5f94` bond-split weight inflation + the
-capability-staging deadlock, `1a7838d` the unverified pruning-point overlay import). **Two
-remain, both in the same class, and both are consensus rules that go live the moment the shadow
-fence opens:**
+first written. Every critical is now fixed on this branch:
 
-1. **Forged slashing evidence via the mergeset.** `check_slashing_evidence_genuine`,
-   `check_precommit_evidence_genuine` and `check_compute_challenge_genuine` evaluate the block's
-   OWN body (`block_transactions_store`), while `dns_bond_mutations_from_acceptance` derives
-   `BondMutation::Slash` from the whole ACCEPTED set. Evidence riding in a merge-blue block is
-   therefore never signature-checked and still burns a bond. The three `Slash` arms in
-   `bond_mutations_from_accepted_txs` say in comments that the block rule already proved the
-   evidence — true only for own-body evidence.
-   **Fix design (worked out 2026-08-11; the naive version corrupts the bond store).**
-   H-05 closed the identical gap for unbond requests by splitting the check: the signature half
-   view-free at derivation, the owner binding in `apply`/`revert` where the record is. Evidence
-   cannot copy that split as-is — `StakeAttestation` carries a `validator_id`, not the key, so
-   the signature half needs the bond record too.
+| finding | fix |
+|---|---|
+| bond splitting multiplied voting weight | `dca5f94` — cap applies once to the validator's aggregate bond |
+| capability staging deadlocked the virtual processor | `dca5f94` — derive before taking the write guard |
+| peer overlay snapshot written unverified into live consensus | `1a7838d` — verified against a child header first |
+| collateral withdrawable through the mergeset | `58592d4` — skip active at genesis on devnet/simnet |
+| forged evidence slashing through the mergeset | `9685e0b` — acceptance-time SKIP, symmetric by DAA-monotonicity |
+| adjudication read the live bond store | `a0775de` — reads the caller's chain view |
+| committee drawn from this node's committed store | `c43100d` — union of store and walk |
+| capability backfill sweep reads the live store | not a defect — sound by DAA-monotonicity, commented in place |
 
-   The tempting move is to hand `dns_bond_mutations_for_chain_block` the `ActiveBondView` the
-   caller is already walking and drop non-genuine `Slash` mutations there. **That is a store
-   corruption, not a fix.** The walk's view is as-of the block's PARENT while applying and
-   as-of AFTER the block while reverting, and `slashing_evidence_genuine` reads
-   `effective_bond_status(bond, target_daa)`. A bond slashed by evidence in block B is Active in
-   the apply-direction view (mutation kept, stamp written) and Slashed in the revert-direction
-   view (mutation dropped, stamp never undone) — an asymmetric filter, which is exactly the
-   failure `dns_bond_mutations_from_txs`' own doc warns about.
+**The one thing left before `H` can be chosen is a scheduling decision, not a fix.**
+`bond_spend_gate_mergeset_activation_daa_score` is 0 on devnet/simnet and still `u64::MAX` on
+mainnet+testnet; it must move in the SAME release as the shadow fence, because that fence is
+what turns on challenge slashing and slashing an unbacked bond is theatre. Put it in the release
+diff below.
 
-   So the verification must run against a view that is a deterministic function of the BLOCK,
-   identical in both directions — the same `selected_parent_bond_view` the block-validity rule
-   already uses. Two workable shapes:
-   * derive the selected-parent view per chain block inside the mutation derivation (correct,
-     costs a bond-view walk per block — measure before choosing), or
-   * carry the evidence on `BondMutation::Slash` and verify inside `apply_bond_stamp`, which
-     holds the record itself; `revert_bond_stamp` needs no check because it only undoes a stamp
-     whose DAA matches, so a refused apply is inert on revert **by construction**. This keeps
-     the check where both directions provably meet, at the cost of a heavier mutation value
-     (ML-DSA-87 signatures are 4627 bytes each).
-
-   The second shape is the one to build: it is the H-05 pattern with the binding moved one field
-   further, and its symmetry is structural rather than argued.
-2. **Bond collateral is withdrawable through the mergeset.**
-   `bond_spend_gate_mergeset_activation_daa_score` is `u64::MAX` on every preset, so only the
-   own-body spend gate runs and a bond's locked output can be spent from a merge-blue block
-   while the bond still reads Active. Slashing then has nothing behind it — which is the
-   assumption the whole `λ·B_i` cap rests on.
-
-Both must be closed **in the same release as the shadow fence**: the audit fee and challenge
-slashing are exactly what that fence turns on, and #1 lets an attacker burn any bond the moment
-it does. Until then this runbook's `H` stays unset.
-
-Also outstanding from the audit, before the WEIGHT fork (step 4) rather than shadow: the
-`ReplayProof` self-consistency gap (a refuting verdict costs no compute), committee-sortition
-grinding (no consensus cap on live commitments), and the determinism class being coarser than
-the runtime's actual bit-identity guarantee (M1 vs M4 under one `apple-metal-arm64` tag —
-honest verifiers would refute honest executors on a mixed fleet). The last one interacts
-directly with the hardware-class precondition below.
+Still outstanding before the WEIGHT fork (step 4), not before shadow: the `ReplayProof`
+self-consistency gap (a refuting verdict costs no compute, and a later committee member can copy
+an earlier proof — so three confirmations are not yet three independent checks), and
+committee-sortition grinding (no consensus cap on live commitments per validator). Both are
+weight-fork blockers because both are ways to influence what the weight is made of; neither can
+stall the base ledger, which is why shadow may proceed without them.
 
 ## Preconditions (all currently satisfied except the fleet audit)
 
@@ -104,11 +73,90 @@ directly with the hardware-class precondition below.
    classes. Compute participation needs ≥ 1 executor + 3 same-class verifiers **per class**, or
    every certificate stalls below `min_verifier_confirmations` and mints nothing (safe, but a
    shadow that measures nothing defers step 4 indefinitely). Options, in order of preference:
-   a. count ≥ 4 Apple-Silicon validators into the fleet (M-series minis are the cheap path);
-   b. add a pinned **Linux/CPU deterministic profile** (fixed threads, `GGML_NATIVE=OFF`,
-      same worker contract — a new `ModelCostEntry` + class, its own calibration run);
+   a. **BUILT (2026-08-11): the portable CPU profile.** `qwen35_pins::CPU_BUILD_PROFILE` /
+      `CPU_RUNTIME_CLASS` + `palw_qwen35_2b_cpu_entry()`, registered alongside the two Metal
+      entries. The worker selects the backend at BUILD time (`MISAKA_PALW_CPU=1` against a
+      llama.cpp built `-DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF`) and reports the
+      matching identity from the same cfg, so a manifest hash cannot describe a binary that is
+      not the one running. Measured on Apple Silicon: 1.7 s per 64-token job (faster than the
+      Metal path at this size), and byte-identical across rerun, `verify` mode and five
+      concurrent replicas. **This is the profile a Linux fleet runs.**
+
+      **Calibration — the last unchecked box, and it is one command per machine.**
+      `scripts/misaka-palw-cpu-calibrate.sh` runs a fixed job three times (once as `self-job`,
+      twice as `verify`, the mode a committee actually uses), refuses a machine that cannot
+      reproduce its own result — so a cross-machine mismatch can never be blamed on the class by
+      a host that was simply broken — and prints one copy-pasteable line. Run it on every
+      candidate fleet machine; identical lines on two machines of the SAME architecture calibrate
+      that architecture's class. A difference means the class is not real on that hardware and
+      the fence must not be scheduled for it: an executor and its committee would refute each
+      other while both were honest.
+
+      Reference line from the development machine (Apple M4 Pro, 12 cores), for the aarch64
+      class. A second aarch64 machine matching this calibrates it:
+
+      ```
+      MISAKA-PALW-CPU-CALIBRATION-v1 arch=arm64 os=Darwin class=8825d03e4da7faa1 runtime=f561dd30b7b69d31 cu=414 output=a78c75a364c074799261b9f2776639c4 trace=f96abaeee120a3e5f5f444528d4681ae
+      ```
+
+      An `x86_64` line is EXPECTED to differ — different class, different SIMD kernels — so the
+      x86 fleet calibrates against another x86 machine, not against this one. Locally verified as
+      invariant to the main cross-machine variable a fixed-arch build still has: identical output
+      under 12-way CPU contention, so scheduling and core availability do not enter the result.
+   b. count ≥ 4 Apple-Silicon validators into the fleet (only if the fleet is Apple);
    c. run shadow with zero compute (legal; proves only the fork mechanics).
-   The choice is step 4's hardware-class decision; (a) unblocks measurement soonest.
+
+   **Why the class split is not optional — now measured, not assumed.** Running the identical
+   job under the CPU and Metal profiles produced the SAME `output_commitment` (the decoded
+   tokens agree) and a DIFFERENT `gemm_trace_root` (the logits differ in the low bits). A
+   cross-class verifier would therefore reproduce the answer and still refute the receipt. That
+   is the honest-refutes-honest failure, demonstrated; `select_verifiers` drawing only within a
+   class is what prevents it.
+
+## The flag day is BIGGER than this fence — measured against the live network 2026-08-11
+
+A node built from this branch was pointed at the live t10 fleet (peers resolved from the seeder
+records; no credentials involved). Genesis matched — so this is the same network — and the
+handshake was then rejected on **consensus params**:
+
+```
+local: 5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571   (this branch's build)
+remote: 0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3  (the live fleet)
+```
+
+`0e3914b0…` is the testnet fingerprint this repository pinned **before** today's merges. So the
+fleet is running the pre-token-program ruleset, and the branch has moved past it at least twice
+already — PR #62 appended `TokenParams` to `DnsParams` (0x30/0x31 admission), and the concurrent
+PoW work moved it again. (The branch's own binary reported `5fabb683…` rather than the currently
+pinned `1f79bd30…` because it was built before the last params edit; rebuild before the cut.)
+
+**Consequence for the schedule, and it is the useful kind of surprise:** the shadow fork cannot
+be shipped as "one constant" on top of what the fleet runs today. The release that carries
+`TESTNET_VLT_SHADOW_FORK_DAA_SCORE` also carries the token program's admission rules and the PoW
+changes — one flag day, three rule changes, and every one of them rejects an un-updated peer at
+the handshake rather than silently forking it (which is the good failure). Plan the fleet update
+as an A2-pattern rollout of the whole branch, not of a fence.
+
+Verify before cutting: build the release binary, point it at a fleet peer with `--addpeer`, and
+confirm the params-mismatch line NAMES the fingerprint the release pins. That is a five-minute
+check that catches a stale build, and it is how these two numbers were obtained.
+
+## `H` is computed: **30_200_000** — and one layering fix stands between it and being set
+
+Measured 2026-08-11: the live t10 virtual DAA was **29_981_862** (`/info/blockdag` on the public
+explorer, and the same network confirmed by a P2P handshake). t10 runs at 1 bps, so
+`30_200_000` is ~2.5 days of margin — twice the end-to-end duration of the 2026-08-10 flag day.
+**Recompute if the release slips past ~2026-08-13**; a fence that arrives with the fleet
+half-updated forks the un-updated half at the first audit-fee coinbase.
+
+Setting it today fails `shipped_presets_are_either_dormant_or_fully_forkable`, and the guard is
+right: *"fences moved with an empty model table — every job would mint zero and the fork would be
+a no-op"*. The table cannot live in a `const` preset (keyed BLAKE2b digests), and installing it
+in `kaspad`'s `apply_to_config` covers only consumers that go through kaspad's argument path —
+simpa, the integration harnesses and any embedder would get a scheduled fence over an empty
+table. **Move the install into `Params`/`Config` materialization in consensus-core** (a
+`OnceLock`-backed accessor beside the preset), then set the constant, then re-pin the testnet
+fingerprint this legitimately moves. That is the last code change before the cut.
 
 ## Choosing `H`
 
@@ -125,9 +173,11 @@ per-host version table is the go/no-go gate.
 vlt: VltParams {
     vlt_shadow_activation_daa_score: H,          // scheduled flag height
     vlt_activation_daa_score: u64::MAX,          // the vote does NOT move in this fork
-    model_cost_table: ModelCostTable::palw_metal_registered(), // both pinned Metal profiles
+    model_cost_table: ModelCostTable::palw_metal_registered(), // 35B Metal + 2B Metal + 2B CPU
     ..VltParams::INERT
 },
+// SAME release, not a later one — see the audit table above.
+bond_spend_gate_mergeset_activation_daa_score: H,
 ```
 
 `min_network_compute` stays at the production default through shadow: it gates **weight-fork

@@ -839,20 +839,44 @@ impl DerefMut for Params {
     }
 }
 
+/// Install the registered compute profiles into a preset that has SCHEDULED its VLT shadow fence
+/// (ADR-0024 step 3).
+///
+/// The table cannot live in the `const` preset: its entries are keyed BLAKE2b digests of the
+/// pinned artifact strings, which no `const fn` can produce. It therefore has to be attached
+/// where the preset is materialized — and it has to be attached HERE, at the `From` impls every
+/// consumer passes through, rather than in one binary's argument parsing. A node built on
+/// `kaspad`'s CLI is not the only thing that reads a preset: simpa, the integration harnesses and
+/// any embedder read them too, and a scheduled fence over an empty table is a coordinated hard
+/// fork in which every job normalizes to zero VLT — the one mistake
+/// `shipped_presets_are_either_dormant_or_fully_forkable` exists to make impossible.
+///
+/// A dormant preset (`u64::MAX`) is left untouched, so every shipped network is byte-identical to
+/// before this function existed.
+fn with_registered_models(mut params: Params) -> Params {
+    if let Some(dns) = params.dns_params.as_mut()
+        && dns.vlt.vlt_shadow_activation_daa_score != u64::MAX
+        && dns.vlt.model_cost_table.len == 0
+    {
+        dns.vlt.model_cost_table = crate::vlt::ModelCostTable::palw_metal_registered();
+    }
+    params
+}
+
 impl From<NetworkType> for Params {
     fn from(value: NetworkType) -> Self {
-        match value {
+        with_registered_models(match value {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => TESTNET_PARAMS,
             NetworkType::Devnet => DEVNET_PARAMS,
             NetworkType::Simnet => SIMNET_PARAMS,
-        }
+        })
     }
 }
 
 impl From<NetworkId> for Params {
     fn from(value: NetworkId) -> Self {
-        match value.network_type {
+        with_registered_models(match value.network_type {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
@@ -861,7 +885,7 @@ impl From<NetworkId> for Params {
             },
             NetworkType::Devnet => DEVNET_PARAMS,
             NetworkType::Simnet => SIMNET_PARAMS,
-        }
+        })
     }
 }
 
@@ -1339,6 +1363,47 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// arrives as ~3.7-MSK fragments. Lowering both to 10 KAS lets a tester mine for a few seconds
 /// and bond (the `bond` CLI aggregates several mature coinbase UTXOs — see `build_funded_stake_bond_tx_multi`).
 /// Mainnet keeps the 20M-KAS floors. None of these are genesis-block inputs.
+/// ADR-0024 step 3 (the VLT SHADOW fork) — the ONE constant a release cut has to choose.
+///
+/// `u64::MAX` means "not scheduled", which is the shipped state. Setting it to a DAA height picks
+/// up everything the fork needs at once, because the three fields below are derived from it
+/// rather than edited independently:
+///
+/// * `vlt.vlt_shadow_activation_daa_score` — the overlay starts crediting, drawing committees,
+///   paying the audit fee and slashing settled challenges;
+/// * `bond_spend_gate_mergeset_activation_daa_score` — the mergeset spend gate closes, so the
+///   collateral those slashes are aimed at can no longer be withdrawn out from under an Active
+///   bond (2026-08-11 audit P0; it MUST move with the fence, never after it);
+/// * `vlt.model_cost_table` — the registered profiles, without which every job mints zero and the
+///   fork would cost a hard fork to discover it did nothing.
+///
+/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX`: moving the VOTE
+/// is step 4, after the soak has measured what the weight is made of.
+///
+/// Choosing the height, the fleet-update procedure and the exit criteria are in
+/// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the
+/// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
+pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 30_200_000;
+
+// SCHEDULED 2026-08-11. Live tip measured at 29_981_862 (`/info/blockdag` on the public
+// explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
+// ~2.5 days — twice the end-to-end duration of the 2026-08-10 flag day, so an operator who starts
+// the rollout when this release lands still finishes with a day to spare.
+//
+// RE-CHECK BEFORE CUTTING. This number is only as good as the tip it was measured against: if the
+// release slips past ~2026-08-13 the margin is gone and H must be recomputed, because a fence
+// that arrives with the fleet half-updated forks the un-updated half at the first audit-fee
+// coinbase. `docs/testnet10-vlt-shadow-fork-runbook.md` has the procedure and the five-minute
+// staleness check.
+//
+// The model table rides along automatically: `with_registered_models` attaches the registered
+// profiles at every `From<NetworkType/NetworkId> for Params`, so a scheduled fence can never
+// reach a consumer over an empty table (which would be a coordinated hard fork crediting every
+// job zero — see `shipped_presets_are_either_dormant_or_fully_forkable`).
+//
+// The WEIGHT fence stays dormant. This release only starts the overlay running and policing;
+// moving the vote is step 4, after the soak has measured what the weight is made of.
+
 pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
@@ -1420,6 +1485,17 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
+    // ADR-0024 step 3, driven by the ONE release constant above. Both move together by
+    // construction: the fence turns on challenge slashing, and the spend gate is what keeps the
+    // collateral those slashes aim at from being withdrawn through the mergeset first
+    // (2026-08-11 audit P0). Shipped `u64::MAX` = not scheduled.
+    bond_spend_gate_mergeset_activation_daa_score: TESTNET_VLT_SHADOW_FORK_DAA_SCORE,
+    vlt: VltParams {
+        vlt_shadow_activation_daa_score: TESTNET_VLT_SHADOW_FORK_DAA_SCORE,
+        // The VOTE does not move in this fork — that is step 4, after the soak.
+        vlt_activation_daa_score: u64::MAX,
+        ..VltParams::INERT
+    },
     ..PRODUCTION_DNS_PARAMS
 };
 
@@ -1903,14 +1979,23 @@ mod consensus_params_id_tests {
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
             // Moved again by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
             // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
-            // see docs/testnet10-palw-rollout-runbook.md.
-            ("testnet", TESTNET_PARAMS, "32cbf80f4264dd1336b3d02664baf2595fbdf21d37fa6f83f324b241306ad158"),
+            // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
+            // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
+            // `d07cb673…` shadow-materialized) were both superseded by this merge.
+            ("testnet", TESTNET_PARAMS, "fe88c065fbadf119e5388f17770e1bfa8d1481449d291bf5ed2c66a1dfeaa6d8"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
-            let actual = params.consensus_params_id().to_string();
+            // MATERIALIZED, not the raw const. `with_registered_models` attaches the compute
+            // profiles to a preset that has scheduled its VLT shadow fence, and it runs at every
+            // `From<NetworkType/NetworkId> for Params` — so the const and the thing a node
+            // actually runs are different values, and only the second one is what peers compare
+            // at the handshake. Pinning the const would pin a number no node ever reports:
+            // caught live, where a correctly-built release announced `5fabb683…` while this test
+            // was green on `62e299b6…`.
+            let actual = Params::from(params.net).consensus_params_id().to_string();
             (actual != expected).then(|| format!("  {name}: pinned {expected}, got {actual}"))
         })
         .collect();

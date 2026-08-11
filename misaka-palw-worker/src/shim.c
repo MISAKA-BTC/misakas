@@ -44,9 +44,17 @@ shim_ctx * shim_open(const char * model_path, int32_t n_ctx, int32_t n_batch, in
     llama_backend_init();
 
     struct llama_model_params mp = llama_model_default_params();
+#ifdef MISAKA_PALW_CPU_ONLY
+    // CPU profile: NOTHING on a GPU. Not "prefer CPU" — zero offloaded layers, so the split
+    // point cannot become a hidden knob and the arithmetic is the portable ggml kernels', fixed
+    // by the source and the thread count. This is the profile a heterogeneous public fleet can
+    // audit within (see `qwen35_pins::CPU_RUNTIME_CLASS`).
+    mp.n_gpu_layers = 0;
+#else
     // All layers on Metal: the profile is a GPU profile ("apple-metal-arm64"); partial offload
     // would split the numerics between two backends and make the split point a hidden knob.
     mp.n_gpu_layers = 999;
+#endif
 
     struct llama_model * model = llama_model_load_from_file(model_path, mp);
     if (model == NULL) {
