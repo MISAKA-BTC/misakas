@@ -141,6 +141,23 @@ Verify before cutting: build the release binary, point it at a fleet peer with `
 confirm the params-mismatch line NAMES the fingerprint the release pins. That is a five-minute
 check that catches a stale build, and it is how these two numbers were obtained.
 
+## `H` is computed: **30_200_000** — and one layering fix stands between it and being set
+
+Measured 2026-08-11: the live t10 virtual DAA was **29_981_862** (`/info/blockdag` on the public
+explorer, and the same network confirmed by a P2P handshake). t10 runs at 1 bps, so
+`30_200_000` is ~2.5 days of margin — twice the end-to-end duration of the 2026-08-10 flag day.
+**Recompute if the release slips past ~2026-08-13**; a fence that arrives with the fleet
+half-updated forks the un-updated half at the first audit-fee coinbase.
+
+Setting it today fails `shipped_presets_are_either_dormant_or_fully_forkable`, and the guard is
+right: *"fences moved with an empty model table — every job would mint zero and the fork would be
+a no-op"*. The table cannot live in a `const` preset (keyed BLAKE2b digests), and installing it
+in `kaspad`'s `apply_to_config` covers only consumers that go through kaspad's argument path —
+simpa, the integration harnesses and any embedder would get a scheduled fence over an empty
+table. **Move the install into `Params`/`Config` materialization in consensus-core** (a
+`OnceLock`-backed accessor beside the preset), then set the constant, then re-pin the testnet
+fingerprint this legitimately moves. That is the last code change before the cut.
+
 ## Choosing `H`
 
 Same A2 pattern as the 2026-08-10 flag day: `H` ≥ current tip + (fleet update window × safety

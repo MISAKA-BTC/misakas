@@ -1354,6 +1354,34 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
 pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = u64::MAX;
 
+// READY TO SCHEDULE AT 30_200_000 — measured, and blocked on one layering fix.
+//
+// The height is computed: live tip 29_981_862 on 2026-08-11 (`/info/blockdag` on the public
+// explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
+// ~2.5 days — twice the end-to-end duration of the 2026-08-10 flag day, so an operator who starts
+// the rollout when this release lands still finishes with a day to spare.
+//
+// RE-CHECK BEFORE CUTTING. This number is only as good as the tip it was measured against: if the
+// release slips past ~2026-08-13 the margin is gone and H must be recomputed, because a fence
+// that arrives with the fleet half-updated forks the un-updated half at the first audit-fee
+// coinbase. `docs/testnet10-vlt-shadow-fork-runbook.md` has the procedure and the five-minute
+// staleness check.
+//
+// WHY IT IS NOT SET YET. Setting it fails
+// `shipped_presets_are_either_dormant_or_fully_forkable` with exactly the right complaint:
+// "fences moved with an empty model table — every job would mint zero and the fork would be a
+// no-op". The table cannot live in a `const` preset (its entries are keyed BLAKE2b digests of
+// the pinned artifact strings), and installing it in `kaspad`'s `apply_to_config` — as this
+// branch currently does — only covers consumers that go through kaspad's argument path. simpa,
+// the integration harnesses and any other embedder would get a SCHEDULED fence over an EMPTY
+// table, which is the precise failure the guard exists to prevent.
+//
+// The fix is to install it where every consumer passes: `Params`/`Config` materialization in
+// consensus-core (a `OnceLock`-backed accessor beside the preset, so the digests are computed
+// once and the preset stays `const`). Then set the constant above to 30_200_000 — recomputing it
+// first if the release has slipped — and update the testnet fingerprint pin, which this change
+// legitimately moves.
+
 pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
