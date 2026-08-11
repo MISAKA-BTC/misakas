@@ -41,9 +41,9 @@
 //! delay above that burial depth.
 
 use blake2b_simd::Params as Blake2bParams;
-use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
+use std::collections::BTreeMap;
 
 use crate::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
 use crate::vlt::VltEpochCredits;

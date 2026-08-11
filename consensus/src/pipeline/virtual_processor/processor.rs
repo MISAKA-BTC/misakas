@@ -95,12 +95,6 @@ use kaspa_consensus_core::{
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
-    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
-    token::{
-        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement,
-        TokenSupply, apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload,
-        emission_epoch_budget, emission_rewards_v2, token_burn_message, token_transfer_message,
-    },
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
@@ -108,7 +102,7 @@ use kaspa_consensus_core::{
     token::{
         TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement, TokenSupply,
         apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload, emission_epoch_budget,
-        emission_rewards, token_burn_message, token_transfer_message,
+        emission_rewards_v2, token_burn_message, token_transfer_message,
     },
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
     utxo::{
@@ -4655,8 +4649,7 @@ impl VirtualStateProcessor {
             // pre-fence epoch's row keeps an empty audit vec, so settlement stays v0.1-shaped
             // for exactly the epochs the sompi fee already paid.
             if dns_params.tkn.active_at(anchor.anchor_daa_score) {
-                row = row
-                    .with_audit(snapshot.audit().iter().filter_map(|(v, per_epoch)| per_epoch.get(&epoch).map(|x| (*v, *x))));
+                row = row.with_audit(snapshot.audit().iter().filter_map(|(v, per_epoch)| per_epoch.get(&epoch).map(|x| (*v, *x))));
             }
             self.vlt_credit_store.set_batch(batch, epoch, row).unwrap();
         }
@@ -4910,8 +4903,12 @@ impl VirtualStateProcessor {
                 }
                 Err(e) => panic!("settle_token_emission: vlt_credit_store.get({next}) failed: {e}"),
             };
-            let settlement =
-                emission_rewards_v2(emission_epoch_budget(tkn, next), &credits.credits, &credits.audit, tkn.emission_min_network_compute);
+            let settlement = emission_rewards_v2(
+                emission_epoch_budget(tkn, next),
+                &credits.credits,
+                &credits.audit,
+                tkn.emission_min_network_compute,
+            );
             if live {
                 for reward in settlement.rewards.iter() {
                     let mut account = self.staged_token_account(accounts, TOK_ASSET_ID, reward.owner);

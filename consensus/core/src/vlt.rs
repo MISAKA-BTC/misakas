@@ -1850,7 +1850,8 @@ pub struct VltEpochSnapshot {
     /// agreeing byte-for-byte on the table itself — which is exactly what the root has to mean.
     /// It is a local licence to act, not a consensus value: a node with an incomplete table refuses
     /// to cache it and refuses to activate on it, and simply waits until it can do better.
-    resolution_complete: bool,    /// Audit-emission v0.2: `verifier_id → (epoch → X_i^audit)` — µRTE judged by counted
+    resolution_complete: bool,
+    /// Audit-emission v0.2: `verifier_id → (epoch → X_i^audit)` — µRTE judged by counted
     /// verdicts, aggregated under the SAME pin and survivorship as `credits` (refuted
     /// certificates keep paying their committees — design §2.1). Deliberately absent from
     /// [`Self::commitment_root`]: the root is the §5 VOTING denominator a vote signs, and v0.2
