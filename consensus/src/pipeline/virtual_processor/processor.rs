@@ -2025,11 +2025,22 @@ impl VirtualStateProcessor {
         // status query, so any view holding the bond answers identically — see
         // `proved_slash_targets`. The store's current set is the cheapest such view, and it is
         // the same one on both the removed and added passes.
-        let evidence_view = self.initial_active_bond_view();
+        // The evidence view for the SKIP filter, ADVANCED across the path. A single pre-path view
+        // would judge block N's evidence against a bond set that predates every block of the
+        // batch, so a bond created earlier in the same virtual advance would be unresolvable and
+        // its genuine equivocation silently unslashed — the false-negative half of the same
+        // IBD/live divergence the capability strict-prefix loop closes. Removed blocks are walked
+        // newest-first against the same starting view: their mutations were derived under it when
+        // they were applied, so re-deriving under it is what makes revert the exact inverse.
+        let mut evidence_view = self.initial_active_bond_view();
         let removed_muts: Vec<Vec<BondMutation>> =
             chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
-        let added_muts: Vec<Vec<BondMutation>> =
-            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
+        let mut added_muts: Vec<Vec<BondMutation>> = Vec::with_capacity(chain_path.added.len());
+        for h in chain_path.added.iter().copied() {
+            let muts = self.dns_bond_mutations_for_chain_block(h, &evidence_view);
+            evidence_view.apply(&muts);
+            added_muts.push(muts);
+        }
 
         let mut store = self.stake_bonds_store.write();
 
@@ -2130,9 +2141,15 @@ impl VirtualStateProcessor {
         // its window under an active shadow fence — no thread visibly holding anything, the chain
         // simply stops. (The apply loop below still folds them in block by block: the ORDER is
         // what the strict-prefix rule needs, not the moment of derivation.)
-        let evidence_view = self.initial_active_bond_view();
-        let added_muts: Vec<Vec<BondMutation>> =
-            chain_path.added.iter().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
+        // Advanced across the path for the same reason `stage_dns_bond_mutations` advances its
+        // copy: block N's evidence must be judged against the bonds blocks 0..N created.
+        let mut evidence_view = self.initial_active_bond_view();
+        let mut added_muts: Vec<Vec<BondMutation>> = Vec::with_capacity(chain_path.added.len());
+        for h in chain_path.added.iter().copied() {
+            let muts = self.dns_bond_mutations_for_chain_block(h, &evidence_view);
+            evidence_view.apply(&muts);
+            added_muts.push(muts);
+        }
 
         let mut store = self.compute_capability_store.write();
 
@@ -2145,6 +2162,15 @@ impl VirtualStateProcessor {
         // as-of-block only for already-durable blocks (see above), and every block of this path
         // is the apply loop's job anyway.
         if !store.is_backfilled() {
+            // The sweep judges each historical block's declarations at THAT block's DAA, and it
+            // never walks above the pre-path tip — so the live `bonds` above is the right input
+            // even though its stamps are current: `effective_bond_status` is strictly DAA-monotone
+            // (a stamp at `s` only answers differently for `pov >= s`), and bond records are never
+            // deleted, only stamped. A bond slashed after a block was produced is therefore still
+            // Active at that block's score, which is what a node present at the time saw. Flagged
+            // by the 2026-08-11 audit as a live-store read; it is one, and it is sound for this
+            // query — do not "fix" it into an as-of view that would answer the same and cost a
+            // walk per historical block.
             let sweep_tip = chain_path
                 .added
                 .first()
@@ -4426,11 +4452,28 @@ impl VirtualStateProcessor {
         // under evaluation does not contain — one branch borrowing another's verifiers, which is a
         // consensus split rather than a slow path. `accepted_daa_score <= pov` does not substitute:
         // a DAA score is a number like a clock, and two branches can carry blocks at the same one.
+        //
+        // UNION of the store and this walk (2026-08-11 audit, IBD/live divergence class). The
+        // store is written by `stage_compute_capabilities` at commit time, so during a virtual
+        // advance it holds only what was committed BEFORE this batch. A node that lived the
+        // chain commits every block separately and therefore sees block N-1's declarations while
+        // resolving block N; a replayer batches many blocks and sees none of them — a different
+        // committee, hence a different verified/unverified verdict, hence divergent credit and
+        // audit-fee outputs. The walk covers exactly the segment the store is missing, and the
+        // ancestry filter below is what keeps the union honest: a declaration from a branch this
+        // beacon does not contain is dropped whichever source it came from.
+        // Keyed on (declaration block, validator, bond, profile): one declaration is one row, and
+        // the same declaration reached from both sources must collapse to one candidate.
+        let mut seen_caps: HashSet<(BlockHash, Hash64, TransactionOutpoint, Hash64, Hash64)> = HashSet::new();
         let stored_capabilities: Vec<ComputeCapabilityRecord> = self
             .compute_capability_store
             .read()
             .all()
             .into_iter()
+            .chain(walk.capabilities.iter().cloned())
+            .filter(|r| {
+                seen_caps.insert((r.declaration_block, r.validator_id, r.bond_outpoint, r.model_weights_hash, r.runtime_hash))
+            })
             .filter(|r| {
                 r.declaration_block == beacon_anchor.anchor_hash
                     || self.reachability_service.is_chain_ancestor_of(r.declaration_block, beacon_anchor.anchor_hash)
