@@ -172,6 +172,25 @@ pub const POW_L1_PALW_OLLAMA_V1_DOMAIN: &[u8] = b"misaka-l1-palw-ollama-v1";
 /// constant of the v1 algorithm, exactly like [`POW_L1_PALW_N_PREDICT_V1`].
 pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 48;
 
+/// `options.num_gpu` for every PoW inference: **0 — compute on the CPU backend, always.**
+///
+/// Measured 2026-08-11, and the reason this is a consensus constant rather than a host choice:
+/// the same model, same prompt, same options produced DIFFERENT greedy continuations on Ollama's
+/// Metal (GPU) backend and its CPU backend. GPU-vs-CPU is therefore a determinism-class
+/// dimension, and unlike the Ollama version or the host architecture it is one the protocol
+/// *controls* — so it is pinned rather than left to whatever hardware a host happens to have.
+/// A fleet mixing GPU-equipped and CPU-only hosts would otherwise split silently, and a
+/// GPU-equipped developer box would "verify" a configuration the CPU-only fleet never runs.
+///
+/// The cost is deliberate: PoW cannot exploit a GPU. That is the same trade the VLT portable CPU
+/// profile makes — a class a heterogeneous fleet can actually audit within beats a faster class
+/// only some hosts can join.
+///
+/// Thread count is NOT pinned: measured invariant across `num_thread` 1/4/8 on the CPU backend
+/// (ggml sums each dot product within one thread's row chunk, so the reduction order does not
+/// move with the split). Leaving it host-chosen lets a bigger VPS use its cores.
+pub const POW_L1_PALW_OLLAMA_NUM_GPU_V1: u32 = 0;
+
 /// The **pinned model blob** for `algo_id = 5`, as Ollama reports it (`GET /api/tags`).
 ///
 /// The weights ARE the algorithm here: a different blob produces different greedy continuations,

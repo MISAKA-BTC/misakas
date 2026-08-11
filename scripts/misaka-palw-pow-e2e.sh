@@ -117,8 +117,13 @@ count_accepted() {
        /Unorphaned [0-9]+ block/{for(i=1;i<=NF;i++) if($i=="Unorphaned"){n+=$(i+1); break}}
        END{print n+0}' "$1" 2>/dev/null || echo 0
 }
+# Wait budget: the fixture is instant, but a real runtime spends seconds per header AND, in this
+# single-host harness, the miner and both nodes queue on ONE Ollama server (a fleet host runs its
+# own). Scale with the block count instead of a flat minute.
+WAIT_TICKS=30
+[ "$NET" = "testnet-10" ] || [ "$PALW_REAL" = "1" ] && WAIT_TICKS=$((30 + BLOCKS * 15))
 synced=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 $WAIT_TICKS); do
   accepted=$(count_accepted "$WORK_DIR/node-1/kaspad.log")
   if [ "${accepted:-0}" -ge "$BLOCKS" ]; then synced=1; break; fi
   sleep 2
@@ -156,7 +161,7 @@ if [ "$IBD" = "1" ]; then
     awk '/IBD: Processed [0-9]+ blocks/{for(i=1;i<=NF;i++) if($i=="Processed"){if($(i+1)>n)n=$(i+1); break}} END{print n+0}' "$1" 2>/dev/null || echo 0
   }
   ibd_ok=0
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 $((WAIT_TICKS * 2))); do
     total=$(( $(count_ibd "$WORK_DIR/node-3/kaspad.log") + $(count_accepted "$WORK_DIR/node-3/kaspad.log") ))
     if grep -q "completed successfully" "$WORK_DIR/node-3/kaspad.log" 2>/dev/null && [ "$total" -ge "$BLOCKS" ]; then
       ibd_ok=1; break

@@ -315,17 +315,27 @@ mod native {
     }
 
     fn run_ollama(url: &str, model: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
-        use kaspa_consensus_core::pow_layer0::{POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, palw_ollama_l1_tag_from_response};
+        use kaspa_consensus_core::pow_layer0::{
+            POW_L1_PALW_OLLAMA_NUM_GPU_V1, POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, palw_ollama_l1_tag_from_response,
+        };
         let prompt = kaspa_consensus_core::pow_layer0::palw_pow_prompt_v1(seed);
         // Consensus-frozen request shape: raw continuation (no chat template), greedy
-        // (temperature 0), the v1 decode budget, a fixed context size. Every option here is part
-        // of what the network's runtime class reproduces — do not make these configurable.
+        // (temperature 0), the v1 decode budget, a fixed context size, and the CPU backend
+        // (`num_gpu = 0` — GPU and CPU produce different continuations; see the constant's doc).
+        // Every option here is part of what the network's runtime class reproduces — do not make
+        // these configurable.
         let body = serde_json::json!({
             "model": model,
             "prompt": prompt,
             "raw": true,
             "stream": false,
-            "options": { "temperature": 0.0, "num_predict": POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, "num_ctx": 4096, "seed": 0 },
+            "options": {
+                "temperature": 0.0,
+                "num_predict": POW_L1_PALW_OLLAMA_NUM_PREDICT_V1,
+                "num_ctx": 4096,
+                "seed": 0,
+                "num_gpu": POW_L1_PALW_OLLAMA_NUM_GPU_V1,
+            },
         })
         .to_string();
         let started = Instant::now();

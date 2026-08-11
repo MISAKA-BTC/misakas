@@ -30,19 +30,30 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    and the **calibration line**. Every fleet host must print the same digest, and hosts of the
    same architecture must print identical calibration lines — different ⇒ STOP (version/blob
    skew; an executor would refute honest verifiers).
-2. **Determinism class = (Ollama version, model digest, architecture).** Greedy decoding is
+2. **The miner must run in the VERIFIERS' class — a GPU miner cannot feed a CPU-verifying fleet.**
+   Measured 2026-08-11 on one host, one model blob, one Ollama build: the Metal (GPU) backend and
+   the CPU backend produced **different greedy continuations** for the identical canonical PoW
+   request. Different continuation ⇒ different tag ⇒ the block a GPU miner solves fails PoW for
+   every CPU verifier, and vice versa. This is not a tuning knob; it is what "the inference IS the
+   proof" means.
+   The protocol therefore pins `num_gpu = 0` (`POW_L1_PALW_OLLAMA_NUM_GPU_V1`): every host — miner
+   and validator, GPU-equipped or not — computes on the CPU backend, so the GPU/CPU dimension
+   cannot split the network. Mining cannot exploit a GPU on this network, deliberately (the same
+   trade the VLT portable CPU profile makes).
+   Thread count is safe to leave host-chosen: measured invariant across `num_thread` 1/4/8.
+3. **Determinism class = (Ollama version, model digest, architecture).** Greedy decoding is
    reproducible within one class; ACROSS architectures (NEON vs AVX2 reduction order) it is not
    promised — the same arch-scoping the VLT CPU compute class documents. The public chain is
    therefore mined AND validated by the fleet's class (x86-64 Ubuntu). An arm64 machine (the
    M4 Pro dev box) forms its own class: fine for local E2E, not a validator of the public chain
    unless its calibration line happens to match — verify, never assume.
-3. **The model blob is PINNED IN CONSENSUS** (`POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1` =
+4. **The model blob is PINNED IN CONSENSUS** (`POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1` =
    `324d162be6ca…`, 2_741_192_820 bytes). kaspad verifies it against `GET /api/tags` at startup
    and the tag runner re-checks once per process, so a host serving a different blob **refuses to
    start** instead of silently forking (it would otherwise reject every honest block and have its
    own rejected). Re-pulling a model that upstream has re-published under the same tag changes the
    digest — if that happens, the pin (and the network) must be updated deliberately, not silently.
-4. **Environment for kaspad AND misaminer**:
+5. **Environment for kaspad AND misaminer**:
    ```
    export MISAKA_PALW_OLLAMA_MODEL=qwen3.5:2b        # the fleet's pinned ref — one value everywhere
    # export MISAKA_PALW_OLLAMA_URL=http://127.0.0.1:11434   # default; set only if changed
@@ -50,7 +61,7 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    kaspad checks at startup on PALW networks that the model env is set and the server is
    reachable, and exits with instructions otherwise — no first-header panic.
    `MISAKA_PALW_POW_FIXTURE=1` is refused outside devnet.
-5. **Tag semantics under Ollama** (ADR-0021 addendum): the API exposes no per-decode logits, so
+6. **Tag semantics under Ollama** (ADR-0021 addendum): the API exposes no per-decode logits, so
    the algo-5 tag commits to the greedy response bytes + token counts — weaker binding than the
    worker's `gemm_trace_root`, still model-work-priced. Devnet keeps the stronger algo-4 worker
    tag; a future Ollama fork exposing logits (or a logits-serving shim) can restore full-trace
@@ -99,6 +110,12 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 * **Verified**: solo mining (`misaminer`), independent per-header replay validation by peers, the
   fail-fast rails, and **from-genesis headers-first IBD** — all exercised end-to-end on t10 params
   with the real model.
+* **NOT exercised: cross-machine agreement.** Every "independent replay" so far was a separate
+  PROCESS on ONE host — same CPU, same Ollama build, same blob. The load-bearing assumption of the
+  whole design (two machines of one class agree byte-for-byte) has never been demonstrated,
+  because no second host was reachable. **This is the gate before any public launch**: run
+  `scripts/misaka-palw-ollama-setup.sh` on two fleet VPSes and compare the calibration lines. An
+  arm64 dev box is its own class — do NOT assume it matches the x86-64 fleet; measure it.
 * **NOT exercised: pruning-proof IBD.** Once the chain passes the pruning depth (10_800 blocks ≈
   30 h), a new node syncs via a pruning proof instead, and `calc_block_level_check_pow_layer0`
   runs **one inference per proof header** (`pruning_proof_m = 1000` per level). That path has not
@@ -117,8 +134,12 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
   host. Before the chain is months old, ship either the Open-then-Audit sampled-audit tier or
   trusted-checkpoint IBD (ADR-0021 consequences).
 * **Miners**: one attempt = one `/api/generate` call; Ollama keeps the model RESIDENT between
-  calls (its keep_alive default), so there is no per-attempt model-load cost — on VPS CPUs
-  expect ~5-15 s/attempt for prefill 70 + decode 48 at 2B-Q4. Size the fleet's miner count for
+  calls (its keep_alive default), so there is no per-attempt model-load cost. Measured on an
+  M4 Pro CPU backend: ~2-4.5 s per attempt; a VPS core will be slower (~5-15 s). At the genesis
+  max target (p ≈ ½ per attempt) one miner therefore lands a block every ~10-30 s — **the 10 s
+  cadence needs 2-3 miners**, and until it does the difficulty stays pinned at the floor (the DAA
+  cannot make a max target easier). On a testnet that is acceptable; it does mean PoW contributes
+  no difficulty margin at the floor and the VLT overlay is the real finality. Size the fleet's miner count for
   the 10 s target accordingly; the DAA absorbs whatever the real rate is.
 * **VLT**: bonding floors are unchanged (10 KAS); epochs are now 100 s wall-clock (10 blocks),
   and the 14-day evidence/unbonding windows are the same 14 days they always were.

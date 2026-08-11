@@ -46,13 +46,13 @@ echo "   Every fleet host MUST show this digest. A different digest = a differen
 echo "   node that refutes honest peers."
 
 # Determinism probe — the EXACT consensus request shape (raw, temperature 0, num_predict 48,
-# num_ctx 4096) over a fixed probe seed. Consensus constants live in
+# num_ctx 4096, num_gpu 0 = CPU backend) over a fixed probe seed. Consensus constants live in
 # consensus/core/src/pow_layer0.rs (POW_L1_PALW_OLLAMA_*); keep this block in sync with them.
 probe() {
   curl -s "$URL/api/generate" -d "{
     \"model\": \"$MODEL\", \"raw\": true, \"stream\": false,
     \"prompt\": \"MISAKA PALW proof-of-work v1\nseed: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\ncontinue:\",
-    \"options\": {\"temperature\": 0.0, \"num_predict\": 48, \"num_ctx\": 4096, \"seed\": 0}
+    \"options\": {\"temperature\": 0.0, \"num_predict\": 48, \"num_ctx\": 4096, \"seed\": 0, \"num_gpu\": 0}
   }"
 }
 R1=$(probe); R2=$(probe)
@@ -60,8 +60,8 @@ T1=$(printf '%s' "$R1" | python3 -c "import json,sys; d=json.load(sys.stdin); pr
 T2=$(printf '%s' "$R2" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([d['response'], d.get('prompt_eval_count'), d.get('eval_count')]))")
 if [ "$T1" != "$T2" ]; then
   echo "DETERMINISM PROBE FAILED: two identical requests produced different outputs." >&2
-  echo "Do NOT put this host on the network. Check for GPU offload (must be CPU-only on the VPS" >&2
-  echo "class), a background model update, or an Ollama version mismatch." >&2
+  echo "Do NOT put this host on the network. Check for a background model update or an Ollama" >&2
+  echo "version mismatch (GPU offload is already excluded — the request pins num_gpu = 0)." >&2
   exit 1
 fi
 CAL=$(printf '%s' "$T1" | python3 -c "
