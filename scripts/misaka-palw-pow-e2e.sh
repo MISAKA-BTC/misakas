@@ -38,10 +38,14 @@ case "$NET" in
   devnet) NET_ARGS=(--devnet) ;;
   testnet-10)
     NET_ARGS=(--testnet --netsuffix=10)
-    if [ "$PALW_REAL" != "1" ]; then
-      echo "NET=testnet-10 requires PALW_REAL=1 (public-network params refuse the fixture)" >&2
+    # t10 is the PALW-OLLAMA network (algo_id = 5): the runtime is a host-local Ollama server,
+    # and the public-network params refuse the fixture.
+    if [ -z "${MISAKA_PALW_OLLAMA_MODEL:-}" ]; then
+      echo "NET=testnet-10 requires MISAKA_PALW_OLLAMA_MODEL (e.g. qwen3.5:2b) with 'ollama serve' running" >&2
       exit 1
     fi
+    OLLAMA_URL="${MISAKA_PALW_OLLAMA_URL:-http://127.0.0.1:11434}"
+    curl -s "$OLLAMA_URL/api/version" >/dev/null || { echo "no Ollama server at $OLLAMA_URL" >&2; exit 1; }
     ;;
   *) echo "unknown NET=$NET (devnet | testnet-10)" >&2; exit 1 ;;
 esac
@@ -61,11 +65,14 @@ sleep 1
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 
-if [ "$PALW_REAL" = "1" ]; then
+if [ "$NET" = "testnet-10" ]; then
+  PALW_ENV=(MISAKA_PALW_OLLAMA_MODEL="$MISAKA_PALW_OLLAMA_MODEL" MISAKA_PALW_OLLAMA_URL="${MISAKA_PALW_OLLAMA_URL:-http://127.0.0.1:11434}")
+  echo "mode        : OLLAMA runtime (model $MISAKA_PALW_OLLAMA_MODEL, algo_id = 5)"
+elif [ "$PALW_REAL" = "1" ]; then
   : "${PALW_WORKER:?PALW_REAL=1 needs PALW_WORKER}"
   : "${MISAKA_PALW_GGUF:?PALW_REAL=1 needs MISAKA_PALW_GGUF}"
   PALW_ENV=(PALW_WORKER="$PALW_WORKER" MISAKA_PALW_GGUF="$MISAKA_PALW_GGUF")
-  echo "mode        : REAL model ($MISAKA_PALW_GGUF)"
+  echo "mode        : REAL model via worker ($MISAKA_PALW_GGUF, algo_id = 4)"
 else
   PALW_ENV=(MISAKA_PALW_POW_FIXTURE=1)
   echo "mode        : fixture (model-free)"
@@ -127,9 +134,9 @@ echo "verified    : node-1 accepted $accepted blocks over p2p (independent PALW 
 # Scrub the PALW variables explicitly: in real mode they live in THIS script's environment and
 # every child inherits them — without the scrub node-2 quietly validates via the inherited
 # worker and the probe tests nothing.
-start_node 2 -u PALW_WORKER -u MISAKA_PALW_GGUF -u MISAKA_PALW_POW_FIXTURE
+start_node 2 -u PALW_WORKER -u MISAKA_PALW_GGUF -u MISAKA_PALW_POW_FIXTURE -u MISAKA_PALW_OLLAMA_MODEL -u MISAKA_PALW_OLLAMA_URL
 sleep 25
-if grep -qE "PALW PoW validation cannot run|validates PALW \(algo_id = 4\)" "$WORK_DIR/node-2/kaspad.log" 2>/dev/null; then
+if grep -qE "PALW PoW validation cannot run|validates PALW \(algo_id = 4\)|validates PALW-Ollama \(algo_id = 5\)" "$WORK_DIR/node-2/kaspad.log" 2>/dev/null; then
   echo "verified    : node-2 (no worker, no fixture) hit the designed fail-fast (startup rail / validation panic)"
 elif kill -0 "$(cat "$WORK_DIR/node-2.pid")" 2>/dev/null \
     && [ "$(count_accepted "$WORK_DIR/node-2/kaspad.log")" -ge 1 ]; then
@@ -175,4 +182,4 @@ grep "mined block" "$WORK_DIR/miner.log" | tail -5 || true
 for pid_file in "$WORK_DIR"/node-*.pid; do
   kill "$(cat "$pid_file")" 2>/dev/null || true
 done
-echo "PASS: $BLOCKS PALW (algo_id=4) blocks mined, independently replay-validated, and synced."
+echo "PASS: $BLOCKS PALW blocks mined ($NET), independently replay-validated, and synced."

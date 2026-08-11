@@ -14,8 +14,9 @@ use kaspa_consensus_core::{
     BlockLevel, hashing,
     header::Header,
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, POW_FINALIZER_BYTES,
-        POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA,
+        POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES,
+        POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
         blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
@@ -238,6 +239,13 @@ impl StateLayer0 {
     #[inline]
     fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_TAG_MAX_BYTES]) -> Result<usize, PowLayer0Error> {
         match self.pow_algo_id {
+            // Phase 4b (algo_id = 5): one deterministic Ollama inference over the same seed;
+            // the tag commits to the greedy response bytes + counts. 72 bytes.
+            POW_ALGO_ID_PALW_OLLAMA => {
+                let tag = palw::palw_ollama_l1_tag(self.pre_pow_hash_64, self.timestamp, nonce, &self.network_id)?;
+                buf[..POW_L1_PALW_OLLAMA_OUT_BYTES].copy_from_slice(&tag);
+                Ok(POW_L1_PALW_OLLAMA_OUT_BYTES)
+            }
             // Phase 4 (algo_id = 4): one deterministic pinned-LLM inference over the seed derived
             // from (network, pre_pow_hash, timestamp, nonce). 200 bytes.
             POW_ALGO_ID_PALW_LLM => {

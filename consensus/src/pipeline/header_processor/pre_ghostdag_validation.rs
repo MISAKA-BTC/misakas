@@ -71,9 +71,10 @@ impl HeaderProcessor {
         if header.direct_parents().is_empty() {
             return Ok(());
         }
+        let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
         let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_active, blake2b_sha3_active)
+        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
             .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))
     }
 

@@ -5137,6 +5137,7 @@ dependencies = [
  "kaspa-p2p-lib",
  "kaspa-p2p-mining",
  "kaspa-perf-monitor",
+ "kaspa-pow",
  "kaspa-pq-validator-core",
  "kaspa-rpc-core",
  "kaspa-rpc-service",

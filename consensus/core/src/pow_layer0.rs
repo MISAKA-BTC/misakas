@@ -140,6 +140,38 @@ pub const POW_L1_PALW_V1_DOMAIN: &[u8] = b"misaka-l1-palw-llm-v1";
 /// hard fork = a new algo id, exactly like the other Layer-1 parameters.
 pub const POW_L1_PALW_N_PREDICT_V1: u32 = 128;
 
+/// MISAKA Phase 4b Layer 1 algorithm id: **PALW LLM inference via an Ollama runtime**
+/// (ADR-0021 addendum). Same seed, same canonical prompt, same grinding closure as
+/// [`POW_ALGO_ID_PALW_LLM`]; the difference is WHERE the inference runs and WHAT the tag can
+/// bind:
+///
+/// * The runtime is a host-local **Ollama server** (`/api/generate`, `raw` mode, temperature 0,
+///   [`POW_L1_PALW_OLLAMA_NUM_PREDICT_V1`] new tokens) running the pinned Qwen model — the
+///   runtime an Ubuntu VPS fleet can actually operate, where the pinned-llama.cpp Metal worker
+///   cannot run at all.
+/// * Ollama's API does not expose per-decode logits, so the `gemm_trace_root` binding of the
+///   worker tag is UNAVAILABLE: the v1 tag here commits to the greedy RESPONSE BYTES and the
+///   token counts only. Weaker binding than algo 4 (an attacker reproducing the exact greedy
+///   continuation by other means is not distinguished), still model-work-priced: the response
+///   to a fresh 256-bit seed prompt is not predictable without running the model.
+/// * Determinism scope is the **runtime class** an operator deploys: same Ollama build, same
+///   model digest, same architecture. Greedy decoding across machines of one class is
+///   reproducible; across architectures (NEON vs AVX2 reduction order) it is NOT promised —
+///   the same arch-scoping the CPU compute class documents. One network = one class.
+pub const POW_ALGO_ID_PALW_OLLAMA: u8 = 5;
+
+/// Output width of the `algo_id = 5` tag:
+/// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
+pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;
+
+/// Domain separator for every PALW-Ollama v1 derivation (tag digest, fixture).
+pub const POW_L1_PALW_OLLAMA_V1_DOMAIN: &[u8] = b"misaka-l1-palw-ollama-v1";
+
+/// `options.num_predict` for every PoW inference: the number of NEW tokens Ollama may decode
+/// (its `num_predict` is decode-only, unlike the worker's total ceiling). A frozen consensus
+/// constant of the v1 algorithm, exactly like [`POW_L1_PALW_N_PREDICT_V1`].
+pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 48;
+
 /// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
 ///
 /// Replaces Argon2id (`algo_id = 2`) on the networks where it is activated (testnet/mainnet) to make
@@ -185,14 +217,17 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
 }
 
 /// The Layer-1 algorithm a header MUST declare, given which PoW forks are active at the header's
-/// DAA score. The PALW LLM fork (`algo_id = 4`) supersedes everything where activated; then the
-/// Phase-3 BLAKE2b-512 ∥ SHA3-512 fork (`algo_id = 3`); otherwise the Phase-1 `algo_id = 1`
-/// (kHeavyHash). This is a hard cut-off — there is no mixed-algo arithmetic. (Argon2id,
-/// `algo_id = 2`, is the superseded Phase-2 algorithm: still *verifiable* via
-/// [`check_algo_id_known`] for historical pruning proofs, but no live network selects it.)
+/// DAA score. The PALW-Ollama fork (`algo_id = 5`) supersedes everything where activated; then
+/// the PALW worker fork (`algo_id = 4`); then the Phase-3 BLAKE2b-512 ∥ SHA3-512 fork
+/// (`algo_id = 3`); otherwise the Phase-1 `algo_id = 1` (kHeavyHash). This is a hard cut-off —
+/// there is no mixed-algo arithmetic. (Argon2id, `algo_id = 2`, is the superseded Phase-2
+/// algorithm: still *verifiable* via [`check_algo_id_known`] for historical pruning proofs, but
+/// no live network selects it.)
 #[inline]
-pub fn required_algo_id(palw_llm_active: bool, blake2b_sha3_active: bool) -> u8 {
-    if palw_llm_active {
+pub fn required_algo_id(palw_ollama_active: bool, palw_llm_active: bool, blake2b_sha3_active: bool) -> u8 {
+    if palw_ollama_active {
+        POW_ALGO_ID_PALW_OLLAMA
+    } else if palw_llm_active {
         POW_ALGO_ID_PALW_LLM
     } else if blake2b_sha3_active {
         POW_ALGO_ID_BLAKE2B_SHA3
@@ -205,8 +240,13 @@ pub fn required_algo_id(palw_llm_active: bool, blake2b_sha3_active: bool) -> u8 
 /// [`required_algo_id`]. Rejects both unknown ids and the *wrong-but-known* id (e.g. a miner trying
 /// the cheap kHeavyHash on a BLAKE2b-SHA3 or PALW network, or vice-versa).
 #[inline]
-pub fn check_algo_id(algo_id: u8, palw_llm_active: bool, blake2b_sha3_active: bool) -> Result<(), PowLayer0Error> {
-    if algo_id == required_algo_id(palw_llm_active, blake2b_sha3_active) {
+pub fn check_algo_id(
+    algo_id: u8,
+    palw_ollama_active: bool,
+    palw_llm_active: bool,
+    blake2b_sha3_active: bool,
+) -> Result<(), PowLayer0Error> {
+    if algo_id == required_algo_id(palw_ollama_active, palw_llm_active, blake2b_sha3_active) {
         Ok(())
     } else {
         Err(PowLayer0Error::UnknownAlgoId(algo_id))
@@ -214,16 +254,17 @@ pub fn check_algo_id(algo_id: u8, palw_llm_active: bool, blake2b_sha3_active: bo
 }
 
 /// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3,
-/// PALW LLM}). Used where the PoW itself is independently verified and only an unknown/garbage id
-/// must be rejected (e.g. the pruning-proof path); the exact per-network/per-DAA rule is enforced
-/// by [`check_algo_id`] in the main header pipeline. Argon2id (2) stays accepted so historical
-/// proofs spanning the Phase-2 era still validate.
+/// PALW LLM, PALW Ollama}). Used where the PoW itself is independently verified and only an
+/// unknown/garbage id must be rejected (e.g. the pruning-proof path); the exact per-network/
+/// per-DAA rule is enforced by [`check_algo_id`] in the main header pipeline. Argon2id (2) stays
+/// accepted so historical proofs spanning the Phase-2 era still validate.
 #[inline]
 pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH
         || algo_id == POW_ALGO_ID_ARGON2ID
         || algo_id == POW_ALGO_ID_BLAKE2B_SHA3
         || algo_id == POW_ALGO_ID_PALW_LLM
+        || algo_id == POW_ALGO_ID_PALW_OLLAMA
     {
         Ok(())
     } else {
@@ -478,6 +519,49 @@ pub fn palw_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OUT_BYTES] {
     tag
 }
 
+/// MISAKA Phase 4b (`algo_id = 5`): assemble the 72-byte PALW-Ollama Layer-1 tag from a
+/// deterministic `/api/generate` response. Shared by the HTTP runner (`kaspa-pow`) and tests so
+/// the byte layout has one definition.
+///
+/// ```text
+/// digest = BLAKE2b-512(key = POW_L1_PALW_OLLAMA_V1_DOMAIN,
+///                      "output" || resp_len_le_u64 || response_bytes)
+/// tag    = digest ∥ prompt_eval_count_le_u32 ∥ eval_count_le_u32
+/// ```
+pub fn palw_ollama_l1_tag_from_response(
+    response_bytes: &[u8],
+    prompt_eval_count: u32,
+    eval_count: u32,
+) -> [u8; POW_L1_PALW_OLLAMA_OUT_BYTES] {
+    let digest = Params::new()
+        .hash_length(64)
+        .key(POW_L1_PALW_OLLAMA_V1_DOMAIN)
+        .to_state()
+        .update(b"output")
+        .update(&(response_bytes.len() as u64).to_le_bytes())
+        .update(response_bytes)
+        .finalize();
+    let mut tag = [0u8; POW_L1_PALW_OLLAMA_OUT_BYTES];
+    tag[..64].copy_from_slice(digest.as_bytes());
+    tag[64..68].copy_from_slice(&prompt_eval_count.to_le_bytes());
+    tag[68..72].copy_from_slice(&eval_count.to_le_bytes());
+    tag
+}
+
+/// MISAKA Phase 4b (`algo_id = 5`): the **fixture** tag — the 72-byte layout synthesized from the
+/// seed alone, selected by the same `MISAKA_PALW_POW_FIXTURE=1` env as the worker fixture (and
+/// confined to devnet by the same kaspad rail).
+pub fn palw_ollama_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OLLAMA_OUT_BYTES] {
+    let digest =
+        Params::new().hash_length(64).key(POW_L1_PALW_OLLAMA_V1_DOMAIN).to_state().update(b"fixture").update(seed).finalize();
+    let mut tag = [0u8; POW_L1_PALW_OLLAMA_OUT_BYTES];
+    tag[..64].copy_from_slice(digest.as_bytes());
+    // Stable, obviously synthetic counts in the real field layout.
+    tag[64..68].copy_from_slice(&70u32.to_le_bytes());
+    tag[68..72].copy_from_slice(&48u32.to_le_bytes());
+    tag
+}
+
 /// Assemble the 200-byte PALW Layer-1 tag from a worker projection's replay-stable fields. Shared
 /// by the real subprocess runner (`kaspa-pow`) and tests so the byte layout has one definition.
 pub fn palw_l1_tag_from_projection(
@@ -558,21 +642,28 @@ mod tests {
     fn check_algo_id_enforces_exact_network_algo() {
         // BLAKE2b-SHA3-active network: must be 3; kHeavyHash (1) and the superseded Argon2id (2) are
         // both WRONG (not just unknown) on the active path.
-        assert!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, true).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, true), Err(PowLayer0Error::UnknownAlgoId(1)));
-        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, false, true), Err(PowLayer0Error::UnknownAlgoId(2)));
+        assert!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, false, true).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, false, true), Err(PowLayer0Error::UnknownAlgoId(1)));
+        assert_eq!(check_algo_id(POW_ALGO_ID_ARGON2ID, false, false, true), Err(PowLayer0Error::UnknownAlgoId(2)));
         // kHeavyHash network: must be 1, 3 is rejected.
-        assert!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, false).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, false), Err(PowLayer0Error::UnknownAlgoId(3)));
-        // PALW-active network: must be 4, and PALW takes precedence over BLAKE2b-SHA3.
-        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, true, false).is_ok());
-        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, true, true).is_ok());
-        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, true, true), Err(PowLayer0Error::UnknownAlgoId(3)));
-        assert_eq!(check_algo_id(POW_ALGO_ID_PALW_LLM, false, false), Err(PowLayer0Error::UnknownAlgoId(4)));
-        assert_eq!(required_algo_id(false, true), 3);
-        assert_eq!(required_algo_id(false, false), 1);
-        assert_eq!(required_algo_id(true, false), 4);
-        assert_eq!(required_algo_id(true, true), 4);
+        assert!(check_algo_id(POW_ALGO_ID_KHEAVYHASH, false, false, false).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, false, false), Err(PowLayer0Error::UnknownAlgoId(3)));
+        // PALW-worker-active network: must be 4, and PALW takes precedence over BLAKE2b-SHA3.
+        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, false, true, false).is_ok());
+        assert!(check_algo_id(POW_ALGO_ID_PALW_LLM, false, true, true).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_BLAKE2B_SHA3, false, true, true), Err(PowLayer0Error::UnknownAlgoId(3)));
+        assert_eq!(check_algo_id(POW_ALGO_ID_PALW_LLM, false, false, false), Err(PowLayer0Error::UnknownAlgoId(4)));
+        // PALW-Ollama-active network: must be 5, superseding every other algo.
+        assert!(check_algo_id(POW_ALGO_ID_PALW_OLLAMA, true, false, false).is_ok());
+        assert!(check_algo_id(POW_ALGO_ID_PALW_OLLAMA, true, true, true).is_ok());
+        assert_eq!(check_algo_id(POW_ALGO_ID_PALW_LLM, true, true, true), Err(PowLayer0Error::UnknownAlgoId(4)));
+        assert_eq!(check_algo_id(POW_ALGO_ID_PALW_OLLAMA, false, true, false), Err(PowLayer0Error::UnknownAlgoId(5)));
+        assert_eq!(required_algo_id(false, false, true), 3);
+        assert_eq!(required_algo_id(false, false, false), 1);
+        assert_eq!(required_algo_id(false, true, false), 4);
+        assert_eq!(required_algo_id(false, true, true), 4);
+        assert_eq!(required_algo_id(true, false, false), 5);
+        assert_eq!(required_algo_id(true, true, true), 5);
     }
 
     /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can verify —
@@ -580,10 +671,12 @@ mod tests {
     /// rejects the rest.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
-        for ok in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM] {
+        for ok in
+            [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]
+        {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 5, 7, 0xff] {
+        for bad in [0u8, 6, 7, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
     }
@@ -649,6 +742,32 @@ mod tests {
         assert_eq!(&tag[196..200], &99u32.to_le_bytes());
         // The finalizer accepts the 200-byte tag with algo_id = 4.
         assert!(pow_finalizer_blake2b_512(b"devnet", POW_ALGO_ID_PALW_LLM, h(0x01), 1, 2, 3, &tag).is_ok());
+    }
+
+    /// PALW-Ollama tag (algo_id = 5): documented layout, deterministic, response-sensitive, and
+    /// distinct from the fixture derivation over the same bytes.
+    #[test]
+    fn palw_ollama_tag_layout_and_determinism() {
+        let a = palw_ollama_l1_tag_from_response(b"greedy continuation", 70, 48);
+        assert_eq!(a.len(), POW_L1_PALW_OLLAMA_OUT_BYTES);
+        assert!(POW_L1_PALW_OLLAMA_OUT_BYTES <= POW_L1_TAG_MAX_BYTES);
+        assert_eq!(a, palw_ollama_l1_tag_from_response(b"greedy continuation", 70, 48), "tag must be deterministic");
+        assert_ne!(a, palw_ollama_l1_tag_from_response(b"greedy continuatioN", 70, 48), "response bytes must change the tag");
+        assert_eq!(&a[64..68], &70u32.to_le_bytes());
+        assert_eq!(&a[68..72], &48u32.to_le_bytes());
+        // Counts are OUTSIDE the digest but inside the tag, so they still alter the finalizer input.
+        let b = palw_ollama_l1_tag_from_response(b"greedy continuation", 71, 48);
+        assert_eq!(&a[..64], &b[..64], "digest covers response bytes only");
+        assert_ne!(a, b, "counts must alter the tag");
+        // Fixture: same layout, different derivation, seed-sensitive.
+        let seed_a = palw_pow_seed_v1(h(0x11), 1, 2, b"testnet-10");
+        let seed_b = palw_pow_seed_v1(h(0x11), 1, 3, b"testnet-10");
+        let fa = palw_ollama_fixture_l1_tag_v1(&seed_a);
+        assert_eq!(fa, palw_ollama_fixture_l1_tag_v1(&seed_a));
+        assert_ne!(fa, palw_ollama_fixture_l1_tag_v1(&seed_b));
+        assert_ne!(&fa[..64], &palw_ollama_l1_tag_from_response(&seed_a[..], 70, 48)[..64]);
+        // The finalizer accepts the 72-byte tag with algo_id = 5.
+        assert!(pow_finalizer_blake2b_512(b"testnet-10", POW_ALGO_ID_PALW_OLLAMA, h(0x01), 1, 2, 3, &fa).is_ok());
     }
 
     /// BLAKE2b-SHA3 Layer-1 (algo_id = 3) must be DETERMINISTIC (miner and every verifier agree on

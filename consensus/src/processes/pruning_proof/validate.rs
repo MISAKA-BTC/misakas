@@ -194,9 +194,17 @@ impl ProofContext {
                 // not mandate at that DAA into the proof. Genesis is exempt (parentless trusted
                 // root; its PoW is never validated and it may carry any id) — mirrors the pipeline.
                 if !header.direct_parents().is_empty() {
+                    let palw_ollama_active = ppm.pow_palw_ollama_activation.is_active(header.daa_score);
                     let palw_active = ppm.pow_palw_activation.is_active(header.daa_score);
                     let blake2b_sha3_active = ppm.pow_blake2b_sha3_activation.is_active(header.daa_score);
-                    if kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_active, blake2b_sha3_active).is_err() {
+                    if kaspa_consensus_core::pow_layer0::check_algo_id(
+                        header.pow_algo_id,
+                        palw_ollama_active,
+                        palw_active,
+                        blake2b_sha3_active,
+                    )
+                    .is_err()
+                    {
                         return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
                     }
                 }

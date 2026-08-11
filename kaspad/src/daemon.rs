@@ -451,6 +451,49 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
             );
             exit(1);
         }
+        // Phase 4b (algo_id = 5): the Ollama-runtime PALW network. Validation reaches a
+        // host-local Ollama server, so check reachability and the model pin NOW.
+        let palw_ollama_ever_active = params.pow_palw_ollama_activation.is_active(u64::MAX - 1);
+        if palw_ollama_ever_active && !fixture {
+            let model = match std::env::var(kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV) {
+                Ok(m) => m,
+                Err(_) => {
+                    println!(
+                        "network {} validates PALW-Ollama (algo_id = 5) LLM proof-of-work.\nSet {}=<pinned model, e.g. \
+                         qwen3.5:2b> (and optionally {}=http://127.0.0.1:11434), with `ollama serve` running and the \
+                         model pulled — see docs/testnet10-palw-rollout-runbook.md.{}",
+                        network,
+                        kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV,
+                        kaspa_pow::palw::PALW_OLLAMA_URL_ENV,
+                        if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
+                            "\nOr export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
+                        } else {
+                            ""
+                        }
+                    );
+                    exit(1);
+                }
+            };
+            let url = std::env::var(kaspa_pow::palw::PALW_OLLAMA_URL_ENV)
+                .unwrap_or_else(|_| kaspa_pow::palw::DEFAULT_OLLAMA_URL.to_string());
+            let hostport = url.strip_prefix("http://").unwrap_or(&url).trim_end_matches('/').to_string();
+            match std::net::TcpStream::connect_timeout(
+                &hostport.parse().unwrap_or_else(|_| {
+                    println!("{} must be http://host:port, got {url}", kaspa_pow::palw::PALW_OLLAMA_URL_ENV);
+                    exit(1);
+                }),
+                Duration::from_secs(3),
+            ) {
+                Ok(_) => info!("PALW-Ollama runtime: {url} reachable, model {model} (digest is checked by the fleet runbook)"),
+                Err(e) => {
+                    println!(
+                        "cannot reach the Ollama server at {url}: {e}\nStart it (`ollama serve`, or the systemd unit from \
+                         scripts/misaka-palw-ollama-setup.sh) and pull the pinned model (`ollama pull {model}`)."
+                    );
+                    exit(1);
+                }
+            }
+        }
         if palw_ever_active && !fixture {
             match std::env::var("PALW_WORKER") {
                 Err(_) => {

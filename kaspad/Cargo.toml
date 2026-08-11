@@ -20,6 +20,7 @@ kaspa-alloc.workspace = true # This changes the global allocator for all of the 
 kaspa-addresses.workspace = true
 kaspa-addressmanager.workspace = true
 kaspa-consensus-core.workspace = true
+kaspa-pow.workspace = true
 kaspa-consensus-notify.workspace = true
 misaka-endpoints.workspace = true
 kaspa-consensus.workspace = true

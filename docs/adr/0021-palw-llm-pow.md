@@ -104,6 +104,14 @@ worker subprocesses.
 * kaspad refuses to start on a PALW network without the worker runtime (actionable startup
   error instead of a first-header panic), and refuses `MISAKA_PALW_POW_FIXTURE=1` outside
   devnet — a mis-exported fixture var must not mint a private fork of the public testnet.
+* **Addendum (user decision 2026-08-11): testnet-10 runs the OLLAMA flavor, `algo_id = 5`.**
+  The public fleet is Ubuntu VPSes that cannot run the Metal-pinned worker; the runtime is a
+  host-local Ollama serving the pinned Qwen model (`MISAKA_PALW_OLLAMA_MODEL`). Same seed,
+  prompt and grinding closure as algo 4; the tag commits to the greedy response bytes + token
+  counts because the API exposes no per-decode logits — weaker binding, still model-work-priced,
+  and the determinism class is (Ollama version, model digest, architecture), enforced
+  operationally by `scripts/misaka-palw-ollama-setup.sh`'s calibration line. Devnet deliberately
+  keeps algo 4 (full `gemm_trace_root` binding) as the stronger reference implementation.
 * IBD replays one inference per header (~1–3 s): a full day of chain is ~8 640 blocks ≈ hours of
   inference. Acceptable for devnet; a public rollout needs the paper's sampled-audit tier or
   trusted-checkpoint IBD before the chain is long.

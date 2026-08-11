@@ -27,7 +27,8 @@
 //! as [`PowLayer0Error::PalwWorkerFailed`], also escalated at the consensus boundary.
 
 use kaspa_consensus_core::pow_layer0::{
-    POW_L1_PALW_OUT_BYTES, PowLayer0Error, palw_fixture_l1_tag_v1, palw_pow_seed_v1,
+    POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, PowLayer0Error, palw_fixture_l1_tag_v1,
+    palw_ollama_fixture_l1_tag_v1, palw_pow_seed_v1,
 };
 use kaspa_hashes::Hash64;
 
@@ -39,6 +40,14 @@ pub const PALW_FIXTURE_ENV: &str = "MISAKA_PALW_POW_FIXTURE";
 /// ~1-3 s a pinned Qwen3.5-2B attempt takes — it exists to reap a wedged worker, not to pace one.
 pub const PALW_TIMEOUT_ENV: &str = "MISAKA_PALW_POW_TIMEOUT_SECS";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Ollama model reference for the `algo_id = 5` runtime (e.g. `qwen3.5:2b`). Required on a
+/// PALW-Ollama network; the operator pins the model DIGEST at deploy time (the runbook records
+/// it) — every fleet host must serve the same blob.
+pub const PALW_OLLAMA_MODEL_ENV: &str = "MISAKA_PALW_OLLAMA_MODEL";
+/// Base URL of the host-local Ollama server (default [`DEFAULT_OLLAMA_URL`]).
+pub const PALW_OLLAMA_URL_ENV: &str = "MISAKA_PALW_OLLAMA_URL";
+pub const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 
 /// Whether the fixture tag is selected in this process.
 pub fn fixture_enabled() -> bool {
@@ -60,6 +69,22 @@ pub fn palw_l1_tag(
         return Ok(palw_fixture_l1_tag_v1(&seed));
     }
     native::tag_for_seed(&seed)
+}
+
+/// The PALW-Ollama (`algo_id = 5`) Layer-1 tag for one (header, nonce) attempt. Same seed and
+/// canonical prompt as algo 4; the inference runs on the host-local Ollama server and the tag
+/// commits to the greedy response bytes + token counts. Cached by seed like the worker tag.
+pub fn palw_ollama_l1_tag(
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    network_id: &[u8],
+) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
+    let seed = palw_pow_seed_v1(pre_pow_hash, timestamp, nonce, network_id);
+    if fixture_enabled() {
+        return Ok(palw_ollama_fixture_l1_tag_v1(&seed));
+    }
+    native::ollama_tag_for_seed(&seed)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -187,6 +212,140 @@ mod native {
         Ok(tag)
     }
 
+    // ── PALW-Ollama (algo_id = 5): host-local HTTP inference ────────────────────────────────────
+
+    /// Completed Ollama tags by seed — separate from the worker cache (same seed under the two
+    /// algos is a different computation).
+    static OLLAMA_TAG_CACHE: OnceLock<Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OLLAMA_OUT_BYTES]>>> = OnceLock::new();
+
+    fn ollama_cache() -> &'static Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OLLAMA_OUT_BYTES]>> {
+        OLLAMA_TAG_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub(super) fn ollama_tag_for_seed(seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
+        if let Some(tag) = ollama_cache().lock().unwrap().get(seed) {
+            return Ok(*tag);
+        }
+        let model = std::env::var(PALW_OLLAMA_MODEL_ENV).map_err(|_| {
+            PowLayer0Error::PalwUnavailable(format!(
+                "{PALW_OLLAMA_MODEL_ENV} is not set; point it at the fleet's pinned Qwen model \
+                 (e.g. qwen3.5:2b) served by a local Ollama, or run with {PALW_FIXTURE_ENV}=1 \
+                 (devnet only) for the model-free fixture"
+            ))
+        })?;
+        let url = std::env::var(PALW_OLLAMA_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string());
+        let tag = {
+            let _gate = SPAWN_GATE.lock().unwrap();
+            if let Some(tag) = ollama_cache().lock().unwrap().get(seed) {
+                return Ok(*tag);
+            }
+            run_ollama(&url, &model, seed)?
+        };
+        let mut cache = ollama_cache().lock().unwrap();
+        if cache.len() >= TAG_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(*seed, tag);
+        Ok(tag)
+    }
+
+    fn run_ollama(url: &str, model: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
+        use kaspa_consensus_core::pow_layer0::{POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, palw_ollama_l1_tag_from_response};
+        let prompt = kaspa_consensus_core::pow_layer0::palw_pow_prompt_v1(seed);
+        // Consensus-frozen request shape: raw continuation (no chat template), greedy
+        // (temperature 0), the v1 decode budget, a fixed context size. Every option here is part
+        // of what the network's runtime class reproduces — do not make these configurable.
+        let body = serde_json::json!({
+            "model": model,
+            "prompt": prompt,
+            "raw": true,
+            "stream": false,
+            "options": { "temperature": 0.0, "num_predict": POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, "num_ctx": 4096, "seed": 0 },
+        })
+        .to_string();
+        let started = Instant::now();
+        let response = http_post_json(url, "/api/generate", &body, timeout())?;
+        let doc: serde_json::Value = serde_json::from_slice(&response)
+            .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse the Ollama response: {e}")))?;
+        if let Some(err) = doc.get("error").and_then(|v| v.as_str()) {
+            return Err(PowLayer0Error::PalwWorkerFailed(format!(
+                "Ollama refused the generate request: {err} (model {model} pulled? `ollama pull {model}`)"
+            )));
+        }
+        let text = doc
+            .get("response")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("Ollama response lacks the `response` field".into()))?;
+        let prompt_eval = doc.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let eval = doc.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        log::debug!("palw-ollama: inference attempt completed in {:?} (prompt_eval={prompt_eval} eval={eval})", started.elapsed());
+        Ok(palw_ollama_l1_tag_from_response(text.as_bytes(), prompt_eval, eval))
+    }
+
+    /// Minimal blocking HTTP/1.1 POST for the host-local Ollama endpoint. Deliberately not a
+    /// full client: `http://host:port` only, `Connection: close`, handles the two body framings
+    /// Ollama uses (Content-Length and chunked). Keeps reqwest-class dependency weight out of
+    /// the consensus tree.
+    fn http_post_json(base_url: &str, path: &str, body: &str, budget: Duration) -> Result<Vec<u8>, PowLayer0Error> {
+        use std::net::TcpStream;
+        let hostport = base_url
+            .strip_prefix("http://")
+            .ok_or_else(|| PowLayer0Error::PalwUnavailable(format!("{PALW_OLLAMA_URL_ENV} must be http://host:port, got {base_url}")))?
+            .trim_end_matches('/');
+        let mut stream = TcpStream::connect(hostport).map_err(|e| {
+            PowLayer0Error::PalwUnavailable(format!(
+                "cannot reach the Ollama server at {hostport}: {e} (is `ollama serve` running?)"
+            ))
+        })?;
+        stream.set_read_timeout(Some(budget)).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot send the Ollama request: {e}")))?;
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).map_err(|e| {
+            PowLayer0Error::PalwWorkerFailed(format!("reading the Ollama response failed (budget {budget:?}): {e}"))
+        })?;
+        let header_end = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("malformed HTTP response from Ollama (no header end)".into()))?;
+        let (head, rest) = raw.split_at(header_end + 4);
+        let head_text = String::from_utf8_lossy(head);
+        let status = head_text.lines().next().unwrap_or_default().to_string();
+        if !status.contains(" 200 ") {
+            let tail: String = String::from_utf8_lossy(rest).chars().take(300).collect();
+            return Err(PowLayer0Error::PalwWorkerFailed(format!("Ollama answered {status}: {tail}")));
+        }
+        let chunked = head_text.to_ascii_lowercase().contains("transfer-encoding: chunked");
+        if !chunked {
+            return Ok(rest.to_vec());
+        }
+        // De-chunk: size lines are hex; a 0-size chunk terminates.
+        let mut out = Vec::with_capacity(rest.len());
+        let mut i = 0;
+        while i < rest.len() {
+            let line_end = match rest[i..].windows(2).position(|w| w == b"\r\n") {
+                Some(p) => i + p,
+                None => break,
+            };
+            let size = usize::from_str_radix(String::from_utf8_lossy(&rest[i..line_end]).trim(), 16)
+                .map_err(|_| PowLayer0Error::PalwWorkerFailed("malformed chunk size from Ollama".into()))?;
+            if size == 0 {
+                break;
+            }
+            let start = line_end + 2;
+            let end = (start + size).min(rest.len());
+            out.extend_from_slice(&rest[start..end]);
+            i = end + 2;
+        }
+        Ok(out)
+    }
+
     /// Parse the worker's `misaka.palw.testnet-submission.v3` document (the LAST non-empty stdout
     /// line) into the 200-byte tag.
     fn parse_projection(stdout: &[u8]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
@@ -230,5 +389,9 @@ mod native {
 
     pub(super) fn tag_for_seed(_seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
         Err(PowLayer0Error::PalwUnavailable("PALW (algo_id = 4) PoW cannot run in a wasm build".into()))
+    }
+
+    pub(super) fn ollama_tag_for_seed(_seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
+        Err(PowLayer0Error::PalwUnavailable("PALW-Ollama (algo_id = 5) PoW cannot run in a wasm build".into()))
     }
 }

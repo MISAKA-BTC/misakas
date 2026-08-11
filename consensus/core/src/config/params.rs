@@ -401,6 +401,16 @@ pub struct Params {
     /// (`MISAKA_PALW_POW_FIXTURE=1`).
     pub pow_palw_activation: ForkActivation,
 
+    /// MISAKA Phase 4b PoW: activation of the **PALW-via-Ollama** Layer-1
+    /// (`POW_ALGO_ID_PALW_OLLAMA = 5`), superseding every other algo where active. Same seed /
+    /// prompt / grinding closure as Phase 4; the runtime is a host-local Ollama server running
+    /// the pinned Qwen model (the runtime an Ubuntu VPS fleet operates), and the tag commits to
+    /// the greedy response bytes + token counts (Ollama exposes no per-decode logits).
+    /// `always()` ⇒ from genesis (testnet-10 — the public PALW network); `never()` elsewhere
+    /// (devnet keeps the stronger algo-4 worker tag). Nodes need `MISAKA_PALW_OLLAMA_MODEL`
+    /// (+ optional `MISAKA_PALW_OLLAMA_URL`) or the devnet-only fixture env.
+    pub pow_palw_ollama_activation: ForkActivation,
+
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
     /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
@@ -524,6 +534,7 @@ impl Params {
             dns_params,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
+            pow_palw_ollama_activation,
             pq_enforcement,
             pq_activation_daa_score,
             evm_activation_daa_score,
@@ -587,6 +598,7 @@ impl Params {
 
         h.write(pow_blake2b_sha3_activation.daa_score().to_le_bytes());
         h.write(pow_palw_activation.daa_score().to_le_bytes());
+        h.write(pow_palw_ollama_activation.daa_score().to_le_bytes());
         h.write([*pq_enforcement as u8]);
         h.write(pq_activation_daa_score.to_le_bytes());
         h.write(evm_activation_daa_score.to_le_bytes());
@@ -811,6 +823,7 @@ impl Params {
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
+            pow_palw_ollama_activation: self.pow_palw_ollama_activation,
             // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
             pq_enforcement: self.pq_enforcement,
             pq_activation_daa_score: self.pq_activation_daa_score,
@@ -1581,6 +1594,7 @@ pub const MAINNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1694,11 +1708,15 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
-    // PALW LLM PoW from genesis: the public testnet-10 IS the 0.1-bps LLM-PoW network as of the
-    // "-palw" re-genesis (docs/testnet10-palw-rollout-runbook.md). Every post-genesis header
-    // declares algo_id = 4; validators need the pinned worker (`PALW_WORKER` +
-    // `MISAKA_PALW_GGUF`) — the fixture env is refused outside devnet by the kaspad startup rail.
-    pow_palw_activation: ForkActivation::always(),
+    // PALW LLM PoW from genesis, in the OLLAMA flavor (algo_id = 5): the public testnet-10 IS
+    // the 0.1-bps LLM-PoW network as of the "-palw" re-genesis
+    // (docs/testnet10-palw-rollout-runbook.md), and its fleet is Ubuntu VPSes, which cannot run
+    // the Metal-pinned worker — the runtime is a host-local Ollama serving the pinned Qwen
+    // model (`MISAKA_PALW_OLLAMA_MODEL`, optional `MISAKA_PALW_OLLAMA_URL`). The stronger
+    // worker-tag algo (4) stays devnet's; its activation here remains never() so required_algo_id
+    // resolves to 5 alone.
+    pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::always(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
@@ -1779,6 +1797,7 @@ pub const SIMNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1892,8 +1911,11 @@ pub const DEVNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
-    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture).
+    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture). Devnet
+    // deliberately keeps the WORKER flavor (full-logits `gemm_trace_root` binding) — the Ollama
+    // flavor (5) is testnet's fleet-runtime concession.
     pow_palw_activation: ForkActivation::always(),
+    pow_palw_ollama_activation: ForkActivation::never(),
 };
 
 #[cfg(test)]
@@ -1975,16 +1997,20 @@ mod consensus_params_id_tests {
         // mechanics as the TokenParams merge above). Devnet moved for three additional,
         // deliberate reasons: `always()` activation, the 0.1-bps `new_deci_bps` blockrate, and
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
+        //
+        // And once more when `pow_palw_ollama_activation` entered the hash (the Phase-4b
+        // Ollama-runtime algo, `always()` on testnet-10 — the fleet's runtime — and `never()`
+        // elsewhere).
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
+            ("mainnet", MAINNET_PARAMS, "9110ee1c8bedfc8cd0e32336a7adeeb2940752737e385d1c69b65aee662334c2"),
             // Moved again by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
             // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by this merge.
-            ("testnet", TESTNET_PARAMS, "fe88c065fbadf119e5388f17770e1bfa8d1481449d291bf5ed2c66a1dfeaa6d8"),
-            ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
-            ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
+            ("testnet", TESTNET_PARAMS, "2d2258cc51a3b2216bab6d93b0aec2332322903e5e7414db15ad8112adced671"),
+            ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
+            ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
