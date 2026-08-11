@@ -12,7 +12,34 @@ be verified rather than hoped for.
 
 ---
 
-## ⛔ BLOCKER — do not cut this release yet
+## ⛔ BLOCKER — and a READING ERROR in this document's fingerprints
+
+**Correction first, because everything below inherited it.** The line these numbers came from is
+`P2P, got reject message: Consensus params mismatch … local: X, remote: Y`. That is a message
+this node RECEIVED. `flow_context.rs:1293` shows the sender fills `local` with
+`self.config.params.consensus_params_id()` — **its own** — so in a received reject, `local:` is
+the PEER's fingerprint and `remote:` is ours. Every attribution in this document and in
+`testnet10-vlt-shadow-fork-runbook.md` was made the other way round and must be re-read:
+
+* `5fabb683…` is most likely the FLEET's fingerprint, not our build's.
+* `0e3914b0…` is what the fleet saw from OUR build — which is this repository's pre-merge pin,
+  and that does not match a build of the release commit either.
+
+Neither reading is yet reconciled with the probe below, which is decisive about the source:
+
+```
+const                : 62e299b6…      (TESTNET_PARAMS, table empty)
+Params::from(net)    : d07cb673…      (materialized — what a node runs)
+Params::from(id{10}) : d07cb673…      (identical; the daemon's path reaches the same arm)
+```
+
+So the source is self-consistent and the pin is right for the materialized path. What is NOT
+established is which binary announced what. **Do not cut a release, and do not trust any
+fingerprint claim in these documents, until a node's own value is read from its own side** —
+`grep "local_params_id"` at a debug log, or a one-line print after `build()` — rather than from
+a peer's rejection.
+
+
 
 A kaspad built from a CLEAN checkout of the release commit, in an isolated target dir, with
 `--features evm`, announces `5fabb683…` at the handshake. The same source computes `d07cb673…`

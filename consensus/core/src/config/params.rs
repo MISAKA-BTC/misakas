@@ -2009,3 +2009,28 @@ mod consensus_params_id_tests {
         assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
     }
 }
+
+#[cfg(test)]
+mod fingerprint_probe {
+    use super::*;
+
+    /// The probe the deploy card asks for: does the fingerprint a NODE announces equal the one
+    /// this crate pins? The daemon takes `NetworkId` → `Params` (`daemon.rs:410`) and nothing in
+    /// its builder chain mutates `params`, so these must be the same value — and if they are not,
+    /// the pin describes a configuration no node runs.
+    #[test]
+    fn the_pinned_testnet_fingerprint_is_the_one_a_node_announces() {
+        let from_const = TESTNET_PARAMS.consensus_params_id().to_string();
+        let via_preset_net = Params::from(TESTNET_PARAMS.net).consensus_params_id().to_string();
+        let as_the_daemon_builds_it =
+            Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10)).consensus_params_id().to_string();
+        println!("const                 : {from_const}");
+        println!("Params::from(net)     : {via_preset_net}");
+        println!("Params::from(id{{10}})  : {as_the_daemon_builds_it}");
+        println!("TESTNET_PARAMS.net    : {:?}", TESTNET_PARAMS.net);
+        assert_eq!(
+            via_preset_net, as_the_daemon_builds_it,
+            "the preset's own NetworkId must reach the same match arm the daemon's does"
+        );
+    }
+}
