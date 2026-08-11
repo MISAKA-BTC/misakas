@@ -46,11 +46,34 @@ fence opens:**
    therefore never signature-checked and still burns a bond. The three `Slash` arms in
    `bond_mutations_from_accepted_txs` say in comments that the block rule already proved the
    evidence — true only for own-body evidence.
-   *Fix shape (H-05's, already established in this codebase for the identical gap on unbond
-   requests): carry the claimed evidence on the mutation and bind it where the bond RECORD is in
-   hand — `ActiveBondView::apply`/`revert` — so apply and revert stay symmetric. The signature
-   half cannot be done view-free here as it can for H-05, because `StakeAttestation` carries a
-   `validator_id` and not the key; the record supplies the key.*
+   **Fix design (worked out 2026-08-11; the naive version corrupts the bond store).**
+   H-05 closed the identical gap for unbond requests by splitting the check: the signature half
+   view-free at derivation, the owner binding in `apply`/`revert` where the record is. Evidence
+   cannot copy that split as-is — `StakeAttestation` carries a `validator_id`, not the key, so
+   the signature half needs the bond record too.
+
+   The tempting move is to hand `dns_bond_mutations_for_chain_block` the `ActiveBondView` the
+   caller is already walking and drop non-genuine `Slash` mutations there. **That is a store
+   corruption, not a fix.** The walk's view is as-of the block's PARENT while applying and
+   as-of AFTER the block while reverting, and `slashing_evidence_genuine` reads
+   `effective_bond_status(bond, target_daa)`. A bond slashed by evidence in block B is Active in
+   the apply-direction view (mutation kept, stamp written) and Slashed in the revert-direction
+   view (mutation dropped, stamp never undone) — an asymmetric filter, which is exactly the
+   failure `dns_bond_mutations_from_txs`' own doc warns about.
+
+   So the verification must run against a view that is a deterministic function of the BLOCK,
+   identical in both directions — the same `selected_parent_bond_view` the block-validity rule
+   already uses. Two workable shapes:
+   * derive the selected-parent view per chain block inside the mutation derivation (correct,
+     costs a bond-view walk per block — measure before choosing), or
+   * carry the evidence on `BondMutation::Slash` and verify inside `apply_bond_stamp`, which
+     holds the record itself; `revert_bond_stamp` needs no check because it only undoes a stamp
+     whose DAA matches, so a refused apply is inert on revert **by construction**. This keeps
+     the check where both directions provably meet, at the cost of a heavier mutation value
+     (ML-DSA-87 signatures are 4627 bytes each).
+
+   The second shape is the one to build: it is the H-05 pattern with the binding moved one field
+   further, and its symmetry is structural rather than argued.
 2. **Bond collateral is withdrawable through the mergeset.**
    `bond_spend_gate_mergeset_activation_daa_score` is `u64::MAX` on every preset, so only the
    own-body spend gate runs and a bond's locked output can be spent from a merge-blue block

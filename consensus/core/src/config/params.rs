@@ -185,6 +185,42 @@ impl BlockrateParams {
         }
         self
     }
+
+    /// Blockrate params for the **0.1-bps** (one block per 10 seconds) PALW LLM-PoW network.
+    ///
+    /// `Bps<const BPS: u64>` cannot express a sub-integer rate, so the same formulas are spelled
+    /// out here evaluated at λ = 0.1, with every per-block sample rate floored at 1
+    /// (a rate below one block is "sample every block"):
+    ///
+    /// * `target_time_per_block` = 1000 / 0.1 = 10_000 ms.
+    /// * `ghostdag_k` = `calculate_ghostdag_k(2·NETWORK_DELAY_BOUND·0.1 = 1.0, GHOSTDAG_TAIL_DELTA)`
+    ///   = 4 (asserted against the real function in `deci_bps_constants_match_formulas`).
+    /// * `past_median_time_sample_rate` = max(1, ⌊0.1 · PAST_MEDIAN_TIME_SAMPLE_INTERVAL⌋) = 1;
+    ///   the 27-sample median window then spans 270 s ≈ the 264 s deviation window it models.
+    /// * `difficulty_sample_rate` = max(1, ⌊0.1 · DIFFICULTY_WINDOW_SAMPLE_INTERVAL⌋) = 1.
+    /// * `max_block_parents` = 10, `mergeset_size_limit` = 180 — both formula floors (k/2 = 2 and
+    ///   2k = 8 are far below them).
+    /// * `merge_depth` = 0.1 · MERGE_DEPTH_DURATION = 360, `finality_depth` = 0.1 ·
+    ///   FINALITY_DURATION = 4_320, `pruning_depth` = 0.1 · PRUNING_DURATION = 10_800 (the
+    ///   prunality lower bound at these values is 7_930, below the duration term).
+    /// * `coinbase_maturity` = 0.1 · COINBASE_MATURITY_SECONDS = 10.
+    ///
+    /// Wall-clock durations (12 h finality, 30 h pruning, 100 s maturity) are exactly the
+    /// 10-bps network's — only the block-unit denominators shrink 100×.
+    pub const fn new_deci_bps() -> Self {
+        Self {
+            target_time_per_block: 10_000,
+            ghostdag_k: 4,
+            past_median_time_sample_rate: 1,
+            difficulty_sample_rate: 1,
+            max_block_parents: 10,
+            mergeset_size_limit: 180,
+            merge_depth: 360,
+            finality_depth: 4_320,
+            pruning_depth: 10_800,
+            coinbase_maturity: 10,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -354,6 +390,17 @@ pub struct Params {
     /// (devnet/simnet keep fast local PoW). Genesis (the parentless trusted root) is exempt.
     pub pow_blake2b_sha3_activation: ForkActivation,
 
+    /// MISAKA Phase 4 PoW: activation of the **PALW deterministic pinned-LLM** Layer-1
+    /// (`POW_ALGO_ID_PALW_LLM = 4`). Past this DAA score every block header MUST declare
+    /// `algo_id = 4` and its PoW digest is the Layer-0 finalizer over one deterministic
+    /// Qwen3.5-2B inference transcript (see `pow_layer0::POW_ALGO_ID_PALW_LLM`); it supersedes
+    /// BLAKE2b-SHA3 where both are active. `always()` ⇒ PALW from genesis (devnet — the
+    /// 0.1-bps LLM-PoW network); `never()` ⇒ inert (mainnet/testnet/simnet until their own
+    /// fork ADR). Genesis (the parentless trusted root) is exempt. Validating nodes need the
+    /// pinned worker (`PALW_WORKER` + `MISAKA_PALW_GGUF`) or the explicit fixture mode
+    /// (`MISAKA_PALW_POW_FIXTURE=1`).
+    pub pow_palw_activation: ForkActivation,
+
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
     /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
@@ -476,6 +523,7 @@ impl Params {
             crescendo_activation,
             dns_params,
             pow_blake2b_sha3_activation,
+            pow_palw_activation,
             pq_enforcement,
             pq_activation_daa_score,
             evm_activation_daa_score,
@@ -538,6 +586,7 @@ impl Params {
         };
 
         h.write(pow_blake2b_sha3_activation.daa_score().to_le_bytes());
+        h.write(pow_palw_activation.daa_score().to_le_bytes());
         h.write([*pq_enforcement as u8]);
         h.write(pq_activation_daa_score.to_le_bytes());
         h.write(evm_activation_daa_score.to_le_bytes());
@@ -614,6 +663,14 @@ impl Params {
             1000 / self.blockrate.target_time_per_block,
             self.crescendo_activation,
         )
+    }
+
+    /// Target time per block throughout history, in milliseconds. The sub-integer-bps-safe
+    /// counterpart of [`Params::bps_history`]: at 0.1 bps (`target_time_per_block = 10_000`)
+    /// integer `bps` truncates to 0, so every rate-scaled computation (notably the coinbase
+    /// emission schedule) consumes THIS and scales by `ttpb / 1000` instead of dividing by bps.
+    pub fn target_time_per_block_history(&self) -> ForkedParam<u64> {
+        ForkedParam::new(self.pre_crescendo_target_time_per_block, self.blockrate.target_time_per_block, self.crescendo_activation)
     }
 
     pub fn ghostdag_k(&self) -> KType {
@@ -746,6 +803,7 @@ impl Params {
             dns_params: self.dns_params,
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
+            pow_palw_activation: self.pow_palw_activation,
             // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
             pq_enforcement: self.pq_enforcement,
             pq_activation_daa_score: self.pq_activation_daa_score,
@@ -921,9 +979,16 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // (EVM-active) and enforced-inert on simnet (EVM u64::MAX ⇒ identical splits even if a
     // lock output appears). NOT a genesis-block input.
     finality_fee_activation_daa_score: 0,
-    // kaspa-pq bond spend-gate mergeset hardening: inert (u64::MAX) — the legacy own-body
-    // spend-gate is the active protection; activation is a coordinated hard fork (see the field doc).
-    bond_spend_gate_mergeset_activation_daa_score: u64::MAX,
+    // kaspa-pq bond spend-gate mergeset hardening: GENESIS-ACTIVE here (2026-08-11 audit P0).
+    //
+    // The own-body gate it replaces only ever saw a block's own transactions, so a spend of a
+    // non-releasable bond's locked output-0 riding in a MERGE-BLUE block was accepted — the
+    // collateral could be withdrawn while the bond still read `Active`, which is precisely the
+    // backing `W_i(E) = min{C_i(E), λ·B_i(E)}` and every slashing rule assume exists. The
+    // acceptance-time SKIP (`BondSpendFilter`) has been implemented and dormant behind this
+    // fence; on a network that starts with it there is no history to fork, so it starts at 0
+    // and the legacy own-body gate stands down (see `verify_expected_utxo_state`).
+    bond_spend_gate_mergeset_activation_daa_score: 0,
     // kaspa-pq liveness-first DNS finality: attestation participation feeds StakeScore, rewards,
     // and health, but shipped networks do not make insufficient attestation stake a base-ledger
     // validity failure. Private/research networks can lower this fence when explicitly testing the
@@ -1118,8 +1183,20 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // alone cannot reroute fees there). NOT a genesis-block input; the classification change
     // rides the ADR-0007 Phase-3 re-genesis (BlockRewardData/VirtualState store-format change).
     finality_fee_activation_daa_score: 0,
-    // kaspa-pq bond spend-gate mergeset hardening: inert (u64::MAX) on mainnet+testnet — the legacy
-    // own-body spend-gate stays the active protection until a coordinated activation (see field doc).
+    // kaspa-pq bond spend-gate mergeset hardening: still inert (u64::MAX) on mainnet+testnet, and
+    // that is now a SCHEDULING decision rather than a default (2026-08-11 audit P0).
+    //
+    // The hole is real and open here: the legacy own-body gate never sees a spend that arrives via
+    // the MERGESET, so a validator can withdraw its locked collateral out from under an `Active`
+    // bond — removing exactly the backing `λ·B_i` caps weight against and slashing threatens.
+    // Devnet/simnet start with the acceptance-time skip at genesis (see GENESIS_ACTIVE_DNS_PARAMS);
+    // a public network cannot, because activating it re-classifies transactions and is therefore a
+    // coordinated hard fork with real history behind it.
+    //
+    // It must move in the SAME release as the VLT shadow fence — that fence turns on challenge
+    // slashing, and slashing an unbacked bond is theatre. See
+    // `docs/testnet10-vlt-shadow-fork-runbook.md`, which refuses to have its `H` chosen until
+    // this and the forged-evidence gap close.
     bond_spend_gate_mergeset_activation_daa_score: u64::MAX,
     // kaspa-pq liveness-first DNS finality: keep attestation below the base-chain validity layer.
     // Missing or below-floor shards degrade StakeScore / DNS health and pause finality-dependent
@@ -1383,6 +1460,8 @@ pub const MAINNET_PARAMS: Params = Params {
     // Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(PRODUCTION_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
+    // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
+    pow_palw_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1487,6 +1566,9 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
+    // PALW LLM PoW: inert on testnet-10 until its own fork (the shadow-fork runbook pattern:
+    // scheduling it is one ForkActivation constant on a coordinated build).
+    pow_palw_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
@@ -1565,6 +1647,8 @@ pub const SIMNET_PARAMS: Params = Params {
     // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::never(),
+    // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
+    pow_palw_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1616,7 +1700,11 @@ pub const DEVNET_PARAMS: Params = Params {
     max_difficulty_target: MAX_DIFFICULTY_TARGET,
     max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
     past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
-    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    // PALW 0.1 bps: with `difficulty_sample_rate = 1` (every block sampled) the window size IS the
+    // window duration in blocks. 264 blocks × 10 s ≈ the same 2 641 s DAA window duration the
+    // sampled 661-slot window models on ≥1-bps networks; keeping 661 here would slow difficulty
+    // response to ~1.8 h of chain time for no extra fidelity.
+    difficulty_window_size: 264,
     min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
     coinbase_payload_script_public_key_max_len: 150,
     max_coinbase_payload_len: 204,
@@ -1651,7 +1739,9 @@ pub const DEVNET_PARAMS: Params = Params {
     max_block_level: 250,
     pruning_proof_m: 1000,
 
-    blockrate: BlockrateParams::new::<10>(),
+    // PALW LLM PoW runs at 0.1 bps — one block per 10 s, sized so one deterministic
+    // Qwen3.5-2B inference (~1-3 s/attempt) is a meaningful fraction of the block interval.
+    blockrate: BlockrateParams::new_deci_bps(),
 
     pre_crescendo_target_time_per_block: 100,
 
@@ -1664,14 +1754,59 @@ pub const DEVNET_PARAMS: Params = Params {
     // from genesis (`full_reward_split_daa_score = 0`); the PoS-v2 "本格版" economics stay fenced
     // (`pos_v2_activation_daa_score = u64::MAX`). The small epoch/window (epoch 100, reorg/evidence
     // 300, unbond 700, reward 600 — consistent with U ≥ R+E) keep the PR-10.11-throttled StakeScore
-    // aggregation walk cheap on the ~10 bps devnet (amortized O(1) per block).
+    // aggregation walk cheap on the devnet (amortized O(1) per block). NOTE (PALW 0.1 bps): these
+    // windows are BLOCK counts, so at one block per 10 s their wall-clock stretches 100× vs the
+    // old 10-bps devnet (epoch 100 blocks ≈ 17 min, unbond 700 ≈ ~2 h) — the U ≥ R+E shape and
+    // every consensus invariant are unchanged, but VLT harness timings must budget for it.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::never(),
+    // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
+    // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
+    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture).
+    pow_palw_activation: ForkActivation::always(),
 };
 
 #[cfg(test)]
 mod consensus_params_id_tests {
     use super::*;
+
+    /// The hand-evaluated 0.1-bps blockrate constants must match the same formulas `Bps<BPS>`
+    /// encodes, evaluated at λ = 0.1 (`Bps` itself cannot express a sub-integer rate). Guards the
+    /// spelled-out values in `new_deci_bps` against drift in the shared duration constants.
+    #[test]
+    fn deci_bps_constants_match_formulas() {
+        use crate::config::{bps::calculate_ghostdag_k, constants::consensus::*};
+        let b = BlockrateParams::new_deci_bps();
+        let lambda = 0.1f64;
+        assert_eq!(b.target_time_per_block, 10_000, "1000 / 0.1 ms");
+        assert_eq!(b.ghostdag_k as u64, calculate_ghostdag_k(2.0 * NETWORK_DELAY_BOUND as f64 * lambda, GHOSTDAG_TAIL_DELTA));
+        // Per-block sample rates floor at 1 (0.1 · interval < 1 for both windows).
+        assert_eq!(b.past_median_time_sample_rate, 1);
+        assert_eq!(b.difficulty_sample_rate, 1);
+        // Formula floors: k/2 = 2 < 10 parents; 2k = 8 < 180 mergeset.
+        assert_eq!(b.max_block_parents, 10);
+        assert_eq!(b.mergeset_size_limit, 180);
+        // Duration-scaled depths: λ · duration, exactly.
+        assert_eq!(b.merge_depth as f64, lambda * MERGE_DEPTH_DURATION as f64);
+        assert_eq!(b.finality_depth as f64, lambda * FINALITY_DURATION as f64);
+        assert_eq!(b.coinbase_maturity as f64, lambda * COINBASE_MATURITY_SECONDS as f64);
+        // Pruning: the prunality lower bound at these constants sits below the duration term,
+        // so the duration term wins — recompute both sides to keep that claim honest.
+        let lower_bound = b.finality_depth
+            + b.merge_depth * 2
+            + 4 * b.mergeset_size_limit * b.ghostdag_k as u64
+            + 2 * b.ghostdag_k as u64
+            + 2;
+        assert!(lower_bound <= b.pruning_depth, "prunality lower bound {lower_bound} must not exceed pruning depth");
+        assert_eq!(b.pruning_depth as f64, lambda * PRUNING_DURATION as f64);
+        // The devnet preset actually runs these params with PALW active from genesis.
+        assert_eq!(DEVNET_PARAMS.blockrate.target_time_per_block, 10_000);
+        assert!(DEVNET_PARAMS.pow_palw_activation.is_active(0));
+        // And the integer-bps view truncates to zero — the reason emission consumes
+        // `target_time_per_block_history` instead (see CoinbaseManager).
+        assert_eq!(DEVNET_PARAMS.bps(), 0);
+        assert_eq!(DEVNET_PARAMS.target_time_per_block_history().after(), 10_000);
+    }
 
     #[test]
     fn a_different_rule_set_gets_a_different_fingerprint() {
@@ -1704,11 +1839,17 @@ mod consensus_params_id_tests {
         // Report every preset rather than dying on the first. All four moved together on that
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
+        //
+        // PALW LLM PoW (this branch): all four moved again because `pow_palw_activation` entered
+        // the hash (every preset writes its daa_score, so even the `never()` nets shift — same
+        // mechanics as the TokenParams merge above). Devnet moved for three additional,
+        // deliberate reasons: `always()` activation, the 0.1-bps `new_deci_bps` blockrate, and
+        // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "2b76a4c83c35d0500c130d4bde4e07c3883224ddc1ba567a57a88e119494f07a"),
-            ("testnet", TESTNET_PARAMS, "0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3"),
-            ("simnet", SIMNET_PARAMS, "87d372da26991e1549e9055c0ba3053d1797d738a3f6c88a23ea73976b9267e2"),
-            ("devnet", DEVNET_PARAMS, "40fee8400f4e4b1b2f2b1b471389181d3ce58cb2a8b07e46ccf82f654e13cd7c"),
+            ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
+            ("testnet", TESTNET_PARAMS, "1f79bd30272401a6cb63004bbcb07a453329638b310d215c91985830b9f91136"),
+            ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
+            ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
