@@ -1,0 +1,30 @@
+[package]
+name = "misaka-palw-worker"
+description = "MISAKA palw-lite worker: the pinned Qwen3.5-2B llama.cpp runtime behind the misaka-palw subprocess contract (--mode manifest / self-job / verify), emitting the misaka.palw.testnet-submission.v3 MatchProjection from a real, deterministic Metal inference"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "palw-worker"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+
+blake2b_simd.workspace = true
+faster-hex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

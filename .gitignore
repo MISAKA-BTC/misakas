@@ -45,6 +45,7 @@ rothschild-generated-key.hex
 **/*private*key*
 **/*.secret
 
-# MISAKA VLT private devnet working directory (validator keys, rocksdb, logs) — never committed.
+# MISAKA VLT private devnet working directories (validator keys, rocksdb, logs) — never committed.
 .misaka-vlt-devnet/
+.misaka-vlt-real/
 .soak-t10/

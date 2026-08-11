@@ -1018,6 +1018,46 @@ pub mod palw_pins {
     pub const METAL_RUNTIME_CLASS: &str = "palw-fp-per-vendor/apple-metal-arm64/v1";
 }
 
+/// Immutable upstream pins of the **Qwen3.5-2B palw-lite** profile — the small-model profile a
+/// real-compute devnet actually runs, where five executors and their verifier committees all
+/// share one machine and a 24 GB model per replay is not an experiment anyone can finish.
+///
+/// Same shape and same derivations as [`palw_pins`], different artifact. The runtime here is the
+/// in-repo `misaka-palw-worker` (plain upstream llama.cpp driven through a pinned shim — no
+/// observer patch), so `LLAMA_PATCH_SHA256`'s slot carries the literal `"unpatched"`: the derive
+/// hashes whatever string is pinned, and an honest "no patch" must still be load-bearing in the
+/// identity rather than an empty field two different builds could share.
+pub mod qwen35_pins {
+    /// SHA-256 of `Qwen3.5-2B-Q4_K_M.gguf` (the Hugging Face LFS object digest).
+    pub const GGUF_SHA256: &str = "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223";
+    /// Bytes.
+    pub const GGUF_SIZE: u64 = 1_280_835_840;
+    pub const GGUF_FILENAME: &str = "Qwen3.5-2B-Q4_K_M.gguf";
+    /// The base metadata (tokenizer, config) the GGUF was converted from. Part of the model
+    /// identity because a different tokenizer turns the same weights into a different function
+    /// from prompt bytes to tokens.
+    pub const BASE_REPO_ID: &str = "Qwen/Qwen3.5-2B";
+    pub const BASE_REVISION: &str = "15852e8c16360a2fea060d615a32b45270f8a8fc";
+
+    /// Pinned upstream `ggml-org/llama.cpp` commit the worker links against.
+    pub const LLAMA_COMMIT: &str = "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a";
+    /// `git rev-list --count` at that commit — llama.cpp's own build-number convention.
+    pub const LLAMA_BUILD_NUMBER: u64 = 10_358;
+    /// No patch is applied; the literal is hashed so "unpatched" is itself part of the identity.
+    pub const LLAMA_PATCH_SHA256: &str = "unpatched";
+
+    /// Canonical tag for the worker's build profile: Release, arm64, Metal on with the shader
+    /// library embedded, `GGML_NATIVE` off (no per-host tuning), LTO off, Accelerate on, CUDA
+    /// off, all ggml/llama libs linked statically into the worker.
+    pub const METAL_BUILD_PROFILE: &str = "release/arm64/metal-embed/no-native/no-lto/accelerate-blas-apple/cuda-off/static/v1";
+
+    /// The determinism class: same fp-per-vendor regime as [`super::palw_pins`] but a distinct
+    /// class, because these are different kernels — a byte comparison between this runtime and
+    /// the patched 35B one would be meaningless, and [`super::select_verifiers`] must never draw
+    /// such a pair.
+    pub const METAL_RUNTIME_CLASS: &str = "misaka-palw-lite-fp/apple-metal-arm64/v1";
+}
+
 /// `h_M` for a GGUF-distributed model: keyed digest over the content digest, size, filename, and
 /// the base-metadata revision the GGUF was converted from.
 ///
@@ -1198,6 +1238,55 @@ pub fn palw_qwen36_metal_entry() -> ModelCostEntry {
     }
 }
 
+/// Per-job token ceiling for the Qwen3.5-2B palw-lite profile. `prefill + decode` per job is
+/// bounded by this (see `normalize_vlt`'s `ReceiptExceedsSpecLimit`), so it is the audit-cost
+/// bound for a committee that must fully re-execute every accepted job — sized so one replay is
+/// seconds on the machine class the profile names.
+pub const PALW_QWEN35_2B_MAX_TOKENS: u32 = 512;
+
+/// The registered [`ModelCostEntry`] for the pinned Qwen3.5-2B palw-lite Metal profile.
+pub fn palw_qwen35_2b_metal_entry() -> ModelCostEntry {
+    ModelCostEntry {
+        model_weights_hash: derive_model_weights_hash(
+            qwen35_pins::GGUF_SHA256,
+            qwen35_pins::GGUF_SIZE,
+            qwen35_pins::GGUF_FILENAME,
+            qwen35_pins::BASE_REPO_ID,
+            qwen35_pins::BASE_REVISION,
+        ),
+        runtime_hash: derive_runtime_hash(
+            qwen35_pins::LLAMA_COMMIT,
+            qwen35_pins::LLAMA_PATCH_SHA256,
+            qwen35_pins::LLAMA_BUILD_NUMBER,
+            qwen35_pins::METAL_BUILD_PROFILE,
+        ),
+        runtime_class_id: derive_runtime_class_id(qwen35_pins::METAL_RUNTIME_CLASS),
+        // ρ = 1.0 — a devnet calibration, stated as such: on the devnet this profile is the only
+        // model actually executed, so it serves as its own reference and one VLT unit is one of
+        // its reference-token-equivalents. A production registration alongside the 35B profile
+        // would calibrate this ρ against that reference instead (§8.4), not reuse 1.0.
+        rho_micro: VLT_MICRO as u64,
+        max_tokens: PALW_QWEN35_2B_MAX_TOKENS,
+    }
+}
+
+/// The floor job a real-compute devnet's `min_network_compute` is sized against: 8 prefill and
+/// 8 decode tokens, in µRTE under `(a, b)` — deliberately smaller than any real prompt+decode, so
+/// the activation gate asks for "a committee's worth of modest real jobs", not for a 35B-sized
+/// window nothing on a devnet can fill (the production 1e11 default is ~three 4096-token jobs of
+/// the [`palw_pins`] profile — several hundred small-model jobs, i.e. an overlay that reports
+/// inactive forever while behaving correctly).
+pub fn palw_devnet_floor_job_vlt(prefill_cost_micro: u64, decode_cost_micro: u64) -> u128 {
+    const FLOOR_PREFILL_TOKENS: u128 = 8;
+    const FLOOR_DECODE_TOKENS: u128 = 8;
+    let token_cost = (prefill_cost_micro as u128)
+        .saturating_mul(FLOOR_PREFILL_TOKENS)
+        .saturating_add((decode_cost_micro as u128).saturating_mul(FLOOR_DECODE_TOKENS));
+    // ρ = 1.0 for the profile this floor is sized against (`palw_qwen35_2b_metal_entry`); same
+    // µ-arithmetic as `devnet_fixture_job_vlt`, so the two floors are comparable numbers.
+    VLT_MICRO.saturating_mul(token_cost) / VLT_MICRO
+}
+
 /// The **determinism class** two replicas must share for a byte-exact comparison to be a fair
 /// test. Corresponds to PALW's `runtime_class_id`.
 ///
@@ -1366,6 +1455,20 @@ impl ModelCostTable {
         let mut table = Self::EMPTY;
         table.len = 1;
         table.entries[0] = palw_qwen36_metal_entry();
+        table
+    }
+
+    /// The registry a **real-compute devnet** ships: both pinned Metal profiles, so the operator
+    /// chooses the model by which worker binary they point `--compute-worker` at — the node
+    /// resolves its entry from the worker's probed `runtime_hash`, and the two runtime hashes are
+    /// distinct by construction. On one machine that choice is effectively
+    /// [`palw_qwen35_2b_metal_entry`]; the 35B entry stays registered so pointing a real PALW
+    /// worker at the same devnet is a configuration, not a fork.
+    pub fn palw_metal_devnet() -> Self {
+        let mut table = Self::EMPTY;
+        table.len = 2;
+        table.entries[0] = palw_qwen36_metal_entry();
+        table.entries[1] = palw_qwen35_2b_metal_entry();
         table
     }
 
@@ -4423,6 +4526,50 @@ mod tests {
         assert_eq!(table.live().len(), 1);
         assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
         assert!(table.lookup(e.runtime_hash, e.model_weights_hash).is_none(), "lookup must not be order-insensitive");
+    }
+
+    /// Same contract for the Qwen3.5-2B palw-lite profile: identities re-derivable from the
+    /// published pins, distinct from each other AND from every identity of the 35B profile — the
+    /// worker-side registration check keys on `runtime_hash`, and the committee draw on
+    /// `runtime_class_id`, so a collision on either would let the wrong pair look comparable.
+    #[test]
+    fn qwen35_2b_registry_derives_from_the_published_pins() {
+        let e = palw_qwen35_2b_metal_entry();
+        assert_eq!(
+            e.model_weights_hash,
+            derive_model_weights_hash(
+                "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+                1_280_835_840,
+                "Qwen3.5-2B-Q4_K_M.gguf",
+                "Qwen/Qwen3.5-2B",
+                "15852e8c16360a2fea060d615a32b45270f8a8fc",
+            )
+        );
+        assert_eq!(
+            e.runtime_hash,
+            derive_runtime_hash("030ebb558a5820b444a8f836ed5cdd46c9b4bd7a", "unpatched", 10_358, qwen35_pins::METAL_BUILD_PROFILE)
+        );
+        assert_eq!(e.runtime_class_id, derive_runtime_class_id("misaka-palw-lite-fp/apple-metal-arm64/v1"));
+        assert_eq!(e.rho_micro, VLT_MICRO as u64);
+        assert_eq!(e.max_tokens, PALW_QWEN35_2B_MAX_TOKENS);
+
+        // Distinct from the 35B profile in every identity dimension.
+        let q36 = palw_qwen36_metal_entry();
+        assert_ne!(e.model_weights_hash, q36.model_weights_hash);
+        assert_ne!(e.runtime_hash, q36.runtime_hash);
+        assert_ne!(e.runtime_class_id, q36.runtime_class_id, "distinct kernels must be distinct determinism classes");
+
+        // The devnet registry resolves each worker to exactly its own profile.
+        let table = ModelCostTable::palw_metal_devnet();
+        assert_eq!(table.live().len(), 2);
+        assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
+        assert!(table.lookup(q36.model_weights_hash, q36.runtime_hash).is_some());
+        assert!(table.lookup(e.model_weights_hash, q36.runtime_hash).is_none(), "cross-pairing must not resolve");
+        assert_eq!(table.live().iter().filter(|entry| entry.runtime_hash == e.runtime_hash).count(), 1);
+
+        // The activation floor is a couple of modest real jobs, not a 35B-sized window.
+        let floor = palw_devnet_floor_job_vlt(VLT_MICRO as u64, 8 * VLT_MICRO as u64);
+        assert_eq!(floor, 72 * VLT_MICRO, "8 prefill + 8 decode under (a=1, b=8) is 72 VLT");
     }
 
     #[test]

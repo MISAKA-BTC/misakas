@@ -1542,7 +1542,12 @@ impl DnsParams {
         #[cfg(not(feature = "devnet-vlt-fixture"))]
         let model_cost_table = {
             let _ = genesis_hash;
-            crate::vlt::ModelCostTable::palw_qwen36_metal()
+            // Both pinned Metal profiles: the node resolves its own entry from the worker it was
+            // pointed at, and on a one-machine devnet that worker is realistically the Qwen3.5-2B
+            // palw-lite one — five executors plus their replay committees cannot share a 24 GB
+            // model. The 35B profile stays registered so a real PALW worker is a configuration
+            // choice on the same network, not a different network.
+            crate::vlt::ModelCostTable::palw_metal_devnet()
         };
         // `W_min` is profile-relative and the shipped value is the real PALW profile's: it comes
         // from "a handful of validators each having completed roughly one full job" at that
@@ -1555,8 +1560,13 @@ impl DnsParams {
         #[cfg(feature = "devnet-vlt-fixture")]
         let min_network_compute = (1 + self.vlt.min_verifier_confirmations as u128)
             * crate::vlt::devnet_fixture_job_vlt(self.vlt.prefill_cost_micro, self.vlt.decode_cost_micro);
+        // Same derivation as the fixture arm — "a committee's worth of modest jobs" — but over the
+        // small-model floor, because the inherited production default is sized for the 35B
+        // profile (~three 4096-token jobs): behind it, a 2B devnet runs the whole overlay
+        // correctly and still reports `below_min_network_compute` forever.
         #[cfg(not(feature = "devnet-vlt-fixture"))]
-        let min_network_compute = self.vlt.min_network_compute;
+        let min_network_compute = (1 + self.vlt.min_verifier_confirmations as u128)
+            * crate::vlt::palw_devnet_floor_job_vlt(self.vlt.prefill_cost_micro, self.vlt.decode_cost_micro);
         self.vlt = VltParams {
             vlt_shadow_activation_daa_score: shadow_daa,
             vlt_activation_daa_score: u64::MAX,
