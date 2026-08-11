@@ -7167,6 +7167,53 @@ impl VirtualStateProcessor {
         if self.dns_params.is_none() {
             return Ok(()); // overlay dormant — the snapshot is empty and nothing reads it
         }
+
+        // TRUSTLESS GATE — this runs BEFORE the write, and the write is to the LIVE consensus
+        // store (all three IBD call sites hand this a live session; the headers-proof one
+        // deliberately re-obtains it after `staging.commit()`). The doc above used to argue the
+        // first post-pruning block's `c == v` would catch a forged snapshot, and it would —
+        // *after* peer-supplied bond records and a peer-supplied `reserve_balance` were already
+        // durable, with no rollback. Forged bonds are voting weight and reward eligibility; a
+        // forged reserve balance is minted coin in the §F drip. Detection after the write is not
+        // a defence.
+        //
+        // What makes it checkable: `Header::overlay_commitment_root` commits to the overlay
+        // snapshot as-of the block's SELECTED PARENT, and this snapshot is as-of `pruning_point`
+        // — so any header whose selected parent is the pruning point commits to exactly this
+        // value. Headers are synced before the utxoset sidecars in every IBD path, so such a
+        // child normally exists by now, and it arrived under PoW + the headers proof.
+        let got = snapshot.commitment_root();
+        let mut verified_against = None;
+        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
+            .map(|c| c.read().iter().copied().collect())
+            .unwrap_or_default();
+        {
+            for child in children {
+                let Ok(header) = self.headers_store.get_header(child) else { continue };
+                if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
+                    continue; // commits to a different parent's snapshot — not this one
+                }
+                if header.overlay_commitment_root != got {
+                    return Err(PruningImportError::ImportedOverlayCommitmentMismatch(
+                        pruning_point,
+                        got,
+                        header.overlay_commitment_root,
+                    ));
+                }
+                verified_against = Some(child);
+                break;
+            }
+        }
+        if verified_against.is_none() {
+            // No child header to check against yet. Refuse rather than write on trust: an
+            // unverifiable snapshot is exactly the one an attacker supplies, and the IBD can be
+            // retried once the child header is in hand.
+            warn!(
+                "[overlay-import] refusing the pruning-point overlay snapshot for {pruning_point}: no header whose selected parent is \
+                 the pruning point is available to verify its commitment {got} against"
+            );
+            return Err(PruningImportError::ImportedOverlayCommitmentMismatch(pruning_point, got, Hash64::default()));
+        }
         info!(
             "Importing the overlay snapshot of the pruning point {} ({} bonds, {} window blocks, reserve {})",
             pruning_point,
