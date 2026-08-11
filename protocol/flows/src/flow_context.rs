@@ -565,6 +565,13 @@ impl FlowContext {
         self.ibd_candidates.write().set_validation(id, validation);
     }
 
+    /// A proof fetch failed in transport (not judged). Charges the candidate's retry budget so a
+    /// flapping source cannot pin it at `proof_attempts == 0` and block the commit forever. See
+    /// [`IbdCandidateRegistry::note_proof_transport_failure`].
+    pub fn note_ibd_candidate_transport_failure(&self, id: CandidateId) {
+        self.ibd_candidates.write().note_proof_transport_failure(&id);
+    }
+
     /// Ask whoever can to verify the strongest chain nobody has checked yet.
     ///
     /// A no-op when there is nothing worth checking. Verified candidates are never re-nominated,

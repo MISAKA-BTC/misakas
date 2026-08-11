@@ -1018,6 +1018,46 @@ pub mod palw_pins {
     pub const METAL_RUNTIME_CLASS: &str = "palw-fp-per-vendor/apple-metal-arm64/v1";
 }
 
+/// Immutable upstream pins of the **Qwen3.5-2B palw-lite** profile — the small-model profile a
+/// real-compute devnet actually runs, where five executors and their verifier committees all
+/// share one machine and a 24 GB model per replay is not an experiment anyone can finish.
+///
+/// Same shape and same derivations as [`palw_pins`], different artifact. The runtime here is the
+/// in-repo `misaka-palw-worker` (plain upstream llama.cpp driven through a pinned shim — no
+/// observer patch), so `LLAMA_PATCH_SHA256`'s slot carries the literal `"unpatched"`: the derive
+/// hashes whatever string is pinned, and an honest "no patch" must still be load-bearing in the
+/// identity rather than an empty field two different builds could share.
+pub mod qwen35_pins {
+    /// SHA-256 of `Qwen3.5-2B-Q4_K_M.gguf` (the Hugging Face LFS object digest).
+    pub const GGUF_SHA256: &str = "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223";
+    /// Bytes.
+    pub const GGUF_SIZE: u64 = 1_280_835_840;
+    pub const GGUF_FILENAME: &str = "Qwen3.5-2B-Q4_K_M.gguf";
+    /// The base metadata (tokenizer, config) the GGUF was converted from. Part of the model
+    /// identity because a different tokenizer turns the same weights into a different function
+    /// from prompt bytes to tokens.
+    pub const BASE_REPO_ID: &str = "Qwen/Qwen3.5-2B";
+    pub const BASE_REVISION: &str = "15852e8c16360a2fea060d615a32b45270f8a8fc";
+
+    /// Pinned upstream `ggml-org/llama.cpp` commit the worker links against.
+    pub const LLAMA_COMMIT: &str = "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a";
+    /// `git rev-list --count` at that commit — llama.cpp's own build-number convention.
+    pub const LLAMA_BUILD_NUMBER: u64 = 10_358;
+    /// No patch is applied; the literal is hashed so "unpatched" is itself part of the identity.
+    pub const LLAMA_PATCH_SHA256: &str = "unpatched";
+
+    /// Canonical tag for the worker's build profile: Release, arm64, Metal on with the shader
+    /// library embedded, `GGML_NATIVE` off (no per-host tuning), LTO off, Accelerate on, CUDA
+    /// off, all ggml/llama libs linked statically into the worker.
+    pub const METAL_BUILD_PROFILE: &str = "release/arm64/metal-embed/no-native/no-lto/accelerate-blas-apple/cuda-off/static/v1";
+
+    /// The determinism class: same fp-per-vendor regime as [`super::palw_pins`] but a distinct
+    /// class, because these are different kernels — a byte comparison between this runtime and
+    /// the patched 35B one would be meaningless, and [`super::select_verifiers`] must never draw
+    /// such a pair.
+    pub const METAL_RUNTIME_CLASS: &str = "misaka-palw-lite-fp/apple-metal-arm64/v1";
+}
+
 /// `h_M` for a GGUF-distributed model: keyed digest over the content digest, size, filename, and
 /// the base-metadata revision the GGUF was converted from.
 ///
@@ -1198,6 +1238,55 @@ pub fn palw_qwen36_metal_entry() -> ModelCostEntry {
     }
 }
 
+/// Per-job token ceiling for the Qwen3.5-2B palw-lite profile. `prefill + decode` per job is
+/// bounded by this (see `normalize_vlt`'s `ReceiptExceedsSpecLimit`), so it is the audit-cost
+/// bound for a committee that must fully re-execute every accepted job — sized so one replay is
+/// seconds on the machine class the profile names.
+pub const PALW_QWEN35_2B_MAX_TOKENS: u32 = 512;
+
+/// The registered [`ModelCostEntry`] for the pinned Qwen3.5-2B palw-lite Metal profile.
+pub fn palw_qwen35_2b_metal_entry() -> ModelCostEntry {
+    ModelCostEntry {
+        model_weights_hash: derive_model_weights_hash(
+            qwen35_pins::GGUF_SHA256,
+            qwen35_pins::GGUF_SIZE,
+            qwen35_pins::GGUF_FILENAME,
+            qwen35_pins::BASE_REPO_ID,
+            qwen35_pins::BASE_REVISION,
+        ),
+        runtime_hash: derive_runtime_hash(
+            qwen35_pins::LLAMA_COMMIT,
+            qwen35_pins::LLAMA_PATCH_SHA256,
+            qwen35_pins::LLAMA_BUILD_NUMBER,
+            qwen35_pins::METAL_BUILD_PROFILE,
+        ),
+        runtime_class_id: derive_runtime_class_id(qwen35_pins::METAL_RUNTIME_CLASS),
+        // ρ = 1.0 — a devnet calibration, stated as such: on the devnet this profile is the only
+        // model actually executed, so it serves as its own reference and one VLT unit is one of
+        // its reference-token-equivalents. A production registration alongside the 35B profile
+        // would calibrate this ρ against that reference instead (§8.4), not reuse 1.0.
+        rho_micro: VLT_MICRO as u64,
+        max_tokens: PALW_QWEN35_2B_MAX_TOKENS,
+    }
+}
+
+/// The floor job a real-compute devnet's `min_network_compute` is sized against: 8 prefill and
+/// 8 decode tokens, in µRTE under `(a, b)` — deliberately smaller than any real prompt+decode, so
+/// the activation gate asks for "a committee's worth of modest real jobs", not for a 35B-sized
+/// window nothing on a devnet can fill (the production 1e11 default is ~three 4096-token jobs of
+/// the [`palw_pins`] profile — several hundred small-model jobs, i.e. an overlay that reports
+/// inactive forever while behaving correctly).
+pub fn palw_devnet_floor_job_vlt(prefill_cost_micro: u64, decode_cost_micro: u64) -> u128 {
+    const FLOOR_PREFILL_TOKENS: u128 = 8;
+    const FLOOR_DECODE_TOKENS: u128 = 8;
+    let token_cost = (prefill_cost_micro as u128)
+        .saturating_mul(FLOOR_PREFILL_TOKENS)
+        .saturating_add((decode_cost_micro as u128).saturating_mul(FLOOR_DECODE_TOKENS));
+    // ρ = 1.0 for the profile this floor is sized against (`palw_qwen35_2b_metal_entry`); same
+    // µ-arithmetic as `devnet_fixture_job_vlt`, so the two floors are comparable numbers.
+    VLT_MICRO.saturating_mul(token_cost) / VLT_MICRO
+}
+
 /// The **determinism class** two replicas must share for a byte-exact comparison to be a fair
 /// test. Corresponds to PALW's `runtime_class_id`.
 ///
@@ -1366,6 +1455,20 @@ impl ModelCostTable {
         let mut table = Self::EMPTY;
         table.len = 1;
         table.entries[0] = palw_qwen36_metal_entry();
+        table
+    }
+
+    /// The registry a **real-compute devnet** ships: both pinned Metal profiles, so the operator
+    /// chooses the model by which worker binary they point `--compute-worker` at — the node
+    /// resolves its entry from the worker's probed `runtime_hash`, and the two runtime hashes are
+    /// distinct by construction. On one machine that choice is effectively
+    /// [`palw_qwen35_2b_metal_entry`]; the 35B entry stays registered so pointing a real PALW
+    /// worker at the same devnet is a configuration, not a fork.
+    pub fn palw_metal_devnet() -> Self {
+        let mut table = Self::EMPTY;
+        table.len = 2;
+        table.entries[0] = palw_qwen36_metal_entry();
+        table.entries[1] = palw_qwen35_2b_metal_entry();
         table
     }
 
@@ -2341,6 +2444,20 @@ fn recovery_state(last_finalized_anchor: Hash64, total_weight: u128, blocker: Vl
     }
 }
 
+/// How far back the caller's canonical-reservation scan looks for the start of the current
+/// contiguous run of magnitude-eligible frozen snapshots. A constant, because the scan bound is
+/// part of what makes the derived epoch canonical: two nodes with different bounds could name
+/// different run starts for one chain.
+pub const CANONICAL_RESERVATION_SCAN_CAP: u64 = 64;
+
+/// The **magnitude** half of [`vlt_activation_eligibility`], over a persisted
+/// [`VltVotingSnapshot`] row: weight at/above the floor, spread over enough validators. The
+/// local-availability half (resolution completeness, a finalized source anchor) is deliberately
+/// absent — those gate when THIS node may act, and canonical history must not depend on them.
+pub fn snapshot_row_magnitude_eligible(total_weight: u128, credited_validators: usize, params: &VltParams) -> bool {
+    total_weight > 0 && total_weight >= params.min_network_compute && credited_validators >= params.min_active_validators as usize
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn tick_vlt_activation(
     shadow_active: bool,
@@ -2352,7 +2469,19 @@ pub fn tick_vlt_activation(
     last_finalized_anchor: Hash64,
     eligibility: Result<(), VltActivationBlocker>,
     weight_fence_daa: u64,
+    // The chain-canonical epoch a reservation must be stamped with: the start of the current
+    // contiguous run of magnitude-eligible frozen snapshots (the caller derives it from the
+    // write-once per-epoch rows). `current_epoch` is when this node OBSERVED eligibility — a
+    // recompute-cadence fact that trails the chain by a sync-path-dependent amount, so stamping
+    // it into the record made `activation_epoch` differ between a node that lived the epoch and
+    // one that replayed or imported it: the §12 identity tuple then disagreed on its one
+    // machine-derived field while every root matched. Found live: five present nodes said 37, a
+    // pruning-imported sixth said 36 — and 36 is the canonical answer.
+    canonical_scheduled_epoch: u64,
 ) -> (Option<VltActivationRecord>, VltActivationState) {
+    // Never schedule the future: the canonical epoch comes from persisted rows so it cannot
+    // exceed the wall epoch, but the machine's invariants should not rest on a caller's walk.
+    let canonical_scheduled_epoch = canonical_scheduled_epoch.min(current_epoch);
     use PersistedVltActivationState as P;
     if !shadow_active {
         return (prev.cloned(), VltActivationState::PreShadow);
@@ -2388,18 +2517,22 @@ pub fn tick_vlt_activation(
         Some(r) if r.state == P::Recovery => match eligibility {
             Err(blocker) => (Some(r.clone()), recovery_state(last_finalized_anchor, total_weight, blocker)),
             Ok(()) => {
+                // The re-reservation is stamped with the start of the CURRENT eligibility run —
+                // the epoch weight came back, not the epoch this node noticed. Same canonical
+                // coordinate as first activation, same reason: a replayer must derive the same
+                // record.
                 let record = VltActivationRecord {
                     state: P::ActivationScheduled,
                     source_anchor: last_finalized_anchor,
                     snapshot_epoch: epoch,
                     snapshot_root,
-                    scheduled_at_epoch: current_epoch,
+                    scheduled_at_epoch: canonical_scheduled_epoch,
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
                     ..r.clone()
                 };
                 let state = VltActivationState::ActivationScheduled {
-                    activation_epoch: current_epoch + 1,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     source_anchor: last_finalized_anchor,
                     snapshot_root,
                     total_weight,
@@ -2448,9 +2581,13 @@ pub fn tick_vlt_activation(
                 },
             ),
         },
-        // No record yet, or Awaiting: an eligible snapshot reserves the NEXT epoch, never this
-        // one. The validator set and its weights are fixed within an epoch, and compute
-        // finalized in `E` is usable from `E+1` at the earliest.
+        // No record yet, or Awaiting: an eligible snapshot reserves the epoch AFTER the run of
+        // eligible snapshots began — never the run-start itself. The validator set and its
+        // weights are fixed within an epoch, and compute finalized in `E` is usable from `E+1`
+        // at the earliest. The stamp is the CANONICAL epoch, not this node's observation epoch:
+        // a node whose recompute noticed the run late still records the same reservation a
+        // replaying or importing node derives, and the `>=` activation gates below mean lateness
+        // costs it nothing but the delay it already had.
         _ => match eligibility {
             Err(blocker) => {
                 (Some(VltActivationRecord::awaiting()), VltActivationState::AwaitingEligibleSnapshot { weight_fence_daa, blocker })
@@ -2462,13 +2599,13 @@ pub fn tick_vlt_activation(
                     source_anchor: last_finalized_anchor,
                     snapshot_epoch: epoch,
                     snapshot_root,
-                    scheduled_at_epoch: current_epoch,
-                    activation_epoch: current_epoch + 1,
+                    scheduled_at_epoch: canonical_scheduled_epoch,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     total_weight,
                     quorum_weight: bft_quorum(total_weight),
                 };
                 let state = VltActivationState::ActivationScheduled {
-                    activation_epoch: current_epoch + 1,
+                    activation_epoch: canonical_scheduled_epoch + 1,
                     source_anchor: last_finalized_anchor,
                     snapshot_root,
                     total_weight,
@@ -3410,17 +3547,17 @@ mod tests {
         let tick = |newest: Option<(u64, u128)>, validators: usize, confirmed: bool| {
             let e = vlt_activation_eligibility(true, newest.map_or(0, |(_, w)| w), validators, confirmed, &p);
             let last = if confirmed { anchor } else { Hash64::default() };
-            tick_vlt_activation(true, true, None, 10, newest, root, last, e, 5_000).1
+            tick_vlt_activation(true, true, None, 10, newest, root, last, e, 5_000, 10).1
         };
 
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
-            tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000).1,
+            tick_vlt_activation(false, false, None, 10, None, root, Hash64::default(), e_ok, 5_000, 10).1,
             VltActivationState::PreShadow
         );
         let e_ok = vlt_activation_eligibility(true, 5_000, 5, true, &p);
         assert_eq!(
-            tick_vlt_activation(true, false, None, 10, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000).1,
+            tick_vlt_activation(true, false, None, 10, Some((4, 5_000)), root, Hash64::default(), e_ok, 5_000, 10).1,
             VltActivationState::Shadow
         );
 
@@ -3463,7 +3600,8 @@ mod tests {
                 root,
                 anchor,
                 vlt_activation_eligibility(false, 9_000, 5, true, &p),
-                5_000
+                5_000,
+                10
             )
             .1,
             VltActivationState::AwaitingEligibleSnapshot { blocker: VltActivationBlocker::ResolutionIncomplete, .. }
@@ -3484,7 +3622,7 @@ mod tests {
             ..VltActivationRecord::awaiting()
         };
         let e = vlt_activation_eligibility(true, 0, 0, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 0)), root, anchor, e, 5_000);
+        let (r, s) = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 0)), root, anchor, e, 5_000, 10);
         assert!(matches!(s, VltActivationState::Recovery { .. }), "got {s:?}");
         assert!(!matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }), "Active must never fall back to bootstrap");
         // The record follows the report into Recovery — and keeps every stamped field, because
@@ -3499,7 +3637,7 @@ mod tests {
 
         // With the record Active and the snapshot healthy again ⇒ active, on live values.
         let e = vlt_activation_eligibility(true, 3_000, 5, true, &p);
-        let s = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 3_000)), root, anchor, e, 5_000).1;
+        let s = tick_vlt_activation(true, true, Some(&active), 10, Some((4, 3_000)), root, anchor, e, 5_000, 10).1;
         assert_eq!(
             s,
             VltActivationState::Active { epoch: 4, snapshot_root: root, total_weight: 3_000, quorum_weight: bft_quorum(3_000) }
@@ -3520,7 +3658,7 @@ mod tests {
         let fence = 5_000u64;
 
         // Epoch 10: eligible ⇒ a reservation for 11, persisted as such.
-        let (r, s) = tick_vlt_activation(true, true, None, 10, Some((4, 2_000)), root, anchor, ok(2_000), fence);
+        let (r, s) = tick_vlt_activation(true, true, None, 10, Some((4, 2_000)), root, anchor, ok(2_000), fence, 10);
         let scheduled = r.expect("above the weight fence the machine always yields a record");
         assert_eq!(scheduled.state, PersistedVltActivationState::ActivationScheduled);
         assert_eq!((scheduled.scheduled_at_epoch, scheduled.activation_epoch), (10, 11));
@@ -3538,13 +3676,13 @@ mod tests {
 
         // Still epoch 10 (a second recompute inside the epoch): the reservation holds, unchanged —
         // the step is idempotent within an epoch, so a restart that replays it rewrites nothing.
-        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 2_500)), h64(10), anchor, ok(2_500), fence);
+        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 2_500)), h64(10), anchor, ok(2_500), fence, 10);
         assert_eq!(r.as_ref(), Some(&scheduled), "a committed reservation is not re-stamped while it waits");
 
         // Epoch 11, the boundary: the re-evaluation passes ⇒ Active, stamped with the LIVE
         // snapshot the re-evaluation approved (epoch 5, new root), at the reserved epoch.
         let live_root = h64(11);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 2_400)), live_root, anchor, ok(2_400), fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 2_400)), live_root, anchor, ok(2_400), fence, 11);
         let active = r.expect("record");
         assert_eq!(active.state, PersistedVltActivationState::Active);
         assert_eq!((active.scheduled_at_epoch, active.activation_epoch), (10, 11));
@@ -3563,12 +3701,13 @@ mod tests {
             anchor,
             vlt_activation_eligibility(true, 100, 5, true, &p),
             fence,
+            12,
         );
         assert_eq!(r.as_ref().map(|r| r.state), Some(PersistedVltActivationState::Recovery), "weight loss pauses finality");
         assert!(matches!(s, VltActivationState::Recovery { total_weight: 100, min_network_compute: 1_000, .. }));
         // Eligibility holding while the record is still Active keeps it Active — the pause is
         // driven by the eligibility verdict, not by the passage of epochs.
-        let (r, s) = tick_vlt_activation(true, true, Some(&active), 13, Some((7, 3_000)), h64(13), anchor, ok(3_000), fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&active), 13, Some((7, 3_000)), h64(13), anchor, ok(3_000), fence, 13);
         assert_eq!(r.as_ref(), Some(&active), "an eligible Active record is not re-stamped");
         assert!(matches!(s, VltActivationState::Active { .. }));
 
@@ -3576,11 +3715,11 @@ mod tests {
         // a successful challenge can do that — cancels back to Awaiting rather than activating on
         // a proof that no longer holds. Same rule AT the boundary: re-evaluation failed, no switch.
         let refuted = vlt_activation_eligibility(true, 500, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 500)), root, anchor, refuted, fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 10, Some((4, 500)), root, anchor, refuted, fence, 10);
         assert_eq!(r, Some(VltActivationRecord::awaiting()), "cancelled, not silently kept");
         assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
         let refuted = vlt_activation_eligibility(true, 500, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 500)), root, anchor, refuted, fence);
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 11, Some((5, 500)), root, anchor, refuted, fence, 11);
         assert_eq!(r, Some(VltActivationRecord::awaiting()), "the boundary re-evaluation really evaluates");
         assert!(matches!(s, VltActivationState::AwaitingEligibleSnapshot { .. }));
 
@@ -3595,20 +3734,53 @@ mod tests {
             anchor,
             ok(2_000),
             fence,
+            14,
         );
         assert_eq!((r.as_ref().unwrap().scheduled_at_epoch, r.as_ref().unwrap().activation_epoch), (14, 15));
 
         // A node that crossed several epochs in one commit (restart, IBD) still activates at the
         // reserved epoch: `>=`, not `==`, but only through the same re-evaluation.
-        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 19, Some((12, 2_000)), h64(19), anchor, ok(2_000), fence);
+        let (r, _) = tick_vlt_activation(true, true, Some(&scheduled), 19, Some((12, 2_000)), h64(19), anchor, ok(2_000), fence, 19);
         let late = r.unwrap();
         assert_eq!((late.state, late.activation_epoch), (PersistedVltActivationState::Active, 11));
 
         // Below the fences the record passes through untouched — fences are a fact about the DAA
         // score, not about the machine, and lowering them back must not lose history.
         let e = vlt_activation_eligibility(true, 2_000, 5, true, &p);
-        let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence);
+        let (r, s) = tick_vlt_activation(true, false, Some(&active), 20, None, root, anchor, e, fence, 20);
         assert_eq!((r.as_ref(), s), (Some(&active), VltActivationState::Shadow));
+    }
+
+    /// The reservation is stamped with the CHAIN's epoch, not this node's observation epoch. A
+    /// recompute that first notices an eligible run late — or a replayer that steps through
+    /// history coarsely — must derive the record a node that lived every boundary derives: same
+    /// `scheduled_at_epoch`, same `activation_epoch`. Found live as the §12 identity tuple's one
+    /// disagreeing field: five present nodes said `activation_epoch=37`, a pruning-imported
+    /// sixth said 36 — and 36, the epoch after the eligible run began, is the canonical answer.
+    #[test]
+    fn late_observation_stamps_the_canonical_reservation() {
+        let root = h64(9);
+        let anchor = h64(7);
+        let p = VltParams { min_network_compute: 1_000, min_active_validators: 2, ..VltParams::INERT };
+        let ok = |w: u128| vlt_activation_eligibility(true, w, 5, true, &p);
+
+        // The run of eligible snapshots began at epoch 35; this node first observes at 37.
+        let (r, s) = tick_vlt_activation(true, true, None, 37, Some((35, 2_000)), root, anchor, ok(2_000), 5_000, 35);
+        let scheduled = r.unwrap();
+        assert_eq!((scheduled.scheduled_at_epoch, scheduled.activation_epoch), (35, 36));
+        assert!(matches!(s, VltActivationState::ActivationScheduled { activation_epoch: 36, .. }));
+
+        // The very next recompute activates — lateness costs nothing further, and the record
+        // carries the canonical epoch, never observation+1.
+        let (r, s) = tick_vlt_activation(true, true, Some(&scheduled), 37, Some((36, 2_400)), h64(11), anchor, ok(2_400), 5_000, 35);
+        let active = r.unwrap();
+        assert_eq!((active.state, active.activation_epoch), (PersistedVltActivationState::Active, 36));
+        assert!(matches!(s, VltActivationState::Active { .. }));
+
+        // A canonical epoch from a broken caller can never postdate the wall epoch: the machine
+        // clamps rather than scheduling the future.
+        let (r, _) = tick_vlt_activation(true, true, None, 10, Some((9, 2_000)), root, anchor, ok(2_000), 5_000, 99);
+        assert_eq!((r.as_ref().unwrap().scheduled_at_epoch, r.as_ref().unwrap().activation_epoch), (10, 11));
     }
 
     /// §10.2's return path, which is the whole of PR 6's state machine: weight collapses, the
@@ -3625,7 +3797,7 @@ mod tests {
         let dead = || vlt_activation_eligibility(true, 0, 0, true, &p);
         let fence = 5_000u64;
         let tick = |prev: Option<&VltActivationRecord>, epoch: u64, w: u128, e: Result<(), VltActivationBlocker>| {
-            tick_vlt_activation(true, true, prev, epoch, Some((epoch - 2, w)), root, anchor, e, fence)
+            tick_vlt_activation(true, true, prev, epoch, Some((epoch - 2, w)), root, anchor, e, fence, epoch)
         };
 
         // Reach Active the ordinary way.
@@ -4457,6 +4629,50 @@ mod tests {
         assert_eq!(table.live().len(), 1);
         assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
         assert!(table.lookup(e.runtime_hash, e.model_weights_hash).is_none(), "lookup must not be order-insensitive");
+    }
+
+    /// Same contract for the Qwen3.5-2B palw-lite profile: identities re-derivable from the
+    /// published pins, distinct from each other AND from every identity of the 35B profile — the
+    /// worker-side registration check keys on `runtime_hash`, and the committee draw on
+    /// `runtime_class_id`, so a collision on either would let the wrong pair look comparable.
+    #[test]
+    fn qwen35_2b_registry_derives_from_the_published_pins() {
+        let e = palw_qwen35_2b_metal_entry();
+        assert_eq!(
+            e.model_weights_hash,
+            derive_model_weights_hash(
+                "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+                1_280_835_840,
+                "Qwen3.5-2B-Q4_K_M.gguf",
+                "Qwen/Qwen3.5-2B",
+                "15852e8c16360a2fea060d615a32b45270f8a8fc",
+            )
+        );
+        assert_eq!(
+            e.runtime_hash,
+            derive_runtime_hash("030ebb558a5820b444a8f836ed5cdd46c9b4bd7a", "unpatched", 10_358, qwen35_pins::METAL_BUILD_PROFILE)
+        );
+        assert_eq!(e.runtime_class_id, derive_runtime_class_id("misaka-palw-lite-fp/apple-metal-arm64/v1"));
+        assert_eq!(e.rho_micro, VLT_MICRO as u64);
+        assert_eq!(e.max_tokens, PALW_QWEN35_2B_MAX_TOKENS);
+
+        // Distinct from the 35B profile in every identity dimension.
+        let q36 = palw_qwen36_metal_entry();
+        assert_ne!(e.model_weights_hash, q36.model_weights_hash);
+        assert_ne!(e.runtime_hash, q36.runtime_hash);
+        assert_ne!(e.runtime_class_id, q36.runtime_class_id, "distinct kernels must be distinct determinism classes");
+
+        // The devnet registry resolves each worker to exactly its own profile.
+        let table = ModelCostTable::palw_metal_devnet();
+        assert_eq!(table.live().len(), 2);
+        assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
+        assert!(table.lookup(q36.model_weights_hash, q36.runtime_hash).is_some());
+        assert!(table.lookup(e.model_weights_hash, q36.runtime_hash).is_none(), "cross-pairing must not resolve");
+        assert_eq!(table.live().iter().filter(|entry| entry.runtime_hash == e.runtime_hash).count(), 1);
+
+        // The activation floor is a couple of modest real jobs, not a 35B-sized window.
+        let floor = palw_devnet_floor_job_vlt(VLT_MICRO as u64, 8 * VLT_MICRO as u64);
+        assert_eq!(floor, 72 * VLT_MICRO, "8 prefill + 8 decode under (a=1, b=8) is 72 VLT");
     }
 
     #[test]

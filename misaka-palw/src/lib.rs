@@ -50,7 +50,7 @@ use std::time::Duration;
 use blake2b_simd::Params as Blake2bParams;
 use kaspa_consensus_core::vlt::{
     ComputeReceipt, LlmJobSpec, ReplayResiduals, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
-    residual_commitment,
+    qwen35_pins, residual_commitment,
 };
 #[cfg(feature = "devnet-vlt-fixture")]
 use kaspa_consensus_core::vlt::{devnet_fixture, devnet_fixture_id};
@@ -277,6 +277,27 @@ impl RuntimeIdentity {
             runtime_class_id: derive_runtime_class_id(palw_pins::METAL_RUNTIME_CLASS),
         }
     }
+
+    /// The identity of the consensus-registered Qwen3.5-2B palw-lite Metal profile
+    /// (`misaka-palw-worker` linking the pinned upstream llama.cpp).
+    pub fn registered_qwen35_2b_metal() -> Self {
+        Self {
+            runtime_hash: derive_runtime_hash(
+                qwen35_pins::LLAMA_COMMIT,
+                qwen35_pins::LLAMA_PATCH_SHA256,
+                qwen35_pins::LLAMA_BUILD_NUMBER,
+                qwen35_pins::METAL_BUILD_PROFILE,
+            ),
+            runtime_class_id: derive_runtime_class_id(qwen35_pins::METAL_RUNTIME_CLASS),
+        }
+    }
+
+    /// Every profile this build knows to be consensus-registered somewhere. The per-network
+    /// question — is this profile registered *here* — is answered by the model cost table lookup
+    /// in the compute role's startup, not by this list.
+    pub fn known_registered() -> [Self; 2] {
+        [Self::registered_palw_metal(), Self::registered_qwen35_2b_metal()]
+    }
 }
 
 /// What a node needs to drive a compute runtime, as executor and as verifier.
@@ -304,16 +325,23 @@ pub trait ComputeRuntime: Send + Sync {
     /// [`ComputeReceipt`], which is this projection already folded down.)
     fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError>;
 
-    /// Whether this runtime's identity is the consensus-registered one.
+    /// Whether this runtime's identity is one this build knows to be consensus-registered.
     ///
     /// A node running an unregistered build mints nothing (the model table lookup fails) and,
     /// worse, would refute honest peers if it were sortitioned as a verifier. Callers should
-    /// refuse to participate rather than produce garbage.
+    /// refuse to participate rather than produce garbage. Which registered profile the network
+    /// actually runs is the model cost table's question; this check only refuses builds that
+    /// match none of them.
     fn assert_registered(&self) -> Result<(), PalwError> {
         let got = self.probe()?;
-        let expected = RuntimeIdentity::registered_palw_metal();
-        if got.runtime_hash != expected.runtime_hash {
-            return Err(PalwError::RuntimeIdentityMismatch { got: got.runtime_hash, expected: expected.runtime_hash });
+        let known = RuntimeIdentity::known_registered();
+        if !known.iter().any(|expected| expected.runtime_hash == got.runtime_hash) {
+            // Report the small-model profile as the expectation: it is the one a devnet operator
+            // wiring a worker by hand is overwhelmingly likely to have meant.
+            return Err(PalwError::RuntimeIdentityMismatch {
+                got: got.runtime_hash,
+                expected: RuntimeIdentity::registered_qwen35_2b_metal().runtime_hash,
+            });
         }
         Ok(())
     }
@@ -347,7 +375,7 @@ impl PalwWorkerRuntime {
     }
 
     fn run(&self, args: &[&str], stdin_bytes: Option<&[u8]>) -> Result<serde_json::Value, PalwError> {
-        use std::io::Write;
+        use std::io::{Read, Write};
         use std::process::Stdio;
 
         let mut cmd = Command::new(&self.cfg.worker_bin);
@@ -360,19 +388,39 @@ impl PalwWorkerRuntime {
         {
             let _ = stdin.write_all(bytes);
         }
+        // Drain BOTH pipes concurrently with the wait. An OS pipe buffer is ~64 KiB, and a real
+        // worker's stderr can exceed that before it exits (llama.cpp's model-load narration alone
+        // does) — the child then blocks in write(), never exits, and the poll below kills a
+        // perfectly healthy job at the full timeout. Found live: five executors, every job
+        // "did not finish within 900s", zero VLT credited.
+        let mut stdout_pipe = child.stdout.take().expect("stdout was piped above");
+        let mut stderr_pipe = child.stderr.take().expect("stderr was piped above");
+        let stdout_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
         // Enforce the wall-clock ceiling. A worker that never returns is indistinguishable from an
         // absent one to the rest of the network, but to *this* node it is much worse: the job slot
         // stays occupied and the validator silently stops auditing. Kill it and report instead.
+        // (On the kill path the readers see EOF and finish on their own.)
         self.wait_with_timeout(&mut child)?;
-        let out =
-            child.wait_with_output().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
-        if !out.status.success() {
+        let status =
+            child.wait().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
+        let stdout = stdout_reader.join().unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_default();
+        if !status.success() {
             return Err(PalwError::WorkerFailed {
-                status: out.status.to_string(),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+                status: status.to_string(),
+                stderr: String::from_utf8_lossy(&stderr).trim().to_owned(),
             });
         }
-        Ok(serde_json::from_slice(&out.stdout)?)
+        Ok(serde_json::from_slice(&stdout)?)
     }
 
     /// Poll for `child` to exit within [`PalwWorkerConfig::timeout`], killing it if it does not.

@@ -471,6 +471,42 @@ impl IbdCandidateRegistry {
         }
     }
 
+    /// A proof fetch ended in a TRANSPORT failure — the connection closed, the deadline elapsed
+    /// under the flow, or the lease was revoked — rather than a proof this node judged. Charge it
+    /// the same retry budget a lease timeout costs, then hand the candidate back to the ordinary
+    /// nomination/rotation machinery.
+    ///
+    /// The reason this exists: a transport failure USED to leave the candidate untouched in
+    /// `ProofRequested`. A source that flaps (a peer running its own failing IBD gets disconnected
+    /// constantly — exactly when its chain most needs checking) is then re-nominated, which rebuilds
+    /// `ProofRequested { since: now }` and resets the lease clock, so `expire_proof_requests` never
+    /// reaches its deadline and `proof_attempts` never moves. The candidate is pinned at
+    /// `proof_attempts == 0`, which is the one state [`Self::unresolved`] counts — so it blocks
+    /// every commit, forever, while never being resolvable. Observed live on testnet-10 (a ghost
+    /// candidate from a flapping peer held the commit barrier across a whole recovery).
+    ///
+    /// Charging the attempt breaks the pin two ways at once: after the FIRST transport failure the
+    /// candidate is no longer at `proof_attempts == 0`, so it stops blocking the commit (a source
+    /// that cannot deliver a proof has spent its right to hold up the decision), and after
+    /// [`MAX_PROOF_ATTEMPTS`] it is written off as `NoSource`. It stays retryable in between —
+    /// being disconnected is still not evidence against the chain — so a genuinely-returning source
+    /// gets its turns; it just cannot block while it flaps.
+    pub fn note_proof_transport_failure(&mut self, id: &CandidateId) {
+        let Some(c) = self.candidates.get_mut(id) else { return };
+        // Only a proof that was actually in flight is charged; a candidate already moved on
+        // (validated, rejected, or renominated by another path) is left as it is.
+        let claimed = match c.validation {
+            CandidateValidation::ProofRequested { claimed_blue_work, .. } => claimed_blue_work,
+            _ => return,
+        };
+        c.proof_attempts += 1;
+        c.validation = if c.proof_attempts < MAX_PROOF_ATTEMPTS {
+            CandidateValidation::SummaryReceived { claimed_blue_work: claimed }
+        } else {
+            CandidateValidation::Rejected { reason: CandidateRejectReason::NoSource }
+        };
+    }
+
     pub fn get(&self, id: &CandidateId) -> Option<&IbdCandidate> {
         self.candidates.get(id)
     }
@@ -864,6 +900,54 @@ mod tests {
         r.set_validation(a, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(10) });
         r.set_validation(b, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
         assert_eq!(r.unresolved().len(), 1, "only the one still unexamined");
+    }
+
+    #[test]
+    fn a_transport_failure_stops_a_flapping_candidate_from_pinning_the_barrier() {
+        // The testnet-10 ghost: a source that keeps disconnecting mid-proof re-arms
+        // `ProofRequested { since: now }` on every reconnect, so the lease deadline is never
+        // reached and `proof_attempts` never moves — pinning the candidate at the one state the
+        // commit barrier waits on. Charging the transport failure breaks the pin.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        assert_eq!(r.unresolved().len(), 1, "an un-checked summary blocks the commit");
+
+        // Nominate: a proof is requested. Simulate the flow's transition.
+        r.set_validation(
+            id,
+            CandidateValidation::ProofRequested { since: now, claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)) },
+        );
+        assert_eq!(r.unresolved().len(), 1, "still blocking while genuinely in flight");
+
+        // First transport failure: charged, back to nominatable, but NO LONGER blocking.
+        r.note_proof_transport_failure(&id);
+        assert_eq!(r.unresolved().len(), 0, "a source that could not deliver has spent its right to block");
+        assert!(
+            matches!(r.get(&id).unwrap().validation, CandidateValidation::SummaryReceived { .. }),
+            "but it stays retryable — a disconnect is not a verdict on the chain"
+        );
+
+        // Re-nominated and it flaps again, repeatedly: still never blocks, and is written off at the cap.
+        for _ in 0..MAX_PROOF_ATTEMPTS {
+            r.set_validation(
+                id,
+                CandidateValidation::ProofRequested {
+                    since: now,
+                    claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(900)),
+                },
+            );
+            r.note_proof_transport_failure(&id);
+            assert_eq!(r.unresolved().len(), 0, "a flapping source never regains the power to pin the barrier");
+        }
+        assert!(
+            matches!(r.get(&id).unwrap().validation, CandidateValidation::Rejected { reason: CandidateRejectReason::NoSource }),
+            "and after its retries are spent it is written off as NoSource"
+        );
+
+        // Idempotent / safe on a candidate that already moved on.
+        r.note_proof_transport_failure(&id);
+        assert!(matches!(r.get(&id).unwrap().validation, CandidateValidation::Rejected { .. }));
     }
 
     #[test]
@@ -1447,6 +1531,12 @@ pub struct CommitInputs<'a> {
     pub staged_blue_work: BlueWorkType,
     /// Whether the staged chain descends from the operator's checkpoint. `None` when no checkpoint
     /// is configured.
+    ///
+    /// `Some(true)` is evidence, not a claim — the caller computes it from staging's own
+    /// reachability over the pinned hash — and it is load-bearing twice: it clears the
+    /// admissibility refusal, and it waives [`CommitVerdict::RefuseUnresolved`], because a pinned
+    /// checkpoint IS the operator resolution that refusal exists to wait for (see
+    /// [`decide_commit`], rule 3).
     pub descends_from_checkpoint: Option<bool>,
     /// Whether the configured checkpoint's params id matches this build. `None` when unconfigured.
     pub checkpoint_params_match: Option<bool>,
@@ -1478,6 +1568,22 @@ pub struct CommitInputs<'a> {
 ///    Refusing here is the whole point — silence about a candidate is not evidence against it.
 ///    Counted by the caller, which alone can tell a rival branch from a peer on this same chain
 ///    that has simply moved on (see [`CommitInputs::unresolved_competing`]).
+///
+///    With one exception: a staged chain that VERIFIABLY descends from the operator's pinned
+///    checkpoint. The refusal's stated purpose is to hold the question open "until an operator
+///    resolves which branch is canonical" — and `--trusted-checkpoint` is that resolution, given
+///    in advance. Once the staged chain contains the pinned block, an unverified rival can only be
+///    one of three things: a chain that also contains it (the same history through the checkpoint;
+///    whatever differs above it is an ordinary fork for post-commit fork choice), a chain that
+///    does not (inadmissible here forever, so its unresolvedness cannot make committing past it a
+///    mistake), or a chain nobody ever verifies (which was going to be one of the two). In every
+///    branch of that case split, refusing protects nothing. And the refusal is not free: measured
+///    on testnet-10 (2026-08-11), a node that had synced 1.26M headers of the operator-pinned
+///    chain threw them away and re-quarantined ONCE AN HOUR because a single inbound peer kept
+///    offering a work≈0 chain that could not be verified inside the commit window.
+///
+///    The exemption deliberately sits BELOW the verified-superior rule: it waives waiting on the
+///    unverified, never overrules verified evidence.
 pub fn decide_commit(inputs: CommitInputs<'_>) -> CommitVerdict {
     if inputs.checkpoint_params_match == Some(false) {
         return CommitVerdict::RefuseCheckpointParamsMismatch;
@@ -1492,6 +1598,12 @@ pub fn decide_commit(inputs: CommitInputs<'_>) -> CommitVerdict {
         };
     }
     if inputs.unresolved_competing > 0 {
+        // Rule-3 exception: the operator already answered the question this refusal holds open.
+        // `Some(true)` is staging's own reachability verdict over the pinned hash (a rules-mismatch
+        // checkpoint was vetoed above before it could vouch for anything).
+        if inputs.descends_from_checkpoint == Some(true) {
+            return CommitVerdict::Allow;
+        }
         return CommitVerdict::RefuseUnresolved { count: inputs.unresolved_competing };
     }
     CommitVerdict::Allow
@@ -1631,6 +1743,61 @@ mod commit_barrier_tests {
         i.checkpoint_params_match = Some(true);
         i.descends_from_checkpoint = Some(true);
         assert_eq!(decide_commit(i), CommitVerdict::Allow, "a checkpoint constrains, it does not select");
+    }
+
+    #[test]
+    fn a_pinned_checkpoint_settles_what_an_unresolved_rival_holds_open() {
+        // The measured t10 loop (2026-08-11): a node synced 1.26M headers of the chain its operator
+        // had pinned with --trusted-checkpoint, then refused its own commit and re-quarantined —
+        // once an hour, indefinitely — because one inbound peer kept offering a work≈0 chain
+        // nobody could verify in time. The refusal exists to wait for an operator resolution; the
+        // checkpoint IS that resolution, so an admissible staged chain commits through it.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+
+        // Without a checkpoint the rival still blocks — the testnet-22 behavior is untouched.
+        assert_eq!(decide_commit(inputs(100, &r)), CommitVerdict::RefuseUnresolved { count: 1 });
+
+        // With the operator's pin verifiably under the staged tip, the same rival blocks nothing.
+        let mut i = inputs(100, &r);
+        i.checkpoint_params_match = Some(true);
+        i.descends_from_checkpoint = Some(true);
+        assert_eq!(decide_commit(i), CommitVerdict::Allow, "the operator already resolved which branch is canonical");
+    }
+
+    #[test]
+    fn the_checkpoint_exemption_does_not_outrank_verified_evidence() {
+        // The exemption waives waiting on the UNVERIFIED. A candidate this node verified as
+        // heavier is an answer, not an open question, and a checkpoint does not silence answers —
+        // both chains may descend from it, and the heavier one is still the better of the two.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        let id = r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+        r.set_validation(id, CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(900) });
+
+        let mut i = inputs(100, &r);
+        i.checkpoint_params_match = Some(true);
+        i.descends_from_checkpoint = Some(true);
+        assert_eq!(
+            decide_commit(i),
+            CommitVerdict::RefuseVerifiedSuperior { candidate: id, verified_blue_work: BlueWorkType::from_u64(900) }
+        );
+    }
+
+    #[test]
+    fn the_exemption_needs_the_operators_evidence_not_the_absence_of_a_verdict() {
+        // Only Some(true) unlocks the commit. None means no operator answer exists to lean on
+        // (pinned above), and Some(false) never reaches the rival count at all: an inadmissible
+        // staged chain is refused outright, rivals or no rivals.
+        let mut r = IbdCandidateRegistry::default();
+        let now = Instant::now();
+        r.observe_summary(peer(1), &header(0xA, 900), pp(0xA), now);
+
+        let mut i = inputs(100, &r);
+        i.checkpoint_params_match = Some(true);
+        i.descends_from_checkpoint = Some(false);
+        assert_eq!(decide_commit(i), CommitVerdict::RefuseCheckpointMissing);
     }
 }
 

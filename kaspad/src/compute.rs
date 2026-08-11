@@ -218,11 +218,20 @@ impl ComputeRole {
         };
 
         let runtime: Arc<dyn ComputeRuntime> = match &cfg.worker_bin {
-            Some(bin) => Arc::new(PalwWorkerRuntime::new(PalwWorkerConfig {
-                worker_bin: bin.clone(),
-                work_dir: cfg.work_dir.clone(),
-                timeout: cfg.timeout,
-            })),
+            Some(bin) => {
+                // The worker runs with the work dir as its cwd. Nothing else creates it, and a
+                // missing cwd fails the spawn with ENOENT — an error that reads as "worker binary
+                // not found" and points the operator at exactly the wrong file.
+                if let Err(err) = std::fs::create_dir_all(&cfg.work_dir) {
+                    warn!("[{COMPUTE}] could not create the compute work dir {}: {err}; compute role disabled", cfg.work_dir.display());
+                    return None;
+                }
+                Arc::new(PalwWorkerRuntime::new(PalwWorkerConfig {
+                    worker_bin: bin.clone(),
+                    work_dir: cfg.work_dir.clone(),
+                    timeout: cfg.timeout,
+                }))
+            }
             // MISAKA devnet fixture: a deterministic executor whose identity is the one this
             // network's own preset registered. It is chosen only when no real worker was given —
             // an explicit `--compute-worker` always means the operator wants the real thing — and

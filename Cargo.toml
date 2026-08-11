@@ -29,6 +29,7 @@ members = [
     "misaka-cli",
     "misaka-endpoints",
     "misaka-palw",
+    "misaka-palw-worker",
     "simpa",
     "wasm",
     "wasm/core",

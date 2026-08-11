@@ -292,6 +292,10 @@ for i in $(seq 0 $((NODES - 1))); do
   args+=(--enable-compute --compute-work-dir="$node_dir/compute" --compute-prompt="$node_dir/compute-prompt.txt")
   if [ -n "$PALW_WORKER" ]; then
     args+=(--compute-worker="$PALW_WORKER")
+    # A real-model job is priced by what it actually decodes, and the verifier committee must
+    # fully re-execute every accepted job — 128 keeps one replay ~a second on the Qwen3.5-2B
+    # Metal profile, so five executors and their committees keep pace with the epoch cadence.
+    args+=(--compute-max-tokens=128)
   else
     # Fixture only. The quota is what makes the weights ASYMMETRIC — without it every node
     # originates forever and the five converge, which measures nothing.
@@ -330,7 +334,10 @@ if [ "$MINE" -eq 1 ]; then
       if (exec 3<>"/dev/tcp/127.0.0.1/$BASE_RPC") 2>/dev/null; then exec 3<&- 3>&-; break; fi
       sleep 1
     done
-    "$MISAMINER_BIN" --rpc="127.0.0.1:$BASE_RPC" --network-id=devnet --allow-burn --mine-when-not-synced --threads=2 \
+    # `--mine-when-not-synced`: a fresh devnet's node reports is_synced=false forever (there is
+    # nobody to sync from), and misaminer refuses an unsynced template since 2d17e78 — without
+    # this consent the chain never leaves DAA 0 and the run looks started while doing nothing.
+    "$MISAMINER_BIN" --rpc="127.0.0.1:$BASE_RPC" --network-id=devnet --allow-burn --threads=2 --mine-when-not-synced \
       >>"$WORK_DIR/miner.log" 2>&1 &
     echo $! > "$WORK_DIR/miner.pid"
     echo

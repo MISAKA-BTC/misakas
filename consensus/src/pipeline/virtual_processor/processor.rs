@@ -2640,6 +2640,44 @@ impl VirtualStateProcessor {
             // `last_anchor != default` proxy let bootstrap confirmations masquerade as a moved
             // vote, reporting Recovery on networks that had never activated.
             let prev_record = self.vlt_activation_store.read().get().ok();
+            // The chain-canonical reservation epoch: walk the write-once frozen-snapshot rows
+            // backward from the wall epoch and find where the current contiguous run of
+            // magnitude-eligible snapshots begins. Those rows are reconstructed identically by a
+            // replaying or importing node (the §5 roots equality), so the reservation this stamp
+            // produces is the same on every sync path — unlike the observation epoch, which
+            // trails the chain by however coarsely this node's recomputes happened to land.
+            let canonical_scheduled_epoch = {
+                let wall_epoch = sink_blue / epoch_len_blue;
+                let floor = wall_epoch.saturating_sub(kaspa_consensus_core::vlt::CANONICAL_RESERVATION_SCAN_CAP);
+                let row_eligible = |e: u64| {
+                    self.vlt_voting_snapshot_store
+                        .get(e)
+                        .map(|row| {
+                            kaspa_consensus_core::vlt::snapshot_row_magnitude_eligible(
+                                row.total_weight,
+                                row.validators.len(),
+                                &dns_params.vlt,
+                            )
+                        })
+                        .unwrap_or(false)
+                };
+                // The current wall epoch's row freezes at its boundary, so mid-epoch the newest
+                // row can sit one (or, after a stall, a few) epochs back — skip the missing head
+                // first, then walk the contiguous eligible run to its start.
+                let mut e = wall_epoch;
+                while e > floor && !self.vlt_voting_snapshot_store.has(e).unwrap_or(false) {
+                    e -= 1;
+                }
+                let mut run_start = wall_epoch;
+                while row_eligible(e) {
+                    run_start = e;
+                    if e == floor || e == 0 {
+                        break;
+                    }
+                    e -= 1;
+                }
+                run_start
+            };
             let (new_record, state) = tick_vlt_activation(
                 shadow_active,
                 weight_active,
@@ -2650,6 +2688,7 @@ impl VirtualStateProcessor {
                 last_anchor,
                 eligibility,
                 dns_params.vlt.vlt_activation_daa_score,
+                canonical_scheduled_epoch,
             );
             if let Some(record) = new_record
                 && prev_record.as_ref() != Some(&record)
