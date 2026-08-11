@@ -488,17 +488,12 @@ impl Args {
                      inert compute overlay is undefined (design v0.1 §10)."
                 );
             }
-            let dns = config
-                .params
-                .dns_params
-                .take()
-                .expect("devnet/simnet ship with the DNS overlay configured")
-                .with_tkn_devnet(
-                    active_daa,
-                    self.tkn_devnet_shadow_span,
-                    self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
-                    self.tkn_devnet_phase_b_span,
-                );
+            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_tkn_devnet(
+                active_daa,
+                self.tkn_devnet_shadow_span,
+                self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
+                self.tkn_devnet_phase_b_span,
+            );
             // Fail loudly rather than start a node whose fold or settlement would silently refuse
             // to run — the devnet symptom would be "no [token] line, ever", which reads as a bug.
             assert!(
@@ -1260,7 +1255,10 @@ impl Args {
             tkn_devnet_phase_b_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-phase-b-span", defaults.tkn_devnet_phase_b_span),
             tkn_fixture_transfers: m.get_many::<String>("tkn-fixture-transfer").map(|v| v.cloned().collect()).unwrap_or_default(),
             tkn_fixture_burns: m.get_many::<String>("tkn-fixture-burn").map(|v| v.cloned().collect()).unwrap_or_default(),
-            tkn_fixture_create_mints: m.get_many::<String>("tkn-fixture-create-mint").map(|v| v.cloned().collect()).unwrap_or_default(),
+            tkn_fixture_create_mints: m
+                .get_many::<String>("tkn-fixture-create-mint")
+                .map(|v| v.cloned().collect())
+                .unwrap_or_default(),
             tkn_fixture_mint_tos: m.get_many::<String>("tkn-fixture-mint-to").map(|v| v.cloned().collect()).unwrap_or_default(),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

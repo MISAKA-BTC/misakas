@@ -6,7 +6,9 @@ use kaspa_consensus_core::dns_finality::{
     validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
     validate_stake_unbond_payload,
 };
-use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER};
+use kaspa_consensus_core::subnets::{
+    SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER,
+};
 use kaspa_consensus_core::token::{
     validate_token_burn_payload, validate_token_create_mint_payload, validate_token_mint_to_payload, validate_token_transfer_payload,
 };
@@ -479,7 +481,7 @@ mod tests {
     #[test]
     fn validate_token_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
-        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER};
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
         use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
         use kaspa_hashes::Hash64;
 

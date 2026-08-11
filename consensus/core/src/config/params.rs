@@ -1687,22 +1687,23 @@ mod consensus_params_id_tests {
         // that nodes on the old build will no longer peer with this one. That is usually the
         // correct outcome. Make sure it is the intended one.
         //
-        // Last moved when the Compute Token Program's `tkn: TokenParams` joined `DnsParams`
-        // (design v0.1 §10, inert `u64::MAX` fences everywhere — same shape as the `vlt` and
-        // settlement-fence appends before it: `dns_params` is hashed as its whole borsh encoding,
-        // so every preset that carries an overlay moved at once). Deliberate: the same release
-        // also admits the 0x30/0x31 token-op subnetworks, which older builds reject per-tx, so
-        // shipping it is the next coordinated flag day, not a rolling update — exactly as it was
-        // for the settlement/preference batch this note previously recorded.
+        // Last moved when the Compute Token Program's Phase B fence
+        // (`TokenParams::tkn_phase_b_activation_daa_score`, design §4.6) joined the `tkn` block
+        // that itself had just joined `DnsParams` (design v0.1 §10) — inert `u64::MAX`
+        // everywhere, and `dns_params` is hashed as its whole borsh encoding, so every preset
+        // that carries an overlay moved at once. Deliberate, and the SAME flag day either way:
+        // that release already admits the 0x30/0x31 token ops, and Phase B adds 0x32/0x33 —
+        // subnetworks an older build rejects per-tx, so this ships as a coordinated flag day
+        // rather than a rolling update, exactly as the settlement/preference batch did.
         //
         // Report every preset rather than dying on the first. All four moved together on that
         // merge, and a first-failure assert showed one of them, which reads as a narrower change
         // than it was.
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "2b76a4c83c35d0500c130d4bde4e07c3883224ddc1ba567a57a88e119494f07a"),
-            ("testnet", TESTNET_PARAMS, "0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3"),
-            ("simnet", SIMNET_PARAMS, "87d372da26991e1549e9055c0ba3053d1797d738a3f6c88a23ea73976b9267e2"),
-            ("devnet", DEVNET_PARAMS, "40fee8400f4e4b1b2f2b1b471389181d3ce58cb2a8b07e46ccf82f654e13cd7c"),
+            ("mainnet", MAINNET_PARAMS, "cc852c998d36e1e431c0b2ba9e299787912b1be435bc1cf05ccead3993882806"),
+            ("testnet", TESTNET_PARAMS, "aa7ecb9ce7b6cdff7315bb87915491b6219ae7f2127698881645f55e1fa51fe2"),
+            ("simnet", SIMNET_PARAMS, "e381f4959e89e48048e7bea9eaa91ea95171110235a6512d3de16f9062b6de99"),
+            ("devnet", DEVNET_PARAMS, "b9866980ca643f33f0c9e576df5b9b3e729ef897af92ccd7075d11b8ed9e8cad"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

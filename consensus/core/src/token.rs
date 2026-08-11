@@ -595,16 +595,29 @@ pub fn apply_token_create_mint(
     ))
 }
 
-/// Phase B, step 1 of a `MintTo`: authority + nonce. Split from the credit step so the
-/// caller's read-through staging handles `authority == to` without aliasing two accounts
-/// in one signature (the same reason transfers forbid self-send; a self-mint is the
-/// common case and cannot be forbidden).
-pub fn apply_token_mint_nonce(
+/// Phase B: apply a `MintTo` **atomically** — authority, nonce, cap, credit, supply, in one
+/// all-or-nothing step.
+///
+/// One function rather than a nonce step and a credit step, because a two-step form invites
+/// the exact bug the devnet caught: a cap-breaching issuance whose nonce bump had already
+/// been staged consumed a nonce it was not entitled to, and the next honest mint then failed
+/// as a replay. A void op must consume nothing — the same invariant the Phase A overdraft
+/// proves by leaving its nonce for the burn that follows it.
+///
+/// `to_account` is the recipient's staged row. When `to == authority` the caller passes the
+/// authority's own row (they are the same row); the alias is resolved here, so the caller
+/// never has to sequence two writes to one account.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_token_mint_to(
     meta: &TokenMintMeta,
     authority: Hash64,
     authority_account: TokenAccount,
+    to: Hash64,
+    to_account: TokenAccount,
+    supply: TokenSupply,
+    amount: u128,
     nonce: u64,
-) -> Result<TokenAccount, TokenOpError> {
+) -> Result<(TokenAccount, TokenAccount, TokenSupply), TokenOpError> {
     if authority != meta.mint_authority {
         return Err(TokenOpError::NotMintAuthority);
     }
@@ -612,22 +625,23 @@ pub fn apply_token_mint_nonce(
     if nonce != expected {
         return Err(TokenOpError::BadNonce { expected, got: nonce });
     }
-    Ok(TokenAccount { balance: authority_account.balance, nonce: expected })
-}
-
-/// Phase B, step 2 of a `MintTo`: cap check, recipient credit, supply bump.
-pub fn apply_token_mint_credit(
-    meta: &TokenMintMeta,
-    to_account: TokenAccount,
-    supply: TokenSupply,
-    amount: u128,
-) -> Result<(TokenAccount, TokenSupply), TokenOpError> {
     let minted = supply.minted.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
     if minted > meta.supply_cap {
         return Err(TokenOpError::SupplyCapExceeded { cap: meta.supply_cap, minted: supply.minted, amount });
     }
-    let balance = to_account.balance.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
-    Ok((TokenAccount { balance, nonce: to_account.nonce }, TokenSupply { minted, burned: supply.burned }))
+    let supply2 = TokenSupply { minted, burned: supply.burned };
+    if to == authority {
+        // Self-mint: one row carries both the nonce bump and the credit.
+        let balance = authority_account.balance.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
+        let merged = TokenAccount { balance, nonce: expected };
+        return Ok((merged, merged, supply2));
+    }
+    let to_balance = to_account.balance.checked_add(amount).ok_or(TokenOpError::BalanceOverflow)?;
+    Ok((
+        TokenAccount { balance: authority_account.balance, nonce: expected },
+        TokenAccount { balance: to_balance, nonce: to_account.nonce },
+        supply2,
+    ))
 }
 
 // ---------------------------------------------------------------------
@@ -1296,33 +1310,60 @@ mod tests {
             Err(TokenOpError::BadNonce { expected: 4, got: 9 })
         ));
         // First-wins: an existing meta voids the claim.
-        assert!(matches!(
-            apply_token_create_mint(Some(&meta), creator_tok, id(1), 1, 0, 4),
-            Err(TokenOpError::AssetExists { .. })
-        ));
+        assert!(matches!(apply_token_create_mint(Some(&meta), creator_tok, id(1), 1, 0, 4), Err(TokenOpError::AssetExists { .. })));
     }
 
     #[test]
     fn mint_to_enforces_authority_cap_and_pays_exactly_to_the_cap() {
         let meta = TokenMintMeta { creator: id(1), mint_authority: id(1), supply_cap: 5_000_000, decimals: 8 };
+        let auth = TokenAccount::default();
         // Authority check.
         assert!(matches!(
-            apply_token_mint_nonce(&meta, id(2), TokenAccount::default(), 1),
+            apply_token_mint_to(&meta, id(2), auth, id(3), TokenAccount::default(), TokenSupply::default(), 1, 1),
             Err(TokenOpError::NotMintAuthority)
         ));
-        // Nonce then credit: 3M, then a cap-violating 2M+1 (void), then exactly 2M.
-        let auth = apply_token_mint_nonce(&meta, id(1), TokenAccount::default(), 1).unwrap();
-        let (to, supply) = apply_token_mint_credit(&meta, TokenAccount::default(), TokenSupply::default(), 3_000_000).unwrap();
-        assert_eq!(to.balance, 3_000_000);
-        assert_eq!(supply.minted, 3_000_000);
-        assert!(matches!(
-            apply_token_mint_credit(&meta, to, supply, 2_000_001),
-            Err(TokenOpError::SupplyCapExceeded { cap: 5_000_000, minted: 3_000_000, amount: 2_000_001 })
-        ));
-        let (to2, supply2) = apply_token_mint_credit(&meta, to, supply, 2_000_000).unwrap();
+        // 3M to a third party.
+        let (auth1, to1, supply1) =
+            apply_token_mint_to(&meta, id(1), auth, id(3), TokenAccount::default(), TokenSupply::default(), 3_000_000, 1).unwrap();
+        assert_eq!(auth1, TokenAccount { balance: 0, nonce: 1 });
+        assert_eq!(to1.balance, 3_000_000);
+        assert_eq!(supply1.minted, 3_000_000);
+        // The cap is reachable exactly, and a self-mint merges the bump and the credit.
+        let (auth2, to2, supply2) = apply_token_mint_to(&meta, id(1), auth1, id(1), auth1, supply1, 2_000_000, 2).unwrap();
+        assert_eq!(auth2, to2, "a self-mint is one row");
+        assert_eq!(auth2, TokenAccount { balance: 2_000_000, nonce: 2 });
         assert_eq!(supply2.minted, 5_000_000, "the cap itself is reachable");
-        // Conservation for the minted asset: Σ balances == minted − burned.
-        assert_eq!(to2.balance + auth.balance, supply2.minted - supply2.burned);
+        // Conservation for the minted asset.
+        assert_eq!(to1.balance + auth2.balance, supply2.minted - supply2.burned);
+    }
+
+    /// The devnet caught this one: a cap-breaching mint whose nonce bump had already been
+    /// staged consumed a nonce it never earned, and the next honest mint failed as a replay.
+    /// A void op consumes NOTHING — the same invariant the Phase A overdraft proves by
+    /// leaving its nonce for the burn behind it.
+    #[test]
+    fn a_cap_breaching_mint_consumes_no_nonce() {
+        let meta = TokenMintMeta { creator: id(1), mint_authority: id(1), supply_cap: 5_000_000, decimals: 8 };
+        let (auth1, _to1, supply1) = apply_token_mint_to(
+            &meta,
+            id(1),
+            TokenAccount::default(),
+            id(3),
+            TokenAccount::default(),
+            TokenSupply::default(),
+            3_000_000,
+            1,
+        )
+        .unwrap();
+        // The breach: nonce 2 is the correct successor, but the cap refuses it.
+        assert!(matches!(
+            apply_token_mint_to(&meta, id(1), auth1, id(3), _to1, supply1, 2_000_001, 2),
+            Err(TokenOpError::SupplyCapExceeded { .. })
+        ));
+        // Nonce 2 is therefore still unspent, and the honest mint that follows uses it.
+        let (auth2, _to2, supply2) = apply_token_mint_to(&meta, id(1), auth1, id(3), _to1, supply1, 2_000_000, 2).unwrap();
+        assert_eq!(auth2.nonce, 2);
+        assert_eq!(supply2.minted, 5_000_000);
     }
 
     /// The absolute rule a payload can violate on its face: TOK cannot be minted.

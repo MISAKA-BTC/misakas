@@ -95,23 +95,16 @@ use kaspa_consensus_core::{
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
-    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER},
-    token::{
-        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement,
-        TokenSupply, apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload,
-        TOKEN_CREATE_MINT_MLDSA87_CONTEXT, TOKEN_MINT_TO_MLDSA87_CONTEXT, TokenMintMeta, apply_token_create_mint,
-        apply_token_mint_credit, apply_token_mint_nonce, asset_id_for_mint, decode_token_create_mint_payload,
-        decode_token_mint_to_payload, emission_epoch_budget, emission_rewards_v2, token_burn_message,
-        token_create_mint_message, token_mint_to_message, token_transfer_message,
-    },
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
-    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
+    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER},
     token::{
-        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement, TokenSupply,
-        apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload, emission_epoch_budget,
-        emission_rewards_v2, token_burn_message, token_transfer_message,
+        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_CREATE_MINT_MLDSA87_CONTEXT, TOKEN_MINT_TO_MLDSA87_CONTEXT,
+        TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement, TokenMintMeta, TokenSupply, apply_token_burn,
+        apply_token_create_mint, apply_token_mint_to, apply_token_transfer, asset_id_for_mint, decode_token_burn_payload,
+        decode_token_create_mint_payload, decode_token_mint_to_payload, decode_token_transfer_payload, emission_epoch_budget,
+        emission_rewards_v2, token_burn_message, token_create_mint_message, token_mint_to_message, token_transfer_message,
     },
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
     utxo::{
@@ -4996,17 +4989,14 @@ impl VirtualStateProcessor {
             return;
         };
         let authority_acc = self.staged_token_account(accounts, p.asset_id, authority);
-        let outcome = apply_token_mint_nonce(&meta, authority, authority_acc, p.nonce).and_then(|authority2| {
-            // Stage the nonce bump BEFORE reading `to`, so a self-mint reads its own bump.
-            if live {
+        // The recipient's row, or the authority's own when they are the same account —
+        // `apply_token_mint_to` resolves the alias, and NOTHING is staged unless the whole
+        // op succeeds (a cap-breaching mint must not consume its nonce).
+        let to_acc = if p.to == authority { authority_acc } else { self.staged_token_account(accounts, p.asset_id, p.to) };
+        let supply = supplies.get(&p.asset_id).copied().unwrap_or_else(|| self.token_store.get_supply(p.asset_id).unwrap());
+        match apply_token_mint_to(&meta, authority, authority_acc, p.to, to_acc, supply, p.amount, p.nonce) {
+            Ok((authority2, to2, supply2)) if live => {
                 accounts.insert((p.asset_id, authority), authority2);
-            }
-            let to_acc = self.staged_token_account(accounts, p.asset_id, p.to);
-            let supply = supplies.get(&p.asset_id).copied().unwrap_or_else(|| self.token_store.get_supply(p.asset_id).unwrap());
-            apply_token_mint_credit(&meta, to_acc, supply, p.amount)
-        });
-        match outcome {
-            Ok((to2, supply2)) if live => {
                 accounts.insert((p.asset_id, p.to), to2);
                 supplies.insert(p.asset_id, supply2);
                 info!("[token] mint-to {}: asset={} {authority} -> {} amount {}", tx.id(), p.asset_id, p.to, p.amount);
