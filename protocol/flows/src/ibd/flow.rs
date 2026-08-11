@@ -1317,7 +1317,9 @@ impl IbdFlow {
             CommitVerdict::RefuseUnresolved { count } => format!(
                 "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
                  verified in time. Choosing by arrival order is what fixes a partition in place, so this node is \
-                 quarantined until an operator resolves which branch is canonical.",
+                 quarantined until an operator resolves which branch is canonical. Pinning --trusted-checkpoint to a \
+                 block on the intended chain IS that resolution: a staged chain that verifiably descends from the pin \
+                 commits without waiting on rivals nobody can verify.",
                 self.router, count
             ),
         };
