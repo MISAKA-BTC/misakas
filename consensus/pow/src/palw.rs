@@ -54,6 +54,20 @@ pub fn fixture_enabled() -> bool {
     std::env::var(PALW_FIXTURE_ENV).as_deref() == Ok("1")
 }
 
+/// Verify that the Ollama server at `url` serves the **pinned** model blob for `algo_id = 5`
+/// (`POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1` + size). A different blob computes different tags: the
+/// node would reject every honest block and have its own rejected — a silent one-host fork that
+/// looks like a network fault. Called eagerly by the kaspad startup rail (good message, before
+/// any peer is dialed) and lazily, once per process, by the tag runner (so a miner, a test
+/// harness or any other consumer cannot skip it).
+///
+/// `model` is the Ollama reference (`qwen3.5:2b`); the pin is on the BLOB, so a re-tagged copy
+/// under another name verifies fine — which is correct, the name is not the algorithm.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn verify_ollama_model_pin(url: &str, model: &str) -> Result<(), PowLayer0Error> {
+    native::verify_model_pin(url, model)
+}
+
 /// The PALW Layer-1 tag for one (header, nonce) attempt. Deterministic across every conforming
 /// node: fixture nodes derive it from the seed alone; real nodes replay the pinned inference.
 /// Real-mode results are cached by seed, so the header pipeline, block-level derivation and
@@ -234,6 +248,10 @@ mod native {
             ))
         })?;
         let url = std::env::var(PALW_OLLAMA_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string());
+        // The blob check happens ONCE per process, before the first tag. Doing it here rather
+        // than only in the kaspad rail means every consumer — miner, harness, test — is covered
+        // by construction; a wrong blob must never silently mint tags no peer agrees with.
+        verify_model_pin_once(&url, &model)?;
         let tag = {
             let _gate = SPAWN_GATE.lock().unwrap();
             if let Some(tag) = ollama_cache().lock().unwrap().get(seed) {
@@ -247,6 +265,53 @@ mod native {
         }
         cache.insert(*seed, tag);
         Ok(tag)
+    }
+
+    /// Memoized `verify_model_pin`: the blob cannot change under a running server without a
+    /// restart of `ollama pull`, and re-checking per attempt would put an HTTP round-trip in the
+    /// mining hot loop. A FAILURE is memoized too — a wrong blob is a configuration fact, and
+    /// re-querying it thousands of times per minute helps nobody.
+    static MODEL_PIN_VERIFIED: OnceLock<Result<(), String>> = OnceLock::new();
+
+    fn verify_model_pin_once(url: &str, model: &str) -> Result<(), PowLayer0Error> {
+        MODEL_PIN_VERIFIED
+            .get_or_init(|| verify_model_pin(url, model).map_err(|e| e.to_string()))
+            .clone()
+            .map_err(PowLayer0Error::PalwUnavailable)
+    }
+
+    pub(super) fn verify_model_pin(url: &str, model: &str) -> Result<(), PowLayer0Error> {
+        use kaspa_consensus_core::pow_layer0::{POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1, POW_L1_PALW_OLLAMA_MODEL_SIZE_V1};
+        let body = http_request("GET", url, "/api/tags", None, Duration::from_secs(15))?;
+        let doc: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| PowLayer0Error::PalwUnavailable(format!("cannot parse the Ollama model list: {e}")))?;
+        let models = doc
+            .get("models")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| PowLayer0Error::PalwUnavailable("Ollama /api/tags has no `models` array".into()))?;
+        // Ollama reports `qwen3.5:2b` for a `qwen3.5:2b` pull and appends `:latest` for a bare
+        // name, so accept the exact ref or the `:latest` expansion of it.
+        let wanted: Vec<String> =
+            if model.contains(':') { vec![model.to_owned()] } else { vec![model.to_owned(), format!("{model}:latest")] };
+        let entry = models
+            .iter()
+            .find(|m| m.get("name").and_then(|v| v.as_str()).is_some_and(|n| wanted.iter().any(|w| w == n)))
+            .ok_or_else(|| {
+                PowLayer0Error::PalwUnavailable(format!(
+                    "the Ollama server at {url} does not serve model {model} — pull it first: `ollama pull {model}`"
+                ))
+            })?;
+        let digest = entry.get("digest").and_then(|v| v.as_str()).unwrap_or_default();
+        let size = entry.get("size").and_then(|v| v.as_u64()).unwrap_or_default();
+        if digest != POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1 || size != POW_L1_PALW_OLLAMA_MODEL_SIZE_V1 {
+            return Err(PowLayer0Error::PalwUnavailable(format!(
+                "model {model} on {url} is blob {digest} ({size} bytes), but PALW-Ollama v1 is pinned to \
+                 {POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1} ({POW_L1_PALW_OLLAMA_MODEL_SIZE_V1} bytes). A different blob \
+                 computes different tags: this node would reject every honest block and have its own rejected. \
+                 Re-pull the pinned model, or run a network whose PALW pin matches this blob."
+            )));
+        }
+        Ok(())
     }
 
     fn run_ollama(url: &str, model: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
@@ -264,7 +329,7 @@ mod native {
         })
         .to_string();
         let started = Instant::now();
-        let response = http_post_json(url, "/api/generate", &body, timeout())?;
+        let response = http_request("POST", url, "/api/generate", Some(&body), timeout())?;
         let doc: serde_json::Value = serde_json::from_slice(&response)
             .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse the Ollama response: {e}")))?;
         if let Some(err) = doc.get("error").and_then(|v| v.as_str()) {
@@ -282,11 +347,17 @@ mod native {
         Ok(palw_ollama_l1_tag_from_response(text.as_bytes(), prompt_eval, eval))
     }
 
-    /// Minimal blocking HTTP/1.1 POST for the host-local Ollama endpoint. Deliberately not a
+    /// Minimal blocking HTTP/1.1 request for the host-local Ollama endpoint. Deliberately not a
     /// full client: `http://host:port` only, `Connection: close`, handles the two body framings
     /// Ollama uses (Content-Length and chunked). Keeps reqwest-class dependency weight out of
-    /// the consensus tree.
-    fn http_post_json(base_url: &str, path: &str, body: &str, budget: Duration) -> Result<Vec<u8>, PowLayer0Error> {
+    /// the consensus tree. `body = None` sends a bodyless request (GET).
+    fn http_request(
+        method: &str,
+        base_url: &str,
+        path: &str,
+        body: Option<&str>,
+        budget: Duration,
+    ) -> Result<Vec<u8>, PowLayer0Error> {
         use std::net::TcpStream;
         let hostport = base_url
             .strip_prefix("http://")
@@ -299,10 +370,13 @@ mod native {
         })?;
         stream.set_read_timeout(Some(budget)).ok();
         stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
-        let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
+        let request = match body {
+            Some(body) => format!(
+                "{method} {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+            None => format!("{method} {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n"),
+        };
         stream
             .write_all(request.as_bytes())
             .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot send the Ollama request: {e}")))?;

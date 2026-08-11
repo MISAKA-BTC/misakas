@@ -36,7 +36,13 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    therefore mined AND validated by the fleet's class (x86-64 Ubuntu). An arm64 machine (the
    M4 Pro dev box) forms its own class: fine for local E2E, not a validator of the public chain
    unless its calibration line happens to match — verify, never assume.
-3. **Environment for kaspad AND misaminer**:
+3. **The model blob is PINNED IN CONSENSUS** (`POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1` =
+   `324d162be6ca…`, 2_741_192_820 bytes). kaspad verifies it against `GET /api/tags` at startup
+   and the tag runner re-checks once per process, so a host serving a different blob **refuses to
+   start** instead of silently forking (it would otherwise reject every honest block and have its
+   own rejected). Re-pulling a model that upstream has re-published under the same tag changes the
+   digest — if that happens, the pin (and the network) must be updated deliberately, not silently.
+4. **Environment for kaspad AND misaminer**:
    ```
    export MISAKA_PALW_OLLAMA_MODEL=qwen3.5:2b        # the fleet's pinned ref — one value everywhere
    # export MISAKA_PALW_OLLAMA_URL=http://127.0.0.1:11434   # default; set only if changed
@@ -44,7 +50,7 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    kaspad checks at startup on PALW networks that the model env is set and the server is
    reachable, and exits with instructions otherwise — no first-header panic.
    `MISAKA_PALW_POW_FIXTURE=1` is refused outside devnet.
-4. **Tag semantics under Ollama** (ADR-0021 addendum): the API exposes no per-decode logits, so
+5. **Tag semantics under Ollama** (ADR-0021 addendum): the API exposes no per-decode logits, so
    the algo-5 tag commits to the greedy response bytes + token counts — weaker binding than the
    worker's `gemm_trace_root`, still model-work-priced. Devnet keeps the stronger algo-4 worker
    tag; a future Ollama fork exposing logits (or a logits-serving shim) can restore full-trace
@@ -87,6 +93,23 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 6. Verify the public path from a machine that is NOT in the fleet: start a kaspad with only the
    env set (no `--addpeer`) and watch it discover via DNS, IBD from genesis (one inference per
    header — ~1 s/header hot), and report the fleet's sink. That is the full public flow.
+
+## Known limits (verified extent of the implementation)
+
+* **Verified**: solo mining (`misaminer`), independent per-header replay validation by peers, the
+  fail-fast rails, and **from-genesis headers-first IBD** — all exercised end-to-end on t10 params
+  with the real model.
+* **NOT exercised: pruning-proof IBD.** Once the chain passes the pruning depth (10_800 blocks ≈
+  30 h), a new node syncs via a pruning proof instead, and `calc_block_level_check_pow_layer0`
+  runs **one inference per proof header** (`pruning_proof_m = 1000` per level). That path has not
+  been measured and is the first thing to test on the live chain before it is 30 h old — it is
+  also the strongest argument for the sampled-audit tier / trusted-checkpoint IBD in ADR-0021's
+  consequences.
+* **Pooled mining is not available.** The stratum bridge (`bridge/`) validates shares with the
+  legacy 256-bit `check_pow`, which predates the Layer-0 PoW entirely — it is not PALW-capable
+  (and was already not algo-3-capable). Solo `misaminer` is the supported miner.
+* **`pq-miner` refuses PALW templates** with a pointer to `misaminer`: its all-nonce rayon scan
+  would grind a stale template forever behind the runtime's serialization gate.
 
 ## Operating notes
 

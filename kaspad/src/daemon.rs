@@ -484,7 +484,13 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                 }),
                 Duration::from_secs(3),
             ) {
-                Ok(_) => info!("PALW-Ollama runtime: {url} reachable, model {model} (digest is checked by the fleet runbook)"),
+                Ok(_) => match kaspa_pow::palw::verify_ollama_model_pin(&url, &model) {
+                    Ok(()) => info!("PALW-Ollama runtime: {url} serving the pinned model blob as {model}"),
+                    Err(e) => {
+                        println!("{e}");
+                        exit(1);
+                    }
+                },
                 Err(e) => {
                     println!(
                         "cannot reach the Ollama server at {url}: {e}\nStart it (`ollama serve`, or the systemd unit from \

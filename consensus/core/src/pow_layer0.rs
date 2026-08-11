@@ -172,6 +172,28 @@ pub const POW_L1_PALW_OLLAMA_V1_DOMAIN: &[u8] = b"misaka-l1-palw-ollama-v1";
 /// constant of the v1 algorithm, exactly like [`POW_L1_PALW_N_PREDICT_V1`].
 pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 48;
 
+/// The **pinned model blob** for `algo_id = 5`, as Ollama reports it (`GET /api/tags`).
+///
+/// The weights ARE the algorithm here: a different blob produces different greedy continuations,
+/// hence different tags, hence a node that rejects every honest block and whose own blocks are
+/// rejected — a silent one-host fork that looks like a network problem. So the digest is pinned
+/// in consensus source and verified against the live server before any PoW work is done
+/// (`kaspa_pow::palw::verify_ollama_model_pin`, called eagerly by the kaspad startup rail and
+/// lazily, once per process, by the tag runner). Same stance as the worker's GGUF size+sha check.
+///
+/// `qwen3.5:2b` as pulled from the Ollama registry (verified 2026-08-11).
+///
+/// The OTHER determinism-class dimensions — Ollama version and CPU architecture — deliberately
+/// are NOT pinned here: pinning a version would break the fleet on every patch release, and the
+/// arch is a property of the host, not of the algorithm. They are operational, covered by the
+/// calibration line `scripts/misaka-palw-ollama-setup.sh` prints and compared across the fleet
+/// before deployment. Pinning the blob closes the one dimension an operator can get wrong by
+/// typing a different model name.
+pub const POW_L1_PALW_OLLAMA_MODEL_DIGEST_V1: &str = "324d162be6ca5629ae4517c8710434d0bd2d665bc94dbad46e9af8fbf8a2f0df";
+/// Size in bytes of the pinned blob, checked alongside the digest (cheap defense against a
+/// truncated or re-tagged pull).
+pub const POW_L1_PALW_OLLAMA_MODEL_SIZE_V1: u64 = 2_741_192_820;
+
 /// kaspa-pq Phase 3 Layer 1 algorithm id: **compute-only BLAKE2b-512 ∥ SHA3-512** (ADR-0007 §"Phase 3").
 ///
 /// Replaces Argon2id (`algo_id = 2`) on the networks where it is activated (testnet/mainnet) to make

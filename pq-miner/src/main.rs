@@ -339,6 +339,24 @@ async fn main() {
             }
         };
 
+        // PALW (algo_id 4/5) is NOT minable through this loop: one attempt is a full LLM
+        // inference, and the all-nonce rayon scan below would queue every core behind the
+        // runtime's serialization gate and never come back to refetch the template — the miner
+        // would grind a stale header forever. `misaminer` implements the sequential PALW path
+        // (one inference per nonce, clock-derived start, template refresh); point there rather
+        // than duplicating it here, and fail loudly instead of thrashing.
+        if matches!(
+            header.pow_algo_id,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_OLLAMA
+        ) {
+            eprintln!(
+                "this network mines PALW LLM proof-of-work (algo_id = {}), which pq-miner does not implement.\n\
+                 Use `misaminer` instead: it mines PALW sequentially (one inference per nonce).",
+                header.pow_algo_id
+            );
+            std::process::exit(1);
+        }
+
         // Grind the Layer 0 nonce (multi-threaded). `StateLayer0` caches the
         // nonce-independent pre-PoW state; `check_pow_layer0(n)` varies n.
         let state = kaspa_pow::StateLayer0::new(&header, &network_id);
