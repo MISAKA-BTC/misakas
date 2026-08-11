@@ -2081,7 +2081,26 @@ impl VirtualStateProcessor {
         if !dns_params.vlt_shadow_active_at(sink_daa) {
             return; // the whole compute overlay is dormant; write nothing
         }
-        let bonds: Vec<StakeBondRecord> =
+        // The bond set as-of BEFORE this chain path (the WriteBatch is not yet applied, so the
+        // store read excludes it). It is a set of stamped RECORDS, not a point-in-time view:
+        // `verified_capability` judges activity against each record's own created/slashed/unbond
+        // stamps, so for any block already durable this set answers as-of-that-block exactly.
+        //
+        // What it cannot answer is this path's OWN blocks — and reading the live snapshot here
+        // was a consensus split in waiting: a node PRESENT at the time processed the bond and the
+        // declaration that rides on it in separate commits, so its snapshot had the bond; a node
+        // REPLAYING the same chain (IBD from genesis) carries both in one batch, the snapshot
+        // misses the bond, `verified_capability` rejects the declaration, and the capability
+        // store — hence the committee draw, the audit-fee outputs, and every certificate's
+        // verified/unverified verdict — permanently diverges. Found live: a from-genesis node
+        // disqualified 86 chain blocks on `[coinbase-mismatch] act=3 exp=2` (the two audit-fee
+        // outputs it refused to expect), froze `capability_root=bee4c439…` against the mesh's
+        // `578636b0…`, and credited zero weight forever.
+        //
+        // So the apply loop below advances this set block by block — verify a block's
+        // declarations against the strict PREFIX, then fold in that block's own bond mutations —
+        // which is exactly the order a present node experienced them in.
+        let mut bonds: Vec<StakeBondRecord> =
             self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let net_id = self.genesis.hash;
         let mut store = self.compute_capability_store.write();
@@ -2090,14 +2109,20 @@ impl VirtualStateProcessor {
         // them, and an empty pool reads exactly like "nobody declared". Sweep history once, bounded
         // by the furthest back a declaration could still be live at any beacon this walk will ask
         // about: `max_capability_validity_blocks` before the oldest anchor in the credit window.
+        //
+        // The sweep starts at the PRE-PATH tip, never inside this path: its `bonds` answers
+        // as-of-block only for already-durable blocks (see above), and every block of this path
+        // is the apply loop's job anyway.
         if !store.is_backfilled() {
+            let sweep_tip = chain_path
+                .added
+                .first()
+                .and_then(|first| self.ghostdag_store.get_selected_parent(*first).ok())
+                .unwrap_or_else(|| chain_path.added.last().copied().unwrap_or(self.genesis.hash));
             let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
             let mut swept = 0usize;
-            if let Ok(sink_blue) = self.headers_store.get_blue_score(chain_path.added.last().copied().unwrap_or(self.genesis.hash)) {
-                for block in self
-                    .reachability_service
-                    .default_backward_chain_iterator(chain_path.added.last().copied().unwrap_or(self.genesis.hash))
-                {
+            if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
+                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
                     let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
                     if sink_blue.saturating_sub(bs) > horizon {
                         break;
@@ -2137,11 +2162,31 @@ impl VirtualStateProcessor {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };
             for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*added)) {
                 // The same bond-binding and signature checks the walk applied, so a row can only
-                // hold a declaration the credit walk would itself have accepted.
+                // hold a declaration the credit walk would itself have accepted. `bonds` is the
+                // strict prefix — earlier paths plus the added blocks already folded in below —
+                // so a batch spanning a bond and its declaration verifies the declaration exactly
+                // as a node that processed them in separate commits did.
                 if let Some(record) =
                     verified_capability(cap, &bonds, net_id.as_byte_slice(), *added, header.daa_score, &dns_params.vlt)
                 {
                     store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
+                }
+            }
+            // THIS block's bond mutations join the set only after its own declarations were
+            // judged: a same-block bond must not validate a same-block declaration on a replayer
+            // when it could not on a present node.
+            for mutation in self.dns_bond_mutations_for_chain_block(*added) {
+                match mutation {
+                    BondMutation::Insert(outpoint, record) => {
+                        if !bonds.iter().any(|b| b.bond_outpoint == outpoint) {
+                            bonds.push(record);
+                        }
+                    }
+                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
+                        if let Some(existing) = bonds.iter_mut().find(|b| b.bond_outpoint == outpoint) {
+                            apply_bond_stamp(existing, &mutation);
+                        }
+                    }
                 }
             }
         }

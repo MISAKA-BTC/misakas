@@ -77,13 +77,39 @@ identity_rows() { # node
 # pruned or freshly-synced node is most likely to hit — cannot hide from that, because it never
 # converges.
 COMPARE_EPOCHS=3
+
+# `finalized_anchor` is the one tuple field carried by the node-local DnsState overlay rather
+# than by a consensus store. Its convergence claim assumes a LIVE confirmation flow: a node that
+# joins after the mesh's attestation quorum has permanently stopped (this harness's endgame —
+# quota exhaustion kills the certificate flow, the ADR-0018 quality gate degrades, stake depth
+# goes to zero) can never apply the final in-flight confirmation, because nothing re-confirms.
+# On any network whose overlay is alive the next confirmation re-syncs it. So: when the mesh's
+# own anchor has been frozen for more than this many epochs, compare the tuple WITHOUT the
+# anchor, and say so — the same lesson the partition harness learned about false failures.
+ANCHOR_LIVENESS_EPOCHS=6
+anchor_is_live() { # node — did this node's finalized_anchor move within the last N epochs?
+  local rows last_move newest
+  rows=$(identity_rows "$1" | awk '{ print $1, $2 }' | sed -E 's/finalized_anchor=//')
+  last_move=$(echo "$rows" | awk '{ if ($2 != prev) { e=$1; prev=$2 } } END { print e }')
+  newest=$(echo "$rows" | awk 'END { print $1 }')
+  [ -n "$last_move" ] && [ -n "$newest" ] && [ $((newest - last_move)) -le "$ANCHOR_LIVENESS_EPOCHS" ]
+}
+
 compare_nodes() { # label node...
   local label="$1"; shift
   local nodes=("$@")
+  local strip_anchor=0
+  if ! anchor_is_live 0; then
+    strip_anchor=1
+    echo "NOTE $label: the mesh's confirmation flow has ended (node-0's finalized_anchor is frozen);"
+    echo "     comparing the identity tuple WITHOUT finalized_anchor — a node joining a dead overlay"
+    echo "     cannot apply its final in-flight confirmation, and nothing will ever re-confirm it."
+  fi
   local tmp; tmp=$(mktemp); trap 'rm -f "$tmp"' RETURN
   local n
   for n in "${nodes[@]}"; do
-    identity_rows "$n" | awk -v node="$n" '{ epoch=$1; $1=""; print epoch "\t" node "\t" substr($0,2) }'
+    identity_rows "$n" | awk -v node="$n" -v strip="$strip_anchor" \
+      '{ epoch=$1; $1=""; if (strip) { sub(/ finalized_anchor=[0-9a-f]+/, "") } print epoch "\t" node "\t" substr($0,2) }'
   done | sort -n > "$tmp"
 
   # Epochs every compared node has reported.
@@ -158,13 +184,22 @@ fi
 echo
 echo "=== starting a from-genesis node (no bond, no validator, no compute) and syncing it"
 fresh_dir="$WORK_DIR/node-$FRESH"
+# A prior fresh node may still be RUNNING (this script re-run, or an operator's manual spawn):
+# deleting its appdir does not release its ports, and the replacement then dies on AddrInUse
+# with an empty log — which reads as "kaspad won't start" rather than "kill the old one".
+if [ -f "$fresh_dir/kaspad.pid" ] && kill -0 "$(cat "$fresh_dir/kaspad.pid")" 2>/dev/null; then
+  kill "$(cat "$fresh_dir/kaspad.pid")" 2>/dev/null || true
+  sleep 3
+fi
+pkill -f -- "--appdir=$fresh_dir" 2>/dev/null || true
+sleep 1
 rm -rf "$fresh_dir"
 mkdir -p "$fresh_dir"
 # Its consensus configuration must match the mesh EXACTLY — the VLT fences are consensus, so a
 # node that syncs with different ones is not a second opinion, it is a different network. Take
 # node-0's recorded arguments and strip only what is node-identity: its ports, its appdir, and
 # the validator/compute/bond roles a syncing observer must not have.
-base_args=$(tr ' ' '\n' < "$WORK_DIR/node-0/run.args.full" 2>/dev/null || tr ' ' '\n' < "$WORK_DIR/node-0/run.args")
+base_args=$({ tr ' ' '\n' < "$WORK_DIR/node-0/run.args.full"; } 2>/dev/null || tr ' ' '\n' < "$WORK_DIR/node-0/run.args")
 fresh_args=$(echo "$base_args" | sed "s/^'//;s/'$//" |
   grep -v '^--appdir=' | grep -v '^--listen=' | grep -v '^--rpclisten' | grep -v '^--addpeer=' |
   grep -v '^--enable-validator' | grep -v '^--validator-mode' | grep -v '^--validator-key=' |
