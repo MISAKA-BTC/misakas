@@ -6,7 +6,7 @@ measured; what is left is running them on the fleet.
 **Fence: DAA 30_200_000.** Measured against a live tip of 29_981_862 (2026-08-11). t10 runs at
 1 bps, so this is ~2.5 days of margin — twice the end-to-end duration of the 2026-08-10 flag day.
 
-**Consensus fingerprint after this release: `62e299b6…`** (was `0e3914b0…` on the fleet). An
+**Consensus fingerprint after this release: `d07cb673…`** (was `0e3914b0…` on the fleet). An
 un-updated peer is rejected at the handshake, not silently forked — which is why the rollout can
 be verified rather than hoped for.
 
@@ -50,9 +50,11 @@ MISAKA-PALW-CPU-CALIBRATION-v1 arch=arm64 os=Darwin class=8825d03e4da7faa1 runti
 
 **Build with `CARGO_TARGET_DIR` set to a directory nothing else writes.** A release binary built
 into a shared `target/` cannot be trusted: on 2026-08-11 a freshly built kaspad reported
-`5fabb683…` at the handshake instead of the `62e299b6…` its own source pins, because a concurrent
-build in the same tree overwrote the artifact between the build finishing and the check running.
-The check below is what caught it — which is the argument for running it every time.
+`5fabb683…` at the handshake — a value matching NEITHER the const-derived pin nor the
+materialized one, because a concurrent session was editing `params.rs` while the build ran. A
+release cannot be cut from a tree another session is editing; take a clean checkout of the
+release commit. The check below is what caught it, twice, which is the argument for running it
+every time.
 
 ```bash
 CARGO_TARGET_DIR=/tmp/misaka-release cargo build --release --features evm   --bin kaspad --bin misaminer --bin kaspa-pq-validator --bin misaka
@@ -64,7 +66,7 @@ CARGO_TARGET_DIR=/tmp/misaka-release cargo build --release --features evm   --bi
 ./kaspad --testnet --netsuffix=10 --appdir=/tmp/probe --addpeer=<any fleet IP>:26211 2>&1 | grep -m1 "params mismatch"
 ```
 
-The `local:` value must be `62e299b6…`. If it is anything else the binary predates the release —
+The `local:` value must be `d07cb673…`. If it is anything else the binary predates the release —
 rebuild. (This is exactly how the fleet's current ruleset was identified.)
 
 ## 3. Roll out — A2 pattern, `docs/testnet10-transition.md`

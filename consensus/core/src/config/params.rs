@@ -1923,13 +1923,20 @@ mod consensus_params_id_tests {
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            ("testnet", TESTNET_PARAMS, "62e299b64504162037443baf1e52411c28323b5ac06ec000d229f972f43d3206"),
+            ("testnet", TESTNET_PARAMS, "d07cb67300434b528e74b15434f05e4adf65018ecd4b21ef9b7dc3a771000d33"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
-            let actual = params.consensus_params_id().to_string();
+            // MATERIALIZED, not the raw const. `with_registered_models` attaches the compute
+            // profiles to a preset that has scheduled its VLT shadow fence, and it runs at every
+            // `From<NetworkType/NetworkId> for Params` — so the const and the thing a node
+            // actually runs are different values, and only the second one is what peers compare
+            // at the handshake. Pinning the const would pin a number no node ever reports:
+            // caught live, where a correctly-built release announced `5fabb683…` while this test
+            // was green on `62e299b6…`.
+            let actual = Params::from(params.net).consensus_params_id().to_string();
             (actual != expected).then(|| format!("  {name}: pinned {expected}, got {actual}"))
         })
         .collect();
