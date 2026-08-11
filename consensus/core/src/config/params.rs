@@ -1332,6 +1332,28 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// arrives as ~3.7-MSK fragments. Lowering both to 10 KAS lets a tester mine for a few seconds
 /// and bond (the `bond` CLI aggregates several mature coinbase UTXOs — see `build_funded_stake_bond_tx_multi`).
 /// Mainnet keeps the 20M-KAS floors. None of these are genesis-block inputs.
+/// ADR-0024 step 3 (the VLT SHADOW fork) — the ONE constant a release cut has to choose.
+///
+/// `u64::MAX` means "not scheduled", which is the shipped state. Setting it to a DAA height picks
+/// up everything the fork needs at once, because the three fields below are derived from it
+/// rather than edited independently:
+///
+/// * `vlt.vlt_shadow_activation_daa_score` — the overlay starts crediting, drawing committees,
+///   paying the audit fee and slashing settled challenges;
+/// * `bond_spend_gate_mergeset_activation_daa_score` — the mergeset spend gate closes, so the
+///   collateral those slashes are aimed at can no longer be withdrawn out from under an Active
+///   bond (2026-08-11 audit P0; it MUST move with the fence, never after it);
+/// * `vlt.model_cost_table` — the registered profiles, without which every job mints zero and the
+///   fork would cost a hard fork to discover it did nothing.
+///
+/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX`: moving the VOTE
+/// is step 4, after the soak has measured what the weight is made of.
+///
+/// Choosing the height, the fleet-update procedure and the exit criteria are in
+/// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the
+/// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
+pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = u64::MAX;
+
 pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
@@ -1377,6 +1399,17 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
+    // ADR-0024 step 3, driven by the ONE release constant above. Both move together by
+    // construction: the fence turns on challenge slashing, and the spend gate is what keeps the
+    // collateral those slashes aim at from being withdrawn through the mergeset first
+    // (2026-08-11 audit P0). Shipped `u64::MAX` = not scheduled.
+    bond_spend_gate_mergeset_activation_daa_score: TESTNET_VLT_SHADOW_FORK_DAA_SCORE,
+    vlt: VltParams {
+        vlt_shadow_activation_daa_score: TESTNET_VLT_SHADOW_FORK_DAA_SCORE,
+        // The VOTE does not move in this fork — that is step 4, after the soak.
+        vlt_activation_daa_score: u64::MAX,
+        ..VltParams::INERT
+    },
     ..PRODUCTION_DNS_PARAMS
 };
 

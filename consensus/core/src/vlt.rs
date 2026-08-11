@@ -1067,18 +1067,29 @@ pub mod qwen35_pins {
     /// only registered classes are Metal ones is a network whose fleet cannot verify anything.
     pub const CPU_BUILD_PROFILE: &str = "release/cpu-only/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
 
-    /// The CPU determinism class. Deliberately **not** vendor-scoped the way the Metal classes
-    /// are: with `GGML_NATIVE` off and no BLAS the worker runs the portable ggml kernels, whose
-    /// arithmetic is fixed by the source and the thread count rather than by the host's
-    /// microarchitecture. That is the property that lets a heterogeneous fleet audit each other
-    /// at all, and it is the reason to prefer this profile over the Metal ones in production
-    /// despite it being slower.
+    /// The CPU determinism class — **scoped to the instruction-set architecture**, and that
+    /// scoping is the honest part.
     ///
-    /// It is still a CLASS, not a promise about every machine: a build with different flags is a
-    /// different `runtime_hash` and simply will not match the registered entry, which is the
-    /// failure mode we want (refuse to participate) rather than the one we do not (refute honest
-    /// peers).
-    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-int/portable-cpu/v1";
+    /// `GGML_NATIVE=OFF` stops the compiler selecting instructions from the BUILD HOST, which is
+    /// what makes one arch's binary reproducible across machines of that arch. It does not make
+    /// two architectures agree: `ggml/src/ggml-cpu/arch/` ships separate hand-written kernels for
+    /// arm, x86, riscv, powerpc, s390 and loongarch, and a NEON reduction and an AVX2 reduction
+    /// sum a vector in different orders. Claiming one portable class across all of them would
+    /// mean an x86 verifier refuting an honest arm64 executor — the measured failure this whole
+    /// class mechanism exists to prevent (identical `output_commitment`, divergent
+    /// `gemm_trace_root`).
+    ///
+    /// So the fleet's rule is: same arch, same class, and a committee forms within it. Mixed-arch
+    /// fleets run two classes and audit within each.
+    #[cfg(target_arch = "aarch64")]
+    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/aarch64/v1";
+    #[cfg(target_arch = "x86_64")]
+    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/x86_64/v1";
+    /// Any other architecture gets its own tag rather than silently joining one of the two above.
+    /// A node here will find its runtime unregistered and decline to participate, which is the
+    /// safe failure.
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/other-arch/v1";
 
     /// Threads the CPU profile pins. In the identity string above as well, so a worker built to
     /// run wider cannot claim this profile — thread count changes how ggml splits a reduction.
@@ -1305,7 +1316,22 @@ pub fn palw_qwen35_2b_metal_entry() -> ModelCostEntry {
 /// from validators declaring the job's class, so a network registering Metal profiles alone can
 /// never assemble one out of Linux servers. `ρ` stays 1.0 — it prices a reference-token-equivalent,
 /// and the same model doing the same job is the same amount of work however slowly it is done.
+///
+/// Returns the entry for the architecture this binary was built for. A network wanting both
+/// arm64 and x86_64 validators registers `palw_cpu_entry_for_class` with each tag — see
+/// `ModelCostTable::palw_metal_registered`, which registers both so a mixed fleet works.
 pub fn palw_qwen35_2b_cpu_entry() -> ModelCostEntry {
+    palw_qwen35_2b_cpu_entry_for(qwen35_pins::CPU_RUNTIME_CLASS)
+}
+
+/// The CPU entry for a NAMED architecture class, so a preset can register the architectures its
+/// fleet actually contains rather than only the one the release was compiled on.
+///
+/// The `runtime_hash` is arch-independent by construction — it commits to the llama.cpp pin and
+/// the build profile, both of which are the same source on every arch. Only the CLASS separates
+/// them, which is exactly right: the same build recipe on two architectures is the same runtime
+/// producing different low bits, and a class is the thing that says "do not compare these".
+pub fn palw_qwen35_2b_cpu_entry_for(class_tag: &str) -> ModelCostEntry {
     ModelCostEntry {
         model_weights_hash: derive_model_weights_hash(
             qwen35_pins::GGUF_SHA256,
@@ -1320,7 +1346,7 @@ pub fn palw_qwen35_2b_cpu_entry() -> ModelCostEntry {
             qwen35_pins::LLAMA_BUILD_NUMBER,
             qwen35_pins::CPU_BUILD_PROFILE,
         ),
-        runtime_class_id: derive_runtime_class_id(qwen35_pins::CPU_RUNTIME_CLASS),
+        runtime_class_id: derive_runtime_class_id(class_tag),
         rho_micro: VLT_MICRO as u64,
         max_tokens: PALW_QWEN35_2B_MAX_TOKENS,
     }
@@ -1526,13 +1552,20 @@ impl ModelCostTable {
     /// reach `min_verifier_confirmations`.
     pub fn palw_metal_registered() -> Self {
         let mut table = Self::EMPTY;
-        table.len = 3;
+        table.len = 4;
         table.entries[0] = palw_qwen36_metal_entry();
         table.entries[1] = palw_qwen35_2b_metal_entry();
         // The CPU profile is what a public fleet can actually run — see `palw_qwen35_2b_cpu_entry`.
         // Registered alongside rather than instead: an operator with Apple hardware keeps its
         // faster path, and the two never audit each other because they are different classes.
-        table.entries[2] = palw_qwen35_2b_cpu_entry();
+        //
+        // BOTH architectures, always, and not the one this release happened to be compiled on: a
+        // preset that registered only the builder's arch would leave every validator of the other
+        // arch with an unregistered runtime — declining to participate, silently, on a network
+        // that looks configured. Registering both costs nothing (an unused entry draws no
+        // committee) and is the difference between a mixed fleet working and half of it idling.
+        table.entries[2] = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64/v1");
+        table.entries[3] = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/x86_64/v1");
         table
     }
 
@@ -4735,7 +4768,7 @@ mod tests {
 
         // The devnet registry resolves each worker to exactly its own profile.
         let table = ModelCostTable::palw_metal_registered();
-        assert_eq!(table.live().len(), 3);
+        assert_eq!(table.live().len(), 4, "35B Metal, 2B Metal, 2B CPU aarch64, 2B CPU x86_64");
         assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
         assert!(table.lookup(q36.model_weights_hash, q36.runtime_hash).is_some());
         assert!(table.lookup(e.model_weights_hash, q36.runtime_hash).is_none(), "cross-pairing must not resolve");
@@ -4751,6 +4784,18 @@ mod tests {
         assert_ne!(cpu.runtime_class_id, e.runtime_class_id, "and a different determinism class");
         assert_ne!(cpu.runtime_class_id, q36.runtime_class_id);
         assert!(table.lookup(cpu.model_weights_hash, cpu.runtime_hash).is_some(), "the fleet's profile must be registered");
+
+        // BOTH architectures are registered, and they are DIFFERENT classes sharing one runtime
+        // hash. That pairing is the design: the same build recipe on arm64 and x86_64 is the same
+        // runtime, and `ggml/src/ggml-cpu/arch/` gives it different SIMD kernels — so they must
+        // never be drawn into one committee, while a preset compiled on either arch must still
+        // register both or half a mixed fleet silently declines to participate.
+        let arm = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64/v1");
+        let x86 = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/x86_64/v1");
+        assert_eq!(arm.runtime_hash, x86.runtime_hash, "one build recipe, one runtime hash");
+        assert_ne!(arm.runtime_class_id, x86.runtime_class_id, "two architectures, two classes");
+        assert!(table.live().iter().any(|e| e.runtime_class_id == arm.runtime_class_id));
+        assert!(table.live().iter().any(|e| e.runtime_class_id == x86.runtime_class_id));
         assert_eq!(cpu.rho_micro, VLT_MICRO as u64);
         assert_eq!(cpu.max_tokens, PALW_QWEN35_2B_MAX_TOKENS);
 

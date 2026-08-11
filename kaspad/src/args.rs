@@ -397,6 +397,22 @@ impl Default for Args {
 
 impl Args {
     pub fn apply_to_config(&self, config: &mut Config) {
+        // ADR-0024 step 3: install the registered compute profiles whenever a preset has actually
+        // SCHEDULED its VLT shadow fence. The table cannot live in the `const` preset — its
+        // entries are keyed BLAKE2b digests of the pinned artifact strings, which no const fn can
+        // produce — so this is where the fence and the models it prices are joined.
+        //
+        // Keyed on the fence rather than on the network: a preset whose fence is `u64::MAX` gets
+        // nothing (byte-identical to today on every shipped network), and a preset that scheduled
+        // one gets every registered profile including the two CPU classes a Linux fleet runs.
+        // Leaving the table empty behind a scheduled fence is the failure the field doc warns
+        // about — a coordinated hard fork that credits every job zero.
+        if let Some(dns) = config.params.dns_params.as_mut()
+            && dns.vlt.vlt_shadow_activation_daa_score != u64::MAX
+            && dns.vlt.model_cost_table.len == 0
+        {
+            dns.vlt.model_cost_table = kaspa_consensus_core::vlt::ModelCostTable::palw_metal_registered();
+        }
         config.utxoindex = self.utxoindex;
         config.disable_upnp = self.disable_upnp;
         config.unsafe_rpc = self.unsafe_rpc;
