@@ -12,6 +12,27 @@ be verified rather than hoped for.
 
 ---
 
+## ⛔ BLOCKER — do not cut this release yet
+
+A kaspad built from a CLEAN checkout of the release commit, in an isolated target dir, with
+`--features evm`, announces `5fabb683…` at the handshake. The same source computes `d07cb673…`
+for the materialized testnet preset (`Params::from(NetworkId)` → `with_registered_models`), under
+default features and under `evm` alike. **Three explanations were tested and eliminated:** a
+stale artifact (clean rebuild — same), a concurrent session editing the tree (clean worktree at
+the release commit — same), and feature-flag skew (test green under `--features evm` — same).
+
+So the node is not building its `Params` through the path the pin now measures. That is the same
+class of miss as attaching the model table in kaspad's `apply_to_config`: an install point that
+is not on the node's actual path. Until it is explained, the number this card tells an operator
+to verify is not the number their node will print, and a flag day whose verification step is
+wrong is worse than one with no verification step.
+
+**Next step for whoever picks this up:** find where `kaspad` materializes `config.params` for a
+`--testnet --netsuffix=10` run (it is evidently not `From<NetworkId> for Params`), and either
+route it through `with_registered_models` or move that install to whatever that path is. Then
+re-pin, and re-run the check below — it has now caught two real defects, which is the argument
+for keeping it first in this document.
+
 ## 0. Staleness check — 10 seconds, do it first
 
 ```bash
