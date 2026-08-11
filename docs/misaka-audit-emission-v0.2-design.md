@@ -57,6 +57,7 @@ settlement:
   reward_i = mul_div_floor(R(E), work_i, W_work)      … 既存の 256-bit 経路をそのまま使う
 ```
 
+- 実装確定（2026-08-11）: 分配は validator ごとに `⌊R·exec_i/W⌋ + ⌊R·audit_i/W⌋` の **二項 floor** で払う。単項 `⌊R·work_i/W⌋` との差は validator あたり最大 1 atomic で、二項形は `audit_paid` を推定でなく正確な台帳量にする。
 - verdict の重みは **判じた certificate の `x_j`**。verdict の向き（Confirmed/Refuted）にも、その cert が最終的に credit されたかにも依存しない（MUST）。refutation にも同額を払うのは §7 の griefing 均衡（「refute は正当な仕事」）を v0.1 から引き継ぐため。counted（= 抽選 committee 内・署名有効）だけが対象なので、verdict スパムは sortition が上限する。
 - executor 自己検証は既存規則どおり不可能（InvalidCertificate）。
 - 端数・`min_network_compute` floor・冪等・pin 済み行のみ読む、は v0.1 §5 の性質をそのまま継承（floor の比較対象は `W_work` ではなく **`X^exec` 総和のまま**とする（MUST）— floor は「網に実計算があるか」の判定であり、検証は実行に随伴するため二重に数えない）。
@@ -125,4 +126,4 @@ settlement:
 |---|---|
 | 1 | R0 較正の再定義（§3 #5: 「検証込み総費用」として） — 親 §12 #2 と同じ凍結タイミング |
 | 2 | committee 絶対数が大きい網での audit 支配（c ≫ 1 で executor 取り分 → 0）。c は consensus 較正値なので §8.9（親）の再較正と同時に見る |
-| 3 | verdict の遅着（cert の epoch より後の epoch に counted される場合の帰属）— walk の既存解決規則に従う。実装時に固定し本書へ追記 |
+| 3 | ~~verdict の遅着の帰属~~ **確定（2026-08-11）**: walk が解決した counted verdicts は常に `cert.epoch` に帰属（`X_i^exec` と同一規則）。遅着 verdict は cert が未決のうちは epoch ごと再 walk され、決した時点の epoch 行に入る |

@@ -102,7 +102,7 @@ use kaspa_consensus_core::{
     token::{
         TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement, TokenSupply,
         apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload, emission_epoch_budget,
-        emission_rewards, token_burn_message, token_transfer_message,
+        emission_rewards_v2, token_burn_message, token_transfer_message,
     },
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
     utxo::{
@@ -406,6 +406,9 @@ pub struct VirtualStateProcessor {
     /// family the buried-chain fold and the emission settlement write. Inert while every
     /// preset's token fence is `u64::MAX`.
     pub(super) token_store: Arc<DbTokenStore>,
+    /// Audit-emission v0.2: whether this process already logged the base-coin audit fee's
+    /// retirement (log-once marker, no consensus meaning).
+    pub(super) audit_fee_retired_logged: std::sync::atomic::AtomicBool,
     /// MISAKA VLT PR 2: per-epoch frozen voting snapshots (§5). Frozen write-once at each wall
     /// epoch's boundary recompute; a cache and audit surface for the chain-derived denominator,
     /// never a verification source on branches whose derivation pins elsewhere.
@@ -586,6 +589,7 @@ impl VirtualStateProcessor {
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
             vlt_credit_store: storage.vlt_credit_store.clone(),
             token_store: storage.token_store.clone(),
+            audit_fee_retired_logged: std::sync::atomic::AtomicBool::new(false),
             vlt_voting_snapshot_store: storage.vlt_voting_snapshot_store.clone(),
             dns_finality_certificate_store: storage.dns_finality_certificate_store.clone(),
             vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool::new(false),
@@ -3714,6 +3718,7 @@ impl VirtualStateProcessor {
         // certificate in a `credit_window_epochs`-deep window, to rebuild a sum whose old terms
         // did not move.
         let mut credited: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+        let mut audited: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
         let mut cached_epochs: HashSet<u64> = HashSet::new();
         let mut oldest_uncached_blue = pin_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
         for (&epoch, anchor) in anchors.iter() {
@@ -3731,6 +3736,9 @@ impl VirtualStateProcessor {
             for (validator_id, x) in row.credits {
                 credited.entry(validator_id).or_default().insert(epoch, x);
             }
+            for (verifier_id, x) in row.audit {
+                audited.entry(verifier_id).or_default().insert(epoch, x);
+            }
             cached_epochs.insert(epoch);
         }
         // The walk only has to reach back to the oldest epoch NOT served from the store. Anchors
@@ -3745,6 +3753,9 @@ impl VirtualStateProcessor {
         let walk = self.walk_compute_overlay(pin, bonds, net_id, dns_params, oldest_uncached_blue, pin_blue);
 
         let mut contributions: Vec<ComputeCreditContribution> = Vec::new();
+        // Audit-emission v0.2: one roster per certificate that reached a decided, non-zero
+        // normalization — the counted verdicts' authors and the job's µRTE they each earn.
+        let mut audit_contributions: Vec<kaspa_consensus_core::dns_finality::AuditCreditContribution> = Vec::new();
         // Certificates whose challenge was ADJUDICATED as standing. §6 zeroes the credit of a
         // receipt whose fraud proof 成立した — not of every receipt somebody pointed at.
         let mut refuted: HashSet<TransactionId> = HashSet::new();
@@ -3857,6 +3868,17 @@ impl VirtualStateProcessor {
                 vlt,
                 accepted_daa_score: block_daa,
             });
+            if !attestations.is_empty() {
+                audit_contributions.push(kaspa_consensus_core::dns_finality::AuditCreditContribution {
+                    certificate_tx_id: cert_tx_id,
+                    executor_id: cert.executor_id,
+                    job_id: resolved.job_id,
+                    epoch: cert.epoch,
+                    vlt,
+                    accepted_daa_score: block_daa,
+                    verifiers: attestations.iter().map(|a| a.verifier_id).collect(),
+                });
+            }
         }
         // The three tests `aggregate_compute_credits` applies, re-run here ONLY to attribute a
         // reason to each contribution it drops — it returns the survivors, not the verdicts. Kept
@@ -3883,6 +3905,22 @@ impl VirtualStateProcessor {
         let walked = aggregate_compute_credits(&contributions, &refuted, pin_daa_score, dns_params.vlt.challenge_window_blocks);
         for (validator_id, per_epoch) in walked {
             let slot = credited.entry(validator_id).or_default();
+            for (epoch, x) in per_epoch {
+                if !cached_epochs.contains(&epoch) {
+                    slot.insert(epoch, x);
+                }
+            }
+        }
+        // Audit-emission v0.2: same pin, same survivorship machinery, same cached-row merge —
+        // refuted certificates keep paying their committees (the one deliberate divergence).
+        let walked_audit = kaspa_consensus_core::dns_finality::aggregate_audit_credits(
+            &audit_contributions,
+            &refuted,
+            pin_daa_score,
+            dns_params.vlt.challenge_window_blocks,
+        );
+        for (verifier_id, per_epoch) in walked_audit {
+            let slot = audited.entry(verifier_id).or_default();
             for (epoch, x) in per_epoch {
                 if !cached_epochs.contains(&epoch) {
                     slot.insert(epoch, x);
@@ -3917,9 +3955,9 @@ impl VirtualStateProcessor {
         // refuses to act on one — the two places where "this node has not got it yet" would
         // otherwise become "nobody ever will".
         if tally.is_incomplete() {
-            return VltEpochSnapshot::pinned_incomplete(pin, pin_daa_score, credited);
+            return VltEpochSnapshot::pinned_incomplete(pin, pin_daa_score, credited).with_audit(audited);
         }
-        VltEpochSnapshot::pinned(pin, pin_daa_score, credited)
+        VltEpochSnapshot::pinned(pin, pin_daa_score, credited).with_audit(audited)
     }
 
     /// ONE backward walk over `[oldest_blue, tip]` collecting every compute-overlay contribution;
@@ -4395,6 +4433,16 @@ impl VirtualStateProcessor {
         if fee == 0 || budget < fee || !dns_params.vlt_shadow_active_at(daa_score) {
             return (Vec::new(), 0);
         }
+        // Audit-emission v0.2 §2.3: past the token fence, verification is paid from R(E) in TOK
+        // and the base-coin fee retires — base-coin issuance returns to the coinbase schedule
+        // alone. One info line at the flip (per process), because "silently stopped minting"
+        // and "never minted" must stay distinguishable in a log.
+        if dns_params.tkn.active_at(daa_score) {
+            if !self.audit_fee_retired_logged.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                info!("[token] audit-fee(base) retired at daa={daa_score} — verification now pays from R(E) (audit-emission v0.2)");
+            }
+            return (Vec::new(), 0);
+        }
         let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
             return (Vec::new(), 0);
         };
@@ -4594,8 +4642,15 @@ impl VirtualStateProcessor {
             if self.vlt_credit_store.has(epoch).unwrap_or(false) {
                 continue; // immutable once written
             }
-            let row =
+            let mut row =
                 VltEpochCredits::from_unordered(credits.iter().filter_map(|(v, per_epoch)| per_epoch.get(&epoch).map(|x| (*v, *x))));
+            // Audit-emission v0.2 §2.3: audit weight exists only for epochs whose anchor sits at
+            // or above the token fence — the same flip that retires the base-coin audit fee. A
+            // pre-fence epoch's row keeps an empty audit vec, so settlement stays v0.1-shaped
+            // for exactly the epochs the sompi fee already paid.
+            if dns_params.tkn.active_at(anchor.anchor_daa_score) {
+                row = row.with_audit(snapshot.audit().iter().filter_map(|(v, per_epoch)| per_epoch.get(&epoch).map(|x| (*v, *x))));
+            }
             self.vlt_credit_store.set_batch(batch, epoch, row).unwrap();
         }
     }
@@ -4848,7 +4903,12 @@ impl VirtualStateProcessor {
                 }
                 Err(e) => panic!("settle_token_emission: vlt_credit_store.get({next}) failed: {e}"),
             };
-            let settlement = emission_rewards(emission_epoch_budget(tkn, next), &credits, tkn.emission_min_network_compute);
+            let settlement = emission_rewards_v2(
+                emission_epoch_budget(tkn, next),
+                &credits.credits,
+                &credits.audit,
+                tkn.emission_min_network_compute,
+            );
             if live {
                 for reward in settlement.rewards.iter() {
                     let mut account = self.staged_token_account(accounts, TOK_ASSET_ID, reward.owner);
@@ -4860,20 +4920,22 @@ impl VirtualStateProcessor {
                 supply.minted = supply.minted.saturating_add(settlement.paid_total);
                 supplies.insert(TOK_ASSET_ID, supply);
                 info!(
-                    "[token] epoch {next} settled: R={} X={} paid={} to {} executor(s) root={}",
+                    "[token] epoch {next} settled: R={} X={} paid={} to {} recipient(s) audit={} root={}",
                     settlement.budget,
                     settlement.network_compute,
                     settlement.paid_total,
                     settlement.rewards.len(),
+                    settlement.audit_paid,
                     settlement.digest(),
                 );
                 self.token_store.set_settlement_batch(batch, next, settlement).unwrap();
             } else {
                 info!(
-                    "[token-shadow] epoch {next} would settle: R={} X={} paid={} root={}",
+                    "[token-shadow] epoch {next} would settle: R={} X={} paid={} audit={} root={}",
                     settlement.budget,
                     settlement.network_compute,
                     settlement.paid_total,
+                    settlement.audit_paid,
                     settlement.digest(),
                 );
             }

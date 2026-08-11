@@ -767,6 +767,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 budget: info.budget.to_string(),
                 network_compute: info.network_compute.to_string(),
                 paid_total: info.paid_total.to_string(),
+                audit_paid: info.audit_paid.to_string(),
                 reward_count: info.reward_count,
                 settlement_root: if info.settled { info.settlement_root.to_string() } else { String::new() },
                 next_settlement_epoch: info.next_settlement_epoch,

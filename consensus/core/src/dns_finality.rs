@@ -6563,6 +6563,57 @@ pub fn aggregate_compute_credits(
     out
 }
 
+/// One certificate's counted-verdict roster — the audit-side twin of
+/// [`ComputeCreditContribution`], one entry **per certificate** (the verdicts fan out at
+/// aggregation). Audit-emission v0.2 (`docs/misaka-audit-emission-v0.2-design.md` §2.1): a
+/// counted verdict is work equal to the job it judged, so each roster carries the job's own
+/// µRTE value once and the verifiers who earned it.
+#[derive(Clone, Debug)]
+pub struct AuditCreditContribution {
+    pub certificate_tx_id: TransactionId,
+    pub executor_id: Hash64,
+    pub job_id: Hash64,
+    pub epoch: u64,
+    /// The judged job's `x_j` in µRTE — the weight EACH counted verdict earns.
+    pub vlt: u128,
+    pub accepted_daa_score: u64,
+    /// The counted verdicts' authors (drawn committee members with valid signatures).
+    pub verifiers: Vec<Hash64>,
+}
+
+/// Aggregate audit-side credit per `(verifier, epoch)` — audit-emission v0.2 §2.1.
+///
+/// Survivorship mirrors [`aggregate_compute_credits`] with ONE deliberate divergence: a
+/// **refuted** certificate's counted verdicts still weigh — the refuters are why it is refuted,
+/// and refutation must stay paid work (the §7 griefing balance). The challenge-window maturity
+/// rule and the `(executor, job)` dedup apply identically: an immature certificate returns on a
+/// later walk, and a re-certified job's committee re-signs a cached replay — paying it twice
+/// would be the replay-for-pay loop the dedup exists to kill. The dedup key deliberately skips
+/// refuted certificates (as the exec side does), so a job refuted once and honestly certified
+/// later pays both committees: two real rounds of replay happened.
+pub fn aggregate_audit_credits(
+    contributions: &[AuditCreditContribution],
+    refuted: &HashSet<TransactionId>,
+    pov_daa_score: u64,
+    challenge_window_blocks: u64,
+) -> HashMap<Hash64, BTreeMap<u64, u128>> {
+    let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
+    let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+    for c in contributions {
+        if pov_daa_score.saturating_sub(c.accepted_daa_score) < challenge_window_blocks {
+            continue; // still challengeable — its epoch is not finalized for audit either.
+        }
+        if !refuted.contains(&c.certificate_tx_id) && !seen.insert((c.executor_id, c.job_id)) {
+            continue; // duplicate certification of one job: one committee payment.
+        }
+        for verifier in c.verifiers.iter() {
+            let entry = out.entry(*verifier).or_default().entry(c.epoch).or_insert(0);
+            *entry = entry.saturating_add(c.vlt);
+        }
+    }
+    out
+}
+
 /// Stateless validation of a [`ComputeCertificatePayload`]'s bytes.
 ///
 /// Structure only — the caller still checks signatures, sortition membership, and the model table.

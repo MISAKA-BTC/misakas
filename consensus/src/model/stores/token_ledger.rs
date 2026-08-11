@@ -51,7 +51,10 @@ use super::U64Key;
 /// for history already recorded.
 ///
 /// * 1 — original (Phase A).
-pub const TOKEN_LEDGER_SCHEMA_VERSION: u32 = 1;
+/// * 2 — audit-emission v0.2: settlements grew `audit_paid` (borsh layout change), and the
+///   settlement values themselves changed shape (one budget now pays exec + audit work), so
+///   rows settled under rule 1 record a distribution this build would not produce.
+pub const TOKEN_LEDGER_SCHEMA_VERSION: u32 = 2;
 
 /// `(asset_id, owner)` as a fixed-width DB key: 8 LE bytes of asset id, then
 /// the 64-byte overlay owner id. Asset-major, so a prefix iteration walks one
@@ -332,6 +335,7 @@ mod tests {
             network_compute: 1_001,
             paid_total: 999,
             rewards: vec![TokenEmissionReward { owner: owner(1), amount: 999 }],
+            audit_paid: 0,
         };
         store.set_settlement(9, settlement.clone()).unwrap();
         assert!(store.has_settlement(9).unwrap());

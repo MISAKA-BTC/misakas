@@ -1330,6 +1330,8 @@ message GetTokenEmissionInfoResponseMessage {
   string networkCompute = 5;
   string paidTotal = 6;
   uint32 rewardCount = 7;
+  // Audit-emission v0.2: the counted-verdict share of paidTotal.
+  string auditPaid = 11;
   // Hex keyed-BLAKE2b-256 digest of the whole settlement (cross-node comparable).
   string settlementRoot = 8;
   uint64 nextSettlementEpoch = 9;
