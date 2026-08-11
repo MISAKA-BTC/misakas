@@ -1175,9 +1175,15 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     //     vlt: VltParams {
     //         vlt_shadow_activation_daa_score: <H>,          // step 3 — the overlay starts running
     //         vlt_activation_daa_score: <H + vlt_credit_span()>,  // step 4 — the vote moves
-    //         model_cost_table: ModelCostTable::palw_qwen36_metal(),
+    //         model_cost_table: ModelCostTable::palw_metal_registered(),
     //         ..VltParams::INERT
     //     },
+    //
+    // (`palw_metal_registered` carries BOTH pinned Metal profiles — Qwen3.5-2B palw-lite and the
+    // 35B PALW — because the 2B one is what a fleet's verifier committees can actually afford to
+    // fully replay; see `docs/testnet10-vlt-shadow-fork-runbook.md` for the step-3 flag-day
+    // procedure, the hardware-class precondition, and why the fence and the table move in ONE
+    // release.)
     //
     // Everything else here is already sized for `INERT`'s K = 96: the credit walk below covers
     // the span, and `unbonding_period_blocks` covers the §7 bound. Two tests hold that claim —

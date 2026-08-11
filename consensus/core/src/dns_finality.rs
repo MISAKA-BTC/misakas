@@ -1553,7 +1553,7 @@ impl DnsParams {
             // palw-lite one — five executors plus their replay committees cannot share a 24 GB
             // model. The 35B profile stays registered so a real PALW worker is a configuration
             // choice on the same network, not a different network.
-            crate::vlt::ModelCostTable::palw_metal_devnet()
+            crate::vlt::ModelCostTable::palw_metal_registered()
         };
         // `W_min` is profile-relative and the shipped value is the real PALW profile's: it comes
         // from "a handful of validators each having completed roughly one full job" at that

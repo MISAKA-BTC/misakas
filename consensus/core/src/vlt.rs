@@ -1458,13 +1458,17 @@ impl ModelCostTable {
         table
     }
 
-    /// The registry a **real-compute devnet** ships: both pinned Metal profiles, so the operator
+    /// The registry a **real-compute network** ships: both pinned Metal profiles, so the operator
     /// chooses the model by which worker binary they point `--compute-worker` at — the node
     /// resolves its entry from the worker's probed `runtime_hash`, and the two runtime hashes are
     /// distinct by construction. On one machine that choice is effectively
     /// [`palw_qwen35_2b_metal_entry`]; the 35B entry stays registered so pointing a real PALW
-    /// worker at the same devnet is a configuration, not a fork.
-    pub fn palw_metal_devnet() -> Self {
+    /// worker at the same network is a configuration, not a fork. This is also the table the
+    /// ADR-0024 step-3 release drops into a public preset (see the fork-edit comment on
+    /// `PRODUCTION_DNS_PARAMS.vlt`): the 2B profile is the one a real fleet can afford to
+    /// replay, and registering only the 35B one would ship a fork whose committees can never
+    /// reach `min_verifier_confirmations`.
+    pub fn palw_metal_registered() -> Self {
         let mut table = Self::EMPTY;
         table.len = 2;
         table.entries[0] = palw_qwen36_metal_entry();
@@ -4663,7 +4667,7 @@ mod tests {
         assert_ne!(e.runtime_class_id, q36.runtime_class_id, "distinct kernels must be distinct determinism classes");
 
         // The devnet registry resolves each worker to exactly its own profile.
-        let table = ModelCostTable::palw_metal_devnet();
+        let table = ModelCostTable::palw_metal_registered();
         assert_eq!(table.live().len(), 2);
         assert!(table.lookup(e.model_weights_hash, e.runtime_hash).is_some());
         assert!(table.lookup(q36.model_weights_hash, q36.runtime_hash).is_some());
