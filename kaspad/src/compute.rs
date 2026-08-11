@@ -223,7 +223,10 @@ impl ComputeRole {
                 // missing cwd fails the spawn with ENOENT — an error that reads as "worker binary
                 // not found" and points the operator at exactly the wrong file.
                 if let Err(err) = std::fs::create_dir_all(&cfg.work_dir) {
-                    warn!("[{COMPUTE}] could not create the compute work dir {}: {err}; compute role disabled", cfg.work_dir.display());
+                    warn!(
+                        "[{COMPUTE}] could not create the compute work dir {}: {err}; compute role disabled",
+                        cfg.work_dir.display()
+                    );
                     return None;
                 }
                 Arc::new(PalwWorkerRuntime::new(PalwWorkerConfig {

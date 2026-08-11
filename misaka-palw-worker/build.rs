@@ -5,8 +5,7 @@
 //! ABI-safe — no hand-declared structs, only the flat functions `src/shim.c` exports.
 
 fn main() {
-    let src = std::env::var("MISAKA_LLAMA_SRC")
-        .unwrap_or_else(|_| "/Users/wata/Downloads/misaka-palw-runtime/llama.cpp".to_string());
+    let src = std::env::var("MISAKA_LLAMA_SRC").unwrap_or_else(|_| "/Users/wata/Downloads/misaka-palw-runtime/llama.cpp".to_string());
     println!("cargo:rerun-if-env-changed=MISAKA_LLAMA_SRC");
     println!("cargo:rerun-if-changed=src/shim.c");
 

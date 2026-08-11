@@ -41,7 +41,8 @@ use sha2::Digest;
 const N_CTX: i32 = 4096;
 const N_BATCH: i32 = 512;
 const N_THREADS: i32 = 4;
-const SHAPE_STRING: &str = "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/v1";
+const SHAPE_STRING: &str =
+    "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/v1";
 const CU_RULESET: &str = "cu = prefill + 8*decode";
 const TRACE_SCHEME: &str = "full-logits-per-decode-call/keyed-blake2b-512/v1";
 
@@ -230,13 +231,13 @@ fn execute(model_path: &Path, input: &[u8], n_predict: u32) -> Execution {
     let mut schedule_event_count: u64 = 0;
 
     let step = |ctx: *mut ShimCtx,
-                    fed: &[i32],
-                    logits: &mut [f32],
-                    logits_bytes: &mut [u8],
-                    trace_events: &mut Vec<u8>,
-                    trace_event_count: &mut u64,
-                    schedule: &mut blake2b_simd::State,
-                    schedule_event_count: &mut u64| {
+                fed: &[i32],
+                logits: &mut [f32],
+                logits_bytes: &mut [u8],
+                trace_events: &mut Vec<u8>,
+                trace_event_count: &mut u64,
+                schedule: &mut blake2b_simd::State,
+                schedule_event_count: &mut u64| {
         let rc = unsafe { shim_decode(ctx, fed.as_ptr(), fed.len() as i32) };
         if rc != 0 {
             die(format!("llama_decode failed with {rc}"));
@@ -259,7 +260,16 @@ fn execute(model_path: &Path, input: &[u8], n_predict: u32) -> Execution {
     // Prefill, then greedy decode. The last sampled token is not fed back (there is nothing left
     // to sample after it), so `schedule_event_count = 1 + tokens fed`, a fact both replicas
     // reproduce exactly.
-    step(ctx, &tokens, &mut logits, &mut logits_bytes, &mut trace_events, &mut trace_event_count, &mut schedule, &mut schedule_event_count);
+    step(
+        ctx,
+        &tokens,
+        &mut logits,
+        &mut logits_bytes,
+        &mut trace_events,
+        &mut trace_event_count,
+        &mut schedule,
+        &mut schedule_event_count,
+    );
     let mut outputs: Vec<i32> = Vec::new();
     let mut rendered: Vec<u8> = Vec::new();
     let mut piece = vec![0u8; 512];
@@ -291,10 +301,8 @@ fn execute(model_path: &Path, input: &[u8], n_predict: u32) -> Execution {
     for t in &outputs {
         output_ids.extend_from_slice(&t.to_le_bytes());
     }
-    let output_commitment = keyed64(
-        b"misaka-palw-lite/output/v1",
-        &[&(outputs.len() as u64).to_le_bytes(), &output_ids, &[0xff], &rendered],
-    );
+    let output_commitment =
+        keyed64(b"misaka-palw-lite/output/v1", &[&(outputs.len() as u64).to_le_bytes(), &output_ids, &[0xff], &rendered]);
     let mut schedule_out = [0u8; 64];
     schedule_out.copy_from_slice(schedule.finalize().as_bytes());
     eprintln!(
