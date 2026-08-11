@@ -1065,7 +1065,15 @@ pub mod qwen35_pins {
     /// This profile exists because a public fleet is Linux servers, not Apple laptops, and a
     /// committee can only be drawn from validators sharing a determinism class — a network whose
     /// only registered classes are Metal ones is a network whose fleet cannot verify anything.
-    pub const CPU_BUILD_PROFILE: &str = "release/cpu-only/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
+    /// `single-variant` is load-bearing: the pinned tree is built with `GGML_CPU_ALL_VARIANTS=OFF`,
+    /// so ggml compiles ONE cpu path instead of dispatching between feature variants at run time.
+    /// That is what makes the class a real class — with runtime dispatch, one binary would take
+    /// different arithmetic paths on different machines and two honest nodes would refute each
+    /// other. Verified by disassembly: the aarch64 build emits ARMv8.2 `sdot`/`udot`, so it
+    /// REQUIRES dotprod (a machine without it fails to execute rather than computing differently
+    /// — the safe failure), and the class tag says so.
+    pub const CPU_BUILD_PROFILE: &str =
+        "release/cpu-only/single-variant/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
 
     /// The CPU determinism class — **scoped to the instruction-set architecture**, and that
     /// scoping is the honest part.
@@ -1082,7 +1090,7 @@ pub mod qwen35_pins {
     /// So the fleet's rule is: same arch, same class, and a committee forms within it. Mixed-arch
     /// fleets run two classes and audit within each.
     #[cfg(target_arch = "aarch64")]
-    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/aarch64/v1";
+    pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/aarch64-dotprod/v1";
     #[cfg(target_arch = "x86_64")]
     pub const CPU_RUNTIME_CLASS: &str = "misaka-palw-lite-cpu/x86_64/v1";
     /// Any other architecture gets its own tag rather than silently joining one of the two above.
@@ -1564,7 +1572,7 @@ impl ModelCostTable {
         // arch with an unregistered runtime — declining to participate, silently, on a network
         // that looks configured. Registering both costs nothing (an unused entry draws no
         // committee) and is the difference between a mixed fleet working and half of it idling.
-        table.entries[2] = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64/v1");
+        table.entries[2] = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64-dotprod/v1");
         table.entries[3] = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/x86_64/v1");
         table
     }
@@ -4790,7 +4798,7 @@ mod tests {
         // runtime, and `ggml/src/ggml-cpu/arch/` gives it different SIMD kernels — so they must
         // never be drawn into one committee, while a preset compiled on either arch must still
         // register both or half a mixed fleet silently declines to participate.
-        let arm = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64/v1");
+        let arm = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/aarch64-dotprod/v1");
         let x86 = palw_qwen35_2b_cpu_entry_for("misaka-palw-lite-cpu/x86_64/v1");
         assert_eq!(arm.runtime_hash, x86.runtime_hash, "one build recipe, one runtime hash");
         assert_ne!(arm.runtime_class_id, x86.runtime_class_id, "two architectures, two classes");

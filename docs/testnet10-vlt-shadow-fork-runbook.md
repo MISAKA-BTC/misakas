@@ -108,9 +108,19 @@ stall the base ledger, which is why shadow may proceed without them.
       * if ggml selects between dotprod and non-dotprod kernels at RUNTIME, one binary takes
         different arithmetic paths on different machines — and the class is over-claiming in
         exactly the way the single portable tag was, one level down.
-      Check `ggml_cpu_has_dotprod`-style runtime dispatch in the pinned tree before scheduling
-      the fence, and if it dispatches, pin the feature set into `CPU_BUILD_PROFILE` and split
-      the class the way the architectures were split. This is what the second machine is FOR.
+      **RESOLVED the same day.** The pinned tree builds with `GGML_CPU_ALL_VARIANTS=OFF`
+      (verified in its `CMakeCache.txt`), so ggml compiles ONE cpu path and never dispatches
+      between feature variants at run time. One binary therefore executes the same instructions
+      on every machine that can execute it at all; a machine without dotprod fails to start
+      rather than computing differently, which is the safe failure. The class is real.
+
+      The requirement is now IN the identity: the class is `…/aarch64-dotprod/v1` and the build
+      profile carries `single-variant`, so an operator reading the tag knows what the machine
+      must support, and a build made with runtime dispatch enabled would be a different
+      `runtime_hash` and simply not match the registered entry.
+
+      This turns the second machine from a discovery step into a confirmation: it should agree,
+      and the calibration exists to prove it did rather than to find out whether it would.
 
       An `x86_64` line is EXPECTED to differ — different class, different SIMD kernels — so the
       x86 fleet calibrates against another x86 machine, not against this one. Locally verified as
@@ -138,7 +148,7 @@ remote: 0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3  (the b
 
 CORRECTED 2026-08-11: this is a RECEIVED reject, and the sender fills `local` with its own
 fingerprint (`flow_context.rs:1293`) — so `local:` is the FLEET's value, not the prober's. The
-release's own fingerprint is `d07cb673…`, read from the node's startup line rather than inferred
+release's own fingerprint is `8bf48730…`, read from the node's startup line rather than inferred
 from a peer.
 ```
 

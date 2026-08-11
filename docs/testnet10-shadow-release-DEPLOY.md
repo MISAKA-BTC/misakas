@@ -6,7 +6,7 @@ measured; what is left is running them on the fleet.
 **Fence: DAA 30_200_000.** Measured against a live tip of 29_981_862 (2026-08-11). t10 runs at
 1 bps, so this is ~2.5 days of margin — twice the end-to-end duration of the 2026-08-10 flag day.
 
-**Consensus fingerprint after this release: `d07cb673…`** (the fleet runs `5fabb683…` today). An
+**Consensus fingerprint after this release: `8bf48730…`** (the fleet runs `5fabb683…` today). An
 un-updated peer is rejected at the handshake, not silently forked — which is why the rollout can
 be verified rather than hoped for.
 
@@ -17,7 +17,7 @@ be verified rather than hoped for.
 A node built from the release commit now prints its own value at startup:
 
 ```
-Consensus params fingerprint: d07cb67300434b528e74b15434f05e4adf65018ecd4b21ef9b7dc3a771000d33
+Consensus params fingerprint: 8bf487309c1371da52725b501a581600c8fbc98887071476f066d2ecdb6fe377
 ```
 
 That matches the pin exactly, and matches `Params::from(NetworkId)` — source, pin and running
@@ -34,7 +34,7 @@ So, correctly attributed:
 | | fingerprint |
 |---|---|
 | the live t10 fleet today | `5fabb683…` |
-| this release | `d07cb673…` |
+| this release | `8bf48730…` |
 
 The startup line above exists so this is never inferred from a peer again: it answers "is this
 binary the release?" with no network at all.
@@ -94,7 +94,7 @@ CARGO_TARGET_DIR=/tmp/misaka-release cargo build --release --features evm   --bi
 ```
 
 Read the binary's own startup line instead — `Consensus params fingerprint:` — which must be
-`d07cb673…`. Do NOT read it from a peer's rejection: in a received reject, `local:` is the
+`8bf48730…`. Do NOT read it from a peer's rejection: in a received reject, `local:` is the
 PEER's value, and reading it the other way is what cost two rounds of debugging here.
 
 ## 3. Roll out — A2 pattern, `docs/testnet10-transition.md`

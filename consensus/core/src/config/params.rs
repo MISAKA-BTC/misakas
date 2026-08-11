@@ -1923,7 +1923,7 @@ mod consensus_params_id_tests {
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            ("testnet", TESTNET_PARAMS, "d07cb67300434b528e74b15434f05e4adf65018ecd4b21ef9b7dc3a771000d33"),
+            ("testnet", TESTNET_PARAMS, "8bf487309c1371da52725b501a581600c8fbc98887071476f066d2ecdb6fe377"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]
