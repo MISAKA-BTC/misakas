@@ -70,6 +70,14 @@ AMT_REPLAY=9000
 AMT_LIVE2=11000
 AMT_OVERDRAFT=1000000000000000
 AMT_BURN=3000
+# Phase B plan (caps/amounts double as identifiers too). The mint plan issues 3M + 2M to land
+# EXACTLY on the 5M cap, with a cap-breaching 2M+1 between them that must stay void without
+# consuming its nonce — the mint-side twin of the overdraft/burn nonce proof.
+CAP_SHADOW=7777777
+CAP_LIVE=5000000
+MINT1=3000000
+MINT_CAPVOID=2000001
+MINT2=2000000
 
 wait_for_log() { # file regex timeout_secs what
   local file="$1" regex="$2" timeout="$3" what="$4"
@@ -125,6 +133,8 @@ SHADOW_SPAN=300
 # The recipient of every transfer is node-1's overlay identity, printed at key load.
 NODE1_ID=$({ grep -oE 'validator_id=[0-9a-f]+' "$WORK_DIR/node-1/kaspad.log" || true; } | head -1 | cut -d= -f2)
 [ -n "$NODE1_ID" ] || { echo "could not read node-1's validator_id from its log" >&2; exit 1; }
+NODE0_ID=$({ grep -oE 'validator_id=[0-9a-f]+' "$WORK_DIR/node-0/kaspad.log" || true; } | head -1 | cut -d= -f2)
+[ -n "$NODE0_ID" ] || { echo "could not read node-0's validator_id from its log" >&2; exit 1; }
 
 echo
 echo "== Phase 2: token fences =="
@@ -143,7 +153,7 @@ for i in $(seq 0 $((NODES - 1))); do
   # Keep the compute fixture producing THROUGH the token phase: emission settles over live
   # credits, and a quota exhausted before the active fence would settle nothing but zeros.
   cleaned=$(printf '%s' "$cleaned" | sed -E "s/--compute-fixture-job-limit=[0-9]+/--compute-fixture-job-limit=200/")
-  extra=" --tkn-devnet=$TKN_ACTIVE --tkn-devnet-shadow-span=$SHADOW_SPAN --tkn-devnet-epoch-budget-tok=1000"
+  extra=" --tkn-devnet=$TKN_ACTIVE --tkn-devnet-shadow-span=$SHADOW_SPAN --tkn-devnet-epoch-budget-tok=1000 --tkn-devnet-phase-b-span=300"
   if [ "$i" -eq 0 ]; then
     extra+=" --tkn-fixture-transfer=$NODE1_ID:$AMT_SHADOW:1:$((TKN_ACTIVE - 150))"
     extra+=" --tkn-fixture-transfer=$NODE1_ID:$AMT_LIVE1:1:$((TKN_ACTIVE + 800))"
@@ -151,6 +161,14 @@ for i in $(seq 0 $((NODES - 1))); do
     extra+=" --tkn-fixture-transfer=$NODE1_ID:$AMT_LIVE2:2:$((TKN_ACTIVE + 1000))"
     extra+=" --tkn-fixture-transfer=$NODE1_ID:$AMT_OVERDRAFT:3:$((TKN_ACTIVE + 1100))"
     extra+=" --tkn-fixture-burn=$AMT_BURN:3:$((TKN_ACTIVE + 1200))"
+    # Phase B (fence at ACTIVE+300). The creates share the TOK nonce line with the Phase A
+    # plan, so they sit AFTER the burn: shadow-B create (pre-fence, void forever), the real
+    # create at TOK-nonce 4, then the mint trio on the new asset's own nonce line.
+    extra+=" --tkn-fixture-create-mint=$CAP_SHADOW:8:4:$((TKN_ACTIVE + 150))"
+    extra+=" --tkn-fixture-create-mint=$CAP_LIVE:8:4:$((TKN_ACTIVE + 1300))"
+    extra+=" --tkn-fixture-mint-to=4:$NODE1_ID:$MINT1:1:$((TKN_ACTIVE + 1400))"
+    extra+=" --tkn-fixture-mint-to=4:$NODE1_ID:$MINT_CAPVOID:2:$((TKN_ACTIVE + 1500))"
+    extra+=" --tkn-fixture-mint-to=4:$NODE0_ID:$MINT2:2:$((TKN_ACTIVE + 1600))"
   fi
   printf '%s%s' "$cleaned" "$extra" > "$args_file"
 done

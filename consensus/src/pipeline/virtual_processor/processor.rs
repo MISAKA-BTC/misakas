@@ -95,6 +95,15 @@ use kaspa_consensus_core::{
         verdicts_for_certificate, voting_epoch_for_target,
     },
     header::Header,
+    subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER},
+    token::{
+        TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenAccount, TokenEmissionSettlement,
+        TokenSupply, apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload,
+        TOKEN_CREATE_MINT_MLDSA87_CONTEXT, TOKEN_MINT_TO_MLDSA87_CONTEXT, TokenMintMeta, apply_token_create_mint,
+        apply_token_mint_credit, apply_token_mint_nonce, asset_id_for_mint, decode_token_create_mint_payload,
+        decode_token_mint_to_payload, emission_epoch_budget, emission_rewards_v2, token_burn_message,
+        token_create_mint_message, token_mint_to_message, token_transfer_message,
+    },
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
@@ -4730,8 +4739,10 @@ impl VirtualStateProcessor {
         // this commit, and each touched key is written to the batch exactly once.
         let mut accounts: HashMap<(u64, Hash64), TokenAccount> = HashMap::new();
         let mut supplies: HashMap<u64, TokenSupply> = HashMap::new();
+        // Phase B: mints claimed within this commit (read-through against the store).
+        let mut metas: HashMap<u64, TokenMintMeta> = HashMap::new();
 
-        self.fold_token_ledger(batch, sink, sink_daa, dns_params, selected_chain, &mut accounts, &mut supplies);
+        self.fold_token_ledger(batch, sink, sink_daa, dns_params, selected_chain, &mut accounts, &mut supplies, &mut metas);
         self.settle_token_emission(batch, sink, sink_daa, dns_params, &mut accounts, &mut supplies);
 
         for ((asset, owner), account) in accounts {
@@ -4739,6 +4750,9 @@ impl VirtualStateProcessor {
         }
         for (asset, supply) in supplies {
             self.token_store.set_supply_batch(batch, asset, supply).unwrap();
+        }
+        for (asset, meta) in metas {
+            self.token_store.set_mint_meta_batch(batch, asset, meta).unwrap();
         }
     }
 
@@ -4761,6 +4775,7 @@ impl VirtualStateProcessor {
         selected_chain: &impl SelectedChainStoreReader,
         accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
         supplies: &mut HashMap<u64, TokenSupply>,
+        metas: &mut HashMap<u64, TokenMintMeta>,
     ) {
         const MAX_FOLD_BLOCKS_PER_COMMIT: u64 = 4096;
         let tkn = &dns_params.tkn;
@@ -4783,11 +4798,18 @@ impl VirtualStateProcessor {
                 break; // not buried yet — resume on a later commit
             }
             let live = tkn.active_at(block_daa);
+            // Phase B has its own fence: a create/mint accepted below it is void forever,
+            // narrated in shadow exactly like a pre-Phase-A op.
+            let live_b = live && tkn.phase_b_active_at(block_daa);
             for tx in self.accepted_txs_of_chain_block(block) {
                 if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER {
                     self.fold_token_transfer(&tx, live, net_id.as_byte_slice(), accounts);
                 } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
                     self.fold_token_burn(&tx, live, net_id.as_byte_slice(), accounts, supplies);
+                } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_CREATE_MINT {
+                    self.fold_token_create_mint(&tx, live_b, net_id.as_byte_slice(), accounts, metas);
+                } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_MINT_TO {
+                    self.fold_token_mint_to(&tx, live_b, net_id.as_byte_slice(), accounts, supplies, metas);
                 }
             }
             next += 1;
@@ -4884,6 +4906,114 @@ impl VirtualStateProcessor {
             Ok(_) => info!("[token-shadow] burn {} would destroy {} (asset {})", tx.id(), p.amount, p.asset_id),
             Err(e) if !live => info!("[token-shadow] burn {} would be void: {e} (asset {})", tx.id(), p.asset_id),
             Err(e) => trace!("[token] burn {} void: {e}", tx.id()),
+        }
+    }
+
+    /// Phase B: one accepted `CreateMint` — claim `asset_id_for_mint(creator, nonce)` under
+    /// first-wins, consuming the creator's TOK-line nonce. Same void-not-fatal stance as the
+    /// transfer fold; `live` here means the PHASE B fence (an op below it is void forever).
+    fn fold_token_create_mint(
+        &self,
+        tx: &Transaction,
+        live: bool,
+        net_id: &[u8],
+        accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
+        metas: &mut HashMap<u64, TokenMintMeta>,
+    ) {
+        let Some(p) = decode_token_create_mint_payload(&tx.payload) else {
+            trace!("[token] create-mint {} void: payload does not decode", tx.id());
+            return;
+        };
+        let creator = validator_id_from_pubkey(&p.creator_pubkey);
+        let digest = token_create_mint_message(net_id, creator, p.supply_cap, p.decimals, p.nonce);
+        if !matches!(
+            verify_mldsa87_with_context(&p.creator_pubkey, &digest.as_bytes(), &p.signature, TOKEN_CREATE_MINT_MLDSA87_CONTEXT),
+            Ok(true)
+        ) {
+            trace!("[token] create-mint {} void: signature does not verify", tx.id());
+            return;
+        }
+        let asset_id = asset_id_for_mint(creator, p.nonce);
+        let existing = match metas.get(&asset_id) {
+            Some(m) => Some(m.clone()),
+            None => self.token_store.get_mint_meta(asset_id).unwrap(),
+        };
+        let creator_acc = self.staged_token_account(accounts, TOK_ASSET_ID, creator);
+        match apply_token_create_mint(existing.as_ref(), creator_acc, creator, p.supply_cap, p.decimals, p.nonce) {
+            Ok((creator2, meta)) if live => {
+                accounts.insert((TOK_ASSET_ID, creator), creator2);
+                metas.insert(asset_id, meta);
+                info!(
+                    "[token] create-mint {}: asset={asset_id} creator={creator} cap={} decimals={}",
+                    tx.id(),
+                    p.supply_cap,
+                    p.decimals
+                );
+            }
+            Ok(_) => info!("[token-shadow] create-mint {} would claim asset={asset_id} cap={}", tx.id(), p.supply_cap),
+            Err(e) if !live => info!("[token-shadow] create-mint {} would be void: {e}", tx.id()),
+            Err(e) => trace!("[token] create-mint {} void: {e}", tx.id()),
+        }
+    }
+
+    /// Phase B: one accepted `MintTo` — authority + nonce, then cap-checked issuance. The
+    /// two-step application (nonce first, then credit) lets the staging map alias
+    /// `authority == to` — the common self-mint — without a special case.
+    #[allow(clippy::too_many_arguments)]
+    fn fold_token_mint_to(
+        &self,
+        tx: &Transaction,
+        live: bool,
+        net_id: &[u8],
+        accounts: &mut HashMap<(u64, Hash64), TokenAccount>,
+        supplies: &mut HashMap<u64, TokenSupply>,
+        metas: &mut HashMap<u64, TokenMintMeta>,
+    ) {
+        let Some(p) = decode_token_mint_to_payload(&tx.payload) else {
+            trace!("[token] mint-to {} void: payload does not decode", tx.id());
+            return;
+        };
+        let authority = validator_id_from_pubkey(&p.authority_pubkey);
+        let digest = token_mint_to_message(net_id, p.asset_id, authority, p.to, p.amount, p.nonce);
+        if !matches!(
+            verify_mldsa87_with_context(&p.authority_pubkey, &digest.as_bytes(), &p.signature, TOKEN_MINT_TO_MLDSA87_CONTEXT),
+            Ok(true)
+        ) {
+            trace!("[token] mint-to {} void: signature does not verify", tx.id());
+            return;
+        }
+        let meta = match metas.get(&p.asset_id) {
+            Some(m) => Some(m.clone()),
+            None => self.token_store.get_mint_meta(p.asset_id).unwrap(),
+        };
+        let Some(meta) = meta else {
+            let msg = kaspa_consensus_core::token::TokenOpError::UnknownAsset { asset_id: p.asset_id };
+            if !live {
+                info!("[token-shadow] mint-to {} would be void: {msg}", tx.id());
+            } else {
+                trace!("[token] mint-to {} void: {msg}", tx.id());
+            }
+            return;
+        };
+        let authority_acc = self.staged_token_account(accounts, p.asset_id, authority);
+        let outcome = apply_token_mint_nonce(&meta, authority, authority_acc, p.nonce).and_then(|authority2| {
+            // Stage the nonce bump BEFORE reading `to`, so a self-mint reads its own bump.
+            if live {
+                accounts.insert((p.asset_id, authority), authority2);
+            }
+            let to_acc = self.staged_token_account(accounts, p.asset_id, p.to);
+            let supply = supplies.get(&p.asset_id).copied().unwrap_or_else(|| self.token_store.get_supply(p.asset_id).unwrap());
+            apply_token_mint_credit(&meta, to_acc, supply, p.amount)
+        });
+        match outcome {
+            Ok((to2, supply2)) if live => {
+                accounts.insert((p.asset_id, p.to), to2);
+                supplies.insert(p.asset_id, supply2);
+                info!("[token] mint-to {}: asset={} {authority} -> {} amount {}", tx.id(), p.asset_id, p.to, p.amount);
+            }
+            Ok(_) => info!("[token-shadow] mint-to {} would issue {} (asset {})", tx.id(), p.amount, p.asset_id),
+            Err(e) if !live => info!("[token-shadow] mint-to {} would be void: {e}", tx.id()),
+            Err(e) => trace!("[token] mint-to {} void: {e}", tx.id()),
         }
     }
 

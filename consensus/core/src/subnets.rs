@@ -226,11 +226,17 @@ pub const SUBNETWORK_ID_EVM_ADMIN: SubnetworkId = SubnetworkId::from_byte(0x22);
 // MISAKA Compute Token Program token-op band 0x30-0x33 (design
 // `docs/misaka-compute-token-program-design-v0.1.md` §4.3). Above the EVM
 // bridge band (0x20-0x22) as that band sits above the finality overlay
-// (0x10-0x1a). Phase A defines transfer/burn; 0x32 (`CreateMint`) and 0x33
-// (`MintTo`) are reserved for Phase B and intentionally not defined yet — the
-// TOK asset itself has no mint authority (§4.1), its only issuance is emission.
-/// Move TOK between ledger accounts — [`crate::token::TokenTransferPayload`].
+// (0x10-0x1a). Phase A defines transfer/burn; Phase B (design §4.6) adds the
+// permissionless mint pair. The TOK asset itself has no mint authority (§4.1) —
+// its only issuance is emission, and a MintTo naming it is rejected statelessly.
+/// Move an asset between ledger accounts — [`crate::token::TokenTransferPayload`].
 pub const SUBNETWORK_ID_TOKEN_TRANSFER: SubnetworkId = SubnetworkId::from_byte(0x30);
-/// Destroy TOK from the signer's own ledger account —
+/// Destroy an asset from the signer's own ledger account —
 /// [`crate::token::TokenBurnPayload`].
 pub const SUBNETWORK_ID_TOKEN_BURN: SubnetworkId = SubnetworkId::from_byte(0x31);
+/// Phase B: claim a new asset id and fix its immutable mint policy —
+/// [`crate::token::TokenCreateMintPayload`].
+pub const SUBNETWORK_ID_TOKEN_CREATE_MINT: SubnetworkId = SubnetworkId::from_byte(0x32);
+/// Phase B: issue an asset to a ledger account, signed by its mint authority —
+/// [`crate::token::TokenMintToPayload`].
+pub const SUBNETWORK_ID_TOKEN_MINT_TO: SubnetworkId = SubnetworkId::from_byte(0x33);

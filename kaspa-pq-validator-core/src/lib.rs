@@ -22,12 +22,14 @@ use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
-    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT,
-    SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
+    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND,
+    SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT,
+    SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
 };
 use kaspa_consensus_core::token::{
-    TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload,
-    TokenTransferPayload, token_burn_message, token_transfer_message,
+    TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_CREATE_MINT_MLDSA87_CONTEXT, TOKEN_MINT_TO_MLDSA87_CONTEXT,
+    TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload, TokenCreateMintPayload, TokenMintToPayload,
+    TokenTransferPayload, token_burn_message, token_create_mint_message, token_mint_to_message, token_transfer_message,
 };
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
@@ -593,6 +595,61 @@ impl ValidatorKey {
         };
         let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed burn is infallible");
         self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_BURN, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Phase B: sign and build a **CreateMint** claiming
+    /// `asset_id_for_mint(validator_id, nonce)` — devnet-harness surface, same stance as
+    /// [`Self::build_token_transfer_tx`].
+    pub fn build_token_create_mint_tx(
+        &self,
+        network_id: &[u8],
+        supply_cap: u128,
+        decimals: u8,
+        nonce: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let message = token_create_mint_message(network_id, self.validator_id, supply_cap, decimals, nonce);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_CREATE_MINT_MLDSA87_CONTEXT).to_vec();
+        let payload = TokenCreateMintPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            creator_pubkey: self.public_key().to_vec(),
+            supply_cap,
+            decimals,
+            nonce,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed create-mint is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_CREATE_MINT, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Phase B: sign and build a **MintTo** for an asset this key is the authority of.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_token_mint_to_tx(
+        &self,
+        network_id: &[u8],
+        asset_id: u64,
+        to: Hash64,
+        amount: u128,
+        nonce: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let message = token_mint_to_message(network_id, asset_id, self.validator_id, to, amount, nonce);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_MINT_TO_MLDSA87_CONTEXT).to_vec();
+        let payload = TokenMintToPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id,
+            authority_pubkey: self.public_key().to_vec(),
+            to,
+            amount,
+            nonce,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed mint-to is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_MINT_TO, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Sign and build the **phase-1 job commitment**.

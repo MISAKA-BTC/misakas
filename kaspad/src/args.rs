@@ -236,11 +236,17 @@ pub struct Args {
     pub tkn_devnet_shadow_span: u64,
     /// Flat per-epoch emission budget in whole TOK (atomic = ×10^8). Devnet-only calibration.
     pub tkn_devnet_epoch_budget_tok: u64,
+    /// Phase B fence offset above the Phase A fence (0 = Phase B never opens on this devnet).
+    pub tkn_devnet_phase_b_span: u64,
     /// Fixture token ops, submitted by the validator service once the chain reaches each op's
     /// DAA: `to_hex128:amount_atomic:nonce:at_daa` per entry.
     pub tkn_fixture_transfers: Vec<String>,
     /// `amount_atomic:nonce:at_daa` per entry.
     pub tkn_fixture_burns: Vec<String>,
+    /// Phase B: `cap:decimals:nonce:at_daa` per entry.
+    pub tkn_fixture_create_mints: Vec<String>,
+    /// Phase B: `create_nonce:to_hex128:amount:nonce:at_daa` per entry.
+    pub tkn_fixture_mint_tos: Vec<String>,
 
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
@@ -341,8 +347,11 @@ impl Default for Args {
             tkn_devnet_active_daa: None,
             tkn_devnet_shadow_span: 300,
             tkn_devnet_epoch_budget_tok: 1_000,
+            tkn_devnet_phase_b_span: 0,
             tkn_fixture_transfers: Vec::new(),
             tkn_fixture_burns: Vec::new(),
+            tkn_fixture_create_mints: Vec::new(),
+            tkn_fixture_mint_tos: Vec::new(),
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -479,11 +488,17 @@ impl Args {
                      inert compute overlay is undefined (design v0.1 §10)."
                 );
             }
-            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_tkn_devnet(
-                active_daa,
-                self.tkn_devnet_shadow_span,
-                self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
-            );
+            let dns = config
+                .params
+                .dns_params
+                .take()
+                .expect("devnet/simnet ship with the DNS overlay configured")
+                .with_tkn_devnet(
+                    active_daa,
+                    self.tkn_devnet_shadow_span,
+                    self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
+                    self.tkn_devnet_phase_b_span,
+                );
             // Fail loudly rather than start a node whose fold or settlement would silently refuse
             // to run — the devnet symptom would be "no [token] line, ever", which reads as a bug.
             assert!(
@@ -494,7 +509,11 @@ impl Args {
                 dns.tkn.settlement_delay_epochs,
             );
             config.params.dns_params = Some(dns);
-        } else if !self.tkn_fixture_transfers.is_empty() || !self.tkn_fixture_burns.is_empty() {
+        } else if !self.tkn_fixture_transfers.is_empty()
+            || !self.tkn_fixture_burns.is_empty()
+            || !self.tkn_fixture_create_mints.is_empty()
+            || !self.tkn_fixture_mint_tos.is_empty()
+        {
             panic!("--tkn-fixture-transfer/--tkn-fixture-burn only mean something together with --tkn-devnet");
         }
 
@@ -919,6 +938,16 @@ pub fn cli() -> Command {
                 .help("MISAKA TOK: flat per-epoch emission budget in whole TOK for --tkn-devnet (default 1000; no halving within a run)."),
         )
         .arg(
+            Arg::new("tkn-devnet-phase-b-span")
+                .long("tkn-devnet-phase-b-span")
+                .value_name("daa-span")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "MISAKA TOK Phase B: open permissionless mints (CreateMint/MintTo) this many DAA above the --tkn-devnet                      fence (default 0 = never). Devnet/simnet only, like every token fence.",
+                ),
+        )
+        .arg(
             Arg::new("tkn-fixture-transfer")
                 .long("tkn-fixture-transfer")
                 .value_name("to-hex128:amount-atomic:nonce:at-daa")
@@ -937,6 +966,24 @@ pub fn cli() -> Command {
                 .action(clap::ArgAction::Append)
                 .require_equals(false)
                 .help("MISAKA TOK devnet fixture: once the chain reaches at-daa, sign and submit ONE TOK burn. Repeatable."),
+        )
+        .arg(
+            Arg::new("tkn-fixture-create-mint")
+                .long("tkn-fixture-create-mint")
+                .value_name("cap:decimals:nonce:at-daa")
+                .action(clap::ArgAction::Append)
+                .require_equals(false)
+                .help("MISAKA TOK Phase B fixture: submit ONE CreateMint claiming this node's own derived asset. Repeatable."),
+        )
+        .arg(
+            Arg::new("tkn-fixture-mint-to")
+                .long("tkn-fixture-mint-to")
+                .value_name("create-nonce:to-hex128:amount:nonce:at-daa")
+                .action(clap::ArgAction::Append)
+                .require_equals(false)
+                .help(
+                    "MISAKA TOK Phase B fixture: submit ONE MintTo for this node's own mint (asset derived from create-nonce).                      Nonce taken literally, so a harness can submit deliberately void issuances (cap breach) and assert they stay void.",
+                ),
         )
         .arg(
             arg!(--"vlt-shadow-only" "MISAKA VLT Shadow Mode: with --vlt-devnet, leave the WEIGHT fence dormant. The overlay \
@@ -1210,8 +1257,11 @@ impl Args {
                 "tkn-devnet-epoch-budget-tok",
                 defaults.tkn_devnet_epoch_budget_tok,
             ),
+            tkn_devnet_phase_b_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-phase-b-span", defaults.tkn_devnet_phase_b_span),
             tkn_fixture_transfers: m.get_many::<String>("tkn-fixture-transfer").map(|v| v.cloned().collect()).unwrap_or_default(),
             tkn_fixture_burns: m.get_many::<String>("tkn-fixture-burn").map(|v| v.cloned().collect()).unwrap_or_default(),
+            tkn_fixture_create_mints: m.get_many::<String>("tkn-fixture-create-mint").map(|v| v.cloned().collect()).unwrap_or_default(),
+            tkn_fixture_mint_tos: m.get_many::<String>("tkn-fixture-mint-to").map(|v| v.cloned().collect()).unwrap_or_default(),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

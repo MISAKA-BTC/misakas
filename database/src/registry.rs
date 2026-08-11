@@ -331,6 +331,11 @@ pub enum DatabaseStorePrefixes {
     /// Singleton `u64`: the next epoch emission settlement will consider (design §5.3). Advances
     /// in epoch order; a settled (or deliberately skipped) epoch is never revisited.
     TokenSettlementCursor = 250,
+    /// Phase B (design §4.6): keyed by `u64` asset id — the asset's immutable
+    /// [`TokenMintMeta`] (creator, mint authority, supply cap, decimals), written once by the
+    /// first accepted `CreateMint` that derived it (first-wins) and never mutated. Inert while
+    /// every preset's Phase B fence is `u64::MAX`.
+    TokenMintMetas = 251,
 
     // ---- Separator ----
     /// Reserved as a separator

@@ -155,6 +155,11 @@ pub struct ValidatorConfig {
     /// construction; a malformed spec fails startup rather than silently submitting nothing).
     pub tkn_fixture_transfers: Vec<String>,
     pub tkn_fixture_burns: Vec<String>,
+    /// Phase B fixture ops: `cap:decimals:nonce:at_daa` per entry.
+    pub tkn_fixture_create_mints: Vec<String>,
+    /// Phase B fixture ops: `create_nonce:to_hex128:amount:nonce:at_daa` — the target asset is
+    /// this node's own mint claimed at `create_nonce` (self-derived, no log scraping).
+    pub tkn_fixture_mint_tos: Vec<String>,
 }
 
 /// One parsed devnet fixture token op (see [`ValidatorConfig::tkn_fixture_transfers`]).
@@ -164,13 +169,48 @@ enum TokenFixtureOp {
     Transfer { to: Hash64, amount: u128, nonce: u64, at_daa: u64 },
     /// `amount:nonce:at_daa`
     Burn { amount: u128, nonce: u64, at_daa: u64 },
+    /// `cap:decimals:nonce:at_daa` (Phase B)
+    CreateMint { supply_cap: u128, decimals: u8, nonce: u64, at_daa: u64 },
+    /// `create_nonce:to:amount:nonce:at_daa` (Phase B; asset self-derived from create_nonce)
+    MintTo { create_nonce: u64, to: Hash64, amount: u128, nonce: u64, at_daa: u64 },
 }
 
 impl TokenFixtureOp {
     fn at_daa(&self) -> u64 {
         match self {
-            Self::Transfer { at_daa, .. } | Self::Burn { at_daa, .. } => *at_daa,
+            Self::Transfer { at_daa, .. }
+            | Self::Burn { at_daa, .. }
+            | Self::CreateMint { at_daa, .. }
+            | Self::MintTo { at_daa, .. } => *at_daa,
         }
+    }
+
+    fn parse_create_mint(spec: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let [cap, decimals, nonce, at_daa] = parts.as_slice() else {
+            return Err(format!("--tkn-fixture-create-mint '{spec}': expected cap:decimals:nonce:at_daa"));
+        };
+        Ok(Self::CreateMint {
+            supply_cap: cap.parse().map_err(|_| format!("--tkn-fixture-create-mint '{spec}': bad cap"))?,
+            decimals: decimals.parse().map_err(|_| format!("--tkn-fixture-create-mint '{spec}': bad decimals"))?,
+            nonce: nonce.parse().map_err(|_| format!("--tkn-fixture-create-mint '{spec}': bad nonce"))?,
+            at_daa: at_daa.parse().map_err(|_| format!("--tkn-fixture-create-mint '{spec}': bad at_daa"))?,
+        })
+    }
+
+    fn parse_mint_to(spec: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let [create_nonce, to, amount, nonce, at_daa] = parts.as_slice() else {
+            return Err(format!("--tkn-fixture-mint-to '{spec}': expected create_nonce:to_hex128:amount:nonce:at_daa"));
+        };
+        let to = to.parse::<Hash64>().map_err(|_| format!("--tkn-fixture-mint-to '{spec}': 'to' must be 128 hex chars"))?;
+        Ok(Self::MintTo {
+            create_nonce: create_nonce.parse().map_err(|_| format!("--tkn-fixture-mint-to '{spec}': bad create_nonce"))?,
+            to,
+            amount: amount.parse().map_err(|_| format!("--tkn-fixture-mint-to '{spec}': bad amount"))?,
+            nonce: nonce.parse().map_err(|_| format!("--tkn-fixture-mint-to '{spec}': bad nonce"))?,
+            at_daa: at_daa.parse().map_err(|_| format!("--tkn-fixture-mint-to '{spec}': bad at_daa"))?,
+        })
     }
 
     fn parse_transfer(spec: &str) -> Result<Self, String> {
@@ -403,6 +443,12 @@ impl ValidatorService {
         }
         for spec in &config.tkn_fixture_burns {
             token_fixture.push(TokenFixtureOp::parse_burn(spec).unwrap_or_else(|e| panic!("{e}")));
+        }
+        for spec in &config.tkn_fixture_create_mints {
+            token_fixture.push(TokenFixtureOp::parse_create_mint(spec).unwrap_or_else(|e| panic!("{e}")));
+        }
+        for spec in &config.tkn_fixture_mint_tos {
+            token_fixture.push(TokenFixtureOp::parse_mint_to(spec).unwrap_or_else(|e| panic!("{e}")));
         }
         token_fixture.sort_by_key(|op| op.at_daa());
         if !token_fixture.is_empty() {
@@ -1341,6 +1387,13 @@ impl ValidatorService {
                 TokenFixtureOp::Burn { amount, nonce, .. } => {
                     key.build_token_burn_tx(&network_id, amount, nonce, funding_outpoint, funding, fee)
                 }
+                TokenFixtureOp::CreateMint { supply_cap, decimals, nonce, .. } => {
+                    key.build_token_create_mint_tx(&network_id, supply_cap, decimals, nonce, funding_outpoint, funding, fee)
+                }
+                TokenFixtureOp::MintTo { create_nonce, to, amount, nonce, .. } => {
+                    let asset_id = kaspa_consensus_core::token::asset_id_for_mint(key.validator_id, create_nonce);
+                    key.build_token_mint_to_tx(&network_id, asset_id, to, amount, nonce, funding_outpoint, funding, fee)
+                }
             };
             if let Some(tx_id) = self.build_and_submit_overlay_tx("token-op", TOKEN_OP_PAYLOAD_BYTES, false, build).await {
                 self.token_fixture_submitted.lock().unwrap().insert(idx);
@@ -1350,6 +1403,12 @@ impl ValidatorService {
                     ),
                     TokenFixtureOp::Burn { amount, nonce, .. } => info!(
                         "[{VALIDATOR}] token fixture: submitted burn #{idx} tx={tx_id} amount={amount} nonce={nonce} at daa {virtual_daa}"
+                    ),
+                    TokenFixtureOp::CreateMint { supply_cap, decimals, nonce, .. } => info!(
+                        "[{VALIDATOR}] token fixture: submitted create-mint #{idx} tx={tx_id} cap={supply_cap} decimals={decimals} nonce={nonce} at daa {virtual_daa}"
+                    ),
+                    TokenFixtureOp::MintTo { create_nonce, to, amount, nonce, .. } => info!(
+                        "[{VALIDATOR}] token fixture: submitted mint-to #{idx} tx={tx_id} create_nonce={create_nonce} to={to} amount={amount} nonce={nonce} at daa {virtual_daa}"
                     ),
                 }
             } else {

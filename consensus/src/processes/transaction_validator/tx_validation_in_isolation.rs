@@ -6,8 +6,10 @@ use kaspa_consensus_core::dns_finality::{
     validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
     validate_stake_unbond_payload,
 };
-use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
-use kaspa_consensus_core::token::{validate_token_burn_payload, validate_token_transfer_payload};
+use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER};
+use kaspa_consensus_core::token::{
+    validate_token_burn_payload, validate_token_create_mint_payload, validate_token_mint_to_payload, validate_token_transfer_payload,
+};
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
 use std::collections::HashSet;
@@ -293,6 +295,16 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
     } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
         validate_token_burn_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
         Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_CREATE_MINT {
+        // Phase B (design §4.6): stateless shape of a permissionless mint claim. The derived
+        // asset id, the creator's nonce line, and first-wins are stateful and run in the fold.
+        validate_token_create_mint_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_MINT_TO {
+        // Phase B: stateless shape of an issuance — including the one absolute rule a payload
+        // can violate on its face: TOK has no mint authority (design §4.1).
+        validate_token_mint_to_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
     }
@@ -467,7 +479,7 @@ mod tests {
     #[test]
     fn validate_token_subnetwork_tx() {
         use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
-        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_CREATE_MINT, SUBNETWORK_ID_TOKEN_MINT_TO, SUBNETWORK_ID_TOKEN_TRANSFER};
         use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
         use kaspa_hashes::Hash64;
 
@@ -513,13 +525,44 @@ mod tests {
         tx.payload = borsh::to_vec(&transfer).unwrap();
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
-        // Phase A knows only TOK — any other asset id is rejected at the door.
+        // Phase B relaxed admission: any asset id is a valid SHAPE (an absent mint voids
+        // statefully in the fold) — asset 7 passes the door it used to be rejected at.
         let mut alien = transfer.clone();
         alien.asset_id = 7;
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
         tx.payload = borsh::to_vec(&alien).unwrap();
-        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::UnknownAsset(7))));
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Phase B additions: a mint-to naming TOK is rejected on its face (no mint
+        // authority exists for it, design §4.1) — the one absolute admission rule.
+        let mint = kaspa_consensus_core::token::TokenMintToPayload {
+            version: kaspa_consensus_core::token::TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: kaspa_consensus_core::token::TOK_ASSET_ID,
+            authority_pubkey: vec![0x11; kaspa_consensus_core::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN],
+            to: kaspa_hashes::Hash64::from_bytes([0x22; 64]),
+            amount: 1,
+            nonce: 1,
+            signature: vec![0x33; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = kaspa_consensus_core::subnets::SUBNETWORK_ID_TOKEN_MINT_TO;
+        tx.payload = borsh::to_vec(&mint).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::TokMintForbidden)));
+
+        // And a create-mint with a plausible shape is routed and accepted at the door.
+        let create = kaspa_consensus_core::token::TokenCreateMintPayload {
+            version: kaspa_consensus_core::token::TOKEN_PAYLOAD_VERSION_V1,
+            creator_pubkey: vec![0x11; kaspa_consensus_core::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN],
+            supply_cap: 5_000_000,
+            decimals: 8,
+            nonce: 1,
+            signature: vec![0x33; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = kaspa_consensus_core::subnets::SUBNETWORK_ID_TOKEN_CREATE_MINT;
+        tx.payload = borsh::to_vec(&create).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
         // Undecodable bytes on the burn subnetwork → InvalidTokenPayload(Decode),
         // proving 0x31 is routed to the validator rather than rejected outright.

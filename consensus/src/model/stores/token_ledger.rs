@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use kaspa_consensus_core::token::{TokenAccount, TokenEmissionSettlement, TokenSupply};
+use kaspa_consensus_core::token::{TokenAccount, TokenEmissionSettlement, TokenMintMeta, TokenSupply};
 use kaspa_core::info;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
@@ -92,6 +92,8 @@ pub struct DbTokenStore {
     ledger: CachedDbAccess<TokenLedgerKey, TokenAccount>,
     supply: CachedDbAccess<U64Key, TokenSupply>,
     settlements: CachedDbAccess<U64Key, TokenEmissionSettlement>,
+    /// Phase B: `asset_id → TokenMintMeta`, written once by the first accepted CreateMint.
+    mint_metas: CachedDbAccess<U64Key, TokenMintMeta>,
     version: CachedDbItem<u32>,
     /// Next selected-chain index the ledger fold processes (design §9.2).
     /// `RwLock` because [`CachedDbItem::write`] needs `&mut` and this store is
@@ -110,6 +112,7 @@ impl DbTokenStore {
             ledger: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenLedger.into()),
             supply: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenSupply.into()),
             settlements: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenEmissionSettlements.into()),
+            mint_metas: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::TokenMintMetas.into()),
             version: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::TokenLedgerSchemaVersion.into()),
             fold_cursor: RwLock::new(CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::TokenLedgerFoldCursor.into())),
             settlement_cursor: RwLock::new(CachedDbItem::new(db, DatabaseStorePrefixes::TokenSettlementCursor.into())),
@@ -150,6 +153,7 @@ impl DbTokenStore {
             self.ledger.delete_all(DirectDbWriter::new(&self.db))?;
             self.supply.delete_all(DirectDbWriter::new(&self.db))?;
             self.settlements.delete_all(DirectDbWriter::new(&self.db))?;
+            self.mint_metas.delete_all(DirectDbWriter::new(&self.db))?;
             // The cursors describe how far the discarded rows reached; resetting them is what
             // makes the next commit rebuild rather than resume past the wiped span.
             self.fold_cursor.write().write(DirectDbWriter::new(&self.db), &0)?;
@@ -233,6 +237,25 @@ impl DbTokenStore {
 
     pub fn set_supply_batch(&self, batch: &mut WriteBatch, asset_id: u64, supply: TokenSupply) -> Result<(), StoreError> {
         self.supply.write(BatchDbWriter::new(batch), asset_id.into(), supply)
+    }
+
+    // ---- mint metas (Phase B) ------------------------------------------
+
+    /// The asset's immutable mint policy, or `None` for an asset no accepted
+    /// `CreateMint` has claimed (and always `None` for TOK, whose only issuance
+    /// is emission).
+    pub fn get_mint_meta(&self, asset_id: u64) -> Result<Option<TokenMintMeta>, StoreError> {
+        match self.mint_metas.read(asset_id.into()) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write-once by contract: the caller only stages a meta for an asset
+    /// [`Self::get_mint_meta`] answered `None` for within the same fold pass.
+    pub fn set_mint_meta_batch(&self, batch: &mut WriteBatch, asset_id: u64, meta: TokenMintMeta) -> Result<(), StoreError> {
+        self.mint_metas.write(BatchDbWriter::new(batch), asset_id.into(), meta)
     }
 
     // ---- emission settlements ------------------------------------------

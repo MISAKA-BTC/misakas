@@ -53,6 +53,11 @@ AMT_REPLAY=9000
 AMT_LIVE2=11000
 AMT_OVERDRAFT=1000000000000000
 AMT_BURN=3000
+CAP_SHADOW=7777777
+CAP_LIVE=5000000
+MINT1=3000000
+MINT_CAPVOID=2000001
+MINT2=2000000
 
 log_of() { echo "$WORK_DIR/node-$1/kaspad.log"; }
 
@@ -60,6 +65,16 @@ log_of() { echo "$WORK_DIR/node-$1/kaspad.log"; }
 # carries is then the join key into the fold's own lines.
 txid_of_amount() { # amount -> txid (empty if not submitted yet)
   { grep -oE "token fixture: submitted (transfer|burn) #[0-9]+ tx=[0-9a-f]+ (to=[0-9a-f]+ )?amount=$1 " "$(log_of 0)" || true; } |
+    head -1 | grep -oE 'tx=[0-9a-f]+' | cut -d= -f2
+}
+
+txid_of_cap() { # create-mint cap -> txid
+  { grep -oE "token fixture: submitted create-mint #[0-9]+ tx=[0-9a-f]+ cap=$1 " "$(log_of 0)" || true; } |
+    head -1 | grep -oE 'tx=[0-9a-f]+' | cut -d= -f2
+}
+
+txid_of_mint_amount() { # mint-to amount -> txid
+  { grep -oE "token fixture: submitted mint-to #[0-9]+ tx=[0-9a-f]+ create_nonce=[0-9]+ to=[0-9a-f]+ amount=$1 " "$(log_of 0)" || true; } |
     head -1 | grep -oE 'tx=[0-9a-f]+' | cut -d= -f2
 }
 
@@ -79,7 +94,10 @@ until
     [ "${settled:-0}" -ge 3 ] &&
     [ -n "$(txid_of_amount $AMT_BURN)" ] &&
     burn_tx=$(txid_of_amount $AMT_BURN) &&
-    grep -q "\[token\] burn $burn_tx" "$(log_of 0)"
+    grep -q "\[token\] burn $burn_tx" "$(log_of 0)" &&
+    mint2_tx=$(txid_of_mint_amount $MINT2) &&
+    [ -n "$mint2_tx" ] &&
+    grep -q "\[token\] mint-to $mint2_tx" "$(log_of 0)"
 do
   sleep 15
   waited=$((waited + 15))
@@ -175,6 +193,45 @@ for spec in "transfer $TX_REPLAY" "transfer $TX_OVER"; do
 done
 note "replay $TX_REPLAY and overdraft $TX_OVER: no binding line on any node"
 
+# ---- 4b. PHASE B (permissionless mints) --------------------------------------------------------
+echo "== 4b. PHASE B: a mint is claimed, issues to its cap, and refuses past it =="
+TX_CREATE_SHADOW=$(txid_of_cap $CAP_SHADOW)
+TX_CREATE=$(txid_of_cap $CAP_LIVE)
+TX_MINT1=$(txid_of_mint_amount $MINT1)
+TX_MINT_CAPVOID=$(txid_of_mint_amount $MINT_CAPVOID)
+TX_MINT2=$(txid_of_mint_amount $MINT2)
+for v in TX_CREATE_SHADOW TX_CREATE TX_MINT1 TX_MINT_CAPVOID TX_MINT2; do
+  [ -n "${!v}" ] || fail "$v was never submitted"
+done
+for i in $(seq 0 $((NODES - 1))); do
+  if token_lines "$i" "^\[token\] create-mint $TX_CREATE_SHADOW" | grep -q .; then
+    fail "pre-Phase-B create $TX_CREATE_SHADOW BOUND on node-$i — the Phase B fence leaked"
+  fi
+done
+sb=0
+for i in $(seq 0 $((NODES - 1))); do
+  token_lines "$i" "^\[token-shadow\] create-mint $TX_CREATE_SHADOW" | grep -q . && sb=$((sb + 1))
+done
+[ "$sb" -ge 1 ] || fail "no node narrated the pre-Phase-B create in shadow"
+for spec in "create-mint $TX_CREATE" "mint-to $TX_MINT1" "mint-to $TX_MINT2"; do
+  ref=""
+  for i in $(seq 0 $((NODES - 1))); do
+    line=$(token_lines "$i" "^\[token\] $spec" | head -1)
+    [ -n "$line" ] || fail "$spec never bound on node-$i"
+    if [ -z "$ref" ]; then ref="$line"; elif [ "$line" != "$ref" ]; then
+      fail "$spec bound differently on node-$i"
+    fi
+  done
+  note "bound on all $NODES: $ref"
+done
+for i in $(seq 0 $((NODES - 1))); do
+  if token_lines "$i" "^\[token\] mint-to $TX_MINT_CAPVOID" | grep -q .; then
+    fail "cap-breaching mint $TX_MINT_CAPVOID BOUND on node-$i"
+  fi
+done
+ASSET_ID=$(token_lines 0 "^\[token\] create-mint $TX_CREATE" | grep -oE 'asset=[0-9]+' | head -1 | cut -d= -f2)
+note "asset $ASSET_ID: minted to its 5000000 cap exactly (3000000 + 2000000), the 2000001 breach void, nonce 2 reused"
+
 # ---- 5. RESTART --------------------------------------------------------------------------------
 if [ "$RESTART_CHECK" -eq 1 ]; then
   echo "== 5. RESTART: cursors resume, nothing re-applies =="
@@ -226,3 +283,4 @@ echo "  settlements  : $settled epoch(s) paid on node-0, cross-node identical (r
 echo "  shadow fence : $TX_SHADOW void forever"
 echo "  live ops     : $TX_LIVE1, $TX_LIVE2 (transfers), $TX_BURN (burn) bound on all $NODES nodes"
 echo "  void classes : $TX_REPLAY (nonce replay), $TX_OVER (overdraft) bound nowhere"
+echo "  phase B      : asset $ASSET_ID claimed ($TX_CREATE), minted to cap, breach void, pre-fence create void forever"

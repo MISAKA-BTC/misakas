@@ -920,6 +920,8 @@ Do you confirm? (y/n)";
             compute,
             tkn_fixture_transfers: args.tkn_fixture_transfers.clone(),
             tkn_fixture_burns: args.tkn_fixture_burns.clone(),
+            tkn_fixture_create_mints: args.tkn_fixture_create_mints.clone(),
+            tkn_fixture_mint_tos: args.tkn_fixture_mint_tos.clone(),
         };
         let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
         Some(Arc::new(ValidatorService::new(
