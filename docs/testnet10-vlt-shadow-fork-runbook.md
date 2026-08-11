@@ -31,6 +31,43 @@ fork's blast radius** — that is the entire point of taking shadow first. What 
 So it is a true hard fork — old builds reject the first block whose coinbase pays an audit fee
 — with compute-overlay-sized consequences and finality-sized none.
 
+## BLOCKERS from the 2026-08-11 audit — the fence may not be scheduled until these close
+
+An external multi-agent audit (89 surviving findings, 8 critical) landed after this runbook was
+first written. Three of its P0s are fixed (`dca5f94` bond-split weight inflation + the
+capability-staging deadlock, `1a7838d` the unverified pruning-point overlay import). **Two
+remain, both in the same class, and both are consensus rules that go live the moment the shadow
+fence opens:**
+
+1. **Forged slashing evidence via the mergeset.** `check_slashing_evidence_genuine`,
+   `check_precommit_evidence_genuine` and `check_compute_challenge_genuine` evaluate the block's
+   OWN body (`block_transactions_store`), while `dns_bond_mutations_from_acceptance` derives
+   `BondMutation::Slash` from the whole ACCEPTED set. Evidence riding in a merge-blue block is
+   therefore never signature-checked and still burns a bond. The three `Slash` arms in
+   `bond_mutations_from_accepted_txs` say in comments that the block rule already proved the
+   evidence — true only for own-body evidence.
+   *Fix shape (H-05's, already established in this codebase for the identical gap on unbond
+   requests): carry the claimed evidence on the mutation and bind it where the bond RECORD is in
+   hand — `ActiveBondView::apply`/`revert` — so apply and revert stay symmetric. The signature
+   half cannot be done view-free here as it can for H-05, because `StakeAttestation` carries a
+   `validator_id` and not the key; the record supplies the key.*
+2. **Bond collateral is withdrawable through the mergeset.**
+   `bond_spend_gate_mergeset_activation_daa_score` is `u64::MAX` on every preset, so only the
+   own-body spend gate runs and a bond's locked output can be spent from a merge-blue block
+   while the bond still reads Active. Slashing then has nothing behind it — which is the
+   assumption the whole `λ·B_i` cap rests on.
+
+Both must be closed **in the same release as the shadow fence**: the audit fee and challenge
+slashing are exactly what that fence turns on, and #1 lets an attacker burn any bond the moment
+it does. Until then this runbook's `H` stays unset.
+
+Also outstanding from the audit, before the WEIGHT fork (step 4) rather than shadow: the
+`ReplayProof` self-consistency gap (a refuting verdict costs no compute), committee-sortition
+grinding (no consensus cap on live commitments), and the determinism class being coarser than
+the runtime's actual bit-identity guarantee (M1 vs M4 under one `apple-metal-arm64` tag —
+honest verifiers would refute honest executors on a mixed fleet). The last one interacts
+directly with the hardware-class precondition below.
+
 ## Preconditions (all currently satisfied except the fleet audit)
 
 1. **IBD equality** — a node that was not present must derive the same overlay. Evidenced by:
