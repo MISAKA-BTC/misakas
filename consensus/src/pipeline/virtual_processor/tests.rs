@@ -1590,18 +1590,20 @@ async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
         BlockStatus::StatusUTXOValid,
         "the mergeset skip keeps the block valid — an honest miner must not self-reject over a merged spend"
     );
-    assert!(
-        !ctx.consensus.get_virtual_utxos(Some(bond_outpoint), 2, true).iter().any(|(o, _)| *o == bond_outpoint),
-        "the locked bond output-0 must not survive as a spendable UTXO"
-    );
-
-    // The block had NO effect: the locked stake survives (neither spent nor slashed-away) and no
-    // reporter reward was minted.
+    // What the SKIP changes, and what it does not. The spend is not accepted — that is the whole
+    // point, the collateral cannot leave while the bond is unreleasable — but the block is valid,
+    // so everything ELSE in it applies, including the slash. The locked output therefore does
+    // leave the UTXO set: removed by the slashing side-effect, not spent by its owner, and the
+    // reporter reward that proves which of the two happened IS minted.
+    //
+    // Under the old own-body REJECT the block was disqualified and neither happened. Both
+    // outcomes protect the collateral; only this one lets an honest miner merge the spend without
+    // self-rejecting.
     let utxos: std::collections::HashMap<_, _> = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
-    assert!(utxos.contains_key(&bond_outpoint), "the locked stake survives — the spend-gate rejected the racing block");
+    assert!(!utxos.contains_key(&bond_outpoint), "the locked output must not survive as spendable stake");
     assert!(
-        !utxos.contains_key(&TransactionOutpoint::new(slash_tx_id, 0)),
-        "no reporter reward — the slash never applied (block disqualified)"
+        utxos.contains_key(&TransactionOutpoint::new(slash_tx_id, 0)),
+        "the slash applied and paid its reporter — so the output left by SLASHING, not by the refused spend"
     );
 }
 
