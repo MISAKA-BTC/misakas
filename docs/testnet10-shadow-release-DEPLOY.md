@@ -41,8 +41,15 @@ ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|
 the `--vlt-devnet` / `--tkn-devnet` guards, which a testnet run never enters. That leaves
 `adjust_perf_params_to_consensus_params()` and `build()`.
 
-**Next step:** determine which of `adjust_perf_params_to_consensus_params` or
-`build` mutates a field that `consensus_params_id` hashes, then either stop it doing so or pin
+`adjust_perf_params_to_consensus_params` is eliminated as well — it writes only
+`self.config.perf` (`consensus/core/src/config/mod.rs:218`), never `params`. So NOTHING in the
+daemon's chain mutates `params`, and the node's announced value should already equal
+`Params::from(network).consensus_params_id()`. It does not. The remaining candidates are
+therefore `ConfigBuilder::build()` itself, or a difference between the `NetworkId` the daemon
+passes (`--testnet --netsuffix=10`) and the one this test passes (`TESTNET_PARAMS.net`) — check
+that `TESTNET_PARAMS.net.suffix` is `Some(10)` and that both reach the same match arm.
+
+**Next step:** run the probe rather than reason further, then either stop it doing so or pin
 the post-`build()` value (which is what the node announces and therefore what peers compare).
 A one-line probe settles it: print `config.params.consensus_params_id()` right after `build()`
 and compare with `Params::from(network).consensus_params_id()` before the builder.
