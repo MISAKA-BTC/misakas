@@ -54,10 +54,15 @@ use super::U64Key;
 ///   floor rises past a declaration that is still in force — so they record certificates as
 ///   unverified that a committee-aware walk credits.
 ///
+/// * 4 — audit-emission v0.2: rows grew the per-epoch audit vec (`VltEpochCredits::audit`,
+///   counted-verdict µRTE per verifier) and the borsh layout changed with it. Rows written
+///   under rule 3 would decode as garbage-or-absent; discarding them re-derives both sides
+///   from the same chain.
+///
 /// The rule is the *resolution* semantics, not the row layout: bump this whenever a change alters
 /// what the walk would decide about an epoch it has already recorded, because write-once means the
 /// old decision outlives the code that made it.
-pub const VLT_CREDITS_SCHEMA_VERSION: u32 = 3;
+pub const VLT_CREDITS_SCHEMA_VERSION: u32 = 4;
 
 /// Per-epoch verified-compute credit store, keyed by `u64` epoch. Write-once per epoch: a row
 /// appears only after the epoch is finalized, and a finalized epoch never changes.

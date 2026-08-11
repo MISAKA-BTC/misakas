@@ -1236,6 +1236,12 @@ pub struct DnsParams {
     /// localized; NOT a genesis-block input, so adopting it leaves genesis hashes unchanged.
     pub vlt: VltParams,
 
+    /// MISAKA Compute Token Program (design v0.1 §10): the TOK ledger + compute-backed
+    /// emission fences and schedule. [`crate::token::TokenParams::INERT`] on every shipped
+    /// preset — the ledger fold and emission settlement are a no-op until a per-network hard
+    /// fork moves the fences. Like [`Self::vlt`], NOT a genesis-block input.
+    pub tkn: crate::token::TokenParams,
+
     /// blue_score window the VLT credit walk scans back from the tip when collecting each
     /// validator's per-epoch `X_i(e)` for [`crate::vlt::recent_compute_score`].
     ///
@@ -1590,6 +1596,40 @@ impl DnsParams {
         self
     }
 
+    /// MISAKA Compute Token Program devnet fences (design v0.1 §10): move the token fences on a
+    /// PRIVATE devnet the way [`Self::with_vlt_devnet`] moves the VLT ones. `active_daa` opens the
+    /// ledger fold and emission; the shadow fence sits `shadow_span` below it, giving the harness a
+    /// real `[shadow, active)` window in which to prove that shadow-era ops stay void forever.
+    ///
+    /// Emission is pinned to the shapes a devnet can actually verify: a flat `R0` (no halving
+    /// inside a run — `H` is pinned huge), `D_settle` at exactly its coherence floor against this
+    /// preset's own challenge window / reorg horizon / epoch length, and the compute floor at 1
+    /// µRTE so a five-node fixture devnet (5e7 µRTE per job) actually mints. The §5.1 floor-skip
+    /// property itself is unit-tested in consensus-core; the devnet exists to exercise the fold
+    /// and settlement plumbing, not to re-prove the arithmetic.
+    ///
+    /// Devnet DAA and blue score track closely on a private mesh, so the epoch origin derived from
+    /// the DAA fence is the right epoch ±1 — and with a flat budget, being one epoch early or late
+    /// moves nothing a harness asserts.
+    pub fn with_tkn_devnet(mut self, active_daa: u64, shadow_span: u64, r0_atomic: u128) -> Self {
+        let epoch_len = self.attestation_epoch_length_blue_score.max(1);
+        self.tkn = crate::token::TokenParams {
+            tkn_shadow_activation_daa_score: active_daa.saturating_sub(shadow_span),
+            tkn_activation_daa_score: active_daa,
+            emission_activation_epoch: active_daa / epoch_len,
+            emission_epoch_budget_r0_atomic: r0_atomic,
+            emission_halving_epochs: u64::MAX,
+            settlement_delay_epochs: crate::token::TokenParams::min_settlement_delay_epochs(
+                self.vlt.challenge_window_blocks,
+                self.max_reorg_horizon_blocks,
+                epoch_len,
+                self.vlt.credit_delay_epochs,
+            ),
+            emission_min_network_compute: 1,
+        };
+        self
+    }
+
     pub fn vlt_params_consistent(&self) -> bool {
         if self.vlt.vlt_activation_daa_score == u64::MAX {
             return true;
@@ -1614,6 +1654,26 @@ impl DnsParams {
         self.vlt_credit_window_blue_score >= needed_credit_window
             && soak >= needed_credit_window
             && self.unbonding_period_blocks >= self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score)
+    }
+
+    /// MISAKA Compute Token Program (design v0.1 §10): is the token preset self-consistent
+    /// against the VLT preset it settles over? Trivially true while the token fence is inert
+    /// (every shipped preset). Same role as [`Self::vlt_params_consistent`]: a preset
+    /// assertion, not a consensus rule — an incoherent live preset is a fork-planning error
+    /// caught before the fork, not after.
+    pub fn tkn_params_consistent(&self) -> bool {
+        if self.tkn.tkn_activation_daa_score == u64::MAX {
+            return self.tkn.is_coherent().is_ok();
+        }
+        self.tkn
+            .is_coherent_with_vlt(
+                self.vlt.vlt_shadow_activation_daa_score,
+                self.vlt.challenge_window_blocks,
+                self.max_reorg_horizon_blocks,
+                self.attestation_epoch_length_blue_score,
+                self.vlt.credit_delay_epochs,
+            )
+            .is_ok()
     }
 
     /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
@@ -6513,6 +6573,57 @@ pub fn aggregate_compute_credits(
     out
 }
 
+/// One certificate's counted-verdict roster — the audit-side twin of
+/// [`ComputeCreditContribution`], one entry **per certificate** (the verdicts fan out at
+/// aggregation). Audit-emission v0.2 (`docs/misaka-audit-emission-v0.2-design.md` §2.1): a
+/// counted verdict is work equal to the job it judged, so each roster carries the job's own
+/// µRTE value once and the verifiers who earned it.
+#[derive(Clone, Debug)]
+pub struct AuditCreditContribution {
+    pub certificate_tx_id: TransactionId,
+    pub executor_id: Hash64,
+    pub job_id: Hash64,
+    pub epoch: u64,
+    /// The judged job's `x_j` in µRTE — the weight EACH counted verdict earns.
+    pub vlt: u128,
+    pub accepted_daa_score: u64,
+    /// The counted verdicts' authors (drawn committee members with valid signatures).
+    pub verifiers: Vec<Hash64>,
+}
+
+/// Aggregate audit-side credit per `(verifier, epoch)` — audit-emission v0.2 §2.1.
+///
+/// Survivorship mirrors [`aggregate_compute_credits`] with ONE deliberate divergence: a
+/// **refuted** certificate's counted verdicts still weigh — the refuters are why it is refuted,
+/// and refutation must stay paid work (the §7 griefing balance). The challenge-window maturity
+/// rule and the `(executor, job)` dedup apply identically: an immature certificate returns on a
+/// later walk, and a re-certified job's committee re-signs a cached replay — paying it twice
+/// would be the replay-for-pay loop the dedup exists to kill. The dedup key deliberately skips
+/// refuted certificates (as the exec side does), so a job refuted once and honestly certified
+/// later pays both committees: two real rounds of replay happened.
+pub fn aggregate_audit_credits(
+    contributions: &[AuditCreditContribution],
+    refuted: &HashSet<TransactionId>,
+    pov_daa_score: u64,
+    challenge_window_blocks: u64,
+) -> HashMap<Hash64, BTreeMap<u64, u128>> {
+    let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
+    let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
+    for c in contributions {
+        if pov_daa_score.saturating_sub(c.accepted_daa_score) < challenge_window_blocks {
+            continue; // still challengeable — its epoch is not finalized for audit either.
+        }
+        if !refuted.contains(&c.certificate_tx_id) && !seen.insert((c.executor_id, c.job_id)) {
+            continue; // duplicate certification of one job: one committee payment.
+        }
+        for verifier in c.verifiers.iter() {
+            let entry = out.entry(*verifier).or_default().entry(c.epoch).or_insert(0);
+            *entry = entry.saturating_add(c.vlt);
+        }
+    }
+    out
+}
+
 /// Stateless validation of a [`ComputeCertificatePayload`]'s bytes.
 ///
 /// Structure only — the caller still checks signatures, sortition membership, and the model table.
@@ -9264,6 +9375,11 @@ mod tests {
             assert_eq!(p.vlt.vlt_shadow_activation_daa_score, u64::MAX, "{name} must ship with the overlay dormant too");
             assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
             assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
+            // MISAKA Compute Token Program: same fence story — shipped presets never fold the
+            // ledger and never settle emission, and the inert preset is internally coherent.
+            assert_eq!(p.tkn.tkn_activation_daa_score, u64::MAX, "{name} must ship with the token program dormant");
+            assert!(!p.tkn.shadow_active_at(u64::MAX - 1), "{name}: no ledger row is written, no TOK settled");
+            assert!(p.tkn_params_consistent(), "{name}: the dormant token preset must be coherent");
             assert!(
                 matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
                 "{name} must stay on the graded φS rule below the fence"
@@ -11324,6 +11440,12 @@ mod tests {
                 vlt_activation_daa_score: 12_000_000,
                 credit_window_epochs: 42,
                 ..VltParams::INERT
+            },
+            tkn: crate::token::TokenParams {
+                tkn_shadow_activation_daa_score: 12_500_000,
+                tkn_activation_daa_score: 13_000_000,
+                emission_epoch_budget_r0_atomic: 500 * 100_000_000,
+                ..crate::token::TokenParams::INERT
             },
             vlt_credit_window_blue_score: 13_000_000,
             dns_gate_horizon_blocks: 14_000_000,

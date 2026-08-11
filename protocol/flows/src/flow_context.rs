@@ -1013,10 +1013,8 @@ impl FlowContext {
         let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
         if replaced {
             self.chain_participation().quarantine();
-        } else {
-            if let Some(lease) = self.ibd_lease.write().take() {
-                self.chain_participation().release_after_noop_ibd(lease);
-            }
+        } else if let Some(lease) = self.ibd_lease.write().take() {
+            self.chain_participation().release_after_noop_ibd(lease);
         }
         replaced
     }

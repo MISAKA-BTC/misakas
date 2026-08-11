@@ -210,6 +210,29 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// MISAKA Compute Token Program (design §9.3): one `(asset, owner)` TOK ledger
+    /// row. `None` when the token program is not configured for this network;
+    /// `Some(default)` (zero balance, zero nonce) for an absent row — an absent row
+    /// IS the empty account (design §4.2). Default `None` keeps non-token impls
+    /// trivially correct.
+    fn get_token_account(&self, _asset_id: u64, _owner: Hash64) -> Option<crate::token::TokenAccount> {
+        None
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): an asset's supply counters, with
+    /// the same `None`/default semantics as [`Self::get_token_account`].
+    fn get_token_supply(&self, _asset_id: u64) -> Option<crate::token::TokenSupply> {
+        None
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): one epoch's emission-settlement
+    /// view plus the fold/settlement cursors. `epoch = None` reads the most recently
+    /// settled epoch (settlement cursor − 1). `None` when the token program is not
+    /// configured.
+    fn get_token_emission_info(&self, _epoch: Option<u64>) -> Option<crate::token::TokenEmissionInfo> {
+        None
+    }
+
     /// kaspa-pq: a paged, filtered enumeration of the `StakeBonds` overlay store,
     /// backing the `GetStakeBonds` RPC. Lets a bond owner recover the outpoint(s)
     /// of bonds they funded — the key a `StakeUnbondRequest` binds to — since the

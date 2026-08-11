@@ -165,6 +165,12 @@ pub enum RpcApiOps {
     /// kaspa-pq DNS v3 (batch): every ready attestation target from an epoch so an external
     /// validator that fell behind can catch up multiple epochs per poll
     GetValidatorAttestationTargets = 163,
+    /// MISAKA Compute Token Program (design §9.3): one (asset, owner) TOK ledger row
+    GetTokenLedgerEntry = 164,
+    /// MISAKA Compute Token Program (design §9.3): an asset's minted/burned/circulating counters
+    GetTokenSupply = 165,
+    /// MISAKA Compute Token Program (design §9.3): an epoch's emission settlement + the live cursors
+    GetTokenEmissionInfo = 166,
 }
 
 impl RpcApiOps {

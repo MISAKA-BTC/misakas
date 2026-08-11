@@ -816,6 +816,15 @@ async fn sanity_test() {
             KaspadPayloadOps::GetValidatorStatus => {
                 tst!(op, "validator status RPC — validator service is opt-in (default-off)")
             }
+            KaspadPayloadOps::GetTokenLedgerEntry => {
+                tst!(op, "TOK ledger read — the token program is inert on every shipped preset (tkn fence = u64::MAX)")
+            }
+            KaspadPayloadOps::GetTokenSupply => {
+                tst!(op, "TOK supply read — inert preset answers available:false by design")
+            }
+            KaspadPayloadOps::GetTokenEmissionInfo => {
+                tst!(op, "TOK emission read — inert preset answers available:false by design")
+            }
 
             // kaspa-pq EVM Lane v0.4 (§16): the lane is inert on the sanity
             // daemon's network (evm_activation = u64::MAX on simnet) and the

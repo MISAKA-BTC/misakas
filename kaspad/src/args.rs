@@ -228,6 +228,20 @@ pub struct Args {
     /// validators that finish their quotas across different epochs drift off the plan's ratios.
     pub vlt_devnet_flat_decay: bool,
 
+    // MISAKA Compute Token Program devnet fences + fixture ops, PRIVATE devnets only —
+    // same refusal rule as the VLT fences above.
+    /// `--tkn-devnet=<active_daa>`: open the TOK ledger fold + emission at this DAA, with the
+    /// shadow fence `tkn_devnet_shadow_span` below it.
+    pub tkn_devnet_active_daa: Option<u64>,
+    pub tkn_devnet_shadow_span: u64,
+    /// Flat per-epoch emission budget in whole TOK (atomic = ×10^8). Devnet-only calibration.
+    pub tkn_devnet_epoch_budget_tok: u64,
+    /// Fixture token ops, submitted by the validator service once the chain reaches each op's
+    /// DAA: `to_hex128:amount_atomic:nonce:at_daa` per entry.
+    pub tkn_fixture_transfers: Vec<String>,
+    /// `amount_atomic:nonce:at_daa` per entry.
+    pub tkn_fixture_burns: Vec<String>,
+
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
     pub testnet_suffix: u32,
@@ -324,6 +338,11 @@ impl Default for Args {
             vlt_devnet_credit_window_epochs: 8,
             vlt_shadow_only: false,
             vlt_devnet_flat_decay: false,
+            tkn_devnet_active_daa: None,
+            tkn_devnet_shadow_span: 300,
+            tkn_devnet_epoch_budget_tok: 1_000,
+            tkn_fixture_transfers: Vec::new(),
+            tkn_fixture_burns: Vec::new(),
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -442,6 +461,41 @@ impl Args {
             panic!("--vlt-shadow-only only means something together with --vlt-devnet");
         } else if self.vlt_devnet_flat_decay {
             panic!("--vlt-devnet-flat-decay only means something together with --vlt-devnet");
+        }
+
+        // MISAKA Compute Token Program devnet fences — same refusal rules as the VLT block above:
+        // private networks only, and only on top of a running compute overlay.
+        if let Some(active_daa) = self.tkn_devnet_active_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--tkn-devnet is devnet/simnet only (got {net:?}). Moving a token activation fence is a consensus \
+                     change and must ship in a release, not a command line."
+                );
+            }
+            if self.vlt_devnet_shadow_daa.is_none() {
+                panic!(
+                    "--tkn-devnet requires --vlt-devnet: emission settles over VLT credits, and a token program on an \
+                     inert compute overlay is undefined (design v0.1 §10)."
+                );
+            }
+            let dns = config.params.dns_params.take().expect("devnet/simnet ship with the DNS overlay configured").with_tkn_devnet(
+                active_daa,
+                self.tkn_devnet_shadow_span,
+                self.tkn_devnet_epoch_budget_tok as u128 * 100_000_000,
+            );
+            // Fail loudly rather than start a node whose fold or settlement would silently refuse
+            // to run — the devnet symptom would be "no [token] line, ever", which reads as a bug.
+            assert!(
+                dns.tkn_params_consistent(),
+                "--tkn-devnet={active_daa} produced an inconsistent token configuration against the VLT fences \
+                 (vlt_shadow={}, D_settle={}); raise --tkn-devnet above the VLT shadow fence",
+                dns.vlt.vlt_shadow_activation_daa_score,
+                dns.tkn.settlement_delay_epochs,
+            );
+            config.params.dns_params = Some(dns);
+        } else if !self.tkn_fixture_transfers.is_empty() || !self.tkn_fixture_burns.is_empty() {
+            panic!("--tkn-fixture-transfer/--tkn-fixture-burn only mean something together with --tkn-devnet");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -831,6 +885,60 @@ pub fn cli() -> Command {
                 .env("KASPAD_VLT_DEVNET_CREDIT_WINDOW_EPOCHS"),
         )
         .arg(
+            Arg::new("tkn-devnet")
+                .long("tkn-devnet")
+                .value_name("active-daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "MISAKA Compute Token Program: open the TOK ledger fold and emission on a PRIVATE devnet at this DAA \
+                     score, with the shadow fence --tkn-devnet-shadow-span below it. Requires --vlt-devnet (emission \
+                     settles over VLT credits; a token program on an inert compute overlay is undefined). DEVNET/SIMNET \
+                     ONLY — on a public network the fences are a release decision, and the node refuses to start.",
+                )
+                .env("KASPAD_TKN_DEVNET"),
+        )
+        .arg(
+            Arg::new("tkn-devnet-shadow-span")
+                .long("tkn-devnet-shadow-span")
+                .value_name("daa-span")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "MISAKA TOK: how far below the --tkn-devnet active fence the shadow fence sits (default 300 DAA). \
+                     The [shadow, active) window is where the harness proves shadow-era ops stay void forever.",
+                )
+                .env("KASPAD_TKN_DEVNET_SHADOW_SPAN"),
+        )
+        .arg(
+            Arg::new("tkn-devnet-epoch-budget-tok")
+                .long("tkn-devnet-epoch-budget-tok")
+                .value_name("tok-per-epoch")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help("MISAKA TOK: flat per-epoch emission budget in whole TOK for --tkn-devnet (default 1000; no halving within a run)."),
+        )
+        .arg(
+            Arg::new("tkn-fixture-transfer")
+                .long("tkn-fixture-transfer")
+                .value_name("to-hex128:amount-atomic:nonce:at-daa")
+                .action(clap::ArgAction::Append)
+                .require_equals(false)
+                .help(
+                    "MISAKA TOK devnet fixture: once the chain reaches at-daa, sign and submit ONE TOK transfer from this \
+                     node's validator identity. Repeatable; nonce is taken literally so a harness can submit deliberately \
+                     void ops (bad nonce, overdraft) and assert they stay void.",
+                ),
+        )
+        .arg(
+            Arg::new("tkn-fixture-burn")
+                .long("tkn-fixture-burn")
+                .value_name("amount-atomic:nonce:at-daa")
+                .action(clap::ArgAction::Append)
+                .require_equals(false)
+                .help("MISAKA TOK devnet fixture: once the chain reaches at-daa, sign and submit ONE TOK burn. Repeatable."),
+        )
+        .arg(
             arg!(--"vlt-shadow-only" "MISAKA VLT Shadow Mode: with --vlt-devnet, leave the WEIGHT fence dormant. The overlay \
                  runs and is policed for real — certificates credited, committees drawn, verdicts paid, challenges slashing — \
                  while DNS finality stays on bonded stake indefinitely. This is the mode to run before committing to a \
@@ -1095,6 +1203,15 @@ impl Args {
             ),
             vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
             vlt_devnet_flat_decay: arg_match_unwrap_or::<bool>(&m, "vlt-devnet-flat-decay", defaults.vlt_devnet_flat_decay),
+            tkn_devnet_active_daa: m.get_one::<u64>("tkn-devnet").copied(),
+            tkn_devnet_shadow_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-shadow-span", defaults.tkn_devnet_shadow_span),
+            tkn_devnet_epoch_budget_tok: arg_match_unwrap_or::<u64>(
+                &m,
+                "tkn-devnet-epoch-budget-tok",
+                defaults.tkn_devnet_epoch_budget_tok,
+            ),
+            tkn_fixture_transfers: m.get_many::<String>("tkn-fixture-transfer").map(|v| v.cloned().collect()).unwrap_or_default(),
+            tkn_fixture_burns: m.get_many::<String>("tkn-fixture-burn").map(|v| v.cloned().collect()).unwrap_or_default(),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),

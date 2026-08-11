@@ -222,3 +222,15 @@ pub const SUBNETWORK_ID_EVM_WITHDRAW_CLAIM: SubnetworkId = SubnetworkId::from_by
 /// Reserved for future EVM fork-activation / system-contract migration admin
 /// txs; unused on a governance-free network.
 pub const SUBNETWORK_ID_EVM_ADMIN: SubnetworkId = SubnetworkId::from_byte(0x22);
+
+// MISAKA Compute Token Program token-op band 0x30-0x33 (design
+// `docs/misaka-compute-token-program-design-v0.1.md` §4.3). Above the EVM
+// bridge band (0x20-0x22) as that band sits above the finality overlay
+// (0x10-0x1a). Phase A defines transfer/burn; 0x32 (`CreateMint`) and 0x33
+// (`MintTo`) are reserved for Phase B and intentionally not defined yet — the
+// TOK asset itself has no mint authority (§4.1), its only issuance is emission.
+/// Move TOK between ledger accounts — [`crate::token::TokenTransferPayload`].
+pub const SUBNETWORK_ID_TOKEN_TRANSFER: SubnetworkId = SubnetworkId::from_byte(0x30);
+/// Destroy TOK from the signer's own ledger account —
+/// [`crate::token::TokenBurnPayload`].
+pub const SUBNETWORK_ID_TOKEN_BURN: SubnetworkId = SubnetworkId::from_byte(0x31);

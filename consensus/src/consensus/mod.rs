@@ -1191,6 +1191,40 @@ impl ConsensusApi for Consensus {
         Some(dns_confirmation_from_state(&state, dns_params.required_work_depth, dns_params.required_stake_depth))
     }
 
+    fn get_token_account(&self, asset_id: u64, owner: kaspa_hashes::Hash64) -> Option<kaspa_consensus_core::token::TokenAccount> {
+        // MISAKA Compute Token Program (design §9.3). `None` when the token program is
+        // not configured; an absent ledger row reads as the default (empty) account.
+        self.config.params.dns_params.as_ref()?;
+        self.storage.token_store.get_account(asset_id, owner).ok()
+    }
+
+    fn get_token_supply(&self, asset_id: u64) -> Option<kaspa_consensus_core::token::TokenSupply> {
+        self.config.params.dns_params.as_ref()?;
+        self.storage.token_store.get_supply(asset_id).ok()
+    }
+
+    fn get_token_emission_info(&self, epoch: Option<u64>) -> Option<kaspa_consensus_core::token::TokenEmissionInfo> {
+        self.config.params.dns_params.as_ref()?;
+        let store = &self.storage.token_store;
+        let next_settlement_epoch = store.settlement_cursor().ok()?.unwrap_or(0);
+        let fold_cursor = store.fold_cursor().ok()?.unwrap_or(0);
+        // `None` asks for the most recently settled epoch — one below the cursor,
+        // saturating so a never-settled program reads epoch 0 / settled=false.
+        let epoch = epoch.unwrap_or_else(|| next_settlement_epoch.saturating_sub(1));
+        let mut info =
+            kaspa_consensus_core::token::TokenEmissionInfo { epoch, next_settlement_epoch, fold_cursor, ..Default::default() };
+        if let Ok(settlement) = store.get_settlement(epoch) {
+            info.settled = true;
+            info.budget = settlement.budget;
+            info.network_compute = settlement.network_compute;
+            info.paid_total = settlement.paid_total;
+            info.audit_paid = settlement.audit_paid;
+            info.reward_count = settlement.rewards.len() as u32;
+            info.settlement_root = settlement.digest();
+        }
+        Some(info)
+    }
+
     fn get_stake_bond(&self, bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
         // kaspa-pq Phase 11 (ADR-0010): look up a stake bond by outpoint for the
         // validator service's eligibility check. `None` when the overlay is not

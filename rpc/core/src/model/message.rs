@@ -2148,6 +2148,226 @@ impl Deserializer for GetValidatorStatusResponse {
     }
 }
 
+// MISAKA Compute Token Program (design §9.3): the TOK read surface. Same
+// RPC-friendly encodings as getDnsConfirmation — `u128` as decimal strings,
+// `Hash64` identities and roots as hex strings — and `available = false`
+// (with default fields) when the token program is not configured for the
+// network, mirroring that RPC's "not configured" stance.
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenLedgerEntryRequest {
+    /// Asset id (0 = TOK, the only asset until Phase B).
+    pub asset_id: u64,
+    /// Owner id — the 128-hex overlay identity (`BLAKE2b-512(pubkey)`).
+    pub owner: String,
+}
+
+impl Serializer for GetTokenLedgerEntryRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.asset_id, writer)?;
+        store!(String, &self.owner, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenLedgerEntryRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let asset_id = load!(u64, reader)?;
+        let owner = load!(String, reader)?;
+        Ok(Self { asset_id, owner })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenLedgerEntryResponse {
+    /// False when the token program is not configured for this network (or the
+    /// owner id did not parse); the other fields are then defaults. An absent
+    /// ledger row is NOT an error — it reads as balance 0 / nonce 0 (design §4.2).
+    pub available: bool,
+    /// Atomic units, decimal string (`u128`).
+    pub balance: String,
+    /// Last applied nonce; the next payload must carry `nonce + 1`.
+    pub nonce: u64,
+}
+
+impl Serializer for GetTokenLedgerEntryResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.balance, writer)?;
+        store!(u64, &self.nonce, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenLedgerEntryResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let balance = load!(String, reader)?;
+        let nonce = load!(u64, reader)?;
+        Ok(Self { available, balance, nonce })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenSupplyRequest {
+    pub asset_id: u64,
+}
+
+impl Serializer for GetTokenSupplyRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.asset_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenSupplyRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let asset_id = load!(u64, reader)?;
+        Ok(Self { asset_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenSupplyResponse {
+    pub available: bool,
+    /// Decimal strings (`u128` atomic units).
+    pub minted: String,
+    pub burned: String,
+    pub circulating: String,
+}
+
+impl Serializer for GetTokenSupplyResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.minted, writer)?;
+        store!(String, &self.burned, writer)?;
+        store!(String, &self.circulating, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenSupplyResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let minted = load!(String, reader)?;
+        let burned = load!(String, reader)?;
+        let circulating = load!(String, reader)?;
+        Ok(Self { available, minted, burned, circulating })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenEmissionInfoRequest {
+    /// The epoch to read. Ignored when `latest` is true.
+    #[serde(default)]
+    pub epoch: u64,
+    /// When true (the sugar default), read the most recently settled epoch.
+    #[serde(default)]
+    pub latest: bool,
+}
+
+impl Serializer for GetTokenEmissionInfoRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(bool, &self.latest, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenEmissionInfoRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let epoch = load!(u64, reader)?;
+        let latest = load!(bool, reader)?;
+        Ok(Self { epoch, latest })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTokenEmissionInfoResponse {
+    pub available: bool,
+    pub epoch: u64,
+    /// False ⇒ the epoch has no settlement row yet (numeric fields are zero).
+    pub settled: bool,
+    /// Decimal strings (`u128`): R(E), X(E), Σ reward_i.
+    pub budget: String,
+    pub network_compute: String,
+    pub paid_total: String,
+    /// Audit-emission v0.2: the counted-verdict share of `paid_total` (decimal `u128`).
+    #[serde(default)]
+    pub audit_paid: String,
+    pub reward_count: u32,
+    /// Hex keyed-BLAKE2b-256 digest of the whole settlement (cross-node comparable).
+    pub settlement_root: String,
+    /// The live cursors — the ops gauges (design §9.2): next epoch settlement
+    /// will consider, and the next selected-chain index the ledger fold processes.
+    pub next_settlement_epoch: u64,
+    pub fold_cursor: u64,
+}
+
+impl Serializer for GetTokenEmissionInfoResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &2, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(bool, &self.settled, writer)?;
+        store!(String, &self.budget, writer)?;
+        store!(String, &self.network_compute, writer)?;
+        store!(String, &self.paid_total, writer)?;
+        store!(String, &self.audit_paid, writer)?;
+        store!(u32, &self.reward_count, writer)?;
+        store!(String, &self.settlement_root, writer)?;
+        store!(u64, &self.next_settlement_epoch, writer)?;
+        store!(u64, &self.fold_cursor, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetTokenEmissionInfoResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let epoch = load!(u64, reader)?;
+        let settled = load!(bool, reader)?;
+        let budget = load!(String, reader)?;
+        let network_compute = load!(String, reader)?;
+        let paid_total = load!(String, reader)?;
+        let audit_paid = if version >= 2 { load!(String, reader)? } else { String::new() };
+        let reward_count = load!(u32, reader)?;
+        let settlement_root = load!(String, reader)?;
+        let next_settlement_epoch = load!(u64, reader)?;
+        let fold_cursor = load!(u64, reader)?;
+        Ok(Self {
+            available,
+            epoch,
+            settled,
+            budget,
+            network_compute,
+            paid_total,
+            audit_paid,
+            reward_count,
+            settlement_root,
+            next_settlement_epoch,
+            fold_cursor,
+        })
+    }
+}
+
 // kaspa-pq Phase 12 (ADR-0011): getValidatorAttestationTarget. Given a stake-bond
 // outpoint ("txid_hex:index"), returns the exact ready-to-sign attestation message
 // (and its bound fields) the validator must ML-DSA-87-sign for the current sink — so

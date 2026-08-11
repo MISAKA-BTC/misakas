@@ -141,6 +141,7 @@ pub mod pruning;
 pub mod sign;
 pub mod sortable_block;
 pub mod subnets;
+pub mod token;
 pub mod trusted;
 pub mod tx;
 pub mod utxo;

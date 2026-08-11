@@ -273,9 +273,15 @@ async fn joined_follower(overrides: &std::path::Path, leader_p2p_port: u16, targ
     connect(&client, leader_p2p_port).await;
 
     let check = client.clone();
+    // 200ms x 1800 = six minutes for the follower to complete an IBD of the leader's chain.
+    // The previous two-minute budget was calibrated on a dev machine, where this test finishes
+    // in ~155s end to end; a GitHub runner is roughly four times slower and blew it on every
+    // run — including on this branch's base, which is how it was identified as a budget rather
+    // than a regression. Generous on purpose: when the IBD works the poll exits as soon as the
+    // score lands, so the ceiling only ever costs time on a genuine failure.
     wait_for(
         200,
-        600,
+        1800,
         move || {
             let c = check.clone();
             async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= target }

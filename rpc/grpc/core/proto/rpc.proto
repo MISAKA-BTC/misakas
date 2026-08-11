@@ -1286,3 +1286,55 @@ message GetCurrentBlockColorResponseMessage {
 
   RPCError error = 1000;
 }
+
+// MISAKA Compute Token Program (design v0.1 §9.3) — the TOK read surface.
+// u128 quantities travel as decimal strings; Hash64 identities/roots as 128/64-hex.
+message GetTokenLedgerEntryRequestMessage {
+  uint64 assetId = 1;
+  // 128-hex overlay identity (BLAKE2b-512 of the owner's ML-DSA-87 pubkey).
+  string owner = 2;
+}
+
+message GetTokenLedgerEntryResponseMessage {
+  // False when the token program is not configured (or owner did not parse).
+  // An absent ledger row is NOT an error: balance "0" / nonce 0 (design §4.2).
+  bool available = 1;
+  string balance = 2;
+  uint64 nonce = 3;
+  RPCError error = 1000;
+}
+
+message GetTokenSupplyRequestMessage {
+  uint64 assetId = 1;
+}
+
+message GetTokenSupplyResponseMessage {
+  bool available = 1;
+  string minted = 2;
+  string burned = 3;
+  string circulating = 4;
+  RPCError error = 1000;
+}
+
+message GetTokenEmissionInfoRequestMessage {
+  // Ignored when latest = true.
+  uint64 epoch = 1;
+  bool latest = 2;
+}
+
+message GetTokenEmissionInfoResponseMessage {
+  bool available = 1;
+  uint64 epoch = 2;
+  bool settled = 3;
+  string budget = 4;
+  string networkCompute = 5;
+  string paidTotal = 6;
+  uint32 rewardCount = 7;
+  // Audit-emission v0.2: the counted-verdict share of paidTotal.
+  string auditPaid = 11;
+  // Hex keyed-BLAKE2b-256 digest of the whole settlement (cross-node comparable).
+  string settlementRoot = 8;
+  uint64 nextSettlementEpoch = 9;
+  uint64 foldCursor = 10;
+  RPCError error = 1000;
+}

@@ -23,7 +23,11 @@ use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
     SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT,
-    SUBNETWORK_ID_STAKE_UNBOND, SubnetworkId,
+    SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
+};
+use kaspa_consensus_core::token::{
+    TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload,
+    TokenTransferPayload, token_burn_message, token_transfer_message,
 };
 use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
@@ -531,6 +535,64 @@ impl ValidatorKey {
         };
         let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed capability is infallible");
         self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CAPABILITY, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign and build a **TOK transfer** (Compute Token Program design v0.1 §4.3) from this
+    /// validator's ledger account to `to`.
+    ///
+    /// Devnet-harness surface for now: the ledger fold judges everything stateful (nonce
+    /// currency, balance), so a transfer built here with a wrong nonce is void on chain, not
+    /// invalid — which is exactly what the harness's void-case assertions rely on.
+    pub fn build_token_transfer_tx(
+        &self,
+        network_id: &[u8],
+        to: Hash64,
+        amount: u128,
+        nonce: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        if to == self.validator_id {
+            return Err("token transfer to self is rejected statelessly; pick a different recipient".into());
+        }
+        let message = token_transfer_message(network_id, TOK_ASSET_ID, self.validator_id, to, amount, nonce);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_TRANSFER_MLDSA87_CONTEXT).to_vec();
+        let payload = TokenTransferPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: TOK_ASSET_ID,
+            from_pubkey: self.public_key().to_vec(),
+            to,
+            amount,
+            nonce,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed transfer is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_TRANSFER, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign and build a **TOK burn** — same stance as [`Self::build_token_transfer_tx`].
+    pub fn build_token_burn_tx(
+        &self,
+        network_id: &[u8],
+        amount: u128,
+        nonce: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let message = token_burn_message(network_id, TOK_ASSET_ID, self.validator_id, amount, nonce);
+        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_BURN_MLDSA87_CONTEXT).to_vec();
+        let payload = TokenBurnPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: TOK_ASSET_ID,
+            owner_pubkey: self.public_key().to_vec(),
+            amount,
+            nonce,
+            signature,
+        };
+        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed burn is infallible");
+        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_BURN, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Sign and build the **phase-1 job commitment**.

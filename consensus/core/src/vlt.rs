@@ -1870,6 +1870,14 @@ pub struct VltEpochCredits {
     /// `(validator_id, X_i(epoch))` in µRTE, sorted ascending by `validator_id` so the encoding
     /// is byte-deterministic.
     pub credits: Vec<(Hash64, u128)>,
+    /// Audit-emission v0.2 (`docs/misaka-audit-emission-v0.2-design.md` §2.1):
+    /// `(verifier_id, X_i^audit(epoch))` in µRTE — the µRTE each verifier's counted verdicts
+    /// judged this epoch. Same canonical ordering as `credits`. **Money only, never votes**:
+    /// nothing in the weight path ([`recent_compute_score`], `C_i`, the §5 snapshot roots)
+    /// reads this field — a replay re-counts the same physical job, and letting it weigh
+    /// would multiply one job's power by `1 + committee`. Empty for epochs whose anchor
+    /// predates the token activation fence (v0.2 §2.3).
+    pub audit: Vec<(Hash64, u128)>,
 }
 
 impl VltEpochCredits {
@@ -1877,7 +1885,15 @@ impl VltEpochCredits {
     pub fn from_unordered(entries: impl IntoIterator<Item = (Hash64, u128)>) -> Self {
         let mut credits: Vec<(Hash64, u128)> = entries.into_iter().collect();
         credits.sort_by(|a, b| a.0.cmp(&b.0));
-        Self { credits }
+        Self { credits, audit: Vec::new() }
+    }
+
+    /// Attach the epoch's audit-side credit (v0.2), canonicalising its order.
+    pub fn with_audit(mut self, entries: impl IntoIterator<Item = (Hash64, u128)>) -> Self {
+        let mut audit: Vec<(Hash64, u128)> = entries.into_iter().collect();
+        audit.sort_by(|a, b| a.0.cmp(&b.0));
+        self.audit = audit;
+        self
     }
 
     pub fn get(&self, validator_id: &Hash64) -> u128 {
@@ -1938,6 +1954,12 @@ pub struct VltEpochSnapshot {
     /// It is a local licence to act, not a consensus value: a node with an incomplete table refuses
     /// to cache it and refuses to activate on it, and simply waits until it can do better.
     resolution_complete: bool,
+    /// Audit-emission v0.2: `verifier_id → (epoch → X_i^audit)` — µRTE judged by counted
+    /// verdicts, aggregated under the SAME pin and survivorship as `credits` (refuted
+    /// certificates keep paying their committees — design §2.1). Deliberately absent from
+    /// [`Self::commitment_root`]: the root is the §5 VOTING denominator a vote signs, and v0.2
+    /// changes what money pays, never what a vote binds.
+    audit: HashMap<Hash64, BTreeMap<u64, u128>>,
 }
 
 impl VltEpochSnapshot {
@@ -1967,13 +1989,25 @@ impl VltEpochSnapshot {
     /// `pin_daa_score` or lower. A table built from a branch tip instead satisfies the type and
     /// none of its meaning.
     pub fn pinned(pin: BlockHash, pin_daa_score: u64, credits: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
-        Self { pin, pin_daa_score, credits, resolution_complete: true }
+        Self { pin, pin_daa_score, credits, audit: HashMap::new(), resolution_complete: true }
     }
 
     /// As [`Self::pinned`], but recording that at least one certificate's dependency could not be
     /// loaded. See [`Self::resolution_complete`].
     pub fn pinned_incomplete(pin: BlockHash, pin_daa_score: u64, credits: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
-        Self { pin, pin_daa_score, credits, resolution_complete: false }
+        Self { pin, pin_daa_score, credits, audit: HashMap::new(), resolution_complete: false }
+    }
+
+    /// Attach the audit-side table (v0.2). Kept off the [`Self::pinned`] signature so every
+    /// existing call site (and its meaning) is untouched; the credit walk is the one caller.
+    pub fn with_audit(mut self, audit: HashMap<Hash64, BTreeMap<u64, u128>>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// `verifier_id → (epoch → X_i^audit)` — for the credit accumulator store (v0.2).
+    pub fn audit(&self) -> &HashMap<Hash64, BTreeMap<u64, u128>> {
+        &self.audit
     }
 
     /// Whether this table is an answer at all. `false` ⇒ do not cache it, do not activate on it.

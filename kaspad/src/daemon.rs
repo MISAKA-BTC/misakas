@@ -918,6 +918,8 @@ Do you confirm? (y/n)";
             network_id: config.params.genesis.hash.as_byte_slice().to_vec(),
             vlt: config.params.dns_params.as_ref().map(|p| p.vlt),
             compute,
+            tkn_fixture_transfers: args.tkn_fixture_transfers.clone(),
+            tkn_fixture_burns: args.tkn_fixture_burns.clone(),
         };
         let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
         Some(Arc::new(ValidatorService::new(

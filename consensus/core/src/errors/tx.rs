@@ -103,6 +103,15 @@ pub enum TxRuleError {
     #[error("transaction has an invalid DNS finality overlay payload: {0}")]
     InvalidDnsOverlayPayload(DnsTxError),
 
+    /// MISAKA Compute Token Program (design v0.1 §4.3): a transaction on the
+    /// token-op band (0x30/0x31) carried a payload that failed stateless
+    /// validation (see [`crate::token::validate_token_transfer_payload`] /
+    /// `validate_token_burn_payload`). Nonce currency, balance sufficiency and
+    /// the ML-DSA-87 signature are stateful and judged by the ledger fold —
+    /// where a failing op is void (skip-class), not consensus-fatal.
+    #[error("transaction has an invalid token-op payload: {0}")]
+    InvalidTokenPayload(crate::token::TokenTxError),
+
     /// [`TxRuleError::FeerateTooLow`] is not a consensus error but a mempool error triggered by the
     /// fee/mass RBF validation rule
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]
