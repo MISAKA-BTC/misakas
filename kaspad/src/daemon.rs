@@ -440,6 +440,11 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     info!("{} v{}", env!("CARGO_PKG_NAME"), git::with_short_hash(version()));
 
     assert!(!db_dir.to_str().unwrap().is_empty());
+    // The fingerprint this node will announce at the handshake, from ITS OWN side. Peers print
+    // their own value in a rejection, so reading a fingerprint out of a received reject attributes
+    // it to the wrong node — an error that cost a release cut on 2026-08-11. One line here makes
+    // "is this binary the release?" answerable without a peer, which is what a flag day needs.
+    info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
     info!("Application directory: {}", app_dir.display());
     info!("Data directory: {}", db_dir.display());
     match runtime.log_dir.as_ref() {

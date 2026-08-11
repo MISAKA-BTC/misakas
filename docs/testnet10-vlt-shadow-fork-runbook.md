@@ -120,8 +120,13 @@ records; no credentials involved). Genesis matched — so this is the same netwo
 handshake was then rejected on **consensus params**:
 
 ```
-local: 5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571   (this branch's build)
-remote: 0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3  (the live fleet)
+local: 5fabb683c0210a69e26e8cd7acc7c398923d6ae090f6aa211d7a97479ce46571   (the live FLEET — see below)
+remote: 0e3914b077cdd738670d173f47410b5dbc149ff760d270223bf2afd4df8297d3  (the build that probed it)
+
+CORRECTED 2026-08-11: this is a RECEIVED reject, and the sender fills `local` with its own
+fingerprint (`flow_context.rs:1293`) — so `local:` is the FLEET's value, not the prober's. The
+release's own fingerprint is `d07cb673…`, read from the node's startup line rather than inferred
+from a peer.
 ```
 
 `0e3914b0…` is the testnet fingerprint this repository pinned **before** today's merges. So the
