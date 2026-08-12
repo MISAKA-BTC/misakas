@@ -1058,14 +1058,23 @@ pub mod qwen35_pins {
     pub const METAL_RUNTIME_CLASS: &str = "misaka-palw-lite-fp/apple-metal-arm64/v1";
 
     /// The **CPU** build profile of the same worker against the same GGUF: no GPU backend at all,
-    /// a pinned thread count, and `GGML_NATIVE` off so the compiler may not select instructions
-    /// from the build host. Every one of those is part of the identity because every one of them
-    /// can change a reduction order and therefore the logits.
+    /// a pinned thread count, `GGML_NATIVE` off so the compiler may not select instructions from
+    /// the build host, and **OpenMP off**. Every one of those is part of the identity because
+    /// every one of them can change a reduction order and therefore the logits.
+    ///
+    /// `no-openmp` was added 2026-08-12 after building this profile on Linux for the first time.
+    /// ggml-cpu compiles against OpenMP by default there, and Apple clang does not enable it — so
+    /// every earlier measurement of "the CPU profile" was of a build WITHOUT it, while the fleet
+    /// would have run one WITH it. That is not a portability detail: under OpenMP the matmul's
+    /// work split and reduction order come from an external runtime's scheduling rather than from
+    /// ggml's own threadpool at the pinned thread count, so the arithmetic is no longer a function
+    /// of (source, thread count) alone. It also announced itself as a link error rather than a
+    /// wrong number, which is the lucky version of this class of mistake.
     ///
     /// This profile exists because a public fleet is Linux servers, not Apple laptops, and a
     /// committee can only be drawn from validators sharing a determinism class — a network whose
     /// only registered classes are Metal ones is a network whose fleet cannot verify anything.
-    pub const CPU_BUILD_PROFILE: &str = "release/cpu-only/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
+    pub const CPU_BUILD_PROFILE: &str = "release/cpu-only/no-native/no-lto/no-blas/no-openmp/threads-4/gpu-off/static/v1";
 
     /// The CPU determinism class — **scoped to the instruction-set architecture**, and that
     /// scoping is the honest part.

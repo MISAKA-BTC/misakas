@@ -2157,7 +2157,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by this merge.
-            ("testnet", TESTNET_PARAMS, "c08dbbacaf4b2991b582270e45bfac5779208eff95f57dfebc2ad5a3e3d2f834"),
+            ("testnet", TESTNET_PARAMS, "dd720ae3353a3f04c1d96e9f4dc7854c21388e32160bf0a5fe828f5681e023c5"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
