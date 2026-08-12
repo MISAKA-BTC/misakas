@@ -27,10 +27,16 @@ A validator replays every OTHER miner's winning attempt, so its steady-state loa
 `(M-1)/M · r / T` — per-header replay cost `r` over interval `T`. Fleet measurements
 (2B/F16 profile, N = 16 decode tokens, `num_gpu = 0`):
 
-| profile | r (slowest honest host) | load at T = 10 s | at T = 60 s | **at T = 120 s** |
+| profile / host | r (per-header replay) | load at T = 10 s | at T = 60 s | **at T = 120 s** |
 |---|---|---|---|---|
-| Qwen3.5-2B F16 (today) | ~26 s (Broadwell); ~12 s (EPYC) | 173 % — impossible | 29 % | **~15 %** |
-| Qwen3.6-35B-A3B (future algo fork, ≥ 32 GB hosts) | ~30-60 s (est., prefix-cached) | — | 33-67 % | **17-33 %** |
+| 2B F16, EPYC + F16C (measured) | **4.4 s** / **9.0 s** | 44-90 % | 7-15 % | **4-8 %** |
+| 2B F16, Broadwell **without F16C** (measured) | **33 s** | 330 % — impossible | 55 % | **18-28 %** |
+| Qwen3.6-35B-A3B, ≥ 32 GB hosts (est., prefix-cached) | ~30-60 s | — | 33-67 % | **17-33 %** |
+
+Measured 2026-08-12 on the three-host fleet at N = 16, `num_gpu = 0`: h1 EPYC-6c 4.4 s, h3
+EPYC-8c 9.0 s, h2 Broadwell-8c 33 s steady state (its first samples — 97-244 s — are backlog
+contention, not the steady cost). Load figures assume every host also mines; a pure validator
+replays every block instead of `(M-1)/M` of them, which is the upper number in each range.
 
 The **model** can be replaced by an algo-id fork on the same chain (that is what `algo_id` is
 for). The **block rate** cannot: there is no forked-blockrate machinery, so changing it later
@@ -38,6 +44,14 @@ means another re-genesis. T = 120 s is therefore chosen as the smallest interval
 slowest honest validator comfortable on today's 2B profile *and* still fits the 35B runtime the
 network intends to adopt — at 60 s the 35B fork would arrive at 33-67 % load with no headroom for
 the VLT overlay, RPC and seeder work these hosts also carry.
+
+**Host class: F16C matters more than core count.** The same F16 model, same tokens, same thread
+count is **4-7× slower on a CPU without the F16C flag** (h2: 33 s vs h1's 4.4 s on FEWER cores) —
+without hardware fp16↔fp32 conversion ggml does it in software, and an F16 model is nothing but
+that conversion. F16C has shipped on x86 since ~2013; h2 only lacks it because its hypervisor
+masks the flag. Check `grep -o f16c /proc/cpuinfo` when provisioning: a host without it still
+validates *correctly* (determinism is unaffected — that is why the fleet agrees 8/8) but carries
+several times the load, and it is the host that sets the network's floor.
 
 Consequences to plan for: 35B adoption additionally needs **≥ 32 GB RAM hosts** (its Q4_K_M blob
 is 23.9 GB — the current 11/15/23 GB fleet cannot hold it), and at 120 s the DAA window (264
@@ -134,6 +148,12 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 * **Verified**: solo mining (`misaminer`), independent per-header replay validation by peers, the
   fail-fast rails, and **from-genesis headers-first IBD** — all exercised end-to-end on t10 params
   with the real model.
+* **Full multi-machine chain: MEASURED (2026-08-12) at the final T = 120 s / N = 16.** Three
+  hosts, real CPU inference: h1 mined 10 blocks, h2 and h3 independently replay-validated all 10
+  (identical accepted-block sets, identical tip `1c8be6cac21e9a2c`, zero bad-PoW/ban events), and
+  a FRESH node on h3 did a from-genesis IBD over the network — 10 blocks, 10 UTXO-validated, 0
+  bad events. This is the first run where mining, validation and IBD each happened on a
+  *different physical machine*.
 * **Cross-machine agreement: MEASURED (2026-08-12), and it is what forced the F16 profile.**
   8-seed canonical probes across five surfaces — M4 Pro Metal, M4 Pro CPU (arm64), AMD EPYC ×2
   and Intel Broadwell (x86-64, one without f16c):
