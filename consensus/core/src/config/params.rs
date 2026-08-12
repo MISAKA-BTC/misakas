@@ -1767,15 +1767,29 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
-    // PALW LLM PoW from genesis, in the OLLAMA flavor (algo_id = 5): the public testnet-10 IS
-    // the 0.1-bps LLM-PoW network as of the "-palw" re-genesis
-    // (docs/testnet10-palw-rollout-runbook.md), and its fleet is Ubuntu VPSes, which cannot run
-    // the Metal-pinned worker — the runtime is a host-local Ollama serving the pinned Qwen
-    // model (`MISAKA_PALW_OLLAMA_MODEL`, optional `MISAKA_PALW_OLLAMA_URL`). The stronger
-    // worker-tag algo (4) stays devnet's; its activation here remains never() so required_algo_id
-    // resolves to 5 alone.
+    // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
+    // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
+    // network for one more commit.
+    //
+    // Measured, on the pinned blob: the canonical prompt makes the model emit ONE constant
+    // 16-token continuation for every seed (27/27 seeds, 22 of them uniform random). The tag is
+    // therefore a 64-byte constant, a `prompt_eval_count` drawn from ~10 values, and a constant
+    // 16 — so an attacker guesses it with ~31 BLAKE2b hashes and zero inference, at ~38 k
+    // nonces/s in single-threaded Python, while an honest miner pays 12-26 s per attempt. The
+    // verifier replays the real model, gets the same constant, and ACCEPTS the forgery: no
+    // consensus rule is broken, the work is simply not there. Confirmable without any runtime —
+    // the first 64 bytes of the calibration constant ARE the digest of that boilerplate string.
+    //
+    // The cause is structural, not a tuning error: the tag can only commit to the OUTPUT TEXT,
+    // and a small model at temperature 0 collapses to a handful of attractors (measured
+    // min-entropy ~3.1 bits over 60 seeds even with a high-entropy seed-derived prompt), while
+    // Ollama exposes no per-token logprobs to bind instead. The replacement therefore binds the
+    // LOGITS via the worker's `gemm_trace_root` and lands as `algo_id = 2` — see ADR-0021.
+    //
+    // Until that ships, testnet falls back to the Phase-3 BLAKE2b-SHA3 PoW below, which is
+    // sound. This line is the safety switch; the redesign is the fix.
     pow_palw_activation: ForkActivation::never(),
-    pow_palw_ollama_activation: ForkActivation::always(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
@@ -2010,9 +2024,14 @@ mod consensus_params_id_tests {
         assert_eq!(b.pruning_depth, lower_bound);
         // Pruning depth still buys MORE than the 30 h the duration term intends.
         assert!(b.pruning_depth * 120 > PRUNING_DURATION);
-        // The public testnet actually runs this, with the Ollama PALW algo active from genesis.
+        // The public testnet actually runs this interval. Its PoW is deliberately NOT the Ollama
+        // PALW algo any more: that flavor was measured forgeable without running the model (see
+        // the preset's comment), so the preset falls back to Phase-3 BLAKE2b-SHA3 until the
+        // logits-binding replacement lands. Asserted, so re-enabling it is a deliberate edit here
+        // rather than a quiet flip of one activation.
         assert_eq!(TESTNET_PARAMS.blockrate.target_time_per_block, 120_000);
-        assert!(TESTNET_PARAMS.pow_palw_ollama_activation.is_active(0));
+        assert!(!TESTNET_PARAMS.pow_palw_ollama_activation.is_active(u64::MAX - 1), "the forgeable flavor must stay off");
+        assert!(TESTNET_PARAMS.pow_blake2b_sha3_activation.is_active(0), "and the sound Phase-3 PoW carries the chain meanwhile");
         assert_eq!(TESTNET_PARAMS.target_time_per_block_history().after(), 120_000);
         // Emission holds the 37.047 MSK/s rate: one 120 s block pays 120× the per-second value.
         assert_eq!(TESTNET_PARAMS.bps(), 1, "integer bps floors at 1; exact rate work uses ttpb");
@@ -2138,7 +2157,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by this merge.
-            ("testnet", TESTNET_PARAMS, "a044a6723956b7746f04ae71f1b987ce1aee366c0affc1df119bb8d5dfd6a0a5"),
+            ("testnet", TESTNET_PARAMS, "c08dbbacaf4b2991b582270e45bfac5779208eff95f57dfebc2ad5a3e3d2f834"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
