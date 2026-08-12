@@ -24,8 +24,12 @@ const SYNC_RATE_WINDOW_MIN_THRESHOLD: usize = 60 / (SNAPSHOT_INTERVAL as usize);
 
 pub struct SyncRateRule {
     pub use_sync_rate_rule: Arc<AtomicBool>,
+    /// `(received blocks, elapsed milliseconds)` per sample. The elapsed TIME is kept, not the
+    /// expected block count derived from it: dividing per sample truncates, and once the block
+    /// interval exceeds the 10 s sampling interval every sample truncates to zero. See
+    /// `expected_blocks_in_window`.
     sync_rate_samples: RwLock<VecDeque<(u64, u64)>>,
-    total_expected_blocks: AtomicU64,
+    total_elapsed_ms: AtomicU64,
     total_received_blocks: AtomicU64,
 }
 
@@ -34,7 +38,7 @@ impl SyncRateRule {
         Self {
             use_sync_rate_rule,
             sync_rate_samples: RwLock::new(VecDeque::new()),
-            total_expected_blocks: AtomicU64::new(0),
+            total_elapsed_ms: AtomicU64::new(0),
             total_received_blocks: AtomicU64::new(0),
         }
     }
@@ -42,19 +46,19 @@ impl SyncRateRule {
     /// Adds current observation of received and expected blocks to the sample window, and removes
     /// old samples. Returns true if there are enough samples in the window to start triggering the
     /// sync rate rule.
-    fn update_sync_rate_window(&self, received_blocks: u64, expected_blocks: u64) -> bool {
+    fn update_sync_rate_window(&self, received_blocks: u64, elapsed_ms: u64) -> bool {
         self.total_received_blocks.fetch_add(received_blocks, Ordering::SeqCst);
-        self.total_expected_blocks.fetch_add(expected_blocks, Ordering::SeqCst);
+        self.total_elapsed_ms.fetch_add(elapsed_ms, Ordering::SeqCst);
 
         let mut samples = self.sync_rate_samples.write().unwrap();
 
-        samples.push_back((received_blocks, expected_blocks));
+        samples.push_back((received_blocks, elapsed_ms));
 
         // Remove old samples. Usually is a single op after the window is full per 10s:
         while samples.len() > SYNC_RATE_WINDOW_MAX_SIZE {
-            let (old_received_blocks, old_expected_blocks) = samples.pop_front().unwrap();
+            let (old_received_blocks, old_elapsed_ms) = samples.pop_front().unwrap();
             self.total_received_blocks.fetch_sub(old_received_blocks, Ordering::SeqCst);
-            self.total_expected_blocks.fetch_sub(old_expected_blocks, Ordering::SeqCst);
+            self.total_elapsed_ms.fetch_sub(old_elapsed_ms, Ordering::SeqCst);
         }
 
         samples.len() >= SYNC_RATE_WINDOW_MIN_THRESHOLD
@@ -70,16 +74,31 @@ impl SyncRateRule {
 /// Recovery: Sync rate is back above threshold
 impl MiningRule for SyncRateRule {
     fn check_rule(&self, delta: &ProcessingCountersSnapshot, extra_data: &ExtraData) {
-        let expected_blocks = (extra_data.elapsed_time.as_millis() as u64) / extra_data.target_time_per_block;
+        let elapsed_ms = extra_data.elapsed_time.as_millis() as u64;
         let received_blocks = delta.body_counts.max(delta.header_counts);
 
-        if !self.update_sync_rate_window(received_blocks, expected_blocks) {
+        if !self.update_sync_rate_window(received_blocks, elapsed_ms) {
             // Don't process the sync rule if the window doesn't have enough samples to filter out noise
             return;
         }
 
-        let rate: f64 =
-            (self.total_received_blocks.load(Ordering::SeqCst) as f64) / (self.total_expected_blocks.load(Ordering::SeqCst) as f64);
+        // Expected blocks are derived ONCE over the whole window, not per sample. Per sample this
+        // is `elapsed / interval` truncated to an integer: at the 10 s sampling interval that is
+        // exactly 1 for a 10 s block time, but 0 for anything slower than the sampling interval —
+        // so on a 120 s network every sample contributed 0, the window total stayed 0, and the
+        // rate was `received / 0` = NaN. Every comparison against a NaN is false, so the rule
+        // silently never fired and never recovered. Summing the time first keeps the arithmetic
+        // exact at any block interval and is identical to the old value wherever the old one was
+        // not truncating.
+        let total_elapsed_ms = self.total_elapsed_ms.load(Ordering::SeqCst);
+        let expected_blocks = total_elapsed_ms / extra_data.target_time_per_block;
+        if expected_blocks == 0 {
+            // Not enough wall clock has passed for even one block to be due; there is no rate to
+            // judge yet. (Reachable on a slow network before the window fills.)
+            return;
+        }
+
+        let rate: f64 = (self.total_received_blocks.load(Ordering::SeqCst) as f64) / (expected_blocks as f64);
 
         // Finality point is considered "recent" if it is within 3 finality durations from the current time
         let is_finality_recent = extra_data.finality_point_timestamp >= unix_now().saturating_sub(extra_data.finality_duration * 3);
@@ -157,7 +176,7 @@ mod tests {
             !use_sync_rate_rule.load(Ordering::SeqCst),
             "Expected rule to not be triggered during normal operation. {} | {}",
             rule.total_received_blocks.load(Ordering::SeqCst),
-            rule.total_expected_blocks.load(Ordering::SeqCst)
+            rule.total_elapsed_ms.load(Ordering::SeqCst)
         );
 
         // Sync rate should be at 0.5
@@ -169,7 +188,7 @@ mod tests {
             use_sync_rate_rule.load(Ordering::SeqCst),
             "Expected rule to trigger. {} | {}",
             rule.total_received_blocks.load(Ordering::SeqCst),
-            rule.total_expected_blocks.load(Ordering::SeqCst)
+            rule.total_elapsed_ms.load(Ordering::SeqCst)
         );
 
         for _ in 0..10 {
@@ -180,7 +199,41 @@ mod tests {
             !use_sync_rate_rule.load(Ordering::SeqCst),
             "Expected rule to not be triggered during normal operation. {} | {}",
             rule.total_received_blocks.load(Ordering::SeqCst),
-            rule.total_expected_blocks.load(Ordering::SeqCst)
+            rule.total_elapsed_ms.load(Ordering::SeqCst)
+        );
+    }
+
+    /// The rule must judge a network whose block interval is LONGER than the 10 s sampling
+    /// interval. Per-sample `elapsed / interval` truncates to 0 there, the window total stayed 0,
+    /// and `received / 0` is NaN — every comparison false, so the rule could neither fire nor
+    /// recover on a 120 s network. Windowed arithmetic is what makes this expressible at all.
+    #[test]
+    fn test_rule_fires_when_block_interval_exceeds_the_sampling_interval() {
+        let (use_sync_rate_rule, rule) = create_rule();
+        let extra_data = &ExtraData {
+            elapsed_time: std::time::Duration::from_secs(10),
+            target_time_per_block: 120_000, // the PALW-era 120 s interval
+            finality_point_timestamp: unix_now(),
+            finality_duration: 1000,
+            has_sufficient_peer_connectivity: true,
+        };
+
+        // A minute of samples receiving nothing: 60 s of wall clock is half a 120 s block, so the
+        // window expects 0 blocks and there is nothing to judge yet — silence, not a false alarm.
+        for _ in 0..(SYNC_RATE_WINDOW_MIN_THRESHOLD + 1) {
+            rule.check_rule(&ProcessingCountersSnapshot::default(), extra_data);
+        }
+        assert!(!use_sync_rate_rule.load(Ordering::SeqCst), "no verdict before one block is even due");
+
+        // Keep receiving nothing until blocks ARE due. Now the rate is a real 0 and the rule fires.
+        for _ in 0..24 {
+            rule.check_rule(&ProcessingCountersSnapshot::default(), extra_data);
+        }
+        assert!(
+            use_sync_rate_rule.load(Ordering::SeqCst),
+            "expected the rule to fire on a stalled 120 s network. received={} elapsed_ms={}",
+            rule.total_received_blocks.load(Ordering::SeqCst),
+            rule.total_elapsed_ms.load(Ordering::SeqCst)
         );
     }
 
@@ -206,7 +259,7 @@ mod tests {
             !use_sync_rate_rule.load(Ordering::SeqCst),
             "Expected rule to trigger even with low sync rate if finality is old. {} | {}",
             rule.total_received_blocks.load(Ordering::SeqCst),
-            rule.total_expected_blocks.load(Ordering::SeqCst)
+            rule.total_elapsed_ms.load(Ordering::SeqCst)
         );
     }
 
@@ -215,15 +268,15 @@ mod tests {
         let (_, rule) = create_rule();
 
         let received_blocks = 123;
-        let expected_blocks = 456;
+        let elapsed_ms = 456;
 
         let old_received_total = rule.total_received_blocks.load(Ordering::SeqCst);
-        let old_expected_total = rule.total_expected_blocks.load(Ordering::SeqCst);
+        let old_elapsed_total = rule.total_elapsed_ms.load(Ordering::SeqCst);
 
-        rule.update_sync_rate_window(received_blocks, expected_blocks);
+        rule.update_sync_rate_window(received_blocks, elapsed_ms);
 
         assert_eq!(rule.total_received_blocks.load(Ordering::SeqCst), old_received_total + received_blocks);
-        assert_eq!(rule.total_expected_blocks.load(Ordering::SeqCst), old_expected_total + expected_blocks);
+        assert_eq!(rule.total_elapsed_ms.load(Ordering::SeqCst), old_elapsed_total + elapsed_ms);
     }
 
     #[test]
@@ -262,7 +315,7 @@ mod tests {
         }
 
         let total_received = rule.total_received_blocks.load(Ordering::SeqCst);
-        let total_expected = rule.total_expected_blocks.load(Ordering::SeqCst);
+        let total_expected = rule.total_elapsed_ms.load(Ordering::SeqCst);
 
         let new_received_block = received_blocks * 2;
         let new_expected_block = expected_blocks * 2;
@@ -276,7 +329,7 @@ mod tests {
         );
 
         assert_eq!(
-            rule.total_expected_blocks.load(Ordering::SeqCst),
+            rule.total_elapsed_ms.load(Ordering::SeqCst),
             total_expected + new_expected_block - expected_blocks,
             "Expected total expected blocks to be updated correctly"
         );
