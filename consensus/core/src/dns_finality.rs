@@ -9532,6 +9532,14 @@ mod tests {
             let shadow = p.vlt.vlt_shadow_activation_daa_score;
             if shadow == u64::MAX {
                 assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
+            } else if shadow == 0 {
+                assert_eq!(name, "testnet", "only testnet has a scheduled shadow fork ({name} moved one unexpectedly)");
+                // GENESIS-ACTIVE (the PALW re-genesis): there is no "below the fence" for the
+                // legacy rule to hold in, because the fork ships in the genesis rules themselves.
+                // That is only available to a chain being rebuilt — and it is why the rebuild took
+                // it: no height to miss, no fleet to coordinate ahead of one, no window in which
+                // the bond spend gate is off while challenge slashing is on.
+                assert!(p.vlt_shadow_active_at(0), "{name}: genesis-active means the overlay runs from block 1");
             } else {
                 assert_eq!(name, "testnet", "only testnet has a scheduled shadow fork ({name} moved one unexpectedly)");
                 assert!(!p.vlt_shadow_active_at(shadow - 1), "{name}: the legacy rule holds right up to the fence");

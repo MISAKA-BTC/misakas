@@ -81,10 +81,19 @@ if [ "$T1" != "$T2" ]; then
   echo "version mismatch (GPU offload is already excluded — the request pins num_gpu = 0)." >&2
   exit 1
 fi
-CAL=$(printf '%s' "$T1" | python3 -c "
-import hashlib,sys
-print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:32])")
+# The calibration value is the CANONICAL Layer-1 TAG for the probe seed — byte-for-byte what
+# consensus computes (`palw_ollama_l1_tag_from_response`), so an operator's printed line and the
+# pinned constant POW_L1_PALW_OLLAMA_CALIBRATION_V1 are the same object rather than two hashes
+# that merely correlate. kaspad enforces this at startup; printing it here is for diagnosis.
+CAL=$(printf '%s' "$R1" | python3 -c "
+import json,sys,hashlib,struct
+d=json.load(sys.stdin)
+r=d['response'].encode()
+h=hashlib.blake2b(key=b'misaka-l1-palw-ollama-v1', digest_size=64)
+h.update(b'output'); h.update(struct.pack('<Q', len(r))); h.update(r)
+tag=h.digest()+struct.pack('<I', d.get('prompt_eval_count',0))+struct.pack('<I', d.get('eval_count',0))
+print(tag.hex())")
 echo "== determinism probe OK =="
 echo "MISAKA-PALW-OLLAMA-CALIBRATION-v1 arch=$(uname -m) os=$(uname -s) ollama=$(curl -s "$URL/api/version" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])') model=${LIST_DIGEST:-unknown} probe=$CAL"
-echo "   Compare this LINE across fleet hosts of the same architecture: identical ⇒ the class is"
+echo "   This probe= value must equal POW_L1_PALW_OLLAMA_CALIBRATION_V1 in"
 echo "   calibrated; different ⇒ STOP (version or blob skew — fix before scheduling anything)."

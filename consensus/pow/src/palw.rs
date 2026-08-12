@@ -65,7 +65,8 @@ pub fn fixture_enabled() -> bool {
 /// under another name verifies fine — which is correct, the name is not the algorithm.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn verify_ollama_model_pin(url: &str, model: &str) -> Result<(), PowLayer0Error> {
-    native::verify_model_pin(url, model)
+    native::verify_model_pin(url, model)?;
+    native::verify_calibration(url, model)
 }
 
 /// The PALW Layer-1 tag for one (header, nonce) attempt. Deterministic across every conforming
@@ -275,9 +276,24 @@ mod native {
 
     fn verify_model_pin_once(url: &str, model: &str) -> Result<(), PowLayer0Error> {
         MODEL_PIN_VERIFIED
-            .get_or_init(|| verify_model_pin(url, model).map_err(|e| e.to_string()))
+            .get_or_init(|| verify_model_pin(url, model).and_then(|()| verify_calibration(url, model)).map_err(|e| e.to_string()))
             .clone()
             .map_err(PowLayer0Error::PalwUnavailable)
+    }
+
+    /// The class check: run the canonical probe through the ordinary tag path and compare against
+    /// `POW_L1_PALW_OLLAMA_CALIBRATION_V1`. Costs one inference, once per process, and is what
+    /// stops a runtime-drifted node from joining and silently rejecting everyone.
+    pub(super) fn verify_calibration(url: &str, model: &str) -> Result<(), PowLayer0Error> {
+        use kaspa_consensus_core::pow_layer0::{POW_L1_PALW_OLLAMA_CALIBRATION_V1, POW_L1_PALW_OLLAMA_PROBE_SEED_V1};
+        let tag = run_ollama(url, model, &POW_L1_PALW_OLLAMA_PROBE_SEED_V1)?;
+        let got = faster_hex::hex_string(&tag);
+        if got != POW_L1_PALW_OLLAMA_CALIBRATION_V1 {
+            return Err(PowLayer0Error::PalwUnavailable(format!(
+                "this runtime is not in the network's determinism class.\n  expected calibration {POW_L1_PALW_OLLAMA_CALIBRATION_V1}\n  got               {got}\n                 The model blob matches, so the difference is the Ollama build or the CPU architecture.                  Every block this node validated would disagree with the network. Match the fleet's runtime                  (see docs/testnet10-palw-rollout-runbook.md) or run a network pinned to this class."
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn verify_model_pin(url: &str, model: &str) -> Result<(), PowLayer0Error> {

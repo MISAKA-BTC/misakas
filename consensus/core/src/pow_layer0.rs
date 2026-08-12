@@ -200,6 +200,34 @@ pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 16;
 /// move with the split). Leaving it host-chosen lets a bigger VPS use its cores.
 pub const POW_L1_PALW_OLLAMA_NUM_GPU_V1: u32 = 0;
 
+/// The canonical **calibration probe** seed for `algo_id = 5`: a fixed 32-byte pattern, run
+/// through the ordinary PoW path (same prompt frame, same frozen options) so the probe measures
+/// exactly what block validation will do — not an approximation of it.
+pub const POW_L1_PALW_OLLAMA_PROBE_SEED_V1: [u8; 32] = [
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44,
+    0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+];
+
+/// The Layer-1 tag [`POW_L1_PALW_OLLAMA_PROBE_SEED_V1`] MUST produce, hex-encoded — the network's
+/// **determinism class, pinned**.
+///
+/// The blob pin above catches the wrong model. This catches everything else that decides the
+/// arithmetic: the Ollama build, the CPU architecture, any future change in how the runtime
+/// schedules the same kernels. Those cannot be pinned individually — pinning an Ollama version
+/// would break the fleet on every patch release, and the architecture is a property of the host —
+/// but their COMBINED effect is observable in one inference, so that is what is pinned.
+///
+/// Without this check a node with, say, a newer Ollama starts happily (its blob matches), then
+/// computes a different tag for every header: it rejects every honest block, has its own
+/// rejected, bans its peers, and the operator sees "invalid PoW" with nothing pointing at the
+/// cause. With it, the node refuses to start and says which value it produced. The cost is one
+/// inference per process start.
+///
+/// Measured 2026-08-12 on the x86-64 fleet class (Ollama 0.32.8, `misaka-palw-2b-f16`,
+/// AMD EPYC and Intel Broadwell agreeing byte-for-byte). An arm64 machine produces a different
+/// value and is therefore — correctly — refused: it is not in this network's class.
+pub const POW_L1_PALW_OLLAMA_CALIBRATION_V1: &str = "85afd857dcb8f71ac8a0fdc98f8aace1a4b13a256139424c196a1ed05657b5c0c590c8b93911f5f7c691602411f1702b14d0df3980c6e0ed61ca7ac876b5fefd4400000010000000";
+
 /// The **pinned model blob** for `algo_id = 5`, as Ollama reports it (`GET /api/tags`).
 ///
 /// The weights ARE the algorithm here: a different blob produces different greedy continuations,

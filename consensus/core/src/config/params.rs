@@ -1420,9 +1420,17 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// Mainnet keeps the 20M-KAS floors. None of these are genesis-block inputs.
 /// ADR-0024 step 3 (the VLT SHADOW fork) — the ONE constant a release cut has to choose.
 ///
-/// `u64::MAX` means "not scheduled", which is the shipped state. Setting it to a DAA height picks
-/// up everything the fork needs at once, because the three fields below are derived from it
-/// rather than edited independently:
+/// **GENESIS-ACTIVE (`0`) since the PALW re-genesis** (user decision 2026-08-12). The height
+/// 30_200_000 this constant used to carry was measured against the SUPERSEDED 1-bps chain's live
+/// tip; on the re-genesised chain, which restarts at DAA 0 and advances one block per 120 s, that
+/// height is ~115 years away — the fence, and with it the bond spend gate the 2026-08-11 audit
+/// called a P0, would have been silently inert forever. Since the chain is being rebuilt anyway
+/// there is no fleet to coordinate ahead of a future height: the fork ships in the genesis rules,
+/// which is strictly safer than any scheduled height (nothing to miss, nothing to race).
+///
+/// `u64::MAX` still means "not scheduled". Setting it to a DAA height picks up everything the
+/// fork needs at once, because the three fields below are derived from it rather than edited
+/// independently:
 ///
 /// * `vlt.vlt_shadow_activation_daa_score` — the overlay starts crediting, drawing committees,
 ///   paying the audit fee and slashing settled challenges;
@@ -1432,13 +1440,15 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// * `vlt.model_cost_table` — the registered profiles, without which every job mints zero and the
 ///   fork would cost a hard fork to discover it did nothing.
 ///
-/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX`: moving the VOTE
-/// is step 4, after the soak has measured what the weight is made of.
+/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX` even now: moving
+/// the VOTE is step 4, after the soak has measured what the weight is made of. Genesis-active
+/// step 3 means the overlay credits, draws committees, pays the audit fee and slashes settled
+/// challenges from block 1 — it does NOT mean compute weight decides finality yet.
 ///
 /// Choosing the height, the fleet-update procedure and the exit criteria are in
 /// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
-pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 30_200_000;
+pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 0;
 
 // SCHEDULED 2026-08-11. Live tip measured at 29_981_862 (`/info/blockdag` on the public
 // explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
@@ -2128,7 +2138,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by this merge.
-            ("testnet", TESTNET_PARAMS, "f6d315f773e8c0d0274791552eeb5f6cd1c85b77a7125ac721d3908dd7d144b0"),
+            ("testnet", TESTNET_PARAMS, "a044a6723956b7746f04ae71f1b987ce1aee366c0affc1df119bb8d5dfd6a0a5"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

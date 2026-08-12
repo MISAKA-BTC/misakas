@@ -11,13 +11,14 @@ startup genesis-mismatch guard, and nothing of the old chain (balances included)
 |---|---|
 | genesis hash | `477f85fc a51674f5 …` (`TESTNET_GENESIS`, "-palw" payload marker) |
 | PoW model | `misaka-palw-2b-f16` digest `d5d0bc552430…` (F16 profile; canonical GGUF sha `575eddc35774…` — created from the file, NOT pulled; the registry Q8_0 blob is non-portable across ISAs) |
-| consensus fingerprint | `f6d315f773e8c0d0274791552eeb5f6cd1c85b77a7125ac721d3908dd7d144b0` (pin it MATERIALIZED — `Params::from(net)` — per the 8208cd6 lesson) |
+| consensus fingerprint | `a044a6723956b7746f04ae71f1b987ce1aee366c0affc1df119bb8d5dfd6a0a5` (pin it MATERIALIZED — `Params::from(net)` — per the 8208cd6 lesson) |
 | PoW | `algo_id = 5` (PALW via **Ollama**) from genesis; fixture env **refused** on this network |
 | block rate | **one block per 120 s** (`target_time_per_block = 120_000`, ghostdag k = 1) — see §"Why 120 s" |
 | genesis difficulty | `0x207fffff` (p ≈ ½ per inference; DAA converges within the 150-block min window) |
 | block subsidy (year 1) | 444_562_014_000 sompi ≈ 4 445.62 MSK per block — the same 37.047 MSK/s rate |
 | emission fork | none: `crescendo_activation = always` (the 88_657_000 score belonged to the old chain) |
 | VLT windows | wall-clock preserved (table in `TESTNET_DNS_PARAMS`): 14-day evidence/unbond = 10_080/10_083 blocks, epochs 2 blocks (4 min), gate horizon 360 (12 h) / veto TTL 120 (4 h), settlement 600 (20 h) |
+| VLT shadow fork (ADR-0024 step 3) | **genesis-active** (`TESTNET_VLT_SHADOW_FORK_DAA_SCORE = 0`) — overlay crediting, committee draw, audit fee, challenge slashing AND the bond spend gate all from block 1; the weight fence (step 4) stays dormant |
 | DNS seeders | unchanged records (`seeder1-4.misakascan.com`, `seeder1-3.misakachain.com`, `seeder1.misakastake.com`) — the daemons must run this build to crawl the new chain |
 
 ## Why 120 s (the one parameter that cannot be forked later)
@@ -107,15 +108,20 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 
 ## Rollout order (single coordinated window — this is a flag day AND a re-genesis)
 
-0. **Decide the deploy that day** — two mutually exclusive t10 plans exist on this branch:
-   * **Plan A** (`docs/testnet10-shadow-release-DEPLOY.md`): VLT shadow release on the EXISTING
-     1-bps chain, fence DAA 30_200_000. No re-genesis; PoW stays algo 3.
-   * **Plan B** (THIS runbook): the PALW re-genesis — new chain, algo 5, one block per 120 s.
-     The shadow card's fence value is meaningless here; on the fresh chain set
-     `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` to a small height (e.g. 1_700 ≈ 2.4 days at 120 s)
-     or run the soak first and schedule later — the one-constant machinery works unchanged.
-   Deploying A then B later re-genesises twice; deploying B first obsoletes A's fence math.
-   Decide, then re-pin the materialized fingerprint for whichever constants ship.
+0. **The plan is decided (2026-08-12): Plan B, with Plan A folded into genesis.** Both used to be
+   live options on this branch — Plan A (`docs/testnet10-shadow-release-DEPLOY.md`) was the VLT
+   shadow release scheduled at DAA 30_200_000 on the OLD 1-bps chain, Plan B is this re-genesis.
+   They were mutually exclusive because A's fence is a height on a chain B throws away: carried
+   over unchanged it would have landed ~115 years past the new genesis, leaving the overlay AND
+   the bond spend gate (a 2026-08-11 audit P0) silently inert forever.
+   The resolution is better than either: `TESTNET_VLT_SHADOW_FORK_DAA_SCORE = 0`, so step 3 ships
+   **in the genesis rules**. A rebuilt chain is the one situation where a fork needs no scheduling
+   at all — no height to miss, no fleet to update ahead of it, and no window where challenge
+   slashing is on while the spend gate that protects the collateral is off.
+   What this does NOT include is step 4: `vlt_activation_daa_score` stays `u64::MAX`, so compute
+   weight still does not decide finality. The overlay credits, draws committees, pays the audit
+   fee and slashes settled challenges from block 1 — that is what "shadow" means, and the soak it
+   is meant to provide now starts at block 1 instead of after a flag day.
 1. Build this branch on every host: `cargo build --release -p kaspad --features evm -p misaminer`.
    The `--features evm` requirement is unchanged from the current fleet. Cut the release from a
    clean checkout of the release commit (a tree another session is editing poisons the build —
