@@ -69,6 +69,37 @@ pub fn verify_ollama_model_pin(url: &str, model: &str) -> Result<(), PowLayer0Er
     native::verify_calibration(url, model)
 }
 
+/// One deterministic generation against the pinned runtime — the same call the PoW path makes,
+/// exposed so anything else that wants a REPRODUCIBLE answer from this network's model shares one
+/// definition instead of writing its own HTTP client and its own idea of the options.
+///
+/// Returns `(response text, prompt_eval_count, eval_count)`.
+///
+/// `templated = false` reproduces the consensus request exactly (raw continuation — what a PoW
+/// attempt is). `templated = true` applies the model's own chat template, which is what a person
+/// asking a question wants; it is equally deterministic (the template lives inside the pinned
+/// blob) but it is a DIFFERENT computation, so any receipt must record which mode produced it.
+///
+/// `think` is `None` on the consensus path — the field is then omitted entirely, keeping the
+/// request byte-identical to what block validation sends. A caller that sets it is choosing
+/// whether this thinking-capable model reasons before answering, which changes the output and so
+/// belongs in that caller's receipt too.
+///
+/// Everything else stays at the consensus values on purpose — greedy (temperature 0), the CPU
+/// backend, the 4096-token context. Those are what make an answer reproducible on another machine
+/// of the same class, so they are not parameters.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn palw_generate(
+    url: &str,
+    model: &str,
+    prompt: &str,
+    num_predict: u32,
+    templated: bool,
+    think: Option<bool>,
+) -> Result<(String, u32, u32), PowLayer0Error> {
+    native::generate(url, model, prompt, num_predict, templated, think)
+}
+
 /// The PALW Layer-1 tag for one (header, nonce) attempt. Deterministic across every conforming
 /// node: fixture nodes derive it from the seed alone; real nodes replay the pinned inference.
 /// Real-mode results are cached by seed, so the header pipeline, block-level derivation and
@@ -330,45 +361,65 @@ mod native {
         Ok(())
     }
 
-    fn run_ollama(url: &str, model: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
-        use kaspa_consensus_core::pow_layer0::{
-            POW_L1_PALW_OLLAMA_NUM_GPU_V1, POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, palw_ollama_l1_tag_from_response,
-        };
-        let prompt = kaspa_consensus_core::pow_layer0::palw_pow_prompt_v1(seed);
-        // Consensus-frozen request shape: raw continuation (no chat template), greedy
-        // (temperature 0), the v1 decode budget, a fixed context size, and the CPU backend
-        // (`num_gpu = 0` — GPU and CPU produce different continuations; see the constant's doc).
-        // Every option here is part of what the network's runtime class reproduces — do not make
-        // these configurable.
-        let body = serde_json::json!({
+    /// The one place that speaks to the runtime. `templated` picks between the consensus request
+    /// (raw continuation) and the chat-templated form a human question needs.
+    pub(super) fn generate(
+        url: &str,
+        model: &str,
+        prompt: &str,
+        num_predict: u32,
+        templated: bool,
+        think: Option<bool>,
+    ) -> Result<(String, u32, u32), PowLayer0Error> {
+        use kaspa_consensus_core::pow_layer0::POW_L1_PALW_OLLAMA_NUM_GPU_V1;
+        let mut body = serde_json::json!({
             "model": model,
             "prompt": prompt,
-            "raw": true,
+            "raw": !templated,
             "stream": false,
             "options": {
                 "temperature": 0.0,
-                "num_predict": POW_L1_PALW_OLLAMA_NUM_PREDICT_V1,
+                "num_predict": num_predict,
                 "num_ctx": 4096,
                 "seed": 0,
                 "num_gpu": POW_L1_PALW_OLLAMA_NUM_GPU_V1,
             },
-        })
-        .to_string();
-        let started = Instant::now();
+        });
+        // Omitted, not defaulted, when the caller does not choose: the consensus request must stay
+        // exactly the bytes it has always been.
+        if let Some(think) = think {
+            body["think"] = serde_json::Value::Bool(think);
+        }
+        let body = body.to_string();
         let response = http_request("POST", url, "/api/generate", Some(&body), timeout())?;
         let doc: serde_json::Value = serde_json::from_slice(&response)
             .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse the Ollama response: {e}")))?;
         if let Some(err) = doc.get("error").and_then(|v| v.as_str()) {
             return Err(PowLayer0Error::PalwWorkerFailed(format!(
-                "Ollama refused the generate request: {err} (model {model} pulled? `ollama pull {model}`)"
+                "Ollama refused the generate request: {err} (is model {model} present? `ollama list`)"
             )));
         }
         let text = doc
             .get("response")
             .and_then(|v| v.as_str())
             .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("Ollama response lacks the `response` field".into()))?;
-        let prompt_eval = doc.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let eval = doc.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        Ok((
+            text.to_owned(),
+            doc.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            doc.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        ))
+    }
+
+    fn run_ollama(url: &str, model: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
+        use kaspa_consensus_core::pow_layer0::{
+            POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, palw_ollama_l1_tag_from_response,
+        };
+        let prompt = kaspa_consensus_core::pow_layer0::palw_pow_prompt_v1(seed);
+        // The consensus request shape lives in `generate`: raw continuation (no chat template),
+        // greedy, fixed context, CPU backend. What makes THIS call the consensus one is the pair
+        // it passes — the frozen v1 decode budget and raw mode.
+        let started = Instant::now();
+        let (text, prompt_eval, eval) = generate(url, model, &prompt, POW_L1_PALW_OLLAMA_NUM_PREDICT_V1, false, None)?;
         log::debug!("palw-ollama: inference attempt completed in {:?} (prompt_eval={prompt_eval} eval={eval})", started.elapsed());
         Ok(palw_ollama_l1_tag_from_response(text.as_bytes(), prompt_eval, eval))
     }
