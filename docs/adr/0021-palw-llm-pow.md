@@ -54,8 +54,9 @@ targets, the DAA, blue-work accounting (still the legacy 256-bit `calc_work`), a
 (top-256 projection) all work unmodified. One attempt simply costs ~1–3 s of Metal inference
 instead of nanoseconds, so the equilibrium difficulty is ~p≈1/attempts-per-10 s.
 
-**0.1 bps.** One block per 10 seconds, so one inference is a meaningful fraction of the block
-interval. `Bps<const BPS>` cannot express sub-integer rates; `BlockrateParams::new_deci_bps()`
+**0.1 bps on devnet.** One block per 10 seconds, so one inference is a meaningful fraction of the
+block interval. (The PUBLIC testnet's interval is 120 s — see "Block interval" below; devnet keeps
+the faster rate because its fixture tag costs nothing.) `Bps<const BPS>` cannot express sub-integer rates; `BlockrateParams::new_deci_bps()`
 spells out the same formulas at λ = 0.1 (k = 4, every-block window sampling, merge 360 /
 finality 4 320 / pruning 10 800 blocks, maturity 10 — wall-clock durations identical to the
 10-bps net). The devnet difficulty window is 264 blocks ≈ the same 2 641 s duration the sampled
@@ -105,7 +106,7 @@ per-block subsidy is `(per-second value × ttpb).div_ceil(1000)`.
   fingerprints moved because `pow_palw_activation` entered the params hash. Simnet/mainnet stay
   `never()`.
 * **testnet-10 is re-genesised too** (the "-bs3" precedent, now "-palw"): trivial genesis bits,
-  0.1-bps blockrate, `crescendo_activation = always` (the legacy 88_657_000 emission fork score
+  the 120 s blockrate, `crescendo_activation = always` (the legacy 88_657_000 emission fork score
   belonged to the superseded chain), and a wall-clock-preserving ÷100 re-sizing of every
   block/DAA/blue-score-denominated `TESTNET_DNS_PARAMS` window (inherited unchanged, the
   "14-day" unbond would have become ~3.8 years). A mid-chain BPS change was rejected: unlike

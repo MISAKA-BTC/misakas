@@ -2,7 +2,8 @@
 # misaka-palw-ollama-setup.sh — provision an Ubuntu VPS as a PALW-Ollama (algo_id = 5) node host.
 #
 # Run ON the VPS (as a sudo-capable user):
-#   MODEL=qwen3.5:2b bash misaka-palw-ollama-setup.sh
+#   GGUF=/tmp/qwen35-2b-f16.gguf bash misaka-palw-ollama-setup.sh
+# (MODEL defaults to the pinned class model `misaka-palw-2b-f16`, created from that GGUF.)
 #
 # What it does, idempotently:
 #   1. installs Ollama (official installer → systemd service `ollama` on 127.0.0.1:11434)

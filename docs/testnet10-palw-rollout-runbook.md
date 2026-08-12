@@ -1,7 +1,7 @@
 # testnet-10 PALW rollout runbook — the LLM-PoW re-genesis
 
 The release that makes the public testnet's proof-of-work one deterministic Qwen3.5-2B
-inference per attempt (ADR-0021), at one block per 10 seconds. This is a **re-genesis**, the
+inference per attempt (ADR-0021), at one block per two minutes. This is a **re-genesis**, the
 "-bs3" precedent: the new chain is cryptographically distinct, an un-wiped node hits the
 startup genesis-mismatch guard, and nothing of the old chain (balances included) carries over.
 
@@ -93,7 +93,7 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    digest — if that happens, the pin (and the network) must be updated deliberately, not silently.
 5. **Environment for kaspad AND misaminer**:
    ```
-   export MISAKA_PALW_OLLAMA_MODEL=qwen3.5:2b        # the fleet's pinned ref — one value everywhere
+   export MISAKA_PALW_OLLAMA_MODEL=misaka-palw-2b-f16   # the PINNED F16 class model (see the table)
    # export MISAKA_PALW_OLLAMA_URL=http://127.0.0.1:11434   # default; set only if changed
    ```
    kaspad checks at startup on PALW networks that the model env is set and the server is
@@ -110,9 +110,9 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 0. **Decide the deploy that day** — two mutually exclusive t10 plans exist on this branch:
    * **Plan A** (`docs/testnet10-shadow-release-DEPLOY.md`): VLT shadow release on the EXISTING
      1-bps chain, fence DAA 30_200_000. No re-genesis; PoW stays algo 3.
-   * **Plan B** (THIS runbook): the PALW re-genesis — new chain, algo 5, 0.1 bps. The shadow
-     card's fence value is meaningless here; on the fresh chain set
-     `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` to a small height (e.g. 20_000 ≈ 2.3 days at 0.1 bps)
+   * **Plan B** (THIS runbook): the PALW re-genesis — new chain, algo 5, one block per 120 s.
+     The shadow card's fence value is meaningless here; on the fresh chain set
+     `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` to a small height (e.g. 1_700 ≈ 2.4 days at 120 s)
      or run the soak first and schedule later — the one-constant machinery works unchanged.
    Deploying A then B later re-genesises twice; deploying B first obsoletes A's fence math.
    Decide, then re-pin the materialized fingerprint for whichever constants ship.
@@ -122,7 +122,7 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    the 8208cd6 lesson), into a private target dir.
 2. Rehearse locally first (any host with Ollama + the model pulled):
    ```
-   NET=testnet-10 IBD=1 MISAKA_PALW_OLLAMA_MODEL=qwen3.5:2b BLOCKS=6 \
+   NET=testnet-10 IBD=1 MISAKA_PALW_OLLAMA_MODEL=misaka-palw-2b-f16 BLOCKS=6 \
      bash scripts/misaka-palw-pow-e2e.sh
    ```
    PASS = mine → independent replay validation → fail-fast probe → fresh-node from-genesis IBD.
@@ -137,8 +137,9 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    misaminer --rpc=127.0.0.1:26210 --network-id=testnet-10 --wallet=<payout> --mine-when-not-synced
    ```
    Drop `--mine-when-not-synced` once the chain is moving (F3: it must never run in normal
-   operation). Expect sub-10 s blocks for the first ~150 blocks (fixed genesis difficulty
-   window), then the DAA walks onto the 120 s cadence.
+   operation). Expect blocks much faster than 120 s for the first ~150 (the genesis target is
+   the easiest representable and difficulty is fixed until the min window fills), then the DAA
+   walks onto the 120 s cadence.
 6. Verify the public path from a machine that is NOT in the fleet: start a kaspad with only the
    env set (no `--addpeer`) and watch it discover via DNS, IBD from genesis (one inference per
    header — ~1 s/header hot), and report the fleet's sink. That is the full public flow.
@@ -189,10 +190,10 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
   max target (p ≈ ½ per attempt) one miner therefore lands a block every ~10-30 s — **the 10 s
   cadence needs 2-3 miners**, and until it does the difficulty stays pinned at the floor (the DAA
   cannot make a max target easier). On a testnet that is acceptable; it does mean PoW contributes
-  no difficulty margin at the floor and the VLT overlay is the real finality. Size the fleet's miner count for
-  the 10 s target accordingly; the DAA absorbs whatever the real rate is.
-* **VLT**: bonding floors are unchanged (10 KAS); epochs are now 100 s wall-clock (10 blocks),
-  and the 14-day evidence/unbonding windows are the same 14 days they always were.
+  no difficulty margin at the floor and the VLT overlay is the real finality.
+* **VLT**: bonding floors are unchanged (10 KAS); epochs are 4 min of wall clock (2 blocks —
+  the floor, see the DnsParams table), and the 14-day evidence/unbonding windows are the same
+  14 days they always were.
 * **Rollback**: the old chain's datadir backups + the previous build restore the pre-PALW
   testnet exactly (its fingerprint pins are in git history); the two chains can never confuse
   each other (distinct genesis + fingerprint + the "-palw" marker).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# misaka-palw-pow-e2e.sh — PALW LLM-PoW (algo_id = 4, 0.1 bps) devnet smoke:
+# misaka-palw-pow-e2e.sh — PALW LLM-PoW single-host smoke (devnet algo_id = 4 / testnet algo_id = 5):
 #
 #   node-0 (miner target) ── p2p ── node-1 (verifier)          [both PALW]
 #                                   node-2 (NO PALW runtime)   [expects the fail-loud panic]
@@ -12,15 +12,19 @@
 #      fail-loud alternative to silently rejecting valid blocks and banning honest peers.
 #
 # Defaults run the MODEL-FREE fixture rules (MISAKA_PALW_POW_FIXTURE=1 for node-0/1/miner).
-# For the real pinned model instead: PALW_REAL=1 PALW_WORKER=<bin> MISAKA_PALW_GGUF=<gguf> —
-# expect ~1-3 s per attempt and size BLOCKS accordingly.
+# Real runtimes instead:
+#   * devnet worker algo (4): PALW_REAL=1 PALW_WORKER=<bin> MISAKA_PALW_GGUF=<gguf>
+#   * testnet Ollama algo (5): NET=testnet-10 MISAKA_PALW_OLLAMA_MODEL=misaka-palw-2b-f16
+# A real attempt costs seconds (measured 2-5 s on an M4 Pro CPU, 12-33 s on fleet VPS cores), so
+# size BLOCKS accordingly — the wait budget below already scales with it.
 #
 #   KASPAD_BIN / MISAMINER_BIN   binaries (default: ./target/release/{kaspad,misaminer})
 #   BLOCKS                       blocks to mine before declaring success (default 12)
 #   WORK_DIR                     state dir (default .misaka-palw-pow-e2e; wiped per run)
 #   NET                          devnet (default) or testnet-10. testnet-10 exercises the PUBLIC
-#                                network's params (PALW re-genesis) and REQUIRES PALW_REAL=1 —
-#                                the kaspad startup rail refuses the fixture outside devnet.
+#                                network's params (the PALW re-genesis, 120 s blocks) and requires
+#                                MISAKA_PALW_OLLAMA_MODEL with a running Ollama — the kaspad
+#                                startup rail refuses the fixture outside devnet.
 #   IBD=1                        after mining, boot a FRESH node-3 and require a full
 #                                from-genesis IBD (per-header PALW replay) to catch up.
 set -euo pipefail
@@ -41,7 +45,7 @@ case "$NET" in
     # t10 is the PALW-OLLAMA network (algo_id = 5): the runtime is a host-local Ollama server,
     # and the public-network params refuse the fixture.
     if [ -z "${MISAKA_PALW_OLLAMA_MODEL:-}" ]; then
-      echo "NET=testnet-10 requires MISAKA_PALW_OLLAMA_MODEL (e.g. qwen3.5:2b) with 'ollama serve' running" >&2
+      echo "NET=testnet-10 requires MISAKA_PALW_OLLAMA_MODEL=misaka-palw-2b-f16 (the pinned class model) with 'ollama serve' running" >&2
       exit 1
     fi
     OLLAMA_URL="${MISAKA_PALW_OLLAMA_URL:-http://127.0.0.1:11434}"
