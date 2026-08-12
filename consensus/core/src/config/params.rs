@@ -208,17 +208,59 @@ impl BlockrateParams {
     /// Wall-clock durations (12 h finality, 30 h pruning, 100 s maturity) are exactly the
     /// 10-bps network's — only the block-unit denominators shrink 100×.
     pub const fn new_deci_bps() -> Self {
+        Self::new_seconds_per_block(10, 4)
+    }
+
+    /// Blockrate params for the **120 s/block** PALW public testnet (decided 2026-08-12 from
+    /// fleet measurements; see docs/testnet10-palw-rollout-runbook.md §"Why 120 s").
+    ///
+    /// The block interval on a network whose PoW is an LLM inference is not a UX preference: a
+    /// validator replays every OTHER miner's winning attempt, so its steady-state load is
+    /// `(M-1)/M · r / T` for per-header replay cost `r`. Measured on the fleet (2B/F16, N = 16
+    /// decode tokens): r ≈ 12 s on an EPYC core, ≈ 26 s on the slowest host (Broadwell). T = 120 s
+    /// puts the slowest honest host at ≈ 15 %. And because the MODEL can be replaced by an
+    /// algo-id fork on the same chain while the BLOCK RATE cannot, the interval is chosen to also
+    /// absorb the Qwen3.6-35B-A3B runtime (r ≈ 30-60 s on ≥ 32 GB hosts ⇒ ≈ 17-33 %). At the
+    /// earlier 10 s the slowest host sat at 400 % — permanently behind, on any model.
+    ///
+    /// `ghostdag_k = 1` is `calculate_ghostdag_k(2 · NETWORK_DELAY_BOUND · (1/120), δ)`, asserted
+    /// against the real function in `two_minute_bps_constants_match_formulas`.
+    pub const fn new_two_minute_bps() -> Self {
+        Self::new_seconds_per_block(120, 1)
+    }
+
+    /// Shared constructor for sub-1-bps networks: the same formulas `Bps<BPS>` encodes, evaluated
+    /// at λ = 1/`secs` (which `Bps` cannot express — its const generic is an integer bps).
+    ///
+    /// Per-block sample rates floor at 1 (a rate below one block means "sample every block"), and
+    /// `max_block_parents` / `mergeset_size_limit` sit at the formula floors for every k this is
+    /// used with (k/2 < 10, 2k < 180). `ghostdag_k` is a parameter because `calculate_ghostdag_k`
+    /// is not a const fn; each caller's value is asserted against the real formula in tests.
+    pub const fn new_seconds_per_block(secs: u64, ghostdag_k: KType) -> Self {
+        use crate::config::constants::consensus::{
+            COINBASE_MATURITY_SECONDS, FINALITY_DURATION, MERGE_DEPTH_DURATION, PRUNING_DURATION,
+        };
+        let mergeset_size_limit: u64 = 180;
+        let finality_depth = FINALITY_DURATION / secs;
+        let merge_depth = MERGE_DEPTH_DURATION / secs;
+        // The prunality lower bound, exactly as `Bps::pruning_depth` decomposes it.
+        let lower_bound = finality_depth + merge_depth * 2 + 4 * mergeset_size_limit * ghostdag_k as u64 + 2 * ghostdag_k as u64 + 2;
+        let duration_term = PRUNING_DURATION / secs;
+        let pruning_depth = if lower_bound > duration_term { lower_bound } else { duration_term };
+        // Ceiling division: maturity must never round DOWN below its wall-clock intent (at
+        // 120 s/block, 100 s of maturity is one block, not zero).
+        let coinbase_maturity = (COINBASE_MATURITY_SECONDS + secs - 1) / secs;
         Self {
-            target_time_per_block: 10_000,
-            ghostdag_k: 4,
+            target_time_per_block: secs * 1000,
+            ghostdag_k,
             past_median_time_sample_rate: 1,
             difficulty_sample_rate: 1,
             max_block_parents: 10,
-            mergeset_size_limit: 180,
-            merge_depth: 360,
-            finality_depth: 4_320,
-            pruning_depth: 10_800,
-            coinbase_maturity: 10,
+            mergeset_size_limit,
+            merge_depth,
+            finality_depth,
+            pruning_depth,
+            coinbase_maturity,
         }
     }
 }
@@ -1444,45 +1486,49 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // silently off, not merely weaker. Keep the original "≥1 credited attestation in the anchor's
     // own epoch" guard. Raise this in lockstep with `min_active_validators`, never before.
     min_anchor_attesters: 1,
-    // ── PALW 0.1-bps re-sizing of every block/DAA/blue-score-denominated window ─────────────────
-    // PRODUCTION's windows are sized for 10 bps; inherited unchanged onto a 0.1-bps chain their
-    // wall-clock stretches ×100 (the 14-day unbond becomes ~3.8 YEARS, the ~55-min dead-branch
-    // auto-release becomes days). Every override below preserves the SECURITY semantics in wall
-    // clock, with two deliberate deviations noted inline. Mainnet (10 bps) keeps PRODUCTION as-is.
+    // ── PALW 120 s/block re-sizing of every block/DAA/blue-score-denominated window ────────────
+    // PRODUCTION's windows are sized for 10 bps (100 ms blocks); inherited unchanged onto a
+    // 120 s/block chain their wall clock stretches ×1200 (the 14-day unbond would be ~46 YEARS).
+    // Every override below preserves the SECURITY semantics in wall clock, with the deviations
+    // noted inline. Mainnet (10 bps) keeps PRODUCTION as-is.
     //
-    //   field                                PRODUCTION @10bps        here @0.1bps       wall clock
-    //   epoch_length_blocks                  100        (10 s)        10    (100 s)      ×10: 1-block
-    //     epochs would be degenerate (every block an epoch boundary); 100 s epochs keep the
-    //     attestation/snapshot cadence meaningful. attestation_* below move in lockstep.
-    //   max_reorg_horizon_blocks             300        (30 s)        30    (300 s)      ×10: a
-    //     3-block horizon is below plausible anticone depth even at k = 4; 30 blocks errs long.
-    //   evidence_window_blocks               12_096_000 (14 d)        120_960 (14 d)     exact
-    //   unbonding_period_blocks              +300                     120_990            U ≥ R+E ✓
-    //   dns_gate_horizon_blocks              18_000     (30 min)      1_800  (5 h)       3×TTL kept
-    //   dns_veto_ttl_daa_score               6_000      (10 min)      600    (100 min)   30× the
-    //     healthy anchor-to-tip distance (lag 10 + epoch 10 = 20), the same headroom ratio the
+    //   field                                 PRODUCTION @10bps      here @120 s     wall clock
+    //   epoch_length_blocks                   100        (10 s)      2   (4 min)     see note A
+    //   max_reorg_horizon_blocks              300        (30 s)      3   (6 min)     see note B
+    //   evidence_window_blocks                12_096_000 (14 d)      10_080 (14 d)   exact
+    //   unbonding_period_blocks               +300                   10_083          U ≥ R+E ✓
+    //   dns_gate_horizon_blocks               18_000     (30 min)    360 (12 h)      3×TTL kept
+    //   dns_veto_ttl_daa_score                6_000      (10 min)    120 (4 h)       30× the
+    //     healthy anchor-to-tip distance (lag 2 + epoch 2 = 4), the same headroom ratio the
     //     PRODUCTION comment derives (6_000 ≈ 30 × 200).
-    //   attestation_epoch_length_blue_score  100                      10
-    //   attestation_lag_blue_score           100                      10
-    //   attestation_anchor_backoff_blue_score 20                      2
-    //   stake_score_window_blue_score        1_500                    150   (= 15 epochs, the
+    //   attestation_epoch_length_blue_score   100                    2
+    //   attestation_lag_blue_score            100                    2
+    //   attestation_anchor_backoff_blue_score 20                     1               floor
+    //   stake_score_window_blue_score         1_500                  30  (= 15 epochs, the
     //     window-ceiling ratio the emergency_stake_margin calibration relies on)
-    //   bridge_finality_max_staleness        1_500      (150 s)       15    (150 s)      exact
-    //   coinbase_settlement_long_maturity    30_000     (~4.5 h)      3_000 (8.3 h)      > horizon
-    //     + TTL with the same margin shape (3_000 > 1_800 + 600).
-    //   reward_uniqueness_window_blocks      600 — INHERITED unchanged (block-count semantics; the
-    //     scan bound is cheap and shrinking it toward the mergeset limit would weaken it).
-    epoch_length_blocks: 10,
-    max_reorg_horizon_blocks: 30,
-    evidence_window_blocks: 120_960,
-    unbonding_period_blocks: 120_990,
-    dns_gate_horizon_blocks: 1_800,
-    dns_veto_ttl_daa_score: 600,
-    attestation_epoch_length_blue_score: 10,
-    attestation_lag_blue_score: 10,
-    attestation_anchor_backoff_blue_score: 2,
-    stake_score_window_blue_score: 150,
-    bridge_finality_max_staleness_daa_score: 15,
+    //   bridge_finality_max_staleness         1_500      (150 s)     2   (4 min)     ≥ 150 s
+    //   coinbase_settlement_long_maturity     30_000     (~4.5 h)    600 (20 h)      > horizon
+    //     + TTL with the same margin shape (600 > 360 + 120).
+    //   reward_uniqueness_window_blocks       600 — INHERITED unchanged (block-count semantics;
+    //     the scan bound is cheap and shrinking it toward the mergeset limit would weaken it).
+    //
+    // Note A: the ×1200 scaling would put epoch_length at 0 blocks, which is meaningless — 2 is
+    // the floor at which an epoch still contains a boundary and an interior. It is 4 min of wall
+    // clock (vs PRODUCTION's 10 s): epochs are now a coarse unit on this chain, which is the
+    // honest consequence of 120 s blocks, not a tuning choice.
+    // Note B: likewise floored. 3 blocks is 6 min — far longer in wall clock than PRODUCTION's
+    // 30 s, and comfortably above any plausible anticone depth at k = 1.
+    epoch_length_blocks: 2,
+    max_reorg_horizon_blocks: 3,
+    evidence_window_blocks: 10_080,
+    unbonding_period_blocks: 10_083,
+    dns_gate_horizon_blocks: 360,
+    dns_veto_ttl_daa_score: 120,
+    attestation_epoch_length_blue_score: 2,
+    attestation_lag_blue_score: 2,
+    attestation_anchor_backoff_blue_score: 1,
+    stake_score_window_blue_score: 30,
+    bridge_finality_max_staleness_daa_score: 2,
     // (superseded by the PALW table above; the historical rationale for inheriting 18_000/6_000
     // at 10 bps — measured ~110 DAA/min, ~2.5 h protection, ~55 min auto-release — is preserved
     // in the PRODUCTION_DNS_PARAMS comment.)
@@ -1490,11 +1536,11 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
     // Settlement soaks here first too, POLICY layer only (the consensus layer is unwired until
-    // the anchor gets its sequential per-chain-block view — see the field doc). 3_000 DAA >
-    // gate horizon (1_800) + veto TTL (600) with margin: a contested fork should resolve
-    // before either side's rewards go liquid through the fallback. At 0.1 bps this is ~8.3 h —
-    // long enough to bite, short enough to tolerate while the validator set is being restored.
-    coinbase_settlement_long_maturity_daa: 3_000,
+    // the anchor gets its sequential per-chain-block view — see the field doc). 600 DAA > gate
+    // horizon (360) + veto TTL (120) with margin: a contested fork should resolve before either
+    // side's rewards go liquid through the fallback. At 120 s/block this is ~20 h — long enough
+    // to bite, short enough to tolerate while the validator set is being restored.
+    coinbase_settlement_long_maturity_daa: 600,
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
@@ -1638,9 +1684,12 @@ pub const TESTNET_PARAMS: Params = Params {
     max_difficulty_target: MAX_DIFFICULTY_TARGET,
     max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
     past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
-    // PALW 0.1 bps: with `difficulty_sample_rate = 1` the window size IS the window duration in
-    // blocks — 264 × 10 s ≈ the same 2 641 s DAA window the sampled 661-slot window models on
-    // ≥1-bps networks (see the devnet preset for the full rationale).
+    // PALW 120 s/block: with `difficulty_sample_rate = 1` (every block sampled) the window size
+    // IS the window duration in blocks. 264 × 120 s ≈ 8.8 h of difficulty memory — longer in
+    // wall clock than the 2 641 s the shared constant models at ≥1 bps, and kept deliberately:
+    // the miner set is a provisioned fleet rather than an open hashrate market, so the ±6 %
+    // statistical stability of 264 samples is worth more than fast response. The 150-block
+    // `min_difficulty_window_size` still gives a ~5 h fixed-difficulty launch window.
     difficulty_window_size: 264,
     min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
     coinbase_payload_script_public_key_max_len: 150,
@@ -1684,11 +1733,11 @@ pub const TESTNET_PARAMS: Params = Params {
     max_block_level: 250,
     pruning_proof_m: 1000,
 
-    // PALW re-genesis: testnet-10 runs the 0.1-bps LLM-PoW blockrate — one block per 10 s,
-    // sized so one deterministic Qwen3.5-2B inference (~1-3 s/attempt) is a meaningful
-    // fraction of the block interval. See docs/testnet10-palw-rollout-runbook.md for the
-    // coordinated public rollout this implies.
-    blockrate: BlockrateParams::new_deci_bps(),
+    // PALW public testnet: ONE BLOCK PER 120 SECONDS. Sized from the fleet's measured per-header
+    // replay cost so the slowest honest validator stays near 15 % steady-state load today and
+    // still fits the future 35B-A3B algo fork (the model can fork on this chain; the block rate
+    // cannot). See `new_two_minute_bps` and the runbook's §"Why 120 s".
+    blockrate: BlockrateParams::new_two_minute_bps(),
 
     // kaspa-pq: this field only feeds the subsidy-month calc's pre-activation arm, which the
     // always-active crescendo below makes unreachable on this chain.
@@ -1922,6 +1971,70 @@ pub const DEVNET_PARAMS: Params = Params {
 mod consensus_params_id_tests {
     use super::*;
 
+    /// The 120 s/block constants the PUBLIC TESTNET runs must match the same formulas `Bps<BPS>`
+    /// encodes, evaluated at λ = 1/120, and the ghostdag k passed to the shared constructor must
+    /// be the one `calculate_ghostdag_k` actually returns — the one value the const fn cannot
+    /// compute for itself.
+    #[test]
+    fn two_minute_bps_constants_match_formulas() {
+        use crate::config::{bps::calculate_ghostdag_k, constants::consensus::*};
+        let b = BlockrateParams::new_two_minute_bps();
+        let lambda = 1.0f64 / 120.0;
+        assert_eq!(b.target_time_per_block, 120_000);
+        assert_eq!(b.ghostdag_k as u64, calculate_ghostdag_k(2.0 * NETWORK_DELAY_BOUND as f64 * lambda, GHOSTDAG_TAIL_DELTA));
+        assert_eq!(b.past_median_time_sample_rate, 1);
+        assert_eq!(b.difficulty_sample_rate, 1);
+        assert_eq!(b.max_block_parents, 10);
+        assert_eq!(b.mergeset_size_limit, 180);
+        // Duration-scaled depths: 12 h finality, 1 h merge, 100 s maturity — the SAME wall clock
+        // the 10-bps mainnet has, which is the whole point of scaling by duration.
+        assert_eq!(b.finality_depth, FINALITY_DURATION / 120);
+        assert_eq!(b.merge_depth, MERGE_DEPTH_DURATION / 120);
+        assert_eq!(b.finality_depth * 120, FINALITY_DURATION, "12 h exactly");
+        assert_eq!(b.coinbase_maturity, 1, "100 s of maturity rounds UP to one 120 s block");
+        // Pruning: at this rate the prunality lower bound EXCEEDS the duration term, so the bound
+        // wins — recompute both sides rather than trusting the constant.
+        let lower_bound =
+            b.finality_depth + b.merge_depth * 2 + 4 * b.mergeset_size_limit * b.ghostdag_k as u64 + 2 * b.ghostdag_k as u64 + 2;
+        assert!(lower_bound > PRUNING_DURATION / 120, "at 120 s the bound, not the 30 h duration, sets pruning depth");
+        assert_eq!(b.pruning_depth, lower_bound);
+        // Pruning depth still buys MORE than the 30 h the duration term intends.
+        assert!(b.pruning_depth * 120 > PRUNING_DURATION);
+        // The public testnet actually runs this, with the Ollama PALW algo active from genesis.
+        assert_eq!(TESTNET_PARAMS.blockrate.target_time_per_block, 120_000);
+        assert!(TESTNET_PARAMS.pow_palw_ollama_activation.is_active(0));
+        assert_eq!(TESTNET_PARAMS.target_time_per_block_history().after(), 120_000);
+        // Emission holds the 37.047 MSK/s rate: one 120 s block pays 120× the per-second value.
+        assert_eq!(TESTNET_PARAMS.bps(), 1, "integer bps floors at 1; exact rate work uses ttpb");
+    }
+
+    /// The VLT windows the public testnet runs are the wall-clock equivalents of PRODUCTION's,
+    /// not PRODUCTION's block counts. A regression here is silent and expensive: inherited
+    /// unchanged, the "14-day" unbonding window would be ~46 years at 120 s/block.
+    #[test]
+    fn testnet_vlt_windows_preserve_production_wall_clock() {
+        let t = TESTNET_DNS_PARAMS;
+        let secs = TESTNET_PARAMS.blockrate.target_time_per_block / 1000;
+        assert_eq!(secs, 120);
+        // 14 days of evidence/unbonding, exactly (the security property, in wall clock).
+        assert_eq!(t.evidence_window_blocks * secs, 14 * 86_400);
+        // Unbonding = evidence + the reorg horizon, so ADR-0009's U ≥ R + E still holds.
+        assert_eq!(t.unbonding_period_blocks, t.evidence_window_blocks + t.max_reorg_horizon_blocks);
+        assert!(t.unbonding_period_blocks >= t.max_reorg_horizon_blocks + t.evidence_window_blocks);
+        // The veto TTL keeps PRODUCTION's ~30× headroom over a healthy anchor-to-tip distance,
+        // and the gate horizon stays 3× the TTL.
+        let healthy_anchor_distance = t.attestation_lag_blue_score + t.epoch_length_blocks;
+        assert!(t.dns_veto_ttl_daa_score >= 25 * healthy_anchor_distance);
+        assert_eq!(t.dns_gate_horizon_blocks, 3 * t.dns_veto_ttl_daa_score);
+        // Settlement must outlast a contested fork: horizon + TTL, with margin.
+        assert!(t.coinbase_settlement_long_maturity_daa > t.dns_gate_horizon_blocks + t.dns_veto_ttl_daa_score);
+        // The stake-score window stays 15 epochs — the ratio emergency_stake_margin is calibrated
+        // against (ADR-0018 / the 2026-07-19 incident note).
+        assert_eq!(t.stake_score_window_blue_score, 15 * t.attestation_epoch_length_blue_score);
+        // Bridge staleness keeps at least PRODUCTION's 150 s.
+        assert!(t.bridge_finality_max_staleness_daa_score * secs >= 150);
+    }
+
     /// The hand-evaluated 0.1-bps blockrate constants must match the same formulas `Bps<BPS>`
     /// encodes, evaluated at λ = 0.1 (`Bps` itself cannot express a sub-integer rate). Guards the
     /// spelled-out values in `new_deci_bps` against drift in the shared duration constants.
@@ -1953,6 +2066,11 @@ mod consensus_params_id_tests {
         assert_eq!(b.pruning_depth as f64, lambda * PRUNING_DURATION as f64);
         // The devnet preset actually runs these params with PALW active from genesis.
         assert_eq!(DEVNET_PARAMS.blockrate.target_time_per_block, 10_000);
+        // Unchanged by the shared-constructor refactor: the hand-written table this replaced.
+        assert_eq!(b.merge_depth, 360);
+        assert_eq!(b.finality_depth, 4_320);
+        assert_eq!(b.pruning_depth, 10_800);
+        assert_eq!(b.coinbase_maturity, 10);
         assert!(DEVNET_PARAMS.pow_palw_activation.is_active(0));
         // And the integer-bps view floors at 1 (the raw division is 0 — the reason emission
         // consumes `target_time_per_block_history` and sizing consumers get the floored view).
@@ -2003,12 +2121,14 @@ mod consensus_params_id_tests {
         // elsewhere).
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "9110ee1c8bedfc8cd0e32336a7adeeb2940752737e385d1c69b65aee662334c2"),
-            // Moved again by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
+            // Moved once more when the block interval was set to its final 120 s (2026-08-12) —
+            // the blockrate, the DAA window duration and every VLT window are in the hash.
+            // Moved before that by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
             // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by this merge.
-            ("testnet", TESTNET_PARAMS, "2d2258cc51a3b2216bab6d93b0aec2332322903e5e7414db15ad8112adced671"),
+            ("testnet", TESTNET_PARAMS, "f6d315f773e8c0d0274791552eeb5f6cd1c85b77a7125ac721d3908dd7d144b0"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

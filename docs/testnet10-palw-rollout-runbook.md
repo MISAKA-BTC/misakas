@@ -11,14 +11,37 @@ startup genesis-mismatch guard, and nothing of the old chain (balances included)
 |---|---|
 | genesis hash | `477f85fc a51674f5 …` (`TESTNET_GENESIS`, "-palw" payload marker) |
 | PoW model | `misaka-palw-2b-f16` digest `d5d0bc552430…` (F16 profile; canonical GGUF sha `575eddc35774…` — created from the file, NOT pulled; the registry Q8_0 blob is non-portable across ISAs) |
-| consensus fingerprint | `2d2258cc51a3b2216bab6d93b0aec2332322903e5e7414db15ad8112adced671` (pin it MATERIALIZED — `Params::from(net)` — per the 8208cd6 lesson) |
+| consensus fingerprint | `f6d315f773e8c0d0274791552eeb5f6cd1c85b77a7125ac721d3908dd7d144b0` (pin it MATERIALIZED — `Params::from(net)` — per the 8208cd6 lesson) |
 | PoW | `algo_id = 5` (PALW via **Ollama**) from genesis; fixture env **refused** on this network |
-| block rate | 0.1 bps (`target_time_per_block = 10 s`, ghostdag k = 4) |
+| block rate | **one block per 120 s** (`target_time_per_block = 120_000`, ghostdag k = 1) — see §"Why 120 s" |
 | genesis difficulty | `0x207fffff` (p ≈ ½ per inference; DAA converges within the 150-block min window) |
-| block subsidy (year 1) | 37_046_834_500 sompi ≈ 370.47 MSK per block — the same 37.047 MSK/s rate |
+| block subsidy (year 1) | 444_562_014_000 sompi ≈ 4 445.62 MSK per block — the same 37.047 MSK/s rate |
 | emission fork | none: `crescendo_activation = always` (the 88_657_000 score belonged to the old chain) |
-| VLT windows | wall-clock preserved (÷100 table in `TESTNET_DNS_PARAMS`): 14-day evidence/unbond = 120_960/120_990 blocks, epochs 10 blocks (100 s), gate horizon 1_800 / veto TTL 600 |
+| VLT windows | wall-clock preserved (table in `TESTNET_DNS_PARAMS`): 14-day evidence/unbond = 10_080/10_083 blocks, epochs 2 blocks (4 min), gate horizon 360 (12 h) / veto TTL 120 (4 h), settlement 600 (20 h) |
 | DNS seeders | unchanged records (`seeder1-4.misakascan.com`, `seeder1-3.misakachain.com`, `seeder1.misakastake.com`) — the daemons must run this build to crawl the new chain |
+
+## Why 120 s (the one parameter that cannot be forked later)
+
+On a chain whose PoW *is* an inference, the block interval is a capacity decision, not a UX one.
+A validator replays every OTHER miner's winning attempt, so its steady-state load is
+`(M-1)/M · r / T` — per-header replay cost `r` over interval `T`. Fleet measurements
+(2B/F16 profile, N = 16 decode tokens, `num_gpu = 0`):
+
+| profile | r (slowest honest host) | load at T = 10 s | at T = 60 s | **at T = 120 s** |
+|---|---|---|---|---|
+| Qwen3.5-2B F16 (today) | ~26 s (Broadwell); ~12 s (EPYC) | 173 % — impossible | 29 % | **~15 %** |
+| Qwen3.6-35B-A3B (future algo fork, ≥ 32 GB hosts) | ~30-60 s (est., prefix-cached) | — | 33-67 % | **17-33 %** |
+
+The **model** can be replaced by an algo-id fork on the same chain (that is what `algo_id` is
+for). The **block rate** cannot: there is no forked-blockrate machinery, so changing it later
+means another re-genesis. T = 120 s is therefore chosen as the smallest interval that keeps the
+slowest honest validator comfortable on today's 2B profile *and* still fits the 35B runtime the
+network intends to adopt — at 60 s the 35B fork would arrive at 33-67 % load with no headroom for
+the VLT overlay, RPC and seeder work these hosts also carry.
+
+Consequences to plan for: 35B adoption additionally needs **≥ 32 GB RAM hosts** (its Q4_K_M blob
+is 23.9 GB — the current 11/15/23 GB fleet cannot hold it), and at 120 s the DAA window (264
+blocks) is 8.8 h of difficulty memory, so a hashrate change takes that long to be fully absorbed.
 
 ## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11)
 
@@ -101,7 +124,7 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    ```
    Drop `--mine-when-not-synced` once the chain is moving (F3: it must never run in normal
    operation). Expect sub-10 s blocks for the first ~150 blocks (fixed genesis difficulty
-   window), then the DAA walks onto the 10 s cadence.
+   window), then the DAA walks onto the 120 s cadence.
 6. Verify the public path from a machine that is NOT in the fleet: start a kaspad with only the
    env set (no `--addpeer`) and watch it discover via DNS, IBD from genesis (one inference per
    header — ~1 s/header hot), and report the fleet's sink. That is the full public flow.
@@ -137,8 +160,8 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
 
 ## Operating notes
 
-* **IBD cost grows with the chain**: a day of chain is 8_640 headers ≈ 2-3 h of replay on one
-  host. Before the chain is months old, ship either the Open-then-Audit sampled-audit tier or
+* **IBD cost grows with the chain**: a day of chain is 720 headers ≈ 2.5-5 h of replay on one
+  host (the 120 s interval cut this 12× versus the earlier 10 s plan). Before the chain is months old, ship either the Open-then-Audit sampled-audit tier or
   trusted-checkpoint IBD (ADR-0021 consequences).
 * **Miners**: one attempt = one `/api/generate` call; Ollama keeps the model RESIDENT between
   calls (its keep_alive default), so there is no per-attempt model-load cost. Measured on an

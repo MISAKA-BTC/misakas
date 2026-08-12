@@ -1,4 +1,4 @@
-# ADR-0021: PALW LLM proof-of-work (`algo_id = 4`) at 0.1 bps
+# ADR-0021: PALW LLM proof-of-work (`algo_id = 4`/`5`), at one block per 120 s
 
 Status: accepted (devnet AND public testnet-10 genesis-active on the `palw-llm-pow` branch —
 t10 via the "-palw" re-genesis, docs/testnet10-palw-rollout-runbook.md; mainnet inert)
@@ -88,6 +88,16 @@ pipeline, block-level derivation and proof validation pay one inference per atte
 worker inference per nonce, clock-derived start so rigs don't duplicate attempts, 20 s template
 refresh to stay ahead of the moving past-median) — the rayon all-nonce scan would fork-bomb
 worker subprocesses.
+
+**Block interval (decided 2026-08-12, T = 120 s).** Validator load is `(M-1)/M · r / T` for
+per-header replay `r`; measured r ≈ 12-26 s for the 2B/F16 profile at N = 16 decode tokens, and
+estimated 30-60 s for the Qwen3.6-35B-A3B runtime this network intends to adopt by algo fork.
+Because the model forks on-chain and the block rate does not, T is chosen to fit BOTH: ~15 % load
+today, 17-33 % after the 35B fork. `BlockrateParams::new_seconds_per_block` derives every
+dependent depth from the same duration constants `Bps<BPS>` uses, so the 12 h finality / 1 h merge
+/ 100 s maturity wall clocks are unchanged; `TESTNET_DNS_PARAMS` re-sizes every VLT window the
+same way (14-day evidence stays 14 days). Emission is rate-preserving by construction — the
+per-block subsidy is `(per-second value × ttpb).div_ceil(1000)`.
 
 ## Consequences
 

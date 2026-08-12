@@ -170,7 +170,16 @@ pub const POW_L1_PALW_OLLAMA_V1_DOMAIN: &[u8] = b"misaka-l1-palw-ollama-v1";
 /// `options.num_predict` for every PoW inference: the number of NEW tokens Ollama may decode
 /// (its `num_predict` is decode-only, unlike the worker's total ceiling). A frozen consensus
 /// constant of the v1 algorithm, exactly like [`POW_L1_PALW_N_PREDICT_V1`].
-pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 48;
+///
+/// **16, chosen with the 120 s block interval (2026-08-12).** This constant IS the per-header
+/// verification cost every validator pays forever, so it is a capacity parameter, not a quality
+/// one: 48 tokens measured ~26-60 s of replay on the slowest fleet host, 16 measures ~12-26 s.
+/// Shrinking it does not weaken the proof — the work a miner must do is set by the DIFFICULTY,
+/// which the DAA re-derives for whatever an attempt costs; what the token count sets is the
+/// floor cost of *checking* someone else's answer, and that floor is what decides whether a
+/// modest host can stay on the network. Fewer decode steps also mean fewer near-tie argmax
+/// draws, i.e. a slightly wider cross-implementation determinism margin.
+pub const POW_L1_PALW_OLLAMA_NUM_PREDICT_V1: u32 = 16;
 
 /// `options.num_gpu` for every PoW inference: **0 — compute on the CPU backend, always.**
 ///

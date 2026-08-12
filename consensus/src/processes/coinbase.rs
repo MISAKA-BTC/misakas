@@ -538,6 +538,9 @@ mod tests {
         // Year-1 per-block subsidy at 0.1 BPS (10 s) = table[0] * 10 ≈ 370.468 KAS — the same
         // 3.70468.. KAS/s emission RATE, paid in 100×-larger, 100×-rarer blocks.
         const YEAR1_PER_BLOCK_DECI_BPS: u64 = 37046834500;
+        // Year-1 per-block subsidy at 120 s/block (the PALW public testnet) = table[0] * 120 ≈
+        // 4445.62 KAS. Same rate again, in 1200×-larger, 1200×-rarer blocks.
+        const YEAR1_PER_BLOCK_TWO_MINUTE: u64 = 444562014000;
 
         for network_id in NetworkId::iter() {
             let params: Params = network_id.into();
@@ -551,9 +554,19 @@ mod tests {
             // Genesis / year-1 subsidy.
             let expected_year1 = (SUBSIDY_BY_MONTH_TABLE[0] * ttpb).div_ceil(1000);
             assert_eq!(cbm.calc_block_subsidy(0), expected_year1, "{network_id}: genesis subsidy");
+            // The invariant is the per-SECOND emission rate, not any per-block figure: a block
+            // interval change must move the per-block subsidy in exact proportion, which is what
+            // makes the 10 s → 120 s decision emission-neutral.
+            assert_eq!(
+                expected_year1 * 1000 / ttpb,
+                SUBSIDY_BY_MONTH_TABLE[0],
+                "{network_id}: year-1 emission rate must stay {} sompi/s",
+                SUBSIDY_BY_MONTH_TABLE[0]
+            );
             match ttpb {
                 100 => assert_eq!(expected_year1, YEAR1_PER_BLOCK_10BPS, "{network_id}: year-1 per-block subsidy"),
                 10_000 => assert_eq!(expected_year1, YEAR1_PER_BLOCK_DECI_BPS, "{network_id}: year-1 per-block subsidy"),
+                120_000 => assert_eq!(expected_year1, YEAR1_PER_BLOCK_TWO_MINUTE, "{network_id}: year-1 per-block subsidy"),
                 other => panic!("{network_id}: unexpected target time per block {other}"),
             }
 
