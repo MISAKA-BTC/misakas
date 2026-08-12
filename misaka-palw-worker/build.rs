@@ -52,5 +52,14 @@ fn main() {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
     }
-    println!("cargo:rustc-link-lib=c++");
+    // The C++ runtime ggml is compiled against differs by platform, and getting it wrong is a
+    // link failure, not a silent one: Apple's toolchain ships libc++, a stock Linux toolchain
+    // links libstdc++ and has no libc++ at all. Picking by target keeps ONE build.rs able to
+    // produce both the Metal profile (macOS) and the portable CPU profile the Linux fleet audits
+    // within — which is the whole point of the CPU profile existing.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=stdc++");
+    }
 }
