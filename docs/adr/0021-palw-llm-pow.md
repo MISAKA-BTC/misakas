@@ -1,7 +1,11 @@
 # ADR-0021: PALW LLM proof-of-work (`algo_id = 4`/`5`), at one block per 120 s
 
-Status: accepted (devnet AND public testnet-10 genesis-active on the `palw-llm-pow` branch —
-t10 via the "-palw" re-genesis, docs/testnet10-palw-rollout-runbook.md; mainnet inert)
+Status: **SUPERSEDED FOR REWARD/POW ACTIVATION** — historical implementation record only.
+The Ollama path was disabled by `9736aec` after its output-text commitment was empirically shown
+forgeable without model execution. The worker full-logits path is now experimental and limited to
+devnet, shadow mode and consensus-visible zero-credit observation. See
+[`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) for the current safety model,
+namespace rules and activation gates. Mainnet remains inert.
 Date: 2026-08-11
 Relates to: ADR-0007 (layered PoW), ADR-0008 (64-byte pre-PoW hash), ADR-0024 (verified-LLM
 token-weighted BFT), `docs/PALW` Open-then-Audit paper (rev 1.3), `misaka-palw-worker`
@@ -14,12 +18,14 @@ overlay's voting power is real Qwen3.5-2B inference, replay-verified byte-for-by
 hash race (`algo_id = 3` BLAKE2b∥SHA3 on t10, kHeavyHash on devnet): the electricity buys
 nothing but lottery tickets.
 
-The Open-then-Audit paper's accounting gives the missing piece: a worker bound to **one
-execution**, committing to a checkpointed trace whose forgery is as hard as the computation, with
-full replay as the verification regime when the interval count is small (`q ≤ 18` ⇒ verify
-everything). A PoW attempt is exactly that degenerate case: a tiny, fixed-shape job whose entire
-trace is cheap to replay relative to block time — no sampling, no beacon, no bonded-replayer
-machinery needed, because every validating node replays every attempt that becomes a block.
+The Open-then-Audit paper's accounting motivated binding a worker to **one execution** and using
+full canonical replay when the interval count is small (`q ≤ 18` ⇒ verify everything). Later
+review established an important limit: a trace root is an audited commitment, not a cryptographic
+proof that computation occurred. A claimant can publish an arbitrary root; making it survive an
+honest replay requires reproducing the canonical logits or evading/corrupting the audit process.
+Any credit therefore depends on committee independence, bond/slashing, challenge windows and
+reward maturity. Full replay also costs approximately one primary execution and is not described
+as cheap verification in the current design.
 
 ## Decision
 
@@ -37,9 +43,12 @@ l1_tag  = output_commitment ∥ gemm_trace_root ∥ operation_schedule_commitmen
           ∥ prefill_tokens ∥ decode_tokens                  (200 bytes)
 ```
 
-`gemm_trace_root` chains a digest of the full logits vector of every decode call; nothing short
-of running the pinned model on the pinned kernels reproduces it. Mining is inference; a verifier
-re-runs the worker (`verify` **is** `self-job` recomputed) and recomputes the finalizer.
+`gemm_trace_root` chains a digest of the full logits vector of every decode call. This legacy name
+does not imply that every GEMM intermediate is committed; the current design calls the value
+`full_logits_sequence_root`. An unaudited claimant can announce an arbitrary value. A verifier
+re-runs the worker (`verify` **is** `self-job` recomputed), and only an exact canonical replay or a
+failure of the verification process can make that claim survive. This ADR's direct-PoW activation
+is superseded; the commitment remains available only for staged zero-credit evaluation.
 
 **Grinding closure — why the seed binds `timestamp`.** For cheap tags the finalizer's own
 `timestamp`/`nonce` binding suffices: re-hashing after a timestamp tweak costs the same as a new
@@ -115,14 +124,17 @@ per-block subsidy is `(per-second value × ttpb).div_ceil(1000)`.
 * kaspad refuses to start on a PALW network without the worker runtime (actionable startup
   error instead of a first-header panic), and refuses `MISAKA_PALW_POW_FIXTURE=1` outside
   devnet — a mis-exported fixture var must not mint a private fork of the public testnet.
-* **Addendum (user decision 2026-08-11): testnet-10 runs the OLLAMA flavor, `algo_id = 5`.**
+* **Historical addendum (2026-08-11; superseded by `9736aec`): testnet-10 ran the OLLAMA flavor,
+  `algo_id = 5`.**
   The public fleet is Ubuntu VPSes that cannot run the Metal-pinned worker; the runtime is a
   host-local Ollama serving the pinned Qwen model (`MISAKA_PALW_OLLAMA_MODEL`). Same seed,
   prompt and grinding closure as algo 4; the tag commits to the greedy response bytes + token
-  counts because the API exposes no per-decode logits — weaker binding, still model-work-priced,
-  and the determinism class is (Ollama version, model digest, architecture), enforced
-  operationally by `scripts/misaka-palw-ollama-setup.sh`'s calibration line. Devnet deliberately
-  keeps algo 4 (full `gemm_trace_root` binding) as the stronger reference implementation.
+  counts because the API exposes no per-decode logits — at the time this was assumed to remain
+  model-work-priced,
+  and the determinism class was described as (Ollama version, model digest, architecture), enforced
+  operationally by `scripts/misaka-palw-ollama-setup.sh`'s calibration line. Measurement later
+  showed that the response collapsed to a low-entropy constant and was forgeable without model
+  execution; this path MUST remain disabled and MUST NOT be used as a determinism calibration.
 * IBD replays one inference per header (~1–3 s): a full day of chain is ~8 640 blocks ≈ hours of
   inference. Acceptable for devnet; a public rollout needs the paper's sampled-audit tier or
   trusted-checkpoint IBD before the chain is long.
