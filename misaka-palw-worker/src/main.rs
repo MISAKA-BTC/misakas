@@ -44,10 +44,10 @@ use kaspa_consensus_core::palw_v2::{
     canonical_compute_units_v2, cu_ruleset_id_v2, decode_framed_borsh, expected_schedule_commitment_v2,
     golden_vector_root_unpopulated_v2, job_request_hash_v2, logits_event_hash_v2, output_commitment_v2,
     output_token_ids_hash_v2, read_framed, rendered_output_hash_v2, shape_profile_id_v2, tokenizer_id_v2_for_gguf,
-    trace_scheme_id_v2, write_framed, PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2,
-    PalwLogitsDtypeV2, PalwResultProjectionV2, PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2,
-    PalwTraceCommitmentV2, PalwTracePhaseV2, PalwTraceSummaryV2, PALW_JOB_WIRE_VERSION_V2,
-    PALW_RUNTIME_MANIFEST_VERSION_V2, PALW_V2_MAX_FRAME_BYTES,
+    trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2, PalwGoldenVectorSetV2, PalwJobContextV2,
+    PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2,
+    PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2,
+    PalwTraceSummaryV2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V2, PALW_V2_MAX_FRAME_BYTES,
 };
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
@@ -324,9 +324,11 @@ fn ggml_flag(v: &str) -> bool {
 
 /// Assembles this binary's `RuntimeManifestV2` from measured values: build-time hashes of the
 /// exact CMake cache and static libraries linked (captured by `build.rs`), the pinned model
-/// identity, and the live self-hash. Fields a Land-stage build cannot verify carry the literal
-/// `"unpinned"` — visible, hash-bound, and a mandatory rejection at class registration.
-fn runtime_manifest_v2(worker_sha: [u8; 32]) -> PalwRuntimeManifestV2 {
+/// identity, and the live self-hash. `golden_root` is the registered set's canonical root, or
+/// the `"unpopulated"` sentinel when none is registered. Fields a Land-stage build cannot
+/// verify carry the literal `"unpinned"` — visible, hash-bound, and a mandatory rejection at
+/// class registration.
+fn runtime_manifest_v2(worker_sha: [u8; 32], golden_root: Hash64) -> PalwRuntimeManifestV2 {
     PalwRuntimeManifestV2 {
         version: PALW_RUNTIME_MANIFEST_VERSION_V2,
         target_arch: std::env::consts::ARCH.to_string(),
@@ -366,7 +368,7 @@ fn runtime_manifest_v2(worker_sha: [u8; 32]) -> PalwRuntimeManifestV2 {
             h.finalize().into()
         },
         trace_scheme_id: trace_scheme_id_v2(),
-        golden_vector_root: golden_vector_root_unpopulated_v2(),
+        golden_vector_root: golden_root,
     }
 }
 
@@ -401,6 +403,205 @@ fn pinned_model_path_v2() -> PathBuf {
         ));
     }
     path
+}
+
+// ---- golden vectors: registration, boot self-test, generation --------------------------------
+
+/// Points at the registered golden vector set (framed Borsh `PalwGoldenVectorSetV2`). When set,
+/// its canonical root replaces the `"unpopulated"` sentinel inside `RuntimeManifestV2` — so the
+/// manifest hash CHANGES when goldens are registered, which is intended: a runtime with and
+/// without a registered boot gate are different runtimes.
+const PALW_GOLDEN_ENV: &str = "MISAKA_PALW_GOLDEN";
+
+/// Loads, validates and identity-checks a golden set. A set generated under another class,
+/// model or shape is refused — vectors must not certify a runtime they were not made under.
+fn load_golden_set(path: &str) -> PalwGoldenVectorSetV2 {
+    let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("cannot open golden set at {path}: {e}")));
+    let payload = read_framed(&mut file, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
+    let set: PalwGoldenVectorSetV2 =
+        decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
+    set.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
+    let checks: [(&str, Hash64, Hash64); 3] = [
+        ("runtime_class_id", runtime_class_id(), set.runtime_class_id),
+        ("model_profile_id", model_profile_id(), set.model_profile_id),
+        ("shape_profile_id", shape_profile_id_v2(&shape_string_v2()), set.shape_profile_id),
+    ];
+    for (field, ours, theirs) in checks {
+        if ours != theirs {
+            die(format!(
+                "golden set at {path} rejected: {field} mismatch — the set was generated under a runtime this worker is not (ours {}, set {})",
+                hex(ours),
+                hex(theirs)
+            ));
+        }
+    }
+    set
+}
+
+/// The golden root the manifest carries: the registered set's canonical root when
+/// `MISAKA_PALW_GOLDEN` is set, else the explicit `"unpopulated"` sentinel.
+fn resolve_golden_root() -> Hash64 {
+    match std::env::var(PALW_GOLDEN_ENV) {
+        Ok(path) => load_golden_set(&path).golden_root(),
+        Err(_) => golden_vector_root_unpopulated_v2(),
+    }
+}
+
+/// The fixed boot-probe corpus. Inputs only — expectations are measured by `v2-golden-gen` on a
+/// reference machine of the class. Chosen to cover the profile's edges: the D=1 path (the trace
+/// is a single Prefill event), the standard calibration decode, a prefill near the single-batch
+/// bound, and a degenerate repeated-token prompt.
+fn golden_probe_inputs() -> Vec<(&'static str, [u8; 32], Vec<u32>, u32)> {
+    vec![
+        ("golden-min-1tok-d1", [0x01; 32], vec![0], 1),
+        ("golden-probe-12tok-d16", [0xA5; 32], vec![1000, 42, 7, 31337, 9999, 5, 88, 12345, 3, 777, 2024, 66], 16),
+        ("golden-prefill96-d16", [0x33; 32], (0..96u32).map(|i| (i * 97 + 13) % 50_000).collect(), 16),
+        ("golden-repeat8-d2", [0x5A; 32], vec![7; 8], 2),
+    ]
+}
+
+const GOLDEN_NETWORK_ID: &[u8] = b"misaka-golden-v2";
+
+/// `--mode v2-golden-gen --out <path>`: execute the probe corpus on THIS machine and write the
+/// measured set. Run it on a reference machine of the class; a second machine of the class must
+/// then pass `v2-selftest` against the same file — that second-machine agreement, not this
+/// generation step, is what earns the word "golden" (v2 design §5 CAUTION).
+fn run_v2_golden_gen(out_path: &str) {
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!("v2-golden-gen refused: non-canonical floating-point environment: {}", fp.canonical_string()));
+    }
+    let model_path = pinned_model_path_v2();
+    let mut set = PalwGoldenVectorSetV2 {
+        version: PALW_JOB_WIRE_VERSION_V2,
+        runtime_class_id: runtime_class_id(),
+        model_profile_id: model_profile_id(),
+        shape_profile_id: shape_profile_id_v2(&shape_string_v2()),
+        jobs: Vec::new(),
+    };
+    for (name, seed, ids, decode) in golden_probe_inputs() {
+        let mut job = PalwGoldenJobV2 {
+            name: name.to_string(),
+            network_id: GOLDEN_NETWORK_ID.to_vec(),
+            execution_seed: seed,
+            prompt_token_ids: ids,
+            exact_decode_tokens: decode,
+            max_context_tokens: N_CTX as u32,
+            expected: PalwGoldenExpectedV2 {
+                job_context_hash: golden_vector_root_unpopulated_v2(),
+                full_logits_trace_root: golden_vector_root_unpopulated_v2(),
+                output_commitment: golden_vector_root_unpopulated_v2(),
+                operation_schedule_commitment: golden_vector_root_unpopulated_v2(),
+                canonical_compute_units: 0,
+                prefill_tokens: 0,
+                decode_tokens: 0,
+                trace_event_count: 0,
+            },
+        };
+        let envelope = set.envelope_for(&job);
+        envelope.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("golden probe {name} is malformed: {e}")));
+        let exec = execute_v2(&model_path, &envelope);
+        job.expected = PalwGoldenExpectedV2 {
+            job_context_hash: exec.projection.job_context_hash,
+            full_logits_trace_root: exec.projection.full_logits_trace_root,
+            output_commitment: exec.projection.output_commitment,
+            operation_schedule_commitment: exec.projection.operation_schedule_commitment,
+            canonical_compute_units: exec.projection.canonical_compute_units,
+            prefill_tokens: exec.projection.prefill_tokens,
+            decode_tokens: exec.projection.decode_tokens,
+            trace_event_count: exec.projection.trace_event_count,
+        };
+        set.jobs.push(job);
+    }
+    set.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("generated golden set is invalid: {e}")));
+    let bytes = borsh::to_vec(&set).unwrap_or_else(|e| die(format!("cannot serialize the golden set: {e}")));
+    let mut file = std::fs::File::create(out_path).unwrap_or_else(|e| die(format!("cannot create {out_path}: {e}")));
+    write_framed(&mut file, &bytes).unwrap_or_else(|e| die(format!("cannot write {out_path}: {e}")));
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.v2-golden-gen.debug",
+        "out": out_path,
+        "golden_root": hex(set.golden_root()),
+        "runtime_class_id": hex(set.runtime_class_id),
+        "jobs": set.jobs.iter().map(|j| serde_json::json!({
+            "name": j.name,
+            "prefill": j.expected.prefill_tokens,
+            "decode": j.expected.decode_tokens,
+            "root": hex(j.expected.full_logits_trace_root),
+        })).collect::<Vec<_>>(),
+    });
+    println!("{doc}");
+}
+
+/// `--mode v2-selftest`: re-execute every registered golden job and compare the FULL projection
+/// (64-byte roots, counts, CU). Any mismatch exits non-zero — a supervisor must treat that as
+/// QUARANTINED and never enable compute over a worker that failed its own class's vectors.
+fn run_v2_selftest() {
+    let path = std::env::var(PALW_GOLDEN_ENV)
+        .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-selftest needs the registered golden set")));
+    let set = load_golden_set(&path);
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!("v2-selftest FAILED before execution: non-canonical floating-point environment: {}", fp.canonical_string()));
+    }
+    let model_path = pinned_model_path_v2();
+    let mut results = Vec::new();
+    for job in &set.jobs {
+        let envelope = set.envelope_for(job);
+        let exec = execute_v2(&model_path, &envelope);
+        let got = PalwGoldenExpectedV2 {
+            job_context_hash: exec.projection.job_context_hash,
+            full_logits_trace_root: exec.projection.full_logits_trace_root,
+            output_commitment: exec.projection.output_commitment,
+            operation_schedule_commitment: exec.projection.operation_schedule_commitment,
+            canonical_compute_units: exec.projection.canonical_compute_units,
+            prefill_tokens: exec.projection.prefill_tokens,
+            decode_tokens: exec.projection.decode_tokens,
+            trace_event_count: exec.projection.trace_event_count,
+        };
+        if got != job.expected {
+            die(format!(
+                "v2-selftest FAILED on {:?}: this machine does not reproduce the registered vectors \
+                 (expected root {}, got {}) — QUARANTINE, do not enable compute",
+                job.name,
+                hex(job.expected.full_logits_trace_root),
+                hex(got.full_logits_trace_root)
+            ));
+        }
+        eprintln!("[palw-worker] v2-selftest ok: {} (root {}…)", job.name, &hex(got.full_logits_trace_root)[..16]);
+        results.push(serde_json::json!({ "name": job.name, "root": hex(got.full_logits_trace_root) }));
+    }
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.v2-selftest.debug",
+        "status": "pass",
+        "jobs": results,
+        "golden_root": hex(set.golden_root()),
+        "runtime_manifest_hash_v2": hex(runtime_manifest_v2(worker_binary_sha256(), set.golden_root()).manifest_hash()),
+    });
+    println!("{doc}");
+}
+
+/// `--mode v2-golden-show`: display a golden set without loading the model.
+fn run_v2_golden_show() {
+    let path = std::env::var(PALW_GOLDEN_ENV)
+        .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-golden-show needs a golden set to show")));
+    let set = load_golden_set(&path);
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.v2-golden-show.debug",
+        "golden_root": hex(set.golden_root()),
+        "runtime_class_id": hex(set.runtime_class_id),
+        "model_profile_id": hex(set.model_profile_id),
+        "shape_profile_id": hex(set.shape_profile_id),
+        "jobs": set.jobs.iter().map(|j| serde_json::json!({
+            "name": j.name,
+            "network_id": String::from_utf8_lossy(&j.network_id),
+            "seed": faster_hex::hex_string(&j.execution_seed),
+            "prompt_tokens": j.prompt_token_ids.len(),
+            "exact_decode_tokens": j.exact_decode_tokens,
+            "expected_root": hex(j.expected.full_logits_trace_root),
+            "expected_cu": j.expected.canonical_compute_units.to_string(),
+        })).collect::<Vec<_>>(),
+    });
+    println!("{doc}");
 }
 
 /// Rejects a job whose declared runtime identity is not THIS worker. Every profile field must
@@ -631,7 +832,7 @@ fn run_v2_job() {
             fp.canonical_string()
         ));
     }
-    let manifest = runtime_manifest_v2(worker_binary_sha256());
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
     check_v2_identity(&envelope, &manifest);
     let model_path = pinned_model_path_v2();
     let exec = execute_v2(&model_path, &envelope);
@@ -652,7 +853,7 @@ fn run_v2_job() {
 /// operator can read what the binary is. Does not load the model.
 fn run_v2_manifest() {
     let fp = fp_env::probe();
-    let manifest = runtime_manifest_v2(worker_binary_sha256());
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
     let doc = serde_json::json!({
         "schema": "misaka.palw.v2-manifest.debug",
         "note": "display document; canonical identity is runtime_manifest_hash_v2 over the canonical preimage",
@@ -667,6 +868,8 @@ fn run_v2_manifest() {
         "worker_binary_sha256": faster_hex::hex_string(&manifest.worker_binary_sha256),
         "cmake_cache_sha256": faster_hex::hex_string(&manifest.cmake_cache_sha256),
         "llama_static_library_sha256": faster_hex::hex_string(&manifest.llama_static_library_sha256),
+        "golden_vector_root": hex(manifest.golden_vector_root),
+        "golden_registered": std::env::var(PALW_GOLDEN_ENV).is_ok(),
         "ggml_flags": {
             "native": manifest.ggml_native,
             "openmp": manifest.ggml_openmp,
@@ -840,6 +1043,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut mode: Option<String> = None;
     let mut n_predict: Option<u32> = None;
+    let mut out_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -852,6 +1056,10 @@ fn main() {
                 i += 1;
                 n_predict = args.get(i).and_then(|s| s.parse().ok());
             }
+            "--out" => {
+                i += 1;
+                out_path = args.get(i).cloned();
+            }
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
@@ -860,13 +1068,21 @@ fn main() {
     // The v2 interface deliberately has no `--n-predict`: the prefill/decode budgets are
     // separate, explicit envelope fields (VPS design §5.4), and accepting the ambiguous v1
     // flag here would reintroduce exactly the total-vs-decode confusion v2 removes.
-    if matches!(mode.as_deref(), Some("v2-job" | "v2-manifest")) && n_predict.is_some() {
+    if matches!(mode.as_deref(), Some("v2-job" | "v2-manifest" | "v2-golden-gen" | "v2-selftest" | "v2-golden-show"))
+        && n_predict.is_some()
+    {
         die("--n-predict is not a v2 interface; token budgets come from the job envelope".into());
     }
 
     match mode.as_deref() {
         Some("v2-job") => run_v2_job(),
         Some("v2-manifest") => run_v2_manifest(),
+        Some("v2-golden-gen") => {
+            let out = out_path.unwrap_or_else(|| die("--out <path> is required for v2-golden-gen".into()));
+            run_v2_golden_gen(&out);
+        }
+        Some("v2-selftest") => run_v2_selftest(),
+        Some("v2-golden-show") => run_v2_golden_show(),
         Some("manifest") => {
             let doc = serde_json::json!({
                 "runtime_manifest_hash": hex(runtime_manifest_hash()),

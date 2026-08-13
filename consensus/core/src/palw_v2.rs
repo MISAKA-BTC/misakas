@@ -118,6 +118,12 @@ pub const PALW_V2_DOMAIN_TOKENIZER_ID: &[u8] = b"misaka-palw/tokenizer-id/v2";
 pub const PALW_V2_DOMAIN_JOB_REQUEST: &[u8] = b"misaka-palw/job-request/v2";
 /// Sentinel derivation for a manifest whose golden vectors are not yet populated.
 pub const PALW_V2_DOMAIN_GOLDEN_VECTOR_ROOT: &[u8] = b"misaka-palw/golden-vector-root/v2";
+/// Root of a registered golden vector set (the boot self-test corpus).
+pub const PALW_V2_DOMAIN_GOLDEN_SET: &[u8] = b"misaka-palw/golden-vector-set/v2";
+/// Deterministic per-name identifiers for golden self-test jobs.
+pub const PALW_V2_DOMAIN_GOLDEN_JOB_ID: &[u8] = b"misaka-palw/golden-job-id/v2";
+pub const PALW_V2_DOMAIN_GOLDEN_JOB_NULLIFIER: &[u8] = b"misaka-palw/golden-job-nullifier/v2";
+pub const PALW_V2_DOMAIN_GOLDEN_ASSIGNMENT_ID: &[u8] = b"misaka-palw/golden-assignment-id/v2";
 
 /// Every domain key in this module, for the length/uniqueness tests and for documentation
 /// tooling. Keep in sync when adding a domain.
@@ -139,6 +145,10 @@ pub const PALW_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_V2_DOMAIN_TOKENIZER_ID,
     PALW_V2_DOMAIN_JOB_REQUEST,
     PALW_V2_DOMAIN_GOLDEN_VECTOR_ROOT,
+    PALW_V2_DOMAIN_GOLDEN_SET,
+    PALW_V2_DOMAIN_GOLDEN_JOB_ID,
+    PALW_V2_DOMAIN_GOLDEN_JOB_NULLIFIER,
+    PALW_V2_DOMAIN_GOLDEN_ASSIGNMENT_ID,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -265,6 +275,8 @@ pub enum PalwV2Error {
     RuntimeIdentityMismatch { field: &'static str },
     #[error("floating-point environment violates the canonical profile: {0}")]
     FpEnvironmentMismatch(String),
+    #[error("golden vector set is invalid: {0}")]
+    GoldenSetInvalid(String),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -941,6 +953,161 @@ impl PalwRuntimeManifestV2 {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Golden vector set — the boot self-test corpus (VPS design §8.2, v2 design §10 item 2).
+// ---------------------------------------------------------------------------------------------
+
+/// The sentinel `runtime_manifest_hash` golden jobs bind in their job context.
+///
+/// The real manifest hash **includes** `golden_vector_root`, and the golden vectors' expected
+/// values depend on the job context — putting the real manifest hash into golden contexts would
+/// be circular. The sentinel (all-zero, unreachable by any keyed BLAKE2b output in practice)
+/// removes exactly that one self-referential field. Everything else a vector could be smuggled
+/// across — class, model, shape, scheme, CU rule, tokenizer, budgets — is still bound: the set
+/// header pins the real ids and a loader must refuse a set whose ids are not the worker's own.
+/// A golden PASS therefore means "this machine reproduces the class's canonical arithmetic",
+/// while real jobs keep the full manifest binding.
+pub fn golden_sentinel_manifest_hash() -> Hash64 {
+    Hash64::from_bytes([0u8; 64])
+}
+
+pub fn golden_job_id_v2(name: &str) -> Hash64 {
+    keyed64(PALW_V2_DOMAIN_GOLDEN_JOB_ID, &[name.as_bytes()])
+}
+
+pub fn golden_job_nullifier_v2(name: &str) -> Hash64 {
+    keyed64(PALW_V2_DOMAIN_GOLDEN_JOB_NULLIFIER, &[name.as_bytes()])
+}
+
+pub fn golden_assignment_id_v2(name: &str) -> Hash64 {
+    keyed64(PALW_V2_DOMAIN_GOLDEN_ASSIGNMENT_ID, &[name.as_bytes()])
+}
+
+/// Caps for golden sets: a boot corpus is small by design.
+pub const PALW_V2_MAX_GOLDEN_JOBS: usize = 64;
+pub const PALW_V2_MAX_GOLDEN_NAME_BYTES: usize = 128;
+
+/// The full expected projection of one golden job — compared field-exact, full 64 bytes.
+/// Prefix comparison is banned as an acceptance criterion (v2 design §5, activation gate §12).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwGoldenExpectedV2 {
+    pub job_context_hash: Hash64,
+    pub full_logits_trace_root: Hash64,
+    pub output_commitment: Hash64,
+    pub operation_schedule_commitment: Hash64,
+    pub canonical_compute_units: u128,
+    pub prefill_tokens: u32,
+    pub decode_tokens: u32,
+    pub trace_event_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwGoldenJobV2 {
+    pub name: String,
+    pub network_id: Vec<u8>,
+    pub execution_seed: [u8; 32],
+    pub prompt_token_ids: Vec<u32>,
+    pub exact_decode_tokens: u32,
+    pub max_context_tokens: u32,
+    pub expected: PalwGoldenExpectedV2,
+}
+
+/// A registered golden vector set. The header binds the exact runtime identity the vectors were
+/// generated under; [`PalwGoldenVectorSetV2::golden_root`] is the value `RuntimeManifestV2`
+/// carries, replacing the [`golden_vector_root_unpopulated_v2`] sentinel.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwGoldenVectorSetV2 {
+    pub version: u16,
+    pub runtime_class_id: Hash64,
+    pub model_profile_id: Hash64,
+    pub shape_profile_id: Hash64,
+    pub jobs: Vec<PalwGoldenJobV2>,
+}
+
+impl PalwGoldenVectorSetV2 {
+    /// Structural validation — caps and per-job budget arithmetic, fail closed. Identity
+    /// equality against the LOADING worker's own ids is the loader's job (the set says what it
+    /// was generated under; the worker must refuse a set that is not its own class).
+    pub fn validate_shape(&self, profile_max_context_tokens: u32) -> Result<(), PalwV2Error> {
+        if self.version != PALW_JOB_WIRE_VERSION_V2 {
+            return Err(PalwV2Error::UnsupportedVersion { got: self.version, expected: PALW_JOB_WIRE_VERSION_V2 });
+        }
+        if self.jobs.is_empty() {
+            return Err(PalwV2Error::GoldenSetInvalid("a golden set with no jobs gates nothing".into()));
+        }
+        if self.jobs.len() > PALW_V2_MAX_GOLDEN_JOBS {
+            return Err(PalwV2Error::GoldenSetInvalid(format!("{} jobs exceeds the {PALW_V2_MAX_GOLDEN_JOBS}-job cap", self.jobs.len())));
+        }
+        let mut seen: Vec<&str> = Vec::with_capacity(self.jobs.len());
+        for job in &self.jobs {
+            if job.name.is_empty() || job.name.len() > PALW_V2_MAX_GOLDEN_NAME_BYTES {
+                return Err(PalwV2Error::GoldenSetInvalid("golden job name is empty or over the cap".into()));
+            }
+            if seen.contains(&job.name.as_str()) {
+                return Err(PalwV2Error::GoldenSetInvalid(format!("duplicate golden job name {:?}", job.name)));
+            }
+            seen.push(&job.name);
+            // Reuse the envelope predicate so a golden job can never be shaped in a way a real
+            // job could not be.
+            self.envelope_for(job).validate_shape(profile_max_context_tokens)?;
+        }
+        Ok(())
+    }
+
+    /// The canonical execution request for one golden job. Deterministic — an executor and a
+    /// later auditor derive the identical envelope from the set alone.
+    pub fn envelope_for(&self, job: &PalwGoldenJobV2) -> PalwJobEnvelopeV2 {
+        PalwJobEnvelopeV2 {
+            version: PALW_JOB_WIRE_VERSION_V2,
+            network_id: job.network_id.clone(),
+            job_id: golden_job_id_v2(&job.name),
+            job_nullifier: golden_job_nullifier_v2(&job.name),
+            mode: PalwJobModeV2::Execute,
+            model_profile_id: self.model_profile_id,
+            runtime_manifest_hash: golden_sentinel_manifest_hash(),
+            runtime_class_id: self.runtime_class_id,
+            shape_profile_id: self.shape_profile_id,
+            trace_scheme_id: trace_scheme_id_v2(),
+            cu_ruleset_id: cu_ruleset_id_v2(),
+            execution_seed: job.execution_seed,
+            prompt_token_ids: job.prompt_token_ids.clone(),
+            exact_decode_tokens: job.exact_decode_tokens,
+            max_context_tokens: job.max_context_tokens,
+            assignment_id: golden_assignment_id_v2(&job.name),
+            assignment_epoch: 0,
+            deadline_unix_ms: 0,
+        }
+    }
+
+    /// The frozen root over the canonical encoding of the whole set (NOT over file bytes, so a
+    /// re-serialized but semantically identical set keeps its root).
+    pub fn golden_root(&self) -> Hash64 {
+        let mut w = CanonicalWriter::new();
+        w.put_u16(self.version);
+        w.put_hash64(&self.runtime_class_id);
+        w.put_hash64(&self.model_profile_id);
+        w.put_hash64(&self.shape_profile_id);
+        w.put_u32(self.jobs.len() as u32);
+        for job in &self.jobs {
+            w.put_var_str(&job.name);
+            w.put_var_bytes(&job.network_id);
+            w.put_fixed32(&job.execution_seed);
+            w.put_u32_seq(&job.prompt_token_ids);
+            w.put_u32(job.exact_decode_tokens);
+            w.put_u32(job.max_context_tokens);
+            w.put_hash64(&job.expected.job_context_hash);
+            w.put_hash64(&job.expected.full_logits_trace_root);
+            w.put_hash64(&job.expected.output_commitment);
+            w.put_hash64(&job.expected.operation_schedule_commitment);
+            w.0.extend_from_slice(&job.expected.canonical_compute_units.to_le_bytes());
+            w.put_u32(job.expected.prefill_tokens);
+            w.put_u32(job.expected.decode_tokens);
+            w.put_u32(job.expected.trace_event_count);
+        }
+        w.keyed64(PALW_V2_DOMAIN_GOLDEN_SET)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // IPC framing: `u32-le length ‖ Borsh payload`, hard-capped, fail closed (VPS §5.1).
 // ---------------------------------------------------------------------------------------------
 
@@ -1418,6 +1585,113 @@ mod tests {
         assert_eq!(p.canonical_compute_units, 37, "cu = prefill + 8*decode");
         // Telemetry is a different type; it cannot enter this comparison by construction.
         let _telemetry: PalwJobTelemetryV2 = Default::default();
+    }
+
+    fn test_golden_set() -> PalwGoldenVectorSetV2 {
+        let expected = PalwGoldenExpectedV2 {
+            job_context_hash: h64(0xE1),
+            full_logits_trace_root: h64(0xE2),
+            output_commitment: h64(0xE3),
+            operation_schedule_commitment: h64(0xE4),
+            canonical_compute_units: 140,
+            prefill_tokens: 12,
+            decode_tokens: 16,
+            trace_event_count: 16,
+        };
+        PalwGoldenVectorSetV2 {
+            version: 2,
+            runtime_class_id: h64(0x55),
+            model_profile_id: h64(0x33),
+            shape_profile_id: h64(0x66),
+            jobs: vec![
+                PalwGoldenJobV2 {
+                    name: "probe-a".into(),
+                    network_id: b"misaka-golden".to_vec(),
+                    execution_seed: [1; 32],
+                    prompt_token_ids: vec![1, 2, 3],
+                    exact_decode_tokens: 4,
+                    max_context_tokens: 4096,
+                    expected: expected.clone(),
+                },
+                PalwGoldenJobV2 {
+                    name: "probe-b".into(),
+                    network_id: b"misaka-golden".to_vec(),
+                    execution_seed: [2; 32],
+                    prompt_token_ids: vec![9, 8],
+                    exact_decode_tokens: 2,
+                    max_context_tokens: 4096,
+                    expected,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn golden_set_validates_and_roots_deterministically() {
+        let set = test_golden_set();
+        set.validate_shape(4096).unwrap();
+        assert_eq!(set.golden_root(), test_golden_set().golden_root());
+
+        // The derived envelope is deterministic, passes the normal predicate, and binds the
+        // sentinel manifest hash — never a real one.
+        let env = set.envelope_for(&set.jobs[0]);
+        env.validate_shape(4096).unwrap();
+        assert_eq!(env, set.envelope_for(&set.jobs[0]));
+        assert_eq!(env.runtime_manifest_hash, golden_sentinel_manifest_hash());
+        assert_eq!(env.job_id, golden_job_id_v2("probe-a"));
+        assert_ne!(env.job_id, golden_job_nullifier_v2("probe-a"), "id and nullifier domains are distinct");
+    }
+
+    #[test]
+    fn golden_root_binds_identity_jobs_and_expectations() {
+        let base = test_golden_set().golden_root();
+
+        let mut s = test_golden_set();
+        s.runtime_class_id = h64(0x56);
+        assert_ne!(base, s.golden_root(), "a set for another class is another set");
+
+        let mut s = test_golden_set();
+        s.jobs[1].expected.full_logits_trace_root = h64(0xEE);
+        assert_ne!(base, s.golden_root(), "expectations are part of the root");
+
+        let mut s = test_golden_set();
+        s.jobs.swap(0, 1);
+        assert_ne!(base, s.golden_root(), "job order is part of the root");
+
+        let mut s = test_golden_set();
+        s.jobs[0].prompt_token_ids.push(4);
+        assert!(s.validate_shape(4096).is_ok());
+        assert_ne!(base, s.golden_root());
+    }
+
+    #[test]
+    fn golden_set_rejections_fail_closed() {
+        let mut s = test_golden_set();
+        s.jobs.clear();
+        assert!(matches!(s.validate_shape(4096), Err(PalwV2Error::GoldenSetInvalid(_))));
+
+        let mut s = test_golden_set();
+        s.jobs[1].name = "probe-a".into();
+        assert!(matches!(s.validate_shape(4096), Err(PalwV2Error::GoldenSetInvalid(_))));
+
+        let mut s = test_golden_set();
+        s.version = 1;
+        assert!(matches!(s.validate_shape(4096), Err(PalwV2Error::UnsupportedVersion { .. })));
+
+        // A malformed job inside the set is caught by the shared envelope predicate.
+        let mut s = test_golden_set();
+        s.jobs[0].exact_decode_tokens = 0;
+        assert!(matches!(s.validate_shape(4096), Err(PalwV2Error::ZeroDecodeBudget)));
+
+        let mut s = test_golden_set();
+        s.jobs[0].max_context_tokens = 2048;
+        assert!(matches!(s.validate_shape(4096), Err(PalwV2Error::ContextProfileMismatch { .. })));
+
+        // Borsh round trip for the file format.
+        let s = test_golden_set();
+        let bytes = borsh::to_vec(&s).unwrap();
+        let back: PalwGoldenVectorSetV2 = decode_framed_borsh(&bytes).unwrap();
+        assert_eq!(s, back);
     }
 
     #[test]
