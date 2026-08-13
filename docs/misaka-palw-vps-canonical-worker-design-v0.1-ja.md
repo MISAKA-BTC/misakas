@@ -823,12 +823,25 @@ pub enum PalwRuntimeBackend {
 
 ### 12.3 `kaspad`
 
-- `--compute-endpoint`
-- agent health probe
-- capability withdraw/quarantine
-- queue/deadline telemetry
-- runtime manifest RPC表示
-- old Ollama profileのactivation fence
+実装状態（2026-08-13、`kaspad/src/palw_agent.rs` / `misaka-palw/src/agent_client.rs`）:
+
+- `--compute-endpoint` — **済**（bare path / `unix://` URI両対応。Land段階=観測のみ:
+  reward・work・fork-choice weightを一切与えず、`--compute-worker`(v1 VLT role)も置換しない）
+- agent health probe — **済**（30秒間隔、framed Borsh Health round-trip、状態遷移のみログ）
+- capability withdraw/quarantine — **済（handle層）**: `PalwAgentCapability` が
+  Available / Quarantined / Unreachable を保持し、agent不達・隔離で即時撤回。
+  **consensus可視のcapability宣言はまだ何もこのhandleを消費しない**（将来のVLT v2
+  capability宣言が参照する唯一のフック）。agent死亡・隔離でもvalidator本体は継続
+  （E2E実証: agent kill→1 probe内でwithdraw WARN→kaspad生存）
+- queue/deadline telemetry — 部分（Health frameのcounters。Prometheusは未）
+- runtime manifest RPC表示 — 未（現状はlog表示: manifest/golden root prefix +
+  selftest_passed。RPC surfaceへの追加は別変更）
+- old Ollama profileのactivation fence — 済（`9736aec` の `never()` + test pin）
+
+client側の要点: `misaka-palw::agent_client` はagentの応答を**自前の入力から再検証**する
+（request hash・job id・counts・CU再導出・job_context_hash再計算）。supervisorの言葉だけで
+計算結果を受け取らない — ただしこの検証は「モデルが実際に走った」ことを証明しない
+（それは独立replay・committee・bondの仕事、基礎設計§4）。
 
 ### 12.4 consensus / registry
 

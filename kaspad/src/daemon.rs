@@ -982,6 +982,17 @@ Do you confirm? (y/n)";
         mining_rule_engine.clone(),
     ));
 
+    // MISAKA PALW v2 (Land stage): monitor a palw-agent when one is configured. Observation
+    // and a capability handle only — an absent or quarantined agent withdraws v2 compute
+    // capability (which nothing consensus-visible consumes yet) and the node continues
+    // validator-only, exactly as the VPS design's failure policy requires. Independent of
+    // `--enable-validator`: watching a runtime is not a validator role.
+    let _palw_agent_capability = args.compute_endpoint.as_ref().map(|endpoint| {
+        // Accept both the bare socket path and the design docs' `unix://` URI spelling.
+        let path = endpoint.strip_prefix("unix://").unwrap_or(endpoint);
+        crate::palw_agent::spawn_palw_agent_monitor(PathBuf::from(path))
+    });
+
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
     // when `--enable-validator` is set (so default node behavior is unchanged) and after
     // `flow_context`, which it uses to submit attestation-shard transactions.

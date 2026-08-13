@@ -2,6 +2,7 @@ pub mod args;
 pub mod chain_participation_store;
 pub mod compute;
 pub mod daemon;
+pub mod palw_agent;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod validator_service;
