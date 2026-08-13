@@ -1114,6 +1114,11 @@ impl PalwGoldenVectorSetV2 {
 /// Reads one frame. Enforces the cap BEFORE allocating, requires the payload to be complete,
 /// and (because one connection carries one request) requires EOF after it — trailing bytes are
 /// an error, not a second message.
+///
+/// Protocol contract for stream sockets: the SENDER half-closes its write side
+/// (`shutdown(SHUT_WR)`) after its frame, so the receiver's EOF probe returns immediately
+/// instead of blocking until a read timeout. Subprocess stdin gets the same effect by closing
+/// the pipe.
 pub fn read_framed(reader: &mut impl std::io::Read, max_bytes: u32) -> Result<Vec<u8>, PalwV2Error> {
     let mut len_bytes = [0u8; 4];
     read_exactly(reader, &mut len_bytes)?;
@@ -1160,6 +1165,63 @@ pub fn decode_framed_borsh<T: BorshDeserialize>(payload: &[u8]) -> Result<T, Pal
         return Err(PalwV2Error::TrailingBytes(slice.len()));
     }
     Ok(value)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Agent wire protocol `misaka-palw-agent-borsh/v1` (VPS design §2.3, §5.1): one framed request,
+// one framed response, per connection. Same framing, same caps, same fail-closed decoding.
+// ---------------------------------------------------------------------------------------------
+
+/// What a client (kaspad's compute service, or a harness) may ask the agent.
+/// Unknown discriminants fail Borsh decoding.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwAgentRequestV1 {
+    /// Execute or replay one canonical job.
+    Job(PalwJobEnvelopeV2) = 0,
+    /// Health probe — never touches the worker or the model.
+    Health = 1,
+}
+
+/// Agent lifecycle state (VPS design §8.1, collapsed to what Phase A has).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+pub enum PalwAgentStateV1 {
+    Ready = 0,
+    Busy = 1,
+    /// A conformance failure (golden selftest, artifact hash) — every job is rejected until an
+    /// operator intervenes. Preferring abstention over answers is the refutation-dominant rule
+    /// (VPS design §13).
+    Quarantined = 2,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwAgentHealthV1 {
+    pub state: PalwAgentStateV1,
+    pub selftest_passed: bool,
+    pub runtime_manifest_hash: Hash64,
+    pub golden_vector_root: Hash64,
+    pub max_context_tokens: u32,
+    pub jobs_total: u64,
+    pub jobs_ok: u64,
+    pub jobs_rejected: u64,
+    pub jobs_failed: u64,
+    pub timeouts_total: u64,
+}
+
+/// The agent's answer. `JobRejected` is an admission decision (nothing executed — deadline,
+/// budget, duplicate, busy, quarantine); `JobFailed` means a worker ran and did not produce an
+/// accepted result (crash, timeout, malformed or mis-bound output). The split matters to a
+/// supervisor: rejections are safe to retry elsewhere, failures are evidence about THIS host.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwAgentResponseV1 {
+    JobOk(PalwJobResultV2) = 0,
+    JobRejected { code: String, message: String } = 1,
+    JobFailed { code: String, message: String } = 2,
+    Health(PalwAgentHealthV1) = 3,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1692,6 +1754,43 @@ mod tests {
         let bytes = borsh::to_vec(&s).unwrap();
         let back: PalwGoldenVectorSetV2 = decode_framed_borsh(&bytes).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn agent_wire_round_trips_and_fails_closed() {
+        let req = PalwAgentRequestV1::Job(test_envelope());
+        let bytes = borsh::to_vec(&req).unwrap();
+        assert_eq!(bytes[0], 0, "Job discriminant");
+        let back: PalwAgentRequestV1 = decode_framed_borsh(&bytes).unwrap();
+        assert_eq!(req, back);
+
+        let health = borsh::to_vec(&PalwAgentRequestV1::Health).unwrap();
+        assert_eq!(health, vec![1], "Health is exactly one tag byte");
+
+        // Unknown request discriminant fails closed.
+        assert!(matches!(decode_framed_borsh::<PalwAgentRequestV1>(&[9]), Err(PalwV2Error::Decode(_))));
+
+        let resp = PalwAgentResponseV1::JobRejected { code: "busy".into(), message: "slot occupied".into() };
+        let bytes = borsh::to_vec(&resp).unwrap();
+        assert_eq!(bytes[0], 1, "JobRejected discriminant");
+        let back: PalwAgentResponseV1 = decode_framed_borsh(&bytes).unwrap();
+        assert_eq!(resp, back);
+
+        let health_resp = PalwAgentResponseV1::Health(PalwAgentHealthV1 {
+            state: PalwAgentStateV1::Quarantined,
+            selftest_passed: false,
+            runtime_manifest_hash: h64(1),
+            golden_vector_root: h64(2),
+            max_context_tokens: 4096,
+            jobs_total: 5,
+            jobs_ok: 1,
+            jobs_rejected: 3,
+            jobs_failed: 1,
+            timeouts_total: 0,
+        });
+        let bytes = borsh::to_vec(&health_resp).unwrap();
+        let back: PalwAgentResponseV1 = decode_framed_borsh(&bytes).unwrap();
+        assert_eq!(health_resp, back);
     }
 
     #[test]

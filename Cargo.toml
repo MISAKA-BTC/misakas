@@ -29,6 +29,7 @@ members = [
     "misaka-cli",
     "misaka-endpoints",
     "misaka-palw",
+    "misaka-palw-agent",
     "misaka-palw-worker",
     "simpa",
     "wasm",
@@ -221,6 +222,8 @@ igd-next = { version = "0.17.0", features = ["aio_tokio"] }
 indexmap = "2.1.0"
 ipnet = "2.9.0"
 itertools = "0.13.0"
+# misaka-palw-agent: UDS peer-credential checks (SO_PEERCRED on Linux, getpeereid on macOS/BSD).
+libc = "0.2"
 js-sys = "=0.3.77"
 keccak = "0.1.4"
 # kaspa-pq: ML-DSA-87 (FIPS 204) post-quantum signatures via libcrux. Exact

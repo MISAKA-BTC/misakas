@@ -1,0 +1,27 @@
+[package]
+name = "misaka-palw-agent"
+description = "MISAKA PALW canonical runtime supervisor: the UDS front (misaka-palw-agent-borsh/v1) for the pinned palw-worker — boot golden gate, admission control, per-job process supervision, fail-closed"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "palw-agent"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+
+borsh.workspace = true
+faster-hex.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
