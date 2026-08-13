@@ -1424,11 +1424,25 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // silently off, not merely weaker. Keep the original "≥1 credited attestation in the anchor's
     // own epoch" guard. Raise this in lockstep with `min_active_validators`, never before.
     min_anchor_attesters: 1,
-    // Reach + TTL are inherited from PRODUCTION (18_000 blocks / 6_000 DAA). Deliberately NOT
-    // retuned for this net's slower real block rate: at the measured ~110 DAA/min of the live mesh
-    // they buy ~2.5 h of rewind protection and auto-release a dead-branch wedge in ~55 min, versus
-    // the 3.5 h (2026-07-19) and ~15 h (2026-08-03) that needed manual arbitration. A shorter TTL
-    // here would trip on ordinary attestation hiccups, which this mesh has plenty of.
+    // Reach stays inherited from PRODUCTION (18_000 blocks). The TTL does NOT — see below.
+    //
+    // 2026-08-13/14: the inherited 6_000 was calibrated against "~110 DAA/min of the live mesh",
+    // which read the release time as ~55 min. That calibration assumes the chain keeps moving,
+    // and the wedge this TTL exists to release is exactly the state where it does not. Measured
+    // on the live t10 fleet: confirmed anchor 7fb6529b (daa 30_075_173) fell off the selected
+    // chain, so every candidate failed the includes test, so the gate refused every heavier
+    // candidate, so virtual advanced 3 DAA per ~17 min — and at THAT rate the 6_000 the TTL
+    // wants takes ~12 days, not 55 min. The clock is `canonical_daa - anchor_daa` on this node's
+    // OWN chain (`dns_reorg_outcome`), and the wedge stops that clock. Self-referential: the
+    // release cannot fire because the thing it releases is what freezes its input.
+    //
+    // 2_000 is chosen against the wedge's OWN geometry rather than against a block rate: it sits
+    // below the anchor age a wedged node reaches within hours (2_882 when this was measured) and
+    // far above the `lag + epoch` distance a CONFIRMING chain ever shows, which is what the field
+    // doc says the number must separate. The honest fix is to stop counting the TTL on a clock
+    // the veto can stop — that is a behaviour change to `dns_reorg_outcome` and belongs in its
+    // own release; this constant is what unwedges the fleet without one.
+    dns_veto_ttl_daa_score: 2_000,
     // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
@@ -1923,7 +1937,12 @@ mod consensus_params_id_tests {
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
         let changed: Vec<String> = [
             ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            ("testnet", TESTNET_PARAMS, "8bf487309c1371da52725b501a581600c8fbc98887071476f066d2ecdb6fe377"),
+            // Moved 2026-08-14 by the t10 unwedge (`dns_veto_ttl_daa_score` 6_000 -> 2_000). The
+            // fleet's own release carries the same constant and lands on `a1e6602e…`; this branch
+            // is that plus the token-program + PoW changes, hence a different value. Both must
+            // carry the TTL edit or the shadow release would re-wedge on the same self-referential
+            // clock. Testnet only — the other three presets are untouched.
+            ("testnet", TESTNET_PARAMS, "28649895702c66fbed8162f325b5e3294c2886108d59015a72b62c8f1f5d0db5"),
             ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
             ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
         ]
