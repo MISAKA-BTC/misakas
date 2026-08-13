@@ -109,6 +109,23 @@ struct RunArgs {
     #[arg(long, env = "KASPA_PQ_DRY_RUN")]
     dry_run: bool,
 
+    /// Operator override: attest even while the node reports `is_synced=false`.
+    ///
+    /// The sync guard below exists so a freshly-started validator cannot sign for a chain it has
+    /// not caught up to. It becomes a DEADLOCK when what froze the node's virtual is the DNS
+    /// reorg gate itself: the gate vetoes every candidate that leaves a confirmed anchor which is
+    /// no longer on the selected chain, the node therefore stops advancing and reports unsynced,
+    /// and the attestations that would confirm a NEW anchor — the one thing that releases the
+    /// gate — are exactly what this guard withholds. Measured on testnet-10 2026-08-13: the
+    /// designed `ConfirmedAnchorStale` TTL could not release it either, because that TTL is
+    /// counted in the node's OWN canonical DAA and the wedge is what stops that clock.
+    ///
+    /// Off by default, and node-local: it changes nothing about what an attestation MEANS, only
+    /// whether this validator is willing to sign one while its node is behind. Remove it from the
+    /// unit once the node reports synced again.
+    #[arg(long, env = "KASPA_PQ_ATTEST_WHILE_UNSYNCED")]
+    attest_while_unsynced: bool,
+
     /// Expected node network id; refuse to start on mismatch (ADR-0011 §"Same network").
     #[arg(long, visible_alias = "network-id", env = "KASPA_PQ_NETWORK")]
     network: Option<String>,
@@ -1785,9 +1802,17 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
             }
         };
         if !server.is_synced {
-            info!("[{VALIDATOR}] status=NodeNotSynced (virtual_daa={})", server.virtual_daa_score);
-            sleep_secs(5).await;
-            continue;
+            if !args.attest_while_unsynced {
+                info!("[{VALIDATOR}] status=NodeNotSynced (virtual_daa={})", server.virtual_daa_score);
+                sleep_secs(5).await;
+                continue;
+            }
+            // Loud on every round, deliberately: this is an operator override of a safety guard,
+            // and the log is the only place it is visible after the unit file scrolls away.
+            warn!(
+                "[{VALIDATOR}] node reports is_synced=false (virtual_daa={}) — attesting ANYWAY (--attest-while-unsynced). Remove this flag once the node reports synced.",
+                server.virtual_daa_score
+            );
         }
 
         // 2. Bond configured?
