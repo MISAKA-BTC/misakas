@@ -295,6 +295,10 @@ signed manifestの自己申告だけでは、悪意あるVPSが本当にそのbi
 - transport framing: `u32-le length || Borsh payload`
 - 最大request sizeとresponse sizeを固定
 - 1 connectionあたり1 requestを初期仕様とする
+- **half-close契約（2026-08-13追加）**: 送信側はframe送信後に書き込み側を
+  `shutdown(SHUT_WR)` する。受信側はframe後の余剰バイト不在をEOFで検証するため、
+  half-closeしないclientはtimeoutまでblockし応答を得られない。subprocess stdinは
+  pipe closeで同じ効果を得る
 - unknown versionはfail closed
 
 JSONはCLI、debug、evidence表示に限り、production IPCのcanonical identityには使わない。
@@ -989,14 +993,24 @@ Ollama pathを失効させた事実だけでV4以降へ進んではならない�
 
 ### P1: fleet運用前
 
-1. `palw-agent`
-2. UDS Borsh protocol
-3. systemd sandbox
-4. bounded queue/deadline
-5. persistent model worker pool
-6. Prometheus metrics
-7. capability quarantine/withdraw
-8. five-node deployment harness
+実装状態（2026-08-13、`misaka-palw-agent` / `scripts/misaka-palw-v2-agent-smoke.py`）:
+
+1. `palw-agent` — **済（Phase A）**: boot golden gate（selftest失敗でQUARANTINED、
+   golden未登録は`--allow-ungated`なしで起動拒否）、admission（envelope形状・
+   6 identity・deadline実現性・duplicate window・単一slot）、per-job supervision
+   （pipe drain、min(timeout, deadline)でkill、部分結果破棄）、応答の再束縛検証
+   （request hash echo・job id・token counts・CU再導出・job_context_hash再計算）
+2. UDS Borsh protocol — **済**（`misaka-palw-agent-borsh/v1`: Job/Health request、
+   JobOk/JobRejected/JobFailed/Health response。§5.1のhalf-close契約に注意）
+3. systemd sandbox — 未（§10.2のunit例のまま。実配備時に適用）
+4. bounded queue/deadline — **済（Phase A形）**: 隠れqueueを持たずbusy=即時拒否、
+   deadline admissionはworst-case見積で実行前拒否
+5. persistent model worker pool — 未（Phase B。Phase Aとのgolden全一致が有効化条件）
+6. Prometheus metrics — 未（Health frameのcounters — total/ok/rejected/failed/timeouts —
+   で代替中）
+7. capability quarantine/withdraw — 部分（agentのQUARANTINE状態は実装済。kaspad側
+   capability宣言との連動は未）
+8. five-node deployment harness — 未
 
 ### P2: public no-value testnet前
 

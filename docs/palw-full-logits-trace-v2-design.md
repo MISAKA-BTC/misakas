@@ -493,6 +493,19 @@ manifest、経済パラメータを添付した明示的decision recordで行う
 - closed-replay smoke harness `scripts/misaka-palw-v2-worker-smoke.py`: 実モデルで
   Execute×2+Replay×1のprojection byte一致、seed/prompt入力感応性、fail-closed 10 probe
   （改竄manifest・予算違反・不正frame・vocab範囲外token・`--n-predict`混入等）を確認した。
+- **golden vector登録とboot self-test**（`v2-golden-gen` / `v2-selftest` /
+  `MISAKA_PALW_GOLDEN`）: manifest hashとの循環はgolden job contextの
+  sentinel manifest hash（全zero）で解決し、set headerがclass/model/shapeを束縛
+  （別classのsetはロード拒否 — CPU buildがMetal setを拒否することを実証）。登録すると
+  manifest hashが変わるため、gate付きruntimeとgate無しruntimeはhashレベルで別物になる。
+  ローカル2 profile（aarch64 Metal / aarch64 CPU）のdev goldenを生成・全PASS。
+  ただしこれは**開発機のgolden**であり、x86 fleet classのgoldenはfleet実機で
+  同じtoolingにより生成する（§5のCAUTIONは未解消のまま）。
+- **`palw-agent` Phase A**（`misaka-palw-agent`）: boot golden gate（selftest失敗で
+  QUARANTINED=全job拒否で稼働継続、golden未登録は起動拒否）、model load前のadmission、
+  per-job supervision（deadline/timeout kill、部分結果破棄）、応答の再束縛検証
+  （request hash echo・CU再導出・job_context_hash独立再計算）。
+  smoke: `scripts/misaka-palw-v2-agent-smoke.py`。
 
 これらは必要な前進だが、§12のgateを満たしたことを意味しない。特にgolden vector
 （full 64-byte）の正式登録、3 microarchitectures×1,000 prompts×5回、10,000 seedsの
