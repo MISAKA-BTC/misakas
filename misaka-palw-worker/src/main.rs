@@ -47,7 +47,8 @@ use kaspa_consensus_core::palw_v2::{
     trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2, PalwGoldenVectorSetV2, PalwJobContextV2,
     PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2,
     PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2,
-    PalwTraceSummaryV2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V2, PALW_V2_MAX_FRAME_BYTES,
+    PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V2,
+    PALW_V2_MAX_FRAME_BYTES,
 };
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
@@ -418,6 +419,23 @@ const PALW_GOLDEN_ENV: &str = "MISAKA_PALW_GOLDEN";
 fn load_golden_set(path: &str) -> PalwGoldenVectorSetV2 {
     let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("cannot open golden set at {path}: {e}")));
     let payload = read_framed(&mut file, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
+    // Peek the schema version BEFORE decoding. `version` is the first field of the Borsh layout,
+    // and a set from an older layout fails to decode structurally — which surfaces as
+    // "Unexpected length of input" at some offset and tells an operator nothing about what to do.
+    // Reading the two bytes first turns that into the actionable error.
+    let declared_version = match payload.get(..2) {
+        Some(bytes) => u16::from_le_bytes([bytes[0], bytes[1]]),
+        None => die(format!("golden set at {path} rejected: truncated — {} bytes cannot hold a version", payload.len())),
+    };
+    if declared_version != PALW_GOLDEN_SET_VERSION_V2 {
+        die(format!(
+            "golden set at {path} rejected: schema version {declared_version}, but this worker speaks \
+             {PALW_GOLDEN_SET_VERSION_V2}. Version {PALW_GOLDEN_SET_VERSION_V2} added the measured build identity \
+             (cmake_cache_sha256, llama_static_library_sha256) that a v{declared_version} set does not carry, so it \
+             cannot be checked against this build. Regenerate it on this build: \
+             `palw-worker --mode v2-golden-gen --out {path}`."
+        ));
+    }
     let set: PalwGoldenVectorSetV2 =
         decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
     set.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
@@ -432,6 +450,38 @@ fn load_golden_set(path: &str) -> PalwGoldenVectorSetV2 {
                 "golden set at {path} rejected: {field} mismatch — the set was generated under a runtime this worker is not (ours {}, set {})",
                 hex(ours),
                 hex(theirs)
+            ));
+        }
+    }
+    // The three ids above are DECLARED identity: `runtime_class_id` hashes a compile-time class
+    // string, so two builds that claim one class and compute different arithmetic pass all three.
+    // The pair below is MEASURED. Without it, a host built with GGML_OPENMP=ON accepts a set
+    // generated with it OFF, passes its own boot self-test, and then disagrees with the fleet on
+    // every real job — surfacing as a determinism failure whose actual cause is the build. This is
+    // also the gate for a validator's own claim: `PalwCapabilityDeclarationV2` bonds a
+    // `runtime_manifest_hash` that covers exactly these bytes.
+    let build_checks: [(&str, [u8; 32], [u8; 32], &str); 2] = [
+        (
+            "cmake_cache_sha256",
+            hex_to_32(env!("MISAKA_PALW_CMAKE_CACHE_SHA256"), "build-time CMake cache SHA-256"),
+            set.cmake_cache_sha256,
+            "the llama.cpp tree was configured differently (ggml flags such as GGML_OPENMP, or the toolchain)",
+        ),
+        (
+            "llama_static_library_sha256",
+            hex_to_32(env!("MISAKA_PALW_LLAMA_LIBS_SHA256"), "build-time llama libs SHA-256"),
+            set.llama_static_library_sha256,
+            "different llama.cpp/ggml archives are linked into this worker",
+        ),
+    ];
+    for (field, ours, theirs, why) in build_checks {
+        if ours != theirs {
+            die(format!(
+                "golden set at {path} rejected: {field} mismatch — {why}. The vectors were MEASURED under \
+                 a build this worker is not, so passing them would prove nothing (ours {}, set {}). Rebuild \
+                 to match the fleet, or regenerate the set on this build with --mode v2-golden-gen.",
+                faster_hex::hex_string(&ours),
+                faster_hex::hex_string(&theirs)
             ));
         }
     }
@@ -473,10 +523,14 @@ fn run_v2_golden_gen(out_path: &str) {
     }
     let model_path = pinned_model_path_v2();
     let mut set = PalwGoldenVectorSetV2 {
-        version: PALW_JOB_WIRE_VERSION_V2,
+        version: PALW_GOLDEN_SET_VERSION_V2,
         runtime_class_id: runtime_class_id(),
         model_profile_id: model_profile_id(),
         shape_profile_id: shape_profile_id_v2(&shape_string_v2()),
+        // Measured, from the same build-time values the runtime manifest is assembled out of —
+        // so the set records the build it was generated under, not the class it claims.
+        cmake_cache_sha256: hex_to_32(env!("MISAKA_PALW_CMAKE_CACHE_SHA256"), "build-time CMake cache SHA-256"),
+        llama_static_library_sha256: hex_to_32(env!("MISAKA_PALW_LLAMA_LIBS_SHA256"), "build-time llama libs SHA-256"),
         jobs: Vec::new(),
     };
     for (name, seed, ids, decode) in golden_probe_inputs() {

@@ -77,6 +77,20 @@ pub const PALW_TRACE_COMMITMENT_VERSION_V2: u16 = 2;
 /// The job envelope / job result wire version (VPS design §5.2).
 pub const PALW_JOB_WIRE_VERSION_V2: u16 = 2;
 
+/// Schema version of a registered golden vector set — **deliberately its own constant**, not
+/// [`PALW_JOB_WIRE_VERSION_V2`].
+///
+/// A golden set is a LOCAL artifact: a file an operator generates on one host and registers via
+/// `MISAKA_PALW_GOLDEN`. It never crosses the wire between peers. The job envelope / result /
+/// health / capability documents do, and they are what `PALW_JOB_WIRE_VERSION_V2` speaks for.
+/// Sharing one constant meant the set's schema could not evolve without invalidating every v2
+/// wire message — including the agent↔worker UDS protocol — so the two are separated here.
+///
+/// `3` because the set gained `cmake_cache_sha256` + `llama_static_library_sha256` (see the
+/// struct docs): sets written under the previous layout are refused with an explicit
+/// `UnsupportedVersion` instead of a bare Borsh decode error.
+pub const PALW_GOLDEN_SET_VERSION_V2: u16 = 3;
+
 // ---------------------------------------------------------------------------------------------
 // Domain-separation keys. All keyed BLAKE2b-512; a BLAKE2b key is at most 64 bytes, which the
 // tests assert for every constant here so a future rename cannot panic at first use.
@@ -1014,12 +1028,39 @@ pub struct PalwGoldenJobV2 {
 /// A registered golden vector set. The header binds the exact runtime identity the vectors were
 /// generated under; [`PalwGoldenVectorSetV2::golden_root`] is the value `RuntimeManifestV2`
 /// carries, replacing the [`golden_vector_root_unpopulated_v2`] sentinel.
+///
+/// # Why the header carries MEASURED build identity, not just the class label
+///
+/// `runtime_class_id` is derived from a compile-time class STRING (the worker's `RUNTIME_CLASS`,
+/// selected by cfg), so it says which class the build *claims*. It cannot distinguish two builds
+/// that claim the same class and compute different arithmetic — and the difference that matters
+/// most is exactly of that kind: `GGML_OPENMP` moves the matmul's work split and reduction order
+/// into an external runtime's scheduling, so an OpenMP build and a non-OpenMP build of the same
+/// source are different arithmetic under one class label.
+///
+/// `RuntimeManifestV2` already covers that (it hashes `cmake_cache_sha256`,
+/// `llama_static_library_sha256` and every `ggml_*` flag), and a validator's
+/// [`PalwCapabilityDeclarationV2`] stakes a bond on its `runtime_manifest_hash`. The boot gate
+/// that loads this set must therefore be at least as strong as the claim it is gating, or a host
+/// passes its own self-test against vectors generated under a build it did not declare. So the
+/// two measured build hashes travel WITH the set and the loader compares them.
+///
+/// They are the measured pair rather than the full `runtime_manifest_hash` because that hash
+/// includes `golden_vector_root` — comparing it against the set that DEFINES that root would be
+/// circular. `cmake_cache_sha256` (the configuration that chose the kernels) and
+/// `llama_static_library_sha256` (the archives actually linked) carry no such self-reference.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwGoldenVectorSetV2 {
     pub version: u16,
     pub runtime_class_id: Hash64,
     pub model_profile_id: Hash64,
     pub shape_profile_id: Hash64,
+    /// SHA-256 of the `CMakeCache.txt` that configured the llama.cpp tree these vectors were
+    /// measured under — the file the `ggml_*` flags (OpenMP included) are read out of.
+    pub cmake_cache_sha256: [u8; 32],
+    /// Combined SHA-256 over the exact llama.cpp/ggml static archives linked into the generating
+    /// worker, in the build's fixed order with each library name bound to its digest.
+    pub llama_static_library_sha256: [u8; 32],
     pub jobs: Vec<PalwGoldenJobV2>,
 }
 
@@ -1028,8 +1069,8 @@ impl PalwGoldenVectorSetV2 {
     /// equality against the LOADING worker's own ids is the loader's job (the set says what it
     /// was generated under; the worker must refuse a set that is not its own class).
     pub fn validate_shape(&self, profile_max_context_tokens: u32) -> Result<(), PalwV2Error> {
-        if self.version != PALW_JOB_WIRE_VERSION_V2 {
-            return Err(PalwV2Error::UnsupportedVersion { got: self.version, expected: PALW_JOB_WIRE_VERSION_V2 });
+        if self.version != PALW_GOLDEN_SET_VERSION_V2 {
+            return Err(PalwV2Error::UnsupportedVersion { got: self.version, expected: PALW_GOLDEN_SET_VERSION_V2 });
         }
         if self.jobs.is_empty() {
             return Err(PalwV2Error::GoldenSetInvalid("a golden set with no jobs gates nothing".into()));
@@ -1086,6 +1127,13 @@ impl PalwGoldenVectorSetV2 {
         w.put_hash64(&self.runtime_class_id);
         w.put_hash64(&self.model_profile_id);
         w.put_hash64(&self.shape_profile_id);
+        // The measured build identity is inside the root, so two sets that differ ONLY in the
+        // build they were generated under are different sets — and because the root is what
+        // `RuntimeManifestV2` carries, that difference propagates into the manifest hash a
+        // capability declaration bonds. Leaving it out of the root would let the header field be
+        // rewritten without moving any committed value.
+        w.put_fixed32(&self.cmake_cache_sha256);
+        w.put_fixed32(&self.llama_static_library_sha256);
         w.put_u32(self.jobs.len() as u32);
         for job in &self.jobs {
             w.put_var_str(&job.name);
@@ -1661,10 +1709,12 @@ mod tests {
             trace_event_count: 16,
         };
         PalwGoldenVectorSetV2 {
-            version: 2,
+            version: PALW_GOLDEN_SET_VERSION_V2,
             runtime_class_id: h64(0x55),
             model_profile_id: h64(0x33),
             shape_profile_id: h64(0x66),
+            cmake_cache_sha256: [0xC1; 32],
+            llama_static_library_sha256: [0xC2; 32],
             jobs: vec![
                 PalwGoldenJobV2 {
                     name: "probe-a".into(),
@@ -1724,6 +1774,44 @@ mod tests {
         s.jobs[0].prompt_token_ids.push(4);
         assert!(s.validate_shape(4096).is_ok());
         assert_ne!(base, s.golden_root());
+
+        // MEASURED build identity is part of the root, not just of the header. Two sets that
+        // agree on class, model, shape, jobs AND every expectation, and differ only in the build
+        // they were measured under, are different sets — this is the OpenMP case, where the class
+        // label is identical and the arithmetic is not.
+        let mut s = test_golden_set();
+        s.cmake_cache_sha256[0] ^= 1;
+        assert!(s.validate_shape(4096).is_ok(), "a differently-configured build is well-formed, just not ours");
+        assert_ne!(base, s.golden_root(), "the CMake configuration is part of the root");
+
+        let mut s = test_golden_set();
+        s.llama_static_library_sha256[31] ^= 1;
+        assert_ne!(base, s.golden_root(), "the linked llama.cpp/ggml archives are part of the root");
+    }
+
+    /// The golden-set schema version must stay INDEPENDENT of the job-wire version. They were one
+    /// constant, which meant the set's schema could not gain a field without invalidating every
+    /// v2 wire message — envelope, result, health, capability, and the agent↔worker UDS protocol.
+    /// A future refactor that re-merges them would silently reintroduce that coupling, so the
+    /// separation is asserted rather than left to a comment.
+    #[test]
+    fn golden_set_version_is_independent_of_the_job_wire_version() {
+        assert_ne!(
+            PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2,
+            "a local artifact's schema and the peer wire protocol must be able to move separately"
+        );
+        // A set written under the previous layout is refused EXPLICITLY, by version, rather than
+        // surfacing as a bare Borsh decode error at some offset.
+        let mut s = test_golden_set();
+        s.version = PALW_JOB_WIRE_VERSION_V2;
+        assert_eq!(
+            s.validate_shape(4096),
+            Err(PalwV2Error::UnsupportedVersion { got: PALW_JOB_WIRE_VERSION_V2, expected: PALW_GOLDEN_SET_VERSION_V2 })
+        );
+        // The envelopes a set derives still speak the JOB WIRE version — the set's own bump must
+        // not leak into the protocol the worker and agent talk.
+        let s = test_golden_set();
+        assert_eq!(s.envelope_for(&s.jobs[0]).version, PALW_JOB_WIRE_VERSION_V2);
     }
 
     #[test]
