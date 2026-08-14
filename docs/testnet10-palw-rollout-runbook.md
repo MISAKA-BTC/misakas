@@ -1,5 +1,36 @@
 # testnet-10 PALW rollout runbook — the LLM-PoW re-genesis
 
+> ## ⚠️ STATUS 2026-08-13: the PoW this runbook deploys is DISABLED. Do not follow §"Identity"
+> ## or §"Per-host prerequisites" as written.
+>
+> `algo_id = 5` (PALW via Ollama) was measured **forgeable without running the model** and
+> switched off in `9736aec`: `TESTNET_PARAMS.pow_palw_ollama_activation = never()`. The public
+> preset falls back to the sound Phase-3 BLAKE2b-SHA3 PoW (`algo_id = 3`) until the
+> logits-binding replacement ships.
+>
+> Why: the canonical prompt makes the pinned model emit ONE constant 16-token continuation for
+> every seed (27/27 seeds, 22 of them uniform random). The 72-byte tag is therefore a 64-byte
+> constant, a `prompt_eval_count` drawn from ~10 values, and a constant 16 — guessable with ~31
+> BLAKE2b hashes and zero inference, while an honest miner pays 12-26 s per attempt. The verifier
+> replays the real model, gets the same constant, and ACCEPTS the forgery. Checkable with no
+> runtime at all: the first 64 bytes of `POW_L1_PALW_OLLAMA_CALIBRATION_V1` **are** the digest of
+> that boilerplate string.
+>
+> What this invalidates in the text below, beyond the PoW itself:
+>
+> * **The consensus fingerprint in §Identity is stale.** It reads `a044a672…`; the preset now
+>   produces `dd720ae3353a3f04c1d96e9f4dc7854c21388e32160bf0a5fe828f5681e023c5`. Verify against
+>   the pin in `consensus_params_id_tests`, never against this table.
+> * **The Ollama prerequisites (§Per-host) are no longer a consensus requirement.** A node on the
+>   current preset needs no Ollama server and no model pin to validate.
+> * **The "fleet agrees 8/8" determinism evidence is void** wherever it is cited — it measured
+>   agreement on a constant, which no rounding-order difference could have moved. See
+>   §"Host class" for what replaced it.
+>
+> The §"Why 120 s" reasoning, the VLT window table and the rollout ordering are unaffected and
+> still current. The replacement PoW binds the LOGITS via the worker's `gemm_trace_root`; its
+> host requirements are in §"Determinism class of the v2 worker" below.
+
 The release that makes the public testnet's proof-of-work one deterministic Qwen3.5-2B
 inference per attempt (ADR-0021), at one block per two minutes. This is a **re-genesis**, the
 "-bs3" precedent: the new chain is cryptographically distinct, an un-wiped node hits the
@@ -50,15 +81,106 @@ the VLT overlay, RPC and seeder work these hosts also carry.
 count is **4-7× slower on a CPU without the F16C flag** (h2: 33 s vs h1's 4.4 s on FEWER cores) —
 without hardware fp16↔fp32 conversion ggml does it in software, and an F16 model is nothing but
 that conversion. F16C has shipped on x86 since ~2013; h2 only lacks it because its hypervisor
-masks the flag. Check `grep -o f16c /proc/cpuinfo` when provisioning: a host without it still
-validates *correctly* (determinism is unaffected — that is why the fleet agrees 8/8) but carries
-several times the load, and it is the host that sets the network's floor.
+masks the flag. Check `grep -o f16c /proc/cpuinfo` when provisioning: a host without it carries
+several times the load on the F16 profile, and it is the host that sets the network's floor.
+
+A host with the flag masked still validates *correctly* — but **not** for the reason this section
+used to give. The old justification was "determinism is unaffected, that is why the fleet agrees
+8/8", and that 8-seed campaign is void: it compared a constant continuation, which no
+reduction-order difference could have moved (see the STATUS banner). The claim now rests on a
+direct measurement of the v2 worker instead, and on two facts about how the flag is used:
+
+* **The masked CPUID bit does not stop the instructions.** Measured on h2 (Broadwell, flag absent
+  from `/proc/cpuinfo`): a `-mf16c` binary executing `VCVTPS2PH`/`VCVTPH2PS` returns cleanly
+  (`exit=0`). The hypervisor hides the bit; the silicon still runs it. So a `GGML_F16C=ON` build
+  runs on h2 rather than trapping, which is why h2 can be in the class at all.
+* **The manifest pins what the BUILD requires, not what the host advertises.**
+  `runtime_cpu_feature_mask` is the constant `"build-required:unpinned"`
+  (`misaka-palw-worker/src/main.rs`), deliberately NOT the CPUID probe —
+  `host_cpu_features_string()` exists but is display-only. Had CPUID fed the manifest, h1 and h2
+  would report different `runtime_manifest_hash` values for identical arithmetic and could never
+  share a class. This is the single decision that makes a mixed-hypervisor fleet workable.
+
+Measured 2026-08-13, one binary across all four x86_64 hosts, full-logits v2 trace: **ONE-CLASS,
+4/4 hosts, 4/4 probe jobs byte-identical**, including h1 (EPYC, flag present) vs h2 (Broadwell,
+flag masked). Golden-set files identical on all four (`81fa2fca…`), and the cross-check —
+h1 verifying h2's set and h2 verifying h1's through the real load-and-verify path — passes both
+ways. Reproduce with `scripts/misaka-palw-v2-class-probe.sh` per host, then
+`scripts/misaka-palw-v2-class-compare.py` over the collected class lines.
 
 Consequences to plan for: 35B adoption additionally needs **≥ 32 GB RAM hosts** (its Q4_K_M blob
 is 23.9 GB — the current 11/15/23 GB fleet cannot hold it), and at 120 s the DAA window (264
 blocks) is 8.8 h of difficulty memory, so a hashrate change takes that long to be fully absorbed.
 
-## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11)
+## Determinism class of the v2 worker — build ONCE, distribute the binary
+
+This section supersedes §"Per-host prerequisites" for the logits-binding replacement. It states
+one rule, because getting it wrong produces a fleet that computes identical arithmetic and still
+cannot form a committee.
+
+**Build the worker once and ship that binary to every host. Never build per host.**
+
+`worker_binary_sha256` is inside the `RuntimeManifestV2` preimage, and a validator's
+`PalwCapabilityDeclarationV2` bonds the resulting `runtime_manifest_hash`. Two hosts that compile
+the same source with different toolchains therefore *declare different runtimes* even though they
+agree on every trace. Measured on this fleet: **h1 has rustc 1.95.0 and h2 has rustc 1.97.0**, so
+per-host builds are not a hypothetical. The consequences are concrete:
+
+* Their `runtime_manifest_hash` values differ, so the identity each bonds on-chain differs.
+* The golden-set gate refuses across them — `cmake_cache_sha256` /
+  `llama_static_library_sha256` are compared on load, so h1's set is rejected by h2 with
+  "the vectors were MEASURED under a build this worker is not".
+* Any cross-host determinism measurement becomes inconclusive: the comparator reports
+  BUILD-MISMATCH and correctly declines to answer the arithmetic question.
+
+The binary is safe to distribute: llama.cpp/ggml are linked **statically**, so only libstdc++ and
+libc are dynamic, and the fleet is uniform there (Ubuntu 24.04, glibc 2.39 on all four hosts).
+Distribution recipe, per the 2026-08-13 run:
+
+```bash
+# ONE build host, against the pinned CPU-profile llama.cpp tree
+MISAKA_PALW_CPU=1 MISAKA_LLAMA_SRC=$HOME/llama.cpp-cpu \
+  cargo build --release -p misaka-palw-worker
+# ship the SAME bytes everywhere, then confirm they are the same bytes
+sha256sum target/release/palw-worker      # 5a3bdc9a5ea7b146… on the 2026-08-13 fleet
+```
+
+Per host, the remaining prerequisites are only data and a pinned tree:
+
+| what | value |
+|---|---|
+| llama.cpp tree | commit `030ebb558a5820b444a8f836ed5cdd46c9b4bd7a` = `qwen35_pins::LLAMA_COMMIT` |
+| CPU-profile flags | `NATIVE=OFF F16C=ON AVX2=ON FMA=ON SSE42=ON CPU_ALL_VARIANTS=OFF OPENMP=OFF BLAS=OFF METAL=OFF` |
+| model | `Qwen3.5-2B-Q4_K_M.gguf`, **1 280 835 840 bytes** (`qwen35_pins::GGUF_SIZE`) at `MISAKA_PALW_GGUF` |
+| fp environment | must probe canonical — `rounding=rne,ftz=0,daz=0` |
+
+`GGML_CPU_ALL_VARIANTS=OFF` is not optional: ON compiles several kernel variants and selects one
+by runtime CPUID, which would split hosts *inside* a single class label — precisely the failure
+the class mechanism exists to prevent. `GGML_OPENMP=OFF` likewise, because under OpenMP the
+matmul's work split and reduction order come from an external runtime's scheduling rather than
+from ggml's threadpool at the pinned thread count. Both flags are read out of the tree's own
+`CMakeCache.txt` at build time and hashed into the manifest, so a mismatch changes the runtime's
+identity instead of silently changing its arithmetic.
+
+Verify a fleet is one class before relying on it:
+
+```bash
+# on each host
+MISAKA_PALW_GGUF=/tmp/Qwen3.5-2B-Q4_K_M.gguf \
+  bash scripts/misaka-palw-v2-class-probe.sh ./palw-worker <label> > class-<label>.json
+# then, with all class lines collected
+python3 scripts/misaka-palw-v2-class-compare.py class-*.json    # want: ONE-CLASS
+```
+
+A `ONE-CLASS` verdict is evidence, not proof — the probe corpus is 4 fixed jobs compiled into the
+worker. Treat a `BUILD-MISMATCH` as "determinism untested", not as "hosts disagree".
+
+## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11) — ⚠️ SUPERSEDED
+
+> Kept for the record only. `algo_id = 5` is disabled (STATUS banner), so **none of this is a
+> consensus requirement**: a node on the current preset validates with no Ollama server, no model
+> pin and no calibration. For the replacement worker's requirements see
+> §"Determinism class of the v2 worker" above. Do not provision a new host from this section.
 
 Every **validating** node replays one inference per header against a **host-local Ollama server**
 running the pinned Qwen model — the runtime an Ubuntu VPS fleet actually operates (the
@@ -169,6 +291,20 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
   - F16 profile: **x86-64 8/8 across vendors** (the fleet class this release pins), and Metal ≡
     arm64-CPU ≡ x86 on 7/8 — one seed still flips arm64-vs-x86 in the batched prefill GEMM, so
     **arm64 is NOT in the class** (7/8 is a fork, not a pass). NVIDIA is unmeasured here.
+  - ⚠️ **RETRACTED 2026-08-13 — the F16 half of this bullet is void, and the way it is void is the
+    whole lesson.** This campaign measured HOST AGREEMENT and never measured SEED DIVERSITY. At the
+    shipped `num_predict = 16` the F16 profile emits ONE constant continuation for every seed
+    (27/27, 22 uniform random), so host agreement is guaranteed a priori and certifies nothing
+    about anyone's arithmetic. Note what that implies about the selection above: the Q8_0 numbers
+    are real — its outputs genuinely varied by host, which is what a sensitive quantity looks like
+    — and F16 was chosen *because* it made that variance disappear. The variance did not disappear
+    because the arithmetic became portable; it disappeared because the output stopped depending on
+    the input. The cure and the defect are the same phenomenon, and the same collapse is what made
+    the PoW forgeable (see the STATUS banner). The campaign also ran at `num_predict = 48`, where
+    the continuation is already partly collapsed (2 distinct over 3 seeds measured), and was never
+    re-run at 16. Superseded by the v2 full-logits measurement in §"Determinism class of the v2
+    worker": one binary, 4/4 x86_64 hosts, 4/4 jobs byte-identical, with a negative control
+    (arm64 vs x86 correctly reports BUILD-MISMATCH) proving the verdict discriminates.
   - Bringing Mac/NVIDIA into one class is exactly what the Qwen3.6-35B PALW runtime's patched
     llama.cpp (serial n_batch=1 execution policy, fp32 accumulation) exists for; porting that
     runtime to the 2B worker is the follow-up phase. Stock Ollama cannot express it
