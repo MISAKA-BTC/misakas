@@ -54,6 +54,13 @@ if not sys.stdout.isatty():
     RED = GRN = YLW = DIM = RST = ""
 
 
+def _prefill_of(job_name):
+    """Corpus job names encode their prefill length as `-p<N>-`; 0 when absent."""
+    import re
+    m = re.search(r"-p(\d+)-", job_name)
+    return int(m.group(1)) if m else 0
+
+
 def load(path):
     with open(path) as f:
         text = f.read().strip()
@@ -83,6 +90,39 @@ def main(paths):
         print(f"  {DIM}·{RST} {h['label']:<16} {arch:<16} fp-env {fp}  openmp={h['ggml_flags'].get('openmp')}")
 
     problems = []
+
+    # ── Corpus agreement (random-corpus mode only) ──────────────────────────────
+    # Comparing trace roots across hosts is only meaningful if the hosts ran the SAME jobs.
+    # The fixed probe guarantees that by compiling the corpus into the worker; the random
+    # corpus has to prove it, so refuse the comparison outright when the inputs differ.
+    modes = {h["label"]: h.get("mode", "fixed-golden") for h in hosts}
+    digests = {h["label"]: h.get("corpus_digest") for h in hosts if h.get("corpus_digest")}
+    if len(set(modes.values())) > 1:
+        print(f"\n{YLW}MODE MISMATCH{RST}: cannot compare a fixed-corpus line against a random-corpus one.")
+        for label, m in modes.items():
+            print(f"    {label:<16} {m}")
+        return 1
+    if digests:
+        if len(digests) != len(hosts):
+            print(f"\n{YLW}corpus_digest missing on some hosts{RST} — cannot prove they ran the same jobs.")
+            return 1
+        if len(set(digests.values())) > 1:
+            print(f"\n{RED}CORPUS MISMATCH{RST}: hosts did not run the same jobs, so any agreement or")
+            print("  disagreement below is meaningless. Re-run with the same --master-seed and --jobs.")
+            for label, d in digests.items():
+                print(f"    {label:<16} {d[:48]}")
+            return 1
+        seeds = {h["label"]: h.get("corpus_master_seed") for h in hosts}
+        n = next(iter({h.get("corpus_jobs") for h in hosts}))
+        print(f"  {DIM}corpus{RST} {n} jobs, master seed {next(iter(set(seeds.values())))!r}, "
+              f"inputs agree ({next(iter(set(digests.values())))[:16]}…)")
+        stuck = {h["label"]: h.get("corpus_failures") or {} for h in hosts}
+        if any(stuck.values()):
+            print(f"\n{YLW}some jobs failed to execute{RST} — the class is untested for those:")
+            for label, f in stuck.items():
+                for name, err in list(f.items())[:4]:
+                    print(f"    {label:<16} {name}: {str(err)[:90]}")
+            problems.append("corpus-failures")
 
     # ── SELFTEST floor ──────────────────────────────────────────────────────────
     failed = [h["label"] for h in hosts if h.get("selftest") != "pass"]
@@ -169,19 +209,45 @@ def main(paths):
         problems.append("golden-root")
 
     if not problems:
+        corpus_mode = bool(digests)
         print(f"\n{GRN}ONE-CLASS{RST}: identity matches on all {len(IDENTITY)} fields and all "
               f"{len(job_names)} probe jobs agree byte for byte.")
-        print(f"  golden_root  {ref['golden_root']}")
+        print(f"  aggregate    {ref['golden_root']}")
         print(f"  class id     {ref['runtime_class_id']}")
-        print(f"\n  Scope of this result: {len(job_names)} jobs on {len(hosts)} hosts. It is evidence")
-        print(f"  for the class, not proof of it — the corpus is fixed and small. Before relying on")
-        print(f"  it, run the decisive cross-check below, which the JSON comparison cannot replace:")
-        for h in hosts:
-            others = [o["label"] for o in hosts if o["label"] != h["label"]]
-            print(f"    MISAKA_PALW_GOLDEN={h['golden_file']} palw-worker --mode v2-selftest   "
-                  f"# on {', '.join(others)}")
-        print(f"\n  Each host must PASS every other host's set. That exercises the real verifier")
-        print(f"  path, including the set's own identity gate, rather than comparing two JSON docs.")
+        print(f"\n  Scope of this result: {len(job_names)} jobs on {len(hosts)} hosts.")
+        if corpus_mode:
+            # The reachable prefill range is 1..512: the shape profile pins prefill-single-batch
+            # and the worker refuses anything longer, so ">512" is out of profile by DESIGN, not a
+            # coverage gap. The gap that matters is the fixed corpus's 96-token ceiling.
+            prefills = [_prefill_of(n) for n in job_names if _prefill_of(n)]
+            beyond = sum(1 for p in prefills if p > 96)
+            print(f"  Random corpus, inputs proven identical across hosts. "
+                  f"{beyond}/{len(job_names)} jobs exceed the fixed corpus's 96-token prefill ceiling"
+                  + (f", longest {max(prefills)}." if prefills else "."))
+            if prefills and max(prefills) >= 512:
+                print(f"  That reaches the 512-token single-batch limit, so the whole legal prefill range")
+                print(f"  is exercised — anything longer is refused by the worker (prefill-single-batch),")
+                print(f"  which is also why the multi-batch GEMM that once split arm64 from x86 is not a")
+                print(f"  path v2 can take.")
+            elif beyond:
+                print(f"  {YLW}The 512-token boundary itself is not reached{RST} — raise --jobs so the")
+                print(f"  longest prefill lengths are included.")
+            else:
+                print(f"  {YLW}This adds no prefill coverage over the fixed corpus{RST} — raise --jobs.")
+            print(f"  Still evidence rather than proof: one seed, one shape profile, one decode-budget")
+            print(f"  set, and agreement on a corpus cannot speak for inputs outside it.")
+        else:
+            print(f"  It is evidence for the class, not proof of it — this corpus is fixed and small.")
+            print(f"  Its longest prefill is 96 tokens while the profile allows 512, so four fifths of")
+            print(f"  the legal prefill range is unmeasured here; misaka-palw-v2-class-corpus.py covers")
+            print(f"  it. Before relying on this, run the decisive cross-check below, which the JSON")
+            print(f"  comparison cannot replace:")
+            for h in hosts:
+                others = [o["label"] for o in hosts if o["label"] != h["label"]]
+                print(f"    MISAKA_PALW_GOLDEN={h['golden_file']} palw-worker --mode v2-selftest   "
+                      f"# on {', '.join(others)}")
+            print(f"\n  Each host must PASS every other host's set. That exercises the real verifier")
+            print(f"  path, including the set's own identity gate, rather than comparing two JSON docs.")
         return 0
 
     print(f"\nverdict: {', '.join(problems)}")
