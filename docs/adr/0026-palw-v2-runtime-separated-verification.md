@@ -154,6 +154,12 @@ CanonicalLogitsV1 (v2 design §3, §8) is what makes within-class exactness reac
 canonical little-endian integer/byte form under a pinned FP environment (RNE, no FTZ/DAZ drift, no
 fast-math, no FMA contraction) — `hash(canonical_tensor)`, never `hash(raw_float_tensor)`.
 
+> **Amended by ADR-0027 §2:** the class definition is upgraded from pairwise agreement to
+> conformance against a canonical reference implementation (soft-float/integer), so disputes are
+> adjudicable by any node without class membership. Exactness itself is also re-grounded: under
+> the no-BFT premise a tolerance verdict could only be settled by a vote, so exact-within-class is
+> forced, not merely preferred.
+
 ### 4. Commit → post-commit challenge → recompute → quorum (the flow, made unpredictable)
 
 Adopt Ambient's central move — decide *what to check after the commitment is fixed* — and bind the
@@ -175,6 +181,12 @@ holding no KV cache must prefill the forced prefix to reach a challenged positio
 cost number in the §10 inequality MUST be measured from a **cold, no-KV verifier**, per class, at
 p99 — the "one-token verification is cheap" claim is prohibited (v2 design §15 extends to cover it).
 
+> **Amended by ADR-0027 §1/§4:** challenge-position unpredictability is no longer a security
+> dependency. The binding dispute path is a challenger-chosen first-divergence refutation
+> (re-execute → name the step → one-step check under canonical reference arithmetic); the
+> PRF-positions flow above survives only as an optional coverage sampler that decides nothing and
+> never feeds a slash.
+
 ### 5. Dynamic challenge count `q`, derived from `P_detect · S > G` — never fixed at 1
 
 Ambient's "verify one token" framing is the single weakest security claim, and PALW must not copy
@@ -185,6 +197,12 @@ per job from bond `S`, expected cheating gain `G`, job value, computation amount
 reputation, so that `P_detect · S > G` holds for the *smallest plausible* `f` the scheme intends to
 resist. The published §10 economics carry the `q`-sizing rule and its assumed minimum `f`; shipping
 a fixed `q` (especially `q = 1`) is a rejected design.
+
+> **Amended by ADR-0027 §3:** under the no-BFT / no-challenge-randomness premises the sampling
+> form of `P_detect` is replaced by funded full re-execution (f-independent: one honest replay
+> catches any deviation), and `q` changes meaning from "positions sampled" to "independent
+> re-executors funded." The inequality keeps its shape; `P_detect` becomes an incentive property
+> measured, never assumed.
 
 ### 6. Verification is asynchronous; PALW never gates block validity, and never on LStake alone
 
