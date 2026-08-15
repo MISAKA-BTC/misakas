@@ -249,6 +249,18 @@ commitment as a proof of computation.
   independently implemented **twice** (v0.1 §29 gate 1) — two implementations agreeing is evidence
   about the *specification*, which is a different and legitimate use of agreement than a jury
   deciding a fact.
+  *Land status (2026-08-15, `consensus/core/src/palw_reference.rs`, consensus-inert):* the
+  canonical arithmetic v1 is implemented as pure-integer soft-float (binary32 add/sub/mul/neg,
+  pinned k-ascending dot, GEMM-over-dot) — no hardware float in the normative path, so MXCSR/FPCR
+  state cannot reach a result; NaN payloads (the one legitimately nondeterministic IEEE surface)
+  canonicalize to `0x7FC00000`; `reference_arithmetic_ruleset_id_v1` pins the rule text for
+  future `shape_profile_id` binding. Verified against the hardware FPU as a clean-environment
+  oracle: full special-value matrix, 200k random pairs, 100k tie-neighborhood pairs, 100k
+  subnormal-range pairs, dot/GEMM cross-checks, an order witness and an FMA-discrimination
+  witness, in debug AND release. This is one implementation plus an in-crate oracle — the §29
+  gate-1 *independent second implementation* (e.g. a Berkeley-SoftFloat cross-build) remains
+  open. Transcendentals (exp/sqrt/div — needed for softmax/norm steps) are deliberately absent
+  pending their own canonical pinning; the step *function* remains unpinned, as above.
 * **GPU admission is now falsifiable**: a backend is admitted iff it matches the reference
   bit-exactly with pinned reductions. Expect some hardware to fail this and stay out.
 * ADR-0026 §3 (class definition), §4 (challenge randomness) and §5 (`q` semantics) are amended by

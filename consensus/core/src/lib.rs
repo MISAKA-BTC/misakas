@@ -138,6 +138,7 @@ pub mod network;
 /// nothing in validation, fork choice or the header pipeline may consume it until the
 /// staged activations pass their gates. `palw_execution_algo_id = 2` in here is a
 /// PALW-internal namespace, NOT the header-level `pow_algo_id = 2` (historical Argon2id).
+pub mod palw_reference;
 pub mod palw_slash;
 pub mod palw_v2;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
