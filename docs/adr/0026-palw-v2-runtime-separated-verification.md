@@ -296,6 +296,21 @@ Ambient is wrong.
 * **Activation + GEMM legs are the next Land increment** under the existing Merkle discipline in
   `palw_v2.rs` — new leaf kinds and `shape_profile_id` pins, not a new mechanism; consensus stays
   inert until their own gates pass.
+  > **Land status (2026-08-15, `consensus/core/src/palw_legs.rs`, consensus-inert):** the
+  > activation and checkpoint legs are implemented as a new scheme family
+  > (`misaka-palw/execution-commitment/v1`) wrapping the frozen v2 logits root; leg-era contexts
+  > keep `trace_scheme_id = v2`, and which commitment form a class produces is a registry fact.
+  > **§2's `Project(·)` is amended to exact canonical rows**: under ADR-0027 the legs feed
+  > openings and one-step recomputation — a projection is neither an input state nor cheaper to
+  > refute, and the hash already is the compression. The v2 fail-closed rule extends to
+  > activations (a committed non-finite value is a refutable fault); checkpoint leaves chain
+  > from a job-bound genesis, which moves v0.1 §17.2 `M-C4` "broken checkpoint ancestry" into
+  > ADR-0027's *objective* column (two adjacent openings that do not chain convict — no
+  > recomputation, no jury). Deliberately opaque until registration-time measurement:
+  > `tap_semantics_id`, `state_layout_id`, tap-layer values, the interval. The GEMM/tile leg is
+  > absent by design (blocked on step-function pinning; adding it is a new scheme version), and
+  > worker capture of the legs is the next runtime increment — the schema froze first so capture
+  > has one layout to hit.
 * **The challenge/`q`/randomness protocol and the cold-verifier cost model are new design work**
   (future ADR): future-randomness binding point, reorg handling, job-commit deadline, `q`-sizing
   formula with its assumed minimum `f`, and per-class p99 cold-prefill costs — all published before

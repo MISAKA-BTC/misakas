@@ -133,13 +133,20 @@ pub mod merkle;
 pub mod mining_rules;
 pub mod muhash;
 pub mod network;
+/// MISAKA PALW execution-commitment legs v1 (ADR-0027 consequences): the activation and
+/// checkpoint commitments. Land-stage, consensus-inert.
+pub mod palw_legs;
+/// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
+/// adjudication maths. Land-stage, consensus-inert.
+pub mod palw_reference;
+/// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
+/// Land-stage, consensus-inert — no slashing is enabled by this module existing.
+pub mod palw_slash;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
 /// staged activations pass their gates. `palw_execution_algo_id = 2` in here is a
 /// PALW-internal namespace, NOT the header-level `pow_algo_id = 2` (historical Argon2id).
-pub mod palw_reference;
-pub mod palw_slash;
 pub mod palw_v2;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
 /// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the

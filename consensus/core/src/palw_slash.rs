@@ -170,7 +170,7 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
 /// The context-shape subset checkable without the envelope: version, network-id bounds, budgets,
 /// and the scheme pin. (Prompt emptiness etc. are envelope-level facts an opaque hash cannot
 /// witness.) Everything here must hold for ANY honestly-produced v2 context.
-fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), PalwSlashError> {
+pub(crate) fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), PalwSlashError> {
     if ctx.version != PALW_TRACE_COMMITMENT_VERSION_V2 {
         return Err(PalwSlashError::ContextShape("version is not the v2 trace commitment version"));
     }
