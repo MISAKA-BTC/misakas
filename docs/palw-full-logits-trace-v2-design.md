@@ -522,9 +522,106 @@ entropy/cost試験、`"unpinned"` fieldの解消、独立bonded credential条件
 - 「full replayは軽い」
 - 「promptが短いのでtoken budgetは固定できる」
 - 「cacheを禁止すれば同じ計算量を強制できる」
+- 「1 tokenの検証だから1 token分のFLOPsで済む」（ADR-0026 §4: KV cacheを持たないfresh
+  verifierは challenged positionまでのprefillを払う。replay costは必ず cold/no-KV で
+  class毎にp99実測する）
+- 「1点challengeで十分」（ADR-0026 §5: `P_detect = 1-(1-f)^q`。局所的不正では
+  `q` を bond/期待利得から動的に決める）
 
 許容する表現:
 
 > 固定されたportable CPU profileの2台・3 vectorsで、入力感応性とfull-logits rootの
 > cross-machine一致を観測した。rootはaudited commitmentであり、その受理安全性はcanonical
 > replay、独立committee、bond/slashing、challenge window、reward maturityに依存する。
+
+## 16. CapabilityDeclarationV2 — v2 capability宣言（2026-08-13追加）
+
+v2 runtimeのconsensus可視化はcapability宣言から始める。設計はv1
+（`ComputeCapabilityPayload` / `misaka-vlt-v1/compute-capability`）が実運用で確立した
+lifecycleを踏襲し、identityブロックだけをv2の完全な識別へ置き換える。正規実装は
+`consensus/core/src/palw_v2.rs`（golden vectorテストでpreimage凍結）。
+
+### 16.1 Object
+
+```rust
+PalwCapabilityDeclarationV2 {
+    version: u16,                       // = 2
+    validator_id: Hash64,               // bondのvalidator_pubkey_hashと一致必須
+    bond_outpoint: TransactionOutpoint, // slashable claimの担保
+    model_profile_id: Hash64,
+    runtime_manifest_hash: Hash64,      // golden_vector_rootをpreimageに含む
+    runtime_class_id: Hash64,
+    shape_profile_id: Hash64,
+    trace_scheme_id: Hash64,
+    cu_ruleset_id: Hash64,
+    expiry_daa_score: u64,
+    signature: Vec<u8>,                 // ML-DSA-87
+}
+```
+
+設計判断:
+
+- **network_idはpayloadに持たず、署名メッセージにのみ束縛する**（v1と同じ。payloadは
+  network-boundなtransactionに乗る）。
+- **golden_vector_rootをpayloadに持たない。** `runtime_manifest_hash` のpreimageが既に
+  束縛しており、別fieldで運ぶと「宣言されたrootとmanifest内のrootが食い違う」という
+  検証不能な表面を作るだけである。ungated runtimeの排除は2層で行う:
+  ローカルは宣言gate（§16.3）がagent healthのsentinel検査で拒否し、
+  ネットワーク（Accept段階）はv2 registryの行がmanifest hashをexactにpinし、
+  registry登録ceremonyがreal golden rootを要求する。
+- **宣言はhardware自己申告を一切運ばない。** 運ぶのはpinned identity hashだけである。
+
+### 16.2 署名メッセージ
+
+```text
+palw_capability_message_v2 = BLAKE2b-256(
+  key = "misaka-palw/capability-message/v2",
+  network_id || validator_id || bond_outpoint(txid || index)
+  || model_profile_id || runtime_manifest_hash || runtime_class_id
+  || shape_profile_id || trace_scheme_id || cu_ruleset_id
+  || expiry_daa_score
+)
+ML-DSA-87 signing context = "misaka-palw/capability/mldsa87/v2"
+```
+
+### 16.3 宣言gate — agent capability handleの消費規範
+
+```text
+may_declare =
+      agent reachable（health probeに応答）
+  AND health.state != Quarantined
+  AND health.selftest_passed == true
+  AND health.golden_vector_root != unpopulated sentinel
+  AND health.runtime_manifest_hash != all-zero sentinel
+```
+
+一つでも欠ければ**宣言しない**。既に宣言済みならrenewを止め、expiryで失効させる
+（**withdraw-by-silence**: 明示的withdrawal objectは持たない。撤回のlivenessを
+別objectの検閲耐性へ依存させず、expiryを撤回の床にする）。gateの評価はagentの
+health frame（identityブロック入り）に対して行い、workerを直接触らない。
+
+### 16.4 v1から継承する受理規則（Accept段階でそのまま適用）
+
+- accepted/expiry**両端**bound（`is_live_at` — 宣言前の視点から宣言が見えてはならない。
+  後出し宣言によるcommittee挿入・pool水増しre-rollの防止）
+- `declaration_block` によるancestry検査（DAAは時計であって祖先証明ではない）
+- expiry cap: `min(declared, accepted + max_capability_validity_blocks)`
+- validator単位dedup（latest expiry勝ち — 1 operatorが複数committee slotを占めない）
+- bond束縛（実行できないclassの宣言はslashable claim）
+
+### 16.5 段階と現在の状態
+
+**現在（Land）**: 型・署名メッセージ・gateを凍結し、kaspadの`--compute-endpoint`監視が
+gate評価結果と宣言identityをログへ出す。**署名もchain受理もまだ行わない。**
+
+**Accept段階へ進むためのchecklist**（一つでも欠ければ進まない）:
+
+```text
+[ ] v2 registry（manifest hash exact-pin行）と登録ceremony（real golden root必須）
+[ ] 新しいDnsTxKind（v1 ComputeCapability kindを再利用しない — 別scheme別pool）
+[ ] stateless/stateful検証（署名・bond・registry membership・expiry cap）
+[ ] store prefix + reorg-exact削除 + pruning bundle包含
+[ ] credit walkでのv2 candidate pool構築（v1 poolと混合しない）
+[ ] activation fence（devnet先行。fingerprint移動を伴う明示的flag day）
+[ ] 宣言のみではcommitteeに入れない（§10: golden vectors + random challenge + bond）
+```

@@ -1,4 +1,4 @@
-# ADR-0026: PALW v2 verification architecture — runtime-separated, class-pinned, open-kernel
+# ADR-0026: PALW v2 verification architecture — borrow Ambient's shape, strengthen the proof
 
 Status: **Accepted (architecture).** Operating envelope unchanged: devnet, shadow mode,
 consensus-visible zero-credit only. Every activation gate in the v2 design §12 stands; this ADR
@@ -7,8 +7,20 @@ Date: 2026-08-15
 Relates to: ADR-0007 (layered PoW), ADR-0021 (superseded PALW PoW record — kept as history),
 ADR-0024 (verified-LLM token-weighted BFT),
 [`palw-full-logits-trace-v2-design.md`](../palw-full-logits-trace-v2-design.md) (operative
-safety model), the detailed / VPS-canonical-worker / secure-OTA design set,
+safety model), [`ambient-pol-binary-audit-2026-08-15.md`](../ambient-pol-binary-audit-2026-08-15.md)
+(the evidence this ADR rests on), the detailed / VPS-canonical-worker / secure-OTA design set,
 `consensus/core/src/palw_v2.rs` (frozen preimages).
+
+## Thesis
+
+**Adopt Ambient's implementation architecture; do not adopt Ambient's proof-security model.** The
+runtime/verification separation, the multi-runtime adapter surface, the Merkle-commit →
+post-commit-challenge → recompute flow, asynchronous verification and bond/slashing are the right
+shape and MISAKA takes them. The parts that make Ambient's *proof* weaker than PALW needs — a
+tolerant (RBO / p95-band) comparison, single-token-as-sufficient framing, logits-only-when-final
+proof material, LStake-only validator selection, and a runtime-embedded closed verifier — MISAKA
+replaces with an exact-within-pinned-class comparison over a deeper trace (logits + activations +
+GEMM), a dynamically-sized challenge count, a diversified validator set, and an open kernel.
 
 ## Context
 
@@ -21,174 +33,256 @@ execution to a `full_logits_sequence_root`: each decode step's full logits vecto
 domain-separated Merkle root, and that root a keyed outer hash binding job, network, runtime,
 class and token budget. Implemented so far, all consensus-inert: the worker's `v2-job` path
 (token-ID envelopes, exact decode, fail-closed non-finite handling, build-measured
-`RuntimeManifestV2`), golden-vector boot gating, `misaka-palw-agent` Phase A (admission →
-supervised execution → response re-binding; QUARANTINED rather than wrong), kaspad
-`--compute-endpoint` (health probing, capability handle), and `PalwCapabilityDeclarationV2`
-(v2 design §16 — typed and signed-message-frozen, not yet chain-accepted).
+`RuntimeManifestV2`), golden-vector boot gating, `misaka-palw-agent` Phase A, kaspad
+`--compute-endpoint`, and `PalwCapabilityDeclarationV2` (v2 design §16).
 
-The honesty baseline (v2 design §4) is load-bearing for every decision below: a trace root is an
-**audited commitment, not a cryptographic proof**. Any claimant can announce an arbitrary root;
-only canonical replay by independent bonded verifiers, bonds/slashing, challenge windows and
-reward maturity make a false one costly. Acceptance security is economic, not cryptographic.
+The honesty baseline (v2 design §4) is load-bearing everywhere below: a trace root is an **audited
+commitment, not a cryptographic proof**. Any claimant can announce an arbitrary root; only
+canonical replay by independent bonded verifiers, plus bonds/slashing/challenge-windows/maturity,
+makes a false one costly. Acceptance security is economic, and reduces to `P_detect · S > G`.
 
-### The external reference: Ambient's Proof of Logits (public-surface survey, 2026-08-15)
+### Ambient, now measured (not inferred)
 
-Ambient is the only other production-intent system we know of that binds L1 economics to verified
-LLM inference ("Proof of Logits"). A survey of the `ambient-xyz` GitHub organization (11 public
-repositories, surveyed 2026-08-15) found:
+The `ambient-xyz/llama.cpp-ambient-bin` `macos-arm64` binary was fetched via Git-LFS and audited
+(strings + exports, diffed against upstream llama.cpp; see the companion audit doc). This replaces
+the earlier survey's inferences with facts:
 
-| public repo | role | distance from PoL |
-|---|---|---|
-| `vllm` | official vLLM fork; `main` ≈ upstream, no PoL-specific code visible | runtime |
-| `llama.cpp-ambient-bin` | compiled binaries only, per its description "Binaries compiled with Ambient verification support." — a four-backend matrix (`macos-arm64`, `ubuntu-cuda-x64`, `ubuntu-rocm-7.2-x64`, `ubuntu-vulkan-x64`), date-versioned `llama-2026.07.21.17-…` | runtime, verification-enabled, **patch source unreleased** |
-| `auction-api` / `-client` / `-interface` / `-listener` | Solana-side job submission, auction-winner wait, `wait_for_job_verification` | consumes verification *outcomes*; computes none |
-| `tokenizer` | standalone tokenization | pinned component outside the runtime |
-| `ambient-miner-benchmark`, `async-threadpool` | miner calibration, plumbing | periphery |
+- **Verification runs inside the llama.cpp fork.** The Ambient `llama-server` exposes
+  `/ambient/v1/inference/verify` and `/…/token-data`, does the recompute, and checks the Merkle
+  proof itself. The compute path is source-unreleased but **runtime-embedded** — a verifier must
+  run Ambient's build. (Survey hypothesis C confirmed; B refuted for the compute path.)
+- **The comparison is tolerant, not exact.** Acceptance is governed by `logit_min_prob` (score
+  only logits above a softmax floor), `logit_min_rbo_score` (a Rank-Biased-Overlap ranking-
+  similarity score on top logits), `mlp_output_p95_abs_diff` (a p95 absolute-difference *band* on
+  MLP-layer outputs), and `num_mlp_failure_threshold` (a bounded per-layer failure allowance).
+  Ambient absorbs hardware FP divergence in the *comparison*.
+- **Ambient already captures intermediate activations.** `ambient_capture_layers` and the MLP-
+  output metric mean the proof material spans logits **and** selected MLP-layer activations.
+- **The challenge is teacher-forced.** `ambient_forced_tokens` fixes the token sequence so the
+  verifier recomputes a challenged position without sampling drift.
+- **Merkle + HDF5 + SGLang-compatible capture.** The proof is a Merkle commitment; captured
+  tensors travel as HDF5 with SGLang-compatible export, so the *capture format* is runtime-
+  portable even though the *comparison code* is not. On-chain `VerificationState`
+  (`merkle_root`, `assigned_verifiers`, `assigned_verifiers_token_ranges`, `verified_tokens`,
+  `output_hash`) maps onto the server's per-request `start_token`/`end_token` window and verdict
+  counters.
 
-Not public anywhere on that surface: the commitment/preimage format, the logits hash spec,
-challenge selection, validator recomputation code, the comparison/tolerance rule, slashing logic,
-stake accounting, and the consensus integration — i.e. every parameter of their own
-`P_detect × S > G` inequality. `auction-listener`'s lockfile shows no dependency on any
-verification crate, and no repo uses submodules; the listener expects a plain multi-repo
-checkout. The most consistent reading — a reading, not a fact (see "What the survey could not
-establish") — is a **separated architecture**: inference runtimes (vLLM *and* llama.cpp) surface
-logits; an unreleased verification component turns them into commitments; the chain layer only
-waits on verification status. Upstream vLLM already exposes raw-logits modes, which is exactly
-the interface a runtime-external verifier needs.
-
-Two things follow for us. First, the separated shape we already built now has independent
-convergent precedent — across two runtimes and four hardware backends. Second, the parts Ambient
-withholds are precisely the parts our acceptance model cannot afford to withhold.
+Two facts reframe the earlier ADR draft. First, Ambient and MISAKA give **opposite answers to the
+same problem** (hardware FP divergence): Ambient fuzzes the comparison; MISAKA pins the class and
+compares exactly. Second, Ambient's tolerant comparison is only safe *because* their verification
+is asynchronous and optimistic — off the chain-validity path, where a fuzzy verdict triggers a
+probabilistic slash rather than a fork. That coupling — comparison strictness ↔ where the verdict
+is consumed — is the hinge of this ADR.
 
 ## Decision
 
-**1. The three-layer separation is the frozen architecture: scheme kernel / execution / node.**
-(a) The *scheme kernel* — every domain key (`misaka-palw/<name>/v2`), preimage layout and
-canonical encoding — lives in `consensus/core/src/palw_v2.rs`, frozen by golden-vector tests,
-with no runtime dependency. (b) *Execution* sits behind the agent boundary: a runtime adapter
-(today the patched-llama.cpp `misaka-palw-worker`) speaks `PalwJobEnvelopeV2` framed Borsh under
-the half-close wire contract, and `misaka-palw-agent` gates boot on golden vectors, supervises
-per-job, and re-binds every response. (c) The *node* consumes capability, re-verifying everything
-it is told (`--compute-endpoint`; declaration gate §16.3) and declaring only pinned identity
-hashes. Ambient patches its runtimes and ships the result; where its commitment logic lives is
-unobservable from outside. Ours is deliberately **not** in the runtime: with N runtimes, a
-commitment defined inside each fork drifts into N dialects — the v2 domain-key incident (two
-documents, two prefixes, an honest-refutes-honest permanent fork caught only at reconciliation)
-is the in-house proof. The kernel is single-sourced in consensus-core; runtimes are replaceable
-adapters beneath it.
+### 1. Borrow Ambient's architecture; keep the scheme kernel out of the runtime
 
-**2. A hardware backend is a determinism class, and the comparison rule is full-length exact.**
-Ambient's four-backend binary matrix leaves open whether its verifiers compare across backends
-under a tolerance or verify per-backend; neither is published. We resolve the question for
-MISAKA from our own measurements and choose **per-class exactness**:
+Adopt, on evidence: (a) **runtime/verification separation** — vLLM / llama.cpp / TensorRT-LLM /
+ROCm behind a Runtime Adapter API, none of them containing consensus logic; (b) a **runtime-
+portable capture format** so a vLLM or SGLang miner and a llama.cpp verifier interoperate on the
+same captured tensors (Ambient's HDF5/SGLang-export precedent); (c) **Merkle commitment**;
+(d) **post-commit random challenge**; (e) **asynchronous verification** off the block-production
+path; (f) **bond + slashing**; (g) pinned **model/runtime/tokenizer profiles**.
 
-* Same job, same model: Metal root `ba3b9994…` ≠ CPU root `d04672dc…` (2026-08-13 smoke) — the
-  class split is real and visible at the root.
-* F16 profile: all-x86 vendors agreed 8/8 seeds; arm-vs-x86 agreed 7/8, the single miss an
-  argmax flip on a prefill batch-GEMM **near-tie** — so arm sits outside the x86 class.
-* The registry Q8_0 artifact split even EPYC vs Broadwell (4/8) — class membership is a property
-  of the exact artifact, not of "x86".
+But where Ambient compiles the verifier into its llama.cpp fork, MISAKA does not. Every domain key
+(`misaka-palw/<name>/v2`), preimage and canonical encoding is single-sourced in
+`consensus/core/src/palw_v2.rs`, golden-frozen, runtime-independent; runtimes are replaceable
+adapters *beneath* the kernel. Ambient's own build is the cautionary case: a consensus-critical
+comparison living inside an inference runtime makes "the runtime updated" a consensus event — the
+blockchain equivalent of `npm update` toppling the chain. The three layers are frozen:
 
-Divergence concentrates at near-ties, which is exactly where an ε-band is undecidable; and any
-published tolerance is a standing allowance for *cheaper approximate execution* (lower-precision
-kernels, pruned paths) that stays in-band with high probability — it un-prices the work the
-scheme exists to price. Tolerance would also break the event model: event hashes commit exact
-bytes, so Merkle single-event openings (the future TraceVM challenge) verify only under
-exactness; an ε-rule would require shipping raw ~1 MB logits vectors per challenged event.
-Therefore: within a class, full 64-byte equality; across classes, **no comparison** — a replay
-refutes only within the declared `runtime_class_id`, and a cross-class mismatch refutes nothing
-(same output with a different trace is the expected physics, and is itself the class-violation
-signal when a receipt claims otherwise). A new backend (CUDA, ROCm, Vulkan, Metal, a vLLM-based
-GPU adapter) enters as a **new class** with its own canonical artifact, golden set, and its own
-v2-design §12 gate. GPU class granularity (per driver? per GPU generation?) is unknown until
-measured and is not assumed — CUDA is not presumed batch-invariant. Class membership is
-manifest-hash exact, never a label: the golden-set gate that compared a class *label* let a
-different build pass (`f9ab6ab`), and a determinism class is a claim about **pairs** of hosts —
-nothing with fewer than two measured sides is a class.
+```
+runtime adapters (vLLM / llama.cpp / TensorRT / …)   ← replaceable, no consensus logic
+        │  per-decode logits + selected activations + GEMM trace
+        ▼
+PALW Canonicalizer (CanonicalLogitsV1)               ← §3, deterministic integer form
+        ▼
+PALW scheme kernel (palw_v2.rs, golden-frozen)       ← single source of preimages/domains
+        ▼
+node: capability / certificate / challenge / slash   ← consumes verdicts, computes none
+```
 
-**3. Distribution is a per-class canonical artifact bundle; the source stays public.** Adopt the
-operational pattern Ambient demonstrates at four-backend scale — date-versioned, per-platform,
-verification-enabled runtime artifacts — as our release unit: one bundle per class containing
-the bit-identical static worker binary, its `RuntimeManifestV2`, the full-length golden vector
-set, the GGUF/tokenizer pins and the launch verifier, signed under the secure-OTA role model
-(distribution and activation stay separate). "Build it yourself per host" is rejected on our own
-evidence: per-host builds silently minted divergent artifacts (the ggml-OpenMP delta,
-`2825d99`), and a fleet that compiles is a fleet whose class membership is unmeasured.
-Reproducible-build checking from public source (`patchset_root`, full worker/patch source, the
-manifest's build-measured hashes) remains a public *audit* path — but bit-identity of the
-distributed artifact is the *membership* rule. This resolves the manifest's `"unpinned"` fields:
-a class registration MUST reject any manifest still carrying them. Unlike Ambient, no part of
-the runtime patch is binary-only: the bundle is a convenience and a pin, never the only form of
-the code.
+### 2. Prove deeper than logits — logits + activations + GEMM trace
 
-**4. The verification kernel is open — the deliberate inverse of Ambient's split.** Everything
-Ambient's public surface withholds, MISAKA publishes and freezes: preimage layouts (golden-frozen
-in `palw_v2.rs`), the comparison rule (full-length exact, §2 above), challenge selection and
-committee sampling, bond, slash, maturity and challenge-window parameters, and the acceptance
-inequality itself (v2 design §10) with **measured** replay costs on the pinned fleet. This is
-not a transparency preference; it is structural. (a) Acceptance security here is economic:
-`P_detect × S > G` cannot be audited by anyone who cannot see challenge selection, the
-comparison rule, or S. A private tolerance/challenge spec makes the security claim unfalsifiable
-— and our own algo-5 history shows what unfalsified looks like: the output-text commitment
-seemed sound until measurement found a 1-distinct constant, forgeable without model execution.
-Publication plus measurement killed it in one cycle; a private spec would have preserved it.
-(b) The committee model *requires* that any bonded operator can stand up a verifier from public
-material alone. If the verification component is vendor-supplied and closed — the position
-Ambient's surface implies for its own network — then the verifier set is permissioned by the
-vendor, "independent committee" degenerates into "the vendor's deployment", and slashing on the
-word of a closed component is ungovernable. (c) There is nothing load-bearing to hide: the
-domain keys are public keyed-BLAKE2b separations, not MAC secrets (v2 design §4.1); obscurity
-buys this scheme no security, so its only effect would be to gate verifiers.
+Ambient treats logits as the computation's fingerprint and (via MLP capture) reaches one layer
+deeper. PALW commits deeper still, because the property MISAKA must enforce is not "the claimant
+knows the right logits" but "the claimant actually performed the pinned, high-cost computation."
+Hashing a final result — `proof = H(Model(x))` — only binds knowledge of the result; the v2 scheme
+already moved past this, and this ADR fixes the target as a per-token tuple:
 
-**5. The chain consumes verification outcomes; it never computes them — and there is no auction
-tier.** The Ambient chain layer's shape (a listener that *waits* on verification status) matches
-ours: the only consensus-visible PALW objects are declarations (`PalwCapabilityDeclarationV2`),
-future certificates/challenges, bonds and slashes; no header-validation path ever runs
-inference. The block-validity condition stays `valid permanent hash PoW AND (PALW certificate
-absent OR valid under its activation stage)` — the algo-4 lesson (one inference per header made
-IBD hours-per-day and forced the per-header replay tax onto every verifier) is why v2 is an
-overlay credit above a hash floor, not a header algorithm. Where we diverge from Ambient by
-design: PALW jobs are **self-originated** — the seed is chain-derived (v2 design §9), there is
-no orderer, no job market and no job fee in this scheme's scope, so the entire auction stack has
-no MISAKA equivalent and none is planned here.
+```
+T_i = H( Canonicalize(final_logits_i)
+       ‖ Project(activation_i @ pinned layers)      // e.g. L8, L16, L24, L32
+       ‖ Project(gemm_trace_i @ pinned ops) )
+TokenRoot = MerkleRoot(T_0 … T_n)                    // domain-separated, per palw_v2.rs
+```
 
-**6. Tokenization lives outside the runtime.** The worker takes token IDs only — it never
-tokenizes, normalizes or applies templates — and `tokenizer_id`/`tokenizer_sha256` pin the
-profile in the manifest and job context. Ambient's standalone `tokenizer` repo is convergent
-precedent that the tokenizer is a separately-pinned component: a tokenizer drift is an identity
-change, not a runtime patch.
+The GEMM-trace leg is the leg Ambient does not have and is where PALW is strictly stronger:
+a challenge can address `(token, layer, matrix-tile)`, so predicting final logits alone is
+insufficient. Which layers/ops are pinned is a `shape_profile_id`-bound constant; changing it is a
+new scheme version. (This is the `full_logits_sequence_root` ambition of the detailed design made
+explicit as the challenge surface; the current Land code commits logits events — activations and
+GEMM legs are staged additions under the same Merkle discipline, not a new mechanism.)
 
-## What the survey could not establish
+### 3. Exactness inside a pinned class — never a tolerance in the slashing verdict
 
-The Ambient facts above are the *public* surface as of 2026-08-15; the architecture reading is
-inference. Specifically undetermined: whether PoL code sits on a non-default branch of the vLLM
-fork (A), in private repositories (B), or exists only as the compiled verification-enabled
-binaries (C) — B/C fit the evidence best; whether their verifiers compare across backends, and
-under what rule; and everything listed as non-public in Context. No binary was reverse-engineered
-for this ADR. A strings/symbol/CLI-surface audit of the published `llama.cpp-ambient-bin`
-tarballs could narrow runtime-embedded vs external-daemon and is noted as **optional competitive
-intelligence — never a design input**: every decision above must stand on our own measurements
-and requirements even if every guess about Ambient is wrong, and this ADR is written so that it
-does.
+This is the deliberate inverse of Ambient's RBO/p95 model, and it is forced by *where PALW's
+verdict is consumed*. A fuzzy comparison means `Validator A → pass, Validator B → fail` on the
+same input; Ambient survives that because a fuzzy verdict there is a probabilistic slash off the
+critical path. PALW's slashing quorum must be **deterministic** — every honest verifier of a class
+must reach the identical verdict — or the slash itself forks. Therefore:
+
+- **A hardware/software backend is a determinism class.** Measured: Metal root `ba3b9994…` ≠ CPU
+  root `d04672dc…` (same job); F16 x86 agreed 8/8 seeds but arm-vs-x86 only 7/8, the miss an
+  argmax flip on a prefill batch-GEMM **near-tie**; the registry Q8_0 artifact split even EPYC vs
+  Broadwell (4/8). Divergence concentrates at near-ties — exactly where any ε-band is undecidable,
+  and exactly what RBO is built to paper over.
+- **Within a class: full 64-byte equality.** Across classes: **no comparison** — a cross-class
+  mismatch refutes nothing (same output, different trace is the expected physics). A replay refutes
+  only within the declared `runtime_class_id`.
+- Divergence is absorbed in **class membership** (exact pinned artifact), not in the comparator.
+  Class membership is manifest-hash exact, never a label — the golden-set gate that compared a
+  class *label* let a different build pass (`f9ab6ab`), and a class is a claim about *pairs* of
+  hosts, so nothing with fewer than two measured sides is a class.
+- A tolerant comparator is not banned from the system — it is banned from the **binding verdict**.
+  A soft cross-class RBO/p95 signal may run in a *diagnostic, non-slashing* audit tier (anomaly
+  detection, class-drift alarms). It never mints, never slashes, never gates a block. Any proposal
+  to make ε binding is a new `trace_scheme_id`, a new ADR, and re-activation from zero-credit.
+
+CanonicalLogitsV1 (v2 design §3, §8) is what makes within-class exactness reachable: hash the
+canonical little-endian integer/byte form under a pinned FP environment (RNE, no FTZ/DAZ drift, no
+fast-math, no FMA contraction) — `hash(canonical_tensor)`, never `hash(raw_float_tensor)`.
+
+### 4. Commit → post-commit challenge → recompute → quorum (the flow, made unpredictable)
+
+Adopt Ambient's central move — decide *what to check after the commitment is fixed* — and bind the
+selection to future chain randomness so the miner cannot know the audited positions at commit time:
+
+```
+C  = MerkleRoot(TokenRoot, activation_root, trace_root)          // published at commit
+R  = H( C ‖ future_DAG_block_hash ‖ epoch_randomness )           // unknowable at commit
+challenge_set = PRF(R) → { (token, layer, tile) … }              // q positions, §6
+verifier: teacher-force the committed token IDs, recompute the challenged positions,
+          compare exactly within the verifier's own runtime_class_id
+verdict:  deterministic quorum over independent bonded verifiers of that class
+```
+
+Teacher-forcing is borrowed (Ambient's `ambient_forced_tokens`) — it removes sampling drift so a
+mid-sequence position is deterministically recomputable. **The KV-cache caveat is a hard measurement
+requirement, not a footnote:** "verify one token" is not "one token of FLOPs." A fresh verifier
+holding no KV cache must prefill the forced prefix to reach a challenged position, so every replay-
+cost number in the §10 inequality MUST be measured from a **cold, no-KV verifier**, per class, at
+p99 — the "one-token verification is cheap" claim is prohibited (v2 design §15 extends to cover it).
+
+### 5. Dynamic challenge count `q`, derived from `P_detect · S > G` — never fixed at 1
+
+Ambient's "verify one token" framing is the single weakest security claim, and PALW must not copy
+its cardinality. For a fault touching a fraction `f` of positions, `P_detect = 1 − (1 − f)^q`.
+A whole-output fault (`f = 1`) needs one challenge; a 1 %-localized fault (`f = 0.01`) is caught
+with probability ≈1 % at `q = 1` and only ≈9.6 % at `q = 10`. So `q` is not a constant: it is sized
+per job from bond `S`, expected cheating gain `G`, job value, computation amount and operator
+reputation, so that `P_detect · S > G` holds for the *smallest plausible* `f` the scheme intends to
+resist. The published §10 economics carry the `q`-sizing rule and its assumed minimum `f`; shipping
+a fixed `q` (especially `q = 1`) is a rejected design.
+
+### 6. Verification is asynchronous; PALW never gates block validity, and never on LStake alone
+
+The BlockDAG must not stall on inference. Block validity stays `valid permanent hash PoW AND (PALW
+certificate absent OR valid under its activation stage)` — the permanent hash floor is retained.
+PALW runs as an overlay: commit on-DAG, challenge after future randomness resolves, verify,
+settle, and slash **retrospectively** (Ambient's asynchronous/optimistic posture, which is
+precisely what lets §3's exact verdict live off the critical path). Fork-choice/DNS/finality
+weight is reached only through the staged ladder, never at once:
+
+```
+Stage 0  ShadowSidecar / zero-credit         (current envelope)
+Stage 1  PALW rewards only
+Stage 2  PALW → validator/DNS weight, WITH a weight cap
+Stage 3  deeper security integration, post external audit + soak
+```
+
+And validator selection is **diversified**, not LStake-only. Ambient's LStake (influence ∝ past
+verified work) invites a self-reinforcing loop: more PALW → more stake → more likely selected →
+verify one's own class → more PALW. MISAKA gates selection on
+`VRF ⊕ bond ⊕ independent-identity ⊕ PALW-reputation`, with executor self-verification excluded and
+operator-aggregation/concentration caps (v2 design §10). If independent bonded credentials fall
+below threshold, the committee is **not** shrunk to mint — PALW credit goes to zero.
+
+### 7. Open kernel; self-originated jobs (no auction); tokenizer outside the runtime
+
+- **Open verification kernel — the inverse of Ambient's binary-only verifier.** Preimage layouts
+  (golden-frozen), the comparison rule (§3), challenge selection (§4), `q`-sizing (§5), and the
+  bond/slash/maturity/window parameters plus **measured** per-class cold-verifier costs (§10) are
+  all published *before* any non-zero credit. This is structural, not a preference: acceptance is
+  economic, so `P_detect · S > G` is unauditable if challenge selection, the comparator or `S` are
+  hidden — and MISAKA's own algo-5 history shows the failure mode (an output-text commitment that
+  looked sound until measurement found a 1-distinct constant, forgeable without model execution;
+  publication + measurement killed it in one cycle, a private spec would have preserved it).
+  A vendor-supplied closed verifier also permissions the committee to the vendor and makes slashing
+  on a closed component's word ungovernable. The domain keys are public keyed-BLAKE2b separations,
+  not MAC secrets — obscurity buys this scheme nothing and would only gate verifiers.
+- **Self-originated jobs, no auction tier.** PALW seeds are chain-derived (v2 design §9); there is
+  no orderer, job market or job fee in scope, so Ambient's entire auction stack (`auction-*`) has
+  no MISAKA equivalent and none is planned. This is also why security here does **not** depend on
+  user query demand.
+- **Tokenizer is a separately-pinned component.** The worker takes token IDs only;
+  `tokenizer_id`/`tokenizer_sha256` pin it. A tokenizer drift is an identity change, not a runtime
+  patch (Ambient's standalone `tokenizer` repo is convergent precedent).
+
+### 8. Distribution: per-class signed artifact bundle, public source
+
+Adopt Ambient's release *shape* (date-versioned, per-backend, verification-enabled runtime
+artifacts — the `llama-2026.07.21.17-…` pattern) as the class unit: one signed bundle per class
+containing the bit-identical static worker, its `RuntimeManifestV2`, the full-length golden set,
+the GGUF/tokenizer pins and the launch verifier, under the secure-OTA role model (distribution and
+activation separate). Unlike Ambient, **no part is binary-only**: full worker/patch source and
+`patchset_root` stay public so reproducible-build checking is a public audit path — but bit-identity
+of the *distributed* artifact is the *membership* rule (per-host builds silently minted divergent
+artifacts once already: the ggml-OpenMP delta, `2825d99`). A class registration MUST reject any
+manifest still carrying `"unpinned"` fields.
+
+## Borrow / do not borrow (summary)
+
+| Borrow from Ambient | Do **not** borrow |
+|---|---|
+| Runtime ↔ verification separation | Verifier compiled into the runtime fork |
+| Multi-runtime adapters (vLLM / llama.cpp / …) | Logits-only proof material |
+| Runtime-portable capture format (HDF5/SGLang-style) | Tolerant RBO / p95-band comparison in the binding verdict |
+| Merkle commitment + post-commit challenge | Fixed 1-token verification |
+| Teacher-forced recompute | "one-token verify = one-token FLOPs" costing |
+| Random validator/range assignment | LStake-only validator selection |
+| Asynchronous / retrospective slashing | PALW result gating block validity |
+| Bond + slashing; pinned model/runtime profiles | Security that depends on user query demand |
+| Release-artifact shape (per-backend, versioned) | Unspecified hardware tolerance |
+
+## What the audit could not establish
+
+Even with the binary: the exact Merkle-leaf preimage and canonical tensor byte-layout, the RBO
+depth/weighting, Ambient's default threshold values (hidden behind format strings), whether cross-
+backend verification shares thresholds, and everything in the unreleased Solana programs (challenge
+selection, committee sampling, bond/slash amounts, LStake accounting). No binary was decompiled;
+only exported symbols and static strings were read. The three x64 tarballs were not downloaded
+(the macOS object settles the scheme). These unknowns do not affect any decision above — each rests
+on MISAKA's own measurements and requirements and stands even if every remaining guess about
+Ambient is wrong.
 
 ## Consequences
 
-* **A GPU/vLLM path is class work, not scheme work.** A new runtime adapter must provide: the
-  per-decode full-logits event surface into the unchanged kernel preimages; FP-environment
-  probes before and after model load; a build-measured manifest with zero `"unpinned"` fields;
-  golden generation/self-test; and the envelope identity gate. The agent, wire contract, and
-  `palw_v2.rs` do not change. Class granularity on GPUs is a measurement campaign (§12-style,
-  per class) before any registration.
-* **Release engineering becomes consensus-adjacent.** The bundle *is* the class: cutting one is
-  a pinning act under OTA roles, and a bundle hash mismatch is a membership rejection, not a
-  warning. Date-versioned bundle names (the `llama-2026.07.21.17` pattern) are adopted.
-* **Any tolerance proposal is a new scheme version.** There is no parameter for ε; relaxing
-  exactness changes the preimage meaning and therefore requires a new `trace_scheme_id`, new
-  golden sets, a new ADR and re-activation from zero-credit.
-* **Publication duty before credit.** The §10 inequality ships with numbers — challenge
-  probability, committee size/confirmations, slash amounts, maturity, measured per-class replay
-  cost and capacity at p99 — as a public document, before the first non-zero credit. An
-  unpublished parameter is an unmet §12 gate.
-* ADR-0021 remains the historical record of the header-PoW era (algo 4/5) and now points here;
-  the v2 design document remains the operative safety model and gate list. This ADR adds no new
-  activation and changes no consensus behavior.
+* **A GPU/vLLM path is class + adapter work, not scheme work.** A new adapter must supply the per-
+  decode logits/activation/GEMM surface into the unchanged kernel preimages, FP-environment probes
+  around model load, a build-measured manifest with zero `"unpinned"` fields, golden
+  generation/self-test, and the envelope identity gate. GPU class granularity (per driver? per GPU
+  generation?) is a measurement campaign before any registration; CUDA is not presumed batch-
+  invariant.
+* **Activation + GEMM legs are the next Land increment** under the existing Merkle discipline in
+  `palw_v2.rs` — new leaf kinds and `shape_profile_id` pins, not a new mechanism; consensus stays
+  inert until their own gates pass.
+* **The challenge/`q`/randomness protocol and the cold-verifier cost model are new design work**
+  (future ADR): future-randomness binding point, reorg handling, job-commit deadline, `q`-sizing
+  formula with its assumed minimum `f`, and per-class p99 cold-prefill costs — all published before
+  the first non-zero credit, as §12 gate items.
+* **Any tolerance proposal is a new scheme version.** There is no ε parameter in the binding path.
+* ADR-0021 stays the historical header-PoW record and points here; the v2 design doc stays the
+  operative safety model and gate list; the binary-audit doc is the evidence of record. This ADR
+  adds no activation and changes no consensus behavior.
