@@ -311,6 +311,19 @@ Ambient is wrong.
   > absent by design (blocked on step-function pinning; adding it is a new scheme version), and
   > worker capture of the legs is the next runtime increment — the schema froze first so capture
   > has one layout to hit.
+  >
+  > **Capture landed (2026-08-15, `misaka-palw-worker`, still consensus-inert):** the worker taps
+  > `l_out-<il>` (post-block residual stream) and commits `llama_state_seq_get_data` checkpoints,
+  > streaming both into the schema's own builder so no structural fault is constructible. The two
+  > opaque identities are now *declared* (they become network facts only at registration), and
+  > the increment's gate was measured rather than assumed: llama.cpp accepts a capture callback
+  > only at context creation and it changes ggml's split-compute granularity, so **capture had to
+  > be shown logits-neutral** — the legs bind the frozen v2 root, and a capturing executor whose
+  > logits moved would disagree with a non-capturing verifier about an honest execution. Measured
+  > 4/4 golden jobs unmoved on both the Metal and CPU classes, roots reproducible across runs,
+  > 0 of 592 captured rows all-zero. A backend that fails this gate is a distinct determinism
+  > class, not a bug to suppress. Evidence and run recipe:
+  > `docs/palw-legs-capture-measurement-2026-08-15.md`.
 * **The challenge/`q`/randomness protocol and the cold-verifier cost model are new design work**
   (future ADR): future-randomness binding point, reorg handling, job-commit deadline, `q`-sizing
   formula with its assumed minimum `f`, and per-class p99 cold-prefill costs — all published before

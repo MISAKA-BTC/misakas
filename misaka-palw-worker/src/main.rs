@@ -50,6 +50,11 @@ use kaspa_consensus_core::palw_v2::{
     PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V2,
     PALW_V2_MAX_FRAME_BYTES,
 };
+use kaspa_consensus_core::palw_legs::{
+    checkpoint_state_root_v1, execution_commitment_scheme_id_v1, state_layout_id_v1, tap_semantics_id_v1,
+    PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegsBindingV1, PalwLegsCommitmentBuilderV1, PalwLegsJobResultV1,
+    PALW_LEGS_OBJECT_VERSION_V1,
+};
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
 use sha2::Digest;
@@ -89,6 +94,27 @@ unsafe extern "C" {
     fn shim_is_eog(s: *const ShimCtx, token: i32) -> i32;
     fn shim_token_to_piece(s: *const ShimCtx, token: i32, buf: *mut u8, buf_len: i32) -> i32;
     fn shim_close(s: *mut ShimCtx);
+
+    // Activation capture (execution-commitment legs v1). `shim_open_capture` with `n_taps = 0`
+    // is `shim_open`; with taps it installs an eval callback, which is a different scheduler
+    // path — see `run_v2_legs_selftest` for the measurement that says whether it is a different
+    // ARITHMETIC path too.
+    fn shim_open_capture(
+        model_path: *const u8,
+        n_ctx: i32,
+        n_batch: i32,
+        n_threads: i32,
+        tap_layers: *const i32,
+        n_taps: i32,
+    ) -> *mut ShimCtx;
+    fn shim_n_embd(s: *const ShimCtx) -> i32;
+    fn shim_n_layer(s: *const ShimCtx) -> i32;
+    fn shim_capture_begin(s: *mut ShimCtx);
+    fn shim_capture_status(s: *const ShimCtx) -> i32;
+    fn shim_capture_positions(s: *const ShimCtx, slot: i32) -> i32;
+    fn shim_capture_row(s: *const ShimCtx, slot: i32, position: i32, out: *mut f32, max_out: i32) -> i32;
+    fn shim_state_seq_size(s: *mut ShimCtx) -> i32;
+    fn shim_state_seq_read(s: *mut ShimCtx, out: *mut u8, max_out: i32) -> i32;
 }
 
 fn die(msg: String) -> ! {
@@ -685,9 +711,137 @@ fn now_unix_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+// ---------------------------------------------------------------------------------------------
+// PALW execution-commitment legs v1 — the capture side of `kaspa_consensus_core::palw_legs`.
+//
+// The schema was frozen first and deliberately: this file feeds it, it does not get to define
+// it. Every canonical rule (leaf order, counts, the checkpoint chain, the fail-closed rule on
+// non-finite values) lives in the builder there, so a capture bug is a build error here rather
+// than a commitment a challenger convicts us on.
+//
+// The two opaque identities the schema left to registration are answered here, by declaration:
+// what a tap reads, and what a checkpoint's bytes are. Both name the llama.cpp commit, because
+// both are claims about a specific runtime's graph and serializer — not about "an LLM".
+// ---------------------------------------------------------------------------------------------
+
+/// The tapped tensor: the post-block residual stream, after the control-vector hook, which is
+/// what the next block consumes. Tapping the residual stream (rather than, say, an attention
+/// output) is the choice that makes a wrong row impossible to hide — every later layer, and
+/// therefore the logits, is downstream of it.
+fn tap_semantics_string() -> String {
+    format!(
+        "llama.cpp@{}/graph-node/l_out-{{il}}/post-block-residual-stream/f32-le/row-per-position/v1",
+        qwen35_pins::LLAMA_COMMIT
+    )
+}
+
+/// The checkpoint's bytes: llama.cpp's own sequence serialization, which is a format with a
+/// version, hence the commit. Opaque on purpose — the commitment says "this runtime produced
+/// these bytes at this point in the decode run", and only the same runtime can say it again.
+fn state_layout_string() -> String {
+    format!("llama.cpp@{}/llama_state_seq_get_data/seq-0/v1", qwen35_pins::LLAMA_COMMIT)
+}
+
+/// One checkpoint every 8 decode calls. A profile parameter, not a constant of the scheme: it
+/// trades commitment size against how much re-execution a challenge costs (a challenger replays
+/// from the last checkpoint, so the interval IS the worst-case replay length).
+const CHECKPOINT_INTERVAL_V1: u32 = 8;
+
+/// The tap schedule: quartile boundaries plus the final block. Four taps spread over depth
+/// catch a divergence wherever it starts — an early tap that matches while a late one does not
+/// localizes the fault to a layer range, which is what makes a challenge cheap.
+fn canonical_tap_layers(n_layer: u32) -> Vec<u16> {
+    let last = n_layer.saturating_sub(1);
+    let mut layers: Vec<u16> =
+        [n_layer / 4, n_layer / 2, (3 * n_layer) / 4, last].into_iter().map(|l| l.min(last) as u16).collect();
+    layers.sort_unstable();
+    layers.dedup();
+    layers
+}
+
+/// Streams what the shim captured into the frozen builder. Holds no rows of its own beyond one
+/// scratch row: the leg is tens of megabytes of f32 and the answer to a challenge is
+/// re-execution, so nothing here needs to survive the job.
+struct LegsCapture {
+    builder: PalwLegsCommitmentBuilderV1,
+    taps: u32,
+    hidden_dim: u32,
+    state_layout_id: Hash64,
+    row: Vec<f32>,
+    state_bytes: Vec<u8>,
+    /// Rows captured, and how many of them were entirely zero. A backend whose tensor read
+    /// silently no-ops would produce a perfectly stable, perfectly reproducible commitment to
+    /// nothing — the one capture failure that does not announce itself, so it is counted.
+    rows_seen: u64,
+    rows_all_zero: u64,
+}
+
+impl LegsCapture {
+    /// Harvests one decode call. `expected_positions` is the schedule's claim about this call
+    /// (the prefill's token count, or 1); a tap that captured anything else — including nothing,
+    /// which means the graph never contained the node the profile claims to read — aborts the
+    /// job. There is no partial-capture path: a short leg is a refutable commitment.
+    fn harvest(&mut self, ctx: *mut ShimCtx, call_index: u32, expected_positions: u32) {
+        let status = unsafe { shim_capture_status(ctx) };
+        if status != 0 {
+            die(format!("v2-legs execution invalid: activation capture fault {status} at call {call_index}"));
+        }
+        for tap_slot in 0..self.taps {
+            let got = unsafe { shim_capture_positions(ctx, tap_slot as i32) };
+            if got != expected_positions as i32 {
+                die(format!(
+                    "v2-legs execution invalid: tap {tap_slot} captured {got} positions at call {call_index}, expected {expected_positions}"
+                ));
+            }
+        }
+        // Tap-major then position — the pinned leaf order. The builder rejects any other order,
+        // so this loop nesting is load-bearing, not stylistic.
+        for tap_slot in 0..self.taps {
+            for position in 0..expected_positions {
+                let got =
+                    unsafe { shim_capture_row(ctx, tap_slot as i32, position as i32, self.row.as_mut_ptr(), self.row.len() as i32) };
+                if got != self.hidden_dim as i32 {
+                    die(format!(
+                        "v2-legs execution invalid: tap {tap_slot} position {position} of call {call_index} returned {got} values"
+                    ));
+                }
+                self.rows_seen += 1;
+                if self.row.iter().all(|v| *v == 0.0) {
+                    self.rows_all_zero += 1;
+                }
+                self.builder
+                    .push_activation_row(call_index, tap_slot, position, &self.row)
+                    .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
+            }
+        }
+    }
+
+    /// Commits the replay state after `decode_call`. The bytes never leave the process — only
+    /// the root does, and reproducing it requires having been in the same state.
+    fn checkpoint(&mut self, ctx: *mut ShimCtx, decode_call: u32) {
+        let size = unsafe { shim_state_seq_size(ctx) };
+        if size <= 0 {
+            die(format!("v2-legs execution invalid: replay state is unavailable at decode call {decode_call} (size {size})"));
+        }
+        self.state_bytes.clear();
+        self.state_bytes.resize(size as usize, 0);
+        let written = unsafe { shim_state_seq_read(ctx, self.state_bytes.as_mut_ptr(), size) };
+        if written <= 0 {
+            die(format!("v2-legs execution invalid: replay state read failed at decode call {decode_call} ({written})"));
+        }
+        self.state_bytes.truncate(written as usize);
+        let state_root = checkpoint_state_root_v1(&self.state_layout_id, &self.state_bytes);
+        self.builder
+            .push_checkpoint(decode_call, state_root)
+            .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
+    }
+}
+
 struct ExecutionV2 {
     projection: PalwResultProjectionV2,
     telemetry: PalwJobTelemetryV2,
+    /// `Some` only on the legs path; the bare v2 path is unchanged and produces none.
+    legs: Option<PalwLegsBindingV1>,
 }
 
 /// One decode call of the v2 loop: feed, record the schedule, capture the full logits row,
@@ -723,9 +877,36 @@ fn step_v2(
     }
 }
 
+/// The frozen v2 path: no capture, therefore no eval callback, therefore the exact scheduler
+/// behaviour every v2 golden was measured under.
 fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
+    execute_v2_inner(model_path, envelope, false)
+}
+
+/// The legs path: identical execution plus activation and checkpoint capture.
+fn execute_v2_legs(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
+    execute_v2_inner(model_path, envelope, true)
+}
+
+fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, capture_legs: bool) -> ExecutionV2 {
     let load_started = std::time::Instant::now();
-    let ctx = unsafe { shim_open(format!("{}\0", model_path.display()).as_ptr(), N_CTX, N_BATCH, N_THREADS) };
+    // Tap layers are a function of the model's depth, which is only known after load — so the
+    // arm has to be provisional here and is checked against the real layer count below.
+    let provisional_taps: Vec<i32> = if capture_legs {
+        canonical_tap_layers(qwen35_pins::MODEL_LAYER_COUNT).into_iter().map(|l| l as i32).collect()
+    } else {
+        Vec::new()
+    };
+    let ctx = unsafe {
+        shim_open_capture(
+            format!("{}\0", model_path.display()).as_ptr(),
+            N_CTX,
+            N_BATCH,
+            N_THREADS,
+            provisional_taps.as_ptr(),
+            provisional_taps.len() as i32,
+        )
+    };
     if ctx.is_null() {
         die(format!("llama.cpp failed to load {}", model_path.display()));
     }
@@ -757,6 +938,48 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
     let context = PalwJobContextV2::from_envelope(envelope, tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256));
     let job_context_hash = context.context_hash();
 
+    // The tap profile the capture was armed with, now checked against the model that actually
+    // loaded. Pins first, measurement second: if the loaded artifact has a different depth or
+    // width than the pins claim, every tap coordinate would be a lie about a different network.
+    let mut legs = capture_legs.then(|| {
+        let n_layer = unsafe { shim_n_layer(ctx) };
+        let n_embd = unsafe { shim_n_embd(ctx) };
+        if n_layer != qwen35_pins::MODEL_LAYER_COUNT as i32 || n_embd != qwen35_pins::MODEL_HIDDEN_DIM as i32 {
+            die(format!(
+                "v2-legs rejected: the loaded model is {n_layer} layers × {n_embd} wide, but the pins say {} × {}",
+                qwen35_pins::MODEL_LAYER_COUNT,
+                qwen35_pins::MODEL_HIDDEN_DIM
+            ));
+        }
+        let tap_profile = PalwActivationTapProfileV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            tap_semantics_id: tap_semantics_id_v1(&tap_semantics_string()),
+            tap_layer_indices: canonical_tap_layers(n_layer as u32),
+            model_total_layers: n_layer as u16,
+            hidden_dim: n_embd as u32,
+            dtype: PalwLogitsDtypeV2::F32Le,
+        };
+        let state_layout_id = state_layout_id_v1(&state_layout_string());
+        let checkpoint_profile = PalwCheckpointProfileV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: CHECKPOINT_INTERVAL_V1,
+            state_layout_id,
+        };
+        let taps = tap_profile.tap_count();
+        let builder = PalwLegsCommitmentBuilderV1::new(context.clone(), tap_profile, checkpoint_profile)
+            .unwrap_or_else(|e| die(format!("v2-legs rejected: {e}")));
+        LegsCapture {
+            builder,
+            taps,
+            hidden_dim: n_embd as u32,
+            state_layout_id,
+            row: vec![0f32; n_embd as usize],
+            state_bytes: Vec::new(),
+            rows_seen: 0,
+            rows_all_zero: 0,
+        }
+    });
+
     let exec_started = std::time::Instant::now();
     let d = envelope.exact_decode_tokens;
     let tokens: Vec<i32> = envelope.prompt_token_ids.iter().map(|t| *t as i32).collect();
@@ -766,6 +989,9 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
     let mut schedule = PalwScheduleCommitmentBuilderV2::new(&job_context_hash);
 
     // Call 0: the prefill batch. Its final-position logits are event 0.
+    if legs.is_some() {
+        unsafe { shim_capture_begin(ctx) };
+    }
     step_v2(
         ctx,
         &tokens,
@@ -779,6 +1005,9 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
         &mut events,
         &mut schedule,
     );
+    if let Some(capture) = legs.as_mut() {
+        capture.harvest(ctx, 0, prefill);
+    }
 
     let mut outputs: Vec<u32> = Vec::with_capacity(d as usize);
     let mut rendered: Vec<u8> = Vec::new();
@@ -801,6 +1030,9 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
         }
         let event_index = outputs.len() as u32;
         let fed = [tok];
+        if legs.is_some() {
+            unsafe { shim_capture_begin(ctx) };
+        }
         step_v2(
             ctx,
             &fed,
@@ -814,7 +1046,17 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
             &mut events,
             &mut schedule,
         );
+        if let Some(capture) = legs.as_mut() {
+            // Decode call k = event_index: one position, and a checkpoint on every interval
+            // boundary. The checkpoint is taken AFTER the call it covers, so replaying from it
+            // resumes at the next call — which is what makes a challenge cost one interval.
+            capture.harvest(ctx, event_index, 1);
+            if event_index.is_multiple_of(CHECKPOINT_INTERVAL_V1) {
+                capture.checkpoint(ctx, event_index);
+            }
+        }
     }
+
     unsafe { shim_close(ctx) };
 
     // Defense in depth: the streamed schedule must equal the schedule the shape mandates. A
@@ -839,6 +1081,26 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
     let commitment = PalwTraceCommitmentV2::assemble(context, summary, events)
         .unwrap_or_else(|e| die(format!("internal error: trace commitment failed to assemble: {e}")));
 
+    // Seal the legs against the logits root they bind. `finish` is where a short leg or a
+    // drifted checkpoint schedule becomes an error — the process must die here rather than emit
+    // a receipt a challenger could convict it on.
+    let legs = legs.map(|capture| {
+        if capture.rows_seen > 0 && capture.rows_all_zero == capture.rows_seen {
+            die(format!(
+                "v2-legs execution invalid: all {} captured activation rows are zero — the tap read nothing",
+                capture.rows_seen
+            ));
+        }
+        let zero_rows = capture.rows_all_zero;
+        let seen = capture.rows_seen;
+        let binding = capture
+            .builder
+            .finish(commitment.full_logits_sequence_root)
+            .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
+        eprintln!("[palw-worker] v2 legs capture: {seen} rows, {zero_rows} all-zero");
+        binding
+    });
+
     let projection = PalwResultProjectionV2 {
         job_context_hash,
         full_logits_trace_root: commitment.full_logits_sequence_root,
@@ -857,6 +1119,15 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
         exec_started.elapsed(),
         &hex(commitment.full_logits_sequence_root)[..16]
     );
+    if let Some(binding) = legs.as_ref() {
+        eprintln!(
+            "[palw-worker] v2 legs: {} activation leaves ({} taps), {} checkpoints; execution root={}…",
+            binding.activation_leaf_count,
+            binding.tap_profile.tap_count(),
+            binding.checkpoint_count,
+            &hex(binding.committed_execution_root)[..16]
+        );
+    }
     ExecutionV2 {
         projection,
         telemetry: PalwJobTelemetryV2 {
@@ -864,6 +1135,7 @@ fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
             execute_ms: exec_started.elapsed().as_millis() as u64,
             eog_first_seen_at_decode_index: eog_first,
         },
+        legs,
     }
 }
 
@@ -900,6 +1172,122 @@ fn run_v2_job() {
     let bytes = borsh::to_vec(&result).unwrap_or_else(|e| die(format!("cannot serialize the v2 result: {e}")));
     let mut stdout = std::io::stdout().lock();
     write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v2 result frame: {e}")));
+}
+
+/// `--mode v2-legs-job`: the v2 job with execution-commitment legs. Same envelope in; a
+/// `PalwLegsJobResultV1` frame out, carrying the v2 result **unchanged** plus the binding.
+fn run_v2_legs_job() {
+    let mut stdin = std::io::stdin().lock();
+    let payload = read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v2-legs-job rejected: {e}")));
+    let request_hash = job_request_hash_v2(&payload);
+    let envelope: PalwJobEnvelopeV2 = decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("v2-legs-job rejected: {e}")));
+    envelope.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("v2-legs-job rejected: {e}")));
+    if envelope.deadline_unix_ms != 0 && now_unix_ms() >= envelope.deadline_unix_ms {
+        die("v2-legs-job rejected: deadline already passed at admission".into());
+    }
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!(
+            "v2-legs-job rejected: floating-point environment is not the canonical profile ({}; required {FP_ENVIRONMENT_PROFILE_V2})",
+            fp.canonical_string()
+        ));
+    }
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
+    check_v2_identity(&envelope, &manifest);
+    let model_path = pinned_model_path_v2();
+    let exec = execute_v2_legs(&model_path, &envelope);
+    let binding = exec.legs.unwrap_or_else(|| die("internal error: the legs path produced no binding".into()));
+    let result = PalwLegsJobResultV1 {
+        version: PALW_LEGS_OBJECT_VERSION_V1,
+        result: PalwJobResultV2 {
+            version: PALW_JOB_WIRE_VERSION_V2,
+            request_hash,
+            job_id: envelope.job_id,
+            projection: exec.projection,
+            telemetry: exec.telemetry,
+        },
+        binding,
+    };
+    // The driver will check this; failing it here means the bug is ours, and a receipt whose two
+    // halves describe different executions must not leave the process.
+    result.validate_coherence().unwrap_or_else(|e| die(format!("internal error: {e}")));
+    let bytes = borsh::to_vec(&result).unwrap_or_else(|e| die(format!("cannot serialize the v2 legs result: {e}")));
+    let mut stdout = std::io::stdout().lock();
+    write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v2 legs result frame: {e}")));
+}
+
+/// `--mode v2-legs-selftest`: **the gate this whole increment stands on.**
+///
+/// Installing a capture callback makes ggml compute each graph split in sub-ranges cut at every
+/// tapped node instead of one whole-split compute. Whether that changes the arithmetic is a
+/// property of the backend's fusion and scheduling, not something anyone may assume — and it
+/// matters totally, because the legs bind *the frozen v2 logits root*: if capture moves that
+/// root, a capturing executor and a non-capturing verifier disagree about an honest execution.
+///
+/// So this replays the golden set with capture ON and demands the SAME roots the goldens hold.
+/// A mismatch is not a bug to paper over — it means capture is a different determinism class on
+/// this backend, and the honest outcomes are to say so and register it as one.
+fn run_v2_legs_selftest() {
+    let path = std::env::var(PALW_GOLDEN_ENV)
+        .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-legs-selftest needs the registered golden set")));
+    let set = load_golden_set(&path);
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!("v2-legs-selftest FAILED before execution: non-canonical floating-point environment: {}", fp.canonical_string()));
+    }
+    let model_path = pinned_model_path_v2();
+    let mut drift = 0usize;
+    let mut results = Vec::new();
+    for job in &set.jobs {
+        let envelope = set.envelope_for(job);
+        let exec = execute_v2_legs(&model_path, &envelope);
+        let binding = exec.legs.unwrap_or_else(|| die("internal error: the legs path produced no binding".into()));
+        let got = exec.projection.full_logits_trace_root;
+        let matches = got == job.expected.full_logits_trace_root;
+        if !matches {
+            drift += 1;
+            eprintln!(
+                "[palw-worker] v2-legs-selftest DRIFT: {} — capture-off root {}, capture-on root {}",
+                job.name,
+                hex(job.expected.full_logits_trace_root),
+                hex(got)
+            );
+        } else {
+            eprintln!(
+                "[palw-worker] v2-legs-selftest ok: {} (logits root unmoved; execution root {}…)",
+                job.name,
+                &hex(binding.committed_execution_root)[..16]
+            );
+        }
+        results.push(serde_json::json!({
+            "name": job.name,
+            "logits_root_unmoved": matches,
+            "logits_root": hex(got),
+            "execution_commitment_root": hex(binding.committed_execution_root),
+            "activation_leaf_count": binding.activation_leaf_count,
+            "checkpoint_count": binding.checkpoint_count,
+        }));
+    }
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.v2-legs-selftest.v1",
+        "runtime_class_id": hex(runtime_class_id()),
+        "execution_commitment_scheme_id": hex(execution_commitment_scheme_id_v1()),
+        "tap_semantics": tap_semantics_string(),
+        "tap_semantics_id": hex(tap_semantics_id_v1(&tap_semantics_string())),
+        "state_layout": state_layout_string(),
+        "state_layout_id": hex(state_layout_id_v1(&state_layout_string())),
+        "tap_layers": canonical_tap_layers(qwen35_pins::MODEL_LAYER_COUNT),
+        "checkpoint_interval": CHECKPOINT_INTERVAL_V1,
+        "jobs": results,
+        "capture_is_logits_neutral": drift == 0,
+    });
+    println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
+    if drift > 0 {
+        die(format!(
+            "{drift} of {} golden jobs moved their logits root under capture — capture is NOT logits-neutral on this backend",
+            set.jobs.len()
+        ));
+    }
 }
 
 /// `--mode v2-manifest`: display-only JSON. The canonical identity is the manifest HASH over
@@ -1122,8 +1510,10 @@ fn main() {
     // The v2 interface deliberately has no `--n-predict`: the prefill/decode budgets are
     // separate, explicit envelope fields (VPS design §5.4), and accepting the ambiguous v1
     // flag here would reintroduce exactly the total-vs-decode confusion v2 removes.
-    if matches!(mode.as_deref(), Some("v2-job" | "v2-manifest" | "v2-golden-gen" | "v2-selftest" | "v2-golden-show"))
-        && n_predict.is_some()
+    if matches!(
+        mode.as_deref(),
+        Some("v2-job" | "v2-manifest" | "v2-golden-gen" | "v2-selftest" | "v2-golden-show" | "v2-legs-job" | "v2-legs-selftest")
+    ) && n_predict.is_some()
     {
         die("--n-predict is not a v2 interface; token budgets come from the job envelope".into());
     }
@@ -1136,6 +1526,8 @@ fn main() {
             run_v2_golden_gen(&out);
         }
         Some("v2-selftest") => run_v2_selftest(),
+        Some("v2-legs-job") => run_v2_legs_job(),
+        Some("v2-legs-selftest") => run_v2_legs_selftest(),
         Some("v2-golden-show") => run_v2_golden_show(),
         Some("manifest") => {
             let doc = serde_json::json!({

@@ -1039,6 +1039,15 @@ pub mod qwen35_pins {
     pub const BASE_REPO_ID: &str = "Qwen/Qwen3.5-2B";
     pub const BASE_REVISION: &str = "15852e8c16360a2fea060d615a32b45270f8a8fc";
 
+    /// The architecture shape, read out of the GGUF's own metadata (`qwen35.block_count`,
+    /// `qwen35.embedding_length`). Pinned here because the activation-tap profile has to be
+    /// chosen BEFORE the model is loaded — llama.cpp only accepts a capture callback at context
+    /// creation — so the tap layers are computed from these and then checked against what the
+    /// loaded model actually reports. A mismatch means the artifact is not the pinned one in a
+    /// way the SHA-256 gate somehow missed, and the worker refuses to run.
+    pub const MODEL_LAYER_COUNT: u32 = 24;
+    pub const MODEL_HIDDEN_DIM: u32 = 2048;
+
     /// Pinned upstream `ggml-org/llama.cpp` commit the worker links against.
     pub const LLAMA_COMMIT: &str = "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a";
     /// `git rev-list --count` at that commit — llama.cpp's own build-number convention.

@@ -56,7 +56,7 @@
 //! chain convict by themselves, no recomputation, no jury (ADR-0027 §4 table gains a row).
 
 use crate::palw_slash::{check_job_context_shape, PalwSlashError};
-use crate::palw_v2::{PalwJobContextV2, PalwLogitsDtypeV2, PALW_V2_MAX_TRACE_EVENTS};
+use crate::palw_v2::{PalwJobContextV2, PalwJobResultV2, PalwLogitsDtypeV2, PALW_V2_MAX_TRACE_EVENTS};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::Hash64;
 use thiserror::Error;
@@ -86,6 +86,12 @@ pub const PALW_LEGS_DOMAIN_CHECKPOINT_GENESIS: &[u8] = b"misaka-palw/checkpoint-
 pub const PALW_LEGS_DOMAIN_CHECKPOINT_EMPTY: &[u8] = b"misaka-palw/checkpoint-empty/v1";
 pub const PALW_LEGS_DOMAIN_EXECUTION_COMMITMENT: &[u8] = b"misaka-palw/execution-commitment/v1";
 pub const PALW_LEGS_DOMAIN_EVIDENCE_ID: &[u8] = b"misaka-palw/legs-refutation-evidence-id/v1";
+/// Registration-side: the preimage of the opaque `tap_semantics_id`.
+pub const PALW_LEGS_DOMAIN_TAP_SEMANTICS_ID: &[u8] = b"misaka-palw/activation-tap-semantics-id/v1";
+/// Registration-side: the preimage of the opaque `state_layout_id`.
+pub const PALW_LEGS_DOMAIN_STATE_LAYOUT_ID: &[u8] = b"misaka-palw/checkpoint-state-layout-id/v1";
+/// Producer-side: how raw replay-state bytes become a checkpoint's `state_root`.
+pub const PALW_LEGS_DOMAIN_CHECKPOINT_STATE_ROOT: &[u8] = b"misaka-palw/checkpoint-state-root/v1";
 
 /// Every domain this module introduces (uniqueness-tested against the v2 / PALW-S / reference
 /// lists — one string shared across families is a preimage bridge).
@@ -105,6 +111,9 @@ pub const PALW_LEGS_ALL_DOMAINS: &[&[u8]] = &[
     PALW_LEGS_DOMAIN_CHECKPOINT_EMPTY,
     PALW_LEGS_DOMAIN_EXECUTION_COMMITMENT,
     PALW_LEGS_DOMAIN_EVIDENCE_ID,
+    PALW_LEGS_DOMAIN_TAP_SEMANTICS_ID,
+    PALW_LEGS_DOMAIN_STATE_LAYOUT_ID,
+    PALW_LEGS_DOMAIN_CHECKPOINT_STATE_ROOT,
 ];
 
 /// Most taps a profile may declare.
@@ -120,6 +129,29 @@ pub const PALW_LEGS_MAX_CHECKPOINTS: usize = PALW_V2_MAX_TRACE_EVENTS;
 pub const PALW_LEGS_MAX_OPENING_SIBLINGS: usize = PALW_LEGS_MAX_ACTIVATION_LEAVES.ilog2() as usize;
 /// Cap on one carried activation row (bytes): `4 × MAX_HIDDEN_DIM`.
 pub const PALW_LEGS_MAX_ROW_BYTES: usize = 4 * PALW_LEGS_MAX_HIDDEN_DIM as usize;
+
+/// The registration preimage of `tap_semantics_id`: a runtime states, as one canonical string,
+/// *which tensor* its taps read — graph node name, what that node is, dtype, and the row
+/// convention. The string is the claim; this hash is how a committed profile references it, and
+/// two runtimes whose taps read different tensors get different ids without anyone having to
+/// describe a tensor inside a consensus preimage.
+pub fn tap_semantics_id_v1(semantics_string: &str) -> Hash64 {
+    keyed64(PALW_LEGS_DOMAIN_TAP_SEMANTICS_ID, &[semantics_string.as_bytes()])
+}
+
+/// The registration preimage of `state_layout_id` — same discipline, for the bytes a checkpoint
+/// commits. It must name the serializer *and its version*: a replay state is only meaningful to
+/// whatever can read it back, and that reader changes with the runtime.
+pub fn state_layout_id_v1(layout_string: &str) -> Hash64 {
+    keyed64(PALW_LEGS_DOMAIN_STATE_LAYOUT_ID, &[layout_string.as_bytes()])
+}
+
+/// How raw replay-state bytes become the `state_root` a checkpoint leaf carries: bound to the
+/// layout id, so the same bytes read under two different layout claims are two different roots.
+/// The bytes themselves never travel — only this root, and (when challenged) a re-execution.
+pub fn checkpoint_state_root_v1(state_layout_id: &Hash64, state_bytes: &[u8]) -> Hash64 {
+    keyed64(PALW_LEGS_DOMAIN_CHECKPOINT_STATE_ROOT, &[state_layout_id.as_byte_slice(), state_bytes])
+}
 
 pub fn execution_commitment_scheme_id_v1() -> Hash64 {
     keyed64(PALW_LEGS_DOMAIN_SCHEME_ID, &[PALW_EXECUTION_COMMITMENT_SCHEME_NAME_V1.as_bytes()])
@@ -158,6 +190,25 @@ pub enum PalwLegsError {
     ChainEvidenceNotAdjacent { earlier: u32, later: u32 },
     #[error("the addressed material is honest under every pinned rule — refutation rejected")]
     NoFaultFound,
+
+    // Producer-side (the builder below). These never travel: they are the errors an honest
+    // executor hits *instead of* emitting a commitment a challenger could convict it on.
+    #[error("the {which} profile is not canonical: {reason}")]
+    ProfileNotCanonical { which: &'static str, reason: &'static str },
+    #[error("row of {got} values does not match the profile hidden dim {expected}")]
+    RowNotHiddenDim { got: usize, expected: u32 },
+    #[error("(call {call_index}, tap {tap_slot}, position {position}) is not a canonical activation coordinate")]
+    CoordinatesNotCanonical { call_index: u32, tap_slot: u32, position: u32 },
+    #[error("activation row belongs at leaf index {canonical} but was pushed as leaf {next}")]
+    RowsOutOfOrder { canonical: u64, next: u64 },
+    #[error("activation value {value_index} of leaf {leaf_index} is non-finite — execution is invalid, emit no receipt")]
+    NonFiniteActivation { leaf_index: u32, value_index: u32 },
+    #[error("checkpoint {index} covers decode call {got}, but the interval mandates {expected}")]
+    CheckpointNotCanonical { index: u32, got: u32, expected: u32 },
+    #[error("{leg} leg holds {got} of the {expected} entries the job mandates")]
+    LegIncomplete { leg: &'static str, got: u64, expected: u64 },
+    #[error("the legs binding and the v2 result disagree on {field} — they are not one execution")]
+    LegsResultIncoherent { field: &'static str },
 }
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
@@ -893,6 +944,280 @@ fn open_checkpoint(
         return Err(PalwLegsError::LeafPreimageMismatch { leaf: "checkpoint" });
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The worker seam
+// ---------------------------------------------------------------------------------------------
+
+/// What a legs-capturing runtime returns: the v2 result **unchanged** — same struct, same
+/// bytes, same goldens — plus the binding for the composite commitment. Two objects rather than
+/// a widened [`PalwJobResultV2`], because whether a class produces legs is a registration fact,
+/// and the bare v2 path must stay exactly what it was for the classes that do not.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwLegsJobResultV1 {
+    /// = [`PALW_LEGS_OBJECT_VERSION_V1`].
+    pub version: u16,
+    pub result: PalwJobResultV2,
+    pub binding: PalwLegsBindingV1,
+}
+
+impl PalwLegsJobResultV1 {
+    /// Checks the two halves describe one execution. A binding whose logits root or job context
+    /// is not the result's is either a different job's legs or a producer bug; either way the
+    /// driver must not treat the composite root as a commitment to what the result says.
+    pub fn validate_coherence(&self) -> Result<(), PalwLegsError> {
+        if self.version != PALW_LEGS_OBJECT_VERSION_V1 {
+            return Err(PalwLegsError::UnsupportedVersion { got: self.version, expected: PALW_LEGS_OBJECT_VERSION_V1 });
+        }
+        if self.binding.version != PALW_LEGS_OBJECT_VERSION_V1 {
+            return Err(PalwLegsError::UnsupportedVersion { got: self.binding.version, expected: PALW_LEGS_OBJECT_VERSION_V1 });
+        }
+        if self.binding.full_logits_trace_root != self.result.projection.full_logits_trace_root {
+            return Err(PalwLegsError::LegsResultIncoherent { field: "full_logits_trace_root" });
+        }
+        if self.binding.job_context.context_hash() != self.result.projection.job_context_hash {
+            return Err(PalwLegsError::LegsResultIncoherent { field: "job_context_hash" });
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The producer side — the only supported way to BUILD a commitment
+// ---------------------------------------------------------------------------------------------
+
+/// Streams captured execution material into a [`PalwLegsBindingV1`].
+///
+/// Every structural fault in [`PalwLegsFaultV1`] is unreachable through this type: coordinates
+/// are checked against [`canonical_activation_leaf_index`] and must arrive in tree order, rows
+/// must be exactly the profile's hidden dim, a non-finite value aborts the *build* (the
+/// fail-closed rule — an honest execution emits no receipt rather than a refutable one), and
+/// checkpoints chain from [`checkpoint_genesis_prev_v1`] with the interval doing the counting.
+/// A runtime that cannot satisfy them gets an error here instead of a slashable commitment
+/// later, which is the whole point of the producer sharing the adjudicator's module.
+///
+/// It keeps **hashes, not rows**: the activation leg of a full job is tens of megabytes of f32,
+/// and the answer to a challenge is re-execution (only challenged rows ever travel), so holding
+/// the material would buy nothing and bound the job size for no reason.
+pub struct PalwLegsCommitmentBuilderV1 {
+    context: PalwJobContextV2,
+    context_hash: Hash64,
+    tap_profile: PalwActivationTapProfileV1,
+    tap_profile_hash: Hash64,
+    checkpoint_profile: PalwCheckpointProfileV1,
+    checkpoint_profile_hash: Hash64,
+    taps: u32,
+    expected_activation_leaves: u64,
+    expected_checkpoints: u32,
+    activation_hashes: Vec<Hash64>,
+    checkpoint_hashes: Vec<Hash64>,
+    prev_checkpoint_leaf_hash: Hash64,
+    row_bytes: Vec<u8>,
+}
+
+impl PalwLegsCommitmentBuilderV1 {
+    pub fn new(
+        context: PalwJobContextV2,
+        tap_profile: PalwActivationTapProfileV1,
+        checkpoint_profile: PalwCheckpointProfileV1,
+    ) -> Result<Self, PalwLegsError> {
+        check_job_context_shape(&context).map_err(PalwLegsError::Context)?;
+        tap_profile
+            .validate_shape()
+            .map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "activation tap", reason })?;
+        checkpoint_profile
+            .validate_shape()
+            .map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "checkpoint", reason })?;
+
+        let taps = tap_profile.tap_count();
+        let expected_activation_leaves = canonical_activation_leaf_count(&context, taps);
+        if expected_activation_leaves == 0 || expected_activation_leaves > PALW_LEGS_MAX_ACTIVATION_LEAVES as u64 {
+            return Err(PalwLegsError::LeafCountOutOfRange {
+                got: expected_activation_leaves.min(u32::MAX as u64) as u32,
+                max: PALW_LEGS_MAX_ACTIVATION_LEAVES,
+            });
+        }
+        let expected_checkpoints = canonical_checkpoint_count(&context, checkpoint_profile.checkpoint_interval);
+        if expected_checkpoints as usize > PALW_LEGS_MAX_CHECKPOINTS {
+            return Err(PalwLegsError::LeafCountOutOfRange { got: expected_checkpoints, max: PALW_LEGS_MAX_CHECKPOINTS });
+        }
+
+        let context_hash = context.context_hash();
+        Ok(Self {
+            tap_profile_hash: tap_profile.profile_hash(),
+            checkpoint_profile_hash: checkpoint_profile.profile_hash(),
+            prev_checkpoint_leaf_hash: checkpoint_genesis_prev_v1(&context_hash),
+            context,
+            context_hash,
+            tap_profile,
+            checkpoint_profile,
+            taps,
+            expected_activation_leaves,
+            expected_checkpoints,
+            activation_hashes: Vec::new(),
+            checkpoint_hashes: Vec::with_capacity(expected_checkpoints as usize),
+            row_bytes: Vec::new(),
+        })
+    }
+
+    pub fn context_hash(&self) -> Hash64 {
+        self.context_hash
+    }
+
+    pub fn expected_activation_leaf_count(&self) -> u64 {
+        self.expected_activation_leaves
+    }
+
+    pub fn expected_checkpoint_count(&self) -> u32 {
+        self.expected_checkpoints
+    }
+
+    /// Commits one captured tap row. Rows must arrive in the pinned tree order — the canonical
+    /// index of the coordinates has to be the next free leaf — so a capture loop that walks the
+    /// execution in the wrong order is a build error, not a wrong root discovered by a verifier.
+    pub fn push_activation_row(
+        &mut self,
+        call_index: u32,
+        tap_slot: u32,
+        position: u32,
+        values: &[f32],
+    ) -> Result<u64, PalwLegsError> {
+        let hidden_dim = self.tap_profile.hidden_dim;
+        if values.len() != hidden_dim as usize {
+            return Err(PalwLegsError::RowNotHiddenDim { got: values.len(), expected: hidden_dim });
+        }
+        let Some(canonical) = canonical_activation_leaf_index(&self.context, self.taps, call_index, tap_slot, position) else {
+            return Err(PalwLegsError::CoordinatesNotCanonical { call_index, tap_slot, position });
+        };
+        let next = self.activation_hashes.len() as u64;
+        if canonical != next {
+            return Err(PalwLegsError::RowsOutOfOrder { canonical, next });
+        }
+        self.row_bytes.clear();
+        self.row_bytes.reserve(values.len() * 4);
+        for (value_index, v) in values.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(PalwLegsError::NonFiniteActivation { leaf_index: next as u32, value_index: value_index as u32 });
+            }
+            self.row_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        if self.row_bytes.len() > PALW_LEGS_MAX_ROW_BYTES {
+            return Err(PalwLegsError::RowBytesTooLarge { got: self.row_bytes.len(), max: PALW_LEGS_MAX_ROW_BYTES });
+        }
+        let leaf = PalwActivationLeafV1 {
+            call_index,
+            tap_slot,
+            position,
+            hidden_dim,
+            value_count: values.len() as u32,
+            values_le_bytes: std::mem::take(&mut self.row_bytes),
+        };
+        self.activation_hashes.push(activation_leaf_hash_v1(&self.context_hash, &self.tap_profile_hash, &leaf));
+        self.row_bytes = leaf.values_le_bytes;
+        Ok(next)
+    }
+
+    /// Commits one replay checkpoint. `covered_decode_call` is the caller's own statement of
+    /// where it believes it is in the decode run; it must equal what the interval mandates for
+    /// this checkpoint index, so a loop that drifts off the schedule is caught at the source
+    /// rather than committed as `CheckpointCoveredCallNotCanonical`.
+    pub fn push_checkpoint(&mut self, covered_decode_call: u32, state_root: Hash64) -> Result<u32, PalwLegsError> {
+        let index = self.checkpoint_hashes.len() as u32;
+        if index >= self.expected_checkpoints {
+            return Err(PalwLegsError::CheckpointNotCanonical {
+                index,
+                got: covered_decode_call,
+                expected: self.expected_checkpoints,
+            });
+        }
+        let expected = (index + 1).saturating_mul(self.checkpoint_profile.checkpoint_interval);
+        if covered_decode_call != expected {
+            return Err(PalwLegsError::CheckpointNotCanonical { index, got: covered_decode_call, expected });
+        }
+        let leaf = PalwCheckpointLeafV1 {
+            checkpoint_index: index,
+            covered_decode_call,
+            state_layout_id: self.checkpoint_profile.state_layout_id,
+            state_root,
+            prev_checkpoint_leaf_hash: self.prev_checkpoint_leaf_hash,
+        };
+        let leaf_hash = checkpoint_leaf_hash_v1(&self.context_hash, &self.checkpoint_profile_hash, &leaf);
+        self.prev_checkpoint_leaf_hash = leaf_hash;
+        self.checkpoint_hashes.push(leaf_hash);
+        Ok(index)
+    }
+
+    /// Seals both legs against the frozen v2 logits root. A short leg fails here: a commitment
+    /// over a partial capture is exactly the object `ActivationLeafCountNotCanonical` exists to
+    /// convict, and an executor must never be the one that emits it.
+    pub fn finish(self, full_logits_trace_root: Hash64) -> Result<PalwLegsBindingV1, PalwLegsError> {
+        let got = self.activation_hashes.len() as u64;
+        if got != self.expected_activation_leaves {
+            return Err(PalwLegsError::LegIncomplete { leg: "activation", got, expected: self.expected_activation_leaves });
+        }
+        let checkpoints = self.checkpoint_hashes.len() as u32;
+        if checkpoints != self.expected_checkpoints {
+            return Err(PalwLegsError::LegIncomplete {
+                leg: "checkpoint",
+                got: checkpoints as u64,
+                expected: self.expected_checkpoints as u64,
+            });
+        }
+
+        let activation_merkle_root = leg_merkle_root_v1(
+            PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
+            PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE,
+            &self.activation_hashes,
+            PALW_LEGS_MAX_ACTIVATION_LEAVES,
+        )?;
+        // `count == 0 ⟺ empty sentinel` is a canonical-form rule, so the empty case takes the
+        // sentinel rather than a root over nothing.
+        let checkpoint_merkle_root = if checkpoints == 0 {
+            checkpoint_empty_root_v1(&self.context_hash)
+        } else {
+            leg_merkle_root_v1(
+                PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF,
+                PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
+                &self.checkpoint_hashes,
+                PALW_LEGS_MAX_CHECKPOINTS,
+            )?
+        };
+
+        let decode_calls = canonical_decode_calls(&self.context);
+        let activation_leg = activation_leg_root_v1(
+            &self.context_hash,
+            &self.tap_profile_hash,
+            self.context.declared_prefill_tokens,
+            decode_calls,
+            got as u32,
+            &activation_merkle_root,
+        );
+        let checkpoint_leg = checkpoint_leg_root_v1(
+            &self.context_hash,
+            &self.checkpoint_profile_hash,
+            decode_calls,
+            checkpoints,
+            &checkpoint_merkle_root,
+        );
+        Ok(PalwLegsBindingV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            job_context: self.context,
+            tap_profile: self.tap_profile,
+            checkpoint_profile: self.checkpoint_profile,
+            full_logits_trace_root,
+            activation_leaf_count: got as u32,
+            activation_merkle_root,
+            checkpoint_count: checkpoints,
+            checkpoint_merkle_root,
+            committed_execution_root: execution_commitment_root_v1(
+                &self.context_hash,
+                &full_logits_trace_root,
+                &activation_leg,
+                &checkpoint_leg,
+            ),
+        })
+    }
 }
 
 // =============================================================================================
@@ -1670,5 +1995,163 @@ mod tests {
         ids.sort_by(|a, b| a.as_byte_slice().cmp(b.as_byte_slice()));
         ids.dedup();
         assert_eq!(ids.len(), 7, "evidence ids collided");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The producer side
+    // -----------------------------------------------------------------------------------------
+
+    fn row_values(seed: u32) -> Vec<f32> {
+        (0..4u32).map(|i| (seed as f32) + i as f32 * 0.5).collect()
+    }
+
+    /// Drives the builder over exactly the material `honest_world` lays out by hand.
+    fn build_honest(rows: usize) -> Result<PalwLegsBindingV1, PalwLegsError> {
+        let context = test_context();
+        let taps = tap_profile().tap_count();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(context.clone(), tap_profile(), checkpoint_profile())?;
+        let mut pushed = 0usize;
+        for tap_slot in 0..taps {
+            for position in 0..context.declared_prefill_tokens {
+                if pushed == rows {
+                    break;
+                }
+                builder.push_activation_row(0, tap_slot, position, &row_values(100 + tap_slot * 10 + position))?;
+                pushed += 1;
+            }
+        }
+        for call in 1..context.exact_decode_tokens {
+            for tap_slot in 0..taps {
+                if pushed == rows {
+                    break;
+                }
+                builder.push_activation_row(call, tap_slot, 0, &row_values(200 + call * 10 + tap_slot))?;
+                pushed += 1;
+            }
+        }
+        builder.push_checkpoint(2, h64(0x61))?;
+        builder.finish(h64(0x71))
+    }
+
+    #[test]
+    fn builder_reproduces_the_hand_built_binding_bit_for_bit() {
+        let world = honest_world();
+        // 2 taps × (3 prefill + 2 decode calls) = 10 rows.
+        let built = build_honest(10).expect("the honest material builds");
+        assert_eq!(built, world.binding, "the producer and the hand-laid canonical order disagree");
+    }
+
+    #[test]
+    fn what_the_builder_produces_cannot_be_convicted() {
+        let binding = build_honest(10).unwrap();
+        assert_eq!(
+            check_legs_refutation_v1(&PalwLegsRefutationV1 { binding, evidence: PalwLegsEvidenceV1::Shape }),
+            Err(PalwLegsError::NoFaultFound)
+        );
+    }
+
+    #[test]
+    fn a_short_capture_fails_the_build_instead_of_committing() {
+        // Nine of ten rows: the leg the miner would have committed is exactly what
+        // `ActivationLeafCountNotCanonical` convicts, so the executor must never reach a receipt.
+        assert_eq!(
+            build_honest(9),
+            Err(PalwLegsError::LegIncomplete { leg: "activation", got: 9, expected: 10 })
+        );
+    }
+
+    #[test]
+    fn rows_must_arrive_in_the_pinned_tree_order() {
+        let mut builder =
+            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        // Position-major (the obvious capture-loop mistake) instead of tap-major.
+        builder.push_activation_row(0, 0, 0, &row_values(1)).unwrap();
+        assert_eq!(
+            builder.push_activation_row(0, 1, 0, &row_values(2)),
+            Err(PalwLegsError::RowsOutOfOrder { canonical: 3, next: 1 })
+        );
+    }
+
+    #[test]
+    fn a_non_finite_activation_aborts_the_build() {
+        let mut builder =
+            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        assert_eq!(
+            builder.push_activation_row(0, 0, 0, &[1.0, f32::NAN, 3.0, 4.0]),
+            Err(PalwLegsError::NonFiniteActivation { leaf_index: 0, value_index: 1 })
+        );
+        assert_eq!(
+            builder.push_activation_row(0, 0, 0, &[1.0, 2.0, f32::NEG_INFINITY, 4.0]),
+            Err(PalwLegsError::NonFiniteActivation { leaf_index: 0, value_index: 2 })
+        );
+    }
+
+    #[test]
+    fn a_row_that_is_not_the_profile_hidden_dim_is_refused() {
+        let mut builder =
+            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        assert_eq!(
+            builder.push_activation_row(0, 0, 0, &[1.0, 2.0, 3.0]),
+            Err(PalwLegsError::RowNotHiddenDim { got: 3, expected: 4 })
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_off_the_interval_schedule_is_refused() {
+        let mut builder =
+            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        assert_eq!(
+            builder.push_checkpoint(3, h64(0x61)),
+            Err(PalwLegsError::CheckpointNotCanonical { index: 0, got: 3, expected: 2 })
+        );
+        builder.push_checkpoint(2, h64(0x61)).unwrap();
+        // The interval mandates one checkpoint for this job; a second has nowhere canonical to go.
+        assert_eq!(
+            builder.push_checkpoint(4, h64(0x62)),
+            Err(PalwLegsError::CheckpointNotCanonical { index: 1, got: 4, expected: 1 })
+        );
+    }
+
+    #[test]
+    fn an_empty_checkpoint_leg_takes_the_sentinel_not_a_root_over_nothing() {
+        let context = test_context();
+        // Interval 8 over a 2-decode-call job ⇒ no checkpoint boundary is reached.
+        let profile =
+            PalwCheckpointProfileV1 { version: PALW_LEGS_OBJECT_VERSION_V1, checkpoint_interval: 8, state_layout_id: h64(0x51) };
+        let mut builder = PalwLegsCommitmentBuilderV1::new(context.clone(), tap_profile(), profile).unwrap();
+        assert_eq!(builder.expected_checkpoint_count(), 0);
+        for tap_slot in 0..tap_profile().tap_count() {
+            for position in 0..context.declared_prefill_tokens {
+                builder.push_activation_row(0, tap_slot, position, &row_values(1)).unwrap();
+            }
+        }
+        for call in 1..context.exact_decode_tokens {
+            for tap_slot in 0..tap_profile().tap_count() {
+                builder.push_activation_row(call, tap_slot, 0, &row_values(2)).unwrap();
+            }
+        }
+        let binding = builder.finish(h64(0x71)).unwrap();
+        assert_eq!(binding.checkpoint_count, 0);
+        assert_eq!(binding.checkpoint_merkle_root, checkpoint_empty_root_v1(&context.context_hash()));
+        assert_eq!(
+            check_legs_refutation_v1(&PalwLegsRefutationV1 { binding, evidence: PalwLegsEvidenceV1::Shape }),
+            Err(PalwLegsError::NoFaultFound)
+        );
+    }
+
+    #[test]
+    fn the_opaque_identities_separate_by_their_declared_string() {
+        let a = tap_semantics_id_v1("llama.cpp/graph-node/l_out-{il}/post-block-residual/f32-le/v1");
+        let b = tap_semantics_id_v1("llama.cpp/graph-node/attn_out-{il}/post-attention/f32-le/v1");
+        assert_ne!(a, b, "two different tapped tensors must not share an id");
+        // Same string under the two different registration domains must not collide either.
+        let same = "misaka/anything/v1";
+        assert_ne!(tap_semantics_id_v1(same), state_layout_id_v1(same));
+        // And the state root is bound to the layout it claims to be under.
+        let bytes = [7u8; 32];
+        assert_ne!(
+            checkpoint_state_root_v1(&state_layout_id_v1("layout/a/v1"), &bytes),
+            checkpoint_state_root_v1(&state_layout_id_v1("layout/b/v1"), &bytes)
+        );
     }
 }
