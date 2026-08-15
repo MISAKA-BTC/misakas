@@ -45,8 +45,11 @@ import sys
 AP = argparse.ArgumentParser()
 AP.add_argument("worker")
 AP.add_argument("label")
-AP.add_argument("--jobs", type=int, default=24)
+AP.add_argument("--jobs", type=int, default=24, help="jobs PER SEED")
 AP.add_argument("--master-seed", default="misaka-palw-v2-class-corpus-v1")
+AP.add_argument("--seed-count", type=int, default=1,
+                help="independent master seeds to iterate; seed i is '<master>#<i>'. Repeating the "
+                     "shape set under different content is what turns one corpus into a sample.")
 AP.add_argument("--timeout", type=int, default=1800)
 AP.add_argument("--network-id", default="misaka-devnet")
 A = AP.parse_args()
@@ -181,20 +184,26 @@ def run_job(payload: bytes):
     return proj, None
 
 
-master = A.master_seed.encode()
-corpus = build_corpus(master, A.jobs)
+corpus = []
+for _s in range(A.seed_count):
+    sub = build_corpus(f"{A.master_seed}#{_s}".encode(), A.jobs)
+    for j in sub:
+        j["seed_index"] = _s
+        j["name"] = f"s{_s}-{j['name']}"
+    corpus += sub
 
 corpus_digest = hashlib.blake2b(digest_size=64, key=b"misaka-palw-corpus-inputs")
 for j in corpus:
-    corpus_digest.update(kdf(j["name"].encode(), j["execution_seed"],
+    corpus_digest.update(kdf(j["name"].encode(), struct.pack("<I", j["seed_index"]), j["execution_seed"],
                              b"".join(struct.pack("<I", t) for t in j["ids"]),
                              struct.pack("<II", j["decode"], MAX_CTX)))
 corpus_digest = corpus_digest.hexdigest()
 
-print(f"[corpus] {A.label}: {len(corpus)} jobs, "
+shapes = sorted({j['prefill_len'] for j in corpus})
+print(f"[corpus] {A.label}: {len(corpus)} jobs = {A.seed_count} seed(s) x {A.jobs}, "
       f"{sum(1 for j in corpus if j['beyond_fixed_corpus'])} with prefill > 96 "
-      f"(beyond anything the fixed corpus reaches), max {max(j['prefill_len'] for j in corpus)}",
-      file=sys.stderr)
+      f"(beyond anything the fixed corpus reaches), {len(shapes)} distinct prefill lengths, "
+      f"max {max(shapes)}", file=sys.stderr)
 
 results, failures = {}, {}
 agg = hashlib.blake2b(digest_size=64, key=b"misaka-palw-corpus-results")
@@ -220,6 +229,8 @@ line = {
     "golden_file": "n/a (corpus mode)",
     "corpus_digest": corpus_digest,
     "corpus_jobs": len(corpus),
+    "corpus_seed_count": A.seed_count,
+    "corpus_jobs_per_seed": A.jobs,
     "corpus_failures": failures,
     "corpus_master_seed": A.master_seed,
     "host": {"machine": platform.machine(), "system": platform.system(), "release": platform.release()},

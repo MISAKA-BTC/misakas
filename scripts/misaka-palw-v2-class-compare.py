@@ -114,8 +114,41 @@ def main(paths):
             return 1
         seeds = {h["label"]: h.get("corpus_master_seed") for h in hosts}
         n = next(iter({h.get("corpus_jobs") for h in hosts}))
-        print(f"  {DIM}corpus{RST} {n} jobs, master seed {next(iter(set(seeds.values())))!r}, "
-              f"inputs agree ({next(iter(set(digests.values())))[:16]}…)")
+        sc = {h.get("corpus_seed_count", 1) for h in hosts}
+        per = {h.get("corpus_jobs_per_seed") for h in hosts}
+        if len(sc) > 1 or len(per) > 1:
+            print(f"\n{YLW}corpus layout differs across hosts{RST}: seed counts {sc}, jobs-per-seed {per}")
+            return 1
+        layout = f"{next(iter(sc))} seed(s) x {next(iter(per))}" if next(iter(per)) else f"{n} jobs"
+        print(f"  {DIM}corpus{RST} {n} jobs ({layout}), master seed "
+              f"{next(iter(set(seeds.values())))!r}, inputs agree "
+              f"({next(iter(set(digests.values())))[:16]}…)")
+        # SEED DEGENERACY: within one host, the same shape under different seeds must produce
+        # DIFFERENT roots. If it does not, the extra seeds sampled nothing and cross-host agreement
+        # is agreement on a constant — the exact way the PALW-Ollama campaign fooled itself. This
+        # check is what makes "we ran more seeds" mean more than "we ran longer".
+        if next(iter(sc)) > 1:
+            worst = None
+            for h in hosts:
+                shapes = {}
+                for name, v in h["jobs"].items():
+                    shape = name.split("-", 1)[1] if name.startswith("s") and "-" in name else name
+                    shapes.setdefault(shape, set()).add(v.get("expected_root"))
+                collided = [s for s, roots in shapes.items() if len(roots) < next(iter(sc))]
+                if collided and (worst is None or len(collided) > len(worst[1])):
+                    worst = (h["label"], collided, len(shapes))
+            if worst:
+                label, collided, total = worst
+                print(f"\n{RED}SEED DEGENERACY{RST}: on {label}, {len(collided)}/{total} shapes produced the")
+                print(f"  SAME root under different seeds. Those seeds are not independent samples, so")
+                print(f"  agreement across hosts on them proves nothing about the arithmetic — it is the")
+                print(f"  constant-output failure mode. Examples: {', '.join(collided[:4])}")
+                problems.append("seed-degeneracy")
+            else:
+                n_shapes = len({n.split('-', 1)[1] for n in hosts[0]["jobs"] if n.startswith('s') and '-' in n})
+                print(f"  {DIM}seeds{RST} independent: all {n_shapes} shapes give {next(iter(sc))} distinct "
+                      f"roots across the {next(iter(sc))} seeds (no collapse)")
+
         stuck = {h["label"]: h.get("corpus_failures") or {} for h in hosts}
         if any(stuck.values()):
             print(f"\n{YLW}some jobs failed to execute{RST} — the class is untested for those:")
@@ -234,8 +267,10 @@ def main(paths):
                 print(f"  longest prefill lengths are included.")
             else:
                 print(f"  {YLW}This adds no prefill coverage over the fixed corpus{RST} — raise --jobs.")
-            print(f"  Still evidence rather than proof: one seed, one shape profile, one decode-budget")
-            print(f"  set, and agreement on a corpus cannot speak for inputs outside it.")
+            nseed = next(iter(sc))
+            seedword = f"{nseed} independent seeds" if nseed > 1 else "one seed"
+            print(f"  Still evidence rather than proof: {seedword}, one shape profile, one")
+            print(f"  decode-budget set, and agreement on a corpus cannot speak for inputs outside it.")
         else:
             print(f"  It is evidence for the class, not proof of it — this corpus is fixed and small.")
             print(f"  Its longest prefill is 96 tokens while the profile allows 512, so four fifths of")
