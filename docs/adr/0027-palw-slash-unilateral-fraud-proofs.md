@@ -224,9 +224,19 @@ commitment as a proof of computation.
 
 ## Consequences
 
-* **New consensus objects to design** (none exist yet): `ExecutionStepRefutationV1`, the bisection
-  ladder messages, `ClassContradictionCertificateV1`, and a step-check verifier over canonical
-  reference arithmetic. `ComputationFaultCertificateV1` from v0.1 §15.2 is **not** implemented.
+* **New consensus objects to design**: `ExecutionStepRefutationV1`, the bisection ladder
+  messages, `ClassContradictionCertificateV1`, and a step-check verifier over canonical reference
+  arithmetic. `ComputationFaultCertificateV1` from v0.1 §15.2 is **not** implemented.
+  *Land status (2026-08-15, `consensus/core/src/palw_slash.rs`, consensus-inert):*
+  `PalwClassContradictionCertificateV1` (§5) is implemented with its equivocation/divergence
+  adjudication; Merkle openings against the v2 event commitment
+  (`trace_event_opening_root_v1`, derivation-based shape — an opening cannot supply its own
+  promote pattern) and two **structural** unilateral refutations are implemented:
+  `PalwTraceSummaryRefutationV1` (the committed root's transparent preimage breaks the pinned
+  exact-decode schedule) and `PalwTraceEventRefutationV1` (an opened event's preimage carries
+  non-finite logits, a wrong row length, or a wrong vocab). All preimage reuse is frozen by
+  equivalence tests against `palw_v2`; the arithmetic `ExecutionStepRefutationV1` remains blocked
+  on the activation/checkpoint legs and the reference evaluator, as designed.
 * **`ComputeFraudKind` gains a provable computation kind for the first time.** The memory-of-record
   rule — `ForgedReceipt` can never slash because it is uncheckable — stands for *unaided claims*.
   A refutation that carries openings and resolves to one reference-arithmetic step is checkable, so
