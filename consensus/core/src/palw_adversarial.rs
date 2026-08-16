@@ -20,9 +20,9 @@ use crate::palw_reference::{
     reference_arithmetic_ruleset_id_v2,
 };
 use crate::palw_step::{
-    canonical_step_coordinates, canonical_step_leaf_index, kernel_semantics_id_v1, transcendental_algorithm_id_v1,
-    PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1,
-    PalwStepOutLenV1, PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1,
+    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1,
+    PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_coordinates, canonical_step_leaf_index,
+    kernel_semantics_id_v1, transcendental_algorithm_id_v1,
 };
 use crate::palw_transcendental::{ggml_v_expf_v1, ggml_v_silu_v1, glibc_expf_v1};
 
@@ -366,4 +366,127 @@ fn attack_layer_kind_is_derived_not_declared() {
     let base = p.shape_profile_id();
     p.full_attention_interval = 6;
     assert_ne!(p.shape_profile_id(), base);
+}
+
+// =============================================================================================
+// Attack 11 — routing-key relabeling ("my receipt claims a cheaper band / a different family")
+// =============================================================================================
+
+/// ADR-0034 §5: the registry, not the miner, gives carried keys meaning. A receipt declaring
+/// a lower band (dodging band-indexed bond floors) or a foreign family (fishing for a panel
+/// that cannot re-execute it) is invalid at acceptance — and a registry row resolved by a
+/// colliding lookup is refused by the recomputed id, the exact bug class that once emptied
+/// every committee silently.
+#[test]
+fn attack_routing_key_relabeling_is_invalid_at_acceptance() {
+    use crate::palw_registry::tests::fleet_registration;
+    use crate::palw_routing::{
+        PalwBindingCoverageStateV1, PalwExecutionFamilyV1, PalwModelBandV1, PalwRoutingError, validate_receipt_routing_keys_v1,
+    };
+    let row = fleet_registration();
+    let id = row.registration_id();
+    // Honest keys pass…
+    validate_receipt_routing_keys_v1(&id, PalwExecutionFamilyV1::Cpu, PalwModelBandV1::B0, &row, PalwBindingCoverageStateV1::Active)
+        .unwrap();
+    // …the down-banded claim is refused as forgery, not "corrected"…
+    assert!(matches!(
+        validate_receipt_routing_keys_v1(
+            &id,
+            PalwExecutionFamilyV1::Cpu,
+            PalwModelBandV1::B1,
+            &row,
+            PalwBindingCoverageStateV1::Active
+        ),
+        Err(PalwRoutingError::BandForged { .. })
+    ));
+    // …a family relabel is refused (cross-family comparison stays diagnostic, never a verdict:
+    // this module offers no API that could slash on it)…
+    assert!(matches!(
+        validate_receipt_routing_keys_v1(
+            &id,
+            PalwExecutionFamilyV1::Metal,
+            PalwModelBandV1::B0,
+            &row,
+            PalwBindingCoverageStateV1::Active
+        ),
+        Err(PalwRoutingError::FamilyMismatch { .. })
+    ));
+    // …and a wrong-row resolution is caught by the recomputed id even with matching coarse keys.
+    assert!(matches!(
+        validate_receipt_routing_keys_v1(
+            &h64(0x5C),
+            PalwExecutionFamilyV1::Cpu,
+            PalwModelBandV1::B0,
+            &row,
+            PalwBindingCoverageStateV1::Active
+        ),
+        Err(PalwRoutingError::BindingIdMismatch)
+    ));
+}
+
+// =============================================================================================
+// Attack 12 — ready-set forgery ("I claim readiness for a model I do not hold")
+// =============================================================================================
+
+/// ADR-0034 §6: a ready claim without a proof is not a claim. The three forgeries that would
+/// let an unequipped verifier take duties (and no-show or stall them): riding another
+/// binding's proof, grafting an internal node as a leaf, and lying about the tree geometry.
+#[test]
+fn attack_ready_set_forgery_cannot_claim_an_unheld_binding() {
+    use crate::palw_routing::{ready_binding_proof_v1, ready_binding_root_v1, verify_ready_binding_v1};
+    let held: Vec<Hash64> = (1..=4u8).map(h64).collect();
+    let root = ready_binding_root_v1(&held).unwrap();
+    let proof_of_first = ready_binding_proof_v1(&held, 0).unwrap();
+    // The binding the verifier does NOT hold cannot ride any held binding's proof.
+    let unheld = h64(0x66);
+    assert!(!verify_ready_binding_v1(&root, &unheld, &proof_of_first));
+    // Nor can a re-indexed proof, nor a geometry lie, manufacture membership.
+    for index in 0..4u32 {
+        for count in [1u32, 3, 4, 5] {
+            let mut forged = proof_of_first.clone();
+            forged.leaf_index = index;
+            forged.leaf_count = count;
+            assert!(!verify_ready_binding_v1(&root, &unheld, &forged), "forged geometry ({index},{count}) admitted an unheld binding");
+        }
+    }
+    // The honest claim still stands (the defense rejects forgery, not readiness).
+    assert!(verify_ready_binding_v1(&root, &held[0], &proof_of_first));
+}
+
+// =============================================================================================
+// Attack 13 — unchecked credit ("nobody could replay it, so credit it" / FINALIZED_WITHOUT_REPLAY)
+// =============================================================================================
+
+/// ADR-0034 §7 rejects the draft's lottery-to-credit path outright: no rule of the form "not
+/// drawn, therefore creditable unchecked" may exist. The routing module exposes no crediting
+/// API at all, so the only door to credit is ADR-0033's `decide_credit_v1` — which at Stage 0
+/// derives its own ADR-0028 class panel and does not yet read the routed lottery (that
+/// substitution is the Stage-1 wiring, ADR-0028 §2 as amended). What this attack pins is the
+/// door itself: with nobody eligible and zero attestations, the §1 predicate credits nothing —
+/// there is no quorum-shrinking, no lottery-miss pass, and nothing a routing draw could say
+/// that would mint against an unattested commitment.
+#[test]
+fn attack_finalized_without_replay_is_untypable() {
+    use crate::palw_credit::{PalwCreditParamsV1, PalwObservedCommitmentV1, decide_credit_v1};
+    use crate::palw_registry::tests::fleet_registration;
+    let registration = fleet_registration();
+    let params = PalwCreditParamsV1 {
+        registration: registration.clone(),
+        s_eff_sompi: 20_000 * 100_000_000,
+        unbonding_period_blocks: 10_083,
+        activation_daa: 0,
+    };
+    let commitment = PalwObservedCommitmentV1 {
+        committed_root: h64(0x01),
+        logits_root: h64(0x02),
+        executor_id: h64(0x03),
+        runtime_class_id: registration.runtime_class_id,
+        accepted_daa: 1_000,
+    };
+    let subsidy = 370_468_345 * 1_200;
+    // No eligible verifier existed; the window closed with zero attestations. The §1
+    // predicate credits nothing — the lottery having "missed" the job is never a pass.
+    let decision = decide_credit_v1(&params, &commitment, &h64(0x04), &[], &[], &[], subsidy);
+    assert!(!decision.creditable && decision.paid_attesters.is_empty(), "an unchecked job was credited");
+    assert_eq!(decision.base_sompi, 0, "an uncreditable job carries no mint");
 }

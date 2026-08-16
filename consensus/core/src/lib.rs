@@ -181,10 +181,16 @@ pub mod palw_bisect;
 /// consumer).
 pub mod palw_credit;
 pub mod palw_registry;
+/// MISAKA PALW re-verification routing (ADR-0034): the four execution-class families, five
+/// model bands, and the binding-aware eligibility/coverage machinery. Consensus-inert —
+/// computed and logged only; no verdict, credit or acceptance path reads any of it, and the
+/// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
+pub mod palw_routing;
 /// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
 /// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
 /// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention
-/// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion.
+/// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion,
+/// routing-key relabeling, ready-set forgery, unchecked-credit refusal (ADR-0034).
 /// Test-only (`#![cfg(test)]`); ships with the crate's test run.
 #[cfg(test)]
 pub mod palw_adversarial;

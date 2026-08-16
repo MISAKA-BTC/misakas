@@ -29,13 +29,23 @@
 //! * **The commitment form determines the Stage-2 eligibility** (ADR-0029 §6: bare-v2 needs
 //!   drilled chunked carriage).
 //!
-//! Consensus-inert: nothing reads this yet. ADR-0033's gate is its first consumer.
+//! # Consumers — this struct is READ, and its Borsh layout is fingerprint-relevant
+//!
+//! ADR-0033's credit gate embeds a row in `PalwCreditParamsV1` (which the virtual processor
+//! reads and `config/params.rs` Borsh-hashes into the consensus fingerprint whenever a fence
+//! is `Some` — every shipped network carries `None`); ADR-0034 routing reads rows for
+//! eligibility, panels and receipt keys. A layout change is therefore a **version-generation
+//! change** (bump [`PALW_REGISTRY_OBJECT_VERSION_V1`]), never a silent edit: on a
+//! fence-active devnet it would be a peering split.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 use crate::config::params::BlockrateParams;
+use crate::palw_routing::{
+    PalwExecutionFamilyV1, PalwModelBandV1, derived_model_band_v1, replay_work_ms_v1, routing_keys_for_class_tag_v1,
+};
 use crate::palw_schedule::{
     PalwEconomicFactsV1, PalwLeverageRemedyV1, PalwReplayCostMeasurementV1, PalwScheduleError, PalwScheduleParamsV1,
     credited_ceiling_tokens_v1, max_leverage_holds_v1,
@@ -46,7 +56,13 @@ use crate::palw_step::{PalwShapeProfileV3, PalwTranscendentalSiteV1};
 // Domains, caps
 // ---------------------------------------------------------------------------------------------
 
-pub const PALW_REGISTRY_OBJECT_VERSION_V1: u16 = 1;
+/// Layout generation 2 (2026-08-16): the ADR-0034 routing keys joined the preimage. The bump
+/// exists so any stray generation-1 bytes fail `UnsupportedVersion` instead of misdecoding —
+/// at the insertion point a gen-1 `commitment_form` byte would otherwise parse as an
+/// `execution_family` (`CompositeV1`/`V2` → `Metal`/`Cuda`) and misalign everything after
+/// it. Generation 1 was never durably serialized anywhere; the guard is against strays, not
+/// stores.
+pub const PALW_REGISTRY_OBJECT_VERSION_V1: u16 = 2;
 
 /// The identity of a whole registration record — what a governance/coordinated-release action
 /// references, and what a class-freeze names.
@@ -73,6 +89,14 @@ pub enum PalwRegistryError {
     Windows(PalwScheduleError),
     #[error("registered credited ceiling {declared} is not the value its own measurement derives ({derived})")]
     CeilingNotDerived { declared: u32, derived: u32 },
+    #[error("declared model band {declared:?} is not the band the registered resources derive ({derived:?})")]
+    BandNotDerived { declared: PalwModelBandV1, derived: PalwModelBandV1 },
+    #[error("the registered resources exceed every band (past 16× the base) — not registrable in v1")]
+    BandNotRegistrable,
+    #[error("the registered runtime_class_id is not the hash of the carried class tag")]
+    ClassIdNotDerivedFromTag,
+    #[error("the declared execution family / family version are not what the class tag reads")]
+    RoutingKeysNotDerivedFromTag,
     #[error("the class's measured p99 does not fit its own replay window at κ")]
     ReplayDoesNotFit,
     #[error("transcendental site {site:?} is bound by the profile but has no registered algorithm")]
@@ -134,6 +158,32 @@ pub struct PalwClassRegistrationV1 {
     /// Tap layer indices and checkpoint interval — profile parameters, valued here.
     pub tap_layer_indices: Vec<u16>,
     pub checkpoint_interval: u32,
+
+    // --- routing keys (ADR-0034 §3: the registration row IS the binding; binding_id =
+    // --- registration_id() over this extended preimage) ---
+    /// The class tag itself — the SAME string `runtime_class_id` hashes, carried so
+    /// `validate()` can recompute the id from it AND machine-read the family/version out of
+    /// it. Load-bearing, unlike `label` (which stays free-form and never checked).
+    pub class_tag: String,
+    /// Must equal what [`crate::palw_routing::routing_keys_for_class_tag_v1`] reads out of
+    /// `class_tag` — checked, not trusted: a self-declared family would let a Metal-runtime
+    /// row draft CPU panels that can never reproduce its trace.
+    pub execution_family: PalwExecutionFamilyV1,
+    /// The tag's `/vN` segment; a coordinated runtime generation, never zero. Checked
+    /// against the tag like the family.
+    pub family_version: u16,
+    /// Derived (ADR-0034 §4), never declared: `validate()` rejects a band the registered
+    /// resources do not derive — the `CeilingNotDerived` pattern, applied to bands.
+    pub model_band: PalwModelBandV1,
+    pub quantization_id: Hash64,
+    /// Measured resource envelope — the band derivation's inputs. `model_artifact_bytes`
+    /// must equal the signed `ModelDefinitionV1::gguf_size` at activation
+    /// (`binding_matches_definition_v1`); the replay deadline in wall-clock terms is an
+    /// accessor ([`Self::replay_deadline_secs`]), not a stored field — a stored copy would
+    /// be uninterpretable without also storing the block time it assumed.
+    pub model_artifact_bytes: u64,
+    pub peak_memory_bytes: u64,
+    pub max_proof_material_bytes: u64,
 
     // --- form and depth ---
     pub commitment_form: PalwCommitmentFormV1,
@@ -200,6 +250,32 @@ impl PalwClassRegistrationV1 {
         // And the measured p99 must fit the window it registered.
         if !crate::palw_schedule::replay_p99_fits_v1(self.p99_cold_replay_ms, &self.windows, target_time_per_block_ms) {
             return Err(PalwRegistryError::ReplayDoesNotFit);
+        }
+
+        // ADR-0034 §3/§4: the routing keys. The class id must derive from the carried tag,
+        // the family/version must be what the tag reads, and the band must be what the
+        // resources derive — declared-but-not-derived is the same lie as a claimed ceiling,
+        // and gets the same refusal.
+        if self.class_tag.is_empty() || self.class_tag.len() > PALW_REGISTRY_MAX_LABEL_BYTES {
+            return Err(PalwRegistryError::NotCanonical("class tag is empty or exceeds the cap"));
+        }
+        if crate::vlt::derive_runtime_class_id(&self.class_tag) != self.runtime_class_id {
+            return Err(PalwRegistryError::ClassIdNotDerivedFromTag);
+        }
+        match routing_keys_for_class_tag_v1(&self.class_tag) {
+            Some((family, version)) if family == self.execution_family && version == self.family_version => {}
+            _ => return Err(PalwRegistryError::RoutingKeysNotDerivedFromTag),
+        }
+        if self.model_artifact_bytes == 0 || self.peak_memory_bytes == 0 || self.max_proof_material_bytes == 0 {
+            return Err(PalwRegistryError::NotCanonical("a routing resource measurement is zero"));
+        }
+        let work_ms = replay_work_ms_v1(&self.replay_cost, self.credited_ceiling_tokens);
+        match derived_model_band_v1(self.model_artifact_bytes, self.peak_memory_bytes, work_ms, self.max_proof_material_bytes) {
+            None => return Err(PalwRegistryError::BandNotRegistrable),
+            Some(band) if band != self.model_band => {
+                return Err(PalwRegistryError::BandNotDerived { declared: self.model_band, derived: band });
+            }
+            Some(_) => {}
         }
 
         if self.rho_v_permille == 0 {
@@ -276,6 +352,14 @@ impl PalwClassRegistrationV1 {
         let mut zeroed = self.clone();
         zeroed.credited_ceiling_tokens = 0;
         zeroed
+    }
+
+    /// The replay deadline in wall-clock seconds, for UI/agents (ADR-0034 §3's "redundant
+    /// view", provided as a derivation instead of a stored field: a stored copy would be
+    /// meaningless without also storing the block time it assumed, and would invalidate
+    /// every drafted registration each time a network re-parameterizes its block rate).
+    pub fn replay_deadline_secs(&self, target_time_per_block_ms: u64) -> u64 {
+        self.windows.w_replay.saturating_mul(target_time_per_block_ms) / 1000
     }
 }
 
@@ -371,10 +455,12 @@ pub(crate) mod tests {
         let replay_cost =
             PalwReplayCostMeasurementV1 { fixed_overhead_ms: 4_300, ms_per_decode_token: 165, format_ceiling_tokens: 4_095 };
         let ceiling = credited_ceiling_tokens_v1(&replay_cost, &windows, 120_000);
+        let class_tag = "misaka-palw-lite-cpu/x86_64/v1"; // the live CPU tag (vlt::CPU_RUNTIME_CLASS on x86_64)
         PalwClassRegistrationV1 {
             version: PALW_REGISTRY_OBJECT_VERSION_V1,
-            label: "misaka-palw-lite-fp/x86-64-cpu/v1".into(),
-            runtime_class_id: h64(0x01),
+            label: class_tag.into(),
+            class_tag: class_tag.into(),
+            runtime_class_id: crate::vlt::derive_runtime_class_id(class_tag),
             runtime_manifest_hash: h64(0x02),
             model_profile_id: h64(0x03),
             tokenizer_id: h64(0x04),
@@ -384,6 +470,15 @@ pub(crate) mod tests {
             state_chunk_map_id: h64(0x44),
             tap_layer_indices: vec![0, 1, 2, 3],
             checkpoint_interval: 8,
+            execution_family: crate::palw_routing::PalwExecutionFamilyV1::Cpu,
+            family_version: 1,
+            model_band: crate::palw_routing::PalwModelBandV1::B0,
+            quantization_id: h64(0x07),
+            // The pinned Qwen3.5-2B-Q4_K_M gguf (`.palw-gguf-sha.json`, sha aaf42c8b…).
+            model_artifact_bytes: 1_280_835_840,
+            // Fleet bench ran to completion inside `systemd-run` MemoryMax 5 G scopes.
+            peak_memory_bytes: 5_000_000_000,
+            max_proof_material_bytes: 8 << 20,
             commitment_form: PalwCommitmentFormV1::CompositeV2,
             adjudication_depth: PalwAdjudicationDepthV1::ArithmeticCatalogued,
             libm_transcribed: true,
@@ -454,7 +549,14 @@ pub(crate) mod tests {
         reg.shape_profile = profile_with_libm(true);
         reg.transcendental_algorithms = vec![(PalwTranscendentalSiteV1::LibmExpf, h64(0x33))];
         reg.libm_transcribed = false;
-        assert!(matches!(reg.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::NotCanonical(_))));
+        // Exact message, not a wildcard: an earlier NotCanonical (a zeroed routing resource,
+        // say) must not be able to satisfy this assertion while the depth defense regresses.
+        assert!(matches!(
+            reg.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::NotCanonical(
+                "arithmetic depth claimed while binding an untranscribed libm — register structural-only"
+            ))
+        ));
         // Registered honestly as structural-only, it validates.
         reg.adjudication_depth = PalwAdjudicationDepthV1::StructuralOnly;
         reg.validate(&two_minute_blockrate(), 120_000).unwrap();
@@ -464,7 +566,10 @@ pub(crate) mod tests {
     fn arithmetic_depth_requires_the_step_leg_form() {
         let mut reg = fleet_registration();
         reg.commitment_form = PalwCommitmentFormV1::CompositeV1;
-        assert!(matches!(reg.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::NotCanonical(_))));
+        assert!(matches!(
+            reg.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::NotCanonical("arithmetic depth requires the step-leg commitment form (composite v2)"))
+        ));
         reg.adjudication_depth = PalwAdjudicationDepthV1::StructuralOnly;
         reg.validate(&two_minute_blockrate(), 120_000).unwrap();
     }
@@ -555,5 +660,98 @@ pub(crate) mod tests {
         assert_ne!(mutate(&|r| r.windows.q = 3), base);
         assert_ne!(mutate(&|r| r.leverage_remedy.min_credit_interval_daa = 5_042), base);
         assert_ne!(mutate(&|r| r.leverage_remedy.base_subsidy_permille = 1), base);
+        // The ADR-0034 routing keys are part of the binding's identity: any of them moving
+        // is a NEW binding id with its own activation epoch — re-banding-by-edit untypable.
+        assert_ne!(mutate(&|r| r.class_tag = "misaka-palw-lite-cpu/aarch64-dotprod/v1".into()), base);
+        assert_ne!(mutate(&|r| r.execution_family = PalwExecutionFamilyV1::Metal), base);
+        assert_ne!(mutate(&|r| r.family_version = 2), base);
+        assert_ne!(mutate(&|r| r.model_band = PalwModelBandV1::B1), base);
+        assert_ne!(mutate(&|r| r.quantization_id = h64(0x99)), base);
+        assert_ne!(mutate(&|r| r.model_artifact_bytes = 1), base);
+        assert_ne!(mutate(&|r| r.peak_memory_bytes = 1), base);
+        assert_ne!(mutate(&|r| r.max_proof_material_bytes = 1), base);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // ADR-0034 §4 — the band is derived, never declared
+    // -----------------------------------------------------------------------------------------
+
+    #[test]
+    fn the_fleet_registration_derives_b0_and_the_work_base_is_frozen() {
+        let reg = fleet_registration();
+        reg.validate(&two_minute_blockrate(), 120_000).unwrap();
+        assert_eq!(reg.model_band, PalwModelBandV1::B0, "row 1 is B0 — ADR-0034 §3");
+        // The work base is a FROZEN snapshot of row 1's cost at v1-definition time — moving
+        // it would re-band every registered binding at once (re-banding-by-constant), so a
+        // fleet re-bench does NOT update it; a base change is a new derivation version.
+        assert_eq!(
+            crate::palw_routing::PALW_ROUTING_BASE_REPLAY_WORK_MS,
+            679_975,
+            "the v1 work base moved — that is a new derivation version, not an edit"
+        );
+        assert!(
+            replay_work_ms_v1(&reg.replay_cost, reg.credited_ceiling_tokens) <= crate::palw_routing::PALW_ROUTING_BASE_REPLAY_WORK_MS,
+            "row 1 no longer fits the frozen B0 work base"
+        );
+        // And the wall-clock deadline view is a derivation, not a stored field.
+        assert_eq!(reg.replay_deadline_secs(120_000), 3_600, "w_replay 30 blocks × 120 s");
+    }
+
+    #[test]
+    fn a_declared_band_the_resources_do_not_derive_is_rejected() {
+        // Declaring one band up on B0 resources is the same lie as a claimed ceiling.
+        let mut inflated = fleet_registration();
+        inflated.model_band = PalwModelBandV1::B1;
+        assert_eq!(
+            inflated.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::BandNotDerived { declared: PalwModelBandV1::B1, derived: PalwModelBandV1::B0 })
+        );
+        // And declaring B0 on genuinely B1-sized resources is refused in the other
+        // direction — under-banding would dodge the band-indexed bond floors.
+        let mut oversized = fleet_registration();
+        oversized.model_artifact_bytes = (4 << 30) + 1;
+        assert_eq!(
+            oversized.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::BandNotDerived { declared: PalwModelBandV1::B0, derived: PalwModelBandV1::B1 })
+        );
+        oversized.model_band = PalwModelBandV1::B1;
+        oversized.validate(&two_minute_blockrate(), 120_000).unwrap();
+    }
+
+    #[test]
+    fn resources_past_every_band_cannot_register_at_all() {
+        let mut hopeless = fleet_registration();
+        hopeless.model_artifact_bytes = (4u64 << 30) * 17; // past 16× the artifact base
+        hopeless.model_band = PalwModelBandV1::B4;
+        assert_eq!(hopeless.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::BandNotRegistrable));
+    }
+
+    #[test]
+    fn routing_keys_must_derive_from_the_carried_class_tag() {
+        // A row whose class id is not the hash of its own tag is refused — the tag is the
+        // load-bearing string, not the label.
+        let mut forged_id = fleet_registration();
+        forged_id.runtime_class_id = h64(0x99);
+        assert_eq!(forged_id.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::ClassIdNotDerivedFromTag));
+
+        // A Metal-runtime tag claiming the Cpu family is refused: the family is READ from the
+        // tag, never believed — a self-declared family would draft panels of verifiers that
+        // can never reproduce the trace.
+        let metal_tag = "misaka-palw-lite-fp/apple-metal-arm64/v1";
+        let mut cross_family = fleet_registration();
+        cross_family.class_tag = metal_tag.into();
+        cross_family.runtime_class_id = crate::vlt::derive_runtime_class_id(metal_tag);
+        assert_eq!(cross_family.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
+        cross_family.execution_family = PalwExecutionFamilyV1::Metal;
+        cross_family.validate(&two_minute_blockrate(), 120_000).unwrap();
+
+        // A version relabel is refused the same way, and an unparseable tag registers nothing.
+        let mut wrong_generation = fleet_registration();
+        wrong_generation.family_version = 2;
+        assert_eq!(wrong_generation.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
+        let mut alien_tag = fleet_registration();
+        alien_tag.class_tag = "misaka-palw-lite-npu/exotic/v1".into();
+        alien_tag.runtime_class_id = crate::vlt::derive_runtime_class_id("misaka-palw-lite-npu/exotic/v1");
+        assert_eq!(alien_tag.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
     }
 }
