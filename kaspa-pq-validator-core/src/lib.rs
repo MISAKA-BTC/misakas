@@ -107,6 +107,45 @@ fn sum_funding(fundings: &[(TransactionOutpoint, UtxoEntry)]) -> Result<u64, Str
 
 const SIGNED_EPOCH_FILE_VERSION: u16 = 1;
 
+/// Write a fresh ML-DSA-87 seed to `path` as hex — the hardened counterpart of
+/// [`load_validator_seed`], shared so every keygen (validator, drill, re-executor) inherits
+/// the same discipline instead of each copying a weaker variant: `create_new`
+/// (`O_CREAT|O_EXCL`) refuses to clobber an existing key AND refuses a pre-planted symlink;
+/// `.mode(0o600)` sets owner-only perms AT CREATION, so there is never the group/world-
+/// readable window a write-then-chmod sequence leaves open (the retained-fd class the M-02
+/// read-side guard exists for); `sync_all` makes the key durable before the caller prints
+/// a funding address anyone might send to. The caller owns scrubbing its seed copy.
+pub fn write_validator_seed(path: &str, seed: &[u8; VALIDATOR_SEED_LEN]) -> Result<(), String> {
+    let mut hex_buf = [0u8; VALIDATOR_SEED_LEN * 2];
+    faster_hex::hex_encode(seed, &mut hex_buf).map_err(|e| format!("hex encode failed: {e}"))?;
+    let result = (|| {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .map_err(|e| format!("cannot create key file '{path}' (it must not already exist): {e}"))?;
+            f.write_all(&hex_buf).map_err(|e| format!("cannot write key to '{path}': {e}"))?;
+            f.sync_all().map_err(|e| format!("cannot fsync key file '{path}': {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            if std::path::Path::new(path).exists() {
+                return Err(format!("refusing to overwrite existing key file '{path}'"));
+            }
+            std::fs::write(path, &hex_buf).map_err(|e| format!("cannot write key to '{path}': {e}"))?;
+        }
+        Ok(())
+    })();
+    hex_buf.fill(0);
+    std::hint::black_box(&hex_buf);
+    result
+}
+
 /// Load a 32-byte ML-DSA-87 seed from a hex file (whitespace-trimmed). The file must
 /// contain exactly [`VALIDATOR_SEED_LEN`] bytes as hex, which seeds the deterministic
 /// ML-DSA-87 keypair via [`ValidatorKey::from_seed`].

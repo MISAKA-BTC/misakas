@@ -241,6 +241,16 @@ pub fn family_is_reserved_v1(family: PalwExecutionFamilyV1) -> bool {
     matches!(family, PalwExecutionFamilyV1::Cuda | PalwExecutionFamilyV1::Rocm)
 }
 
+/// Every class tag registered on some PALW network that routing can NAME — the one
+/// reverse-index authority agents (the re-executor, future explorers) import instead of each
+/// keeping a private copy that lags. Grows by transcription when a class registers, exactly
+/// like the kernel catalog. `misaka-palw-lite-cpu/other-arch/v1` (vlt's
+/// decline-to-participate placeholder) is deliberately absent: a build that declines to
+/// participate is not a routable backend, and resolving it would route duties to a host that
+/// abstains by design.
+pub const PALW_REGISTERED_CLASS_TAGS: &[&str] =
+    &["misaka-palw-lite-cpu/x86_64/v1", "misaka-palw-lite-cpu/aarch64-dotprod/v1", "misaka-palw-lite-fp/apple-metal-arm64/v1"];
+
 /// Machine-reads the routing keys OUT of a class tag (`family-segment/arch-segment/vN`), so
 /// a registration's declared `execution_family`/`family_version` can be checked against the
 /// same string its `runtime_class_id` hashes — without this, the family would be
@@ -1787,6 +1797,21 @@ mod tests {
         );
         assert!(binding_matches_definition_v1(&row, &definition));
         assert!(!binding_matches_definition_v1(&row, &lying_size));
+    }
+
+    #[test]
+    fn the_registered_tag_ledger_is_parseable_unique_and_covers_this_builds_cpu_class() {
+        let mut seen = std::collections::HashSet::new();
+        for tag in PALW_REGISTERED_CLASS_TAGS {
+            assert!(routing_keys_for_class_tag_v1(tag).is_some(), "registered tag {tag} must parse into routing keys");
+            assert!(seen.insert(crate::vlt::derive_runtime_class_id(tag)), "two ledger tags derive one class id");
+        }
+        // The build's own CPU class tag is in the ledger — except the decline-to-participate
+        // placeholder, which is deliberately unroutable.
+        let build_tag = crate::vlt::qwen35_pins::CPU_RUNTIME_CLASS;
+        if build_tag != "misaka-palw-lite-cpu/other-arch/v1" {
+            assert!(PALW_REGISTERED_CLASS_TAGS.contains(&build_tag), "this build's CPU tag {build_tag} is missing from the ledger");
+        }
     }
 
     #[test]

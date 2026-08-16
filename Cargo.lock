@@ -5839,6 +5839,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-reexecutor"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "clap 4.5.51",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "misaka-palw-reference2"
 version = "1.1.0"
 dependencies = [
