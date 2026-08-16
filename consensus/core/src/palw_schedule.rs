@@ -261,6 +261,51 @@ pub fn replay_p99_fits_v1(p99_cold_replay_ms: u64, params: &PalwScheduleParamsV1
 }
 
 // ---------------------------------------------------------------------------------------------
+// §3 credited-ceiling re-derivation — the registration value from a measurement (B13)
+// ---------------------------------------------------------------------------------------------
+
+/// The fixed part of a cold replay: model load plus process spin-up, independent of decode
+/// depth. Subtracted before dividing the residual by the per-token cost, so the ceiling is
+/// not depressed by a large constant on a short measurement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReplayCostMeasurementV1 {
+    /// The class's SLOWEST host, cold: the fixed overhead (ms) — the load-only p99.
+    pub fixed_overhead_ms: u64,
+    /// The class's slowest host: measured milliseconds per decode token at depth (the
+    /// marginal cost — `(p99(D) − fixed) / D` from the bench, taken at the largest measured D
+    /// so the marginal estimate is not overwhelmed by the fixed part).
+    pub ms_per_decode_token: u64,
+    /// The format ceiling — the largest decode-token count the v2 wire can express. The
+    /// credited ceiling can never exceed it regardless of how fast the class is.
+    pub format_ceiling_tokens: u32,
+}
+
+/// Re-derives the **credited-job ceiling** — the largest decode-token count a job may claim
+/// and still be creditable — from a class's measured replay cost against its registered
+/// windows (ADR-0028 §3's rule, made a function so registration cannot ship a guessed value).
+///
+/// The window a cold replay of `D` decode tokens must fit is `w_replay` (κ folded in): the
+/// derivation solves `κ · (fixed + D · per_token) ≤ w_replay · block_ms` for the largest `D`,
+/// then floors at the format ceiling. Returns 0 when even a zero-decode job cannot fit
+/// (a class too slow to register at all — an honest, if unwelcome, answer).
+pub fn credited_ceiling_tokens_v1(
+    measurement: &PalwReplayCostMeasurementV1,
+    params: &PalwScheduleParamsV1,
+    target_time_per_block_ms: u64,
+) -> u32 {
+    let window_ms = params.w_replay.saturating_mul(target_time_per_block_ms);
+    let budget_ms = window_ms / PALW_SCHEDULE_REPLAY_KAPPA; // κ·(fixed + D·per) ≤ window
+    let Some(residual) = budget_ms.checked_sub(measurement.fixed_overhead_ms) else {
+        return 0; // the fixed overhead alone overruns κ⁻¹ of the window
+    };
+    if measurement.ms_per_decode_token == 0 {
+        return measurement.format_ceiling_tokens; // a class with no marginal cost is format-bound
+    }
+    let derived = residual / measurement.ms_per_decode_token;
+    derived.min(measurement.format_ceiling_tokens as u64) as u32
+}
+
+// ---------------------------------------------------------------------------------------------
 // §6 Stage 0 — the shadow ledger
 // ---------------------------------------------------------------------------------------------
 
@@ -672,6 +717,34 @@ mod tests {
         // w_replay = 30 blocks × 120 000 ms = 3 600 000 ms; κ = 3 ⇒ p99 must be ≤ 20 min.
         assert!(replay_p99_fits_v1(20 * 60 * 1_000, &params, 120_000));
         assert!(!replay_p99_fits_v1(20 * 60 * 1_000 + 1, &params, 120_000));
+    }
+
+    #[test]
+    fn credited_ceiling_rederives_from_the_measured_fleet_numbers() {
+        let params = PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
+        // The slowest measured host (D, 2026-08-16 fleet bench): load p50 ≈ 4.3 s cold, and
+        // 165.1 ms/decode-token at D=512. Format ceiling is the v2 wire's 4 095.
+        let measured =
+            PalwReplayCostMeasurementV1 { fixed_overhead_ms: 4_300, ms_per_decode_token: 165, format_ceiling_tokens: 4_095 };
+        // Budget = w_replay(30) × 120 000 / κ(3) = 1 200 000 ms; minus 4 300 fixed = 1 195 700;
+        // / 165 = 7 246 tokens — well past the format ceiling, so the class is FORMAT-bound.
+        let ceiling = credited_ceiling_tokens_v1(&measured, &params, 120_000);
+        assert_eq!(ceiling, 4_095, "the pinned Q4 fleet is format-bound, not window-bound — the ~10x-conservative finding");
+        // The fit check agrees: even the format ceiling's replay fits the window.
+        assert!(replay_p99_fits_v1(4_300 + 4_095 * 165, &params, 120_000));
+
+        // A hypothetical 10× slower class IS window-bound below the format ceiling.
+        let slow = PalwReplayCostMeasurementV1 { fixed_overhead_ms: 20_000, ms_per_decode_token: 1_650, format_ceiling_tokens: 4_095 };
+        let slow_ceiling = credited_ceiling_tokens_v1(&slow, &params, 120_000);
+        assert!(slow_ceiling > 0 && slow_ceiling < 4_095, "a slow class is window-capped: {slow_ceiling}");
+        // Its own ceiling replay must (barely) fit — the derivation's defining property.
+        assert!(replay_p99_fits_v1(20_000 + slow_ceiling as u64 * 1_650, &params, 120_000));
+        assert!(!replay_p99_fits_v1(20_000 + (slow_ceiling as u64 + 1) * 1_650, &params, 120_000));
+
+        // A class too slow to fit even a zero-decode job credits nothing.
+        let hopeless =
+            PalwReplayCostMeasurementV1 { fixed_overhead_ms: 2_000_000, ms_per_decode_token: 1, format_ceiling_tokens: 4_095 };
+        assert_eq!(credited_ceiling_tokens_v1(&hopeless, &params, 120_000), 0);
     }
 
     // -----------------------------------------------------------------------------------------
