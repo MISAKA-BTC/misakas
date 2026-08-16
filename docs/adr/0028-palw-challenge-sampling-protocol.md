@@ -330,6 +330,19 @@ Stage 3 Full         wider exposure; requires the second independent reference
   over DAA windows, on-chain envelopes for attestation, opening call and answer (the wire
   bodies exist in `palw_legs`; what is missing is their chain carriage), and the telemetry that
   measures `P_check`, inclusion latency and no-show rates in shadow.
+  > **Stage-0 landed (2026-08-16, `consensus/core/src/palw_schedule.rs`, consensus-inert):**
+  > the assignment twin (`select_replay_panel_v1`, eligibility rule in the function, domain
+  > uniqueness tested against every PALW family AND the VLT sortition key), the §3 window
+  > parameters with `validate()` enforcing this ADR's inequality set against the real
+  > `BlockrateParams` — including a regression test pinning the 48 h draft failure on both
+  > networks — and the shadow ledger (`PalwShadowLedgerV1`): pure-function duty
+  > classification, the §1 credit gate evaluated as shadow (late refutations counted as
+  > credited-and-refuted, the P3 tail metric), counts and nearest-rank percentiles only.
+  > The worker gained `--mode v2-replay-bench` (fresh-load runs, shared percentile
+  > convention, κ·p99 fit against both networks' defaults, non-zero exit on root drift).
+  > First tool-validation numbers on the dev host: Metal D=512 p99 ≈ 5.5 s, CPU-aarch64
+  > D=512 p99 ≈ 8.2 s — both fit trivially; the registered numbers must come from the
+  > fleet, whose 0.75–1.6 s/token measurement remains the operative sizing basis.
 * **Carriage must outlive headers.** `credit(C)` is evaluated at `W_challenge` close and
   offenses prosecute after anchor finality, so `C`'s commitment record and the duty anchor must
   live in pruning-surviving state (as bond records already do) — or every window must close

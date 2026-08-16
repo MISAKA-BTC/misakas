@@ -139,6 +139,10 @@ pub mod palw_legs;
 /// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
+/// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
+/// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
+/// consensus-inert — computed and logged only; nothing consumes it.
+pub mod palw_schedule;
 /// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
 /// Land-stage, consensus-inert — no slashing is enabled by this module existing.
 pub mod palw_slash;

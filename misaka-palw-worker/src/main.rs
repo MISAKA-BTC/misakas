@@ -61,6 +61,9 @@ use kaspa_consensus_core::palw_legs::{
     PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
     PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
 };
+use kaspa_consensus_core::palw_schedule::{
+    nearest_rank_percentile, replay_p99_fits_v1, PalwScheduleParamsV1, PALW_SCHEDULE_REPLAY_KAPPA,
+};
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
 use sha2::Digest;
@@ -1483,6 +1486,103 @@ fn run_v2_legs_open_verify(call_path: &str) {
     }
 }
 
+/// `--mode v2-replay-bench --name <golden> [--runs N] [--decode D] [--legs]`: measures the
+/// cold replay cost this class would register as `p99_cold_replay` (ADR-0028 §3) and answers
+/// the fit check `κ · p99 ≤ w_replay` against both networks' Stage-1 window defaults.
+///
+/// Each run is a fresh model load in this process — **cold process, warm OS page cache**; the
+/// number a class REGISTERS must come from the fleet's own runs of this mode, not from a dev
+/// machine. `--decode D` overrides the golden's decode budget so the measurement can be taken
+/// at the credited ceiling (the golden set's jobs are far below it); percentiles are the
+/// shared nearest-rank convention from `palw_schedule`, so this tool and the shadow ledger
+/// can never disagree about what "p99" means. Roots must be identical across runs — a bench
+/// that observed a drifting root has measured a broken class, and exits non-zero saying so.
+fn run_v2_replay_bench(name: &str, runs: u32, decode_override: Option<u32>, legs: bool) {
+    if runs == 0 {
+        die("--runs must be at least 1".into());
+    }
+    let path = std::env::var(PALW_GOLDEN_ENV)
+        .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-replay-bench needs the golden set")));
+    let set = load_golden_set(&path);
+    let job = set
+        .jobs
+        .iter()
+        .find(|job| job.name == name)
+        .unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
+    let mut envelope = set.envelope_for(job);
+    if let Some(decode) = decode_override {
+        envelope.exact_decode_tokens = decode;
+        envelope.max_context_tokens = N_CTX as u32;
+        envelope.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("--decode {decode} is not a valid budget: {e}")));
+    }
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!("v2-replay-bench refused: non-canonical floating-point environment: {}", fp.canonical_string()));
+    }
+    let model_path = pinned_model_path_v2();
+
+    let mut load_ms: Vec<u64> = Vec::with_capacity(runs as usize);
+    let mut execute_ms: Vec<u64> = Vec::with_capacity(runs as usize);
+    let mut total_ms: Vec<u64> = Vec::with_capacity(runs as usize);
+    let mut first_root: Option<Hash64> = None;
+    let mut roots_identical = true;
+    for run in 0..runs {
+        let exec = if legs { execute_v2_legs(&model_path, &envelope) } else { execute_v2(&model_path, &envelope) };
+        let total = exec.telemetry.model_load_ms + exec.telemetry.execute_ms;
+        eprintln!(
+            "[palw-worker] v2-replay-bench run {}/{runs}: load {} ms + execute {} ms = {total} ms",
+            run + 1,
+            exec.telemetry.model_load_ms,
+            exec.telemetry.execute_ms
+        );
+        load_ms.push(exec.telemetry.model_load_ms);
+        execute_ms.push(exec.telemetry.execute_ms);
+        total_ms.push(total);
+        let root = exec.projection.full_logits_trace_root;
+        match first_root {
+            None => first_root = Some(root),
+            Some(expected) if expected != root => roots_identical = false,
+            Some(_) => {}
+        }
+    }
+    load_ms.sort_unstable();
+    execute_ms.sort_unstable();
+    total_ms.sort_unstable();
+    let pct = |sorted: &[u64]| {
+        serde_json::json!({
+            "p50": nearest_rank_percentile(sorted, 50, 100),
+            "p95": nearest_rank_percentile(sorted, 95, 100),
+            "p99": nearest_rank_percentile(sorted, 99, 100),
+            "max": sorted.last(),
+        })
+    };
+    let p99_total = nearest_rank_percentile(&total_ms, 99, 100).expect("runs ≥ 1");
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.v2-replay-bench.v1",
+        "runtime_class_id": hex(runtime_class_id()),
+        "job": job.name,
+        "prefill_tokens": envelope.declared_prefill_tokens(),
+        "exact_decode_tokens": envelope.exact_decode_tokens,
+        "legs_path": legs,
+        "runs": runs,
+        "methodology": "cold process (fresh model load per run), warm OS page cache; register fleet-measured numbers only",
+        "model_load_ms": pct(&load_ms),
+        "execute_ms": pct(&execute_ms),
+        "total_ms": pct(&total_ms),
+        "kappa": PALW_SCHEDULE_REPLAY_KAPPA,
+        "kappa_p99_ms": PALW_SCHEDULE_REPLAY_KAPPA * p99_total,
+        "fits_w_replay": {
+            "deci_bps": replay_p99_fits_v1(p99_total, &PalwScheduleParamsV1::stage1_defaults_deci_bps(), 10_000),
+            "two_minute_bps": replay_p99_fits_v1(p99_total, &PalwScheduleParamsV1::stage1_defaults_two_minute_bps(), 120_000),
+        },
+        "roots_identical_across_runs": roots_identical,
+    });
+    println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
+    if !roots_identical {
+        die("v2-replay-bench FAILED: the logits root drifted across runs — this class is broken, not slow".into());
+    }
+}
+
 /// `--mode v2-golden-envelope --name <job>`: writes the named golden job's envelope as one
 /// framed Borsh message on stdout — exactly the frame `v2-job`, `v2-legs-job` and
 /// `v2-legs-open` read first. Harness plumbing (needs the golden set, not the model), so
@@ -1813,6 +1913,9 @@ fn main() {
     let mut name: Option<String> = None;
     let mut envelope_path: Option<String> = None;
     let mut call_path: Option<String> = None;
+    let mut runs: Option<u32> = None;
+    let mut decode_override: Option<u32> = None;
+    let mut legs_flag = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1841,6 +1944,15 @@ fn main() {
                 i += 1;
                 call_path = args.get(i).cloned();
             }
+            "--runs" => {
+                i += 1;
+                runs = args.get(i).and_then(|s| s.parse().ok());
+            }
+            "--decode" => {
+                i += 1;
+                decode_override = args.get(i).and_then(|s| s.parse().ok());
+            }
+            "--legs" => legs_flag = true,
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
@@ -1861,7 +1973,8 @@ fn main() {
             | "v2-legs-selftest"
             | "v2-legs-open"
             | "v2-legs-open-request"
-            | "v2-legs-open-verify")
+            | "v2-legs-open-verify"
+            | "v2-replay-bench")
     ) && n_predict.is_some()
     {
         die("--n-predict is not a v2 interface; token budgets come from the job envelope".into());
@@ -1880,6 +1993,10 @@ fn main() {
         Some("v2-golden-envelope") => {
             let name = name.unwrap_or_else(|| die("--name <golden-job> is required for v2-golden-envelope".into()));
             run_v2_golden_envelope(&name);
+        }
+        Some("v2-replay-bench") => {
+            let name = name.unwrap_or_else(|| die("--name <golden-job> is required for v2-replay-bench".into()));
+            run_v2_replay_bench(&name, runs.unwrap_or(10), decode_override, legs_flag);
         }
         Some("v2-legs-open") => run_v2_legs_open(),
         Some("v2-legs-open-request") => {
