@@ -505,6 +505,15 @@ enum CarriageEvent {
     Refutation {
         target_root: String,
     },
+    /// One chunk of an over-mass refutation (ADR-0029 §6). The watcher records chunks as they
+    /// land; reassembly is the reporter's business, so the event carries only what identifies
+    /// the group and its progress.
+    EvidenceChunk {
+        group: String,
+        index: u8,
+        count: u8,
+        bytes: usize,
+    },
 }
 
 fn events_path(state_dir: &Path) -> PathBuf {
@@ -577,6 +586,12 @@ fn carriage_event_of(carriage: &PalwCarriageV1) -> CarriageEvent {
                 kaspa_consensus_core::palw_carriage::PalwCarriedEvidenceV1::Legs(l) => hex64(&l.binding.committed_execution_root),
                 kaspa_consensus_core::palw_carriage::PalwCarriedEvidenceV1::Summary(s) => hex64(&s.committed_trace_root),
             },
+        },
+        PalwCarriageV1::EvidenceChunk(c) => CarriageEvent::EvidenceChunk {
+            group: hex64(&c.evidence_group_id),
+            index: c.chunk_index,
+            count: c.chunk_count,
+            bytes: c.bytes.len(),
         },
     }
 }
@@ -704,6 +719,7 @@ fn kind_name(carriage: &PalwCarriageV1) -> &'static str {
         PalwCarriageV1::OpeningCall(_) => "opening-call",
         PalwCarriageV1::OpeningAnswer(_) => "opening-answer",
         PalwCarriageV1::Refutation(_) => "refutation",
+        PalwCarriageV1::EvidenceChunk(_) => "evidence-chunk",
     }
 }
 
@@ -901,6 +917,12 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
     let mut refutations: Vec<(String, (Hash64, u64))> = Vec::new();
     let mut calls = 0usize;
     let mut answers = 0usize;
+    // Chunked evidence (ADR-0029 §6): counted per chunk and per completed group. A group is
+    // "complete" when every declared index has been seen — the reporter counts, it does not
+    // reassemble (that is the adjudicating node's job).
+    let mut evidence_chunks = 0usize;
+    let mut chunk_groups: std::collections::HashMap<String, std::collections::HashSet<u8>> = std::collections::HashMap::new();
+    let mut chunk_group_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for event in &events {
         match event {
             Event::ChainAdd { block, daa } => chain.push((block.clone(), *daa)),
@@ -928,6 +950,11 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
                 CarriageEvent::Refutation { target_root } => refutations.push((block.clone(), (parse_hash64(target_root)?, *daa))),
                 CarriageEvent::OpeningCall { .. } => calls += 1,
                 CarriageEvent::OpeningAnswer { .. } => answers += 1,
+                CarriageEvent::EvidenceChunk { group, index, count, .. } => {
+                    evidence_chunks += 1;
+                    chunk_groups.entry(group.clone()).or_default().insert(*index);
+                    chunk_group_counts.insert(group.clone(), *count);
+                }
             },
         }
     }
@@ -1007,6 +1034,15 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
         "attestations_seen": attestations.len(),
         "opening_calls_seen": calls,
         "opening_answers_seen": answers,
+        "evidence_chunks_seen": evidence_chunks,
+        "evidence_groups_complete": chunk_groups
+            .iter()
+            .filter(|(g, seen)| chunk_group_counts.get(*g).is_some_and(|c| seen.len() == *c as usize))
+            .count(),
+        "evidence_groups_incomplete": chunk_groups
+            .iter()
+            .filter(|(g, seen)| chunk_group_counts.get(*g).is_none_or(|c| seen.len() != *c as usize))
+            .count(),
         "jobs_closed": closed,
         "jobs_pending": pending,
         "classes": classes,
