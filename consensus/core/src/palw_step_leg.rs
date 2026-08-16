@@ -687,15 +687,25 @@ pub enum PalwStepFaultV1 {
     StepLeafIndexNotCanonical = 3,
     StepBytesNotFourPerValue = 4,
     StepValueCountNotCanonical = 5,
-    StepNonFinite { value_index: u32 } = 6,
+    StepNonFinite {
+        value_index: u32,
+    } = 6,
     KvChunkNotCanonical = 7,
     KvChunkBytesNotCanonical = 8,
-    KvChunkNonFinite { value_index: u32 } = 9,
+    KvChunkNonFinite {
+        value_index: u32,
+    } = 9,
     CheckpointCountNotCanonical = 10,
     CheckpointIndexNotCanonical = 11,
     CheckpointCoveredCallNotCanonical = 12,
     CheckpointGenesisPrevMismatch = 13,
     CheckpointChainBroken = 14,
+    /// ADR-0027 §1's arithmetic verdict: the step's committed output tile differs from the
+    /// canonical recomputation at `value_index` (added same-session with the step-refutation
+    /// increment; discriminants 0-14 unmoved).
+    ComputationMismatch {
+        value_index: u32,
+    } = 15,
 }
 
 impl PalwStepFaultV1 {
@@ -716,6 +726,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::CheckpointCoveredCallNotCanonical => (12, 0),
             PalwStepFaultV1::CheckpointGenesisPrevMismatch => (13, 0),
             PalwStepFaultV1::CheckpointChainBroken => (14, 0),
+            PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
         }
     }
 }
@@ -775,6 +786,12 @@ pub struct PalwStepRefutationV1 {
 pub struct PalwStepRefutationVerdictV1 {
     pub fault: PalwStepFaultV1,
     pub evidence_id: Hash64,
+}
+
+/// The §24.1 dedup key of a step-family refutation — public so the arithmetic checker
+/// (`palw_step_refute`) mints ids in the same namespace (evidence kind 5).
+pub fn step_refutation_evidence_id(committed_root: &Hash64, evidence_kind: u8, leaf_index: u64, fault: PalwStepFaultV1) -> Hash64 {
+    evidence_id(committed_root, evidence_kind, leaf_index, fault)
 }
 
 fn evidence_id(committed_root: &Hash64, evidence_kind: u8, leaf_index: u64, fault: PalwStepFaultV1) -> Hash64 {
@@ -1101,6 +1118,7 @@ mod tests {
             out_len: out,
             tile_len: tile,
             kernel_semantics_id: h64(0x11),
+            input_refs: vec![crate::palw_step::PALW_STEP_INPUT_LAYER_IN],
         }
     }
 
@@ -1302,8 +1320,8 @@ mod tests {
         let (binding, ..) = honest();
         assert_eq!(
             binding.committed_execution_root.to_string(),
-            "8ced1da9447ec52e7af8bdf68434c253932cfadaf1a2a445c376047e166e774c\
-             10cd1d82a905f5c3c74a0b733f334ef373b348cd932e27511f51853f75749e4e"
+            "f5ada5e130a81b2fb2d9658f8dfaf3fbd0527fdedb1567bd7a19973b009d89f7\
+             7f196bb322f764aa9af857c9da852b7b0b6d522f521a7fe3fa8d7a43ad203aa9"
         );
     }
 

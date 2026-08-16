@@ -207,7 +207,26 @@ pub struct PalwStepNodeV1 {
     pub tile_len: u32,
     /// The frozen reduction-order program adjudicating this node's steps.
     pub kernel_semantics_id: Hash64,
+    /// The node's data inputs — WHICH committed material a step of this node is recomputed
+    /// from. Without this the adjudicator could not reject a challenger who opens unrelated
+    /// tiles as "the inputs" (a manufactured conviction). Values are intra-table node
+    /// indices (this layer's template), or the [`PALW_STEP_INPUT_*`] sentinels for the layer
+    /// input, K/V aux chunks, and checkpoint state. The weight operand is `weight_name`, not
+    /// listed here.
+    pub input_refs: Vec<u16>,
 }
+
+/// `input_refs` sentinel: the layer's input row (the previous layer's final output, or the
+/// embedding output for layer 0; for pre/post tables, the preceding table's output).
+pub const PALW_STEP_INPUT_LAYER_IN: u16 = 0xFFFF;
+/// `input_refs` sentinel: the K aux-chunk series of this attention layer.
+pub const PALW_STEP_INPUT_KV_K: u16 = 0xFFFE;
+/// `input_refs` sentinel: the V aux-chunk series of this attention layer.
+pub const PALW_STEP_INPUT_KV_V: u16 = 0xFFFD;
+/// `input_refs` sentinel: this layer's slice of the checkpoint recurrent state.
+pub const PALW_STEP_INPUT_CHECKPOINT_STATE: u16 = 0xFFFC;
+/// Smallest sentinel value (everything below is an intra-table node index).
+pub const PALW_STEP_INPUT_SENTINEL_MIN: u16 = 0xFFF0;
 
 /// Layer kinds of the hybrid graph. Which kind a layer is follows from
 /// `full_attention_interval` (Fact 1): layer `i` is `Attention` iff `(i+1) % interval == 0`.
@@ -371,7 +390,22 @@ impl PalwShapeProfileV3 {
                 let _ = name;
                 return Err(bad("node table exceeds the per-table cap"));
             }
-            for node in table.iter() {
+            for (node_pos, node) in table.iter().enumerate() {
+                for &r in &node.input_refs {
+                    if r >= PALW_STEP_INPUT_SENTINEL_MIN {
+                        if !matches!(
+                            r,
+                            PALW_STEP_INPUT_LAYER_IN | PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V | PALW_STEP_INPUT_CHECKPOINT_STATE
+                        ) {
+                            return Err(bad("unknown input sentinel"));
+                        }
+                    } else if r as usize >= node_pos {
+                        // Intra-table inputs must point strictly earlier: the graph is a DAG
+                        // in template order, and a forward or self reference would let a
+                        // committed "input" be defined by the output it explains.
+                        return Err(bad("node input does not point strictly earlier in the table"));
+                    }
+                }
                 if node.tile_len < PALW_STEP_MIN_TILE_LEN || node.tile_len > PALW_STEP_MAX_TILE_LEN {
                     return Err(bad("node tile length is out of bounds"));
                 }
@@ -395,6 +429,9 @@ impl PalwShapeProfileV3 {
                 }
                 if node.weight_name.len() > 128 {
                     return Err(bad("weight name exceeds the cap"));
+                }
+                if node.input_refs.len() > 8 {
+                    return Err(bad("node declares more than 8 inputs"));
                 }
             }
         }
@@ -678,6 +715,7 @@ mod tests {
             out_len: out,
             tile_len: tile,
             kernel_semantics_id: h64(0x11),
+            input_refs: vec![PALW_STEP_INPUT_LAYER_IN],
         }
     }
 
@@ -790,8 +828,8 @@ mod tests {
         // class profile exists until registration measures one.
         assert_eq!(
             tiny_profile().shape_profile_id().to_string(),
-            "0fc08fc60f633712ae0b842190d2a931a37067025759e86b15b7316040a47101\
-             212b98d8ee7aeae583d49f89f488de987f3c7fe49f7b01fa88837fb9165a94ff"
+            "0de6a2ae93b884739efde27add7ba951cffbf1f72e4577bd384c87ada65b8320\
+             3a36b70dd08fb606c3c4f78e0848a94c4aa90c50efb3b021e914598cc77c8400"
         );
     }
 
@@ -831,6 +869,18 @@ mod tests {
         assert!(p.validate_shape().is_err());
         let mut p = tiny_profile();
         p.gdn_nodes[0].weight_name = "w".into(); // name without dtype
+        assert!(p.validate_shape().is_err());
+        let mut p = tiny_profile();
+        p.gdn_nodes[0].input_refs = vec![0]; // self/forward reference at position 0
+        assert!(p.validate_shape().is_err());
+        let mut p = tiny_profile();
+        p.gdn_nodes[1].input_refs = vec![1]; // self reference
+        assert!(p.validate_shape().is_err());
+        let mut p = tiny_profile();
+        p.gdn_nodes[1].input_refs = vec![0]; // strictly earlier: fine
+        assert!(p.validate_shape().is_ok());
+        let mut p = tiny_profile();
+        p.gdn_nodes[0].input_refs = vec![0xFFF5]; // unknown sentinel
         assert!(p.validate_shape().is_err());
         assert!(tiny_profile().validate_shape().is_ok());
     }
