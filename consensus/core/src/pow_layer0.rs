@@ -140,6 +140,44 @@ pub const POW_L1_PALW_V1_DOMAIN: &[u8] = b"misaka-l1-palw-llm-v1";
 /// hard fork = a new algo id, exactly like the other Layer-1 parameters.
 pub const POW_L1_PALW_N_PREDICT_V1: u32 = 128;
 
+/// The canonical **calibration probe** seed for `algo_id = 4`: a raw 32-byte PoW seed run through
+/// the ordinary worker path (same prompt frame, same frozen `--n-predict`), so the probe measures
+/// exactly what block validation will do. Provenance: `BLAKE2b-256("palw-audit-2026-08-16/uniform-0/0")`
+/// — the "uniform/u0" seed of the 61-seed forgery audit, whose tag was measured byte-identical on
+/// every fleet host (docs/palw-algo4-crosshost-determinism-2026-08-16.md).
+pub const POW_L1_PALW_PROBE_SEED_V1: [u8; 32] = [
+    0xf5, 0xfe, 0xda, 0x2e, 0xe8, 0xc6, 0xcc, 0x2c, 0xa2, 0x3b, 0x79, 0x6d, 0x48, 0x00, 0xb8, 0xe0, 0x22, 0xcd, 0x89, 0x6f, 0xb2,
+    0x95, 0xd5, 0xcb, 0xd2, 0x53, 0x66, 0xaf, 0x8d, 0x4a, 0x19, 0x0e,
+];
+
+/// The 200-byte tag [`POW_L1_PALW_PROBE_SEED_V1`] MUST produce on **testnet-11** — the public
+/// PALW net's determinism class, pinned (ADR-0035).
+///
+/// Same rationale as [`POW_L1_PALW_OLLAMA_CALIBRATION_V1`]: the GGUF pin catches the wrong model;
+/// this catches everything else that decides the arithmetic (worker build profile, CPU
+/// architecture, runtime scheduling). A runtime outside the class would compute a different tag
+/// for every header and silently fork itself off the network — so it must refuse to start and
+/// say which value it produced instead. The cost is one inference per process start.
+///
+/// Measured 2026-08-16 on all four fleet hosts — Intel Broadwell + 3× AMD EPYC, four kernel
+/// builds, two vendors — byte-identical on each (gate 2: 305/305 tag fields, canonical digest
+/// `311d7eab…`). An Apple-Silicon/Metal worker produces a different value and is — correctly —
+/// refused: it is not in this network's class (its own nets, e.g. devnet, pin no class here).
+pub const POW_L1_PALW_WORKER_CALIBRATION_TN11_V1: &str = "7d1981298652ca5c8fd224dfb6ea8d00787035a0430728d27aa3dd209b38731cc0f5e1cce6ab2a1be8cff97412d4553e0aa512cfc535220cfb57a71a27d060a046f5fc18c9e6564aaa0bc3fd0853802f66a27dfb9647736caa5f91de2ead9cf945d0b7a7d1b81b95ab858b33f260ac907a07f92bb46ae974c37193f4ea1b652ebfbfaad8aa1e587d1d28ad827cca24401c8b6f339a928ea85ea009249976ece4ba684f34d5a6cf911e9d24a9aaed53686c2b16479f1f553b022056d0039375934700000039000000";
+
+/// The pinned worker-class calibration for `network_id` (the `NetworkId::to_string()` bytes the
+/// whole Layer-0 path uses), or `None` where no single class is pinned: devnet deliberately pins
+/// nothing (any conforming runtime may mine its own mesh — that is what a dev net is for), and
+/// nets where algo 4 is inert never reach the check. Every PUBLIC PALW-4 network must add a row
+/// here before its activation flips — a class-less public net cannot tell an honest node from a
+/// silently-forking one.
+pub fn palw_worker_calibration_v1(network_id: &[u8]) -> Option<&'static str> {
+    match network_id {
+        b"testnet-11" => Some(POW_L1_PALW_WORKER_CALIBRATION_TN11_V1),
+        _ => None,
+    }
+}
+
 /// MISAKA Phase 4b Layer 1 algorithm id: **PALW LLM inference via an Ollama runtime**
 /// (ADR-0021 addendum). Same seed, same canonical prompt, same grinding closure as
 /// [`POW_ALGO_ID_PALW_LLM`]; the difference is WHERE the inference runs and WHAT the tag can
@@ -783,6 +821,26 @@ mod tests {
         assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_001, 42, net), "timestamp must change the seed (grinding closure)");
         assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 43, net), "nonce must change the seed");
         assert_ne!(a, palw_pow_seed_v1(h(0x11), 1_000, 42, b"mainnet"), "network must change the seed");
+    }
+
+    /// The worker-class calibration is pinned exactly where a single class is claimed —
+    /// testnet-11 — and nowhere else; and the pinned value is a well-formed 200-byte tag whose
+    /// token counts are the audited probe record's (u0: prefill 71, decode 57, both under the
+    /// frozen 128 budget). Golden: a change here means the network's determinism class moved,
+    /// which strands every deployed runtime — make sure that is the intended outcome (ADR-0035).
+    #[test]
+    fn palw_worker_calibration_scope_and_shape() {
+        assert!(palw_worker_calibration_v1(b"testnet-11").is_some(), "the public PALW net must pin its class");
+        assert!(palw_worker_calibration_v1(b"testnet-10").is_none(), "the hash-lane t10 pins nothing");
+        assert!(palw_worker_calibration_v1(b"devnet").is_none(), "devnet deliberately pins no class");
+        assert!(palw_worker_calibration_v1(b"mainnet").is_none());
+        assert!(palw_worker_calibration_v1(b"simnet").is_none());
+        let hex = POW_L1_PALW_WORKER_CALIBRATION_TN11_V1;
+        assert_eq!(hex.len(), POW_L1_PALW_OUT_BYTES * 2, "calibration must encode a full tag");
+        let mut bytes = [0u8; POW_L1_PALW_OUT_BYTES];
+        faster_hex::hex_decode(hex.as_bytes(), &mut bytes).expect("calibration must be valid hex");
+        assert_eq!(u32::from_le_bytes(bytes[192..196].try_into().unwrap()), 71, "prefill tokens of the audited u0 probe");
+        assert_eq!(u32::from_le_bytes(bytes[196..200].try_into().unwrap()), 57, "decode tokens of the audited u0 probe");
     }
 
     /// The canonical PALW prompt is a pure-ASCII stable frame around the hex seed, and two seeds

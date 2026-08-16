@@ -27,8 +27,8 @@
 //! as [`PowLayer0Error::PalwWorkerFailed`], also escalated at the consensus boundary.
 
 use kaspa_consensus_core::pow_layer0::{
-    POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, PowLayer0Error, palw_fixture_l1_tag_v1,
-    palw_ollama_fixture_l1_tag_v1, palw_pow_seed_v1,
+    POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_PALW_PROBE_SEED_V1, PowLayer0Error, palw_fixture_l1_tag_v1,
+    palw_ollama_fixture_l1_tag_v1, palw_pow_seed_v1, palw_worker_calibration_v1,
 };
 use kaspa_hashes::Hash64;
 
@@ -111,10 +111,39 @@ pub fn palw_l1_tag(
     network_id: &[u8],
 ) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
     let seed = palw_pow_seed_v1(pre_pow_hash, timestamp, nonce, network_id);
+    // Class-pinned networks verify the runtime ONCE per process, in the path every consumer —
+    // node validation, miner, pruning proof — must pass through, so nothing can skip it. This
+    // runs BEFORE the fixture branch on purpose: the fixture tag family must fail a class-pinned
+    // net loudly instead of minting tags no real peer accepts (class-less nets return instantly).
+    verify_worker_calibration(network_id)?;
     if fixture_enabled() {
         return Ok(palw_fixture_l1_tag_v1(&seed));
     }
     native::tag_for_seed(&seed)
+}
+
+/// Verify (once per process, memoized — failure too) that this host's worker runtime is in the
+/// determinism class `network_id` pins, by replaying the canonical probe seed through the
+/// ordinary tag path and comparing the 200-byte tag against the network's pinned calibration.
+/// Networks that pin no class (devnet) pass trivially. The algo-4 mirror of
+/// [`verify_ollama_model_pin`]'s calibration half: without it, an out-of-class runtime starts
+/// happily and then silently forks — rejecting every honest block, having its own rejected —
+/// with nothing pointing at the cause. Called eagerly by the kaspad startup rail (good message,
+/// before any peer is dialed) and lazily by [`palw_l1_tag`] (so no consumer can skip it).
+/// Costs one inference on first use; the probe tag lands in the ordinary seed cache.
+pub fn verify_worker_calibration(network_id: &[u8]) -> Result<(), PowLayer0Error> {
+    let Some(expected) = palw_worker_calibration_v1(network_id) else {
+        return Ok(());
+    };
+    if fixture_enabled() {
+        // The fixture is its own (model-free) tag family, permitted on devnet-class nets only —
+        // and those pin no class. A class-pinned net running the fixture must fail the probe
+        // loudly rather than mint fixture tags no real peer accepts.
+        return Err(PowLayer0Error::PalwUnavailable(
+            "this network pins a worker determinism class; the MISAKA_PALW_POW_FIXTURE tag family cannot join it".into(),
+        ));
+    }
+    native::worker_calibration_once(expected)
 }
 
 /// The PALW-Ollama (`algo_id = 5`) Layer-1 tag for one (header, nonce) attempt. Same seed and
@@ -297,6 +326,32 @@ mod native {
         }
         cache.insert(*seed, tag);
         Ok(tag)
+    }
+
+    /// Memoized worker-class calibration (algo 4): the runtime cannot change under a running
+    /// process, and the probe costs a full inference — once per process is the right cadence.
+    /// A FAILURE is memoized too: an out-of-class runtime is a configuration fact.
+    static WORKER_CALIBRATION_VERIFIED: OnceLock<Result<(), String>> = OnceLock::new();
+
+    pub(super) fn worker_calibration_once(expected: &'static str) -> Result<(), PowLayer0Error> {
+        WORKER_CALIBRATION_VERIFIED
+            .get_or_init(|| {
+                let tag = tag_for_seed(&POW_L1_PALW_PROBE_SEED_V1).map_err(|e| e.to_string())?;
+                let got = faster_hex::hex_string(&tag);
+                if got == expected {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "this worker runtime is not in the network's pinned determinism class.\n  expected calibration {expected}\n  got               {got}\n\
+                         The GGUF pin matches, so the difference is the worker build profile or the CPU architecture. \
+                         Every block this node validated would disagree with the network. Build the pinned CPU-profile \
+                         worker (docs/palw-algo4-crosshost-determinism-2026-08-16.md) or run a network pinned to this \
+                         runtime's class."
+                    ))
+                }
+            })
+            .clone()
+            .map_err(PowLayer0Error::PalwUnavailable)
     }
 
     /// Memoized `verify_model_pin`: the blob cannot change under a running server without a
@@ -539,6 +594,10 @@ mod native {
     use super::*;
 
     pub(super) fn tag_for_seed(_seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        Err(PowLayer0Error::PalwUnavailable("PALW (algo_id = 4) PoW cannot run in a wasm build".into()))
+    }
+
+    pub(super) fn worker_calibration_once(_expected: &'static str) -> Result<(), PowLayer0Error> {
         Err(PowLayer0Error::PalwUnavailable("PALW (algo_id = 4) PoW cannot run in a wasm build".into()))
     }
 

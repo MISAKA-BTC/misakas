@@ -530,6 +530,22 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                         );
                         exit(1);
                     }
+                    // Class-pinned nets (ADR-0035): prove this runtime is in the network's
+                    // determinism class BEFORE any peer is dialed — one probe inference now,
+                    // with a clear message, instead of a silent self-fork at the first header.
+                    // (The tag runner re-checks lazily via the same memoized probe, so a miner
+                    // or harness that bypasses this rail is covered too.)
+                    let net_id_bytes = network.to_string();
+                    if kaspa_consensus_core::pow_layer0::palw_worker_calibration_v1(net_id_bytes.as_bytes()).is_some() {
+                        info!("PALW class calibration: replaying the pinned probe (one inference — this takes seconds)…");
+                        match kaspa_pow::palw::verify_worker_calibration(net_id_bytes.as_bytes()) {
+                            Ok(()) => info!("PALW worker runtime verified in the pinned determinism class of {network}"),
+                            Err(e) => {
+                                println!("{e}");
+                                exit(1);
+                            }
+                        }
+                    }
                 }
             }
         }
