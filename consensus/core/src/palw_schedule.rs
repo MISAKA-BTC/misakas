@@ -306,6 +306,68 @@ pub fn credited_ceiling_tokens_v1(
 }
 
 // ---------------------------------------------------------------------------------------------
+// §4e leverage remedy — the aggregate inequality, encoded (B15 amendment, 2026-08-16)
+// ---------------------------------------------------------------------------------------------
+
+/// `λ` in tenths (2.0) — the §4e economic-security factor: refutation must put at least
+/// `λ ·` the mintable gain at risk. Named apart from `vlt::lambda_vlt_per_kas`, which is a
+/// different concept (a collateral ceiling per KAS, not a security multiple).
+pub const PALW_LEVERAGE_LAMBDA_X10: u64 = 20;
+
+/// ADR-0028 §4e (2026-08-16 amendment), encoded. The AGGREGATE reading of `max_leverage ≤ 1`
+/// governs: credit mintable by one validator within one unbonding period must not exceed
+/// `S_eff / λ` — nothing else stops cheating job after job against one bond. The amendment's
+/// two credible remedies are the same inequality solved for different variables, so ONE
+/// encoding carries both levers:
+///
+/// * the per-validator credited-job **rate cap** — `min_credit_interval_daa` with the full
+///   subsidy (`base_subsidy_permille = 1000`);
+/// * the **fractional `base(C)`** — a small `base_subsidy_permille` at a chosen credit rate.
+///
+/// The registration chooses the pair; [`max_leverage_holds_v1`] is the one check both must
+/// pass. Integer per-mille follows the registry's `rho_v_permille` convention: no floats in
+/// a hashed preimage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwLeverageRemedyV1 {
+    /// Minimum DAA distance between two credited jobs of ONE validator. `1` = every block
+    /// (no rate lever — the fraction must carry the whole inequality). `0` is not a remedy.
+    pub min_credit_interval_daa: u64,
+    /// `base(C)` as a per-mille fraction of the block subsidy (`1000` = the whole subsidy).
+    pub base_subsidy_permille: u32,
+}
+
+/// The chain facts the §4e inequality reads — deliberately NOT part of any hashed
+/// registration preimage: subsidy schedule, bond size and unbonding period are network
+/// facts, not claims a registrant may assert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEconomicFactsV1 {
+    /// The block subsidy at the crediting height (sompi).
+    pub block_subsidy_sompi: u64,
+    /// `S_eff` — the slashable bond reachable by refutation (sompi).
+    pub s_eff_sompi: u64,
+    /// The validator unbonding period (blocks).
+    pub unbonding_period_blocks: u64,
+}
+
+/// The §4e aggregate inequality: `λ · G_max ≤ S_eff`, where `G_max` is the credit ONE
+/// validator can mint inside one unbonding period under this remedy.
+///
+/// Counting is conservative in the attacker's favor: a period of `U` blocks holds
+/// `⌊U / interval⌋ + 1` credit opportunities (both ends included), so the continuous
+/// `S_eff / (λ · base)` job budget from the amendment (≈ 2.2 jobs at live parameters) rounds
+/// DOWN to an interval strictly wider than the continuous bound would suggest — the test
+/// suite pins that difference. `base(C)` floors exactly as the mint arithmetic will.
+pub fn max_leverage_holds_v1(remedy: &PalwLeverageRemedyV1, facts: &PalwEconomicFactsV1) -> bool {
+    if remedy.min_credit_interval_daa == 0 || remedy.base_subsidy_permille > 1000 {
+        return false; // not a canonical remedy encoding
+    }
+    let jobs = (facts.unbonding_period_blocks / remedy.min_credit_interval_daa) as u128 + 1;
+    let base_sompi = (facts.block_subsidy_sompi as u128) * (remedy.base_subsidy_permille as u128) / 1000;
+    let g_max = base_sompi * jobs;
+    g_max * (PALW_LEVERAGE_LAMBDA_X10 as u128) <= (facts.s_eff_sompi as u128) * 10
+}
+
+// ---------------------------------------------------------------------------------------------
 // §6 Stage 0 — the shadow ledger
 // ---------------------------------------------------------------------------------------------
 
@@ -745,6 +807,60 @@ mod tests {
         let hopeless =
             PalwReplayCostMeasurementV1 { fixed_overhead_ms: 2_000_000, ms_per_decode_token: 1, format_ceiling_tokens: 4_095 };
         assert_eq!(credited_ceiling_tokens_v1(&hopeless, &params, 120_000), 0);
+    }
+
+    /// The B15 live facts (`docs/palw-economic-parameters-2026-08-16.md`): the 120 s subsidy
+    /// rate-preserved from the 10 BPS genesis value, the 20 000 MSK bond, unbonding 10 083.
+    fn b15_facts() -> PalwEconomicFactsV1 {
+        PalwEconomicFactsV1 {
+            block_subsidy_sompi: 370_468_345 * 1_200, // 444 562 014 000 sompi = 4 445.62 MSK
+            s_eff_sompi: 20_000 * 100_000_000,        // the 20 000 MSK bond
+            unbonding_period_blocks: 10_083,
+        }
+    }
+
+    #[test]
+    fn the_b15_live_shape_violates_max_leverage_and_both_adr_remedies_hold() {
+        let facts = b15_facts();
+        // The pre-amendment live shape — full subsidy, credit every block — is the B15
+        // finding. Even counting only ONE job per block (the amendment's 11 655× uses the
+        // physical multi-job-per-block rate), the violation is three orders of magnitude.
+        let unremedied = PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1_000 };
+        assert!(!max_leverage_holds_v1(&unremedied, &facts));
+        let g_max = (facts.block_subsidy_sompi as u128) * (facts.unbonding_period_blocks as u128 + 1);
+        assert!(
+            g_max * 2 / (facts.s_eff_sompi as u128) > 4_000,
+            "one-job-per-block leverage is already >4 000× over the bond"
+        );
+
+        // ADR remedy 2 — fractional base(C): 0.2 % of the subsidy at one credit per 10
+        // blocks (the amendment's ≤ 9.92 MSK at that rate).
+        let fractional = PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 };
+        assert!(max_leverage_holds_v1(&fractional, &facts));
+
+        // ADR remedy 1 — the per-validator rate cap at full subsidy. The amendment's
+        // CONTINUOUS 2.2-job budget lands on one job per 4 483 blocks; conservative integer
+        // counting (⌊U/i⌋ + 1 opportunities, both period ends included) needs i > U/2.
+        // 5 042 holds, 4 483 does not — the rounding direction is deliberate and pinned so
+        // nobody "fixes" it back to the continuous value in the attacker's favor.
+        let cap = PalwLeverageRemedyV1 { min_credit_interval_daa: 5_042, base_subsidy_permille: 1_000 };
+        assert!(max_leverage_holds_v1(&cap, &facts));
+        let continuous = PalwLeverageRemedyV1 { min_credit_interval_daa: 4_483, base_subsidy_permille: 1_000 };
+        assert!(!max_leverage_holds_v1(&continuous, &facts));
+    }
+
+    #[test]
+    fn a_degenerate_remedy_encoding_never_holds_and_zero_base_mints_nothing() {
+        let facts = b15_facts();
+        // A zero interval is not a rate; a fraction above the whole subsidy is not a base.
+        assert!(!max_leverage_holds_v1(&PalwLeverageRemedyV1 { min_credit_interval_daa: 0, base_subsidy_permille: 2 }, &facts));
+        assert!(!max_leverage_holds_v1(
+            &PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 1_001 },
+            &facts
+        ));
+        // A zero fraction mints nothing, so the inequality holds trivially — the same
+        // meaning as the §12 zero-credit stage, reached through the arithmetic itself.
+        assert!(max_leverage_holds_v1(&PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 0 }, &facts));
     }
 
     // -----------------------------------------------------------------------------------------

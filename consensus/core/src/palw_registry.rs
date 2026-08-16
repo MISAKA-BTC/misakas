@@ -36,7 +36,10 @@ use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 use crate::config::params::BlockrateParams;
-use crate::palw_schedule::{PalwReplayCostMeasurementV1, PalwScheduleError, PalwScheduleParamsV1, credited_ceiling_tokens_v1};
+use crate::palw_schedule::{
+    PalwEconomicFactsV1, PalwLeverageRemedyV1, PalwReplayCostMeasurementV1, PalwScheduleError, PalwScheduleParamsV1,
+    credited_ceiling_tokens_v1, max_leverage_holds_v1,
+};
 use crate::palw_step::{PalwShapeProfileV3, PalwTranscendentalSiteV1};
 
 // ---------------------------------------------------------------------------------------------
@@ -149,6 +152,14 @@ pub struct PalwClassRegistrationV1 {
     /// The class's measured `p99_cold_replay` at the credited ceiling, milliseconds.
     pub p99_cold_replay_ms: u64,
 
+    // --- §4e leverage remedy (B15 amendment) ---
+    /// The encoded ADR-0028 §4e remedy — the (rate, fraction) pair the aggregate
+    /// `max_leverage ≤ 1` inequality is checked against. Its *canonical form* is validated
+    /// here; whether it actually BOUNDS the mint is [`Self::stage2_eligible`]'s question,
+    /// because the inequality reads chain facts (bond, subsidy, unbonding) a registration
+    /// cannot know by itself.
+    pub leverage_remedy: PalwLeverageRemedyV1,
+
     // --- windows ---
     pub windows: PalwScheduleParamsV1,
 
@@ -193,6 +204,12 @@ impl PalwClassRegistrationV1 {
 
         if self.rho_v_permille == 0 {
             return Err(PalwRegistryError::NotCanonical("rho_v is zero — a replay costs something"));
+        }
+        if self.leverage_remedy.min_credit_interval_daa == 0 {
+            return Err(PalwRegistryError::NotCanonical("leverage remedy has a zero credit interval — not a rate"));
+        }
+        if self.leverage_remedy.base_subsidy_permille > 1000 {
+            return Err(PalwRegistryError::NotCanonical("leverage remedy claims base(C) above the whole subsidy"));
         }
         if self.checkpoint_interval == 0 {
             return Err(PalwRegistryError::NotCanonical("checkpoint interval is zero"));
@@ -239,10 +256,12 @@ impl PalwClassRegistrationV1 {
     /// external facts a registration cannot know by itself.
     ///
     /// `chunked_carriage_drilled` is ADR-0029 §6's gate for bare-v2 classes: the carriage
-    /// landed, but the DRILL is a fleet fact. `leverage_remedy_encoded` is the B15 finding's
-    /// precondition (ADR-0028 §4e amendment) — without it, credit mints against nothing.
-    pub fn stage2_eligible(&self, chunked_carriage_drilled: bool, leverage_remedy_encoded: bool) -> bool {
-        if !leverage_remedy_encoded || self.credited_ceiling_tokens == 0 {
+    /// landed, but the DRILL is a fleet fact. `economics` carries the chain facts (bond,
+    /// subsidy, unbonding period) the B15 precondition (ADR-0028 §4e amendment) is evaluated
+    /// against: the registered remedy must actually bound the aggregate mint — an asserted
+    /// "remedy encoded" flag proved nothing, so the flag was replaced by the evaluation.
+    pub fn stage2_eligible(&self, chunked_carriage_drilled: bool, economics: &PalwEconomicFactsV1) -> bool {
+        if !max_leverage_holds_v1(&self.leverage_remedy, economics) || self.credited_ceiling_tokens == 0 {
             return false;
         }
         match self.commitment_form {
@@ -371,8 +390,19 @@ mod tests {
             credited_ceiling_tokens: ceiling,
             rho_v_permille: 1_000,
             p99_cold_replay_ms: 90_716,
+            leverage_remedy: PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 },
             windows,
             transcendental_algorithms: vec![(PalwTranscendentalSiteV1::VectorExpPolynomial, h64(0x34))],
+        }
+    }
+
+    /// The B15 live facts (`docs/palw-economic-parameters-2026-08-16.md`): the 120 s subsidy
+    /// rate-preserved from the 10 BPS genesis value, the 20 000 MSK bond, unbonding 10 083.
+    fn b15_economic_facts() -> PalwEconomicFactsV1 {
+        PalwEconomicFactsV1 {
+            block_subsidy_sompi: 370_468_345 * 1_200, // 444 562 014 000 sompi = 4 445.62 MSK
+            s_eff_sompi: 20_000 * 100_000_000,        // the 20 000 MSK bond
+            unbonding_period_blocks: 10_083,
         }
     }
 
@@ -447,17 +477,42 @@ mod tests {
 
     #[test]
     fn stage2_eligibility_encodes_both_external_gates() {
+        let facts = b15_economic_facts();
         let composite = fleet_registration();
         // Composite classes are not bare-v2-blocked, but the leverage remedy is universal.
-        assert!(composite.stage2_eligible(false, true));
-        assert!(!composite.stage2_eligible(true, false), "no leverage remedy ⇒ credit mints against nothing");
+        assert!(composite.stage2_eligible(false, &facts));
+
+        // The pre-amendment live shape — full subsidy, credit every block — is exactly the
+        // B15 violation: the registration VALIDATES (it is a canonical encoding) but can
+        // never be Stage-2 eligible against the live facts. The asserted-boolean era would
+        // have let a caller claim otherwise.
+        let mut unremedied = fleet_registration();
+        unremedied.leverage_remedy = PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1000 };
+        unremedied.validate(&two_minute_blockrate(), 120_000).unwrap();
+        assert!(!unremedied.stage2_eligible(true, &facts), "the un-remedied live shape mints against nothing");
 
         let mut bare = fleet_registration();
         bare.commitment_form = PalwCommitmentFormV1::BareV2;
         bare.adjudication_depth = PalwAdjudicationDepthV1::StructuralOnly;
         bare.validate(&two_minute_blockrate(), 120_000).unwrap();
-        assert!(!bare.stage2_eligible(false, true), "ADR-0029 §6: bare-v2 needs the drill");
-        assert!(bare.stage2_eligible(true, true));
+        assert!(!bare.stage2_eligible(false, &facts), "ADR-0029 §6: bare-v2 needs the drill");
+        assert!(bare.stage2_eligible(true, &facts));
+    }
+
+    #[test]
+    fn a_non_canonical_leverage_remedy_is_rejected_at_validation() {
+        let mut zero_interval = fleet_registration();
+        zero_interval.leverage_remedy.min_credit_interval_daa = 0;
+        assert!(matches!(
+            zero_interval.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::NotCanonical("leverage remedy has a zero credit interval — not a rate"))
+        ));
+        let mut oversized = fleet_registration();
+        oversized.leverage_remedy.base_subsidy_permille = 1_001;
+        assert!(matches!(
+            oversized.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::NotCanonical("leverage remedy claims base(C) above the whole subsidy"))
+        ));
     }
 
     #[test]
@@ -465,7 +520,7 @@ mod tests {
         let reg = fleet_registration();
         let zeroed = reg.to_zero_credit();
         assert_eq!(zeroed.credited_ceiling_tokens, 0);
-        assert!(!zeroed.stage2_eligible(true, true), "a zero-ceiling class credits nothing");
+        assert!(!zeroed.stage2_eligible(true, &b15_economic_facts()), "a zero-ceiling class credits nothing");
         assert_ne!(zeroed.registration_id(), reg.registration_id(), "the rollback is a visible new registration");
         // It is still a COHERENT registration — the rollback does not produce garbage state.
         // (Its derived-ceiling check fails by construction, which is the point: a zero-credit
@@ -497,5 +552,7 @@ mod tests {
         assert_ne!(mutate(&|r| r.libm_transcribed = false), base);
         assert_ne!(mutate(&|r| r.replay_cost.ms_per_decode_token = 1), base);
         assert_ne!(mutate(&|r| r.windows.q = 3), base);
+        assert_ne!(mutate(&|r| r.leverage_remedy.min_credit_interval_daa = 5_042), base);
+        assert_ne!(mutate(&|r| r.leverage_remedy.base_subsidy_permille = 1), base);
     }
 }
