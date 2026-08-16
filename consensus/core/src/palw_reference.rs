@@ -1480,19 +1480,33 @@ mod tests {
         assert_eq!(ref_div_v2(0x3F80_0000, 0x4040_0000), 0x3EAA_AAAB);
     }
 
-    /// NaN-INPUT rows do not consult the hardware: in release builds LLVM's transformations
+    /// NaN-RESULT rows do not consult the hardware: in release builds LLVM's transformations
     /// around the sqrt intrinsic make NaN *payload* observation through `is_nan`/`to_bits`
     /// unreliable (observed 2026-08-16: `hw_canon∘sqrt` returned a payload NaN for an sNaN
     /// input, and the failing row moved when an eprintln changed inlining). IEEE-754's whole
-    /// claim for a NaN operand is "the result is a NaN" — which the canonicalization rule is
-    /// the answer to — so those rows assert the rule itself. Non-NaN inputs are unaffected:
-    /// any NaN the hardware mints there (negative operands) is the payload-free default NaN,
-    /// which compares identically whether or not the canonicalizing branch runs.
+    /// claim for those rows is "the result is a NaN" — which the canonicalization rule is the
+    /// answer to — so they assert the rule itself.
+    ///
+    /// That covers NEGATIVE inputs too, and the first draft of this comment was wrong about
+    /// them ("any NaN the hardware mints there is the payload-free default NaN, which compares
+    /// identically whether or not the canonicalizing branch runs"). That is an aarch64-only
+    /// fact: FSQRT's default NaN is `0x7FC00000` = the canonical NaN, so the unreliable branch
+    /// was invisible there. x86-64 SQRTSS mints the sign-set indefinite `0xFFC00000` — measured
+    /// 2026-08-16 on the fleet (input `0x80000001`, raw `0xFFC00000` reached the assert), which
+    /// is how the sqrt-intrinsic unreliability finally became architecture-visible. The div/fma
+    /// oracles still consult hardware on their invalid rows (0/0, ∞/∞, 0×∞) and pass on BOTH
+    /// architectures — evidence their canonicalizing branch currently runs; if a future
+    /// compiler moves the instability onto them, x86's sign-set default NaN will surface it
+    /// exactly like this, and the fix is the same rule-row treatment.
     #[test]
     fn sqrt_matches_hardware_exactly() {
         let check = |a: u32| {
             if is_nan_bits(a) {
                 assert_eq!(ref_sqrt_v2(a), PALW_REFERENCE_CANONICAL_NAN_V1, "sqrt nan-in {a:08x}");
+            } else if a & SIGN_MASK != 0 && a != 0x8000_0000 {
+                // sqrt(negative non-zero) = invalid operation: IEEE pins only "a NaN", and
+                // WHICH NaN is architecture-dependent (see above) — assert the consensus rule.
+                assert_eq!(ref_sqrt_v2(a), PALW_REFERENCE_CANONICAL_NAN_V1, "sqrt neg {a:08x}");
             } else {
                 assert_eq!(ref_sqrt_v2(a), hw_canon(f32::from_bits(a).sqrt()), "sqrt {a:08x}");
             }
