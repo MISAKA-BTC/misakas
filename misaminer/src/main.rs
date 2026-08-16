@@ -99,7 +99,9 @@ async fn main() {
     println!("  worker    : {}", args.worker);
     println!("  threads   : {}\n", if args.threads == 0 { num_threads_label() } else { args.threads.to_string() });
 
-    kaspa_core::log::try_init_logger("INFO");
+    // MISAMINER_LOG lets a harness raise verbosity (e.g. "info,misaminer=debug" to see every
+    // rejected PALW attempt) without touching the default rig output.
+    kaspa_core::log::try_init_logger(&std::env::var("MISAMINER_LOG").unwrap_or_else(|_| "INFO".into()));
 
     if args.threads > 0
         && let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global()
@@ -275,11 +277,26 @@ async fn main() {
         };
 
         template.block.header.nonce = nonce;
+        // Coinbase shape from the template (output 0 = the miner subsidy under the current
+        // pre-carve rules) — logged so a harness can audit live emission without an RPC client.
+        let (cb_out0, cb_outs) = template
+            .block
+            .transactions
+            .first()
+            .map(|tx| (tx.outputs.first().map(|o| o.value).unwrap_or(0), tx.outputs.len()))
+            .unwrap_or((0, 0));
         match client.submit_block(template.block, false).await {
             Ok(_) => {
                 mined += 1;
                 last_block = std::time::Instant::now();
-                log::info!("[{}] mined block #{mined} (nonce={nonce}, daa_score={})", args.worker, header.daa_score);
+                log::info!(
+                    "[{}] mined block #{mined} (nonce={nonce}, daa_score={}, bits={:#010x}, ts={}, blue_score={}, coinbase0={cb_out0}, coinbase_outs={cb_outs})",
+                    args.worker,
+                    header.daa_score,
+                    header.bits,
+                    header.timestamp,
+                    header.blue_score
+                );
             }
             Err(e) => log::warn!("submit_block failed: {e}"),
         }
