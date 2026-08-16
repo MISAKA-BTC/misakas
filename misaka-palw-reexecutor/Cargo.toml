@@ -19,6 +19,7 @@ kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-pq-validator-core.workspace = true
 kaspa-rpc-core.workspace = true
+kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
 kaspa-hashes.workspace = true
 
