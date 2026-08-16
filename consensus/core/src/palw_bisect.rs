@@ -1,0 +1,548 @@
+//! PALW bisection ladder v1 — ADR-0027 §1's degraded path, as a pure state machine.
+//!
+//! The direct route (`palw_step_refute`) needs the miner's own commitments to open. When the
+//! miner has withheld intermediate state — a bare-v2 or composite-v1 commitment, or a v2 one
+//! whose openings go unanswered — the challenger cannot name a step with openings. The
+//! ladder forces disclosure incrementally: each rung, the RESPONDER discloses a state
+//! commitment at the pinned midpoint of the disputed interval; the CHALLENGER agrees (the
+//! divergence is in the upper half) or disagrees (lower half); ≈ log₂(space) rungs later the
+//! interval is one index wide and the dispute terminates in the same one-step (or one-call)
+//! check the direct route uses. **Non-response within `W_round` at any rung is the objective
+//! offense** (v0.1 §17.1 `M-O3` / ADR-0027: withholding is a faster loss, not an escape).
+//!
+//! What is deliberately pinned here: the index-space contract, the midpoint function, the
+//! round bound, every transition's legality, and the terminal handoff shape. What is
+//! deliberately NOT here: carriage (ladder messages ride ADR-0029 rails at Stage 1),
+//! deadlines' calendar values (ADR-0028 §3 owns the windows; this machine records DAA
+//! deadlines it is given), and the terminal adjudication itself (`palw_step_refute` for
+//! step-space ladders; the per-call replay check for event-space ones).
+//!
+//! Consensus-inert: nothing consumes this yet.
+
+use borsh::{BorshDeserialize, BorshSerialize};
+use kaspa_hashes::Hash64;
+use thiserror::Error;
+
+// ---------------------------------------------------------------------------------------------
+// Domains, caps
+// ---------------------------------------------------------------------------------------------
+
+pub const PALW_BISECT_OBJECT_VERSION_V1: u16 = 1;
+
+pub const PALW_BISECT_DOMAIN_SESSION_ID: &[u8] = b"misaka-palw/bisection-session-id/v1";
+pub const PALW_BISECT_DOMAIN_OFFENSE_ID: &[u8] = b"misaka-palw/bisection-offense-id/v1";
+
+pub const PALW_BISECT_ALL_DOMAINS: &[&[u8]] = &[PALW_BISECT_DOMAIN_SESSION_ID, PALW_BISECT_DOMAIN_OFFENSE_ID];
+
+/// Hard bound on rungs: a 2^40 space is 40 rungs; anything needing more is a malformed
+/// space, not a longer dispute. (ADR-0028 sized ladders at ≈ 20 rungs for 10⁶ steps.)
+pub const PALW_BISECT_MAX_ROUNDS: u32 = 48;
+/// Largest index space a ladder may open (the step-space cap, with margin for event spaces).
+pub const PALW_BISECT_MAX_SPACE: u64 = 1 << 40;
+
+/// Which index space the ladder walks — the terminal check differs per space, and mixing
+/// them mid-dispute is meaningless.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwBisectSpaceV1 {
+    /// The `palw_step` leaf space of a v3 profile (terminal = `ExecutionStepRefutationV1`).
+    StepLeaves = 0,
+    /// The v2 trace event space, 0..D (terminal = one-call replay adjudication).
+    TraceEvents = 1,
+}
+
+/// The pinned midpoint: `lo + (hi − lo)/2`, integer floor. One function, one witness test —
+/// a responder and challenger that derive different midpoints are not in the same dispute.
+pub fn bisect_midpoint_v1(lo: u64, hi: u64) -> u64 {
+    debug_assert!(lo < hi);
+    lo + (hi - lo) / 2
+}
+
+/// Session identity: the dispute is ABOUT one committed root, between two identities, over
+/// one space. Rung messages bind this id, so a message cannot be replayed across disputes.
+pub fn bisect_session_id_v1(
+    job_context_hash: &Hash64,
+    committed_root: &Hash64,
+    challenger_id: &Hash64,
+    responder_id: &Hash64,
+    space: PalwBisectSpaceV1,
+    space_size: u64,
+) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BISECT_DOMAIN_SESSION_ID).to_state();
+    h.update(job_context_hash.as_byte_slice());
+    h.update(committed_root.as_byte_slice());
+    h.update(challenger_id.as_byte_slice());
+    h.update(responder_id.as_byte_slice());
+    h.update(&[space as u8]);
+    h.update(&space_size.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwBisectError {
+    #[error("unsupported bisect object version {got} (expected {expected})")]
+    UnsupportedVersion { got: u16, expected: u16 },
+    #[error("index space size {got} is zero, one, or over the {max} cap")]
+    SpaceOutOfRange { got: u64, max: u64 },
+    #[error("the message does not belong to this session")]
+    SessionMismatch,
+    #[error("the message is for round {got}, but the ladder is at round {expected}")]
+    RoundMismatch { got: u32, expected: u32 },
+    #[error("a {expected} message is required next, got {got}")]
+    TurnMismatch { expected: &'static str, got: &'static str },
+    #[error("the ladder is terminal; no further rungs are legal")]
+    AlreadyTerminal,
+    #[error("the deadline for this rung ({deadline}) is not after the previous one ({previous})")]
+    DeadlineNotMonotonic { deadline: u64, previous: u64 },
+    #[error("no-show can only be declared after the rung deadline ({deadline}); observed DAA is {observed}")]
+    DeadlineNotReached { deadline: u64, observed: u64 },
+    #[error("round budget exceeded — a legal ladder narrows to one index within the bound")]
+    RoundBudgetExceeded,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Wire messages (Stage-1 carriage bodies; consensus-inert today)
+// ---------------------------------------------------------------------------------------------
+
+/// The responder's rung: "my execution's state commitment at the midpoint is `mid_state`".
+/// What a "state commitment at index i" means is a property of the SPACE (the v2 event
+/// chain's running digest; a step-space state root) — pinned at registration with the
+/// commitment form; the machine treats it as an opaque, later-openable claim.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwBisectDisclosureV1 {
+    pub version: u16,
+    pub session_id: Hash64,
+    pub round: u32,
+    pub midpoint: u64,
+    pub mid_state: Hash64,
+    /// DAA deadline for the CHALLENGER's verdict on this rung.
+    pub verdict_deadline_daa: u64,
+}
+
+/// The challenger's rung verdict: `agree = true` ⇒ the prefix up to the midpoint matches
+/// (the divergence is in the upper half); `false` ⇒ lower half.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwBisectVerdictV1 {
+    pub version: u16,
+    pub session_id: Hash64,
+    pub round: u32,
+    pub agree: bool,
+    /// DAA deadline for the RESPONDER's next disclosure (or terminal opening).
+    pub next_deadline_daa: u64,
+}
+
+/// Who failed to move within their rung window. An offense record is only mintable from the
+/// machine's own state — the deadline and whose turn it was are machine facts, not claims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwBisectPartyV1 {
+    Responder = 0,
+    Challenger = 1,
+}
+
+/// The `M-O3` objective offense: silence past a rung deadline, attributable and deduplicable.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwBisectNoShowV1 {
+    pub version: u16,
+    pub session_id: Hash64,
+    pub round: u32,
+    pub silent_party: PalwBisectPartyV1,
+    pub deadline_daa: u64,
+    pub observed_daa: u64,
+}
+
+pub fn bisect_offense_id_v1(offense: &PalwBisectNoShowV1) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BISECT_DOMAIN_OFFENSE_ID).to_state();
+    h.update(offense.session_id.as_byte_slice());
+    h.update(&offense.round.to_le_bytes());
+    h.update(&[offense.silent_party as u8]);
+    h.update(&offense.deadline_daa.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The machine
+// ---------------------------------------------------------------------------------------------
+
+/// Whose move it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwBisectTurnV1 {
+    /// The responder must disclose the current midpoint's state commitment.
+    AwaitDisclosure,
+    /// The challenger must agree/disagree with the last disclosure.
+    AwaitVerdict,
+    /// The interval is one index wide: the responder must open that index's input state for
+    /// the terminal one-step / one-call check. The ladder's job is done.
+    Terminal,
+}
+
+/// The full ladder state. Every observer feeding it the same message stream derives the same
+/// state — that is what makes rung silence an OBJECTIVE offense.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBisectLadderV1 {
+    session_id: Hash64,
+    space_size: u64,
+    lo: u64,
+    hi: u64,
+    round: u32,
+    turn: PalwBisectTurnV1,
+    last_deadline_daa: u64,
+    /// Disclosed midpoint states, rung-ordered — the terminal check's anchor pair comes from
+    /// here (the states bracketing the final index).
+    pub disclosures: Vec<(u64, Hash64)>,
+}
+
+impl PalwBisectLadderV1 {
+    /// Opens a dispute over `[0, space_size)`. `first_deadline_daa` is the responder's first
+    /// rung window (ADR-0028 §3 sizing; the machine only requires monotonicity).
+    pub fn open(
+        job_context_hash: &Hash64,
+        committed_root: &Hash64,
+        challenger_id: &Hash64,
+        responder_id: &Hash64,
+        space: PalwBisectSpaceV1,
+        space_size: u64,
+        opened_at_daa: u64,
+        first_deadline_daa: u64,
+    ) -> Result<Self, PalwBisectError> {
+        if space_size < 2 || space_size > PALW_BISECT_MAX_SPACE {
+            return Err(PalwBisectError::SpaceOutOfRange { got: space_size, max: PALW_BISECT_MAX_SPACE });
+        }
+        if first_deadline_daa <= opened_at_daa {
+            return Err(PalwBisectError::DeadlineNotMonotonic { deadline: first_deadline_daa, previous: opened_at_daa });
+        }
+        Ok(Self {
+            session_id: bisect_session_id_v1(job_context_hash, committed_root, challenger_id, responder_id, space, space_size),
+            space_size,
+            lo: 0,
+            hi: space_size,
+            round: 0,
+            turn: PalwBisectTurnV1::AwaitDisclosure,
+            last_deadline_daa: first_deadline_daa,
+            disclosures: Vec::new(),
+        })
+    }
+
+    pub fn session_id(&self) -> Hash64 {
+        self.session_id
+    }
+
+    pub fn turn(&self) -> PalwBisectTurnV1 {
+        self.turn
+    }
+
+    pub fn round(&self) -> u32 {
+        self.round
+    }
+
+    /// The disputed interval `[lo, hi)`.
+    pub fn interval(&self) -> (u64, u64) {
+        (self.lo, self.hi)
+    }
+
+    /// The index the terminal check adjudicates (only meaningful at `Terminal`).
+    pub fn terminal_index(&self) -> Option<u64> {
+        (self.turn == PalwBisectTurnV1::Terminal).then_some(self.lo)
+    }
+
+    /// The midpoint the next disclosure must be about.
+    pub fn expected_midpoint(&self) -> Option<u64> {
+        (self.turn == PalwBisectTurnV1::AwaitDisclosure).then(|| bisect_midpoint_v1(self.lo, self.hi))
+    }
+
+    /// Applies the responder's disclosure.
+    pub fn apply_disclosure(&mut self, msg: &PalwBisectDisclosureV1) -> Result<(), PalwBisectError> {
+        if msg.version != PALW_BISECT_OBJECT_VERSION_V1 {
+            return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_BISECT_OBJECT_VERSION_V1 });
+        }
+        if msg.session_id != self.session_id {
+            return Err(PalwBisectError::SessionMismatch);
+        }
+        match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure => {}
+            PalwBisectTurnV1::AwaitVerdict => return Err(PalwBisectError::TurnMismatch { expected: "verdict", got: "disclosure" }),
+            PalwBisectTurnV1::Terminal => return Err(PalwBisectError::AlreadyTerminal),
+        }
+        if msg.round != self.round {
+            return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
+        }
+        let mid = bisect_midpoint_v1(self.lo, self.hi);
+        if msg.midpoint != mid {
+            // A wrong-midpoint "disclosure" is not a protocol move at all.
+            return Err(PalwBisectError::TurnMismatch { expected: "the pinned midpoint", got: "another index" });
+        }
+        if msg.verdict_deadline_daa <= self.last_deadline_daa {
+            return Err(PalwBisectError::DeadlineNotMonotonic {
+                deadline: msg.verdict_deadline_daa,
+                previous: self.last_deadline_daa,
+            });
+        }
+        self.disclosures.push((mid, msg.mid_state));
+        self.last_deadline_daa = msg.verdict_deadline_daa;
+        self.turn = PalwBisectTurnV1::AwaitVerdict;
+        Ok(())
+    }
+
+    /// Applies the challenger's verdict, narrowing the interval.
+    pub fn apply_verdict(&mut self, msg: &PalwBisectVerdictV1) -> Result<(), PalwBisectError> {
+        if msg.version != PALW_BISECT_OBJECT_VERSION_V1 {
+            return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_BISECT_OBJECT_VERSION_V1 });
+        }
+        if msg.session_id != self.session_id {
+            return Err(PalwBisectError::SessionMismatch);
+        }
+        match self.turn {
+            PalwBisectTurnV1::AwaitVerdict => {}
+            PalwBisectTurnV1::AwaitDisclosure => return Err(PalwBisectError::TurnMismatch { expected: "disclosure", got: "verdict" }),
+            PalwBisectTurnV1::Terminal => return Err(PalwBisectError::AlreadyTerminal),
+        }
+        if msg.round != self.round {
+            return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
+        }
+        if msg.next_deadline_daa <= self.last_deadline_daa {
+            return Err(PalwBisectError::DeadlineNotMonotonic { deadline: msg.next_deadline_daa, previous: self.last_deadline_daa });
+        }
+        let mid = bisect_midpoint_v1(self.lo, self.hi);
+        if msg.agree {
+            self.lo = mid;
+        } else {
+            self.hi = mid;
+        }
+        self.round += 1;
+        if self.round > PALW_BISECT_MAX_ROUNDS {
+            return Err(PalwBisectError::RoundBudgetExceeded);
+        }
+        self.last_deadline_daa = msg.next_deadline_daa;
+        self.turn = if self.hi - self.lo <= 1 { PalwBisectTurnV1::Terminal } else { PalwBisectTurnV1::AwaitDisclosure };
+        Ok(())
+    }
+
+    /// Mints the no-show offense for the party whose move is overdue. Only the machine's own
+    /// deadline and turn can say so — `observed_daa` merely has to be past it.
+    pub fn declare_no_show(&self, observed_daa: u64) -> Result<PalwBisectNoShowV1, PalwBisectError> {
+        if observed_daa <= self.last_deadline_daa {
+            return Err(PalwBisectError::DeadlineNotReached { deadline: self.last_deadline_daa, observed: observed_daa });
+        }
+        let silent_party = match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure => PalwBisectPartyV1::Responder,
+            PalwBisectTurnV1::AwaitVerdict => PalwBisectPartyV1::Challenger,
+            // Terminal: the responder owes the terminal opening — same window discipline.
+            PalwBisectTurnV1::Terminal => PalwBisectPartyV1::Responder,
+        };
+        Ok(PalwBisectNoShowV1 {
+            version: PALW_BISECT_OBJECT_VERSION_V1,
+            session_id: self.session_id,
+            round: self.round,
+            silent_party,
+            deadline_daa: self.last_deadline_daa,
+            observed_daa,
+        })
+    }
+}
+
+// =============================================================================================
+// Tests
+// =============================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
+    use crate::palw_legs::PALW_LEGS_ALL_DOMAINS;
+    use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
+    use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
+    use crate::palw_slash::PALW_S_ALL_DOMAINS;
+    use crate::palw_step::PALW_STEP_ALL_DOMAINS;
+    use crate::palw_step_leg::PALW_STEP_LEG_ALL_DOMAINS;
+    use crate::palw_v2::PALW_V2_ALL_DOMAINS;
+
+    fn h64(fill: u8) -> Hash64 {
+        Hash64::from_bytes([fill; 64])
+    }
+
+    fn open_ladder(space_size: u64) -> PalwBisectLadderV1 {
+        PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, space_size, 100, 200).unwrap()
+    }
+
+    #[test]
+    fn bisect_domains_are_unique_across_all_palw_modules() {
+        let mut seen = std::collections::HashSet::new();
+        for d in PALW_BISECT_ALL_DOMAINS {
+            assert!(seen.insert(*d), "duplicate bisect domain");
+            assert!(d.len() <= 64);
+        }
+        for d in PALW_V2_ALL_DOMAINS
+            .iter()
+            .chain(PALW_S_ALL_DOMAINS.iter())
+            .chain(PALW_LEGS_ALL_DOMAINS.iter())
+            .chain(PALW_REFERENCE_ALL_DOMAINS.iter())
+            .chain(PALW_SCHEDULE_ALL_DOMAINS.iter())
+            .chain(PALW_CARRIAGE_ALL_DOMAINS.iter())
+            .chain(PALW_STEP_ALL_DOMAINS.iter())
+            .chain(PALW_STEP_LEG_ALL_DOMAINS.iter())
+        {
+            assert!(!seen.contains(d), "bisect reuses a foreign domain: {}", String::from_utf8_lossy(d));
+        }
+    }
+
+    /// A full ladder against a simulated divergence point: the challenger's honest strategy
+    /// (agree iff the divergence is strictly above the midpoint) must converge on EXACTLY
+    /// the divergent index, within the log bound, from any starting size.
+    #[test]
+    fn ladder_converges_on_the_divergent_index() {
+        for space in [2u64, 3, 5, 17, 1 << 10, (1 << 20) + 7] {
+            for divergence in [0, 1, space / 2, space - 2, space - 1] {
+                let mut ladder = open_ladder(space);
+                let mut daa = 200u64;
+                let mut rungs = 0u32;
+                while ladder.turn() != PalwBisectTurnV1::Terminal {
+                    let mid = ladder.expected_midpoint().unwrap();
+                    daa += 10;
+                    ladder
+                        .apply_disclosure(&PalwBisectDisclosureV1 {
+                            version: 1,
+                            session_id: ladder.session_id(),
+                            round: ladder.round(),
+                            midpoint: mid,
+                            mid_state: h64((mid % 251) as u8),
+                            verdict_deadline_daa: daa,
+                        })
+                        .unwrap();
+                    daa += 10;
+                    // Honest challenger: prefix [0, mid) matches iff divergence >= mid.
+                    ladder
+                        .apply_verdict(&PalwBisectVerdictV1 {
+                            version: 1,
+                            session_id: ladder.session_id(),
+                            round: ladder.round(),
+                            agree: divergence >= mid,
+                            next_deadline_daa: daa,
+                        })
+                        .unwrap();
+                    rungs += 1;
+                    assert!(rungs <= PALW_BISECT_MAX_ROUNDS, "space {space} divergence {divergence}");
+                }
+                assert_eq!(ladder.terminal_index(), Some(divergence), "space {space}");
+                assert!(rungs <= 64 - (space.leading_zeros()) + 1, "log bound: space {space} took {rungs}");
+            }
+        }
+    }
+
+    #[test]
+    fn protocol_violations_are_rejected() {
+        let mut ladder = open_ladder(16);
+        let sid = ladder.session_id();
+        // Verdict before any disclosure.
+        let verdict = PalwBisectVerdictV1 { version: 1, session_id: sid, round: 0, agree: true, next_deadline_daa: 300 };
+        assert!(matches!(ladder.apply_verdict(&verdict), Err(PalwBisectError::TurnMismatch { .. })));
+        // Wrong session.
+        let alien = PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: h64(0xEE),
+            round: 0,
+            midpoint: 8,
+            mid_state: h64(9),
+            verdict_deadline_daa: 300,
+        };
+        assert_eq!(ladder.apply_disclosure(&alien), Err(PalwBisectError::SessionMismatch));
+        // Wrong midpoint.
+        let off_mid = PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: sid,
+            round: 0,
+            midpoint: 7,
+            mid_state: h64(9),
+            verdict_deadline_daa: 300,
+        };
+        assert!(matches!(ladder.apply_disclosure(&off_mid), Err(PalwBisectError::TurnMismatch { .. })));
+        // Non-monotonic deadline.
+        let stale = PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: sid,
+            round: 0,
+            midpoint: 8,
+            mid_state: h64(9),
+            verdict_deadline_daa: 200,
+        };
+        assert!(matches!(ladder.apply_disclosure(&stale), Err(PalwBisectError::DeadlineNotMonotonic { .. })));
+        // Wrong round.
+        let wrong_round = PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: sid,
+            round: 3,
+            midpoint: 8,
+            mid_state: h64(9),
+            verdict_deadline_daa: 300,
+        };
+        assert!(matches!(ladder.apply_disclosure(&wrong_round), Err(PalwBisectError::RoundMismatch { .. })));
+        // Tiny/huge spaces refuse to open.
+        assert!(matches!(
+            PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::TraceEvents, 1, 100, 200),
+            Err(PalwBisectError::SpaceOutOfRange { .. })
+        ));
+        assert!(matches!(
+            PalwBisectLadderV1::open(
+                &h64(1),
+                &h64(2),
+                &h64(3),
+                &h64(4),
+                PalwBisectSpaceV1::TraceEvents,
+                PALW_BISECT_MAX_SPACE + 1,
+                100,
+                200
+            ),
+            Err(PalwBisectError::SpaceOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn no_show_is_attributable_and_deadline_gated() {
+        let mut ladder = open_ladder(16);
+        // Before the deadline: not declarable.
+        assert!(matches!(ladder.declare_no_show(150), Err(PalwBisectError::DeadlineNotReached { .. })));
+        // Past it: the responder (whose disclosure is due) is the silent party.
+        let offense = ladder.declare_no_show(250).unwrap();
+        assert_eq!(offense.silent_party, PalwBisectPartyV1::Responder);
+        assert_eq!(offense.round, 0);
+        let id1 = bisect_offense_id_v1(&offense);
+        // After a disclosure, silence is the challenger's.
+        ladder
+            .apply_disclosure(&PalwBisectDisclosureV1 {
+                version: 1,
+                session_id: ladder.session_id(),
+                round: 0,
+                midpoint: 8,
+                mid_state: h64(9),
+                verdict_deadline_daa: 300,
+            })
+            .unwrap();
+        let offense2 = ladder.declare_no_show(301).unwrap();
+        assert_eq!(offense2.silent_party, PalwBisectPartyV1::Challenger);
+        assert_ne!(bisect_offense_id_v1(&offense2), id1, "offense ids must separate rungs/parties");
+        // Session ids separate disputes: same parties, different root.
+        let other =
+            PalwBisectLadderV1::open(&h64(1), &h64(0xAB), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, 16, 100, 200).unwrap();
+        assert_ne!(other.session_id(), ladder.session_id());
+    }
+
+    #[test]
+    fn midpoint_function_is_the_pinned_one() {
+        // The floor midpoint, frozen by value witnesses (an implementation that rounds up or
+        // averages differently fails here and is not in the same dispute).
+        assert_eq!(bisect_midpoint_v1(0, 2), 1);
+        assert_eq!(bisect_midpoint_v1(0, 3), 1);
+        assert_eq!(bisect_midpoint_v1(5, 8), 6);
+        assert_eq!(bisect_midpoint_v1(0, u64::MAX), u64::MAX / 2);
+        assert_eq!(bisect_midpoint_v1((1 << 40) - 2, 1 << 40), (1 << 40) - 1);
+    }
+}

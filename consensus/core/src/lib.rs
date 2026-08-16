@@ -169,6 +169,11 @@ pub mod palw_transcendental;
 /// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
+/// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
+/// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
+/// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
+/// one-step check. Land-stage, consensus-inert.
+pub mod palw_bisect;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
