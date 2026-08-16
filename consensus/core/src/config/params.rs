@@ -935,6 +935,7 @@ impl From<NetworkId> for Params {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
+                Some(11) => TESTNET11_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -1883,6 +1884,31 @@ pub const SIMNET_PARAMS: Params = Params {
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
 
+/// MISAKA PALW staging net (`testnet-11`): the public-testnet SHAPE — the same 120 s
+/// blockrate, windows and overlay params as `TESTNET_PARAMS` — with PALW LLM PoW
+/// (`algo_id = 4`, the worker/full-logits flavor) ACTIVE from genesis and the hash lane
+/// off, on the pre-scaled `TESTNET11_GENESIS` bits (`0x200ccccc` ≈ 10× the trivial
+/// target: near the x86 fleet's expected converged difficulty, so the fixed-difficulty
+/// launch window mints at roughly the target cadence instead of bursting — the gate-3
+/// finding this preset applies).
+///
+/// This is a STAGING net for the gate-4 fleet soak: no DNS seeders (join by `--addpeer`
+/// only), and its fingerprint/genesis differ from both live t10 and devnet, so it
+/// handshake-rejects strangers by construction. Whether the PUBLIC launch runs this
+/// suffix or a t10 re-genesis is the gate-5 ADR's decision, not this preset's claim.
+pub const TESTNET11_PARAMS: Params = Params {
+    net: NetworkId::with_suffix(NetworkType::Testnet, 11),
+    genesis: TESTNET11_GENESIS,
+    dns_seeders: &[],
+    // PALW-only lane, devnet's shape: every post-genesis header declares algo 4 and is
+    // validated by replaying one pinned inference. The Ollama flavor stays off — the
+    // fleet's calibrated class is the WORKER (x86 CPU) class, measured 4/4 in gate 2.
+    pow_blake2b_sha3_activation: ForkActivation::never(),
+    pow_palw_activation: ForkActivation::always(),
+    pow_palw_ollama_activation: ForkActivation::never(),
+    ..TESTNET_PARAMS
+};
+
 pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
     pq_enforcement: PqEnforcementMode::Consensus,
@@ -2168,6 +2194,10 @@ mod consensus_params_id_tests {
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
             ("testnet", TESTNET_PARAMS, "48462b2b931522d3bfe3931790a4c8711df6bb931c471a9559db78fe388f3eda"),
+            // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
+            // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
+            // pin proves the t10 row above did NOT move when this preset was added.
+            ("testnet-11", TESTNET11_PARAMS, "62781823f1dd5e5c530e080a72773c6d54f462209e12638ac9d7824e2bc57450"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
