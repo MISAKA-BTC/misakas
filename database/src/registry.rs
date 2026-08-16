@@ -332,6 +332,24 @@ pub enum DatabaseStorePrefixes {
     /// in epoch order; a settled (or deliberately skipped) epoch is never revisited.
     TokenSettlementCursor = 250,
 
+    // ---- MISAKA PALW chain carriage (ADR-0029, Stage 1) ----
+    /// Keyed by the carrying transaction: an accepted `PalwCarriageRecord` (kind byte, acceptance
+    /// DAA, Borsh body bytes verbatim) for every transaction on the PALW carriage band
+    /// (0x40-0x45). Written/deleted by the virtual processor's accept/revert walk exactly like
+    /// [`Self::ComputeCapabilities`]; an **index** — no consensus rule reads it yet (Stage 2, the
+    /// credit gate and duty/offense grounding, is the reader).
+    PalwCarriages = 251,
+    /// Singleton flag: history has been swept into [`Self::PalwCarriages`], mirroring
+    /// [`Self::ComputeCapabilitiesBackfilled`] — a database whose chain predates the store has
+    /// carriers accepted and no rows for them, and an empty index reads exactly like "nothing was
+    /// carried".
+    PalwCarriagesBackfilled = 252,
+    /// Singleton `u32`: the record layout the [`Self::PalwCarriages`] rows were written under,
+    /// mirroring [`Self::ComputeCapabilitiesSchema`] — an undecodable row is dropped silently by
+    /// the iterator, so without this a layout change reads as an empty store, which is a wrong
+    /// answer that looks like a valid one.
+    PalwCarriagesSchema = 253,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

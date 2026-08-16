@@ -112,6 +112,16 @@ pub enum TxRuleError {
     #[error("transaction has an invalid token-op payload: {0}")]
     InvalidTokenPayload(crate::token::TokenTxError),
 
+    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): a transaction on the PALW
+    /// carriage band (0x40-0x45) carried a payload that failed stateless
+    /// validation (see [`crate::palw_carriage::palw_carriage_tx_kind`] +
+    /// [`crate::palw_carriage::validate_palw_carriage_stage1_tx`]). Bond
+    /// existence, ML-DSA-87 signature validity and every cross-object question
+    /// are stateful and belong to the Stage-2 walk — a stateless-valid carriage
+    /// can still be a lie; it cannot be incoherent.
+    #[error("transaction has an invalid PALW carriage payload: {0}")]
+    InvalidPalwCarriagePayload(crate::palw_carriage::PalwCarriageError),
+
     /// [`TxRuleError::FeerateTooLow`] is not a consensus error but a mempool error triggered by the
     /// fee/mass RBF validation rule
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]

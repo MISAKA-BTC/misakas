@@ -234,3 +234,102 @@ pub const SUBNETWORK_ID_TOKEN_TRANSFER: SubnetworkId = SubnetworkId::from_byte(0
 /// Destroy TOK from the signer's own ledger account —
 /// [`crate::token::TokenBurnPayload`].
 pub const SUBNETWORK_ID_TOKEN_BURN: SubnetworkId = SubnetworkId::from_byte(0x31);
+
+// MISAKA PALW chain carriage band 0x40-0x45 (ADR-0029 Stage 1). Above the
+// token-op band (0x30-0x33) as that band sits above the EVM bridge (0x20-0x22)
+// and the finality overlay (0x10-0x1a) — one fresh 0x10-aligned band per
+// family, ids sequential from the band base in carriage-kind order. The
+// payload on each id is the SAME Borsh body Stage 0 wraps in the
+// `"MPALW2" ‖ kind` magic envelope, minus that 7-byte prefix: at Stage 1 the
+// kind lives in the subnetwork id, and
+// [`crate::palw_carriage::palw_carriage_tx_kind`] maps it back. Routed +
+// stateless-validated by full nodes like every band before it.
+//
+// DEPLOYMENT: these ids activate ONLY at a coordinated release. To every node
+// without this code an unknown subnetwork id is `SubnetworksDisabled` at
+// admission — so a block carrying one of these transactions splits an
+// unupgraded fleet, exactly the reason admitting 0x10-0x1a, 0x20-0x22 and
+// 0x30-0x31 was itself release-coordinated. Merely shipping these constants
+// and their validators IS the release artifact, not a live activation:
+// nothing rides these ids on any chain until the whole fleet runs a build
+// that admits them.
+/// A miner's on-chain job commitment (carriage kind 0x01) —
+/// [`crate::palw_carriage::PalwCommitmentCarriageV1`].
+pub const SUBNETWORK_ID_PALW_COMMITMENT: SubnetworkId = SubnetworkId::from_byte(0x40);
+/// An assigned re-executor's bonded attestation (kind 0x02) —
+/// [`crate::palw_carriage::PalwAttestationCarriageV1`].
+pub const SUBNETWORK_ID_PALW_ATTESTATION: SubnetworkId = SubnetworkId::from_byte(0x41);
+/// An opening challenge (kind 0x03) —
+/// [`crate::palw_carriage::PalwOpeningCallCarriageV1`].
+pub const SUBNETWORK_ID_PALW_OPENING_CALL: SubnetworkId = SubnetworkId::from_byte(0x42);
+/// An opening answer, bound to its call's carrier (kind 0x04) —
+/// [`crate::palw_carriage::PalwOpeningAnswerCarriageV1`].
+pub const SUBNETWORK_ID_PALW_OPENING_ANSWER: SubnetworkId = SubnetworkId::from_byte(0x43);
+/// A refutation that fits one transaction (kind 0x05) —
+/// [`crate::palw_carriage::PalwRefutationCarriageV1`]. Pure evidence carrier:
+/// must declare no outputs (the slashing-evidence rule).
+pub const SUBNETWORK_ID_PALW_REFUTATION: SubnetworkId = SubnetworkId::from_byte(0x44);
+/// One chunk of an over-mass refutation (kind 0x06, ADR-0029 §6) —
+/// [`crate::palw_carriage::PalwEvidenceChunkCarriageV1`]. Pure evidence
+/// carrier like the refutation it reassembles into.
+pub const SUBNETWORK_ID_PALW_EVIDENCE_CHUNK: SubnetworkId = SubnetworkId::from_byte(0x45);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every routed subnetwork id in the fork, in one table. A collision between two of these
+    /// would silently route one band's payloads through another band's validator, so
+    /// distinctness is a tested invariant rather than a reading of the byte comments — and every
+    /// new band (the PALW carriage ids most recently) must join this table when it lands.
+    #[test]
+    fn all_subnetwork_ids_are_distinct() {
+        let all: &[(&str, SubnetworkId)] = &[
+            ("NATIVE", SUBNETWORK_ID_NATIVE),
+            ("COINBASE", SUBNETWORK_ID_COINBASE),
+            ("REGISTRY", SUBNETWORK_ID_REGISTRY),
+            ("STAKE_BOND", SUBNETWORK_ID_STAKE_BOND),
+            ("STAKE_ATTESTATION_SHARD", SUBNETWORK_ID_STAKE_ATTESTATION_SHARD),
+            ("SLASHING_EVIDENCE", SUBNETWORK_ID_SLASHING_EVIDENCE),
+            ("STAKE_UNBOND", SUBNETWORK_ID_STAKE_UNBOND),
+            ("COMPUTE_CERTIFICATE", SUBNETWORK_ID_COMPUTE_CERTIFICATE),
+            ("COMPUTE_CHALLENGE", SUBNETWORK_ID_COMPUTE_CHALLENGE),
+            ("COMPUTE_CAPABILITY", SUBNETWORK_ID_COMPUTE_CAPABILITY),
+            ("COMPUTE_COMMITMENT", SUBNETWORK_ID_COMPUTE_COMMITMENT),
+            ("COMPUTE_VERDICT", SUBNETWORK_ID_COMPUTE_VERDICT),
+            ("STAKE_PRECOMMIT", SUBNETWORK_ID_STAKE_PRECOMMIT),
+            ("PRECOMMIT_EVIDENCE", SUBNETWORK_ID_PRECOMMIT_EVIDENCE),
+            ("EVM_DEPOSIT", SUBNETWORK_ID_EVM_DEPOSIT),
+            ("EVM_WITHDRAW_CLAIM", SUBNETWORK_ID_EVM_WITHDRAW_CLAIM),
+            ("EVM_ADMIN", SUBNETWORK_ID_EVM_ADMIN),
+            ("TOKEN_TRANSFER", SUBNETWORK_ID_TOKEN_TRANSFER),
+            ("TOKEN_BURN", SUBNETWORK_ID_TOKEN_BURN),
+            ("PALW_COMMITMENT", SUBNETWORK_ID_PALW_COMMITMENT),
+            ("PALW_ATTESTATION", SUBNETWORK_ID_PALW_ATTESTATION),
+            ("PALW_OPENING_CALL", SUBNETWORK_ID_PALW_OPENING_CALL),
+            ("PALW_OPENING_ANSWER", SUBNETWORK_ID_PALW_OPENING_ANSWER),
+            ("PALW_REFUTATION", SUBNETWORK_ID_PALW_REFUTATION),
+            ("PALW_EVIDENCE_CHUNK", SUBNETWORK_ID_PALW_EVIDENCE_CHUNK),
+        ];
+        for (i, (a_name, a)) in all.iter().enumerate() {
+            for (b_name, b) in all.iter().skip(i + 1) {
+                assert_ne!(a, b, "{a_name} and {b_name} share one subnetwork id");
+            }
+        }
+        // The PALW band keeps the established byte-pattern scheme: a single tag byte in a fresh
+        // 0x10-aligned band, sequential from the base in kind order (0x40..=0x45).
+        for (i, id) in [
+            SUBNETWORK_ID_PALW_COMMITMENT,
+            SUBNETWORK_ID_PALW_ATTESTATION,
+            SUBNETWORK_ID_PALW_OPENING_CALL,
+            SUBNETWORK_ID_PALW_OPENING_ANSWER,
+            SUBNETWORK_ID_PALW_REFUTATION,
+            SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(*id, SubnetworkId::from_byte(0x40 + i as u8));
+        }
+    }
+}

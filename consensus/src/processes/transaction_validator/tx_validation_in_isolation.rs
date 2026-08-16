@@ -6,6 +6,7 @@ use kaspa_consensus_core::dns_finality::{
     validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
     validate_stake_unbond_payload,
 };
+use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
 use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
 use kaspa_consensus_core::token::{validate_token_burn_payload, validate_token_transfer_payload};
 use kaspa_consensus_core::tx::Transaction;
@@ -293,6 +294,22 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
     } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
         validate_token_burn_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
         Ok(())
+    } else if let Some(kind) = palw_carriage_tx_kind(&tx.subnetwork_id) {
+        // MISAKA PALW chain carriage (ADR-0029 Stage 1): the 0x40-0x45 band is routed +
+        // stateless-validated like every overlay band before it. The body is decoded DIRECTLY
+        // as the id's kind — no Stage-0 magic; at Stage 1 the kind lives in the subnetwork id —
+        // and judged by the SAME per-kind validators the Stage-0 extractor runs, plus the
+        // evidence-carrier no-outputs rule for refutations and their chunks (the
+        // slashing-evidence precedent). Bond existence, ML-DSA-87 signature validity and every
+        // cross-object question are stateful and are NOT consensus rules yet (Stage 2 is
+        // explicitly out of scope; the in-node store only indexes).
+        //
+        // DEPLOYMENT: admitting these ids is part of a coordinated release, exactly as
+        // 0x10-0x1a, 0x20-0x22 and 0x30-0x31 were — to a node without this dispatch they are
+        // `SubnetworksDisabled`, so a block carrying one splits an unupgraded fleet. Shipping
+        // this arm IS the release artifact, not a live activation.
+        validate_palw_carriage_stage1_tx(kind, &tx.payload, &tx.outputs).map_err(TxRuleError::InvalidPalwCarriagePayload)?;
+        Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
     }
@@ -527,6 +544,125 @@ mod tests {
         tx.subnetwork_id = SUBNETWORK_ID_TOKEN_BURN;
         tx.payload = vec![0xffu8, 0x00];
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::Decode)));
+    }
+
+    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): a transaction on the PALW band
+    /// (0x40-0x45) is routed to the per-kind stateless validators — accepted when the bare
+    /// Borsh BODY (no Stage-0 magic) passes, rejected with `InvalidPalwCarriagePayload` (not
+    /// the blanket `SubnetworksDisabled`) when it does not. Per-field coverage lives in
+    /// `kaspa_consensus_core::palw_carriage`; this confirms the consensus-layer wiring, that
+    /// the band has hard edges (an unrouted id still rejects), and that Stage-0 native
+    /// carriage stays untouched.
+    #[test]
+    fn validate_palw_carriage_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        use kaspa_consensus_core::palw_carriage::{
+            PALW_CARRIAGE_VERSION_V1, PalwAttestationCarriageV1, PalwCarriageError, PalwEvidenceChunkCarriageV1,
+        };
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed attestation carriage BODY (bare Borsh — the Stage-0 payload minus its
+        // 7-byte envelope) → accepted, outputs and all (only evidence kinds refuse outputs).
+        let attestation = PalwAttestationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            commitment_root: Hash64::from_bytes([0x71u8; 64]),
+            attestation: kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
+                version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                executor_id: Hash64::from_bytes([0xA2u8; 64]),
+                job_context_hash: Hash64::from_bytes([0xC7u8; 64]),
+                full_logits_trace_root: Hash64::from_bytes([0x71u8; 64]),
+                signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            },
+            attester_id: Hash64::from_bytes([0xA2u8; 64]),
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = borsh::to_vec(&attestation).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Same id + garbage body → InvalidPalwCarriagePayload(BodyDecode), proving the id is
+        // routed to the validators rather than rejected outright.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::BodyDecode(_)))
+        );
+
+        // Decodable body that fails the SAME stateless rule Stage 0 enforces (attester drifted
+        // from the inner signer) → rejected at the door.
+        let mut drifted = attestation.clone();
+        drifted.attester_id = Hash64::from_bytes([0xA3u8; 64]);
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = borsh::to_vec(&drifted).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::AttesterMismatch))
+        );
+
+        // Evidence carriers declare no outputs (ADR-0029 §2, the slashing-evidence rule): a
+        // valid chunk with `base`'s output → rejected; with none → accepted.
+        let chunk = PalwEvidenceChunkCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            evidence_group_id: Hash64::from_bytes([0xF1u8; 64]),
+            chunk_index: 0,
+            chunk_count: 2,
+            bytes: vec![0xABu8; 8],
+        };
+        let mut tx_with_out = base.clone();
+        tx_with_out.subnetwork_id = SUBNETWORK_ID_PALW_EVIDENCE_CHUNK;
+        tx_with_out.payload = borsh::to_vec(&chunk).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_with_out),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::EvidenceCarrierHasOutputs(1)))
+        );
+        let mut tx = tx_with_out;
+        tx.outputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // The band has hard edges: 0x46 (one past it) is NOT routed and still rejects with the
+        // blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x46);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
+
+        // Stage-0 carriage is untouched: the SAME object with its magic envelope on the NATIVE
+        // subnetwork remains admission-legal (native payloads are opaque to consensus).
+        let mut tx = base;
+        tx.payload = kaspa_consensus_core::palw_carriage::encode_palw_carriage_v1(
+            &kaspa_consensus_core::palw_carriage::PalwCarriageV1::Attestation(attestation),
+        );
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
     }
 
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality

@@ -53,10 +53,14 @@ use crate::palw_legs::{
 };
 use crate::palw_slash::{PalwExecutionAttestationV1, PalwTraceSummaryRefutationV1, check_job_context_shape};
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
-use crate::subnets::SUBNETWORK_ID_NATIVE;
-use crate::tx::{Transaction, TransactionId, TransactionOutpoint};
+use crate::subnets::{
+    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+    SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
+};
+use crate::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
+use kaspa_utils::mem_size::MemSizeEstimator;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------------------------
@@ -157,6 +161,8 @@ pub enum PalwCarriageError {
     ChunkGroupIncoherent(&'static str),
     #[error("reassembler is tracking the maximum {max} groups")]
     TooManyAssemblingGroups { max: usize },
+    #[error("a PALW evidence carrier must declare no outputs (the reporter-reward slot is (tx_id, 0)); found {0}")]
+    EvidenceCarrierHasOutputs(usize),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -640,6 +646,120 @@ pub fn palw_carriages_from_accepted_txs(txs: &[Transaction]) -> Vec<(Transaction
             && validate_palw_carriage_v1(&carriage).is_ok()
         {
             out.push((tx.id(), carriage));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Stage-1 subnetwork carriage (ADR-0029 §1, right column)
+// ---------------------------------------------------------------------------------------------
+//
+// At Stage 1 the SAME bodies ride dedicated subnetwork ids (`SUBNETWORK_ID_PALW_*`, band
+// 0x40-0x45) instead of the native subnetwork: the Stage-1 payload is the Stage-0 payload minus
+// its 7-byte `"MPALW2" ‖ kind` prefix, because the kind moved into the id. Migration is a change
+// of address, not of format — the functions below reuse the per-kind validators above verbatim,
+// which is what makes a Stage-0 object and its Stage-1 twin verify identically.
+//
+// DEPLOYMENT (the coordinated-release rule, restated where the validators live): an unknown
+// subnetwork id is `SubnetworksDisabled` at admission on every deployed node, so a block
+// carrying one of these ids splits an unupgraded fleet. Shipping these constants + validators
+// IS the release artifact; nothing activates until the whole fleet admits the band.
+
+/// Maps a PALW carriage subnetwork id to its kind byte — the Stage-1 mirror of
+/// `dns_finality::dns_tx_kind`, except the kind is this module's own byte code
+/// (`PALW_CARRIAGE_KIND_*`), so no second enum exists to drift from the Stage-0 envelope's.
+/// `None` = not a PALW carriage id (native / coinbase / another band / unknown).
+pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
+    if *subnetwork_id == SUBNETWORK_ID_PALW_COMMITMENT {
+        Some(PALW_CARRIAGE_KIND_COMMITMENT)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_ATTESTATION {
+        Some(PALW_CARRIAGE_KIND_ATTESTATION)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_OPENING_CALL {
+        Some(PALW_CARRIAGE_KIND_OPENING_CALL)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_OPENING_ANSWER {
+        Some(PALW_CARRIAGE_KIND_OPENING_ANSWER)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_REFUTATION {
+        Some(PALW_CARRIAGE_KIND_REFUTATION)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_EVIDENCE_CHUNK {
+        Some(PALW_CARRIAGE_KIND_EVIDENCE_CHUNK)
+    } else {
+        None
+    }
+}
+
+/// Decodes a Stage-1 payload: the Borsh BODY directly, no magic and no kind byte — those are the
+/// subnetwork id's job at this stage. The Stage-0 door (`decode_palw_carriage_v1`) is untouched;
+/// the two decode the same bytes to the same object (`payload_stage0[7..] == payload_stage1`,
+/// pinned by test).
+pub fn decode_palw_stage1_body(kind: u8, body: &[u8]) -> Result<PalwCarriageV1, PalwCarriageError> {
+    let decode_err = |e: borsh::io::Error| PalwCarriageError::BodyDecode(e.to_string());
+    Ok(match kind {
+        PALW_CARRIAGE_KIND_COMMITMENT => PalwCarriageV1::Commitment(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_ATTESTATION => PalwCarriageV1::Attestation(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_OPENING_CALL => PalwCarriageV1::OpeningCall(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_OPENING_ANSWER => PalwCarriageV1::OpeningAnswer(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
+        other => return Err(PalwCarriageError::UnknownKind(other)),
+    })
+}
+
+/// The Stage-1 admission validator: everything `check_transaction_subnetwork` can decide about a
+/// PALW-band transaction from the transaction alone. Kind comes from the subnetwork id (via
+/// [`palw_carriage_tx_kind`]); the body decodes as that kind and passes the SAME per-kind
+/// stateless validation Stage 0 runs ([`validate_palw_carriage_v1`]). Bond existence, ML-DSA-87
+/// signature validity and every cross-object question are stateful and are NOT admission rules —
+/// a stateless-valid carriage can still be a lie; it cannot be incoherent.
+///
+/// The one check that needs the transaction rather than the body: **evidence carriers declare no
+/// outputs** (ADR-0029 §2, the slashing/challenge/precommit-evidence rule, adopted so the
+/// Stage-2 reporter-reward slot `(tx_id, 0)` is never a retrofit). Kind 0x05 is the rule's named
+/// subject; kind 0x06 carries the same evidence in chunks, and whichever chunk transaction an
+/// adjudication one day names (`W_round` runs from the LAST chunk) must have its slot equally
+/// clear — so both are pure carriers, checked first like `validate_slashing_evidence_tx` does.
+pub fn validate_palw_carriage_stage1_tx(kind: u8, payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), PalwCarriageError> {
+    if matches!(kind, PALW_CARRIAGE_KIND_REFUTATION | PALW_CARRIAGE_KIND_EVIDENCE_CHUNK) && !outputs.is_empty() {
+        return Err(PalwCarriageError::EvidenceCarrierHasOutputs(outputs.len()));
+    }
+    let carriage = decode_palw_stage1_body(kind, payload)?;
+    validate_palw_carriage_v1(&carriage)
+}
+
+/// One accepted Stage-1 carriage as the in-node store keeps it: the kind, the acceptance DAA of
+/// the carrier (the object's protocol time, ADR-0029 §4), and the Borsh body bytes **verbatim** —
+/// what the chain carried, never a re-encoding, so a Stage-2 reader decodes exactly what
+/// admission validated and a schema change in this record cannot silently reshape a body.
+///
+/// Rows are keyed by carrying transaction id (the revert-friendly capability-store key); logical
+/// identity — first-accepted-wins per `committed_root`, `(commitment_root, attester_id)`,
+/// `call_tx_id` — is the Stage-2 reader's business, exactly where ADR-0029 §2 assigns it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+pub struct PalwCarriageRecord {
+    /// The carriage kind byte (`PALW_CARRIAGE_KIND_*`), as routed by the carrier's subnetwork id.
+    pub kind: u8,
+    /// DAA score of the chain block that accepted the carrier.
+    pub accepted_daa_score: u64,
+    /// The Stage-1 payload verbatim (the Borsh body — no magic, no kind prefix).
+    pub body: Vec<u8>,
+}
+
+impl MemSizeEstimator for PalwCarriageRecord {}
+
+/// Stage-1 twin of `compute_capabilities_with_ids_from_accepted_txs`: every accepted transaction
+/// routed by a PALW carriage subnetwork id, as the store row it becomes. Admission already
+/// validated these statelessly — a block carrying an invalid one is invalid on a fleet running
+/// this code — but the walk re-checks anyway: the same defense the Stage-0 extractor applies,
+/// and the backfill sweep crosses history this build cannot vouch was written under it.
+pub fn palw_carriage_records_from_accepted_txs(
+    txs: &[Transaction],
+    accepted_daa_score: u64,
+) -> Vec<(TransactionId, PalwCarriageRecord)> {
+    let mut out = Vec::new();
+    for tx in txs {
+        let Some(kind) = palw_carriage_tx_kind(&tx.subnetwork_id) else { continue };
+        if validate_palw_carriage_stage1_tx(kind, &tx.payload, &tx.outputs).is_ok() {
+            out.push((tx.id(), PalwCarriageRecord { kind, accepted_daa_score, body: tx.payload.clone() }));
         }
     }
     out
@@ -1140,5 +1260,123 @@ mod tests {
             asm.insert(c).unwrap();
         }
         assert!(matches!(asm.insert(&chunks[chunks.len() - 1]), Err(PalwCarriageError::ChunkGroupIncoherent(_))));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Stage-1 subnetwork carriage
+    // -----------------------------------------------------------------------------------------
+
+    fn evidence_chunk() -> PalwEvidenceChunkCarriageV1 {
+        PalwEvidenceChunkCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            evidence_group_id: h64(0xF1),
+            chunk_index: 0,
+            chunk_count: 2,
+            bytes: vec![0xAB; 8],
+        }
+    }
+
+    fn all_six() -> Vec<(SubnetworkId, PalwCarriageV1)> {
+        let mut out: Vec<(SubnetworkId, PalwCarriageV1)> = vec![
+            (SUBNETWORK_ID_PALW_COMMITMENT, PalwCarriageV1::Commitment(commitment_composite())),
+            (SUBNETWORK_ID_PALW_ATTESTATION, PalwCarriageV1::Attestation(attestation())),
+            (SUBNETWORK_ID_PALW_OPENING_CALL, PalwCarriageV1::OpeningCall(opening_call())),
+            (SUBNETWORK_ID_PALW_OPENING_ANSWER, PalwCarriageV1::OpeningAnswer(opening_answer())),
+            (SUBNETWORK_ID_PALW_REFUTATION, PalwCarriageV1::Refutation(refutation())),
+            (SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, PalwCarriageV1::EvidenceChunk(evidence_chunk())),
+        ];
+        debug_assert_eq!(out.len(), 6);
+        out.sort_by_key(|(_, c)| c.kind_byte());
+        out
+    }
+
+    /// The Stage-1 contract, pinned end to end: each new subnetwork id routes to exactly its
+    /// kind byte, and the Stage-1 payload IS the Stage-0 payload minus the 7-byte magic+kind
+    /// prefix — so the goldens above cover both stages and the two decode paths cannot drift.
+    #[test]
+    fn stage1_ids_route_and_bodies_are_stage0_minus_the_envelope() {
+        for (id, carriage) in all_six() {
+            let kind = palw_carriage_tx_kind(&id).expect("a PALW band id routes");
+            assert_eq!(kind, carriage.kind_byte(), "id {id} routes to its own kind");
+            let stage0 = encode_palw_carriage_v1(&carriage);
+            let stage1_body = &stage0[PALW_CARRIAGE_MAGIC.len() + 1..];
+            let decoded = decode_palw_stage1_body(kind, stage1_body).unwrap();
+            assert_eq!(decoded, carriage, "one format, two addresses");
+            validate_palw_carriage_v1(&decoded).unwrap();
+        }
+        // Foreign ids do not route: the band has hard edges on both sides.
+        for id in [
+            SUBNETWORK_ID_NATIVE,
+            SUBNETWORK_ID_COINBASE,
+            crate::subnets::SUBNETWORK_ID_TOKEN_BURN,
+            SubnetworkId::from_byte(0x3F),
+            SubnetworkId::from_byte(0x46),
+        ] {
+            assert_eq!(palw_carriage_tx_kind(&id), None);
+        }
+        // An unknown kind byte is an error, not a fallthrough.
+        assert_eq!(decode_palw_stage1_body(0x09, b"anything"), Err(PalwCarriageError::UnknownKind(0x09)));
+    }
+
+    /// ADR-0029 §2: refutations and their chunks are pure evidence carriers — no outputs, so the
+    /// Stage-2 reporter-reward slot `(tx_id, 0)` is never a retrofit. Checked before the body
+    /// decode, like `validate_slashing_evidence_tx`. Every other kind may carry outputs (change).
+    #[test]
+    fn stage1_evidence_carriers_declare_no_outputs() {
+        let outputs = vec![crate::tx::TransactionOutput::new(1_000, crate::tx::ScriptPublicKey::default())];
+        let refutation_body = borsh::to_vec(&refutation()).unwrap();
+        assert_eq!(
+            validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_REFUTATION, &refutation_body, &outputs),
+            Err(PalwCarriageError::EvidenceCarrierHasOutputs(1))
+        );
+        validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_REFUTATION, &refutation_body, &[]).unwrap();
+        let chunk_body = borsh::to_vec(&evidence_chunk()).unwrap();
+        assert_eq!(
+            validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_EVIDENCE_CHUNK, &chunk_body, &outputs),
+            Err(PalwCarriageError::EvidenceCarrierHasOutputs(1))
+        );
+        validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_EVIDENCE_CHUNK, &chunk_body, &[]).unwrap();
+        // A non-evidence kind rides with outputs (a funded carrier has change).
+        let attestation_body = borsh::to_vec(&attestation()).unwrap();
+        validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_ATTESTATION, &attestation_body, &outputs).unwrap();
+        // The outputs rule is checked first, but a clean carrier still fails on its body.
+        assert!(matches!(
+            validate_palw_carriage_stage1_tx(PALW_CARRIAGE_KIND_REFUTATION, b"garbage", &[]),
+            Err(PalwCarriageError::BodyDecode(_))
+        ));
+    }
+
+    /// The store walk's read of an accepted chain block: exactly the valid PALW-band carriers,
+    /// stamped with the acceptance DAA and holding the payload bytes verbatim.
+    #[test]
+    fn stage1_extractor_takes_valid_palw_band_txs_and_nothing_else() {
+        let good_body = borsh::to_vec(&attestation()).unwrap();
+        let mut drifted = attestation();
+        drifted.attester_id = h64(0xA3); // decodes, fails the same stateless validation Stage 0 runs
+        let bad_body = borsh::to_vec(&drifted).unwrap();
+        let stage0_payload = encode_palw_carriage_v1(&PalwCarriageV1::Attestation(attestation()));
+        let txs = vec![
+            tx_with(SUBNETWORK_ID_PALW_ATTESTATION, good_body.clone()),
+            tx_with(SUBNETWORK_ID_PALW_ATTESTATION, bad_body),
+            tx_with(SUBNETWORK_ID_PALW_ATTESTATION, b"not borsh".to_vec()),
+            // A Stage-0 payload (magic still on) does not ride a Stage-1 id: the body must be bare.
+            tx_with(SUBNETWORK_ID_PALW_ATTESTATION, stage0_payload.clone()),
+            // The right body on the WRONG id of the band decodes as the id's kind — and fails.
+            tx_with(SUBNETWORK_ID_PALW_COMMITMENT, good_body.clone()),
+            // A native Stage-0 carrier is the OTHER extractor's business.
+            tx_with(SUBNETWORK_ID_NATIVE, stage0_payload),
+        ];
+        let extracted = palw_carriage_records_from_accepted_txs(&txs, 4_242);
+        assert_eq!(extracted.len(), 1, "exactly the valid Stage-1 carrier");
+        assert_eq!(extracted[0].0, txs[0].id());
+        assert_eq!(
+            extracted[0].1,
+            PalwCarriageRecord { kind: PALW_CARRIAGE_KIND_ATTESTATION, accepted_daa_score: 4_242, body: good_body }
+        );
+        // The record's body decodes back to the object admission validated — bytes verbatim.
+        assert_eq!(
+            decode_palw_stage1_body(extracted[0].1.kind, &extracted[0].1.body).unwrap(),
+            PalwCarriageV1::Attestation(attestation())
+        );
     }
 }

@@ -30,6 +30,7 @@ use crate::{
             },
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
+            palw_carriage::DbPalwCarriageStore,
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
             pruning_meta::PruningMetaStores,
@@ -97,6 +98,7 @@ use kaspa_consensus_core::{
     header::Header,
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
+    palw_carriage::palw_carriage_records_from_accepted_txs,
     pruning::PruningPointsList,
     subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
     token::{
@@ -328,6 +330,10 @@ pub struct VirtualStateProcessor {
     /// outlives the credit window by three orders of magnitude, so a walk-scoped copy vanishes
     /// while it is still in force and takes the certificate's whole committee with it.
     pub(super) compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
+    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
+    /// carrying tx. Written/reverted by `stage_palw_carriages` beside the capability walk;
+    /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
+    pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
     /// `update_dns_state` and written in the same batch as the `DnsState`.
@@ -570,6 +576,7 @@ impl VirtualStateProcessor {
             pruning_samples_store: storage.pruning_samples_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
+            palw_carriage_store: storage.palw_carriage_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
             vlt_activation_store: storage.vlt_activation_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
@@ -1943,6 +1950,9 @@ impl VirtualStateProcessor {
         if let Some(dns_params) = self.dns_params.as_ref() {
             let sink_daa = self.headers_store.get_header(dns_sink).map(|h| h.daa_score).unwrap_or_default();
             self.stage_compute_capabilities(&mut batch, chain_path, dns_params, sink_daa);
+            // PALW carriage objects (ADR-0029 Stage 1), same accept/revert/backfill discipline,
+            // same batch. An index only — nothing in consensus reads it yet.
+            self.stage_palw_carriages(&mut batch, chain_path, dns_params, sink_daa);
         }
 
         // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
@@ -2248,6 +2258,92 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Persist the PALW carriage objects a selected-chain change adds, and drop those it removes
+    /// (ADR-0029 Stage 1 — the capability-store walk beside this one, verbatim).
+    ///
+    /// A pure index: NOTHING in consensus rules reads this store yet. Stage 2 (the credit gate,
+    /// duty classification, offense grounding) is explicitly out of scope, exactly as the
+    /// capability store landed before its committee-draw consumer. And unlike the capability walk
+    /// there is no bond set to thread: admission already refused any PALW-band transaction whose
+    /// payload fails `validate_palw_carriage_stage1_tx`, and the extractor re-applies the same
+    /// context-free rules — stateless in, stateless out, so apply and revert cannot disagree and
+    /// no strict-prefix ordering question exists here.
+    ///
+    /// Rows are keyed by carrying tx id (the revert-friendly capability key). Logical dedup —
+    /// first-accepted-wins per `committed_root`, `(commitment_root, attester_id)`, `call_tx_id` —
+    /// is the Stage-2 reader's business, exactly where ADR-0029 §2 assigns it: an index that
+    /// dropped "duplicate" rows would erase the very carriers a reorg could promote to first.
+    fn stage_palw_carriages(&self, batch: &mut WriteBatch, chain_path: &ChainPath, dns_params: &DnsParams, sink_daa: u64) {
+        if !dns_params.vlt_shadow_active_at(sink_daa) {
+            // Same dormancy fence as the capability walk it mirrors: the carriage objects bind to
+            // the same bond registry, their Stage-2 consumer is fenced with the compute overlay,
+            // and below the fence the backfill's history walk would be pure cost. (The band's
+            // ADMISSION is deliberately unfenced, like every overlay band's — see
+            // `check_transaction_subnetwork` — so acceptance below the fence is possible but
+            // meaningless: the first post-fence commit backfills whatever it carried.)
+            return;
+        }
+        let mut store = self.palw_carriage_store.write();
+
+        // A database whose chain predates this store has carriers accepted and no rows for them,
+        // and an empty index reads exactly like "nothing was carried". Sweep history once, under
+        // the same horizon discipline as the capability sweep — the furthest back any overlay
+        // read this store will ever serve can reach.
+        if !store.is_backfilled() {
+            let sweep_tip = chain_path
+                .added
+                .first()
+                .and_then(|first| self.ghostdag_store.get_selected_parent(*first).ok())
+                .unwrap_or_else(|| chain_path.added.last().copied().unwrap_or(self.genesis.hash));
+            let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
+            let mut swept = 0usize;
+            if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
+                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
+                    let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
+                    if sink_blue.saturating_sub(bs) > horizon {
+                        break;
+                    }
+                    let Ok(header) = self.headers_store.get_header(block) else { break };
+                    for (tx_id, record) in
+                        palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score)
+                    {
+                        store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
+                        swept += 1;
+                    }
+                }
+            }
+            info!("[palw-carriage] swept {swept} carriage object(s) out of history into the carriage store");
+            // Marked only after every insert is staged. A crash mid-sweep leaves the marker
+            // unset, so the next start sweeps again — idempotently, since a row keyed by its own
+            // transaction id rewrites to the same value.
+            store.mark_backfilled_direct().unwrap();
+        }
+
+        let mut reverted = 0usize;
+        for removed in chain_path.removed.iter().rev() {
+            // Only the keys matter on revert; the stamp the extractor puts on the discarded
+            // records is irrelevant, so a header miss defaults it rather than skipping deletes.
+            let daa = self.headers_store.get_header(*removed).map(|h| h.daa_score).unwrap_or_default();
+            for (tx_id, _) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed), daa) {
+                store.delete_batch(batch, tx_id).unwrap();
+                reverted += 1;
+            }
+        }
+        // The revert path of a new store never runs until it matters, and then runs during a
+        // reorg. Say so when it does: a carriage row silently surviving a branch it is not in is
+        // exactly the indexing divergence Stage 1 exists to rule out.
+        if reverted > 0 {
+            info!("[palw-carriage] reverted {reverted} carriage object(s) that left the selected chain");
+        }
+        for added in chain_path.added.iter() {
+            let Ok(header) = self.headers_store.get_header(*added) else { continue };
+            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score)
+            {
+                store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
             }
         }
     }
