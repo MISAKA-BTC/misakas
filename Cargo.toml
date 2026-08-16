@@ -32,6 +32,7 @@ members = [
     "misaka-palw-shadow",
     "misaka-palw-agent",
     "misaka-palw-worker",
+    "misaka-palw-reference2",
     "simpa",
     "wasm",
     "wasm/core",

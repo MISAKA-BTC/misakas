@@ -5839,6 +5839,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-reference2"
+version = "1.1.0"
+dependencies = [
+ "cc",
+ "kaspa-consensus-core",
+]
+
+[[package]]
 name = "misaka-palw-shadow"
 version = "1.1.0"
 dependencies = [
