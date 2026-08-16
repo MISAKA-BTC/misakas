@@ -52,8 +52,37 @@ Collect every printed `validator_id` into one roster file, shared by all hosts:
 
 `class` is the worker's own `runtime_class_id` (`palw-worker --mode v2-manifest`); `delta_bind`
 matches the parameter set (10 on the 120 s net, 120 on deci). Fund each printed address with a
-**non-coinbase** transfer (instant spendability; coinbase outputs sit behind maturity) —
-`misaka-cli` from the operator wallet. ~10 M sompi per host covers a long session.
+**non-coinbase** transfer (instant spendability; coinbase outputs sit behind maturity).
+~10 M sompi (0.1 MSK) per host covers a long session.
+
+**Funding source — confirmed 2026-08-16, read-only, key untouched:**
+
+* The operator wallet is the t10 premine / miner-payout / 9B-validator funding address
+  `misakatest:qtpflz03z576h02mtpn2vtwg5npj8fhlau3fgmsjl2a2uw0venj3573l07uahcs4gnsl8eqc7nlq5phakthxy606q2jyuxh2a08weduxa2yqlxuz`
+  — measured via `misaka wallet utxo list --address …` over an SSH tunnel to B's RPC:
+  **491,432 mature UTXOs, 9,001,069,939.21 MSK** (plus 82 immature). The whole drill budget
+  (4 × 0.1 MSK) is ~4×10⁻⁹ of it.
+* Its key is `/home/ubuntu/kpq-9b-validator.seed` on host A (0600, 32-byte hex — exactly the
+  `--key-file` format `misaka` expects). **The key stays on A**; the CLI runs there and points
+  at B's RPC, the same pattern the 2026-08-15 bond used (A's own RPC is degraded under load).
+* Recommended one-hop isolation: fund a dedicated **drill treasury** (itself a
+  `palw-shadow keygen` identity) once from the operator wallet, then fund the per-host drill
+  identities from the treasury — repeated drill operations never touch the premine key again.
+
+```bash
+# on host A (key locality), operator-run; DRY-RUN first — broadcast only with --yes:
+misaka wallet send \
+  --to <drill-treasury-or-host-address> --amount 0.1 \
+  --key-file /home/ubuntu/kpq-9b-validator.seed \
+  --network testnet-10 --rpc 95.111.236.186:27610
+# review the preview, then re-run with --yes
+```
+
+The `misaka` binary must be an x86-64 build on A (build on host B per the fleet recipe —
+default features only; the heavy EVM deps sit behind `evm-send` and are not needed). Note the
+wallet's fragmentation (491 k UTXOs) is harmless here: sends select from the giant non-coinbase
+UTXO; the ~2.5 min address scan the bond flow paid applies to each send from this address —
+one more reason the treasury hop is worth it.
 
 ## 3. The three loops
 
