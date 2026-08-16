@@ -391,6 +391,25 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_STAKE_PRECOMMIT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// MISAKA PALW Stage-0 chain carriage (ADR-0029 §5): a fee-funded, signed
+    /// **native-subnetwork** transaction carrying an opaque payload — the
+    /// `"MPALW2" ‖ kind ‖ borsh` envelope built by `kaspa_consensus_core::palw_carriage`.
+    /// Same funding/signing path as every overlay transaction above (one input, change to
+    /// this key's own P2PKH-ML-DSA script, input-0 ML-DSA-signed under
+    /// [`MLDSA87_TX_CONTEXT`]); only the subnetwork differs, because Stage-0 carriage rides
+    /// the native lane admission already accepts. The payload is opaque HERE by design —
+    /// carriage validity is the palw_carriage module's stateless check, run by the caller
+    /// before spending a fee on it.
+    pub fn build_funded_native_carriage_tx(
+        &self,
+        payload: Vec<u8>,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        self.build_funded_overlay_tx(SUBNETWORK_ID_NATIVE, payload, funding_outpoint, funding, fee, false)
+    }
+
     /// Build a fee-funded, signed `StakeAttestationShard` transaction (ADR-0010 step 9,
     /// funding model A). Spends `funding` — a UTXO locked to this key's own P2PKH-ML-DSA
     /// script — to pay the fee, returns the change to the same script, and carries the
