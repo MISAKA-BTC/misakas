@@ -1576,6 +1576,9 @@ fn run_v2_replay_bench(name: &str, runs: u32, decode_override: Option<u32>, legs
             "two_minute_bps": replay_p99_fits_v1(p99_total, &PalwScheduleParamsV1::stage1_defaults_two_minute_bps(), 120_000),
         },
         "roots_identical_across_runs": roots_identical,
+        // The pairwise-class evidence: two hosts of one class benching the same envelope must
+        // print the same root, and printing it is what lets a fleet check that cheaply.
+        "logits_root": first_root.map(hex),
     });
     println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
     if !roots_identical {
