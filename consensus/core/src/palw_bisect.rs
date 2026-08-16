@@ -215,7 +215,7 @@ impl PalwBisectLadderV1 {
         opened_at_daa: u64,
         first_deadline_daa: u64,
     ) -> Result<Self, PalwBisectError> {
-        if space_size < 2 || space_size > PALW_BISECT_MAX_SPACE {
+        if !(2..=PALW_BISECT_MAX_SPACE).contains(&space_size) {
             return Err(PalwBisectError::SpaceOutOfRange { got: space_size, max: PALW_BISECT_MAX_SPACE });
         }
         if first_deadline_daa <= opened_at_daa {
