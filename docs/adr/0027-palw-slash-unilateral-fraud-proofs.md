@@ -213,9 +213,10 @@ is the same rule as P1, applied while reference conformance (§2) is still being
    Mitigations: windows sized in DAA score with the stall rule, multiple submission routes, and a
    window long enough for the degraded bisection ladder (≈20 rounds × response window — materially
    longer than v0.1 §23's 30-minute dispute window; sizing it is open work).
-   *ADR-0028 §3 (Proposed) supplies the sizing: `W_challenge ≥ W_replay + 20·W_round`, every
-   response window sized at replay cost (never shorter), defaults (~48 h at 0.1 bps) explicitly
-   marked placeholders until the per-class p99 replay measurement replaces them.*
+   *ADR-0028 §3 (Accepted) supplies the sizing: `W_challenge ≥ W_replay + 20·W_round`, every
+   response window sized at replay cost (never shorter), the whole ladder constrained inside
+   the pruning horizon — which caps the CREDITED job size (~512 decode tokens on the measured
+   fleet), with every default a placeholder until the per-class p99 measurement replaces it.*
 3. **Reference conformance of the miner's class.** If a class silently stops matching the
    reference, honest miners are refutable. §5's freeze is the fail-safe, and §2's corpus is what
    makes drift detectable before it is punitive.

@@ -336,11 +336,13 @@ Ambient is wrong.
   (future ADR): future-randomness binding point, reorg handling, job-commit deadline, `q`-sizing
   formula with its assumed minimum `f`, and per-class p99 cold-prefill costs — all published before
   the first non-zero credit, as §12 gate items.
-  > **Drafted as ADR-0028 (2026-08-16, Proposed):** binding point and reorg rule (anchor at
-  > `daa(C) + Δ_bind`, chain-scoped duties), DAA-denominated windows with measured-p99 sizing,
+  > **ADR-0028 (2026-08-16, Accepted):** binding point and reorg rule (anchor at
+  > `daa(C) + Δ_bind`, chain-scoped duties), DAA-denominated windows with measured-p99 sizing —
+  > pruning-constrained, which caps the *credited* job size below the format ceiling —
   > `q` re-defined as funded-replay redundancy (its minimum-`f` parameter is gone with the
-  > sampling security model), and the opening seam as the DA-audit transport. Randomness
-  > schedules; it never decides — per ADR-0027 P2.
+  > sampling security model), the replay fee as an issuance split `(1 + q·ρ_v)·base`, and the
+  > opening seam as the DA-audit transport. Randomness schedules; it never decides — per
+  > ADR-0027 P2.
 * **Any tolerance proposal is a new scheme version.** There is no ε parameter in the binding path.
 * ADR-0021 stays the historical header-PoW record and points here; the v2 design doc stays the
   operative safety model and gate list; the binary-audit doc is the evidence of record. This ADR

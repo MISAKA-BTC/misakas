@@ -1,9 +1,12 @@
 # ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict
 
-Status: **Proposed (draft for review).** Activates nothing; devnet / shadow / zero-credit
-envelope unchanged. This ADR fixes the scheduling fabric that ADR-0027 left open: who
-re-executes which job, when duties and windows open and close, what the randomness binds — and
-what it is forbidden to decide.
+Status: **Accepted (architecture).** Activates nothing; devnet / shadow / zero-credit envelope
+unchanged. This ADR fixes the scheduling fabric that ADR-0027 left open: who re-executes which
+job, when duties and windows open and close, what the randomness binds — and what it is
+forbidden to decide. Promoted from Proposed on 2026-08-16 after a numeric review against the
+real network parameters: the first draft's 48 h challenge window exceeded both pruning horizons
+(30 h at 0.1 bps, 38 h on the 120 s net) — windows are now pruning-constrained, they derive a
+credited-job ceiling (§3), and the funding mechanics are concrete (§4a–4e).
 Date: 2026-08-16
 Relates to: ADR-0027 (premises P1–P3, the refutation model this ADR schedules work for),
 ADR-0026 §4/§5 (the PRF-positions flow demoted there is given its surviving role here),
@@ -100,38 +103,63 @@ What this construction is required to provide — and what it is not:
   *funding* device, not an exclusivity device — the challenge window is permissionless, and a
   refutation from anyone stands (§4). Anchor unpredictability is retained as hardening only.
 
-**Reorg rule.** Assignment is a chain-scoped fact: a reorg deeper than `Δ_bind` recomputes
-panels on the new selected chain, and duties re-anchor with their windows. Attestations and
-refutations are statements about `C` — they remain valid in any chain that contains `C`'s
-commitment; only duty, deadline and bounty bookkeeping move. `Δ_bind` must exceed the ordinary
-merge-depth reorg envelope so re-anchoring is the exception, not the steady state.
+**Reorg rule.** Assignment is a chain-scoped fact: a reorg that replaces the anchor block
+recomputes panels on the new selected chain, and duties re-anchor with their windows.
+Attestations and refutations are statements about `C` — they remain valid in any chain that
+contains `C`'s commitment; only duty, deadline and bounty bookkeeping move. `Δ_bind` is a
+**settling offset, not a finality bound**: duties may derive from a young anchor because every
+offense that references the anchor (no-show, deadline) is prosecuted only after the anchor is
+final (§3's `finality < W_challenge` rule) — an assignee that acted on an anchor later reorged
+away simply sees its duty re-drawn, and nothing is chargeable against the vanished draw.
 
-### 3. Windows: DAA-denominated, stall-tolerant, sized from measured p99 — with defaults stated as defaults
+### 3. Windows: DAA-denominated, stall-tolerant, pruning-constrained — and they cap the credited job
 
 All deadlines are DAA-score offsets (v0.1 §23, including "DAA stalls ⇒ deadlines stall").
-Wall-clock examples below assume the 0.1-bps PALW network parameters (one block per 10 s).
+Wall-clock intent is primary; the DAA denominator is per-network. Both PALW parameter sets are
+shown (`new_deci_bps`: 10 s blocks; `new_two_minute_bps`: the 120 s public PALW testnet,
+decided from fleet replay measurements — see the runbook's "Why 120 s").
 
-| Window | Opens | Closes (default) | Meaning of expiry |
-| --- | --- | --- | --- |
-| `W_bind` | `daa(C)` | `+ Δ_bind = 120 DAA` (~20 min) | anchor fixed; panel and duties derivable |
-| `W_replay` | anchor | `+ 360 DAA` (~1 h) | assigned re-executor must attest or refute; silence = objective no-show (v0.1 §17) |
-| `W_challenge` | `daa(C)` | `+ 17_280 DAA` (~48 h) | permissionless refutation window; `credit(C)` evaluated at close |
-| `W_answer` | opening call included | `+ 360 DAA` (~1 h) | committed material must be opened; silence = objective DA offense |
-| `W_round` | bisection rung | `+ 360 DAA` per rung | non-response at any rung = objective offense (`M-O3`) |
+| Window | Intent | 0.1 bps | 120 s net | Meaning of expiry |
+| --- | --- | --- | --- | --- |
+| `Δ_bind` | ~20 min | 120 DAA | 10 DAA | anchor fixed; panel and duties derivable |
+| `W_replay` | ~1 h | 360 DAA | 30 DAA | assigned re-executor must attest or refute; silence = objective no-show (v0.1 §17) — *provided the input was available (below)* |
+| `W_answer` | ~1 h | 360 DAA | 30 DAA | committed material must be opened; silence = objective DA offense |
+| `W_round` | ~1 h | 360 DAA | 30 DAA | non-response at a bisection rung = objective offense (`M-O3`) |
+| `W_challenge` | ~24 h | 8_640 DAA | 720 DAA | permissionless refutation window; `credit(C)` evaluated at close |
 
-Sizing rule, not numerology: `W_replay ≥ κ · p99_cold_replay(class, job ceiling)` with `κ ≥ 3`,
-where `p99_cold_replay` is the **measured** cold, no-KV, per-class replay cost at the job-size
-ceiling — the same §12 gate item ADR-0026 already demands ("measured replay capacity fits the
-challenge window at p99"). `W_answer` and `W_round` are sized by the SAME rule, not shorter:
-answering an opening call regenerates the row by re-execution unless material was retained, and
-a bisection rung can demand state the operator must replay to reach — a response window shorter
-than a replay would make honest silence indistinguishable from withholding, which no objective
-offense may do. `W_challenge` must additionally fit the degraded ladder:
-`≥ W_replay + L_bisect · W_round` with `L_bisect ≈ 20` — the defaults above put that sum at
-~21 h, leaving ~27 h of margin, closing ADR-0027's "sizing it is open work" with a number that
-can be attacked. Every default in the table is a Stage-1 placeholder that MUST be re-derived
+The rules the defaults are one solution of:
+
+```
+W_replay, W_answer, W_round ≥ κ · p99_cold_replay(class, credited ceiling)     κ ≥ 3
+    (an answer or a rung response may cost a replay — a shorter window would make
+     honest silence indistinguishable from withholding, which no objective offense may do)
+W_challenge ≥ W_replay + L_bisect · W_round + margin                           L_bisect ≈ 20
+finality_duration < W_challenge
+    (anchor-referencing offenses prosecute only after the anchor is final — 12 h here)
+W_challenge + prosecution slack < pruning horizon
+    (30 h at 0.1 bps; 38 h on the 120 s net, where the prunality lower bound binds)
+```
+
+**Pruning is the binding constraint, and it caps the credited job, not just the window.** The
+first draft of this ADR defaulted `W_challenge` to 48 h — wrong on both networks, caught in
+review against the real parameters. At 24 h the ladder budget is 21 h with 3 h of margin: thin,
+and priced — every stalled rung is itself an objective offense, so a withholding miner converts
+to conviction long before the window is consumed. Response windows of 1 h at `κ = 3` require
+`p99_cold_replay ≤ 20 min`; the fleet measurement behind the 120 s block time (12–26 s per
+16-decode job ⇒ ≈ 0.75–1.6 s per decode token on the slowest host) derives a **credited-job
+ceiling of ≈ 512 decode tokens**. The v2 format ceiling (4 095) stands unchanged — but a class
+may only *credit* jobs whose measured p99 fits its registered windows inside the pruning
+horizon. A bigger credited job requires a longer window, which requires a longer pruning
+horizon or pruning-surviving carriage (Consequences) — a parameter decision taken explicitly,
+never a silent stretch. Every default here is a Stage-1 placeholder that MUST be re-derived
 from the per-class measurement before any slash activates; shipping the placeholder as if
 measured is a §15-class violation.
+
+**Duty precondition — input availability.** `W_replay`'s clock presumes the assignee can obtain
+the job input (the prompt token ids behind `prompt_token_ids_hash`). An assignee that cannot
+posts a fee-bonded input objection; the miner must serve the input within `W_answer` or the
+duty converts into the miner's `DATA_WITHHOLDING` offense. A no-show is never chargeable
+against an assignee holding an unanswered input objection.
 
 Two consequences worth stating plainly: PALW credit is **latent by construction** — at least
 `W_challenge` behind the chain tip (delayed settlement, v0.1 §20, unchanged); and the checkpoint
@@ -154,16 +182,59 @@ meaning is dead). Defaults and rules:
   A corrupt panel can delay credit (no honest attestation ⇒ no credit) but cannot mint a lie
   safely: attesting a false root is `signature ∧ refutation` slashable the moment anyone —
   panel or not — replays and refutes.
-* **Funding attaches to the credit event, not the job.** Self-originated jobs have no orderer
-  and no execution fee; the replay fee for the panel and the challenger bounty (≤ 10 % of
-  slash, v0.1 §18.4) are priced into PALW credit issuance. A no-show forfeits the fee and is
-  an objective offense; fees for unchecked jobs are never paid because unchecked jobs are
-  never credited (§1).
-* The pre-reward inequality (v2 design §10, ADR-0027 §3) is restated with this ADR's terms and
-  becomes a **registration-time check**:
+
+**4a. The replay fee is an issuance split, not a fee market.** Self-originated jobs have no
+orderer and no execution fee to tax, so the fee attaches to the only event that exists — the
+credit event:
 
 ```
-P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
+issuance(C) = (1 + q · ρ_v) · base(C)
+  miner:                                     base(C)
+  each on-time assigned attester
+  whose replayed root matches:               ρ_v · base(C)
+  ρ_v = measured replay/primary cost ratio of the class (≈ 1.0; published at registration)
+```
+
+Late attestations, non-matching roots and voluntary (unassigned) attestations earn nothing.
+Unchecked jobs pay nobody, because unchecked jobs are never credited (§1). §1's `(1+q)×`
+verification tax is therefore *literally the emission schedule* — visible in issuance,
+not hidden in a market.
+
+**4b. An attestation is assumption of liability, not proof of independent work.** The
+verifier's dilemma is priced, not pretended away: a rubber-stamper who co-signs the miner's
+published root without replaying earns the same fee at zero cost — and stakes its bond on a
+root it never checked. Replaying is the attester's own risk management, dominant when
+`S_a · P(fraud) · P_refute > c_replay`; at current magnitudes (bond 20 000 MSK against minutes
+of CPU) that inequality is slack by orders of magnitude, and it self-stabilizes: were
+rubber-stamping common, fraud would start paying, `P(fraud)` would rise, and replaying would
+become dominant again. What the fee actually buys is **capacity** — hardware-hours standing
+ready — not per-replay willingness; collusive stamping silently lowers the *real* replay rate — which
+is exactly what §6's Stage-0 `P_check` telemetry exists to expose — but never makes a false
+root safe, because the refutation right is permissionless.
+
+**4c. No-show is priced against griefing.** No-show is an objective offense (v0.1 §17) with a
+slash floor of a large multiple of the forgone fee (placeholder: `≥ 100 · ρ_v · base`,
+Stage-1-measured like every number here). The asymmetry is deliberate: a panel that strands a
+job costs the miner one orphan-equivalent (re-mine), while costing the no-show pair two
+slashes — targeted verifier griefing has negative return, and a panel that is merely *down*
+loses fees and a bounded slash, not its base bond.
+
+**4d. The challenger economy is rivalrous by construction.** The refutation bounty stays
+capped at 10 % of slash (v0.1 §18.4) — deliberately not a living: the reliable challengers are
+*competitors*. A rival miner who refutes removes competing credit AND collects the bounty, so
+`P_check` rests on rivalry, not altruism; §5's fee-bonded audit calls are the paid probing
+market for everyone else. (This is also why §2 tolerates a predictable panel: grinding a rival
+*off* the panel removes their fee, never their refutation right.)
+
+**4e. Admission is doubly capped, and both caps are registration-time checks:**
+
+```
+physical:   R_jobs · q ≤ Σ_v capacity_v(p99)
+    a chain may not credit jobs faster than its class can replay them; at 120 s blocks
+    and the 512-decode ceiling (p99 ≈ 10–20 min), every-block crediting with q = 2 needs
+    ≈ 20 standing replay slots — a 4-host fleet credits sparser, or registers more capacity
+
+economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
   P_check = P(≥1 honest full replay AND timely inclusion within W_challenge)
             — measured from Stage-0/1 refutation drills, never assumed
   S_eff   = slashable bond reachable by refutation      (max_leverage ≤ 1.0:
@@ -244,10 +315,13 @@ Stage 3 Full         wider exposure; requires the second independent reference
 3. **Honest measurement.** `p99_cold_replay` and `P_check` are published, reproducible
    artifacts; a class that games its p99 shrinks its own dispute windows and self-refutes on
    the first real dispute.
-4. **Grinding buys scheduling only.** An executor who grinds anchors or identities can shape
-   *who* checks and *when* — never *whether* checking can catch it (full replay) nor *whether*
-   anyone may (permissionless window). If a concrete grinding path to more than scheduling is
-   found, it attacks §2 and this ADR must be amended.
+4. **Grinding never reduces `P_check`.** An executor who grinds anchors or bonded identities
+   can shape who holds the duty — including seating a colluding panel that delays credit or
+   co-signs a lie for the fee — but the lie's safety still reduces to the permissionless
+   window: grinding touches neither the fullness of a replay (nothing to hide in) nor anyone's
+   right to refute. Stated as the invariant it is: grinding moves fees and timing, never
+   detection. If a concrete grinding path that lowers `P_check` is found, it attacks §2 and
+   this ADR must be amended.
 
 ## Consequences
 
@@ -256,10 +330,17 @@ Stage 3 Full         wider exposure; requires the second independent reference
   over DAA windows, on-chain envelopes for attestation, opening call and answer (the wire
   bodies exist in `palw_legs`; what is missing is their chain carriage), and the telemetry that
   measures `P_check`, inclusion latency and no-show rates in shadow.
-* **Registration grows two published numbers per class:** `p99_cold_replay` at the job ceiling
-  and the checkpoint interval's localization cost — plus the §4 inequality check. The §12
-  checklist gains: `[ ] windows re-derived from measured p99`, `[ ] P_check measured in shadow`,
-  `[ ] no-show/inclusion telemetry published`.
+* **Carriage must outlive headers.** `credit(C)` is evaluated at `W_challenge` close and
+  offenses prosecute after anchor finality, so `C`'s commitment record and the duty anchor must
+  live in pruning-surviving state (as bond records already do) — or every window must close
+  inside the pruning horizon with slack, which is what the §3 defaults do. The chain-carriage
+  design (future work) inherits this as a hard constraint, not a preference.
+* **Registration grows the published numbers per class:** `p99_cold_replay` at the credited
+  ceiling, the credited ceiling itself (window-derived, ≤ the format ceiling), `ρ_v`, and the
+  checkpoint interval's localization cost — plus the §4e caps. The §12 checklist gains:
+  `[ ] windows re-derived from measured p99`, `[ ] credited ceiling derived from windows and
+  the pruning horizon`, `[ ] P_check measured in shadow`, `[ ] no-show/inclusion telemetry
+  published`.
 * **ADR-0026 §5 closes.** The dynamic-`q` section's question ("how many challenges") has its
   successor: `q` counts funded replays (§4), the PRF flow schedules audits that decide nothing
   (§5), and the minimum-`f` parameter is gone with the sampling security model.
