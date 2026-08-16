@@ -236,6 +236,16 @@ transaction alone; fetching evidence at validation time is not consensus-safe). 
   the five carriage bodies + caps + encode/decode + golden tests in `consensus/core`
   (`palw_carriage.rs`), reusing the frozen inner objects untouched. Then the watcher/submitter
   binaries (out-of-node), then the drill runbook.
+  > **Landed (2026-08-16, `consensus/core/src/palw_carriage.rs`, on the unified branch,
+  > consensus-inert):** magic + five bodies + the 16-opening carriage cap + stateless
+  > validators + the Stage-0 extractor (`palw_carriages_from_accepted_txs`, the
+  > capability-extractor twin: native + magic + decode + validate). Composite commitments are
+  > **recomputed, not trusted** — the binding must derive from the carried envelope and rebuild
+  > the committed root from parts; the attester dedup identity is equality-enforced against the
+  > inner signer; the refutation enum ships without a logits-event variant per §6. Five
+  > full-payload goldens pinned; domains uniqueness-tested across every PALW family and the
+  > VLT sortition key. Still missing toward Stage 0 running: the watcher/submitter binaries
+  > and the drill runbook.
 * **ADR-0028's Stage-0 telemetry becomes realizable**: `P_check`, no-show and inclusion
   latency stop being columns the ledger cannot fill. The §12 checklist items this feeds:
   `[ ] P_check measured in shadow`, `[ ] no-show/inclusion telemetry published`.
