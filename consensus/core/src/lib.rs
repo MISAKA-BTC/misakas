@@ -180,6 +180,13 @@ pub mod palw_bisect;
 /// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
 /// consumer).
 pub mod palw_credit;
+/// MISAKA PALW asynchronous job state machine (ADR-0037 Decision 2): the closed, monotone
+/// per-job status algebra and the `PalwJobStateV3` object that replaces the per-block
+/// challenge-horizon walk on value networks. Encodes I8 (refutation locks, never destroys),
+/// I9 (only exact conviction or objective no-show destroys), I10 (`Unadjudicable` slashes
+/// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
+/// any shipped network; the Track-C change set is its first consumer.
+pub mod palw_job_state;
 pub mod palw_registry;
 /// MISAKA PALW re-verification routing (ADR-0034): the four execution-class families, five
 /// model bands, and the binding-aware eligibility/coverage machinery. Consensus-inert —
