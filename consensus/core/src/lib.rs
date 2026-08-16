@@ -160,6 +160,11 @@ pub mod palw_step;
 /// chunked checkpoint leg — a NEW scheme family; v1 and its goldens do not move. Land-stage,
 /// consensus-inert.
 pub mod palw_step_leg;
+/// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
+/// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
+/// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;
+/// exact-bits validation against the class binaries is the registration gate.
+pub mod palw_transcendental;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the

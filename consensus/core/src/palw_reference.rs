@@ -75,7 +75,7 @@ pub const PALW_REFERENCE_DOMAIN_RULESET: &[u8] = b"misaka-palw/reference-arithme
 /// accumulators of rms_norm / l2_norm / soft_max, Fact 6), exact f32→f64 widening, RNE f64→f32
 /// narrowing, and binary16 conversions (the F16 KV-cache seam). v1's string, id and behavior do
 /// not move; a profile that needs fma binds THIS id.
-pub const PALW_REFERENCE_ARITHMETIC_RULESET_V2: &str = "extends misaka-palw reference arithmetic v1 unchanged (IEEE-754 binary32; RNE; subnormals exact; canonical NaN 0x7FC00000; pinned k-ascending dot; gemm over dot) with: fma(a,b,c) = RNE(a*b + c) fused, one rounding; div(a,b) and sqrt(a) correctly rounded; binary64 add/sub/mul/div, RNE, subnormals exact, canonical NaN 0x7FF8000000000000, negation flips the sign bit, sub64(a,b) = add64(a, neg64(b)); widen f32->f64 exact; narrow f64->f32 RNE; binary16: f16->f32 exact, f32->f16 RNE, canonical NaN 0x7E00; every NaN operand or NaN result canonicalizes in its own width; v2";
+pub const PALW_REFERENCE_ARITHMETIC_RULESET_V2: &str = "extends misaka-palw reference arithmetic v1 unchanged (IEEE-754 binary32; RNE; subnormals exact; canonical NaN 0x7FC00000; pinned k-ascending dot; gemm over dot) with: fma(a,b,c) = RNE(a*b + c) fused, one rounding, in binary32 and binary64; div(a,b) and sqrt(a) correctly rounded; binary64 add/sub/mul/div, RNE, subnormals exact, canonical NaN 0x7FF8000000000000, negation flips the sign bit, sub64(a,b) = add64(a, neg64(b)); widen f32->f64 exact; narrow f64->f32 RNE; binary16: f16->f32 exact, f32->f16 RNE, canonical NaN 0x7E00; every NaN operand or NaN result canonicalizes in its own width; v2";
 
 /// Keyed-BLAKE2b-512 domain of [`reference_arithmetic_ruleset_id_v2`].
 pub const PALW_REFERENCE_DOMAIN_RULESET_V2: &[u8] = b"misaka-palw/reference-arithmetic-ruleset/v2";
@@ -833,6 +833,90 @@ pub fn ref64_div_v2(a: u64, b: u64) -> u64 {
     round_pack64(sign, exp, q)
 }
 
+/// Canonical binary64 fused multiply-add: `RNE(a·b + c)` with ONE rounding (ruleset v2).
+/// Same architecture as the binary32 fma: the 106-bit product is kept exact in u128; when the
+/// addend's frame is HIGHER it is left-shifted (exact) toward the product, and when it is
+/// lower it is right-jammed — safe by the v1-add argument, because the addend's three
+/// trailing GRS zeros make shifts of ≤ 1 exact and shifts of ≥ 2 leave the difference above
+/// half the larger operand (one normalization step, jam intact). A cancellation therefore
+/// never meets a jammed bit.
+pub fn ref64_fma_v2(a: u64, b: u64, c: u64) -> u64 {
+    if is_nan_bits64(a) || is_nan_bits64(b) || is_nan_bits64(c) {
+        return PALW_REFERENCE_CANONICAL_NAN64_V2;
+    }
+    let psign = (a ^ b) & SIGN_MASK64;
+    let (a_inf, b_inf) = (is_inf_bits64(a), is_inf_bits64(b));
+    let (a_zero, b_zero) = (is_zero_bits64(a), is_zero_bits64(b));
+    if (a_inf && b_zero) || (b_inf && a_zero) {
+        return PALW_REFERENCE_CANONICAL_NAN64_V2;
+    }
+    if a_inf || b_inf {
+        if is_inf_bits64(c) && ((c ^ psign) & SIGN_MASK64) != 0 {
+            return PALW_REFERENCE_CANONICAL_NAN64_V2;
+        }
+        return psign | EXP_MASK64;
+    }
+    if is_inf_bits64(c) {
+        return c;
+    }
+    if a_zero || b_zero {
+        if is_zero_bits64(c) {
+            return if ((c ^ psign) & SIGN_MASK64) == 0 { c } else { 0 };
+        }
+        return c;
+    }
+    let (sa, ea) = decompose_finite_nonzero64(a);
+    let (sb, eb) = decompose_finite_nonzero64(b);
+    // Exact product P ∈ [2^104, 2^106); round frame: value = ((P<<3)/8)·2^(ep − 1075) with
+    // ep = ea + eb − 1075.
+    let wp = ((sa as u128) * (sb as u128)) << 3;
+    let ep = ea + eb - 1075;
+    if is_zero_bits64(c) {
+        return round_wide64(psign, ep, wp);
+    }
+    let (sc, ec) = decompose_finite_nonzero64(c);
+    let csign = c & SIGN_MASK64;
+    let wc = (sc as u128) << 3;
+    // Alignment cases (the header argument, concretely):
+    //   d ≥ 0  — the product's frame is at or above c's, and since the product is ≥ 2^107
+    //            while c is < 2^56, the product ALWAYS dominates: right-jam c onto the
+    //            product's frame (exact for d ≤ 3 by the trailing GRS zeros; for d ≥ 4 the
+    //            aligned c is below wp/2^55, so the difference normalizes by at most one).
+    //   0 < −d ≤ 68 — c's frame is higher but the exact left shift fits u128 (2^56 · 2^68):
+    //            both operands exact, a cancellation is exact.
+    //   −d > 68 — c dominates by ≥ 2^15: right-jam the PRODUCT onto c's frame (aligned
+    //            product ≤ 2^40 < wc/2, one normalization at most; extreme shifts decay to
+    //            pure sticky inside the jam itself).
+    let (e0, prod_aligned, c_aligned) = match ep - ec {
+        d if d >= 0 => (ep, wp, shift_right_jam128(wc, d as u32)),
+        d if -d <= 68 => (ep, wp, wc << (-d) as u32),
+        d => (ec, shift_right_jam128(wp, (-d) as u32), wc),
+    };
+    if psign == csign {
+        round_wide64(psign, e0, prod_aligned + c_aligned)
+    } else if prod_aligned >= c_aligned {
+        round_wide64(psign, e0, prod_aligned - c_aligned)
+    } else {
+        round_wide64(csign, e0, c_aligned - prod_aligned)
+    }
+}
+
+/// Binary64 twin of [`round_wide32`]: normalizes exact `w · 2^(exp − 1078)`-frame magnitudes
+/// into the binary64 round frame and packs.
+fn round_wide64(sign: u64, exp: i32, w: u128) -> u64 {
+    if w == 0 {
+        return 0;
+    }
+    let bit_len = 128 - w.leading_zeros();
+    if bit_len > 56 {
+        let s = bit_len - 56;
+        round_pack64(sign, exp + s as i32, shift_right_jam128(w, s) as u64)
+    } else {
+        let s = 56 - bit_len;
+        round_pack64(sign, exp - s as i32, (w as u64) << s)
+    }
+}
+
 /// Exact widening f32 → f64 (ruleset v2). Every binary32 value is normal in binary64.
 pub fn ref_widen_f32_to_f64_v2(bits: u32) -> u64 {
     if is_nan_bits(bits) {
@@ -1311,10 +1395,13 @@ mod tests {
     #[test]
     fn ruleset_v2_id_golden_vector_and_distinct_from_v1() {
         // Frozen 2026-08-16. Any change to the v2 rule text is a v3, never an edit.
+        // Re-frozen 2026-08-16 same-session: the v2 string gained "in binary32 and binary64"
+        // on the fma clause BEFORE anything external consumed the id (nothing binds ruleset
+        // ids until a shape profile registers). Post-registration this would be a v3.
         assert_eq!(
             reference_arithmetic_ruleset_id_v2().to_string(),
-            "669e08064d664738508e00bfb30e9458350de8261d83a063e236cfcfba34dc9d\
-             3a634a36b5c166951b1d524bd52a3ee0f84298571ead1640e9d2e10b5b435785"
+            "2a2c5b46d6683320a3e5254a455245faf064146e6dc9c723bd4d7ec97190b563\
+             df5f7f686f1476527880f069d691f98592041e0ef32c097891317472140cfa69"
         );
         assert_ne!(reference_arithmetic_ruleset_id_v2(), reference_arithmetic_ruleset_id_v1());
     }
@@ -1492,6 +1579,46 @@ mod tests {
             let (fa, fb) = (f64::from_bits(a), f64::from_bits(b));
             assert_eq!(ref64_add_v2(a, b), hw_canon64(fa + fb), "add64-tie {a:016x} {b:016x}");
             assert_eq!(ref64_mul_v2(a, b), hw_canon64(fa * fb), "mul64-tie {a:016x} {b:016x}");
+        }
+    }
+
+    #[test]
+    fn fma64_matches_hardware_exactly() {
+        let hw = |a: u64, b: u64, c: u64| hw_canon64(f64::from_bits(a).mul_add(f64::from_bits(b), f64::from_bits(c)));
+        let values = special_values64();
+        for &a in &values {
+            for &b in &values {
+                for &c in [values[0], values[6], values[9], values[13], values[values.len() - 3]].iter() {
+                    assert_eq!(ref64_fma_v2(a, b, c), hw(a, b, c), "fma64 {a:016x} {b:016x} {c:016x}");
+                }
+            }
+        }
+        let mut rng = DetRng(0xF64A_0000_0000_0001);
+        for _ in 0..200_000 {
+            let (a, b, c) = (rng.next(), rng.next(), rng.next());
+            assert_eq!(ref64_fma_v2(a, b, c), hw(a, b, c), "fma64 {a:016x} {b:016x} {c:016x}");
+        }
+        // Cancellation hunting: c = −round(a·b) and neighbors — the fused-only residual.
+        for _ in 0..150_000 {
+            let exp_a = 900 + (rng.next() % 250);
+            let exp_b = 900 + (rng.next() % 250);
+            let a = (rng.next() & SIGN_MASK64) | (exp_a << 52) | (rng.next() & FRAC_MASK64);
+            let b = (rng.next() & SIGN_MASK64) | (exp_b << 52) | (rng.next() & FRAC_MASK64);
+            let p = ref64_mul_v2(a, b);
+            if ref64_is_finite_v2(p) && !is_zero_bits64(p) {
+                let neg_p = p ^ SIGN_MASK64;
+                for c in [neg_p, neg_p.wrapping_add(1), neg_p.wrapping_sub(1)] {
+                    assert_eq!(ref64_fma_v2(a, b, c), hw(a, b, c), "fma64-cancel {a:016x} {b:016x} {c:016x}");
+                }
+            }
+            // The frame-gap regimes on both sides of the 68-shift boundary.
+            let tiny = (rng.next() & SIGN_MASK64) | (1 + (rng.next() % 40)) << 52 | (rng.next() & FRAC_MASK64);
+            let huge = (rng.next() & SIGN_MASK64) | (1900 + (rng.next() % 140)) << 52 | (rng.next() & FRAC_MASK64);
+            assert_eq!(ref64_fma_v2(a, b, tiny), hw(a, b, tiny), "fma64-tinyc");
+            assert_eq!(ref64_fma_v2(tiny, tiny, huge), hw(tiny, tiny, huge), "fma64-hugec");
+            assert_eq!(ref64_fma_v2(tiny, tiny, tiny), hw(tiny, tiny, tiny), "fma64-subn");
+            let mid = (rng.next() & SIGN_MASK64) | (1020 + (rng.next() % 8)) << 52 | (rng.next() & FRAC_MASK64);
+            assert_eq!(ref64_fma_v2(tiny, mid, mid), hw(tiny, mid, mid), "fma64-band");
         }
     }
 
