@@ -179,6 +179,7 @@ pub mod palw_bisect;
 /// commitment form and adjudication depth, with the validation that makes an incoherent
 /// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
 /// consumer).
+pub mod palw_credit;
 pub mod palw_registry;
 /// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
 /// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,

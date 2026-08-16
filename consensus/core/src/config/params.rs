@@ -424,6 +424,14 @@ pub struct Params {
     /// and are therefore fully inert until a network opts in.
     pub dns_params: Option<DnsParams>,
 
+    /// ADR-0033 (B14): the PALW credit gate's fence — the one registered class this network
+    /// credits and the §4e chain facts, or `None` when the gate is dormant. `None` on every
+    /// shipped network (the type cannot even be built in a `const`, so a literal here can
+    /// only ever be `None`); activation is a deliberate runtime opt-in whose preconditions
+    /// ADR-0033 lists. Everything the gate mints is validated against this same fence, so a
+    /// node without it rejects any coinbase claiming PALW credit.
+    pub palw_credit: Option<crate::palw_credit::PalwCreditParamsV1>,
+
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
     /// Layer-1 (`POW_ALGO_ID_BLAKE2B_SHA3 = 3`), which supersedes the Phase-2 Argon2id to make header
     /// verification ~10^4× cheaper (the IBD/catch-up bottleneck). Past this DAA score every block
@@ -574,6 +582,7 @@ impl Params {
             pre_crescendo_target_time_per_block,
             crescendo_activation,
             dns_params,
+            palw_credit,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
             pow_palw_ollama_activation,
@@ -648,6 +657,17 @@ impl Params {
         h.write(evm_f002_withdraw_cap_activation_daa_score.to_le_bytes());
         h.write(evm_f003_mldsa_verify_activation_daa_score.to_le_bytes());
         h.write(evm_typed_receipt_root_activation_daa_score.to_le_bytes());
+
+        // ADR-0033 (B14): the credit fence changes coinbase validity, so an ACTIVE fence is
+        // part of the fingerprint — but written Some-only, at the tail: a dormant fence
+        // (`None`, every shipped network) must leave the fingerprint byte-identical to what
+        // it was before this field existed, or adding the wiring would itself be a flag day.
+        // Length-prefixed so distinct fences cannot collide with the fixed-width tail above.
+        if let Some(credit) = palw_credit {
+            let bytes = borsh::to_vec(credit).expect("PalwCreditParamsV1 is borsh-serializable");
+            h.write((bytes.len() as u64).to_le_bytes());
+            h.write(&bytes);
+        }
 
         h.finalize()
     }
@@ -862,6 +882,7 @@ impl Params {
 
             // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
             dns_params: self.dns_params,
+            palw_credit: self.palw_credit,
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
@@ -1648,6 +1669,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // unbonding/evidence window (slashable through the whole exit). See PRODUCTION_DNS_PARAMS.
     // Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(PRODUCTION_DNS_PARAMS),
+    palw_credit: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
@@ -1767,6 +1789,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // premine-backed validator can drive finality. Not a genesis-block input, so the
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
+    palw_credit: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
     // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
@@ -1868,6 +1891,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // kaspa-pq: DNS-finality PoS overlay genesis-active on every network (see
     // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    palw_credit: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
@@ -2007,6 +2031,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // old 10-bps devnet (epoch 100 blocks ≈ 17 min, unbond 700 ≈ ~2 h) — the U ≥ R+E shape and
     // every consensus invariant are unchanged, but VLT harness timings must budget for it.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
+    palw_credit: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic

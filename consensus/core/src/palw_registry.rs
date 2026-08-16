@@ -284,7 +284,7 @@ impl PalwClassRegistrationV1 {
 // =============================================================================================
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
     use crate::palw_legs::PALW_LEGS_ALL_DOMAINS;
@@ -365,7 +365,8 @@ mod tests {
     }
 
     /// A registration built from the REAL fleet measurement (slowest host, 2026-08-16).
-    fn fleet_registration() -> PalwClassRegistrationV1 {
+    /// `pub(crate)`: the credit-gate tests reuse it as their registered class.
+    pub(crate) fn fleet_registration() -> PalwClassRegistrationV1 {
         let windows = PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
         let replay_cost =
             PalwReplayCostMeasurementV1 { fixed_overhead_ms: 4_300, ms_per_decode_token: 165, format_ceiling_tokens: 4_095 };
