@@ -4,7 +4,8 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
-            InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock, NonReleasableBondSpendInBlock,
+            AuditBondSpendAgainstDisposition, InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock,
+            NonReleasableBondSpendInBlock,
             UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock,
             UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
@@ -691,6 +692,9 @@ impl VirtualStateProcessor {
         if !mergeset_bond_gate_active {
             self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
         }
+        // ADR-0032 Phase E2: the audit-call bond spend gate. Inert while the PALW credit
+        // fence is `None` (every shipped network).
+        self.check_palw_audit_bond_spend_gate(&txs, header.daa_score)?;
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
@@ -1536,6 +1540,58 @@ impl VirtualStateProcessor {
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
             .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
+    }
+
+    /// ADR-0032 Phase E2: refuse a block whose transaction spends an audit-call bond UTXO
+    /// (an opening-call carriage transaction's output 0) against its disposition. The
+    /// Stage-1 carriage store is the oracle (the ADR's own words), injected as a closure:
+    /// the call's acceptance DAA comes from its store row, the answer — if any — from the
+    /// earliest accepted OPENING_ANSWER naming that call's tx id. Only `CallerReturn`
+    /// (no answer inside `W_answer`, settlement passed) admits a spend; an answered call's
+    /// bond stays locked until the Stage-2 slash-flow transaction shape exists
+    /// (fail-closed). Inert while the PALW credit fence is `None`.
+    fn check_palw_audit_bond_spend_gate(&self, txs: &[Transaction], daa_score: u64) -> BlockProcessResult<()> {
+        use kaspa_consensus_core::palw_carriage::{
+            PALW_CARRIAGE_KIND_OPENING_ANSWER, PALW_CARRIAGE_KIND_OPENING_CALL, PalwCarriageV1, decode_palw_stage1_body,
+            palw_audit_bond_spend_gate,
+        };
+        let Some(credit) = self.palw_credit_params.as_ref() else {
+            return Ok(());
+        };
+        let windows = &credit.registration.windows;
+        let store = self.palw_carriage_store.read();
+        palw_audit_bond_spend_gate(
+            txs,
+            |outpoint| {
+                if outpoint.index != 0 {
+                    return None;
+                }
+                let record = store.get(outpoint.transaction_id).ok()?;
+                if record.kind != PALW_CARRIAGE_KIND_OPENING_CALL {
+                    return None;
+                }
+                let call_daa = record.accepted_daa_score;
+                // The earliest accepted answer naming this call. A full-store scan, entered
+                // only when a transaction actually spends a known call's output 0.
+                let answer_daa = store
+                    .all()
+                    .into_iter()
+                    .filter(|(_, r)| r.kind == PALW_CARRIAGE_KIND_OPENING_ANSWER)
+                    .filter_map(|(_, r)| match decode_palw_stage1_body(r.kind, &r.body) {
+                        Ok(PalwCarriageV1::OpeningAnswer(a)) if a.call_tx_id == outpoint.transaction_id => {
+                            Some(r.accepted_daa_score)
+                        }
+                        _ => None,
+                    })
+                    .min();
+                Some((call_daa, answer_daa))
+            },
+            daa_score,
+            windows.w_answer,
+            windows.prosecution_slack,
+            true,
+        )
+        .map_err(|(spending_tx, bond_outpoint)| AuditBondSpendAgainstDisposition(spending_tx, bond_outpoint).into())
     }
 
     /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-

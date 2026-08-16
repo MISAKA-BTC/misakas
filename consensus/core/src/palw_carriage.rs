@@ -245,6 +245,97 @@ pub enum PalwCarriedEvidenceV1 {
     // reassembly rules, never a field bolted onto these.
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0032 Phase E2 — the audit-call bond, as a bond
+// ---------------------------------------------------------------------------------------------
+
+/// ADR-0032 Phase E2: what may spend an audit-call bond UTXO (the opening-call carriage
+/// transaction's output 0) at a given moment. The three states are the ADR's spend gate,
+/// verbatim: unspendable before resolution; back to the caller after `W_answer +
+/// settlement` if the answer never came (the miner's `DATA_WITHHOLDING` offense stands
+/// separately — the bond returning does not absolve it); committed to the slash flow
+/// (burn + answerer compensation, Stage-2 machinery) the moment an answer was accepted in
+/// the window — an answered caller never gets its stake back directly, which is what makes
+/// an abusive audit cost something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwAuditBondDispositionV1 {
+    /// Before resolution: unspendable by anyone.
+    Locked,
+    /// No answer inside `W_answer`, settlement passed: spendable by the caller.
+    CallerReturn,
+    /// Answered in the window: spendable only INTO the slash flow, never by the caller.
+    SlashFlowOnly,
+}
+
+/// The E2 disposition of one audit-call bond. A LATE answer (accepted past the deadline)
+/// does not commit the caller's bond — the offense window had already closed against the
+/// miner; the answer is evidence for that offense, not a claim on the caller's stake.
+pub fn palw_audit_bond_disposition_v1(
+    call_accepted_daa: u64,
+    answer_accepted_daa: Option<u64>,
+    now_daa: u64,
+    w_answer: u64,
+    settlement_slack: u64,
+) -> PalwAuditBondDispositionV1 {
+    let answer_deadline = call_accepted_daa.saturating_add(w_answer);
+    match answer_accepted_daa {
+        Some(answered) if answered <= answer_deadline => PalwAuditBondDispositionV1::SlashFlowOnly,
+        _ => {
+            if now_daa > answer_deadline.saturating_add(settlement_slack) {
+                PalwAuditBondDispositionV1::CallerReturn
+            } else {
+                PalwAuditBondDispositionV1::Locked
+            }
+        }
+    }
+}
+
+/// The audit-call bond slot: an opening-call carriage transaction's output 0, when it has
+/// one. Recognition only — whether the value meets `F_audit` is a Stage-2 admission fact
+/// (economic-simulation-gated), and a call WITHOUT outputs simply carries no bond (Stage-1
+/// admission deliberately unchanged: adding an output requirement there would be an
+/// unfenced consensus change).
+pub fn palw_audit_call_bond_outpoint(tx: &Transaction) -> Option<TransactionOutpoint> {
+    if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_OPENING_CALL) || tx.outputs.is_empty() {
+        return None;
+    }
+    Some(TransactionOutpoint::new(tx.id(), 0))
+}
+
+/// ADR-0032 Phase E2, the spend gate in the ADR-0016 shape: every transaction input that
+/// spends a known audit-call bond outpoint must be permitted by that bond's disposition.
+/// `resolve` is the store oracle (closure-injected, the registry-independent discipline):
+/// it answers "this outpoint is an audit-call bond accepted at DAA X, answered at Y/never"
+/// from the Stage-1 carriage store, or `None` for outpoints that are no such bond.
+///
+/// Only `CallerReturn` admits a plain spend. `SlashFlowOnly` is refused HERE even for the
+/// slash flow — the Stage-2 slash transaction shape does not exist yet, and refusing
+/// everything is the fail-closed reading of "spendable INTO the slash flow" until it does.
+pub fn palw_audit_bond_spend_gate(
+    txs: &[Transaction],
+    resolve: impl Fn(&TransactionOutpoint) -> Option<(u64, Option<u64>)>,
+    now_daa: u64,
+    w_answer: u64,
+    settlement_slack: u64,
+    activated: bool,
+) -> Result<(), (TransactionId, TransactionOutpoint)> {
+    if !activated {
+        return Ok(());
+    }
+    for tx in txs {
+        for input in tx.inputs.iter() {
+            let Some((call_daa, answer_daa)) = resolve(&input.previous_outpoint) else {
+                continue;
+            };
+            let disposition = palw_audit_bond_disposition_v1(call_daa, answer_daa, now_daa, w_answer, settlement_slack);
+            if disposition != PalwAuditBondDispositionV1::CallerReturn {
+                return Err((tx.id(), input.previous_outpoint));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl PalwCarriedEvidenceV1 {
     /// Whether this evidence stands against the given commitment — the ADR-0033 credit
     /// gate's "refutation against C" join. A legs refutation names the composite execution
@@ -1393,5 +1484,71 @@ mod tests {
             decode_palw_stage1_body(extracted[0].1.kind, &extracted[0].1.body).unwrap(),
             PalwCarriageV1::Attestation(attestation())
         );
+    }
+
+    #[test]
+    fn audit_bond_disposition_covers_the_three_e2_states_and_their_edges() {
+        use PalwAuditBondDispositionV1::*;
+        let (w, s) = (30, 30); // two-minute w_answer + prosecution slack
+        // No answer: locked through the window AND the settlement slack, inclusive.
+        assert_eq!(palw_audit_bond_disposition_v1(100, None, 100, w, s), Locked);
+        assert_eq!(palw_audit_bond_disposition_v1(100, None, 160, w, s), Locked); // == deadline + slack
+        assert_eq!(palw_audit_bond_disposition_v1(100, None, 161, w, s), CallerReturn);
+        // An answer inside the window (deadline inclusive) commits the bond forever.
+        assert_eq!(palw_audit_bond_disposition_v1(100, Some(130), 10_000, w, s), SlashFlowOnly);
+        assert_eq!(palw_audit_bond_disposition_v1(100, Some(100), 101, w, s), SlashFlowOnly);
+        // A LATE answer does not commit the caller's bond — the miner's offense had
+        // already crystallized when the deadline passed.
+        assert_eq!(palw_audit_bond_disposition_v1(100, Some(131), 140, w, s), Locked);
+        assert_eq!(palw_audit_bond_disposition_v1(100, Some(131), 161, w, s), CallerReturn);
+    }
+
+    #[test]
+    fn audit_bond_spend_gate_admits_only_caller_return() {
+        let bond_outpoint = TransactionOutpoint::new(TransactionId::from_bytes([0xCA; 64]), 0);
+        let spend = Transaction::new(
+            0,
+            vec![crate::tx::TransactionInput::new(bond_outpoint, vec![], 0, 0)],
+            vec![],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let txs = vec![spend];
+        let unanswered = |_: &TransactionOutpoint| Some((100u64, None));
+        // Locked: refused, and the error names the spender and the bond.
+        let err = palw_audit_bond_spend_gate(&txs, unanswered, 130, 30, 30, true).unwrap_err();
+        assert_eq!(err, (txs[0].id(), bond_outpoint));
+        // CallerReturn: admitted.
+        assert!(palw_audit_bond_spend_gate(&txs, unanswered, 161, 30, 30, true).is_ok());
+        // SlashFlowOnly: refused no matter how late — fail-closed until the Stage-2
+        // slash-flow transaction shape exists.
+        assert!(palw_audit_bond_spend_gate(&txs, |_: &TransactionOutpoint| Some((100, Some(120))), 10_000, 30, 30, true).is_err());
+        // Not a recognized bond, or the gate not activated: pass untouched.
+        assert!(palw_audit_bond_spend_gate(&txs, |_: &TransactionOutpoint| None, 130, 30, 30, true).is_ok());
+        assert!(palw_audit_bond_spend_gate(&txs, unanswered, 130, 30, 30, false).is_ok());
+    }
+
+    #[test]
+    fn the_audit_bond_slot_is_an_opening_calls_output_zero_and_nothing_else() {
+        let call_with_bond = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(1_000, Default::default())],
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_OPENING_CALL,
+            0,
+            vec![],
+        );
+        assert_eq!(palw_audit_call_bond_outpoint(&call_with_bond), Some(TransactionOutpoint::new(call_with_bond.id(), 0)));
+        // A call without outputs carries no bond (Stage-1 admission deliberately unchanged).
+        let bare_call =
+            Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_OPENING_CALL, 0, vec![]);
+        assert_eq!(palw_audit_call_bond_outpoint(&bare_call), None);
+        // A non-call carriage or native transaction is never a bond slot.
+        let native =
+            Transaction::new(0, vec![], vec![TransactionOutput::new(1_000, Default::default())], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        assert_eq!(palw_audit_call_bond_outpoint(&native), None);
     }
 }

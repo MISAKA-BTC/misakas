@@ -277,6 +277,14 @@ pub enum RuleError {
     #[error("block transaction {0} spends non-releasable bond outpoint {1}")]
     NonReleasableBondSpendInBlock(TransactionId, TransactionOutpoint),
 
+    // ADR-0032 Phase E2: a block transaction spends an audit-call bond UTXO (an
+    // opening-call carriage transaction's output 0) whose disposition does not
+    // permit it — the call is still inside its answer/settlement window, or an
+    // accepted answer committed the bond to the slash flow. Inert while the
+    // PALW credit fence is `None` (every shipped network).
+    #[error("block transaction {0} spends audit-call bond outpoint {1} against its disposition")]
+    AuditBondSpendAgainstDisposition(TransactionId, TransactionOutpoint),
+
     // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): a block carrying a
     // `StakeUnbondRequest` that is not owner-authorized — its bond is unknown in
     // the block's selected-parent view, is not `Pending`/`Active` at the block's
