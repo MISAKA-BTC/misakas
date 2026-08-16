@@ -174,6 +174,13 @@ pub mod palw_step_refute;
 /// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
 /// one-step check. Land-stage, consensus-inert.
 pub mod palw_bisect;
+/// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
+/// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
+/// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention
+/// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion.
+/// Test-only (`#![cfg(test)]`); ships with the crate's test run.
+#[cfg(test)]
+pub mod palw_adversarial;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
