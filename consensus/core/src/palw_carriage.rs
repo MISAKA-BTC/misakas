@@ -76,10 +76,23 @@ pub const PALW_CARRIAGE_KIND_ATTESTATION: u8 = 0x02;
 pub const PALW_CARRIAGE_KIND_OPENING_CALL: u8 = 0x03;
 pub const PALW_CARRIAGE_KIND_OPENING_ANSWER: u8 = 0x04;
 pub const PALW_CARRIAGE_KIND_REFUTATION: u8 = 0x05;
+/// ADR-0029 §6's chunked evidence: the reassembly envelope for a refutation too big for one
+/// standard transaction (the bare-v2 logits-event row, ≈ 0.99 MiB → 3 chunks). Added before
+/// any Stage-1 validator deployed — the version-trap rule is about DEPLOYED validators.
+pub const PALW_CARRIAGE_KIND_EVIDENCE_CHUNK: u8 = 0x06;
 
 /// Most openings one carried call may request across both legs (and one carried answer may
 /// hold). A CARRIAGE cap, deliberately below the wire cap — see the module doc.
 pub const PALW_CARRIAGE_MAX_OPENINGS_PER_CALL: usize = 16;
+
+/// Largest single evidence chunk (bytes). ≈331 KB payloads ride a 480 KB standard tx with
+/// 3.2× aggregate headroom across a 3-chunk group (ADR-0029 §3/§6 mass arithmetic).
+pub const PALW_CARRIAGE_MAX_CHUNK_BYTES: usize = 340_000;
+/// Most chunks one evidence group may declare (3 needed for the 0.99 MiB case; one spare).
+pub const PALW_CARRIAGE_MAX_CHUNKS: u8 = 4;
+/// Most concurrently-assembling evidence groups a reassembler retains before refusing new
+/// ones — a userspace watcher bound, not consensus state.
+pub const PALW_CARRIAGE_MAX_ASSEMBLING_GROUPS: usize = 64;
 
 /// Domain of [`palw_carriage_envelope_hash_v1`].
 pub const PALW_CARRIAGE_DOMAIN_ENVELOPE_HASH: &[u8] = b"misaka-palw/carriage-envelope-hash/v1";
@@ -90,8 +103,17 @@ pub const PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT: &[u8] = b"misaka-palw/carria
 
 /// Every domain this module introduces (uniqueness-tested against every other PALW family and
 /// the VLT sortition key — one string shared across families is a preimage bridge).
-pub const PALW_CARRIAGE_ALL_DOMAINS: &[&[u8]] =
-    &[PALW_CARRIAGE_DOMAIN_ENVELOPE_HASH, PALW_CARRIAGE_DOMAIN_COMMITMENT_MESSAGE, PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT];
+/// The reassembly key and integrity check of a chunked evidence group: keyed BLAKE2b-512
+/// over the COMPLETE reassembled Stage-0 payload (magic, kind, body — the exact bytes that
+/// would have been one oversized carriage).
+pub const PALW_CARRIAGE_DOMAIN_EVIDENCE_GROUP: &[u8] = b"misaka-palw/evidence-chunk-group/v1";
+
+pub const PALW_CARRIAGE_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_CARRIAGE_DOMAIN_ENVELOPE_HASH,
+    PALW_CARRIAGE_DOMAIN_COMMITMENT_MESSAGE,
+    PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    PALW_CARRIAGE_DOMAIN_EVIDENCE_GROUP,
+];
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -127,6 +149,14 @@ pub enum PalwCarriageError {
     TooManyOpenings { got: usize, max: usize },
     #[error("carried object requests or holds zero openings")]
     EmptyOpenings,
+    #[error("the payload ({bytes} bytes) fits one transaction — send the object directly, not chunks")]
+    ChunkingUnnecessary { bytes: usize },
+    #[error("evidence payload of {bytes} bytes exceeds the {max}-byte group budget")]
+    EvidenceTooLarge { bytes: usize, max: usize },
+    #[error("evidence chunk group is incoherent: {0}")]
+    ChunkGroupIncoherent(&'static str),
+    #[error("reassembler is tracking the maximum {max} groups")]
+    TooManyAssemblingGroups { max: usize },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,6 +258,7 @@ pub enum PalwCarriageV1 {
     OpeningCall(PalwOpeningCallCarriageV1),
     OpeningAnswer(PalwOpeningAnswerCarriageV1),
     Refutation(PalwRefutationCarriageV1),
+    EvidenceChunk(PalwEvidenceChunkCarriageV1),
 }
 
 impl PalwCarriageV1 {
@@ -238,8 +269,122 @@ impl PalwCarriageV1 {
             PalwCarriageV1::OpeningCall(_) => PALW_CARRIAGE_KIND_OPENING_CALL,
             PalwCarriageV1::OpeningAnswer(_) => PALW_CARRIAGE_KIND_OPENING_ANSWER,
             PalwCarriageV1::Refutation(_) => PALW_CARRIAGE_KIND_REFUTATION,
+            PalwCarriageV1::EvidenceChunk(_) => PALW_CARRIAGE_KIND_EVIDENCE_CHUNK,
         }
     }
+}
+
+/// One chunk of an over-mass refutation (ADR-0029 §6). The group id is the keyed hash of the
+/// COMPLETE reassembled payload, so a group cannot be assembled into anything other than what
+/// its submitter hashed — chunk substitution changes the id and never assembles.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwEvidenceChunkCarriageV1 {
+    /// = [`PALW_CARRIAGE_VERSION_V1`].
+    pub version: u16,
+    pub evidence_group_id: Hash64,
+    pub chunk_index: u8,
+    pub chunk_count: u8,
+    pub bytes: Vec<u8>,
+}
+
+/// The group identity of a complete (unsplit) evidence payload.
+pub fn palw_evidence_group_id_v1(full_payload: &[u8]) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_CARRIAGE_DOMAIN_EVIDENCE_GROUP).to_state();
+    h.update(full_payload);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Splits one oversized carriage payload into a chunk group (the submitter half). Refuses
+/// payloads that fit one transaction (send the object directly) or exceed the group budget.
+pub fn palw_evidence_chunks_v1(full_payload: &[u8]) -> Result<Vec<PalwEvidenceChunkCarriageV1>, PalwCarriageError> {
+    palw_evidence_chunks_with_cap(full_payload, PALW_CARRIAGE_MAX_CHUNK_BYTES)
+}
+
+/// The splitter with an explicit per-chunk cap — the production cap is the wrapper above;
+/// tests drive multi-chunk assembly of normal-sized payloads through a small cap.
+fn palw_evidence_chunks_with_cap(full_payload: &[u8], cap: usize) -> Result<Vec<PalwEvidenceChunkCarriageV1>, PalwCarriageError> {
+    if full_payload.len() <= cap {
+        return Err(PalwCarriageError::ChunkingUnnecessary { bytes: full_payload.len() });
+    }
+    let count = full_payload.len().div_ceil(cap);
+    if count > PALW_CARRIAGE_MAX_CHUNKS as usize {
+        return Err(PalwCarriageError::EvidenceTooLarge { bytes: full_payload.len(), max: cap * PALW_CARRIAGE_MAX_CHUNKS as usize });
+    }
+    let group = palw_evidence_group_id_v1(full_payload);
+    Ok(full_payload
+        .chunks(cap)
+        .enumerate()
+        .map(|(i, bytes)| PalwEvidenceChunkCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            evidence_group_id: group,
+            chunk_index: i as u8,
+            chunk_count: count as u8,
+            bytes: bytes.to_vec(),
+        })
+        .collect())
+}
+
+/// The watcher-side reassembler: first-accepted-wins per (group, index) (the ADR-0029 dedup
+/// rule), assembly only when every index is present, the group id recomputed over the
+/// concatenation — and the result must decode as a REFUTATION carriage, the only kind big
+/// enough to have earned chunking. `W_round` timing against the LAST chunk is the scheduling
+/// layer's business; this type only assembles.
+#[derive(Default)]
+pub struct PalwEvidenceChunkAssemblerV1 {
+    groups: std::collections::HashMap<Hash64, Vec<Option<Vec<u8>>>>,
+}
+
+impl PalwEvidenceChunkAssemblerV1 {
+    /// Feeds one validated chunk. `Ok(Some(refutation))` when its group completes and checks
+    /// out; `Ok(None)` while waiting; `Err` on incoherent groups (countable anomalies).
+    pub fn insert(&mut self, chunk: &PalwEvidenceChunkCarriageV1) -> Result<Option<PalwRefutationCarriageV1>, PalwCarriageError> {
+        validate_evidence_chunk(chunk)?;
+        if !self.groups.contains_key(&chunk.evidence_group_id) && self.groups.len() >= PALW_CARRIAGE_MAX_ASSEMBLING_GROUPS {
+            return Err(PalwCarriageError::TooManyAssemblingGroups { max: PALW_CARRIAGE_MAX_ASSEMBLING_GROUPS });
+        }
+        let slots = self.groups.entry(chunk.evidence_group_id).or_insert_with(|| vec![None; chunk.chunk_count as usize]);
+        if slots.len() != chunk.chunk_count as usize {
+            return Err(PalwCarriageError::ChunkGroupIncoherent("chunk_count differs within one group"));
+        }
+        let slot = &mut slots[chunk.chunk_index as usize];
+        if slot.is_none() {
+            *slot = Some(chunk.bytes.clone()); // first-accepted-wins; a duplicate is ignored
+        }
+        if slots.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+        let full: Vec<u8> = slots.iter().flat_map(|s| s.as_ref().expect("all present").iter().copied()).collect();
+        let group = chunk.evidence_group_id;
+        self.groups.remove(&group);
+        if palw_evidence_group_id_v1(&full) != group {
+            return Err(PalwCarriageError::ChunkGroupIncoherent("reassembled bytes do not hash to the group id"));
+        }
+        match decode_palw_carriage_v1(&full)? {
+            Some(PalwCarriageV1::Refutation(r)) => {
+                validate_palw_carriage_v1(&PalwCarriageV1::Refutation(r.clone()))?;
+                Ok(Some(r))
+            }
+            _ => Err(PalwCarriageError::ChunkGroupIncoherent("reassembled payload is not a refutation carriage")),
+        }
+    }
+}
+
+fn validate_evidence_chunk(c: &PalwEvidenceChunkCarriageV1) -> Result<(), PalwCarriageError> {
+    if c.version != PALW_CARRIAGE_VERSION_V1 {
+        return Err(PalwCarriageError::UnsupportedVersion { got: c.version, expected: PALW_CARRIAGE_VERSION_V1 });
+    }
+    if c.chunk_count < 2 || c.chunk_count > PALW_CARRIAGE_MAX_CHUNKS {
+        return Err(PalwCarriageError::ChunkGroupIncoherent("chunk count is not 2..=max"));
+    }
+    if c.chunk_index >= c.chunk_count {
+        return Err(PalwCarriageError::ChunkGroupIncoherent("chunk index is not below the count"));
+    }
+    if c.bytes.is_empty() || c.bytes.len() > PALW_CARRIAGE_MAX_CHUNK_BYTES {
+        return Err(PalwCarriageError::ChunkGroupIncoherent("chunk bytes empty or over the cap"));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -306,6 +451,7 @@ pub fn encode_palw_carriage_v1(carriage: &PalwCarriageV1) -> Vec<u8> {
         PalwCarriageV1::OpeningCall(c) => borsh::to_vec(c),
         PalwCarriageV1::OpeningAnswer(a) => borsh::to_vec(a),
         PalwCarriageV1::Refutation(r) => borsh::to_vec(r),
+        PalwCarriageV1::EvidenceChunk(c) => borsh::to_vec(c),
     }
     .expect("borsh of an in-memory carriage body cannot fail");
     let mut out = Vec::with_capacity(PALW_CARRIAGE_MAGIC.len() + 1 + body.len());
@@ -332,6 +478,7 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
         PALW_CARRIAGE_KIND_OPENING_CALL => PalwCarriageV1::OpeningCall(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_OPENING_ANSWER => PalwCarriageV1::OpeningAnswer(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     };
     Ok(Some(carriage))
@@ -392,6 +539,7 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
             }
             Ok(())
         }
+        PalwCarriageV1::EvidenceChunk(c) => validate_evidence_chunk(c),
     }
 }
 
@@ -921,5 +1069,76 @@ mod tests {
         for domain in PALW_CARRIAGE_ALL_DOMAINS {
             assert!(domain.len() <= 64, "blake2b key cap");
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Evidence chunk carriage (ADR-0029 §6)
+    // -----------------------------------------------------------------------------------------
+
+    #[test]
+    fn evidence_chunks_split_ride_and_reassemble() {
+        let full = encode_palw_carriage_v1(&PalwCarriageV1::Refutation(refutation()));
+        // Small cap → a real multi-chunk group over a REAL refutation payload.
+        let cap = full.len().div_ceil(3);
+        let chunks = super::palw_evidence_chunks_with_cap(&full, cap).unwrap();
+        assert_eq!(chunks.len(), 3);
+        for c in &chunks {
+            // Each chunk is itself a valid carriage object that encodes and decodes.
+            let payload = encode_palw_carriage_v1(&PalwCarriageV1::EvidenceChunk(c.clone()));
+            let back = decode_palw_carriage_v1(&payload).unwrap().unwrap();
+            validate_palw_carriage_v1(&back).unwrap();
+        }
+        // Assembly in a scrambled arrival order.
+        let mut asm = PalwEvidenceChunkAssemblerV1::default();
+        assert_eq!(asm.insert(&chunks[2]).unwrap(), None);
+        assert_eq!(asm.insert(&chunks[0]).unwrap(), None);
+        // A duplicate of an already-held index is ignored (first-accepted-wins).
+        assert_eq!(asm.insert(&chunks[0]).unwrap(), None);
+        let out = asm.insert(&chunks[1]).unwrap().expect("group completes");
+        assert_eq!(out, refutation());
+    }
+
+    #[test]
+    fn evidence_chunk_substitution_never_assembles() {
+        let full = encode_palw_carriage_v1(&PalwCarriageV1::Refutation(refutation()));
+        let cap = full.len().div_ceil(3);
+        let mut chunks = super::palw_evidence_chunks_with_cap(&full, cap).unwrap();
+        // Tamper one byte of chunk 1: the group id no longer matches the reassembly.
+        chunks[1].bytes[0] ^= 1;
+        let mut asm = PalwEvidenceChunkAssemblerV1::default();
+        asm.insert(&chunks[0]).unwrap();
+        asm.insert(&chunks[1]).unwrap();
+        let got = asm.insert(&chunks[2]);
+        assert!(matches!(got, Err(PalwCarriageError::ChunkGroupIncoherent(_))), "got {got:?}");
+    }
+
+    #[test]
+    fn evidence_chunk_rules_are_closed() {
+        // Fits-one-transaction payloads must not be chunked.
+        assert!(matches!(palw_evidence_chunks_v1(&[0u8; 1000]), Err(PalwCarriageError::ChunkingUnnecessary { .. })));
+        // Over the group budget refuses.
+        assert!(matches!(super::palw_evidence_chunks_with_cap(&vec![0u8; 100], 10), Err(PalwCarriageError::EvidenceTooLarge { .. })));
+        // The 0.99 MiB bare-v2 case rides in 3 chunks under the production cap.
+        let logits_case = 248_320usize * 4 + 24_000; // row + object overhead margin
+        let count = logits_case.div_ceil(PALW_CARRIAGE_MAX_CHUNK_BYTES);
+        assert_eq!(count, 3, "the ADR-0029 §6 arithmetic");
+        // Malformed chunks are rejected before assembly.
+        let bad = PalwEvidenceChunkCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            evidence_group_id: Hash64::from_bytes([9; 64]),
+            chunk_index: 2,
+            chunk_count: 2,
+            bytes: vec![1],
+        };
+        assert!(matches!(PalwEvidenceChunkAssemblerV1::default().insert(&bad), Err(PalwCarriageError::ChunkGroupIncoherent(_))));
+        // A completed group that decodes as a NON-refutation kind refuses.
+        let not_refutation = encode_palw_carriage_v1(&PalwCarriageV1::Attestation(attestation()));
+        let cap = not_refutation.len().div_ceil(2);
+        let chunks = super::palw_evidence_chunks_with_cap(&not_refutation, cap).unwrap();
+        let mut asm = PalwEvidenceChunkAssemblerV1::default();
+        for c in &chunks[..chunks.len() - 1] {
+            asm.insert(c).unwrap();
+        }
+        assert!(matches!(asm.insert(&chunks[chunks.len() - 1]), Err(PalwCarriageError::ChunkGroupIncoherent(_))));
     }
 }
