@@ -112,6 +112,16 @@ offense that references the anchor (no-show, deadline) is prosecuted only after 
 final (§3's `finality < W_challenge` rule) — an assignee that acted on an anchor later reorged
 away simply sees its duty re-drawn, and nothing is chargeable against the vanished draw.
 
+> **Amended by ADR-0034 §7 (2026-08-16).** Once receipts carry the three routing keys, the
+> eligibility predicate above becomes binding-aware: family and family-version equality, band
+> capacity, a Merkle ready proof against the verifier's committed `ready_binding_root`, slot,
+> bond, TTL, reputation-floor and control-domain conjuncts join `bonded ∧ ¬frozen ∧ ≠ executor`
+> (`routed_candidate_eligible_v1`, its own domain key — the assignment-twin discipline). A
+> panel that lapses `W_replay` without the required on-time attestations is **re-drawn wider**
+> at the escalation anchor; original no-shows keep their objective offense. Everything else in
+> this section — determinism, executor independence, NOT-unpredictability, the reorg rule —
+> and §4's `q ≥ 2`, funding split, no-show pricing and permissionless window are unchanged.
+
 ### 3. Windows: DAA-denominated, stall-tolerant, pruning-constrained — and they cap the credited job
 
 All deadlines are DAA-score offsets (v0.1 §23, including "DAA stalls ⇒ deadlines stall").
