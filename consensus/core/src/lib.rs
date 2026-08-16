@@ -151,6 +151,11 @@ pub mod palw_schedule;
 /// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
 /// Land-stage, consensus-inert — no slashing is enabled by this module existing.
 pub mod palw_slash;
+/// MISAKA PALW step function v1 (ADR-0030): the frozen operator taxonomy, the shape-profile
+/// v3 schema and identity, and the step-index bijection a one-step refutation names steps
+/// with. Land-stage, consensus-inert — every profile VALUE is registration-measured; only
+/// the schema and the enumeration are pinned here.
+pub mod palw_step;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
