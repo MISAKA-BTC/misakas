@@ -2209,10 +2209,11 @@ impl VirtualStateProcessor {
                 }
             }
             info!("[vlt-credit] swept {swept} capability declaration(s) out of history into the capability store");
-            // Marked only after every insert is durable. A crash mid-sweep leaves the marker unset,
-            // so the next start sweeps again — idempotently, since a declaration keyed by its own
+            // The marker goes into the SAME batch as the inserts, so it becomes durable with them
+            // or not at all. A crash before the batch is written leaves the marker unset and the
+            // next start sweeps again — idempotently, since a declaration keyed by its own
             // transaction id rewrites to the same value.
-            store.mark_backfilled_direct().unwrap();
+            store.mark_backfilled(batch).unwrap();
         }
 
         let mut reverted = 0usize;
@@ -2317,10 +2318,11 @@ impl VirtualStateProcessor {
                 }
             }
             info!("[palw-carriage] swept {swept} carriage object(s) out of history into the carriage store");
-            // Marked only after every insert is staged. A crash mid-sweep leaves the marker
-            // unset, so the next start sweeps again — idempotently, since a row keyed by its own
-            // transaction id rewrites to the same value.
-            store.mark_backfilled_direct().unwrap();
+            // The marker goes into the SAME batch as the inserts, so it becomes durable with them
+            // or not at all. A crash before the batch is written leaves the marker unset and the
+            // next start sweeps again — idempotently, since a row keyed by its own transaction id
+            // rewrites to the same value.
+            store.mark_backfilled(batch).unwrap();
         }
 
         let mut reverted = 0usize;

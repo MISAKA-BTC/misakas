@@ -91,12 +91,6 @@ impl DbComputeCapabilityStore {
         self.access.write(BatchDbWriter::new(batch), tx_id, record)
     }
 
-    /// Immediate, unbatched write — used by the history sweep, whose rows must be readable by the
-    /// rest of the same commit.
-    pub fn insert_direct(&mut self, tx_id: TransactionId, record: Arc<ComputeCapabilityRecord>) -> StoreResult<()> {
-        self.access.write(DirectDbWriter::new(&self.db), tx_id, record)
-    }
-
     pub fn delete_batch(&mut self, batch: &mut WriteBatch, tx_id: TransactionId) -> StoreResult<()> {
         self.access.delete(BatchDbWriter::new(batch), tx_id)
     }
@@ -132,15 +126,18 @@ impl DbComputeCapabilityStore {
         matches!(self.backfilled.read(), Ok(1))
     }
 
-    /// Mark the sweep done. Called once the caller has written every declaration a live pool could
-    /// still need — see `backfill_compute_capabilities`.
+    /// Mark the sweep done — **in the caller's batch**, so the marker and the declarations it
+    /// vouches for become durable in the same atomic write.
+    ///
+    /// There is deliberately no direct (non-batched) variant. A direct mark is durable the moment
+    /// it returns, while the sweep's rows are still staged in an uncommitted `WriteBatch`: a crash
+    /// in that window would leave a store that believes it has been swept and has none of the
+    /// swept declarations, and the sweep never runs again — silently missing capabilities that
+    /// gate VLT credit. Batched, the two are one write: a crash leaves both absent (the next start
+    /// sweeps again, idempotently, since a declaration keyed by its own transaction id rewrites to
+    /// the same value) or both present.
     pub fn mark_backfilled(&mut self, batch: &mut WriteBatch) -> StoreResult<()> {
         self.backfilled.write(BatchDbWriter::new(batch), &1u32)
-    }
-
-    /// Direct (non-batched) mark, for a sweep that ran outside a commit batch.
-    pub fn mark_backfilled_direct(&mut self) -> Result<(), StoreError> {
-        self.backfilled.write(DirectDbWriter::new(&self.db), &1u32)
     }
 
     /// Every stored declaration.
@@ -219,5 +216,37 @@ mod tests {
         store.delete_batch(&mut batch, TransactionId::from_bytes([0xCC; 64])).unwrap();
         db.write(batch).unwrap();
         assert_eq!(store.all().len(), 2);
+    }
+
+    /// The marker and the declarations it vouches for become durable together.
+    ///
+    /// This store gates VLT credit, so a store that believes it has been swept and holds none of
+    /// the swept declarations is a wrong-but-quiet consensus outcome, not a crash. A restart IS a
+    /// fresh store over the same database, so that is how the durability is observed:
+    /// `CachedDbItem::write` populates the in-memory cache immediately (the running process does
+    /// not re-sweep), but the DB sees nothing until the batch is written.
+    #[test]
+    fn the_backfill_marker_is_not_durable_until_its_batch_is_written() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbComputeCapabilityStore::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let tx = kaspa_consensus_core::tx::TransactionId::from_bytes([0xAA; 64]);
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, tx, Arc::new(record(1))).unwrap();
+        store.mark_backfilled(&mut batch).unwrap();
+
+        assert!(store.is_backfilled(), "the sweeping process must not re-sweep within its own pass");
+        {
+            let restarted = DbComputeCapabilityStore::new(db.clone(), CachePolicy::Count(16));
+            assert!(!restarted.is_backfilled(), "a crash before the batch write must leave the sweep undone");
+            assert!(restarted.all().is_empty(), "and it must leave no declarations either — both or neither");
+        }
+
+        db.write(batch).unwrap();
+
+        let restarted = DbComputeCapabilityStore::new(db, CachePolicy::Count(16));
+        assert!(restarted.is_backfilled(), "the marker is durable once its batch is written");
+        assert_eq!(restarted.all().len(), 1, "with the declarations it vouched for");
     }
 }
