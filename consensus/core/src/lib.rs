@@ -174,6 +174,12 @@ pub mod palw_step_refute;
 /// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
 /// one-step check. Land-stage, consensus-inert.
 pub mod palw_bisect;
+/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
+/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
+/// commitment form and adjudication depth, with the validation that makes an incoherent
+/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
+/// consumer).
+pub mod palw_registry;
 /// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
 /// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
 /// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention

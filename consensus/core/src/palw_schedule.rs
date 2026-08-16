@@ -127,7 +127,7 @@ pub const PALW_SCHEDULE_PARAMS_VERSION_V1: u16 = 1;
 /// The per-class window parameters, DAA-denominated. Registered at class registration in later
 /// stages; the constructors below are the ADR-0028 §3 **Stage-1 placeholders**, and
 /// [`Self::validate`] is the rule they are one solution of.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwScheduleParamsV1 {
     /// = [`PALW_SCHEDULE_PARAMS_VERSION_V1`].
     pub version: u16,
@@ -267,7 +267,7 @@ pub fn replay_p99_fits_v1(p99_cold_replay_ms: u64, params: &PalwScheduleParamsV1
 /// The fixed part of a cold replay: model load plus process spin-up, independent of decode
 /// depth. Subtracted before dividing the residual by the per-token cost, so the ceiling is
 /// not depressed by a large constant on a short measurement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwReplayCostMeasurementV1 {
     /// The class's SLOWEST host, cold: the fixed overhead (ms) — the load-only p99.
     pub fixed_overhead_ms: u64,
