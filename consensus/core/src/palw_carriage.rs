@@ -245,6 +245,21 @@ pub enum PalwCarriedEvidenceV1 {
     // reassembly rules, never a field bolted onto these.
 }
 
+impl PalwCarriedEvidenceV1 {
+    /// Whether this evidence stands against the given commitment — the ADR-0033 credit
+    /// gate's "refutation against C" join. A legs refutation names the composite execution
+    /// root it opens against; a trace-summary refutation names the v2 logits root (which IS
+    /// the committed root for a bare-v2 class). Standing against is not conviction — an
+    /// ACCEPTED refutation carriage inside the window voids credit, and adjudicating it is
+    /// the slash path's business, not the gate's.
+    pub fn refutes(&self, committed_root: &Hash64, logits_root: &Hash64) -> bool {
+        match self {
+            PalwCarriedEvidenceV1::Legs(legs) => legs.binding.committed_execution_root == *committed_root,
+            PalwCarriedEvidenceV1::Summary(summary) => summary.committed_trace_root == *logits_root,
+        }
+    }
+}
+
 /// A refutation, carried. Pure evidence carrier: the Stage-1 stateless validator additionally
 /// requires the carrying transaction to declare **no outputs** (the slashing-evidence rule, so
 /// the reporter-reward slot `(tx_id, 0)` is never a retrofit); that check needs the

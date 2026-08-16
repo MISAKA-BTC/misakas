@@ -342,6 +342,11 @@ pub struct VirtualStateProcessor {
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
 
+    /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
+    /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
+    /// and validated identically. Cloned from `Params::palw_credit` at construction.
+    pub(super) palw_credit_params: Option<kaspa_consensus_core::palw_credit::PalwCreditParamsV1>,
+
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
     // chain-context EVM step + canonical head pointers. Inert until
     // `evm_activation_daa_score` is finite (`u64::MAX` on every current net).
@@ -607,6 +612,7 @@ impl VirtualStateProcessor {
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
+            palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
@@ -4791,6 +4797,161 @@ impl VirtualStateProcessor {
         (outputs, spent)
     }
 
+    /// ADR-0033 §4 (B14): the PALW credit outputs of the block being built or validated at
+    /// `daa_score` on top of `selected_parent` — `base(C)` to each creditable commitment's
+    /// executor and `ρ_v · base(C)` to each paid panel attester, resolved to bond reward
+    /// spks exactly like the audit fee.
+    ///
+    /// A commitment crosses its `challenge_close_daa` at this block iff the parent had not
+    /// yet passed it and this block has (the audit-fee crossing rule), so each commitment
+    /// is decided exactly once per chain with no cross-block dedup state. Every fact the
+    /// gate reads is assembled by walking THIS block's selected-parent chain backward
+    /// across the challenge horizon — never the virtual-maintained store — so construction
+    /// and validation of the same block compute identical outputs even while virtual
+    /// points elsewhere, and a reorg re-decides identically on every node (ADR-0033 §5).
+    ///
+    /// # Cost
+    ///
+    /// Nothing when the fence is `None` (every shipped network — the caller gates). Active,
+    /// it reads `w_challenge + Δ_bind + slack` chain blocks' acceptance data per block: the
+    /// same activation-gated posture as [`Self::compute_audit_fee_outputs`], and like it,
+    /// a settled index is the optimization ADR-0033's preconditions require before any
+    /// real network carries the fence.
+    pub(super) fn compute_palw_credit_outputs(
+        &self,
+        credit: &kaspa_consensus_core::palw_credit::PalwCreditParamsV1,
+        daa_score: u64,
+        selected_parent: BlockHash,
+        bonds: &[StakeBondRecord],
+    ) -> Vec<TransactionOutput> {
+        use kaspa_consensus_core::blockhash::BlockHashExtensions;
+        use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body};
+        use kaspa_consensus_core::palw_credit::{PalwObservedAttestationV1, PalwObservedCommitmentV1, decide_credit_v1};
+        use kaspa_consensus_core::palw_schedule::PalwPanelCandidateV1;
+
+        let windows = &credit.registration.windows;
+        // Nothing can have crossed before activation plus one full window.
+        if daa_score <= credit.activation_daa.saturating_add(windows.w_challenge) {
+            return Vec::new();
+        }
+        let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
+            return Vec::new();
+        };
+        // Walk the selected-parent chain back across the whole challenge horizon.
+        let depth = windows.w_challenge.saturating_add(windows.delta_bind).saturating_add(windows.prosecution_slack);
+        let mut chain_rev: Vec<(BlockHash, u64)> = Vec::new(); // newest-first
+        let mut commitments = Vec::new();
+        let mut attestations = Vec::new();
+        let mut refutations = Vec::new();
+        let mut current = selected_parent;
+        loop {
+            let Ok(cur_daa) = self.headers_store.get_daa_score(current) else { break };
+            if parent_daa.saturating_sub(cur_daa) > depth {
+                break;
+            }
+            chain_rev.push((current, cur_daa));
+            for (tx_id, record) in
+                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa)
+            {
+                match decode_palw_stage1_body(record.kind, &record.body) {
+                    Ok(PalwCarriageV1::Commitment(c)) => commitments.push((tx_id, c, cur_daa)),
+                    Ok(PalwCarriageV1::Attestation(a)) => attestations.push((a, cur_daa)),
+                    Ok(PalwCarriageV1::Refutation(r)) => refutations.push((r.evidence, cur_daa)),
+                    _ => {}
+                }
+            }
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else { break };
+            if parent == current || parent.is_origin() {
+                break;
+            }
+            current = parent;
+        }
+        // Crossing commitments, in one pinned order (construction == validation).
+        let mut crossing: Vec<&(TransactionId, kaspa_consensus_core::palw_carriage::PalwCommitmentCarriageV1, u64)> =
+            commitments
+                .iter()
+                .filter(|(_, _, accepted)| {
+                    parent_daa.saturating_sub(*accepted) <= windows.w_challenge
+                        && daa_score.saturating_sub(*accepted) > windows.w_challenge
+                })
+                .collect();
+        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
+        if crossing.is_empty() {
+            return Vec::new();
+        }
+        let subsidy = self.coinbase_manager.calc_block_subsidy(daa_score);
+        // The bonded candidate set. Single registered class by construction of the fence, so
+        // every bonded validator is a candidate of that class; `select_replay_panel_v1`
+        // itself excludes the executor and applies q.
+        let candidates: Vec<PalwPanelCandidateV1> = bonds
+            .iter()
+            .map(|b| PalwPanelCandidateV1 {
+                validator_id: b.validator_pubkey_hash,
+                runtime_class_id: credit.registration.runtime_class_id,
+                bonded: true,
+                frozen: false,
+            })
+            .collect();
+        let mut outputs = Vec::new();
+        for (_, commitment, accepted) in crossing {
+            let logits_root = match commitment.binding.as_ref() {
+                Some(binding) => binding.full_logits_trace_root,
+                None => commitment.committed_root, // bare v2: the committed root IS the logits root
+            };
+            // Anchor: the first chain block at or past accepted + Δ_bind (ADR-0028 §2).
+            let anchor_daa = accepted.saturating_add(windows.delta_bind);
+            let Some((anchor_hash, _)) = chain_rev.iter().rev().find(|(_, daa)| *daa >= anchor_daa) else {
+                continue; // no anchor on this chain — the job is not decidable here
+            };
+            let observed = PalwObservedCommitmentV1 {
+                committed_root: commitment.committed_root,
+                logits_root,
+                executor_id: commitment.validator_id,
+                runtime_class_id: commitment.envelope.runtime_class_id,
+                accepted_daa: *accepted,
+            };
+            let observed_atts: Vec<PalwObservedAttestationV1> = attestations
+                .iter()
+                .filter(|(a, _): &&(kaspa_consensus_core::palw_carriage::PalwAttestationCarriageV1, u64)| {
+                    a.commitment_root == commitment.committed_root
+                })
+                .map(|(a, daa)| PalwObservedAttestationV1 {
+                    attester_id: a.attester_id,
+                    attested_logits_root: a.attestation.full_logits_trace_root,
+                    accepted_daa: *daa,
+                })
+                .collect();
+            let refutation_daas: Vec<u64> = refutations
+                .iter()
+                .filter(|(e, _): &&(kaspa_consensus_core::palw_carriage::PalwCarriedEvidenceV1, u64)| {
+                    e.refutes(&commitment.committed_root, &logits_root)
+                })
+                .map(|(_, daa)| *daa)
+                .collect();
+            let decision = decide_credit_v1(credit, &observed, anchor_hash, &candidates, &observed_atts, &refutation_daas, subsidy);
+            if !decision.creditable {
+                continue;
+            }
+            // base(C) to the executor's bond owner — an unbonded executor has no payout
+            // target and no stake at risk, so it earns nothing; attester shares still pay,
+            // because their liability (signature ∧ refutation) is their own.
+            let executor_bond = bonds.iter().find(|b| b.validator_pubkey_hash == commitment.validator_id);
+            if let (Some(executor_bond), true) = (executor_bond, decision.base_sompi > 0) {
+                outputs.push(TransactionOutput::new(decision.base_sompi, p2pkh_mldsa87_spk(&executor_bond.owner_reward_spk_payload)));
+            }
+            for attester in &decision.paid_attesters {
+                let Some(bond) = bonds.iter().find(|b| b.validator_pubkey_hash == *attester) else { continue };
+                if decision.attester_share_sompi > 0 {
+                    outputs.push(TransactionOutput::new(
+                        decision.attester_share_sompi,
+                        p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload),
+                    ));
+                }
+            }
+        }
+        outputs
+    }
+
     /// This validator's own standing in the compute overlay. Backs
     /// [`ConsensusApi::get_compute_status`].
     ///
@@ -6949,6 +7110,17 @@ impl VirtualStateProcessor {
                 parent_balance,
             );
             validator_reward_outputs.extend(drip_outputs);
+        }
+        // ADR-0033 (B14): PALW credit outputs, appended after the drip in BOTH paths so the
+        // output order is pinned. Dormant (`None`) on every shipped network.
+        if let Some(credit) = self.palw_credit_params.as_ref() {
+            let credit_outputs = self.compute_palw_credit_outputs(
+                credit,
+                virtual_state.daa_score,
+                virtual_state.ghostdag_data.selected_parent,
+                &template_bond_view.records(),
+            );
+            validator_reward_outputs.extend(credit_outputs);
         }
         let coinbase = self
             .coinbase_manager

@@ -774,6 +774,19 @@ impl VirtualStateProcessor {
             validator_reward_outputs.extend(drip_outputs);
             ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
         }
+        // ADR-0033 (B14): PALW credit outputs, appended after the drip in BOTH paths so the
+        // output order is pinned — a validating node recomputes the gate from its own view
+        // and rejects a coinbase claiming credit the gate does not grant. Dormant (`None`)
+        // on every shipped network.
+        if let Some(credit) = self.palw_credit_params.as_ref() {
+            let credit_outputs = self.compute_palw_credit_outputs(
+                credit,
+                header.daa_score,
+                ctx.selected_parent(),
+                &selected_parent_bond_view.records(),
+            );
+            validator_reward_outputs.extend(credit_outputs);
+        }
 
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         self.verify_coinbase_transaction(
