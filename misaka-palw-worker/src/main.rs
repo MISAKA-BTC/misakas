@@ -37,6 +37,7 @@
 //! Greedy argmax decoding, first-index tie-break, no sampler state: the spec's sampling seed
 //! covers runtimes that sample, and this one deliberately does not.
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -51,9 +52,14 @@ use kaspa_consensus_core::palw_v2::{
     PALW_V2_MAX_FRAME_BYTES,
 };
 use kaspa_consensus_core::palw_legs::{
-    checkpoint_state_root_v1, execution_commitment_scheme_id_v1, state_layout_id_v1, tap_semantics_id_v1,
-    PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegsBindingV1, PalwLegsCommitmentBuilderV1, PalwLegsJobResultV1,
-    PALW_LEGS_OBJECT_VERSION_V1,
+    canonical_activation_leaf_coordinates, canonical_activation_leaf_count, canonical_activation_leaf_index,
+    canonical_checkpoint_count, check_legs_opening_answer_v1, check_opening_request_shape, checkpoint_state_root_v1,
+    execution_commitment_scheme_id_v1, leg_opening_v1, state_layout_id_v1, tap_semantics_id_v1, PalwActivationCoordinateV1,
+    PalwActivationLeafV1, PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegsBindingV1, PalwLegsCommitmentBuilderV1,
+    PalwLegsJobResultV1, PalwLegsMaterial, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsOpeningRequestV1,
+    PalwOpenedActivationLeafV1, PalwOpenedCheckpointLeafV1, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
+    PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
+    PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
 };
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
@@ -774,6 +780,26 @@ struct LegsCapture {
     /// nothing — the one capture failure that does not announce itself, so it is counted.
     rows_seen: u64,
     rows_all_zero: u64,
+    /// Coordinates whose rows the caller wants back (the open path); empty on the commit path.
+    wanted: HashSet<(u32, u32, u32)>,
+    retained: Vec<((u32, u32, u32), Vec<f32>)>,
+}
+
+/// What the open path keeps beside the binding: the tree material openings come from, and the
+/// requested rows themselves. Process-local, like the material it wraps.
+struct LegsOpenMaterial {
+    material: PalwLegsMaterial,
+    rows: Vec<((u32, u32, u32), Vec<f32>)>,
+}
+
+/// How (and whether) an execution captures legs.
+enum LegsMode {
+    /// No capture, no callback — the byte-identical frozen v2 path.
+    Off,
+    /// Capture and commit; material is dropped at the seal.
+    Commit,
+    /// Capture, commit, and keep what answering the named coordinates needs.
+    Open(HashSet<(u32, u32, u32)>),
 }
 
 impl LegsCapture {
@@ -809,6 +835,9 @@ impl LegsCapture {
                 if self.row.iter().all(|v| *v == 0.0) {
                     self.rows_all_zero += 1;
                 }
+                if self.wanted.contains(&(call_index, tap_slot, position)) {
+                    self.retained.push(((call_index, tap_slot, position), self.row.clone()));
+                }
                 self.builder
                     .push_activation_row(call_index, tap_slot, position, &self.row)
                     .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
@@ -840,8 +869,10 @@ impl LegsCapture {
 struct ExecutionV2 {
     projection: PalwResultProjectionV2,
     telemetry: PalwJobTelemetryV2,
-    /// `Some` only on the legs path; the bare v2 path is unchanged and produces none.
+    /// `Some` only on the legs paths; the bare v2 path is unchanged and produces none.
     legs: Option<PalwLegsBindingV1>,
+    /// `Some` only on the open path.
+    open_material: Option<LegsOpenMaterial>,
 }
 
 /// One decode call of the v2 loop: feed, record the schedule, capture the full logits row,
@@ -880,15 +911,28 @@ fn step_v2(
 /// The frozen v2 path: no capture, therefore no eval callback, therefore the exact scheduler
 /// behaviour every v2 golden was measured under.
 fn execute_v2(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
-    execute_v2_inner(model_path, envelope, false)
+    execute_v2_inner(model_path, envelope, LegsMode::Off)
 }
 
 /// The legs path: identical execution plus activation and checkpoint capture.
 fn execute_v2_legs(model_path: &Path, envelope: &PalwJobEnvelopeV2) -> ExecutionV2 {
-    execute_v2_inner(model_path, envelope, true)
+    execute_v2_inner(model_path, envelope, LegsMode::Commit)
 }
 
-fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, capture_legs: bool) -> ExecutionV2 {
+/// The answering path: the legs path, additionally retaining the named rows and the tree
+/// material. The computation is bit-identical to [`execute_v2_legs`] — retention is Rust-side
+/// bookkeeping after each row is read, never a different call into the runtime.
+fn execute_v2_legs_open(model_path: &Path, envelope: &PalwJobEnvelopeV2, wanted: HashSet<(u32, u32, u32)>) -> ExecutionV2 {
+    execute_v2_inner(model_path, envelope, LegsMode::Open(wanted))
+}
+
+fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, mode: LegsMode) -> ExecutionV2 {
+    let capture_legs = !matches!(mode, LegsMode::Off);
+    let keep_material = matches!(mode, LegsMode::Open(_));
+    let wanted = match mode {
+        LegsMode::Open(wanted) => wanted,
+        _ => HashSet::new(),
+    };
     let load_started = std::time::Instant::now();
     // Tap layers are a function of the model's depth, which is only known after load — so the
     // arm has to be provisional here and is checked against the real layer count below.
@@ -977,6 +1021,8 @@ fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, capture_leg
             state_bytes: Vec::new(),
             rows_seen: 0,
             rows_all_zero: 0,
+            wanted,
+            retained: Vec::new(),
         }
     });
 
@@ -1084,22 +1130,24 @@ fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, capture_leg
     // Seal the legs against the logits root they bind. `finish` is where a short leg or a
     // drifted checkpoint schedule becomes an error — the process must die here rather than emit
     // a receipt a challenger could convict it on.
-    let legs = legs.map(|capture| {
-        if capture.rows_seen > 0 && capture.rows_all_zero == capture.rows_seen {
-            die(format!(
-                "v2-legs execution invalid: all {} captured activation rows are zero — the tap read nothing",
-                capture.rows_seen
-            ));
+    let (legs, open_material) = match legs {
+        None => (None, None),
+        Some(capture) => {
+            if capture.rows_seen > 0 && capture.rows_all_zero == capture.rows_seen {
+                die(format!(
+                    "v2-legs execution invalid: all {} captured activation rows are zero — the tap read nothing",
+                    capture.rows_seen
+                ));
+            }
+            let LegsCapture { builder, retained, rows_seen, rows_all_zero, .. } = capture;
+            let (binding, material) = builder
+                .finish_with_material(commitment.full_logits_sequence_root)
+                .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
+            eprintln!("[palw-worker] v2 legs capture: {rows_seen} rows, {rows_all_zero} all-zero");
+            let open_material = keep_material.then_some(LegsOpenMaterial { material, rows: retained });
+            (Some(binding), open_material)
         }
-        let zero_rows = capture.rows_all_zero;
-        let seen = capture.rows_seen;
-        let binding = capture
-            .builder
-            .finish(commitment.full_logits_sequence_root)
-            .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
-        eprintln!("[palw-worker] v2 legs capture: {seen} rows, {zero_rows} all-zero");
-        binding
-    });
+    };
 
     let projection = PalwResultProjectionV2 {
         job_context_hash,
@@ -1136,6 +1184,7 @@ fn execute_v2_inner(model_path: &Path, envelope: &PalwJobEnvelopeV2, capture_leg
             eog_first_seen_at_decode_index: eog_first,
         },
         legs,
+        open_material,
     }
 }
 
@@ -1216,6 +1265,249 @@ fn run_v2_legs_job() {
     write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v2 legs result frame: {e}")));
 }
 
+/// Builds the answer from retained material, in request order. Every miss here is an internal
+/// bug — the request was validated before execution and the material comes from the very
+/// execution that produced the binding — so failures die rather than degrade.
+fn compose_opening_answer(
+    binding: &PalwLegsBindingV1,
+    open: &LegsOpenMaterial,
+    request: &PalwLegsOpeningRequestV1,
+) -> PalwLegsOpeningAnswerV1 {
+    let taps = binding.tap_profile.tap_count();
+    let activation = request
+        .activation
+        .iter()
+        .map(|coordinate| {
+            let index = canonical_activation_leaf_index(
+                &binding.job_context,
+                taps,
+                coordinate.call_index,
+                coordinate.tap_slot,
+                coordinate.position,
+            )
+            .unwrap_or_else(|| die("internal error: a validated coordinate stopped being canonical".into()));
+            let opening = leg_opening_v1(
+                PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
+                PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE,
+                &open.material.activation_leaf_hashes,
+                index as u32,
+                PALW_LEGS_MAX_ACTIVATION_LEAVES,
+            )
+            .unwrap_or_else(|e| die(format!("internal error: cannot open activation leaf {index}: {e}")));
+            let row = open
+                .rows
+                .iter()
+                .find(|(coords, _)| *coords == (coordinate.call_index, coordinate.tap_slot, coordinate.position))
+                .unwrap_or_else(|| die("internal error: a requested row was not retained during capture".into()));
+            PalwOpenedActivationLeafV1 {
+                opening,
+                preimage: PalwActivationLeafV1 {
+                    call_index: coordinate.call_index,
+                    tap_slot: coordinate.tap_slot,
+                    position: coordinate.position,
+                    hidden_dim: binding.tap_profile.hidden_dim,
+                    value_count: row.1.len() as u32,
+                    values_le_bytes: row.1.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                },
+            }
+        })
+        .collect();
+    let checkpoints = request
+        .checkpoint_indices
+        .iter()
+        .map(|index| {
+            let opening = leg_opening_v1(
+                PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF,
+                PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
+                &open.material.checkpoint_leaf_hashes,
+                *index,
+                PALW_LEGS_MAX_CHECKPOINTS,
+            )
+            .unwrap_or_else(|e| die(format!("internal error: cannot open checkpoint {index}: {e}")));
+            PalwOpenedCheckpointLeafV1 { opening, preimage: open.material.checkpoint_leaves[*index as usize].clone() }
+        })
+        .collect();
+    PalwLegsOpeningAnswerV1 { version: PALW_LEGS_OBJECT_VERSION_V1, binding: binding.clone(), activation, checkpoints }
+}
+
+/// `--mode v2-legs-open`: answer an opening call about a commitment THIS runtime can
+/// reproduce. stdin carries one framed `PalwLegsOpeningCallV1` (the job envelope and the
+/// request are one message — the v2 frame contract is one frame per stream, and a request
+/// without its job is not answerable anyway); stdout carries one framed
+/// `PalwLegsOpeningAnswerV1`.
+///
+/// The worker re-executes the job with capture and compares the recomputed committed root to
+/// the requested one. On mismatch it dies with nothing on stdout: an honest answerer never
+/// fabricates openings for a tree it cannot reproduce. That refusal is the security property —
+/// within a class, ANY member can answer for any honest commitment (re-execution reproduces the
+/// tree bit for bit), and nobody can answer for a fraudulent one.
+fn run_v2_legs_open() {
+    let mut stdin = std::io::stdin().lock();
+    let payload = read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v2-legs-open rejected: {e}")));
+    let call: PalwLegsOpeningCallV1 = decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("v2-legs-open rejected: {e}")));
+    if call.version != PALW_LEGS_OBJECT_VERSION_V1 {
+        die(format!("v2-legs-open rejected: unsupported call version {}", call.version));
+    }
+    let envelope = call.envelope;
+    let request = call.request;
+    envelope.validate_shape(N_CTX as u32).unwrap_or_else(|e| die(format!("v2-legs-open rejected: {e}")));
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!(
+            "v2-legs-open rejected: floating-point environment is not the canonical profile ({}; required {FP_ENVIRONMENT_PROFILE_V2})",
+            fp.canonical_string()
+        ));
+    }
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
+    check_v2_identity(&envelope, &manifest);
+
+    // The request is validated against THIS worker's profiles before a model load is spent on
+    // it — the same shape gate the answer checker applies afterwards.
+    let context = PalwJobContextV2::from_envelope(&envelope, tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256));
+    let taps = canonical_tap_layers(qwen35_pins::MODEL_LAYER_COUNT).len() as u32;
+    let expected_checkpoints = canonical_checkpoint_count(&context, CHECKPOINT_INTERVAL_V1);
+    check_opening_request_shape(&request, &context, taps, expected_checkpoints)
+        .unwrap_or_else(|e| die(format!("v2-legs-open rejected: {e}")));
+
+    let wanted: HashSet<(u32, u32, u32)> =
+        request.activation.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
+    let model_path = pinned_model_path_v2();
+    let exec = execute_v2_legs_open(&model_path, &envelope, wanted);
+    let binding = exec.legs.unwrap_or_else(|| die("internal error: the open path produced no binding".into()));
+    let open = exec.open_material.unwrap_or_else(|| die("internal error: the open path retained no material".into()));
+    if binding.committed_execution_root != request.committed_execution_root {
+        die(format!(
+            "v2-legs-open refused: this runtime reproduces execution root {}, not the requested {} — refusing to open a commitment that is not this execution",
+            hex(binding.committed_execution_root),
+            hex(request.committed_execution_root)
+        ));
+    }
+    let answer = compose_opening_answer(&binding, &open, &request);
+    check_legs_opening_answer_v1(&request, &answer)
+        .unwrap_or_else(|e| die(format!("internal error: the composed answer failed its own check: {e}")));
+    let bytes = borsh::to_vec(&answer).unwrap_or_else(|e| die(format!("cannot serialize the opening answer: {e}")));
+    write_framed(&mut std::io::stdout().lock(), &bytes).unwrap_or_else(|e| die(format!("cannot write the answer frame: {e}")));
+    eprintln!(
+        "[palw-worker] v2-legs-open: answered {} activation + {} checkpoint opening(s) for root {}…",
+        answer.activation.len(),
+        answer.checkpoints.len(),
+        &hex(request.committed_execution_root)[..16]
+    );
+}
+
+/// Reads one complete frame from a file — the file IS the stream, so the one-frame-then-EOF
+/// contract applies to it exactly as to a pipe.
+fn read_frame_file(path: &str, what: &str) -> Vec<u8> {
+    let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("cannot open the {what} frame at {path}: {e}")));
+    read_framed(&mut file, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("{what} frame at {path} rejected: {e}")))
+}
+
+/// `--mode v2-legs-open-request --envelope <path>`: harness plumbing. Reads a
+/// `PalwLegsJobResultV1` frame on stdin (what `v2-legs-job` wrote) plus the job's envelope
+/// frame, and emits the complete `PalwLegsOpeningCallV1`: a deterministic request for the
+/// first, middle and last activation leaves plus every committed checkpoint (capped). A real
+/// challenge protocol SAMPLES leaf indices from bound randomness — that protocol is future-ADR
+/// work; this mode exists so the E2E harness can exercise commit → open → verify without
+/// pretending to be it. Model-free.
+fn run_v2_legs_open_request(envelope_path: &str) {
+    let envelope_payload = read_frame_file(envelope_path, "envelope");
+    let envelope: PalwJobEnvelopeV2 =
+        decode_framed_borsh(&envelope_payload).unwrap_or_else(|e| die(format!("v2-legs-open-request rejected: {e}")));
+    let mut stdin = std::io::stdin().lock();
+    let payload =
+        read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v2-legs-open-request rejected: {e}")));
+    let result: PalwLegsJobResultV1 =
+        decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("v2-legs-open-request rejected: {e}")));
+    result.validate_coherence().unwrap_or_else(|e| die(format!("v2-legs-open-request rejected: {e}")));
+    let binding = &result.binding;
+    let taps = binding.tap_profile.tap_count();
+    let count = binding.activation_leaf_count as u64;
+    let mut indices = vec![0, count / 2, count.saturating_sub(1)];
+    indices.sort_unstable();
+    indices.dedup();
+    let activation = indices
+        .iter()
+        .map(|index| {
+            canonical_activation_leaf_coordinates(&binding.job_context, taps, *index)
+                .unwrap_or_else(|| die(format!("v2-legs-open-request rejected: leaf {index} has no canonical coordinates")))
+        })
+        .collect();
+    let call = PalwLegsOpeningCallV1 {
+        version: PALW_LEGS_OBJECT_VERSION_V1,
+        envelope,
+        request: PalwLegsOpeningRequestV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            committed_execution_root: binding.committed_execution_root,
+            activation,
+            checkpoint_indices: (0..binding.checkpoint_count.min(8)).collect(),
+        },
+    };
+    let bytes = borsh::to_vec(&call).unwrap_or_else(|e| die(format!("cannot serialize the opening call: {e}")));
+    write_framed(&mut std::io::stdout().lock(), &bytes).unwrap_or_else(|e| die(format!("cannot write the call frame: {e}")));
+}
+
+/// `--mode v2-legs-open-verify --call <path>`: reads the call frame (whose request names what
+/// was asked) and the answer frame on stdin, and adjudicates them. Needs no model, no goldens,
+/// and no environment — answering costs a re-execution, checking an answer is pure
+/// recomputation, and keeping that second half free of the runtime is the point of the seam.
+fn run_v2_legs_open_verify(call_path: &str) {
+    let call_payload = read_frame_file(call_path, "call");
+    let call: PalwLegsOpeningCallV1 =
+        decode_framed_borsh(&call_payload).unwrap_or_else(|e| die(format!("v2-legs-open-verify rejected: {e}")));
+    let request = call.request;
+    let mut stdin = std::io::stdin().lock();
+    let answer_payload =
+        read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v2-legs-open-verify rejected: {e}")));
+    let answer: PalwLegsOpeningAnswerV1 =
+        decode_framed_borsh(&answer_payload).unwrap_or_else(|e| die(format!("v2-legs-open-verify rejected: {e}")));
+    match check_legs_opening_answer_v1(&request, &answer) {
+        Ok(()) => {
+            let doc = serde_json::json!({
+                "schema": "misaka.palw.v2-legs-open-verify.v1",
+                "answer_valid": true,
+                "committed_execution_root": hex(request.committed_execution_root),
+                "activation_openings": answer.activation.len(),
+                "checkpoint_openings": answer.checkpoints.len(),
+            });
+            println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
+        }
+        Err(e) => {
+            let doc = serde_json::json!({
+                "schema": "misaka.palw.v2-legs-open-verify.v1",
+                "answer_valid": false,
+                "error": e.to_string(),
+            });
+            println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `--mode v2-golden-envelope --name <job>`: writes the named golden job's envelope as one
+/// framed Borsh message on stdout — exactly the frame `v2-job`, `v2-legs-job` and
+/// `v2-legs-open` read first. Harness plumbing (needs the golden set, not the model), so
+/// drivers get a canonical envelope without reimplementing the framing.
+///
+/// One field differs from the selftest's in-process envelope: the golden set deliberately
+/// carries a SENTINEL manifest hash (goldens survive worker rebuilds), but the job admission
+/// gate rightly refuses an envelope that does not declare this exact binary — so the sentinel
+/// is replaced with this worker's real manifest hash. The envelope declares the runtime it is
+/// about to drive, which is the truth.
+fn run_v2_golden_envelope(name: &str) {
+    let path = std::env::var(PALW_GOLDEN_ENV)
+        .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-golden-envelope needs the registered golden set")));
+    let set = load_golden_set(&path);
+    let job = set
+        .jobs
+        .iter()
+        .find(|job| job.name == name)
+        .unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
+    let mut envelope = set.envelope_for(job);
+    envelope.runtime_manifest_hash = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root()).manifest_hash();
+    let bytes = borsh::to_vec(&envelope).unwrap_or_else(|e| die(format!("cannot serialize the golden envelope: {e}")));
+    write_framed(&mut std::io::stdout().lock(), &bytes).unwrap_or_else(|e| die(format!("cannot write the envelope frame: {e}")));
+}
+
 /// `--mode v2-legs-selftest`: **the gate this whole increment stands on.**
 ///
 /// Installing a capture callback makes ggml compute each graph split in sub-ranges cut at every
@@ -1240,8 +1532,27 @@ fn run_v2_legs_selftest() {
     let mut results = Vec::new();
     for job in &set.jobs {
         let envelope = set.envelope_for(job);
-        let exec = execute_v2_legs(&model_path, &envelope);
+        // The open path is the commit path plus Rust-side retention — running the selftest
+        // through it measures the same computation AND leaves the material to prove, per job,
+        // that the commitment is answerable.
+        let context = PalwJobContextV2::from_envelope(&envelope, tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256));
+        let taps = canonical_tap_layers(qwen35_pins::MODEL_LAYER_COUNT).len() as u32;
+        let expected_leaves = canonical_activation_leaf_count(&context, taps);
+        let mut probe_indices = vec![0, expected_leaves / 2, expected_leaves.saturating_sub(1)];
+        probe_indices.sort_unstable();
+        probe_indices.dedup();
+        let probe_coordinates: Vec<PalwActivationCoordinateV1> = probe_indices
+            .iter()
+            .map(|index| {
+                canonical_activation_leaf_coordinates(&context, taps, *index)
+                    .unwrap_or_else(|| die(format!("internal error: probe leaf {index} has no canonical coordinates")))
+            })
+            .collect();
+        let wanted: HashSet<(u32, u32, u32)> =
+            probe_coordinates.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
+        let exec = execute_v2_legs_open(&model_path, &envelope, wanted);
         let binding = exec.legs.unwrap_or_else(|| die("internal error: the legs path produced no binding".into()));
+        let open = exec.open_material.unwrap_or_else(|| die("internal error: the open path retained no material".into()));
         let got = exec.projection.full_logits_trace_root;
         let matches = got == job.expected.full_logits_trace_root;
         if !matches {
@@ -1259,6 +1570,18 @@ fn run_v2_legs_selftest() {
                 &hex(binding.committed_execution_root)[..16]
             );
         }
+        // Openability: the commitment just made must answer a request about itself, and the
+        // answer must pass the model-free checker. A commitment that cannot be opened is
+        // unanswerable evidence — as much a failure as a moved root.
+        let request = PalwLegsOpeningRequestV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            committed_execution_root: binding.committed_execution_root,
+            activation: probe_coordinates,
+            checkpoint_indices: (0..binding.checkpoint_count.min(8)).collect(),
+        };
+        let answer = compose_opening_answer(&binding, &open, &request);
+        check_legs_opening_answer_v1(&request, &answer)
+            .unwrap_or_else(|e| die(format!("v2-legs-selftest FAILED: {} is not openable: {e}", job.name)));
         results.push(serde_json::json!({
             "name": job.name,
             "logits_root_unmoved": matches,
@@ -1266,6 +1589,7 @@ fn run_v2_legs_selftest() {
             "execution_commitment_root": hex(binding.committed_execution_root),
             "activation_leaf_count": binding.activation_leaf_count,
             "checkpoint_count": binding.checkpoint_count,
+            "openings_verified": { "activation": answer.activation.len(), "checkpoint": answer.checkpoints.len() },
         }));
     }
     let doc = serde_json::json!({
@@ -1486,6 +1810,9 @@ fn main() {
     let mut mode: Option<String> = None;
     let mut n_predict: Option<u32> = None;
     let mut out_path: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut envelope_path: Option<String> = None;
+    let mut call_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1502,6 +1829,18 @@ fn main() {
                 i += 1;
                 out_path = args.get(i).cloned();
             }
+            "--name" => {
+                i += 1;
+                name = args.get(i).cloned();
+            }
+            "--envelope" => {
+                i += 1;
+                envelope_path = args.get(i).cloned();
+            }
+            "--call" => {
+                i += 1;
+                call_path = args.get(i).cloned();
+            }
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
@@ -1512,7 +1851,17 @@ fn main() {
     // flag here would reintroduce exactly the total-vs-decode confusion v2 removes.
     if matches!(
         mode.as_deref(),
-        Some("v2-job" | "v2-manifest" | "v2-golden-gen" | "v2-selftest" | "v2-golden-show" | "v2-legs-job" | "v2-legs-selftest")
+        Some("v2-job"
+            | "v2-manifest"
+            | "v2-golden-gen"
+            | "v2-selftest"
+            | "v2-golden-show"
+            | "v2-golden-envelope"
+            | "v2-legs-job"
+            | "v2-legs-selftest"
+            | "v2-legs-open"
+            | "v2-legs-open-request"
+            | "v2-legs-open-verify")
     ) && n_predict.is_some()
     {
         die("--n-predict is not a v2 interface; token budgets come from the job envelope".into());
@@ -1528,6 +1877,19 @@ fn main() {
         Some("v2-selftest") => run_v2_selftest(),
         Some("v2-legs-job") => run_v2_legs_job(),
         Some("v2-legs-selftest") => run_v2_legs_selftest(),
+        Some("v2-golden-envelope") => {
+            let name = name.unwrap_or_else(|| die("--name <golden-job> is required for v2-golden-envelope".into()));
+            run_v2_golden_envelope(&name);
+        }
+        Some("v2-legs-open") => run_v2_legs_open(),
+        Some("v2-legs-open-request") => {
+            let envelope = envelope_path.unwrap_or_else(|| die("--envelope <path> is required for v2-legs-open-request".into()));
+            run_v2_legs_open_request(&envelope);
+        }
+        Some("v2-legs-open-verify") => {
+            let call = call_path.unwrap_or_else(|| die("--call <path> is required for v2-legs-open-verify".into()));
+            run_v2_legs_open_verify(&call);
+        }
         Some("v2-golden-show") => run_v2_golden_show(),
         Some("manifest") => {
             let doc = serde_json::json!({

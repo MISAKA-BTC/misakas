@@ -324,6 +324,14 @@ Ambient is wrong.
   > 0 of 592 captured rows all-zero. A backend that fails this gate is a distinct determinism
   > class, not a bug to suppress. Evidence and run recipe:
   > `docs/palw-legs-capture-measurement-2026-08-15.md`.
+  >
+  > **Opening production landed 2026-08-16 (same doc, §6):** commitments are now answerable —
+  > `v2-legs-open` re-executes and opens named leaves, refusing any root it cannot reproduce
+  > (openings come from re-execution, so the class can answer for its honest members and nobody
+  > can open a fraudulent tree), and `check_legs_opening_answer_v1` adjudicates answers
+  > model-free. Measured commit → open-in-a-fresh-process → verify on both classes, with both
+  > refusals (tampered commitment, tampered answer) held. The challenge *sampling* protocol
+  > remains the future ADR above.
 * **The challenge/`q`/randomness protocol and the cold-verifier cost model are new design work**
   (future ADR): future-randomness binding point, reorg handling, job-commit deadline, `q`-sizing
   formula with its assumed minimum `f`, and per-class p99 cold-prefill costs — all published before

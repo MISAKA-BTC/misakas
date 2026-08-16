@@ -112,7 +112,43 @@ cargo build --release -p misaka-palw-worker
 For the CPU class, build with `MISAKA_PALW_CPU=1 MISAKA_LLAMA_SRC=<cpu-only llama tree>` and use
 the `qwen35-2b-v2.cpu-aarch64.golden` set.
 
-## 6. Open, and deliberately not done here
+## 6. Addendum (2026-08-16) — the commitment is answerable
+
+Capture made commitments; this increment makes them *openable*, which is what a challenge
+protocol will consume. The mechanism is `leg_opening_v1` (the producing half of the leg tree,
+frozen against the verifier and the test module's independent hand-built opener across every
+shape ≤ 33 × every index), the coordinate inverse (`canonical_activation_leaf_coordinates` — a
+challenge samples leaf *indices*; this names them), and a worker that answers:
+
+* `--mode v2-legs-open` — reads one framed `PalwLegsOpeningCallV1` (envelope + request; one
+  message because the v2 frame contract is one frame per stream), **re-executes the job**, and
+  answers only if the recomputed committed root equals the requested one. Openings come from
+  re-execution, nowhere else — so any class member can answer for any honest commitment of the
+  class, and nobody can open a fraudulent one. The refusal is the property, not a failure mode.
+* `check_legs_opening_answer_v1` — the model-free adjudicator: binding recomputes the requested
+  root, every leaf opens, request order and coordinates pin the pairing. **Valid ≠ honest**: an
+  opened leaf that carries a fault convicts via `check_legs_refutation_v1`, which is the intended
+  composition (answer → refute).
+
+Measured, both classes (Metal and CPU, 2026-08-16):
+
+| Check | Result |
+| --- | --- |
+| commit → open in a **fresh process** → model-free verify, 4 golden jobs | PASS × both classes |
+| result frame with 1 flipped bit in its committed root, laundered into a call | answering runtime **refused**, nothing on stdout |
+| answer frame with 1 flipped byte | verifier rejected |
+| selftest roots after adding retention | identical to §2/§3 — retention moved nothing |
+| per-job openability probe (first/middle/last leaf + checkpoints) in the selftest | PASS, now a permanent gate beside logits-neutrality |
+
+The E2E is `scripts/misaka-palw-v2-legs-open-e2e.sh`. One deliberate difference inside it:
+`v2-golden-envelope` replaces the golden set's *sentinel* manifest hash with the worker's real
+one (goldens survive rebuilds; a job admission gate rightly refuses an envelope that does not
+declare the exact binary), so E2E roots differ from selftest roots — each is internally
+consistent, and the E2E's open step proving root-reproduction across processes is the property
+that matters. The deterministic first/middle/last request shape is harness plumbing only; the
+sampling protocol (bound randomness, deadlines, `q`) stays future-ADR work.
+
+## 7. Open, and deliberately not done here
 
 * **Nothing consumes this.** No consensus validation, fork choice, header pipeline or acceptance
   path reads a legs commitment; the node agent still drives `v2-job`. Wiring the driver is the

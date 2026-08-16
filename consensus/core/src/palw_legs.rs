@@ -56,7 +56,7 @@
 //! chain convict by themselves, no recomputation, no jury (ADR-0027 §4 table gains a row).
 
 use crate::palw_slash::{check_job_context_shape, PalwSlashError};
-use crate::palw_v2::{PalwJobContextV2, PalwJobResultV2, PalwLogitsDtypeV2, PALW_V2_MAX_TRACE_EVENTS};
+use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2, PalwLogitsDtypeV2, PALW_V2_MAX_TRACE_EVENTS};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::Hash64;
 use thiserror::Error;
@@ -129,6 +129,9 @@ pub const PALW_LEGS_MAX_CHECKPOINTS: usize = PALW_V2_MAX_TRACE_EVENTS;
 pub const PALW_LEGS_MAX_OPENING_SIBLINGS: usize = PALW_LEGS_MAX_ACTIVATION_LEAVES.ilog2() as usize;
 /// Cap on one carried activation row (bytes): `4 × MAX_HIDDEN_DIM`.
 pub const PALW_LEGS_MAX_ROW_BYTES: usize = 4 * PALW_LEGS_MAX_HIDDEN_DIM as usize;
+/// Most openings one request may demand across both legs. Bounds the answer well under the
+/// frame cap — and a coverage argument is made by sampling, never by bulk export.
+pub const PALW_LEGS_MAX_REQUESTED_OPENINGS: usize = 64;
 
 /// The registration preimage of `tap_semantics_id`: a runtime states, as one canonical string,
 /// *which tensor* its taps read — graph node name, what that node is, dtype, and the row
@@ -209,6 +212,10 @@ pub enum PalwLegsError {
     LegIncomplete { leg: &'static str, got: u64, expected: u64 },
     #[error("the legs binding and the v2 result disagree on {field} — they are not one execution")]
     LegsResultIncoherent { field: &'static str },
+    #[error("opening request is not canonical: {reason}")]
+    OpeningRequestNotCanonical { reason: &'static str },
+    #[error("opening answer does not match the request on {what}")]
+    OpeningAnswerMismatch { what: &'static str },
 }
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
@@ -389,6 +396,35 @@ pub fn canonical_activation_leaf_index(
     }
 }
 
+/// The inverse of [`canonical_activation_leaf_index`]. A challenge samples leaf *indices* —
+/// that is what uniform coverage of the tree means — and must then name coordinates; this is
+/// how. `None` when the index is not a leaf of `(context, taps)`.
+pub fn canonical_activation_leaf_coordinates(
+    context: &PalwJobContextV2,
+    taps: u32,
+    leaf_index: u64,
+) -> Option<PalwActivationCoordinateV1> {
+    if taps == 0 || leaf_index >= canonical_activation_leaf_count(context, taps) {
+        return None;
+    }
+    let prefill = context.declared_prefill_tokens as u64;
+    let prefill_leaves = taps as u64 * prefill;
+    if leaf_index < prefill_leaves {
+        Some(PalwActivationCoordinateV1 {
+            call_index: 0,
+            tap_slot: (leaf_index / prefill) as u32,
+            position: (leaf_index % prefill) as u32,
+        })
+    } else {
+        let rest = leaf_index - prefill_leaves;
+        Some(PalwActivationCoordinateV1 {
+            call_index: (rest / taps as u64) as u32 + 1,
+            tap_slot: (rest % taps as u64) as u32,
+            position: 0,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Leaves
 // ---------------------------------------------------------------------------------------------
@@ -549,6 +585,50 @@ pub fn leg_opening_root_v1(
         return Err(PalwLegsError::OpeningPathTooLong { extra: leftover });
     }
     Ok(current)
+}
+
+/// Produces the membership proof of leaf `leaf_index` from the same ordered leaf hashes the
+/// root was built over — the answering half of the tree. [`leg_merkle_root_v1`] commits, this
+/// opens, [`leg_opening_root_v1`] adjudicates; the mirror test holds all three together across
+/// every shape and index.
+pub fn leg_opening_v1(
+    leaf_domain: &[u8],
+    node_domain: &[u8],
+    ordered_leaf_hashes: &[Hash64],
+    leaf_index: u32,
+    max_leaves: usize,
+) -> Result<PalwLegOpeningV1, PalwLegsError> {
+    let count = ordered_leaf_hashes.len();
+    if count == 0 || count > max_leaves {
+        return Err(PalwLegsError::LeafCountOutOfRange { got: count.min(u32::MAX as usize) as u32, max: max_leaves });
+    }
+    if leaf_index as usize >= count {
+        return Err(PalwLegsError::LeafIndexOutOfRange { index: leaf_index, count: count as u32 });
+    }
+    let leaf_hash = ordered_leaf_hashes[leaf_index as usize];
+    let mut level: Vec<Hash64> =
+        ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| leg_merkle_leaf(leaf_domain, i as u32, leaf)).collect();
+    let mut position = leaf_index as usize;
+    let mut siblings = Vec::new();
+    while level.len() > 1 {
+        let width = level.len();
+        // Same promote rule as the verifier: an unpaired last node contributes no sibling.
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            siblings.push(level[position ^ 1]);
+        }
+        let mut next = Vec::with_capacity(width.div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(node_domain, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        position /= 2;
+        level = next;
+    }
+    Ok(PalwLegOpeningV1 { leaf_index, leaf_hash, siblings })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -820,22 +900,7 @@ pub fn check_legs_refutation_v1(refutation: &PalwLegsRefutationV1) -> Result<Pal
             if let Some(fault) = shape_fault {
                 return Ok(PalwLegsRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 0, 0, fault) });
             }
-            if preimage.values_le_bytes.len() > PALW_LEGS_MAX_ROW_BYTES {
-                return Err(PalwLegsError::RowBytesTooLarge { got: preimage.values_le_bytes.len(), max: PALW_LEGS_MAX_ROW_BYTES });
-            }
-            let computed_root = leg_opening_root_v1(
-                PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
-                PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE,
-                binding.activation_leaf_count,
-                opening,
-                PALW_LEGS_MAX_ACTIVATION_LEAVES,
-            )?;
-            if computed_root != binding.activation_merkle_root {
-                return Err(PalwLegsError::OpeningRootMismatch { tree: "activation" });
-            }
-            if activation_leaf_hash_v1(&context_hash, &tap_profile_hash, preimage) != opening.leaf_hash {
-                return Err(PalwLegsError::LeafPreimageMismatch { leaf: "activation" });
-            }
+            self::open_activation(binding, &context_hash, &tap_profile_hash, opening, preimage)?;
             // Fault scan, frozen order: coordinates, placement, encoding, identity, values.
             let taps = binding.tap_profile.tap_count();
             let fault = match canonical_activation_leaf_index(
@@ -921,6 +986,35 @@ pub fn check_legs_refutation_v1(refutation: &PalwLegsRefutationV1) -> Result<Pal
     }
 }
 
+/// Shared activation-evidence plumbing, the twin of [`open_checkpoint`]: opening verifies
+/// against the committed activation tree and the carried preimage is the opened leaf. Performs
+/// no fault scan — validity of the *contents* is the caller's question.
+fn open_activation(
+    binding: &PalwLegsBindingV1,
+    context_hash: &Hash64,
+    tap_profile_hash: &Hash64,
+    opening: &PalwLegOpeningV1,
+    preimage: &PalwActivationLeafV1,
+) -> Result<(), PalwLegsError> {
+    if preimage.values_le_bytes.len() > PALW_LEGS_MAX_ROW_BYTES {
+        return Err(PalwLegsError::RowBytesTooLarge { got: preimage.values_le_bytes.len(), max: PALW_LEGS_MAX_ROW_BYTES });
+    }
+    let computed_root = leg_opening_root_v1(
+        PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
+        PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE,
+        binding.activation_leaf_count,
+        opening,
+        PALW_LEGS_MAX_ACTIVATION_LEAVES,
+    )?;
+    if computed_root != binding.activation_merkle_root {
+        return Err(PalwLegsError::OpeningRootMismatch { tree: "activation" });
+    }
+    if activation_leaf_hash_v1(context_hash, tap_profile_hash, preimage) != opening.leaf_hash {
+        return Err(PalwLegsError::LeafPreimageMismatch { leaf: "activation" });
+    }
+    Ok(())
+}
+
 /// Shared checkpoint-evidence plumbing: opening verifies against the committed checkpoint tree
 /// and the carried preimage is the opened leaf.
 fn open_checkpoint(
@@ -942,6 +1036,171 @@ fn open_checkpoint(
     }
     if checkpoint_leaf_hash_v1(context_hash, checkpoint_profile_hash, preimage) != opening.leaf_hash {
         return Err(PalwLegsError::LeafPreimageMismatch { leaf: "checkpoint" });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The opening seam — a commitment must be answerable
+//
+// A challenge names coordinates; an answering runtime re-executes the job, reproduces the
+// committed tree bit for bit (that is what a determinism class *is*), and opens the named
+// leaves. Two properties fall out of "openings only come from re-execution":
+//
+// * any class member can answer for any honest commitment of the class — the miner is not a
+//   privileged custodian of its own evidence;
+// * nobody can open a fraudulent tree, because re-execution reproduces the honest one and its
+//   root will not match. An honest answerer therefore REFUSES a root it cannot reproduce, and
+//   an unanswerable challenge escalates by the DA/deadline rules — never to arbitration.
+//
+// Checking an answer needs no model and no runtime: answering requires re-execution, checking
+// never does.
+// ---------------------------------------------------------------------------------------------
+
+/// One requested activation coordinate, in the tree's own vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwActivationCoordinateV1 {
+    pub call_index: u32,
+    pub tap_slot: u32,
+    pub position: u32,
+}
+
+/// What a challenger asks: open these leaves of the commitment under this root.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwLegsOpeningRequestV1 {
+    /// = [`PALW_LEGS_OBJECT_VERSION_V1`].
+    pub version: u16,
+    /// The commitment being asked to open. An answering runtime that cannot *reproduce* this
+    /// root must refuse rather than answer — an opening of some other execution proves nothing.
+    pub committed_execution_root: Hash64,
+    /// Strictly ascending by canonical leaf index; every coordinate canonical.
+    pub activation: Vec<PalwActivationCoordinateV1>,
+    /// Strictly ascending, each below the committed checkpoint count.
+    pub checkpoint_indices: Vec<u32>,
+}
+
+/// The complete message an asker sends an answering runtime: which job, and which leaves of
+/// which commitment to open. One object because the v2 frame contract is one frame per stream
+/// — and because a request without its job is not answerable anyway.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwLegsOpeningCallV1 {
+    /// = [`PALW_LEGS_OBJECT_VERSION_V1`].
+    pub version: u16,
+    pub envelope: PalwJobEnvelopeV2,
+    pub request: PalwLegsOpeningRequestV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwOpenedActivationLeafV1 {
+    pub opening: PalwLegOpeningV1,
+    pub preimage: PalwActivationLeafV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwOpenedCheckpointLeafV1 {
+    pub opening: PalwLegOpeningV1,
+    pub preimage: PalwCheckpointLeafV1,
+}
+
+/// The answer: the transparent binding (so the checker can recompute the committed root from
+/// parts) plus one opened leaf per requested coordinate, in request order.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwLegsOpeningAnswerV1 {
+    /// = [`PALW_LEGS_OBJECT_VERSION_V1`].
+    pub version: u16,
+    pub binding: PalwLegsBindingV1,
+    pub activation: Vec<PalwOpenedActivationLeafV1>,
+    pub checkpoints: Vec<PalwOpenedCheckpointLeafV1>,
+}
+
+/// Shape rules a request must satisfy before anyone spends a model load on it. Canonicality is
+/// judged against `(context, taps, checkpoint_count)` — the answering side takes those from its
+/// own profiles, the checking side from the answer's binding.
+pub fn check_opening_request_shape(
+    request: &PalwLegsOpeningRequestV1,
+    context: &PalwJobContextV2,
+    taps: u32,
+    checkpoint_count: u32,
+) -> Result<(), PalwLegsError> {
+    if request.version != PALW_LEGS_OBJECT_VERSION_V1 {
+        return Err(PalwLegsError::UnsupportedVersion { got: request.version, expected: PALW_LEGS_OBJECT_VERSION_V1 });
+    }
+    let total = request.activation.len() + request.checkpoint_indices.len();
+    if total == 0 {
+        return Err(PalwLegsError::OpeningRequestNotCanonical { reason: "the request opens nothing" });
+    }
+    if total > PALW_LEGS_MAX_REQUESTED_OPENINGS {
+        return Err(PalwLegsError::OpeningRequestNotCanonical { reason: "more openings than the cap" });
+    }
+    let mut previous: Option<u64> = None;
+    for coordinate in &request.activation {
+        let Some(index) =
+            canonical_activation_leaf_index(context, taps, coordinate.call_index, coordinate.tap_slot, coordinate.position)
+        else {
+            return Err(PalwLegsError::OpeningRequestNotCanonical { reason: "an activation coordinate is not canonical" });
+        };
+        if previous.is_some_and(|p| p >= index) {
+            return Err(PalwLegsError::OpeningRequestNotCanonical {
+                reason: "activation coordinates are not strictly ascending by leaf index",
+            });
+        }
+        previous = Some(index);
+    }
+    let mut previous: Option<u32> = None;
+    for index in &request.checkpoint_indices {
+        if *index >= checkpoint_count {
+            return Err(PalwLegsError::OpeningRequestNotCanonical { reason: "a checkpoint index is not below the count" });
+        }
+        if previous.is_some_and(|p| p >= *index) {
+            return Err(PalwLegsError::OpeningRequestNotCanonical { reason: "checkpoint indices are not strictly ascending" });
+        }
+        previous = Some(*index);
+    }
+    Ok(())
+}
+
+/// Adjudicates an answer: the binding recomputes the requested root, and every requested leaf
+/// opens against the committed trees, in request order. **Valid is not honest** — an opened
+/// preimage may still carry a refutable fault, and feeding it to [`check_legs_refutation_v1`]
+/// is exactly how a conviction happens; this checker's job is only that the answer is *about*
+/// the requested commitment and *is* what the tree committed.
+pub fn check_legs_opening_answer_v1(
+    request: &PalwLegsOpeningRequestV1,
+    answer: &PalwLegsOpeningAnswerV1,
+) -> Result<(), PalwLegsError> {
+    if answer.version != PALW_LEGS_OBJECT_VERSION_V1 {
+        return Err(PalwLegsError::UnsupportedVersion { got: answer.version, expected: PALW_LEGS_OBJECT_VERSION_V1 });
+    }
+    let (context_hash, tap_profile_hash, checkpoint_profile_hash) = verify_binding(&answer.binding)?;
+    if answer.binding.committed_execution_root != request.committed_execution_root {
+        return Err(PalwLegsError::OpeningAnswerMismatch { what: "the committed execution root" });
+    }
+    let taps = answer.binding.tap_profile.tap_count();
+    check_opening_request_shape(request, &answer.binding.job_context, taps, answer.binding.checkpoint_count)?;
+    if answer.activation.len() != request.activation.len() {
+        return Err(PalwLegsError::OpeningAnswerMismatch { what: "the activation opening count" });
+    }
+    if answer.checkpoints.len() != request.checkpoint_indices.len() {
+        return Err(PalwLegsError::OpeningAnswerMismatch { what: "the checkpoint opening count" });
+    }
+    for (wanted, opened) in request.activation.iter().zip(&answer.activation) {
+        let preimage = &opened.preimage;
+        if (preimage.call_index, preimage.tap_slot, preimage.position) != (wanted.call_index, wanted.tap_slot, wanted.position) {
+            return Err(PalwLegsError::OpeningAnswerMismatch { what: "an activation coordinate" });
+        }
+        let index =
+            canonical_activation_leaf_index(&answer.binding.job_context, taps, wanted.call_index, wanted.tap_slot, wanted.position)
+                .ok_or(PalwLegsError::OpeningAnswerMismatch { what: "an activation coordinate" })?;
+        if index != opened.opening.leaf_index as u64 {
+            return Err(PalwLegsError::OpeningAnswerMismatch { what: "an activation leaf index" });
+        }
+        open_activation(&answer.binding, &context_hash, &tap_profile_hash, &opened.opening, preimage)?;
+    }
+    for (wanted, opened) in request.checkpoint_indices.iter().zip(&answer.checkpoints) {
+        if opened.preimage.checkpoint_index != *wanted || opened.opening.leaf_index != *wanted {
+            return Err(PalwLegsError::OpeningAnswerMismatch { what: "a checkpoint index" });
+        }
+        open_checkpoint(&answer.binding, &context_hash, &checkpoint_profile_hash, &opened.opening, &opened.preimage)?;
     }
     Ok(())
 }
@@ -1012,8 +1271,20 @@ pub struct PalwLegsCommitmentBuilderV1 {
     expected_checkpoints: u32,
     activation_hashes: Vec<Hash64>,
     checkpoint_hashes: Vec<Hash64>,
+    checkpoint_leaves: Vec<PalwCheckpointLeafV1>,
     prev_checkpoint_leaf_hash: Hash64,
     row_bytes: Vec<u8>,
+}
+
+/// Process-local material an answering producer keeps beside its binding: everything needed to
+/// open any leaf later without re-deriving the trees — leaf hashes for both legs (the sibling
+/// source for [`leg_opening_v1`]) and the full checkpoint preimages (they are small; activation
+/// preimages are not, so a challenged row is regenerated by re-execution instead). Never
+/// serialized: openings travel, this does not.
+pub struct PalwLegsMaterial {
+    pub activation_leaf_hashes: Vec<Hash64>,
+    pub checkpoint_leaves: Vec<PalwCheckpointLeafV1>,
+    pub checkpoint_leaf_hashes: Vec<Hash64>,
 }
 
 impl PalwLegsCommitmentBuilderV1 {
@@ -1057,6 +1328,7 @@ impl PalwLegsCommitmentBuilderV1 {
             expected_checkpoints,
             activation_hashes: Vec::new(),
             checkpoint_hashes: Vec::with_capacity(expected_checkpoints as usize),
+            checkpoint_leaves: Vec::with_capacity(expected_checkpoints as usize),
             row_bytes: Vec::new(),
         })
     }
@@ -1145,6 +1417,7 @@ impl PalwLegsCommitmentBuilderV1 {
         let leaf_hash = checkpoint_leaf_hash_v1(&self.context_hash, &self.checkpoint_profile_hash, &leaf);
         self.prev_checkpoint_leaf_hash = leaf_hash;
         self.checkpoint_hashes.push(leaf_hash);
+        self.checkpoint_leaves.push(leaf);
         Ok(index)
     }
 
@@ -1152,6 +1425,15 @@ impl PalwLegsCommitmentBuilderV1 {
     /// over a partial capture is exactly the object `ActivationLeafCountNotCanonical` exists to
     /// convict, and an executor must never be the one that emits it.
     pub fn finish(self, full_logits_trace_root: Hash64) -> Result<PalwLegsBindingV1, PalwLegsError> {
+        self.finish_with_material(full_logits_trace_root).map(|(binding, _)| binding)
+    }
+
+    /// [`Self::finish`], also returning the [`PalwLegsMaterial`] an answering producer keeps.
+    /// Identical binding — the material is retained bookkeeping, not an input to any hash.
+    pub fn finish_with_material(
+        self,
+        full_logits_trace_root: Hash64,
+    ) -> Result<(PalwLegsBindingV1, PalwLegsMaterial), PalwLegsError> {
         let got = self.activation_hashes.len() as u64;
         if got != self.expected_activation_leaves {
             return Err(PalwLegsError::LegIncomplete { leg: "activation", got, expected: self.expected_activation_leaves });
@@ -1200,7 +1482,7 @@ impl PalwLegsCommitmentBuilderV1 {
             checkpoints,
             &checkpoint_merkle_root,
         );
-        Ok(PalwLegsBindingV1 {
+        let binding = PalwLegsBindingV1 {
             version: PALW_LEGS_OBJECT_VERSION_V1,
             job_context: self.context,
             tap_profile: self.tap_profile,
@@ -1216,7 +1498,13 @@ impl PalwLegsCommitmentBuilderV1 {
                 &activation_leg,
                 &checkpoint_leg,
             ),
-        })
+        };
+        let material = PalwLegsMaterial {
+            activation_leaf_hashes: self.activation_hashes,
+            checkpoint_leaves: self.checkpoint_leaves,
+            checkpoint_leaf_hashes: self.checkpoint_hashes,
+        };
+        Ok((binding, material))
     }
 }
 
@@ -2137,6 +2425,274 @@ mod tests {
             check_legs_refutation_v1(&PalwLegsRefutationV1 { binding, evidence: PalwLegsEvidenceV1::Shape }),
             Err(PalwLegsError::NoFaultFound)
         );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The opening seam
+    // -----------------------------------------------------------------------------------------
+
+    /// Three-way freeze: the production opener, the test module's independent hand-built
+    /// opener, and the verifier must agree for EVERY shape and EVERY index, in both domain
+    /// pairs. The hand-built helper is deliberately kept — it is the cross-check that keeps the
+    /// production function honest.
+    #[test]
+    fn opening_producer_mirrors_the_hand_built_opener_and_the_verifier() {
+        let domain_pairs: [(&[u8], &[u8]); 2] = [
+            (PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE),
+            (PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE),
+        ];
+        for (leaf_domain, node_domain) in domain_pairs {
+            for count in 1usize..=33 {
+                let hashes: Vec<Hash64> = (0..count).map(|i| h64(i as u8 + 1)).collect();
+                let root = leg_merkle_root_v1(leaf_domain, node_domain, &hashes, 64).unwrap();
+                for index in 0..count {
+                    let produced = leg_opening_v1(leaf_domain, node_domain, &hashes, index as u32, 64).unwrap();
+                    let hand_built = opening_for(leaf_domain, node_domain, &hashes, index);
+                    assert_eq!(produced, hand_built, "shape {count} index {index}: producer and hand-built disagree");
+                    let recomputed = leg_opening_root_v1(leaf_domain, node_domain, count as u32, &produced, 64).unwrap();
+                    assert_eq!(recomputed, root, "shape {count} index {index}: produced opening does not verify");
+                }
+                assert_eq!(
+                    leg_opening_v1(leaf_domain, node_domain, &hashes, count as u32, 64),
+                    Err(PalwLegsError::LeafIndexOutOfRange { index: count as u32, count: count as u32 })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coordinate_inverse_is_the_inverse_of_the_index_formula() {
+        let context = test_context();
+        let taps = tap_profile().tap_count();
+        let total = canonical_activation_leaf_count(&context, taps);
+        for index in 0..total {
+            let coordinate = canonical_activation_leaf_coordinates(&context, taps, index)
+                .unwrap_or_else(|| panic!("index {index} has no coordinates"));
+            assert_eq!(
+                canonical_activation_leaf_index(&context, taps, coordinate.call_index, coordinate.tap_slot, coordinate.position),
+                Some(index),
+                "round trip broke at {index}"
+            );
+        }
+        assert_eq!(canonical_activation_leaf_coordinates(&context, taps, total), None);
+        assert_eq!(canonical_activation_leaf_coordinates(&context, 0, 0), None);
+    }
+
+    /// The honest request/answer round trip, built from the same honest world every refutation
+    /// test uses — and the produced openings must ALSO survive the refutation checker (valid
+    /// answer, no fault: the two adjudicators agree about honesty).
+    fn honest_request_and_answer(world: &HonestWorld) -> (PalwLegsOpeningRequestV1, PalwLegsOpeningAnswerV1) {
+        let taps = world.binding.tap_profile.tap_count();
+        let count = world.binding.activation_leaf_count as u64;
+        let indices = [0, count / 2, count - 1];
+        let request = PalwLegsOpeningRequestV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            committed_execution_root: world.binding.committed_execution_root,
+            activation: indices
+                .iter()
+                .map(|i| canonical_activation_leaf_coordinates(&world.context, taps, *i).expect("canonical"))
+                .collect(),
+            checkpoint_indices: (0..world.binding.checkpoint_count).collect(),
+        };
+        let answer = PalwLegsOpeningAnswerV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            binding: world.binding.clone(),
+            activation: indices
+                .iter()
+                .map(|i| PalwOpenedActivationLeafV1 {
+                    opening: leg_opening_v1(
+                        PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
+                        PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE,
+                        &world.activation_hashes,
+                        *i as u32,
+                        PALW_LEGS_MAX_ACTIVATION_LEAVES,
+                    )
+                    .unwrap(),
+                    preimage: world.activation_leaves[*i as usize].clone(),
+                })
+                .collect(),
+            checkpoints: (0..world.binding.checkpoint_count)
+                .map(|i| PalwOpenedCheckpointLeafV1 {
+                    opening: leg_opening_v1(
+                        PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF,
+                        PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
+                        &world.checkpoint_hashes,
+                        i,
+                        PALW_LEGS_MAX_CHECKPOINTS,
+                    )
+                    .unwrap(),
+                    preimage: world.checkpoint_leaves[i as usize].clone(),
+                })
+                .collect(),
+        };
+        (request, answer)
+    }
+
+    #[test]
+    fn an_honest_answer_verifies_and_its_openings_convict_nothing() {
+        let world = honest_world();
+        let (request, answer) = honest_request_and_answer(&world);
+        assert_eq!(check_legs_opening_answer_v1(&request, &answer), Ok(()));
+        // The same opened material, fed to the refutation checker, finds no fault — the answer
+        // seam and the conviction seam agree about what honesty is.
+        for opened in &answer.activation {
+            let refutation = PalwLegsRefutationV1 {
+                binding: world.binding.clone(),
+                evidence: PalwLegsEvidenceV1::ActivationLeaf { opening: opened.opening.clone(), preimage: opened.preimage.clone() },
+            };
+            assert_eq!(check_legs_refutation_v1(&refutation), Err(PalwLegsError::NoFaultFound));
+        }
+        for opened in &answer.checkpoints {
+            let refutation = PalwLegsRefutationV1 {
+                binding: world.binding.clone(),
+                evidence: PalwLegsEvidenceV1::CheckpointLeaf { opening: opened.opening.clone(), preimage: opened.preimage.clone() },
+            };
+            assert_eq!(check_legs_refutation_v1(&refutation), Err(PalwLegsError::NoFaultFound));
+        }
+    }
+
+    #[test]
+    fn a_tampered_answer_is_rejected_on_every_axis() {
+        let world = honest_world();
+        let (request, answer) = honest_request_and_answer(&world);
+
+        // A different committed root: the answer is about some other commitment.
+        let mut wrong_root = request.clone();
+        wrong_root.committed_execution_root = h64(0xEE);
+        assert_eq!(
+            check_legs_opening_answer_v1(&wrong_root, &answer),
+            Err(PalwLegsError::OpeningAnswerMismatch { what: "the committed execution root" })
+        );
+
+        // Swapped entries: right leaves, wrong order — every leaf still opens, the pairing fails.
+        let mut swapped = answer.clone();
+        swapped.activation.swap(0, 1);
+        assert_eq!(
+            check_legs_opening_answer_v1(&request, &swapped),
+            Err(PalwLegsError::OpeningAnswerMismatch { what: "an activation coordinate" })
+        );
+
+        // A dropped entry: counts must match the request exactly.
+        let mut short = answer.clone();
+        short.activation.pop();
+        assert_eq!(
+            check_legs_opening_answer_v1(&request, &short),
+            Err(PalwLegsError::OpeningAnswerMismatch { what: "the activation opening count" })
+        );
+
+        // A flipped byte in an opened row: the preimage no longer hashes to the opened leaf.
+        let mut flipped = answer.clone();
+        flipped.activation[0].preimage.values_le_bytes[0] ^= 0xFF;
+        assert_eq!(
+            check_legs_opening_answer_v1(&request, &flipped),
+            Err(PalwLegsError::LeafPreimageMismatch { leaf: "activation" })
+        );
+
+        // An opening transplanted to a different index: the path no longer reproduces the root.
+        let mut transplanted = answer.clone();
+        transplanted.activation[0].opening.leaf_index = 1;
+        transplanted.activation[0].preimage = world.activation_leaves[1].clone();
+        let moved = check_legs_opening_answer_v1(&request, &transplanted);
+        assert!(
+            matches!(moved, Err(PalwLegsError::OpeningAnswerMismatch { .. }) | Err(PalwLegsError::OpeningRootMismatch { .. })),
+            "a transplanted opening must not verify (got {moved:?})"
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_request_is_rejected_before_any_work() {
+        let world = honest_world();
+        let (request, answer) = honest_request_and_answer(&world);
+        let context = &world.context;
+        let taps = world.binding.tap_profile.tap_count();
+        let checkpoints = world.binding.checkpoint_count;
+
+        let empty = PalwLegsOpeningRequestV1 { activation: vec![], checkpoint_indices: vec![], ..request.clone() };
+        assert!(matches!(
+            check_opening_request_shape(&empty, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        let mut unsorted = request.clone();
+        unsorted.activation.swap(0, 1);
+        assert!(matches!(
+            check_opening_request_shape(&unsorted, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        let mut duplicated = request.clone();
+        duplicated.activation[1] = duplicated.activation[0];
+        assert!(matches!(
+            check_opening_request_shape(&duplicated, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        let mut off_tree = request.clone();
+        off_tree.activation[0] = PalwActivationCoordinateV1 { call_index: 99, tap_slot: 0, position: 0 };
+        assert!(matches!(
+            check_opening_request_shape(&off_tree, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        let mut checkpoint_out = request.clone();
+        checkpoint_out.checkpoint_indices = vec![checkpoints];
+        assert!(matches!(
+            check_opening_request_shape(&checkpoint_out, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        let over_cap = PalwLegsOpeningRequestV1 {
+            activation: (0..=PALW_LEGS_MAX_REQUESTED_OPENINGS as u64)
+                .map(|i| canonical_activation_leaf_coordinates(context, taps, i % 10).expect("canonical"))
+                .collect(),
+            ..request.clone()
+        };
+        assert!(matches!(
+            check_opening_request_shape(&over_cap, context, taps, checkpoints),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+
+        // And the answer checker runs the same shape gate — a non-canonical request cannot be
+        // laundered by pairing it with a well-formed answer.
+        assert!(matches!(
+            check_legs_opening_answer_v1(&unsorted, &answer),
+            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
+        ));
+    }
+
+    #[test]
+    fn builder_material_is_the_tree_the_openings_come_from() {
+        let world = honest_world();
+        // Rebuild through the builder, keeping material this time.
+        let context = test_context();
+        let taps = tap_profile().tap_count();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(context.clone(), tap_profile(), checkpoint_profile()).unwrap();
+        for tap_slot in 0..taps {
+            for position in 0..context.declared_prefill_tokens {
+                builder.push_activation_row(0, tap_slot, position, &row_values(100 + tap_slot * 10 + position)).unwrap();
+            }
+        }
+        for call in 1..context.exact_decode_tokens {
+            for tap_slot in 0..taps {
+                builder.push_activation_row(call, tap_slot, 0, &row_values(200 + call * 10 + tap_slot)).unwrap();
+            }
+        }
+        builder.push_checkpoint(2, h64(0x61)).unwrap();
+        let (binding, material) = builder.finish_with_material(h64(0x71)).unwrap();
+        assert_eq!(binding, world.binding, "finish_with_material changed the binding");
+        assert_eq!(material.activation_leaf_hashes, world.activation_hashes);
+        assert_eq!(material.checkpoint_leaf_hashes, world.checkpoint_hashes);
+        assert_eq!(material.checkpoint_leaves, world.checkpoint_leaves);
+    }
+
+    #[test]
+    fn opening_wire_objects_roundtrip_borsh() {
+        let world = honest_world();
+        let (request, answer) = honest_request_and_answer(&world);
+        let request_bytes = borsh::to_vec(&request).unwrap();
+        assert_eq!(PalwLegsOpeningRequestV1::try_from_slice(&request_bytes).unwrap(), request);
+        let answer_bytes = borsh::to_vec(&answer).unwrap();
+        assert_eq!(PalwLegsOpeningAnswerV1::try_from_slice(&answer_bytes).unwrap(), answer);
     }
 
     #[test]
