@@ -214,7 +214,14 @@ root safe, because the refutation right is permissionless.
 
 **4c. No-show is priced against griefing.** No-show is an objective offense (v0.1 §17) with a
 slash floor of a large multiple of the forgone fee (placeholder: `≥ 100 · ρ_v · base`,
-Stage-1-measured like every number here). The asymmetry is deliberate: a panel that strands a
+Stage-1-measured like every number here).
+
+> **Amendment 2026-08-16 (B15 simulation, `docs/palw-economic-parameters-2026-08-16.md`):**
+> at live parameters the placeholder is **uncollectible** — `100 · ρ_v · base` = 444 562 MSK
+> against a 20 000 MSK bond, 22× more than exists to slash. The floor is therefore
+> `min(100 · ρ_v · base, bond)`: below ~222 k MSK bonds, **the bond IS the floor**. The
+> griefing inequality still holds at the cap (2 × 20 000 MSK of slash against a one-orphan
+> gain of 4 445.62 MSK ⇒ ROI 0.11), so the multiplier only becomes meaningful once bonds grow. The asymmetry is deliberate: a panel that strands a
 job costs the miner one orphan-equivalent (re-mine), while costing the no-show pair two
 slashes — targeted verifier griefing has negative return, and a panel that is merely *down*
 loses fees and a bounded slash, not its base bond.
@@ -242,6 +249,32 @@ economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
             under P3 deterrence is economic, so this inequality is load-bearing)
   G_max   = credit mintable from the dishonest commitment
 ```
+
+> **Amendment 2026-08-16 (B15 simulation) — this inequality FAILS at live parameters, and the
+> text above is ambiguous about why.** `G_max` admits two readings that differ by four orders
+> of magnitude:
+>
+> * *per-commitment* ("credit mintable from **the** dishonest commitment") — `G_max` = one
+>   block's `base(C)` = 4 445.62 MSK, needing `S_eff ≥ 8 891 MSK`: **satisfied**, 2.25× margin.
+> * *aggregate* — which is what the `max_leverage ≤ 1` line itself says ("credit mintable
+>   **within one unbonding period** must not exceed `S_eff`"), and what a repeat offender
+>   actually exploits: nothing stops cheating job after job against one bond. A miner
+>   crediting every physically-allowed slot mints **116.5 M MSK** against a 20 000 MSK bond —
+>   **violated by 11 655×** at `P_check = 1.0`, 58 000× at `P_check = 0.2`.
+>
+> **The aggregate reading governs.** Two credible remedies, the same inequality solved for
+> different variables, chosen at registration and required **before Stage 2** (Stage 0/1
+> credit nothing and are unaffected):
+>
+> 1. a per-validator credited-job cap of `S_eff / (λ · base)` ≈ **2.2 jobs per unbonding
+>    period** (≈ 6.2 days per validator), enforced as a registration-time admission rule
+>    alongside the physical cap; or
+> 2. **`base(C)` is a fraction of the block subsidy, not all of it** — crediting once every
+>    10 blocks requires `base(C) ≤ 9.92 MSK`, i.e. 0.22 % of a subsidy.
+>
+> Raising bonds to 233 M MSK is not credible, and shortening unbonding is bounded below by
+> `W_challenge` (≤ 14×). Numbers and their derivation:
+> `scripts/misaka-palw-economics-sim.py`.
 
 ### 5. The audit layer: opening calls as the DA heartbeat — answerable, not correct
 
