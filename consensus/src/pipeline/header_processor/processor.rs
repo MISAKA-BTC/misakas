@@ -118,6 +118,8 @@ pub struct HeaderProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation. Supersedes the
     /// BLAKE2b-SHA3 rule where active; drives the same per-header `pow_algo_id` check.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
+    pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
     /// (see `check_header_version`) — v2 (`EVM_HEADER_VERSION`) required at and
     /// after activation, v1 (`BLOCK_VERSION`) before. `u64::MAX` (inert) on
@@ -213,6 +215,7 @@ impl HeaderProcessor {
             network_id: params.net.to_string().into_bytes(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
+            pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
         }
     }

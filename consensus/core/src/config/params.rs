@@ -208,17 +208,59 @@ impl BlockrateParams {
     /// Wall-clock durations (12 h finality, 30 h pruning, 100 s maturity) are exactly the
     /// 10-bps network's — only the block-unit denominators shrink 100×.
     pub const fn new_deci_bps() -> Self {
+        Self::new_seconds_per_block(10, 4)
+    }
+
+    /// Blockrate params for the **120 s/block** PALW public testnet (decided 2026-08-12 from
+    /// fleet measurements; see docs/testnet10-palw-rollout-runbook.md §"Why 120 s").
+    ///
+    /// The block interval on a network whose PoW is an LLM inference is not a UX preference: a
+    /// validator replays every OTHER miner's winning attempt, so its steady-state load is
+    /// `(M-1)/M · r / T` for per-header replay cost `r`. Measured on the fleet (2B/F16, N = 16
+    /// decode tokens): r ≈ 12 s on an EPYC core, ≈ 26 s on the slowest host (Broadwell). T = 120 s
+    /// puts the slowest honest host at ≈ 15 %. And because the MODEL can be replaced by an
+    /// algo-id fork on the same chain while the BLOCK RATE cannot, the interval is chosen to also
+    /// absorb the Qwen3.6-35B-A3B runtime (r ≈ 30-60 s on ≥ 32 GB hosts ⇒ ≈ 17-33 %). At the
+    /// earlier 10 s the slowest host sat at 400 % — permanently behind, on any model.
+    ///
+    /// `ghostdag_k = 1` is `calculate_ghostdag_k(2 · NETWORK_DELAY_BOUND · (1/120), δ)`, asserted
+    /// against the real function in `two_minute_bps_constants_match_formulas`.
+    pub const fn new_two_minute_bps() -> Self {
+        Self::new_seconds_per_block(120, 1)
+    }
+
+    /// Shared constructor for sub-1-bps networks: the same formulas `Bps<BPS>` encodes, evaluated
+    /// at λ = 1/`secs` (which `Bps` cannot express — its const generic is an integer bps).
+    ///
+    /// Per-block sample rates floor at 1 (a rate below one block means "sample every block"), and
+    /// `max_block_parents` / `mergeset_size_limit` sit at the formula floors for every k this is
+    /// used with (k/2 < 10, 2k < 180). `ghostdag_k` is a parameter because `calculate_ghostdag_k`
+    /// is not a const fn; each caller's value is asserted against the real formula in tests.
+    pub const fn new_seconds_per_block(secs: u64, ghostdag_k: KType) -> Self {
+        use crate::config::constants::consensus::{
+            COINBASE_MATURITY_SECONDS, FINALITY_DURATION, MERGE_DEPTH_DURATION, PRUNING_DURATION,
+        };
+        let mergeset_size_limit: u64 = 180;
+        let finality_depth = FINALITY_DURATION / secs;
+        let merge_depth = MERGE_DEPTH_DURATION / secs;
+        // The prunality lower bound, exactly as `Bps::pruning_depth` decomposes it.
+        let lower_bound = finality_depth + merge_depth * 2 + 4 * mergeset_size_limit * ghostdag_k as u64 + 2 * ghostdag_k as u64 + 2;
+        let duration_term = PRUNING_DURATION / secs;
+        let pruning_depth = if lower_bound > duration_term { lower_bound } else { duration_term };
+        // Ceiling division: maturity must never round DOWN below its wall-clock intent (at
+        // 120 s/block, 100 s of maturity is one block, not zero).
+        let coinbase_maturity = (COINBASE_MATURITY_SECONDS + secs - 1) / secs;
         Self {
-            target_time_per_block: 10_000,
-            ghostdag_k: 4,
+            target_time_per_block: secs * 1000,
+            ghostdag_k,
             past_median_time_sample_rate: 1,
             difficulty_sample_rate: 1,
             max_block_parents: 10,
-            mergeset_size_limit: 180,
-            merge_depth: 360,
-            finality_depth: 4_320,
-            pruning_depth: 10_800,
-            coinbase_maturity: 10,
+            mergeset_size_limit,
+            merge_depth,
+            finality_depth,
+            pruning_depth,
+            coinbase_maturity,
         }
     }
 }
@@ -401,6 +443,16 @@ pub struct Params {
     /// (`MISAKA_PALW_POW_FIXTURE=1`).
     pub pow_palw_activation: ForkActivation,
 
+    /// MISAKA Phase 4b PoW: activation of the **PALW-via-Ollama** Layer-1
+    /// (`POW_ALGO_ID_PALW_OLLAMA = 5`), superseding every other algo where active. Same seed /
+    /// prompt / grinding closure as Phase 4; the runtime is a host-local Ollama server running
+    /// the pinned Qwen model (the runtime an Ubuntu VPS fleet operates), and the tag commits to
+    /// the greedy response bytes + token counts (Ollama exposes no per-decode logits).
+    /// `always()` ⇒ from genesis (testnet-10 — the public PALW network); `never()` elsewhere
+    /// (devnet keeps the stronger algo-4 worker tag). Nodes need `MISAKA_PALW_OLLAMA_MODEL`
+    /// (+ optional `MISAKA_PALW_OLLAMA_URL`) or the devnet-only fixture env.
+    pub pow_palw_ollama_activation: ForkActivation,
+
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
     /// docs/kaspa-pq-design-mldsa87.md). `Consensus` on every kaspa-pq net.
     pub pq_enforcement: PqEnforcementMode,
@@ -524,6 +576,7 @@ impl Params {
             dns_params,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
+            pow_palw_ollama_activation,
             pq_enforcement,
             pq_activation_daa_score,
             evm_activation_daa_score,
@@ -587,6 +640,7 @@ impl Params {
 
         h.write(pow_blake2b_sha3_activation.daa_score().to_le_bytes());
         h.write(pow_palw_activation.daa_score().to_le_bytes());
+        h.write(pow_palw_ollama_activation.daa_score().to_le_bytes());
         h.write([*pq_enforcement as u8]);
         h.write(pq_activation_daa_score.to_le_bytes());
         h.write(evm_activation_daa_score.to_le_bytes());
@@ -646,11 +700,18 @@ impl Params {
         self.blockrate.target_time_per_block
     }
 
-    /// Returns the expected number of blocks per second
+    /// Returns the expected number of blocks per second, **floored at 1**.
+    ///
+    /// Every remaining consumer uses this as a sizing/bounds heuristic (relay-flow counts, log
+    /// chunk limits, orphan-pool ranges, an IBD warn threshold, a gRPC throughput hint), where 1
+    /// is the correct degenerate value on a sub-1-bps network — the un-floored integer division
+    /// is 0 at 0.1 bps (10_000 ms blocks) and 0-sized bounds panic (`chunks_timeout`). Exact
+    /// rate arithmetic must use [`Params::target_time_per_block_history`] instead (as the
+    /// coinbase emission schedule does).
     #[inline]
     #[must_use]
     pub fn bps(&self) -> u64 {
-        1000 / self.blockrate.target_time_per_block
+        (1000 / self.blockrate.target_time_per_block).max(1)
     }
 
     /// Returns the expected number of blocks per second throughout history (currently represented as [`ForkedParam`]).
@@ -659,8 +720,8 @@ impl Params {
     #[must_use]
     pub fn bps_history(&self) -> ForkedParam<u64> {
         ForkedParam::new(
-            1000 / self.pre_crescendo_target_time_per_block,
-            1000 / self.blockrate.target_time_per_block,
+            (1000 / self.pre_crescendo_target_time_per_block).max(1),
+            (1000 / self.blockrate.target_time_per_block).max(1),
             self.crescendo_activation,
         )
     }
@@ -804,6 +865,7 @@ impl Params {
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
+            pow_palw_ollama_activation: self.pow_palw_ollama_activation,
             // kaspa-pq: PQ enforcement is consensus-fixed, never runtime-overridable.
             pq_enforcement: self.pq_enforcement,
             pq_activation_daa_score: self.pq_activation_daa_score,
@@ -1358,9 +1420,17 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// Mainnet keeps the 20M-KAS floors. None of these are genesis-block inputs.
 /// ADR-0024 step 3 (the VLT SHADOW fork) — the ONE constant a release cut has to choose.
 ///
-/// `u64::MAX` means "not scheduled", which is the shipped state. Setting it to a DAA height picks
-/// up everything the fork needs at once, because the three fields below are derived from it
-/// rather than edited independently:
+/// **GENESIS-ACTIVE (`0`) since the PALW re-genesis** (user decision 2026-08-12). The height
+/// 30_200_000 this constant used to carry was measured against the SUPERSEDED 1-bps chain's live
+/// tip; on the re-genesised chain, which restarts at DAA 0 and advances one block per 120 s, that
+/// height is ~115 years away — the fence, and with it the bond spend gate the 2026-08-11 audit
+/// called a P0, would have been silently inert forever. Since the chain is being rebuilt anyway
+/// there is no fleet to coordinate ahead of a future height: the fork ships in the genesis rules,
+/// which is strictly safer than any scheduled height (nothing to miss, nothing to race).
+///
+/// `u64::MAX` still means "not scheduled". Setting it to a DAA height picks up everything the
+/// fork needs at once, because the three fields below are derived from it rather than edited
+/// independently:
 ///
 /// * `vlt.vlt_shadow_activation_daa_score` — the overlay starts crediting, drawing committees,
 ///   paying the audit fee and slashing settled challenges;
@@ -1370,13 +1440,15 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// * `vlt.model_cost_table` — the registered profiles, without which every job mints zero and the
 ///   fork would cost a hard fork to discover it did nothing.
 ///
-/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX`: moving the VOTE
-/// is step 4, after the soak has measured what the weight is made of.
+/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX` even now: moving
+/// the VOTE is step 4, after the soak has measured what the weight is made of. Genesis-active
+/// step 3 means the overlay credits, draws committees, pays the audit fee and slashes settled
+/// challenges from block 1 — it does NOT mean compute weight decides finality yet.
 ///
 /// Choosing the height, the fleet-update procedure and the exit criteria are in
 /// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
-pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 30_200_000;
+pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 0;
 
 // SCHEDULED 2026-08-11. Live tip measured at 29_981_862 (`/info/blockdag` on the public
 // explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
@@ -1424,35 +1496,61 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // silently off, not merely weaker. Keep the original "≥1 credited attestation in the anchor's
     // own epoch" guard. Raise this in lockstep with `min_active_validators`, never before.
     min_anchor_attesters: 1,
-    // Reach stays inherited from PRODUCTION (18_000 blocks). The TTL does NOT — see below.
+    // ── PALW 120 s/block re-sizing of every block/DAA/blue-score-denominated window ────────────
+    // PRODUCTION's windows are sized for 10 bps (100 ms blocks); inherited unchanged onto a
+    // 120 s/block chain their wall clock stretches ×1200 (the 14-day unbond would be ~46 YEARS).
+    // Every override below preserves the SECURITY semantics in wall clock, with the deviations
+    // noted inline. Mainnet (10 bps) keeps PRODUCTION as-is.
     //
-    // 2026-08-13/14: the inherited 6_000 was calibrated against "~110 DAA/min of the live mesh",
-    // which read the release time as ~55 min. That calibration assumes the chain keeps moving,
-    // and the wedge this TTL exists to release is exactly the state where it does not. Measured
-    // on the live t10 fleet: confirmed anchor 7fb6529b (daa 30_075_173) fell off the selected
-    // chain, so every candidate failed the includes test, so the gate refused every heavier
-    // candidate, so virtual advanced 3 DAA per ~17 min — and at THAT rate the 6_000 the TTL
-    // wants takes ~12 days, not 55 min. The clock is `canonical_daa - anchor_daa` on this node's
-    // OWN chain (`dns_reorg_outcome`), and the wedge stops that clock. Self-referential: the
-    // release cannot fire because the thing it releases is what freezes its input.
+    //   field                                 PRODUCTION @10bps      here @120 s     wall clock
+    //   epoch_length_blocks                   100        (10 s)      2   (4 min)     see note A
+    //   max_reorg_horizon_blocks              300        (30 s)      3   (6 min)     see note B
+    //   evidence_window_blocks                12_096_000 (14 d)      10_080 (14 d)   exact
+    //   unbonding_period_blocks               +300                   10_083          U ≥ R+E ✓
+    //   dns_gate_horizon_blocks               18_000     (30 min)    360 (12 h)      3×TTL kept
+    //   dns_veto_ttl_daa_score                6_000      (10 min)    120 (4 h)       30× the
+    //     healthy anchor-to-tip distance (lag 2 + epoch 2 = 4), the same headroom ratio the
+    //     PRODUCTION comment derives (6_000 ≈ 30 × 200).
+    //   attestation_epoch_length_blue_score   100                    2
+    //   attestation_lag_blue_score            100                    2
+    //   attestation_anchor_backoff_blue_score 20                     1               floor
+    //   stake_score_window_blue_score         1_500                  30  (= 15 epochs, the
+    //     window-ceiling ratio the emergency_stake_margin calibration relies on)
+    //   bridge_finality_max_staleness         1_500      (150 s)     2   (4 min)     ≥ 150 s
+    //   coinbase_settlement_long_maturity     30_000     (~4.5 h)    600 (20 h)      > horizon
+    //     + TTL with the same margin shape (600 > 360 + 120).
+    //   reward_uniqueness_window_blocks       600 — INHERITED unchanged (block-count semantics;
+    //     the scan bound is cheap and shrinking it toward the mergeset limit would weaken it).
     //
-    // 2_000 is chosen against the wedge's OWN geometry rather than against a block rate: it sits
-    // below the anchor age a wedged node reaches within hours (2_882 when this was measured) and
-    // far above the `lag + epoch` distance a CONFIRMING chain ever shows, which is what the field
-    // doc says the number must separate. The honest fix is to stop counting the TTL on a clock
-    // the veto can stop — that is a behaviour change to `dns_reorg_outcome` and belongs in its
-    // own release; this constant is what unwedges the fleet without one.
-    dns_veto_ttl_daa_score: 2_000,
+    // Note A: the ×1200 scaling would put epoch_length at 0 blocks, which is meaningless — 2 is
+    // the floor at which an epoch still contains a boundary and an interior. It is 4 min of wall
+    // clock (vs PRODUCTION's 10 s): epochs are now a coarse unit on this chain, which is the
+    // honest consequence of 120 s blocks, not a tuning choice.
+    // Note B: likewise floored. 3 blocks is 6 min — far longer in wall clock than PRODUCTION's
+    // 30 s, and comfortably above any plausible anticone depth at k = 1.
+    epoch_length_blocks: 2,
+    max_reorg_horizon_blocks: 3,
+    evidence_window_blocks: 10_080,
+    unbonding_period_blocks: 10_083,
+    dns_gate_horizon_blocks: 360,
+    dns_veto_ttl_daa_score: 120,
+    attestation_epoch_length_blue_score: 2,
+    attestation_lag_blue_score: 2,
+    attestation_anchor_backoff_blue_score: 1,
+    stake_score_window_blue_score: 30,
+    bridge_finality_max_staleness_daa_score: 2,
+    // (superseded by the PALW table above; the historical rationale for inheriting 18_000/6_000
+    // at 10 bps — measured ~110 DAA/min, ~2.5 h protection, ~55 min auto-release — is preserved
+    // in the PRODUCTION_DNS_PARAMS comment.)
     // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
     // Settlement soaks here first too, POLICY layer only (the consensus layer is unwired until
-    // the anchor gets its sequential per-chain-block view — see the field doc). 30_000 DAA >
-    // gate horizon (18_000) + veto TTL (6_000) with margin: a contested fork should resolve
-    // before either side's rewards go liquid through the fallback. At the mesh's measured
-    // ~110 DAA/min this is ~4.5 h — long enough to bite, short enough to tolerate while the
-    // validator set is being restored.
-    coinbase_settlement_long_maturity_daa: 30_000,
+    // the anchor gets its sequential per-chain-block view — see the field doc). 600 DAA > gate
+    // horizon (360) + veto TTL (120) with margin: a contested fork should resolve before either
+    // side's rewards go liquid through the fallback. At 120 s/block this is ~20 h — long enough
+    // to bite, short enough to tolerate while the validator set is being restored.
+    coinbase_settlement_long_maturity_daa: 600,
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
@@ -1552,6 +1650,7 @@ pub const MAINNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1595,7 +1694,13 @@ pub const TESTNET_PARAMS: Params = Params {
     max_difficulty_target: MAX_DIFFICULTY_TARGET,
     max_difficulty_target_f64: MAX_DIFFICULTY_TARGET_AS_F64,
     past_median_time_window_size: MEDIAN_TIME_SAMPLED_WINDOW_SIZE as usize,
-    difficulty_window_size: DIFFICULTY_SAMPLED_WINDOW_SIZE as usize,
+    // PALW 120 s/block: with `difficulty_sample_rate = 1` (every block sampled) the window size
+    // IS the window duration in blocks. 264 × 120 s ≈ 8.8 h of difficulty memory — longer in
+    // wall clock than the 2 641 s the shared constant models at ≥1 bps, and kept deliberately:
+    // the miner set is a provisioned fleet rather than an open hashrate market, so the ±6 %
+    // statistical stability of 264 samples is worth more than fast response. The 150-block
+    // `min_difficulty_window_size` still gives a ~5 h fixed-difficulty launch window.
+    difficulty_window_size: 264,
     min_difficulty_window_size: MIN_DIFFICULTY_WINDOW_SIZE,
     coinbase_payload_script_public_key_max_len: 150,
     max_coinbase_payload_len: 204,
@@ -1638,15 +1743,21 @@ pub const TESTNET_PARAMS: Params = Params {
     max_block_level: 250,
     pruning_proof_m: 1000,
 
-    blockrate: BlockrateParams::new::<10>(),
+    // PALW public testnet: ONE BLOCK PER 120 SECONDS. Sized from the fleet's measured per-header
+    // replay cost so the slowest honest validator stays near 15 % steady-state load today and
+    // still fits the future 35B-A3B algo fork (the model can fork on this chain; the block rate
+    // cannot). See `new_two_minute_bps` and the runbook's §"Why 120 s".
+    blockrate: BlockrateParams::new_two_minute_bps(),
 
-    // kaspa-pq: 10 BPS since genesis. This field only feeds the subsidy-month
-    // calc (`bps_history`); setting it to 100ms keeps emission on the 10 BPS
-    // schedule throughout, independent of the (legacy) crescendo activation score.
+    // kaspa-pq: this field only feeds the subsidy-month calc's pre-activation arm, which the
+    // always-active crescendo below makes unreachable on this chain.
     pre_crescendo_target_time_per_block: 100,
 
-    // 18:30 UTC, March 6, 2025
-    crescendo_activation: ForkActivation::new(88_657_000),
+    // PALW re-genesis: the chain restarts at DAA 0 with a single 10 s/block era, so the emission
+    // schedule is on the post-activation (0.1-bps) arm from genesis — the historical score
+    // 88_657_000 belonged to the superseded pre-PALW chain and would have kept emission on the
+    // 10-bps table for the first ~28 years of the new chain.
+    crescendo_activation: ForkActivation::always(),
     // kaspa-pq: TESTNET inherits mainnet's production overlay economics (14-day
     // unbonding/evidence window, PoS-v2 active, 2-D dominance reorg gate) but with
     // testnet-friendly thresholds (see TESTNET_DNS_PARAMS): a lowered
@@ -1656,9 +1767,29 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     pow_blake2b_sha3_activation: ForkActivation::always(),
-    // PALW LLM PoW: inert on testnet-10 until its own fork (the shadow-fork runbook pattern:
-    // scheduling it is one ForkActivation constant on a coordinated build).
+    // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
+    // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
+    // network for one more commit.
+    //
+    // Measured, on the pinned blob: the canonical prompt makes the model emit ONE constant
+    // 16-token continuation for every seed (27/27 seeds, 22 of them uniform random). The tag is
+    // therefore a 64-byte constant, a `prompt_eval_count` drawn from ~10 values, and a constant
+    // 16 — so an attacker guesses it with ~31 BLAKE2b hashes and zero inference, at ~38 k
+    // nonces/s in single-threaded Python, while an honest miner pays 12-26 s per attempt. The
+    // verifier replays the real model, gets the same constant, and ACCEPTS the forgery: no
+    // consensus rule is broken, the work is simply not there. Confirmable without any runtime —
+    // the first 64 bytes of the calibration constant ARE the digest of that boilerplate string.
+    //
+    // The cause is structural, not a tuning error: the tag can only commit to the OUTPUT TEXT,
+    // and a small model at temperature 0 collapses to a handful of attractors (measured
+    // min-entropy ~3.1 bits over 60 seeds even with a high-entropy seed-derived prompt), while
+    // Ollama exposes no per-token logprobs to bind instead. The replacement therefore binds the
+    // LOGITS via the worker's `gemm_trace_root` and lands as `algo_id = 2` — see ADR-0021.
+    //
+    // Until that ships, testnet falls back to the Phase-3 BLAKE2b-SHA3 PoW below, which is
+    // sound. This line is the safety switch; the redesign is the fix.
     pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020 (O13 activation): EVM lane GENESIS-ACTIVE on testnet — every
@@ -1739,6 +1870,7 @@ pub const SIMNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
+    pow_palw_ollama_activation: ForkActivation::never(),
     pq_enforcement: PqEnforcementMode::Consensus,
     pq_activation_daa_score: 0,
     // ADR-0020: EVM lane inert in P1 (no executor yet); the testnet value flips to
@@ -1852,13 +1984,85 @@ pub const DEVNET_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
-    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture).
+    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture). Devnet
+    // deliberately keeps the WORKER flavor (full-logits `gemm_trace_root` binding) — the Ollama
+    // flavor (5) is testnet's fleet-runtime concession.
     pow_palw_activation: ForkActivation::always(),
+    pow_palw_ollama_activation: ForkActivation::never(),
 };
 
 #[cfg(test)]
 mod consensus_params_id_tests {
     use super::*;
+
+    /// The 120 s/block constants the PUBLIC TESTNET runs must match the same formulas `Bps<BPS>`
+    /// encodes, evaluated at λ = 1/120, and the ghostdag k passed to the shared constructor must
+    /// be the one `calculate_ghostdag_k` actually returns — the one value the const fn cannot
+    /// compute for itself.
+    #[test]
+    fn two_minute_bps_constants_match_formulas() {
+        use crate::config::{bps::calculate_ghostdag_k, constants::consensus::*};
+        let b = BlockrateParams::new_two_minute_bps();
+        let lambda = 1.0f64 / 120.0;
+        assert_eq!(b.target_time_per_block, 120_000);
+        assert_eq!(b.ghostdag_k as u64, calculate_ghostdag_k(2.0 * NETWORK_DELAY_BOUND as f64 * lambda, GHOSTDAG_TAIL_DELTA));
+        assert_eq!(b.past_median_time_sample_rate, 1);
+        assert_eq!(b.difficulty_sample_rate, 1);
+        assert_eq!(b.max_block_parents, 10);
+        assert_eq!(b.mergeset_size_limit, 180);
+        // Duration-scaled depths: 12 h finality, 1 h merge, 100 s maturity — the SAME wall clock
+        // the 10-bps mainnet has, which is the whole point of scaling by duration.
+        assert_eq!(b.finality_depth, FINALITY_DURATION / 120);
+        assert_eq!(b.merge_depth, MERGE_DEPTH_DURATION / 120);
+        assert_eq!(b.finality_depth * 120, FINALITY_DURATION, "12 h exactly");
+        assert_eq!(b.coinbase_maturity, 1, "100 s of maturity rounds UP to one 120 s block");
+        // Pruning: at this rate the prunality lower bound EXCEEDS the duration term, so the bound
+        // wins — recompute both sides rather than trusting the constant.
+        let lower_bound =
+            b.finality_depth + b.merge_depth * 2 + 4 * b.mergeset_size_limit * b.ghostdag_k as u64 + 2 * b.ghostdag_k as u64 + 2;
+        assert!(lower_bound > PRUNING_DURATION / 120, "at 120 s the bound, not the 30 h duration, sets pruning depth");
+        assert_eq!(b.pruning_depth, lower_bound);
+        // Pruning depth still buys MORE than the 30 h the duration term intends.
+        assert!(b.pruning_depth * 120 > PRUNING_DURATION);
+        // The public testnet actually runs this interval. Its PoW is deliberately NOT the Ollama
+        // PALW algo any more: that flavor was measured forgeable without running the model (see
+        // the preset's comment), so the preset falls back to Phase-3 BLAKE2b-SHA3 until the
+        // logits-binding replacement lands. Asserted, so re-enabling it is a deliberate edit here
+        // rather than a quiet flip of one activation.
+        assert_eq!(TESTNET_PARAMS.blockrate.target_time_per_block, 120_000);
+        assert!(!TESTNET_PARAMS.pow_palw_ollama_activation.is_active(u64::MAX - 1), "the forgeable flavor must stay off");
+        assert!(TESTNET_PARAMS.pow_blake2b_sha3_activation.is_active(0), "and the sound Phase-3 PoW carries the chain meanwhile");
+        assert_eq!(TESTNET_PARAMS.target_time_per_block_history().after(), 120_000);
+        // Emission holds the 37.047 MSK/s rate: one 120 s block pays 120× the per-second value.
+        assert_eq!(TESTNET_PARAMS.bps(), 1, "integer bps floors at 1; exact rate work uses ttpb");
+    }
+
+    /// The VLT windows the public testnet runs are the wall-clock equivalents of PRODUCTION's,
+    /// not PRODUCTION's block counts. A regression here is silent and expensive: inherited
+    /// unchanged, the "14-day" unbonding window would be ~46 years at 120 s/block.
+    #[test]
+    fn testnet_vlt_windows_preserve_production_wall_clock() {
+        let t = TESTNET_DNS_PARAMS;
+        let secs = TESTNET_PARAMS.blockrate.target_time_per_block / 1000;
+        assert_eq!(secs, 120);
+        // 14 days of evidence/unbonding, exactly (the security property, in wall clock).
+        assert_eq!(t.evidence_window_blocks * secs, 14 * 86_400);
+        // Unbonding = evidence + the reorg horizon, so ADR-0009's U ≥ R + E still holds.
+        assert_eq!(t.unbonding_period_blocks, t.evidence_window_blocks + t.max_reorg_horizon_blocks);
+        assert!(t.unbonding_period_blocks >= t.max_reorg_horizon_blocks + t.evidence_window_blocks);
+        // The veto TTL keeps PRODUCTION's ~30× headroom over a healthy anchor-to-tip distance,
+        // and the gate horizon stays 3× the TTL.
+        let healthy_anchor_distance = t.attestation_lag_blue_score + t.epoch_length_blocks;
+        assert!(t.dns_veto_ttl_daa_score >= 25 * healthy_anchor_distance);
+        assert_eq!(t.dns_gate_horizon_blocks, 3 * t.dns_veto_ttl_daa_score);
+        // Settlement must outlast a contested fork: horizon + TTL, with margin.
+        assert!(t.coinbase_settlement_long_maturity_daa > t.dns_gate_horizon_blocks + t.dns_veto_ttl_daa_score);
+        // The stake-score window stays 15 epochs — the ratio emergency_stake_margin is calibrated
+        // against (ADR-0018 / the 2026-07-19 incident note).
+        assert_eq!(t.stake_score_window_blue_score, 15 * t.attestation_epoch_length_blue_score);
+        // Bridge staleness keeps at least PRODUCTION's 150 s.
+        assert!(t.bridge_finality_max_staleness_daa_score * secs >= 150);
+    }
 
     /// The hand-evaluated 0.1-bps blockrate constants must match the same formulas `Bps<BPS>`
     /// encodes, evaluated at λ = 0.1 (`Bps` itself cannot express a sub-integer rate). Guards the
@@ -1891,10 +2095,15 @@ mod consensus_params_id_tests {
         assert_eq!(b.pruning_depth as f64, lambda * PRUNING_DURATION as f64);
         // The devnet preset actually runs these params with PALW active from genesis.
         assert_eq!(DEVNET_PARAMS.blockrate.target_time_per_block, 10_000);
+        // Unchanged by the shared-constructor refactor: the hand-written table this replaced.
+        assert_eq!(b.merge_depth, 360);
+        assert_eq!(b.finality_depth, 4_320);
+        assert_eq!(b.pruning_depth, 10_800);
+        assert_eq!(b.coinbase_maturity, 10);
         assert!(DEVNET_PARAMS.pow_palw_activation.is_active(0));
-        // And the integer-bps view truncates to zero — the reason emission consumes
-        // `target_time_per_block_history` instead (see CoinbaseManager).
-        assert_eq!(DEVNET_PARAMS.bps(), 0);
+        // And the integer-bps view floors at 1 (the raw division is 0 — the reason emission
+        // consumes `target_time_per_block_history` and sizing consumers get the floored view).
+        assert_eq!(DEVNET_PARAMS.bps(), 1);
         assert_eq!(DEVNET_PARAMS.target_time_per_block_history().after(), 10_000);
     }
 
@@ -1935,16 +2144,32 @@ mod consensus_params_id_tests {
         // mechanics as the TokenParams merge above). Devnet moved for three additional,
         // deliberate reasons: `always()` activation, the 0.1-bps `new_deci_bps` blockrate, and
         // the re-genesised trivial-bits genesis hash. Coordinated flag day, as before.
+        //
+        // And once more when `pow_palw_ollama_activation` entered the hash (the Phase-4b
+        // Ollama-runtime algo, `always()` on testnet-10 — the fleet's runtime — and `never()`
+        // elsewhere).
         let changed: Vec<String> = [
-            ("mainnet", MAINNET_PARAMS, "7939e004c7747ecf8d056c382635b7f130b85a9152db51c8132ecaeb8d703e4b"),
-            // Moved 2026-08-14 by the t10 unwedge (`dns_veto_ttl_daa_score` 6_000 -> 2_000). The
-            // fleet's own release carries the same constant and lands on `a1e6602e…`; this branch
-            // is that plus the token-program + PoW changes, hence a different value. Both must
-            // carry the TTL edit or the shadow release would re-wedge on the same self-referential
-            // clock. Testnet only — the other three presets are untouched.
-            ("testnet", TESTNET_PARAMS, "28649895702c66fbed8162f325b5e3294c2886108d59015a72b62c8f1f5d0db5"),
-            ("simnet", SIMNET_PARAMS, "6faf491321d0f2d450fca329e35984cf257d250067e13a8f191e803c0c90a59e"),
-            ("devnet", DEVNET_PARAMS, "a3797a40ad4d89816b43469e3d77d7d923014d8d9b8ecaa709a6d4e6554479ea"),
+            ("mainnet", MAINNET_PARAMS, "9110ee1c8bedfc8cd0e32336a7adeeb2940752737e385d1c69b65aee662334c2"),
+            // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
+            // the two facts the branches discovered separately — `single-variant` (bps01, by
+            // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
+            // and the aarch64 class renamed to its honest `aarch64-dotprod` tag — and the
+            // registered-model entries derive from those pins, so the materialized hash moved.
+            // Only this preset: the other three do not carry the palw-lite registry.
+            // NOTE this "testnet" is the PALW 120 s re-genesis net, NOT the live t10 — the live
+            // t10's wedge TTL (`dns_veto_ttl_daa_score: 2_000`, 3addb8b) is deliberately NOT
+            // carried here: a different genesis cannot join (or re-wedge) that network, and
+            // live-t10 releases keep cutting from bps01/main.
+            // Moved before that when the block interval was set to its final 120 s (2026-08-12) —
+            // the blockrate, the DAA window duration and every VLT window are in the hash.
+            // Moved before that by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
+            // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
+            // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
+            // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
+            // `d07cb673…` shadow-materialized) were both superseded by that merge.
+            ("testnet", TESTNET_PARAMS, "48462b2b931522d3bfe3931790a4c8711df6bb931c471a9559db78fe388f3eda"),
+            ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
+            ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

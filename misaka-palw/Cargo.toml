@@ -15,6 +15,8 @@ kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 
 blake2b_simd.workspace = true
+# v2 agent client: the framed Borsh UDS protocol (misaka-palw-agent-borsh/v1).
+borsh.workspace = true
 faster-hex.workspace = true
 log.workspace = true
 serde.workspace = true

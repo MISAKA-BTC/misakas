@@ -188,6 +188,7 @@ impl ConsensusServices {
             params.skip_proof_of_work,
             params.pow_blake2b_sha3_activation,
             params.pow_palw_activation,
+            params.pow_palw_ollama_activation,
             is_consensus_exiting,
         ));
 

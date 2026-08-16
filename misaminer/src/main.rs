@@ -262,7 +262,9 @@ async fn main() {
         // * Hash algos (1/2/3): the multi-threaded Layer-0 scan. `StateLayer0` caches the
         //   nonce-independent pre-PoW state; `check_pow_layer0(n)` varies n.
         let state = kaspa_pow::StateLayer0::new(&header, &network_id);
-        let found = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM {
+        let palw_ids =
+            [kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_OLLAMA];
+        let found = if palw_ids.contains(&header.pow_algo_id) {
             mine_palw_sequential(&state, PALW_TEMPLATE_REFRESH)
         } else {
             (0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok, _)| ok).unwrap_or(false))
@@ -323,8 +325,9 @@ fn mine_palw_sequential(state: &kaspa_pow::StateLayer0, refresh: std::time::Dura
             Err(e @ kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwUnavailable(_)) => {
                 // Configuration error — retrying cannot help. Fail loud like the node does.
                 eprintln!(
-                    "refusing to mine: {e}\nSet PALW_WORKER (+ MISAKA_PALW_GGUF) to the pinned worker, or export \
-                     MISAKA_PALW_POW_FIXTURE=1 to mine the model-free fixture rules."
+                    "refusing to mine: {e}\nSet PALW_WORKER (+ MISAKA_PALW_GGUF) for the worker algo, or \
+                     MISAKA_PALW_OLLAMA_MODEL (+ a running `ollama serve`) for the Ollama algo, or export \
+                     MISAKA_PALW_POW_FIXTURE=1 (devnet) to mine the model-free fixture rules."
                 );
                 std::process::exit(1);
             }

@@ -18,6 +18,7 @@
 //! Every command honors `--output human|json`. Exit codes are stable (see
 //! `exit`) so systemd / shell / monitors can branch on them.
 
+mod ask;
 mod bootstrap;
 mod config;
 mod eth;
@@ -153,6 +154,13 @@ enum Command {
     #[cfg(feature = "evm-send")]
     #[command(subcommand)]
     Prea(PreaCmd),
+
+    /// Ask this network's pinned model a question — and get a receipt anyone can re-run.
+    ///
+    /// Ordinary LLM use (any language, `--file`/stdin for long prompts), with the property the
+    /// rest of this chain is built on: the request is pinned, so another host of the same class
+    /// reproduces the answer byte for byte. `--verify <receipt>` is that check.
+    Ask(ask::AskArgs),
 }
 
 /// Port-free node launch args for `node start` / `join`: an optional RPC `--profile` plus
@@ -730,6 +738,7 @@ async fn main() -> std::process::ExitCode {
         Command::Prea(PreaCmd::SignSession { key, account, version, call_index, max_relayer_fee, to, value, calldata }) => {
             prea::run_sign_session(ctx.output, &key.source(), &account, version, call_index, &max_relayer_fee, &to, &value, &calldata)
         }
+        Command::Ask(args) => ask::run(args),
     };
 
     match result {

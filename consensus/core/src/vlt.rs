@@ -1039,6 +1039,15 @@ pub mod qwen35_pins {
     pub const BASE_REPO_ID: &str = "Qwen/Qwen3.5-2B";
     pub const BASE_REVISION: &str = "15852e8c16360a2fea060d615a32b45270f8a8fc";
 
+    /// The architecture shape, read out of the GGUF's own metadata (`qwen35.block_count`,
+    /// `qwen35.embedding_length`). Pinned here because the activation-tap profile has to be
+    /// chosen BEFORE the model is loaded — llama.cpp only accepts a capture callback at context
+    /// creation — so the tap layers are computed from these and then checked against what the
+    /// loaded model actually reports. A mismatch means the artifact is not the pinned one in a
+    /// way the SHA-256 gate somehow missed, and the worker refuses to run.
+    pub const MODEL_LAYER_COUNT: u32 = 24;
+    pub const MODEL_HIDDEN_DIM: u32 = 2048;
+
     /// Pinned upstream `ggml-org/llama.cpp` commit the worker links against.
     pub const LLAMA_COMMIT: &str = "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a";
     /// `git rev-list --count` at that commit — llama.cpp's own build-number convention.
@@ -1058,9 +1067,18 @@ pub mod qwen35_pins {
     pub const METAL_RUNTIME_CLASS: &str = "misaka-palw-lite-fp/apple-metal-arm64/v1";
 
     /// The **CPU** build profile of the same worker against the same GGUF: no GPU backend at all,
-    /// a pinned thread count, and `GGML_NATIVE` off so the compiler may not select instructions
-    /// from the build host. Every one of those is part of the identity because every one of them
-    /// can change a reduction order and therefore the logits.
+    /// a pinned thread count, `GGML_NATIVE` off so the compiler may not select instructions from
+    /// the build host, and **OpenMP off**. Every one of those is part of the identity because
+    /// every one of them can change a reduction order and therefore the logits.
+    ///
+    /// `no-openmp` was added 2026-08-12 after building this profile on Linux for the first time.
+    /// ggml-cpu compiles against OpenMP by default there, and Apple clang does not enable it — so
+    /// every earlier measurement of "the CPU profile" was of a build WITHOUT it, while the fleet
+    /// would have run one WITH it. That is not a portability detail: under OpenMP the matmul's
+    /// work split and reduction order come from an external runtime's scheduling rather than from
+    /// ggml's own threadpool at the pinned thread count, so the arithmetic is no longer a function
+    /// of (source, thread count) alone. It also announced itself as a link error rather than a
+    /// wrong number, which is the lucky version of this class of mistake.
     ///
     /// This profile exists because a public fleet is Linux servers, not Apple laptops, and a
     /// committee can only be drawn from validators sharing a determinism class — a network whose
@@ -1072,8 +1090,13 @@ pub mod qwen35_pins {
     /// other. Verified by disassembly: the aarch64 build emits ARMv8.2 `sdot`/`udot`, so it
     /// REQUIRES dotprod (a machine without it fails to execute rather than computing differently
     /// — the safe failure), and the class tag says so.
+    ///
+    /// This string is the **union of two facts discovered on two branches** — `single-variant`
+    /// (bps01, by disassembly) and `no-openmp` (iso, by the Linux link error) — and the union is
+    /// what the four live fleet workers actually derive `2754900829bc36f8…` from. Either fact
+    /// alone is a different manifest hash and the silent zero-mint the calibration caught.
     pub const CPU_BUILD_PROFILE: &str =
-        "release/cpu-only/single-variant/no-native/no-lto/no-blas/threads-4/gpu-off/static/v1";
+        "release/cpu-only/single-variant/no-native/no-lto/no-blas/no-openmp/threads-4/gpu-off/static/v1";
 
     /// The CPU determinism class — **scoped to the instruction-set architecture**, and that
     /// scoping is the honest part.

@@ -126,6 +126,8 @@ pub struct PruningProofManager {
     pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// MISAKA Phase 4: PALW LLM (`algo_id = 4`) activation — same POW-01 rationale as above.
     pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4b: PALW-Ollama (`algo_id = 5`) activation — same POW-01 rationale.
+    pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -149,6 +151,7 @@ impl PruningProofManager {
         skip_proof_of_work: bool,
         pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
         pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+        pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -186,6 +189,7 @@ impl PruningProofManager {
             skip_proof_of_work,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
+            pow_palw_ollama_activation,
 
             is_consensus_exiting,
         }

@@ -19,12 +19,16 @@ kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 
 blake2b_simd.workspace = true
+borsh.workspace = true
 faster-hex.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 
 [build-dependencies]
 cc.workspace = true
+# v2 (RuntimeManifestV2): build.rs hashes the exact CMake cache and static libraries it links,
+# so the manifest describes the artifacts this binary is actually made of.
+sha2.workspace = true
 
 [lints]
 workspace = true

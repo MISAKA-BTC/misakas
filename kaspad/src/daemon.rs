@@ -429,6 +429,112 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         }
     };
 
+    // MISAKA Phase 4 (PALW LLM PoW, ADR-0021) startup rails. Header validation on a PALW-active
+    // network replays a pinned-LLM inference per header; discovering a missing runtime at the
+    // first relayed header means a panic mid-pipeline. Check the operator's intent HERE, at
+    // startup, with actionable messages instead.
+    {
+        // "Ever active on this network": is_active at the largest checkable score — false only
+        // for `ForkActivation::never()`.
+        let palw_ever_active = params.pow_palw_activation.is_active(u64::MAX - 1);
+        let fixture = std::env::var("MISAKA_PALW_POW_FIXTURE").as_deref() == Ok("1");
+        // The fixture derives DIFFERENT tags than the pinned model — fixture rules are a
+        // different network. Confine them to devnet so a mis-exported variable cannot make a
+        // node mint/accept fixture blocks on the public testnet (it would fork at block 1 and
+        // its blocks would be invalid to every real peer).
+        if fixture && network.network_type != kaspa_consensus_core::network::NetworkType::Devnet {
+            println!(
+                "MISAKA_PALW_POW_FIXTURE=1 is only honored on devnet: fixture PALW tags are a \
+                 different rule set than the pinned model, and running them against {} would just \
+                 fork you off the network at the first block. Unset it, or use --devnet.",
+                network
+            );
+            exit(1);
+        }
+        // Phase 4b (algo_id = 5): the Ollama-runtime PALW network. Validation reaches a
+        // host-local Ollama server, so check reachability and the model pin NOW.
+        let palw_ollama_ever_active = params.pow_palw_ollama_activation.is_active(u64::MAX - 1);
+        if palw_ollama_ever_active && !fixture {
+            let model = match std::env::var(kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV) {
+                Ok(m) => m,
+                Err(_) => {
+                    println!(
+                        "network {} validates PALW-Ollama (algo_id = 5) LLM proof-of-work.\nSet {}=<pinned model, e.g. \
+                         qwen3.5:2b> (and optionally {}=http://127.0.0.1:11434), with `ollama serve` running and the \
+                         model pulled — see docs/testnet10-palw-rollout-runbook.md.{}",
+                        network,
+                        kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV,
+                        kaspa_pow::palw::PALW_OLLAMA_URL_ENV,
+                        if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
+                            "\nOr export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
+                        } else {
+                            ""
+                        }
+                    );
+                    exit(1);
+                }
+            };
+            let url = std::env::var(kaspa_pow::palw::PALW_OLLAMA_URL_ENV)
+                .unwrap_or_else(|_| kaspa_pow::palw::DEFAULT_OLLAMA_URL.to_string());
+            let hostport = url.strip_prefix("http://").unwrap_or(&url).trim_end_matches('/').to_string();
+            match std::net::TcpStream::connect_timeout(
+                &hostport.parse().unwrap_or_else(|_| {
+                    println!("{} must be http://host:port, got {url}", kaspa_pow::palw::PALW_OLLAMA_URL_ENV);
+                    exit(1);
+                }),
+                Duration::from_secs(3),
+            ) {
+                Ok(_) => match kaspa_pow::palw::verify_ollama_model_pin(&url, &model) {
+                    Ok(()) => info!("PALW-Ollama runtime: {url} serving the pinned model blob as {model}"),
+                    Err(e) => {
+                        println!("{e}");
+                        exit(1);
+                    }
+                },
+                Err(e) => {
+                    println!(
+                        "cannot reach the Ollama server at {url}: {e}\nStart it (`ollama serve`, or the systemd unit from \
+                         scripts/misaka-palw-ollama-setup.sh) and pull the pinned model (`ollama pull {model}`)."
+                    );
+                    exit(1);
+                }
+            }
+        }
+        if palw_ever_active && !fixture {
+            match std::env::var("PALW_WORKER") {
+                Err(_) => {
+                    println!(
+                        "network {} validates PALW (algo_id = 4) LLM proof-of-work, which needs the \
+                         pinned worker runtime.\nSet PALW_WORKER=<path to palw-worker> and \
+                         MISAKA_PALW_GGUF=<path to {}>{}",
+                        network,
+                        kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME,
+                        if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
+                            ", or export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
+                        } else {
+                            "."
+                        }
+                    );
+                    exit(1);
+                }
+                Ok(worker) => {
+                    if !std::path::Path::new(&worker).is_file() {
+                        println!("PALW_WORKER points at {worker}, which does not exist.");
+                        exit(1);
+                    }
+                    if std::env::var("MISAKA_PALW_GGUF").is_err() {
+                        println!(
+                            "PALW_WORKER is set but MISAKA_PALW_GGUF is not — the worker refuses to run \
+                             without the pinned {} (size+sha checked).",
+                            kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME
+                        );
+                        exit(1);
+                    }
+                }
+            }
+        }
+    }
+
     let config = Arc::new(
         ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|config| args.apply_to_config(config)).build(),
     );
@@ -880,6 +986,17 @@ Do you confirm? (y/n)";
         hub.clone(),
         mining_rule_engine.clone(),
     ));
+
+    // MISAKA PALW v2 (Land stage): monitor a palw-agent when one is configured. Observation
+    // and a capability handle only — an absent or quarantined agent withdraws v2 compute
+    // capability (which nothing consensus-visible consumes yet) and the node continues
+    // validator-only, exactly as the VPS design's failure policy requires. Independent of
+    // `--enable-validator`: watching a runtime is not a validator role.
+    let _palw_agent_capability = args.compute_endpoint.as_ref().map(|endpoint| {
+        // Accept both the bare socket path and the design docs' `unix://` URI spelling.
+        let path = endpoint.strip_prefix("unix://").unwrap_or(endpoint);
+        crate::palw_agent::spawn_palw_agent_monitor(PathBuf::from(path))
+    });
 
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
     // when `--enable-validator` is set (so default node behavior is unchanged) and after

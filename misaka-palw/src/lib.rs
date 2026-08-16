@@ -65,6 +65,11 @@ use serde::{Deserialize, Serialize};
 /// every honest proof is rejected.
 pub use kaspa_consensus_core::vlt::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDUAL_COMMITMENT_KEY;
 
+/// Client for the v2 `palw-agent` UDS protocol (`misaka-palw-agent-borsh/v1`). Separate from the
+/// v1 subprocess bridge below: the v1 `PalwWorkerRuntime` drives `palw-worker --mode self-job`
+/// over the frozen JSON contract, while this speaks framed Borsh to a supervised agent.
+pub mod agent_client;
+
 /// The submission schema this bridge understands.
 pub const PALW_SUBMISSION_SCHEMA_V3: &str = "misaka.palw.testnet-submission.v3";
 

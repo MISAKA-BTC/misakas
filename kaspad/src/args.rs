@@ -209,6 +209,10 @@ pub struct Args {
     // inert on any network whose model cost table is empty (which is every shipped preset).
     pub enable_compute: bool,
     pub compute_worker: Option<String>,
+    /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
+    /// health-probed and logged, feeding the capability handle nothing consensus-visible
+    /// consumes yet. The VLT compute role (v1) is untouched by it.
+    pub compute_endpoint: Option<String>,
     pub compute_work_dir: Option<String>,
     pub compute_prompt: Option<String>,
     pub compute_max_tokens: Option<u32>,
@@ -328,6 +332,7 @@ impl Default for Args {
             validator_mode: None,
             enable_compute: false,
             compute_worker: None,
+            compute_endpoint: None,
             compute_work_dir: None,
             compute_prompt: None,
             compute_max_tokens: None,
@@ -801,6 +806,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("compute-endpoint")
+                .long("compute-endpoint")
+                .env("KASPAD_COMPUTE_ENDPOINT")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW v2: path to a palw-agent Unix socket to health-monitor (Land stage: observation and \
+                     capability state only; grants no reward, no work, no fork-choice weight, and does not replace \
+                     --compute-worker). The node runs validator-only regardless of the agent's state.",
+                ),
+        )
+        .arg(
             Arg::new("compute-work-dir")
                 .long("compute-work-dir")
                 .env("KASPAD_COMPUTE_WORK_DIR")
@@ -1189,6 +1206,7 @@ impl Args {
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
             enable_compute: arg_match_unwrap_or::<bool>(&m, "enable-compute", defaults.enable_compute),
             compute_worker: m.get_one::<String>("compute-worker").cloned().or(defaults.compute_worker),
+            compute_endpoint: m.get_one::<String>("compute-endpoint").cloned().or(defaults.compute_endpoint),
             compute_work_dir: m.get_one::<String>("compute-work-dir").cloned().or(defaults.compute_work_dir),
             compute_prompt: m.get_one::<String>("compute-prompt").cloned().or(defaults.compute_prompt),
             compute_max_tokens: m.get_one::<u32>("compute-max-tokens").copied().or(defaults.compute_max_tokens),

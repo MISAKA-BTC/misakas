@@ -16,11 +16,46 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Activation capture (PALW execution-commitment legs v1).
+//
+// A tap reads the graph node `l_out-<il>` — the post-block residual stream, the tensor every
+// later layer consumes, so a wrong one cannot be hidden downstream. Capture is armed at
+// shim_open_capture() time and NOT afterwards, because llama.cpp only accepts an eval callback
+// through llama_context_params: a context opened without taps never installs one and therefore
+// runs the byte-identical scheduler path the frozen v2 goldens were measured on.
+//
+// That asymmetry is deliberate and is the thing to remember about this file: with a callback
+// installed, ggml_backend_sched computes a split in sub-ranges cut at every tensor the callback
+// asks for, instead of one whole-split compute. Whether that changes the arithmetic is a
+// MEASURED question per backend (`--mode v2-legs-selftest` answers it), never an assumption.
+#define SHIM_MAX_TAPS 16
+
+// Capture fault codes. Any non-zero value means the Rust side must abort the job with no
+// receipt: a partially or wrongly captured leg is exactly what a challenger convicts on.
+#define SHIM_CAPTURE_OK            0
+#define SHIM_CAPTURE_ERR_DTYPE     1  // the tapped node is not F32
+#define SHIM_CAPTURE_ERR_NEMBD     2  // ne[0] is not the hidden dim the buffer was sized for
+#define SHIM_CAPTURE_ERR_POSITIONS 3  // more positions in one call than the ubatch cap
+#define SHIM_CAPTURE_ERR_RANK      4  // the node is not a plain [n_embd, n_tokens] matrix
+#define SHIM_CAPTURE_ERR_DUPLICATE 5  // the same tap fired twice in one call (split ubatch)
+
+typedef struct shim_capture {
+    int32_t   armed;
+    int32_t   n_taps;
+    int32_t   tap_layer[SHIM_MAX_TAPS];
+    int32_t   n_embd;
+    int32_t   max_positions;
+    float   * rows;                       // n_taps × max_positions × n_embd
+    int32_t   positions[SHIM_MAX_TAPS];   // positions captured per tap in the current call
+    int32_t   status;
+} shim_capture;
+
 typedef struct shim_ctx {
     struct llama_model * model;
     struct llama_context * lctx;
     const struct llama_vocab * vocab;
     int32_t n_vocab;
+    shim_capture cap;
 } shim_ctx;
 
 // Keep llama.cpp's own logging to warnings and errors. The full model-load narration alone is
@@ -39,7 +74,89 @@ static void shim_log_cb(enum ggml_log_level level, const char * text, void * use
     }
 }
 
-shim_ctx * shim_open(const char * model_path, int32_t n_ctx, int32_t n_batch, int32_t n_threads) {
+// Which tap slot a graph node belongs to, or -1. Matches `l_out-<il>` exactly: a prefix test
+// alone would also match a hypothetical `l_out_something-3`, and tapping the wrong tensor while
+// claiming `tap_semantics_id` is the one failure mode this comparison exists to prevent.
+static int shim_tap_slot(const shim_ctx * s, const char * name) {
+    static const char prefix[] = "l_out-";
+    const size_t plen = sizeof(prefix) - 1;
+    if (strncmp(name, prefix, plen) != 0) {
+        return -1;
+    }
+    const char * digits = name + plen;
+    if (*digits == '\0') {
+        return -1;
+    }
+    int32_t il = 0;
+    for (const char * p = digits; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') {
+            return -1;
+        }
+        il = il * 10 + (*p - '0');
+    }
+    for (int32_t slot = 0; slot < s->cap.n_taps; ++slot) {
+        if (s->cap.tap_layer[slot] == il) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+// ggml calls this twice per node it offers: `ask` to learn whether we want the data, then again
+// with the data computed. Every fault sets a sticky status and lets the graph finish — refusing
+// mid-graph would leave the context in a state the next call would inherit, and the Rust side
+// aborts the whole job on any non-zero status anyway.
+static bool shim_eval_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    shim_ctx * s = (shim_ctx *)user_data;
+    const int slot = shim_tap_slot(s, t->name);
+    if (ask) {
+        return slot >= 0;
+    }
+    if (slot < 0) {
+        return true;
+    }
+    if (t->type != GGML_TYPE_F32) {
+        s->cap.status = SHIM_CAPTURE_ERR_DTYPE;
+        return true;
+    }
+    if (t->ne[2] != 1 || t->ne[3] != 1) {
+        s->cap.status = SHIM_CAPTURE_ERR_RANK;
+        return true;
+    }
+    if (t->ne[0] != (int64_t)s->cap.n_embd) {
+        s->cap.status = SHIM_CAPTURE_ERR_NEMBD;
+        return true;
+    }
+    if (t->ne[1] > (int64_t)s->cap.max_positions) {
+        s->cap.status = SHIM_CAPTURE_ERR_POSITIONS;
+        return true;
+    }
+    // A second firing means the call was split into more than one ubatch, so the rows already
+    // captured are a different token range: silently keeping the last one would commit a leg
+    // that covers a fraction of the call.
+    if (s->cap.positions[slot] != 0) {
+        s->cap.status = SHIM_CAPTURE_ERR_DUPLICATE;
+        return true;
+    }
+    const size_t row_bytes = (size_t)s->cap.n_embd * sizeof(float);
+    for (int64_t pos = 0; pos < t->ne[1]; ++pos) {
+        float * dst = s->cap.rows + ((size_t)slot * (size_t)s->cap.max_positions + (size_t)pos) * (size_t)s->cap.n_embd;
+        // Per row, at the tensor's own row stride: correct whether or not the node is contiguous.
+        ggml_backend_tensor_get(t, dst, (size_t)pos * t->nb[1], row_bytes);
+    }
+    s->cap.positions[slot] = (int32_t)t->ne[1];
+    return true;
+}
+
+// Opens with activation capture armed for `tap_layers`. `n_taps == 0` installs no callback and
+// is byte-for-byte the pre-capture path (`shim_open` below is exactly that call).
+shim_ctx * shim_open_capture(
+        const char * model_path,
+        int32_t n_ctx,
+        int32_t n_batch,
+        int32_t n_threads,
+        const int32_t * tap_layers,
+        int32_t n_taps) {
     llama_log_set(shim_log_cb, NULL);
     llama_backend_init();
 
@@ -70,18 +187,130 @@ shim_ctx * shim_open(const char * model_path, int32_t n_ctx, int32_t n_batch, in
     cp.n_threads_batch = n_threads;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
+    // The context has to know the callback at creation time, and the callback has to know the
+    // shim context, so the shim context is allocated first.
+    shim_ctx * s = (shim_ctx *)calloc(1, sizeof(shim_ctx));
+    if (s == NULL) {
+        llama_model_free(model);
+        return NULL;
+    }
+    if (n_taps > 0) {
+        if (n_taps > SHIM_MAX_TAPS) {
+            free(s);
+            llama_model_free(model);
+            return NULL;
+        }
+        const int32_t n_layer = llama_model_n_layer(model);
+        for (int32_t i = 0; i < n_taps; ++i) {
+            // Ascending, in range, no repeats: the same rules the committed tap profile is held
+            // to, checked here so a bad arm cannot become a bad commitment.
+            if (tap_layers[i] < 0 || tap_layers[i] >= n_layer || (i > 0 && tap_layers[i] <= tap_layers[i - 1])) {
+                free(s);
+                llama_model_free(model);
+                return NULL;
+            }
+            s->cap.tap_layer[i] = tap_layers[i];
+        }
+        s->cap.n_taps        = n_taps;
+        s->cap.n_embd        = llama_model_n_embd(model);
+        s->cap.max_positions = n_batch;
+        s->cap.rows = (float *)calloc((size_t)n_taps * (size_t)n_batch * (size_t)s->cap.n_embd, sizeof(float));
+        if (s->cap.rows == NULL) {
+            free(s);
+            llama_model_free(model);
+            return NULL;
+        }
+        s->cap.armed = 1;
+        cp.cb_eval = shim_eval_cb;
+        cp.cb_eval_user_data = s;
+    }
+
     struct llama_context * lctx = llama_init_from_model(model, cp);
     if (lctx == NULL) {
+        free(s->cap.rows);
+        free(s);
         llama_model_free(model);
         return NULL;
     }
 
-    shim_ctx * s = (shim_ctx *)calloc(1, sizeof(shim_ctx));
     s->model = model;
     s->lctx = lctx;
     s->vocab = llama_model_get_vocab(model);
     s->n_vocab = llama_vocab_n_tokens(s->vocab);
     return s;
+}
+
+shim_ctx * shim_open(const char * model_path, int32_t n_ctx, int32_t n_batch, int32_t n_threads) {
+    return shim_open_capture(model_path, n_ctx, n_batch, n_threads, NULL, 0);
+}
+
+int32_t shim_n_embd(const shim_ctx * s) {
+    return llama_model_n_embd(s->model);
+}
+
+int32_t shim_n_layer(const shim_ctx * s) {
+    return llama_model_n_layer(s->model);
+}
+
+// Clears the per-call bookkeeping. Called before every decode: `positions[]` is what tells the
+// Rust side how many rows this call produced, and the duplicate check depends on it starting at
+// zero. The sticky `status` is deliberately NOT cleared — a fault anywhere in the job must
+// still be visible at the end of it.
+void shim_capture_begin(shim_ctx * s) {
+    memset(s->cap.positions, 0, sizeof(s->cap.positions));
+}
+
+int32_t shim_capture_status(const shim_ctx * s) {
+    return s->cap.status;
+}
+
+// Positions captured for `slot` in the last call: the prefill's token count, or 1 per decode.
+// A tap that never fired reports 0, which the Rust side treats as a fault — a missing tap means
+// the graph did not contain the node the tap profile claims to read.
+int32_t shim_capture_positions(const shim_ctx * s, int32_t slot) {
+    if (!s->cap.armed || slot < 0 || slot >= s->cap.n_taps) {
+        return -1;
+    }
+    return s->cap.positions[slot];
+}
+
+// Copies one captured row out. Returns the value count written, or negative on a bad request —
+// never a short row, because a truncated activation would hash to a leaf nothing can reproduce.
+int32_t shim_capture_row(const shim_ctx * s, int32_t slot, int32_t position, float * out, int32_t max_out) {
+    if (!s->cap.armed || slot < 0 || slot >= s->cap.n_taps) {
+        return -1;
+    }
+    if (position < 0 || position >= s->cap.positions[slot]) {
+        return -2;
+    }
+    if (max_out < s->cap.n_embd) {
+        return -3;
+    }
+    const float * src = s->cap.rows + ((size_t)slot * (size_t)s->cap.max_positions + (size_t)position) * (size_t)s->cap.n_embd;
+    memcpy(out, src, sizeof(float) * (size_t)s->cap.n_embd);
+    return s->cap.n_embd;
+}
+
+// Serialized replay state of sequence 0 — the bytes a checkpoint commits to. The layout is
+// llama.cpp's own and is opaque here on purpose: what the commitment says is "this runtime, at
+// this version, produced these bytes", and `state_layout_id` carries that claim.
+int32_t shim_state_seq_size(shim_ctx * s) {
+    const size_t size = llama_state_seq_get_size(s->lctx, 0);
+    if (size > (size_t)INT32_MAX) {
+        return -1;
+    }
+    return (int32_t)size;
+}
+
+int32_t shim_state_seq_read(shim_ctx * s, uint8_t * out, int32_t max_out) {
+    if (max_out < 0) {
+        return -1;
+    }
+    const size_t written = llama_state_seq_get_data(s->lctx, out, (size_t)max_out, 0);
+    if (written == 0 || written > (size_t)max_out) {
+        return -2;
+    }
+    return (int32_t)written;
 }
 
 int32_t shim_n_vocab(const shim_ctx * s) {
@@ -131,5 +360,6 @@ void shim_close(shim_ctx * s) {
     if (s->model != NULL) {
         llama_model_free(s->model);
     }
+    free(s->cap.rows);
     free(s);
 }

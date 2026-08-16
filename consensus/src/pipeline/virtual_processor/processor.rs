@@ -304,6 +304,8 @@ pub struct VirtualStateProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation — supersedes the
     /// BLAKE2b-SHA3 rule for the template's `pow_algo_id` where active.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
+    pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -549,6 +551,7 @@ impl VirtualStateProcessor {
             genesis: params.genesis.clone(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
+            pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             max_block_mass: params.max_block_mass,
@@ -6892,6 +6895,7 @@ impl VirtualStateProcessor {
             // DAA score — PALW LLM (algo_id = 4) once activated, else BLAKE2b-512 ∥ SHA3-512 (3)
             // once activated, else kHeavyHash (1).
             kaspa_consensus_core::pow_layer0::required_algo_id(
+                self.pow_palw_ollama_activation.is_active(virtual_state.daa_score),
                 self.pow_palw_activation.is_active(virtual_state.daa_score),
                 self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
             ),
