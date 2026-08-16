@@ -33,6 +33,12 @@
 //! * `ref2_dot` / `ref2_gemm`: the same pinned reduction — accumulator starts at `+0.0` and
 //!   folds strictly k-ascending, `acc = add(acc, mul(a[k], b[k]))`; GEMM is
 //!   `C[i][j] = dot(row_i(A), col_j(B))` with `C` row-major.
+//! * Ruleset-v2 surface (`ref2_fma`/`ref2_div`/`ref2_sqrt`, the `ref2_*64` binary64 family,
+//!   and the `f32↔f64` / `f16↔f32` conversions): the same contract per width — any NaN
+//!   operand short-circuits to the canonical NaN of the RESULT width (`0x7FC00000` /
+//!   `0x7FF8000000000000` / `0x7E00`) before SoftFloat is called, and any NaN result
+//!   canonicalizes the same way; `ref2_neg64` is a pure sign-bit flip; `ref2_sub64` is the
+//!   literal `add64(a, neg64(b))` identity the normative module pins.
 //!
 //! # Thread safety
 //!
@@ -60,9 +66,24 @@ use std::sync::Mutex;
 /// `palw_reference::PALW_REFERENCE_CANONICAL_NAN_V1` (asserted by the differential tests).
 pub const REF2_CANONICAL_NAN: u32 = 0x7FC0_0000;
 
+/// The binary64 canonical quiet NaN — must stay bit-identical to
+/// `palw_reference::PALW_REFERENCE_CANONICAL_NAN64_V2`.
+pub const REF2_CANONICAL_NAN64: u64 = 0x7FF8_0000_0000_0000;
+
+/// The binary16 canonical quiet NaN — must stay bit-identical to
+/// `palw_reference::PALW_REFERENCE_CANONICAL_NAN16_V2`.
+pub const REF2_CANONICAL_NAN16: u16 = 0x7E00;
+
 const SIGN_MASK: u32 = 0x8000_0000;
 const ABS_MASK: u32 = 0x7FFF_FFFF;
 const EXP_MASK: u32 = 0x7F80_0000;
+
+const SIGN_MASK64: u64 = 0x8000_0000_0000_0000;
+const ABS_MASK64: u64 = 0x7FFF_FFFF_FFFF_FFFF;
+const EXP_MASK64: u64 = 0x7FF0_0000_0000_0000;
+
+const ABS_MASK16: u16 = 0x7FFF;
+const EXP_MASK16: u16 = 0x7C00;
 
 /// `softfloat_round_near_even` from softfloat.h — the only mode this crate ever sets.
 const SOFTFLOAT_ROUND_NEAR_EVEN: u8 = 0;
@@ -76,10 +97,37 @@ struct Float32T {
     v: u32,
 }
 
+/// SoftFloat's `float64_t` (`typedef struct { uint64_t v; } float64_t;`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Float64T {
+    v: u64,
+}
+
+/// SoftFloat's `float16_t` (`typedef struct { uint16_t v; } float16_t;`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Float16T {
+    v: u16,
+}
+
+#[allow(non_snake_case)]
 unsafe extern "C" {
     fn f32_add(a: Float32T, b: Float32T) -> Float32T;
     fn f32_sub(a: Float32T, b: Float32T) -> Float32T;
     fn f32_mul(a: Float32T, b: Float32T) -> Float32T;
+    fn f32_mulAdd(a: Float32T, b: Float32T, c: Float32T) -> Float32T;
+    fn f32_div(a: Float32T, b: Float32T) -> Float32T;
+    fn f32_sqrt(a: Float32T) -> Float32T;
+    fn f64_add(a: Float64T, b: Float64T) -> Float64T;
+    fn f64_sub(a: Float64T, b: Float64T) -> Float64T;
+    fn f64_mul(a: Float64T, b: Float64T) -> Float64T;
+    fn f64_div(a: Float64T, b: Float64T) -> Float64T;
+    fn f64_mulAdd(a: Float64T, b: Float64T, c: Float64T) -> Float64T;
+    fn f32_to_f64(a: Float32T) -> Float64T;
+    fn f64_to_f32(a: Float64T) -> Float32T;
+    fn f16_to_f32(a: Float16T) -> Float32T;
+    fn f32_to_f16(a: Float32T) -> Float16T;
     /// `uint_fast8_t` in C — one byte on every supported target (Darwin, glibc, musl all
     /// typedef it to `unsigned char`/`uint8_t`). We only ever store 0 (round_near_even),
     /// which is also the static initializer in softfloat_state.c, so even a hypothetical
@@ -98,6 +146,26 @@ fn is_nan_bits(bits: u32) -> bool {
 #[inline]
 fn canon_result(bits: u32) -> u32 {
     if is_nan_bits(bits) { REF2_CANONICAL_NAN } else { bits }
+}
+
+#[inline]
+fn is_nan_bits64(bits: u64) -> bool {
+    (bits & ABS_MASK64) > EXP_MASK64
+}
+
+#[inline]
+fn canon_result64(bits: u64) -> u64 {
+    if is_nan_bits64(bits) { REF2_CANONICAL_NAN64 } else { bits }
+}
+
+#[inline]
+fn is_nan_bits16(bits: u16) -> bool {
+    (bits & ABS_MASK16) > EXP_MASK16
+}
+
+#[inline]
+fn canon_result16(bits: u16) -> u16 {
+    if is_nan_bits16(bits) { REF2_CANONICAL_NAN16 } else { bits }
 }
 
 /// Runs `f` with the SoftFloat global state locked and the rounding mode pinned to RNE.
@@ -215,6 +283,160 @@ pub fn ref2_gemm(a: &[u32], b: &[u32], m: usize, n: usize, k: usize) -> Vec<u32>
     })
 }
 
+// =============================================================================================
+// Ruleset-v2 operations (second implementations of the `_v2` canonical surface)
+// =============================================================================================
+
+/// binary32 fused multiply-add under the canonical contract (second implementation of
+/// `ref_fma_v2`): one rounding, any NaN operand or invalid combination (`0 × Inf`,
+/// `Inf − Inf`) is the canonical binary32 NaN.
+pub fn ref2_fma(a: u32, b: u32, c: u32) -> u32 {
+    with_softfloat(|| {
+        if is_nan_bits(a) || is_nan_bits(b) || is_nan_bits(c) {
+            return REF2_CANONICAL_NAN;
+        }
+        canon_result(unsafe { f32_mulAdd(Float32T { v: a }, Float32T { v: b }, Float32T { v: c }) }.v)
+    })
+}
+
+/// binary32 division under the canonical contract (second implementation of `ref_div_v2`).
+pub fn ref2_div(a: u32, b: u32) -> u32 {
+    with_softfloat(|| {
+        if is_nan_bits(a) || is_nan_bits(b) {
+            return REF2_CANONICAL_NAN;
+        }
+        canon_result(unsafe { f32_div(Float32T { v: a }, Float32T { v: b }) }.v)
+    })
+}
+
+/// binary32 square root under the canonical contract (second implementation of
+/// `ref_sqrt_v2`): `sqrt(−0) = −0`, any negative non-zero operand is the canonical NaN.
+pub fn ref2_sqrt(a: u32) -> u32 {
+    with_softfloat(|| {
+        if is_nan_bits(a) {
+            return REF2_CANONICAL_NAN;
+        }
+        canon_result(unsafe { f32_sqrt(Float32T { v: a }) }.v)
+    })
+}
+
+/// Canonical binary64 negate (second implementation of `ref64_neg_v2`). Pure Rust —
+/// negation is a bit operation, not arithmetic.
+pub fn ref2_neg64(bits: u64) -> u64 {
+    if is_nan_bits64(bits) {
+        return REF2_CANONICAL_NAN64;
+    }
+    bits ^ SIGN_MASK64
+}
+
+/// binary64 addition under the canonical contract (second implementation of `ref64_add_v2`).
+pub fn ref2_add64(a: u64, b: u64) -> u64 {
+    with_softfloat(|| add64_locked(a, b))
+}
+
+/// Canonical-contract binary64 add. Must only run while `SOFTFLOAT_LOCK` is held.
+#[inline]
+fn add64_locked(a: u64, b: u64) -> u64 {
+    if is_nan_bits64(a) || is_nan_bits64(b) {
+        return REF2_CANONICAL_NAN64;
+    }
+    canon_result64(unsafe { f64_add(Float64T { v: a }, Float64T { v: b }) }.v)
+}
+
+/// binary64 subtraction as the literal identity `add64(a, neg64(b))` — the same definition
+/// `ref64_sub_v2` pins, so both implementations share one rounding path for subtraction.
+pub fn ref2_sub64(a: u64, b: u64) -> u64 {
+    ref2_add64(a, ref2_neg64(b))
+}
+
+/// Subtraction through SoftFloat's own `f64_sub` under the same canonical contract.
+/// Not part of the mirrored API surface — it exists so the differential tests can verify
+/// that the `sub64 = add64 ∘ neg64` identity also holds inside the independent implementation.
+pub fn ref2_sub64_direct(a: u64, b: u64) -> u64 {
+    with_softfloat(|| {
+        if is_nan_bits64(a) || is_nan_bits64(b) {
+            return REF2_CANONICAL_NAN64;
+        }
+        canon_result64(unsafe { f64_sub(Float64T { v: a }, Float64T { v: b }) }.v)
+    })
+}
+
+/// binary64 multiplication under the canonical contract (second implementation of
+/// `ref64_mul_v2`).
+pub fn ref2_mul64(a: u64, b: u64) -> u64 {
+    with_softfloat(|| {
+        if is_nan_bits64(a) || is_nan_bits64(b) {
+            return REF2_CANONICAL_NAN64;
+        }
+        canon_result64(unsafe { f64_mul(Float64T { v: a }, Float64T { v: b }) }.v)
+    })
+}
+
+/// binary64 division under the canonical contract (second implementation of `ref64_div_v2`).
+pub fn ref2_div64(a: u64, b: u64) -> u64 {
+    with_softfloat(|| {
+        if is_nan_bits64(a) || is_nan_bits64(b) {
+            return REF2_CANONICAL_NAN64;
+        }
+        canon_result64(unsafe { f64_div(Float64T { v: a }, Float64T { v: b }) }.v)
+    })
+}
+
+/// binary64 fused multiply-add under the canonical contract (second implementation of
+/// `ref64_fma_v2`).
+pub fn ref2_fma64(a: u64, b: u64, c: u64) -> u64 {
+    with_softfloat(|| {
+        if is_nan_bits64(a) || is_nan_bits64(b) || is_nan_bits64(c) {
+            return REF2_CANONICAL_NAN64;
+        }
+        canon_result64(unsafe { f64_mulAdd(Float64T { v: a }, Float64T { v: b }, Float64T { v: c }) }.v)
+    })
+}
+
+/// Exact widening f32 → f64 under the canonical contract (second implementation of
+/// `ref_widen_f32_to_f64_v2`): any NaN input becomes the canonical NaN of the RESULT width.
+pub fn ref2_widen_f32_to_f64(bits: u32) -> u64 {
+    with_softfloat(|| {
+        if is_nan_bits(bits) {
+            return REF2_CANONICAL_NAN64;
+        }
+        canon_result64(unsafe { f32_to_f64(Float32T { v: bits }) }.v)
+    })
+}
+
+/// RNE narrowing f64 → f32 under the canonical contract (second implementation of
+/// `ref_narrow_f64_to_f32_v2`).
+pub fn ref2_narrow_f64_to_f32(bits: u64) -> u32 {
+    with_softfloat(|| {
+        if is_nan_bits64(bits) {
+            return REF2_CANONICAL_NAN;
+        }
+        canon_result(unsafe { f64_to_f32(Float64T { v: bits }) }.v)
+    })
+}
+
+/// Exact widening f16 → f32 under the canonical contract (second implementation of
+/// `ref_f16_to_f32_v2`).
+pub fn ref2_f16_to_f32(bits: u16) -> u32 {
+    with_softfloat(|| {
+        if is_nan_bits16(bits) {
+            return REF2_CANONICAL_NAN;
+        }
+        canon_result(unsafe { f16_to_f32(Float16T { v: bits }) }.v)
+    })
+}
+
+/// RNE narrowing f32 → f16 under the canonical contract (second implementation of
+/// `ref_f32_to_f16_v2`).
+pub fn ref2_f32_to_f16(bits: u32) -> u16 {
+    with_softfloat(|| {
+        if is_nan_bits(bits) {
+            return REF2_CANONICAL_NAN16;
+        }
+        canon_result16(unsafe { f32_to_f16(Float32T { v: bits }) }.v)
+    })
+}
+
 #[cfg(test)]
 mod linkage_smoke {
     //! A tiny canary so a broken C build fails loudly and readably before the
@@ -229,6 +451,22 @@ mod linkage_smoke {
         assert_eq!(ref2_mul(two, two), 0x4080_0000);
         assert_eq!(ref2_sub(one, one), 0);
         assert_eq!(ref2_sub_direct(one, one), 0);
+        // v2 surface: one canary per vendored C entry point.
+        assert_eq!(ref2_fma(one, one, one), two);
+        assert_eq!(ref2_div(two, two), one);
+        assert_eq!(ref2_sqrt(0x4080_0000), two);
+        let one64 = 0x3FF0_0000_0000_0000u64;
+        let two64 = 0x4000_0000_0000_0000u64;
+        assert_eq!(ref2_add64(one64, one64), two64);
+        assert_eq!(ref2_sub64(one64, one64), 0);
+        assert_eq!(ref2_sub64_direct(one64, one64), 0);
+        assert_eq!(ref2_mul64(two64, two64), 0x4010_0000_0000_0000);
+        assert_eq!(ref2_div64(two64, two64), one64);
+        assert_eq!(ref2_fma64(one64, one64, one64), two64);
+        assert_eq!(ref2_widen_f32_to_f64(one), one64);
+        assert_eq!(ref2_narrow_f64_to_f32(one64), one);
+        assert_eq!(ref2_f16_to_f32(0x3C00), one);
+        assert_eq!(ref2_f32_to_f16(one), 0x3C00);
         assert_eq!(ref2_neg(one), one | SIGN_MASK);
         assert_eq!(ref2_dot(&[one, one], &[one, one]), two);
         assert_eq!(ref2_gemm(&[one], &[one], 1, 1, 1), vec![one]);
