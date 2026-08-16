@@ -330,6 +330,14 @@ Stage 3 Full         wider exposure; requires the second independent reference
   over DAA windows, on-chain envelopes for attestation, opening call and answer (the wire
   bodies exist in `palw_legs`; what is missing is their chain carriage), and the telemetry that
   measures `P_check`, inclusion latency and no-show rates in shadow.
+  > **Chain carriage designed as ADR-0029 (2026-08-16, Proposed):** two stages — Stage 0 on
+  > native-subnetwork payloads (zero node changes, watcher over the RPC acceptance stream,
+  > telemetry-grade only) and Stage 1 on dedicated subnetwork ids under the fork's existing
+  > DNS-overlay discipline (offense-grade). Same Borsh bodies in both. Its mass audit found
+  > one object that does not fit any transaction: the bare-v2 logits-event refutation
+  > (≈ 0.99 MB vs 0.5 MB block mass) — legs-composite classes refute through 8 KB activation
+  > rows and are unaffected, and bare-v2 classes are gated out of Stage 2 until chunked
+  > evidence carriage lands.
   > **Stage-0 landed (2026-08-16, `consensus/core/src/palw_schedule.rs`, consensus-inert):**
   > the assignment twin (`select_replay_panel_v1`, eligibility rule in the function, domain
   > uniqueness tested against every PALW family AND the VLT sortition key), the §3 window
