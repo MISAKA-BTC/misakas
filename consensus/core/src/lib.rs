@@ -156,6 +156,10 @@ pub mod palw_slash;
 /// with. Land-stage, consensus-inert — every profile VALUE is registration-measured; only
 /// the schema and the enumeration are pinned here.
 pub mod palw_step;
+/// MISAKA PALW execution-commitment v2 (ADR-0030 §3): the step leg, KV aux chunks, and the
+/// chunked checkpoint leg — a NEW scheme family; v1 and its goldens do not move. Land-stage,
+/// consensus-inert.
+pub mod palw_step_leg;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
