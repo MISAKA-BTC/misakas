@@ -36,7 +36,41 @@ wall                      9.5 s cold / ~2.3 s warm (page cache + tag cache)
 | run | blocks | result |
 | --- | --- | --- |
 | 6 blocks | 6 | **PASS** — mined, node-1 accepted all 6 over p2p by independent replay, node-2 fail-loud fired |
-| 20 blocks | 20 | mined; node-1 accepted 20 by independent replay |
+| 20 blocks + IBD | 20 | mined; node-1 accepted 20 by independent replay; **a fresh node-3 replayed the whole chain from genesis** |
+
+### The from-genesis leg, and the harness bug it exposed
+
+A fresh node-3 (its own worker, no state) synced the whole chain and validated every header by
+re-running the inference:
+
+```
+IBD: Processed 20 block headers (100%)
+IBD: Processed 20 block bodies  (100%)
+IBD with peer 127.0.0.1:37711 completed successfully
+Processed 20 blocks … (20 UTXO-validated blocks)
+[ibd-perf] validate(A,parallelizable) 955565.7us      ← 0.96 s per header
+```
+
+That 0.96 s per header **is** the PALW inference on the replay path — the cost a late joiner
+pays to verify the chain, visible in the node's own performance counter.
+
+The first run of this leg nonetheless printed FAIL: `count_ibd` matched
+`IBD: Processed N blocks`, while the node logs `N block headers` / `N block bodies`. The
+counter returned 0 through a perfectly successful sync and the harness failed the run on its
+own regex. Fixed (bodies are the real measure, headers the fallback) and verified against the
+recorded log before re-running — a harness that can fail a good run is a harness that will
+eventually pass a bad one.
+
+Re-run with the fix, full verdict:
+
+```
+verified : node-1 accepted 20 blocks over p2p (independent PALW replay)
+verified : node-2 (no worker, no fixture) hit the designed fail-fast
+verified : node-3 caught up from genesis (20 blocks; independent PALW replay of the whole chain)
+PASS: 20 PALW blocks mined (devnet), independently replay-validated, and synced.
+```
+
+Per-header replay cost on the joining node held at 0.86–0.96 s across the run.
 
 Cadence of the 6-block run (real inference, devnet trivial bits ⇒ ~1 attempt/block):
 

@@ -161,8 +161,14 @@ if [ "$IBD" = "1" ]; then
   start_node 3 "${PALW_ENV[@]}"
   # IBD-received blocks surface as "IBD: Processed N blocks" progress + a completion line; blocks
   # arriving after the tip handshake surface as relay accepts. Count both.
+  # The IBD progress lines are "IBD: Processed N block bodies (100%)" and "… N block headers …"
+  # — NOT "N blocks". An earlier pattern looked for the latter, counted 0 through a perfectly
+  # successful sync, and failed the run on its own regex (2026-08-16). Bodies are the real
+  # measure (a fully validated block); headers are the fallback for a header-only phase.
   count_ibd() {
-    awk '/IBD: Processed [0-9]+ blocks/{for(i=1;i<=NF;i++) if($i=="Processed"){if($(i+1)>n)n=$(i+1); break}} END{print n+0}' "$1" 2>/dev/null || echo 0
+    awk '/IBD: Processed [0-9]+ block (bodies|headers)/{
+           for(i=1;i<=NF;i++) if($i=="Processed"){ if($(i+1)>n) n=$(i+1); break }
+         } END{print n+0}' "$1" 2>/dev/null || echo 0
   }
   ibd_ok=0
   for _ in $(seq 1 $((WAIT_TICKS * 2))); do
