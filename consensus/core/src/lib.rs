@@ -139,6 +139,11 @@ pub mod palw_legs;
 /// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
+/// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
+/// bodies, their caps, and the stateless validators that become the Stage-1 admission
+/// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
+/// watcher; no transaction validation or store reads any of it.
+pub mod palw_carriage;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
