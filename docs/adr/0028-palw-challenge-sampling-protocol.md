@@ -343,6 +343,14 @@ Stage 3 Full         wider exposure; requires the second independent reference
   > First tool-validation numbers on the dev host: Metal D=512 p99 ≈ 5.5 s, CPU-aarch64
   > D=512 p99 ≈ 8.2 s — both fit trivially; the registered numbers must come from the
   > fleet, whose 0.75–1.6 s/token measurement remains the operative sizing basis.
+  >
+  > **Fleet-measured (2026-08-16, all four t10 hosts,
+  > `docs/palw-stage0-fleet-replay-bench-2026-08-16.md`):** D=512 p99 37.3–90.7 s,
+  > 59–165 ms/token, worst κ·p99 = 272 s — every host fits `w_replay` = 1 h with ≥ 13×
+  > margin, and the cross-host logits roots are identical 4/4 at both depths (the pairwise
+  > class property, measured). The old 0.75–1.6 s/token basis was F16; the pinned Q4 artifact
+  > is ~10× faster, so the ≈ 512 credited ceiling is conservative and a registration-time
+  > re-derivation may raise it — by this ADR's own rule, not by edit.
 * **Carriage must outlive headers.** `credit(C)` is evaluated at `W_challenge` close and
   offenses prosecute after anchor finality, so `C`'s commitment record and the duty anchor must
   live in pruning-surviving state (as bond records already do) — or every window must close
