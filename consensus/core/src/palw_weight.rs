@@ -1,7 +1,20 @@
 //! ADR-0038 Decision B: the receipt-licensed weight ramp — a block's PALW work matures with
-//! evidence, and fabricated work never outweighs the spam-hash backbone.
+//! evidence, and fabricated work carries no weight until evidence licenses it.
+//!
+//! # W4 is superseded by W4′; there is no hash term in weight
+//!
+//! ADR-0038 W4 read `weight(B) = spam_backbone_work(B) + pwu(B) × ramp(B)`, so an unlicensed block
+//! still weighed its hash work. **ADR-0039 W4′ removes that term entirely** — block production is
+//! PALW work, and [`crate::palw_chain_weight::chain_weights_v1`] is the single definition of
+//! weight, as two derived quantities (safe = matured only, live = safe + bounded immature) rather
+//! than one sum with a hash backbone in it. [`effective_weight_v1`] below still computes the old
+//! additive form and is kept only for the tests that pin the ramp fraction; nothing on a weight
+//! path may call it.
+//!
+//! What this module still owns is [`ramp_stage_v1`]: the stage a block's work has reached.
 //!
 //! ```text
+//! ramp(B), the SUPERSEDED W4 form retained for reference only:
 //! weight(B) = spam_backbone_work(B) + pwu(B) × ramp(B)
 //!
 //! ramp: Provisional (admission)            → 0
@@ -12,12 +25,13 @@
 //!
 //! Three ADR-0038 invariants are theorems of this module, each pinned by a test:
 //!
-//! * **W3** — [`ramp_stage_v1`] and [`effective_weight_v1`] are pure functions of
+//! * **W3** — [`ramp_stage_v1`] (and the retained [`effective_weight_v1`]) are pure functions of
 //!   DAG-derivable facts ([`PalwWeightFactsV1`]): equal DAGs give equal facts give equal
 //!   weights on every node. No store, no clock, no configuration enters.
-//! * **W4** — a Provisional or Voided block's weight IS the spam backbone: unverified pwu
-//!   contributes exactly zero to fork choice, so a private fork full of fabricated
-//!   commitments weighs its (deliberately tiny) hash work and nothing else.
+//! * **W4 (superseded by W4′)** — a Provisional or Voided block contributes exactly zero pwu to
+//!   fork choice. Under W4 that left it weighing its (deliberately tiny) hash work; under W4′ it
+//!   leaves it weighing NOTHING, because there is no hash term. A private fork full of fabricated
+//!   commitments therefore has no weight at all rather than a small amount of it.
 //! * **W5** — `Final` is absorbing: a conviction fact arriving after finality does not
 //!   change the stage (finality means finality — the window is sized so a live watcher
 //!   always convicts first, ADR-0038 A1), and a conviction before finality voids exactly

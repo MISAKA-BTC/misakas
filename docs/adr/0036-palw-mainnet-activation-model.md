@@ -1,6 +1,23 @@
 # ADR-0036: PALW mainnet activation — lineage reconciliation and the model that governs
 
-Status: **Proposed (governance decision).** Activates nothing, changes no code, moves no fence.
+Status: **Proposed (governance decision), with Decision 4's hash floor SUPERSEDED.**
+Activates nothing, changes no code, moves no fence.
+
+> **Decision 4's "mainnet MUST ship the permanent hash floor" is superseded, 2026-08-17, by
+> ADR-0039 Decisions 1/2 (W6′).** Mainnet does NOT ship a hash floor. Block production is PALW work
+> on every network including mainnet, and the liveness floor is a portable integer-only PALW class
+> (`PALW-BASE-0`) held permanently Active — a class whose kernel catalog closes, so it can be
+> audited and convicted on any CPU. Total PALW unavailability therefore HALTS the network loudly
+> rather than degrading it to hash ordering.
+>
+> That is a deliberate trade of one failure mode for another: D4 chose "never halt, degrade to
+> hashes"; ADR-0039 chose "never produce blocks by hashing, halt visibly instead". The reason is the
+> one D4 itself records — a mixed-algo difficulty relation is a large new consensus surface — plus
+> the one D4 did not weigh: a hash lane that can always produce blocks is a permanent incentive to
+> mine the lane instead of the work, which makes the compute chain a hash chain with extra steps.
+> Everything else in this ADR (the lineage decision, the new network identity, the land→accept→mint
+> separation) still holds. Read D4 below as the record of a decision that was reversed, not as a
+> current requirement.
 This ADR settles a *documentation* conflict the 2026-08-16/17 mainnet-readiness audit surfaced:
 two Accepted, non-ancestral ADRs each describe "mainnet PALW", with different mechanisms, a
 colliding "PALW / algo-4" name, and overlapping ADR-number spaces. It decides which lineage
@@ -137,7 +154,9 @@ the mainnet identity. Left unresolved, no one can write a coherent release plan,
      itself require a re-genesis or fork, and would add a large new consensus surface to the very
      system under audit. No hash floor is added here, and this is now a recorded choice rather
      than an unexamined state.
-   * **Mainnet MUST ship the permanent hash floor.** It is a hard gate on the new network identity
+   * **~~Mainnet MUST ship the permanent hash floor.~~** SUPERSEDED by ADR-0039 W6′ — see the banner
+     at the top of this ADR. Retained verbatim below as the record of the reversed decision.
+     It is a hard gate on the new network identity
      Decision 2 already requires: `Valid block = valid permanent hash PoW AND (PALW certificate
      absent OR valid under its activation stage)` (v2 design §2.2, verbatim). A single inference
      runtime failure must degrade mainnet to `credit = 0` with hash ordering and liveness intact —

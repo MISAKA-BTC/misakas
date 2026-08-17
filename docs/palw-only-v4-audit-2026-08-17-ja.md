@@ -463,7 +463,13 @@ class store は Frozen 状態を表現できない（`palw_dispute.rs:219`）。
 10. **mint 経路を 1 変更セットで健全化** — B2/B3/B4/B5/B6/B9 と `select_job_panel_v3` の配線。前回と同じ結論で、
     **1 つ欠けると別が fail-open する**。ここで `bonded`/`frozen` のハードコードを消し、
     動く緊急停止（`class_frozen` を live path が読む）を作る。
-11. **hash floor の実装**（B7）— ADR-0036 D4 が mainnet の hard precondition としたもの。
+11. **~~hash floor の実装~~ → PALW-BASE-0 の登録と常時 Active 化**（B7）— ADR-0036 D4 は
+    ADR-0039 W6′ に**置き換えられた**。mainnet にハッシュ floor は積まない。ブロック生成は
+    全ネットワークで PALW work であり、liveness floor は可搬な整数専用クラス `PALW-BASE-0`
+    （catalog が閉じるので任意の CPU で監査・有罪判定できる）。PALW 全断は**意図された大声の停止**で、
+    ハッシュ順序への劣化ではない — 常にブロックを出せるハッシュ lane は、work ではなく lane を
+    掘る恒久的インセンティブになるから。成果物は floor の実装ではなく、BASE-0 の artifacts・
+    第 2 実装・difficulty-domain share。
     mainnet identity と束ねるので、新 network identity の決定と同時。
 
 7 → 8 → 9 → 10 は直列で、**月単位**。fence を開けるのはその後。
