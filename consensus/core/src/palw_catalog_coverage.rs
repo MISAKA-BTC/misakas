@@ -340,9 +340,9 @@ mod base0_closure_tests {
             execution_class_id: class(),
             kernel_ids: KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect(),
         };
-        assert_eq!(reachable.kernel_ids.len(), 9, "ADR-0040 D is nine ops");
+        assert_eq!(reachable.kernel_ids.len(), 10, "ADR-0040 D + H: ten ops — Decision H added `Rescale` (op 9), without which the other nine cannot compute");
         let certificate = verify_catalog_coverage_v1(&reachable).expect("BASE-0 must be fully catalogued");
-        assert_eq!(certificate.reachable_count, 9);
+        assert_eq!(certificate.reachable_count, 10);
         assert_eq!(certificate.execution_class_id, class());
     }
 

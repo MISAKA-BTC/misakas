@@ -1136,6 +1136,7 @@ mod tests {
             rope_sections: [1, 1, 0, 0],
             rope_freq_base_bits: 0x4CBE_BC20,
             rms_eps_bits: 0x358637BD,
+            base0_rms_eps_q: 1 << 8,
             l2_eps_bits: 0x358637BD,
             gdn_heads: 2,
             gdn_head_k_dim: 4,
@@ -1320,8 +1321,10 @@ mod tests {
         let (binding, ..) = honest();
         assert_eq!(
             binding.committed_execution_root.to_string(),
-            "f5ada5e130a81b2fb2d9658f8dfaf3fbd0527fdedb1567bd7a19973b009d89f7\
-             7f196bb322f764aa9af857c9da852b7b0b6d522f521a7fe3fa8d7a43ad203aa9"
+            // Re-frozen 2026-08-17: this composite binds the shape profile id, which moved when the
+            // profile gained `base0_rms_eps_q` (see `palw_step`'s golden).
+            "79bc2e38d36cc1f4952f467881309d87099c466f29e71f1bb14bb1ef7750a01d\
+             ff20225631174d253e8470f23ee6b03805f0a2b0fddd2edc15c340a0c281f4ce"
         );
     }
 

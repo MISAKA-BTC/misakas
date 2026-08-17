@@ -311,6 +311,19 @@ pub struct PalwShapeProfileV3 {
     /// f32 bit patterns of the two norm epsilons.
     pub rms_eps_bits: u32,
     pub l2_eps_bits: u32,
+    /// `PALW-BASE-0`'s RMS-norm epsilon, Qk (ADR-0040 D op 3) — the INTEGER class's own constant.
+    ///
+    /// Separate from [`Self::rms_eps_bits`] because it is a different type in a different
+    /// arithmetic: that one is an f32 bit pattern for the float classes' `1/sqrtf(mean + eps)`,
+    /// this one is a Qk integer added before `IntRsqrt`. Reinterpreting one as the other would be
+    /// a silent change of both scale and semantics.
+    ///
+    /// It has to be a registration fact rather than a constant in the adjudicator: the court
+    /// recomputed BASE-0's `RmsNorm` with a hardcoded `eps = 1`, so a class registered with any
+    /// other epsilon had its honest producers convicted on every norm step (re-audit §3.3). It is
+    /// inside `shape_profile_id` by construction — the id is a digest of this struct's Borsh bytes
+    /// — so a class cannot change its epsilon without changing its identity.
+    pub base0_rms_eps_q: i64,
     pub gdn_heads: u16,
     pub gdn_head_k_dim: u32,
     pub gdn_head_v_dim: u32,
@@ -736,6 +749,7 @@ mod tests {
             rope_sections: [1, 1, 0, 0],
             rope_freq_base_bits: 0x4CBE_BC20, // 1e8f — a bit pattern, never a float
             rms_eps_bits: 0x358637BD,
+            base0_rms_eps_q: 1 << 8,
             l2_eps_bits: 0x358637BD,
             gdn_heads: 2,
             gdn_head_k_dim: 4,
@@ -828,8 +842,11 @@ mod tests {
         // class profile exists until registration measures one.
         assert_eq!(
             tiny_profile().shape_profile_id().to_string(),
-            "0de6a2ae93b884739efde27add7ba951cffbf1f72e4577bd384c87ada65b8320\
-             3a36b70dd08fb606c3c4f78e0848a94c4aa90c50efb3b021e914598cc77c8400"
+            // Re-frozen 2026-08-17: the profile gained `base0_rms_eps_q`, so its Borsh bytes — and
+            // therefore its id — moved. That is the point of the field: a class cannot change the
+            // epsilon its norms are adjudicated under without changing its identity.
+            "2fe1f76b0423389eaacda28a57dba5e6f69e6c5429b3fb39bc8a197f3293a3e5\
+             8ebf00165931dea4b7625a037ef3bfff2553fdb3d5bf8f89bf25ec53d0ec3cfa"
         );
     }
 

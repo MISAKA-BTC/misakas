@@ -142,6 +142,7 @@ fn attack_profile() -> PalwShapeProfileV3 {
         rope_sections: [1, 1, 0, 0],
         rope_freq_base_bits: 0x4CBE_BC20,
         rms_eps_bits: 0x3583_37BD,
+        base0_rms_eps_q: 1 << 8,
         l2_eps_bits: 0x3583_37BD,
         gdn_heads: 1,
         gdn_head_k_dim: 16,
