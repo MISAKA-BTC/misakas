@@ -43,9 +43,9 @@ pub enum PalwWeightError {
 }
 
 /// The maturity of one block's PALW work. Stages are ordered by evidence, not by time:
-/// a block can reach `Final` without ever being `ReceiptLicensed` (slow path — no quorum
-/// landed, the window simply passed unrefuted), and `Voided` is reachable only before
-/// `Final` (W5).
+/// `Final` is `ReceiptLicensed` plus a closed window, never a shortcut past it (see
+/// [`ramp_stage_v1`] — the "window passed unrefuted" shortcut finalized private forks), and
+/// `Voided` is reachable only before `Final` (W5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwWorkRampStageV1 {
     /// Admitted, no evidence yet: pwu counts for nothing (W4).
@@ -71,6 +71,17 @@ pub struct PalwWeightFactsV1 {
     /// accepted BEFORE the challenge window closed. A conviction observed after close is a
     /// protocol-failure telemetry event, never a weight fact (W5).
     pub convicted_before_close: bool,
+    /// A dispute over this block's work is open, or terminated `Unadjudicable`, as of this
+    /// evaluation.
+    ///
+    /// Without this field the two states were **unrepresentable**, so both took the `Final`
+    /// path at full weight (re-audit 2026-08-17). That inverts the court: ADR-0038 Decision C
+    /// and [`crate::palw_dispute`]'s own settlement table make `Unadjudicable` non-creditable
+    /// and freeze the class — precisely because it means "this class's catalog cannot decide
+    /// the question", which is the forger's hole. Maturing such a block at full weight rewards
+    /// exactly the gap the freeze exists to contain. An open dispute is likewise not an
+    /// absence of refutation; it is a refutation still being answered.
+    pub dispute_open_or_unadjudicable: bool,
 }
 
 /// The ramp parameters a network registers (soak outputs; ADR-0038 "does not decide").
@@ -96,16 +107,47 @@ impl PalwWeightParamsV1 {
 
 /// The one stage function. Precedence is exactly ADR-0038 Decision B's:
 /// conviction-before-close voids (checked first — a convicted block must not finalize in the
-/// same evaluation that observed the conviction); an unrefuted closed window finalizes;
-/// a receipt quorum licenses; otherwise the work is provisional.
+/// same evaluation that observed the conviction); an unresolved court state cannot mature; a
+/// closed window over OBSERVED work finalizes; a receipt quorum licenses; otherwise the work
+/// is provisional.
+///
+/// # Why `Final` requires the receipt quorum
+///
+/// The first version finalized on `challenge_window_closed` alone, documenting it as a "slow
+/// path — no quorum landed, the window simply passed unrefuted". That reading of ADR-0027's
+/// "PASS is absence of refutation" drops its unstated premise: **absence of refutation is
+/// evidence only about work somebody could have refuted.**
+///
+/// A private fork satisfies it trivially. Mine fabricated PALW blocks in private, hold them for
+/// `W_challenge`, publish: nobody refuted them, because nobody could see them. Both facts read
+/// true, the stage is `Final`, and the whole fork matures at full pwu — the fabrication the
+/// ramp exists to stop, arriving through the ramp's own slow path (re-audit 2026-08-17).
+///
+/// Receipts are the only proof-of-publication this design has, so they are what makes "no
+/// refutation" mean anything. Requiring them is not an extra check bolted onto finality; it is
+/// finality's missing premise.
+///
+/// **Known consequence, deliberately taken here**: assigned verifiers can now withhold receipts
+/// and hold an honest block at `Provisional` forever — a censorship veto over *maturity*. That
+/// is the strictly safer failure (delayed finality beats a matured forgery), and it is bounded
+/// only once unlicensed-but-published work carries some live fork-choice weight, so the chain
+/// progresses while maturity waits. That split — live weight for tip selection, safe weight
+/// (this function) for finality and IBD — is the next change on this branch and is a
+/// precondition of activating the ramp. Until it lands, this module is safe and not yet live.
 pub fn ramp_stage_v1(facts: &PalwWeightFactsV1, params: &PalwWeightParamsV1) -> PalwWorkRampStageV1 {
     if facts.convicted_before_close {
         return PalwWorkRampStageV1::Voided;
     }
-    if facts.challenge_window_closed {
+    // An open or unadjudicable dispute is not an absence of refutation. Checked before the
+    // window so a dispute that outlives the window cannot mature by expiry.
+    if facts.dispute_open_or_unadjudicable {
+        return PalwWorkRampStageV1::Provisional;
+    }
+    let licensed = facts.distinct_receipts >= params.receipt_quorum;
+    if facts.challenge_window_closed && licensed {
         return PalwWorkRampStageV1::Final;
     }
-    if facts.distinct_receipts >= params.receipt_quorum {
+    if licensed {
         return PalwWorkRampStageV1::ReceiptLicensed;
     }
     PalwWorkRampStageV1::Provisional
@@ -137,7 +179,17 @@ mod tests {
     const PARAMS: PalwWeightParamsV1 = PalwWeightParamsV1 { receipt_quorum: 3, rho_r_permille: 900 };
 
     fn facts(receipts: u32, closed: bool, convicted: bool) -> PalwWeightFactsV1 {
-        PalwWeightFactsV1 { distinct_receipts: receipts, challenge_window_closed: closed, convicted_before_close: convicted }
+        PalwWeightFactsV1 {
+            distinct_receipts: receipts,
+            challenge_window_closed: closed,
+            convicted_before_close: convicted,
+            dispute_open_or_unadjudicable: false,
+        }
+    }
+
+    /// `facts` with an open / unadjudicable dispute.
+    fn disputed(receipts: u32, closed: bool) -> PalwWeightFactsV1 {
+        PalwWeightFactsV1 { dispute_open_or_unadjudicable: true, ..facts(receipts, closed, false) }
     }
 
     /// Params validation: k = 0 would make fabricated work licensed at admission; ρ_r > 1000
@@ -162,10 +214,57 @@ mod tests {
         assert_eq!(ramp_stage_v1(&facts(2, false, false), &PARAMS), S::Provisional); // below k
         assert_eq!(ramp_stage_v1(&facts(3, false, false), &PARAMS), S::ReceiptLicensed);
         assert_eq!(ramp_stage_v1(&facts(9, false, false), &PARAMS), S::ReceiptLicensed);
-        assert_eq!(ramp_stage_v1(&facts(0, true, false), &PARAMS), S::Final); // slow path: no quorum, window passed
+        // The removed slow path: a closed window with NO quorum is unobserved work, not
+        // finalized work — this is the private-fork hole, now closed.
+        assert_eq!(ramp_stage_v1(&facts(0, true, false), &PARAMS), S::Provisional);
+        assert_eq!(ramp_stage_v1(&facts(2, true, false), &PARAMS), S::Provisional); // below k, window irrelevant
         assert_eq!(ramp_stage_v1(&facts(9, true, false), &PARAMS), S::Final);
         assert_eq!(ramp_stage_v1(&facts(0, false, true), &PARAMS), S::Voided);
         assert_eq!(ramp_stage_v1(&facts(9, false, true), &PARAMS), S::Voided); // receipts don't outvote the court
+    }
+
+    /// Re-audit 2026-08-17: **a private fork cannot self-finalize.**
+    ///
+    /// The attack the old slow path allowed: mine fabricated PALW blocks in private, hold them
+    /// for the whole challenge window, publish. `challenge_window_closed` is true and
+    /// `convicted_before_close` is false — nobody refuted work nobody could see — so the old
+    /// table returned `Final` and the fork matured at full pwu.
+    ///
+    /// Absence of refutation is evidence only about work somebody could have refuted, and
+    /// receipts are this design's only proof that somebody could. This pins the premise.
+    #[test]
+    fn a_private_fork_cannot_self_finalize() {
+        // The attacker's fact pattern, exactly: window closed, never refuted, never observed.
+        let unobserved = facts(0, true, false);
+        assert_eq!(ramp_stage_v1(&unobserved, &PARAMS), S::Provisional, "unobserved work must not mature");
+        assert_eq!(effective_weight_v1(7, u64::MAX, ramp_stage_v1(&unobserved, &PARAMS), &PARAMS), 7, "and it weighs only its spam backbone");
+
+        // One receipt short is still short — the quorum is the premise, not a hint.
+        assert_eq!(ramp_stage_v1(&facts(PARAMS.receipt_quorum - 1, true, false), &PARAMS), S::Provisional);
+        // Published and observed work still finalizes exactly as before.
+        assert_eq!(ramp_stage_v1(&facts(PARAMS.receipt_quorum, true, false), &PARAMS), S::Final);
+    }
+
+    /// An open or `Unadjudicable` dispute cannot mature — the states that were previously
+    /// unrepresentable in the facts and therefore took the `Final` path.
+    ///
+    /// `Unadjudicable` means the class's catalog cannot decide the question and the class
+    /// freezes ([`crate::palw_dispute`] I10). Maturing that block at full weight would pay the
+    /// forger for finding exactly the hole the freeze exists to contain.
+    #[test]
+    fn an_unresolved_dispute_cannot_mature() {
+        for closed in [false, true] {
+            for receipts in [0, PARAMS.receipt_quorum, PARAMS.receipt_quorum * 3] {
+                assert_eq!(
+                    ramp_stage_v1(&disputed(receipts, closed), &PARAMS),
+                    S::Provisional,
+                    "receipts={receipts} closed={closed}: an unresolved dispute is not an absence of refutation"
+                );
+            }
+        }
+        // A conviction still outranks it — Voided is stronger than "unresolved".
+        let convicted_and_disputed = PalwWeightFactsV1 { dispute_open_or_unadjudicable: true, ..facts(9, true, true) };
+        assert_eq!(ramp_stage_v1(&convicted_and_disputed, &PARAMS), S::Voided);
     }
 
     /// W5's precedence edge: a conviction accepted before close voids even when evaluated
