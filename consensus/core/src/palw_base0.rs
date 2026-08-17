@@ -120,6 +120,59 @@ pub fn requantize(acc: i32, multiplier: i32, shift: u8) -> i8 {
     rounding_shift_right(srdhm(acc, multiplier), shift).clamp(-128, 127) as i8
 }
 
+/// [`rounding_shift_right`] at 64 bits — the same round-half-away-from-zero rule, so ADR-0040 C1's
+/// "rounding happens in exactly one place" still holds with two widths of one rule rather than two
+/// rules.
+#[inline]
+pub fn rounding_shift_right_64(x: i64, s: u8) -> i64 {
+    debug_assert!(s <= 62);
+    if s == 0 {
+        return x;
+    }
+    let round = 1i64 << (s - 1);
+    (x.wrapping_add(if x >= 0 { round } else { -round })) >> s
+}
+
+/// The largest right shift [`rescale_q`] accepts. `acc · multiplier` occupies at most 62 bits, so
+/// shifting further can only produce 0 or −1 and is refused as a caller error rather than
+/// silently returning it.
+pub const RESCALE_MAX_SHIFT: u8 = 62;
+
+/// `acc · multiplier · 2^−shift`, saturating into `i32` (ADR-0040 H op 9).
+///
+/// # Why this exists and [`requantize`] could not do it
+///
+/// `requantize` is `RoundingShiftRight(SRDHM(acc, mult), shift)`, and `SRDHM` *contains* a `>> 31`.
+/// With `multiplier ≤ i32::MAX` and `shift ≥ 0`, that composition can only ever **attenuate**:
+/// its gain is at most 1. But `IntExp`'s two consumers — `SoftMax` and `Silu` — are defined on Qk
+/// inputs, and the accumulators that feed them do not reach Qk. Measured on random `int8` rows:
+/// an attention logit over `d_head = 64` lands near 3.6e4, which is **0.002** in Qk, and an FFN
+/// pre-activation over `d_model = 2048` lands near 1.8e5, which is **0.011**. At those magnitudes
+/// `SoftMax` returns 0.1248…0.1255 against a uniform 0.125 — attention is flat, the keys are
+/// indistinguishable — and `IntSigmoid` returns 0.501, so `Silu` degenerates to the linear `x/2`
+/// and the SwiGLU gate stops gating. A class whose attention and gating are both inoperative can
+/// still be executed and audited; it simply cannot compute anything. So the gap was structural,
+/// not cosmetic.
+///
+/// The fix is to stop composing two shifts and do the multiply-and-shift **once** in `i64`. The
+/// `>> 31` is then no longer baked in, so a `shift` below 31 is amplification and one at 31 is
+/// unity gain — the full range without a new arithmetic concept: an `i64` multiply and one
+/// rounding shift, both already in the catalog.
+///
+/// # This is deliberately NOT `requantize` without the clamp
+///
+/// `requantize` rounds twice (inside `SRDHM` at bit 31, then again at `shift`); this rounds once.
+/// They therefore differ by up to one unit and are **not** interchangeable. `requantize` keeps its
+/// exact frozen behaviour on the `int8` narrowing path — re-expressing it through this function
+/// would change the value of every already-pinned narrowing.
+#[inline]
+pub fn rescale_q(acc: i32, multiplier: i32, shift: u8) -> i32 {
+    debug_assert!(shift <= RESCALE_MAX_SHIFT);
+    let shift = shift.min(RESCALE_MAX_SHIFT);
+    let product = (acc as i64) * (multiplier as i64);
+    rounding_shift_right_64(product, shift).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
 /// `Poly2(p) = A·(p + B)² + C` on `p ∈ (−LN2_Q, 0]`, Qk in and out.
 #[inline]
 fn poly2(p: i32) -> i32 {
@@ -335,5 +388,104 @@ mod tests {
         let worst = 127i64 * 127;
         assert!(MAX_DOT_LEN as i64 * worst <= i32::MAX as i64, "the bound must fit");
         assert!((MAX_DOT_LEN as i64 + 1) * worst > i32::MAX as i64, "and must be the largest that does");
+    }
+
+    /// The 64-bit shift obeys the same round-half-away-from-zero rule as the 32-bit one. If it did
+    /// not, ADR-0040 C1 would be describing two rounding rules while claiming one.
+    #[test]
+    fn the_64_bit_shift_rounds_like_the_32_bit_one() {
+        for x in [-9i64, -8, -7, -5, -4, -3, -1, 0, 1, 3, 4, 5, 7, 8, 9, 1 << 40, -(1 << 40)] {
+            for s in [0u8, 1, 2, 3, 31] {
+                if let Ok(x32) = i32::try_from(x) {
+                    if s <= 31 {
+                        assert_eq!(
+                            rounding_shift_right_64(x, s),
+                            rounding_shift_right(x32, s) as i64,
+                            "widths disagree at x={x} s={s}"
+                        );
+                    }
+                }
+            }
+        }
+        // Half rounds AWAY from zero on both signs — the property that makes the rule symmetric.
+        assert_eq!(rounding_shift_right_64(3, 1), 2);
+        assert_eq!(rounding_shift_right_64(-3, 1), -2);
+    }
+
+    /// The whole reason `rescale_q` was added: gain above 1 must be reachable. `requantize` cannot
+    /// do this at any `(multiplier, shift)`, which is what left `SoftMax` and `Silu` unfeedable.
+    #[test]
+    fn rescale_can_amplify_and_requantize_cannot() {
+        // Unity is shift 31, because the multiplier is a Q31 fraction.
+        let unity = rescale_q(1_000_000, i32::MAX, 31);
+        assert!((unity - 1_000_000).abs() <= 1, "shift 31 must be unity gain, got {unity}");
+        // Shift below 31 amplifies, by exactly the power of two it is short by.
+        assert!((rescale_q(1_000_000, i32::MAX, 24) - 128_000_000).abs() <= 128);
+        assert!((rescale_q(100_000, i32::MAX, 21) - 102_400_000).abs() <= 1024);
+        // And above 31 it still attenuates, so it is a strict generalisation rather than a swap.
+        assert!((rescale_q(1_000_000, i32::MAX, 35) - 62_500).abs() <= 1);
+
+        // The negative claim, exhaustively over the shift range: `requantize`'s gain never exceeds
+        // 1, so no parameter choice could have fed a Qk consumer from a sub-Qk accumulator.
+        for shift in 0..=31u8 {
+            let out = requantize(100, i32::MAX, shift) as i32;
+            assert!(out.abs() <= 100, "requantize amplified at shift {shift}: {out}");
+        }
+    }
+
+    /// Amplification is what makes softmax discriminate. Without it the row below returns uniform;
+    /// this pins the actual repair rather than only the arithmetic that enables it.
+    #[test]
+    fn amplification_restores_a_discriminating_softmax() {
+        // Accumulator magnitudes measured from random int8 dots over d_head = 64.
+        let logits = [-23_006i32, 74_627, -15_901, 23_366, 26_776, 17_070, -29_402, -26_712];
+        let uniform = (ONE / logits.len() as i64) as i32;
+
+        let flat: Vec<i32> = logits.iter().map(|l| crate::palw_base0_ops::softmax(&[*l]).unwrap()[0]).collect();
+        assert!(!flat.is_empty());
+        let raw = crate::palw_base0_ops::softmax(&logits).unwrap();
+        let raw_spread = raw.iter().max().unwrap() - raw.iter().min().unwrap();
+        assert!(raw_spread * 100 < uniform, "unscaled logits must be indistinguishable from uniform: {raw:?}");
+
+        // Shift 23 is a gain of 2^8, which lifts these accumulators to O(1) in Qk.
+        let scaled: Vec<i32> = logits.iter().map(|l| rescale_q(*l, i32::MAX, 23)).collect();
+        let good = crate::palw_base0_ops::softmax(&scaled).unwrap();
+        let good_spread = good.iter().max().unwrap() - good.iter().min().unwrap();
+        assert!(good_spread > uniform, "amplified logits must discriminate: {good:?}");
+        assert_eq!(
+            good.iter().enumerate().max_by_key(|(_, p)| **p).unwrap().0,
+            1,
+            "the largest logit must take the largest probability"
+        );
+    }
+
+    /// Saturation, not wrapping: an overflowing rescale pins at the `i32` ends. A wrap would turn
+    /// the largest activation in a row into the most negative one.
+    #[test]
+    fn rescale_saturates_at_both_ends() {
+        assert_eq!(rescale_q(i32::MAX, i32::MAX, 0), i32::MAX);
+        assert_eq!(rescale_q(i32::MIN, i32::MAX, 0), i32::MIN);
+        assert_eq!(rescale_q(i32::MAX, i32::MIN, 0), i32::MIN);
+        // Zero is zero at every setting.
+        for s in 0..=RESCALE_MAX_SHIFT {
+            assert_eq!(rescale_q(0, i32::MAX, s), 0);
+        }
+    }
+
+    /// `rescale_q` rounds once and `requantize` rounds twice, so they are close but NOT equal.
+    /// Pinning the difference stops a later "simplification" that re-expresses one through the
+    /// other and silently moves every already-frozen narrowing by a unit.
+    #[test]
+    fn rescale_is_not_requantize_without_the_clamp() {
+        let mut differed = false;
+        for acc in [3i32, 5, 7, 11, 13, 101, 12_345, -7, -13, -12_345] {
+            for shift in [1u8, 2, 3] {
+                let via_requantize = requantize(acc, i32::MAX, shift) as i32;
+                let via_rescale = rescale_q(acc, i32::MAX, 31 + shift).clamp(-128, 127);
+                assert!((via_requantize - via_rescale).abs() <= 1, "the two paths must stay within a unit");
+                differed |= via_requantize != via_rescale;
+            }
+        }
+        assert!(differed, "if these never differ the double-rounding note is wrong and should be deleted");
     }
 }

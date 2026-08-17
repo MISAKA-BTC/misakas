@@ -5839,6 +5839,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-base0"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+]
+
+[[package]]
 name = "misaka-palw-reexecutor"
 version = "1.1.0"
 dependencies = [
@@ -5850,6 +5859,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-pq-validator-core",
  "kaspa-rpc-core",
+ "kaspa-txscript",
  "kaspa-wrpc-client",
  "rand 0.8.6",
  "serde",

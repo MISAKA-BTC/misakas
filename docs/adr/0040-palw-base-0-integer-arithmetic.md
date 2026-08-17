@@ -117,8 +117,9 @@ for closability:
 | 6 | `Silu` | `x · IntSigmoid(x)`, where `IntSigmoid` reuses `IntExp` |
 | 7 | `MulElem` | exact `i32` multiply, then `Requantize` |
 | 8 | `AddElem` | exact `i32` add (scales pre-aligned at registration) |
+| 9 | `Rescale` | `Saturate32(RoundingShiftRight64(acc · mult, shift))` — **added by Decision H**; unlike `Requantize` its gain may exceed 1 |
 
-Nine kinds, against the float vocabulary's seventeen. Two absences are deliberate and are the
+Ten kinds (nine as first frozen; see Decision H for the tenth and for why the nine could not compute), against the float vocabulary's seventeen. Two absences are deliberate and are the
 whole point:
 
 * **`RopeTable` has no `sinf`/`cosf`.** The rotary angles depend only on (position, dimension),
@@ -205,11 +206,13 @@ between them is not.
 
 ## Decision G — What this buys the catalog
 
-The primitives a second implementation must reproduce are exactly six:
+The primitives a second implementation must reproduce are exactly seven:
 
 ```
-integer add, integer multiply, RoundingShiftRight, SRDHM, IntExp, IntRsqrt
+integer add, integer multiply, RoundingShiftRight, RoundingShiftRight64, SRDHM, IntExp, IntRsqrt
 ```
+
+(seven since Decision H; `RoundingShiftRight64` is the same rule at a wider type)
 
 All six are total functions on `i32`/`i64` with no environment: no rounding mode, no denormals,
 no errno, no libm version, no contraction flag. That is why this class's catalog can reach 100 %
@@ -218,6 +221,85 @@ while the float classes' cannot, and it is the reason ADR-0039 orders this class
 `pwu_per_inference` (ADR-0038 D, `palw_pwu`) becomes exactly countable for the same reason: the op
 count of one canonical inference is a property of the frozen graph, with no data-dependent
 branches to estimate around.
+
+## Decision H — `Rescale`, the tenth op: a scale change that is allowed to amplify
+
+**Amended 2026-08-17, after building the engine. Decision D said nine ops; it is ten.**
+
+### The defect
+
+Decision D's op 2 is `Requantize(acc, mult, shift) = Saturate8(RoundingShiftRight(SRDHM(acc,
+mult), shift))`. `SRDHM` *contains* a `>> 31` (C2). With `mult ≤ i32::MAX` and `shift ≥ 0`, the
+composition's gain is therefore **at most 1** at every parameter setting — it can only attenuate.
+
+But ops 5 and 6, `SoftMax` and `Silu`, are defined on **Qk** inputs, because both are built on
+`IntExp` and `IntExp`'s domain is Qk (F1). And the accumulators that feed them do not reach Qk.
+Measured on random `int8` rows:
+
+| reduction | typical \|acc\| | in Qk |
+| --- | --- | --- |
+| attention logit, `d_head = 64` | 3.6e4 | **0.0022** |
+| attention logit, `d_head = 128` | 5.0e4 | 0.0030 |
+| FFN gate, `d_model = 2048` | 1.8e5 | 0.0110 |
+| FFN down, `d_ff = 8192` | 3.9e5 | 0.0232 |
+
+At those magnitudes the two ops degenerate:
+
+* `SoftMax` over eight such logits returns `0.1248 … 0.1255` against a uniform `0.125` —
+  **attention is flat and the keys are indistinguishable**.
+* `IntSigmoid` returns `0.501`, so `Silu(x) = x · 0.501` — **SwiGLU's gate is linear and stops
+  gating**.
+
+So a conforming BASE-0 implementation, exactly as Decision D froze it, could be executed,
+audited, bisected and convicted — and could not compute. The catalog was closed around a graph it
+could not express.
+
+This was found by writing the engine (`misaka-palw-base0`), not by review. It is worth recording
+why review missed it: every op is individually correct, every op's own tests pass, and the
+composition fails only through a *scale* relationship that no single op's contract mentions.
+
+### The repair
+
+`Requantize` composes two shifts, and the `>> 31` inside `SRDHM` is what makes the gain
+one-sided. Doing the multiply and the shift **once**, in `i64`, removes that:
+
+```
+RoundingShiftRight64(x: i64, s: u8) -> i64      // the C1 rule, at 64 bits
+    identical round-half-away-from-zero; C1 still describes ONE rule, at two widths
+
+Rescale(acc: i32, mult: i32, shift: u8) -> i32  // op 9
+    Saturate32(RoundingShiftRight64(acc · mult, shift))
+```
+
+The gain is `mult · 2^−shift`. Because `mult` is read as a Q31 fraction, **`shift = 31` is unity
+and any `shift < 31` amplifies**, up to `2^31`. No new arithmetic concept is introduced: an `i64`
+multiply and one rounding shift, both already normative.
+
+`Rescale` is **not** `Requantize` with the clamp removed, and the two are not interchangeable:
+`Requantize` rounds twice (at bit 31 inside `SRDHM`, then again at `shift`) and `Rescale` rounds
+once, so they differ by up to one unit. `Requantize` keeps its exact frozen behaviour on the
+`int8` narrowing path — re-expressing it through `Rescale` would move the value of every
+already-pinned narrowing, which is a different and worse change than adding an op.
+
+### Consequences
+
+* The catalog is **ten** ops. Decision D's closability argument is unaffected: `Rescale` is total,
+  environment-free, and reproducible from an `i64` multiply and a shift.
+* The primitives a second implementation must reproduce become **seven**, adding
+  `RoundingShiftRight64` — which is the same rule as `RoundingShiftRight` at a wider type, so the
+  differential surface grows by a width, not by an algorithm.
+* An artifact must carry the amplifying scales (`attn_logit_scale`, `ffn_gate_scale` in
+  `misaka-palw-base0`), and they belong **inside the class digest**: they move every logit and
+  every gate, so an artifact whose digest omitted them could be retuned in place while still
+  claiming the class.
+* The gain targets are calibration, not consensus. Swept and measured for the reference fixture:
+  at `2^22` the gate's `|min|/max` is 0.55 — SiLU still near-linear; at `2^23` it is 0.28, which
+  is SiLU's own floor of −0.278; above `2^25` the softmax collapses to a hard argmax. `2^23` is
+  what the reference artifact uses.
+* **A closed catalog is not evidence that the class can compute.** Every property Decision D
+  claims held while attention was flat. The engine is therefore instrumented (`ForwardProbe`) so
+  attention spread and gate asymmetry are *measured* rather than assumed, and the degenerate
+  configuration is pinned as a test rather than left as a comment.
 
 ## What this ADR does not decide
 

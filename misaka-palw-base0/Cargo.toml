@@ -1,0 +1,15 @@
+[package]
+name = "misaka-palw-base0"
+description = "PALW-BASE-0 (ADR-0040): the integer-only execution class — artifacts, engine, and the pinned rotary table"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+blake2b_simd.workspace = true

@@ -32,6 +32,7 @@ members = [
     "misaka-palw-shadow",
     "misaka-palw-agent",
     "misaka-palw-worker",
+    "misaka-palw-base0",
     "misaka-palw-reference2",
     "misaka-palw-reexecutor",
     "simpa",

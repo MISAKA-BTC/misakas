@@ -22,7 +22,7 @@
 //! caller never sees these errors; they exist so a non-conforming one is refused rather than
 //! crashing the node that refuses it.
 
-use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize};
+use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize, rescale_q};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,32 @@ pub enum PalwBase0OpError {
 pub struct QuantParams {
     pub multiplier: i32,
     pub shift: u8,
+}
+
+/// Scale-change parameters for [`rescale_row`], frozen at registration.
+///
+/// The gain is `multiplier · 2^−shift`. Unity is `shift = 31` with `multiplier = i32::MAX`,
+/// because the multiplier is read as a Q31 fraction; **below 31 is amplification**. That is the
+/// whole difference from [`QuantParams`], whose gain cannot exceed 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScaleParams {
+    pub multiplier: i32,
+    pub shift: u8,
+}
+
+impl ScaleParams {
+    /// The shift that leaves a value unchanged.
+    pub const UNITY_SHIFT: u8 = 31;
+
+    /// A gain of `2^bits`, as a shift off unity. Refuses a gain the shift range cannot express
+    /// rather than clamping to a different gain than the caller asked for.
+    pub fn gain_pow2(bits: i8) -> Option<Self> {
+        let shift = Self::UNITY_SHIFT as i16 - bits as i16;
+        if !(0..=crate::palw_base0::RESCALE_MAX_SHIFT as i16).contains(&shift) {
+            return None;
+        }
+        Some(Self { multiplier: i32::MAX, shift: shift as u8 })
+    }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -118,6 +144,22 @@ pub fn requantize_row(acc: &[i32], params: &[QuantParams]) -> Result<Vec<i8>, Pa
 /// Op 2, per-tensor: one `QuantParams` for the whole row.
 pub fn requantize_row_uniform(acc: &[i32], params: QuantParams) -> Vec<i8> {
     acc.iter().map(|a| requantize(*a, params.multiplier, params.shift)).collect()
+}
+
+// -------------------------------------------------------------------------------------------
+// 9. Rescale — the scale change that is allowed to amplify (ADR-0040 H)
+// -------------------------------------------------------------------------------------------
+
+/// Op 9: `i32` accumulators → `i32` at a different scale, per-tensor, **gain unbounded above**.
+///
+/// This is the op that lets an accumulator reach the Qk domain [`softmax`] and [`silu`] are
+/// defined on. [`requantize_row_uniform`] cannot: its gain is at most 1 at every parameter, so
+/// before this op existed an attention logit arrived at `softmax` around 0.002 in Qk and the
+/// result was uniform to four decimals — attention was flat and SwiGLU's gate was the linear
+/// `x/2`. See `palw_base0::rescale_q` for the measurements and for why this is not simply
+/// `Requantize` with the clamp removed.
+pub fn rescale_row(acc: &[i32], params: ScaleParams) -> Vec<i32> {
+    acc.iter().map(|a| rescale_q(*a, params.multiplier, params.shift)).collect()
 }
 
 // -------------------------------------------------------------------------------------------
