@@ -5005,7 +5005,6 @@ impl VirtualStateProcessor {
         use kaspa_consensus_core::blockhash::BlockHashExtensions;
         use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body};
         use kaspa_consensus_core::palw_credit::{PalwObservedAttestationV1, PalwObservedCommitmentV1, decide_credit_v1};
-        use kaspa_consensus_core::palw_schedule::PalwPanelCandidateV1;
 
         let windows = &credit.registration.windows;
         // Nothing can have crossed before activation plus one full window.
@@ -5063,18 +5062,6 @@ impl VirtualStateProcessor {
             return Vec::new();
         }
         let subsidy = self.coinbase_manager.calc_block_subsidy(daa_score);
-        // The bonded candidate set. Single registered class by construction of the fence, so
-        // every bonded validator is a candidate of that class; `select_replay_panel_v1`
-        // itself excludes the executor and applies q.
-        let candidates: Vec<PalwPanelCandidateV1> = bonds
-            .iter()
-            .map(|b| PalwPanelCandidateV1 {
-                validator_id: b.validator_pubkey_hash,
-                runtime_class_id: credit.registration.runtime_class_id,
-                bonded: true,
-                frozen: false,
-            })
-            .collect();
         // B3/B4: the per-block mint ceiling that makes ADR-0033 §4e non-vacuous.
         //
         // `max_leverage_holds_v1` bounds an attacker's pre-unbonding gain as
@@ -5105,7 +5092,7 @@ impl VirtualStateProcessor {
             };
             // Anchor: the first chain block at or past accepted + Δ_bind (ADR-0028 §2).
             let anchor_daa = accepted.saturating_add(windows.delta_bind);
-            let Some((anchor_hash, _)) = chain_rev.iter().rev().find(|(_, daa)| *daa >= anchor_daa) else {
+            let Some((anchor_hash, anchor_block_daa)) = chain_rev.iter().rev().find(|(_, daa)| *daa >= anchor_daa) else {
                 continue; // no anchor on this chain — the job is not decidable here
             };
             // AUTHENTICATE THE COMMITMENT before it is treated as a claim at all. Nothing in this
@@ -5133,6 +5120,25 @@ impl VirtualStateProcessor {
             if !Self::verify_palw_commitment_signature(&executor_bond.validator_pubkey, &commitment_digest, &commitment.signature) {
                 continue;
             }
+            // The candidate set, built HERE rather than hoisted, because `bonded` is a question
+            // about a point of view and the point of view is this commitment's anchor.
+            //
+            // It used to be the constant `true` for every record in `bonds`, and `bonds` is the
+            // whole view (`ActiveBondView::records()` returns every record it holds, not the active
+            // ones). So a Slashed, Unbonding or not-yet-Active bond took a panel seat and could be
+            // PAID for attesting — the eligibility rule ADR-0028 §2 states, and that
+            // `select_replay_panel_v1`'s own doc says lives in the function, was being satisfied by
+            // a hardcoded answer from the caller. `effective_bond_status` at the anchor's DAA is
+            // that answer, and it is the same function the rest of the overlay judges bonds with.
+            //
+            // `frozen` stays `false` here on purpose: freezing is decided CLASS-wide, once, and
+            // fail-closed at the top of this function (`class_state.is_frozen`), so a per-candidate
+            // copy could only ever disagree with it.
+            let candidates = kaspa_consensus_core::palw_credit::panel_candidates_at_anchor_v1(
+                bonds,
+                credit.registration.runtime_class_id,
+                *anchor_block_daa,
+            );
             let observed = PalwObservedCommitmentV1 {
                 committed_root: commitment.committed_root,
                 logits_root,

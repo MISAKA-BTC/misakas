@@ -116,6 +116,38 @@ impl PalwCreditParamsV1 {
     }
 }
 
+/// The ADR-0028 §2 candidate set at ONE anchor, derived from the bond records a chain point
+/// holds.
+///
+/// The rule lives here rather than at the call site because the call site got it wrong: it passed
+/// the constant `bonded: true` for every record in its bond view, and a view holds EVERY record it
+/// has ever been given, not the active ones (`ActiveBondView::records()` is the whole map). So a
+/// `Slashed`, `Unbonding` or not-yet-`Active` bond took a panel seat and could be paid for
+/// attesting — the eligibility predicate `select_replay_panel_v1`'s own doc says lives in the
+/// function was being satisfied by a hardcoded answer from its caller.
+///
+/// `bonded` is a question about a POINT OF VIEW, and the point of view is the job's anchor:
+/// `is_bond_active_at(record, anchor_daa)`, the same predicate the rest of the overlay judges bonds
+/// with. `frozen` is `false` for every candidate on purpose — freezing is decided class-wide, once,
+/// and fail-closed before this set is built, so a per-candidate copy could only disagree with it.
+///
+/// The executor's own exclusion and `q` are the lottery's job, not this function's.
+pub fn panel_candidates_at_anchor_v1(
+    bonds: &[crate::dns_finality::StakeBondRecord],
+    runtime_class_id: Hash64,
+    anchor_daa: u64,
+) -> Vec<PalwPanelCandidateV1> {
+    bonds
+        .iter()
+        .map(|b| PalwPanelCandidateV1 {
+            validator_id: b.validator_pubkey_hash,
+            runtime_class_id,
+            bonded: crate::dns_finality::is_bond_active_at(b, anchor_daa),
+            frozen: false,
+        })
+        .collect()
+}
+
 /// One commitment as the crediting walk observed it (kind 0x01, accepted-DAA-stamped).
 #[derive(Clone, Debug)]
 pub struct PalwObservedCommitmentV1 {
@@ -318,6 +350,73 @@ mod tests {
             attested_logits_root: logits,
             accepted_daa: 1_035,
         }
+    }
+
+    /// The candidate set is derived from bond STATUS at the anchor, not asserted by the caller.
+    ///
+    /// This was `bonded: true` for every record the bond view held, and a view holds every record
+    /// it has ever been given — so a slashed bond took a panel seat and could be paid for
+    /// attesting to the work of the executor that had just been slashed alongside it.
+    #[test]
+    fn only_bonds_active_at_the_anchor_become_candidates() {
+        use crate::dns_finality::{BondStatus, StakeBondRecord, effective_bond_status};
+        let class = h64(0xC1);
+        let rec = |seed: u8, activation: u64, unbond: Option<u64>, slashed: Option<u64>| StakeBondRecord {
+            version: 1,
+            bond_outpoint: crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_bytes([seed; 64]),
+                index: 0,
+            },
+            owner_pubkey_hash: h64(seed),
+            validator_pubkey_hash: h64(seed),
+            validator_pubkey: vec![seed; 32],
+            amount: 20_000 * 100_000_000,
+            activation_daa_score: activation,
+            created_daa_score: 0,
+            unbonding_period_blocks: 10_083,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: unbond,
+            slashed_at_daa_score: slashed,
+            // The raw field is vestigial — `effective_bond_status` recomputes from the stamps —
+            // so it is deliberately set to the value a naive reader would trust, to show that the
+            // derivation and not this byte is what decides eligibility.
+            status: BondStatus::Active,
+        };
+        // One of each status AT anchor 1 000: active, pending (activates later), unbonding, slashed.
+        let bonds = vec![
+            rec(0x01, 500, None, None),
+            rec(0x02, 5_000, None, None),
+            rec(0x03, 500, Some(900), None),
+            rec(0x04, 500, None, Some(800)),
+        ];
+        let anchor_daa = 1_000;
+        let candidates = panel_candidates_at_anchor_v1(&bonds, class, anchor_daa);
+        assert_eq!(candidates.len(), bonds.len(), "every record is a candidate; only `bonded` differs");
+        for (c, b) in candidates.iter().zip(&bonds) {
+            assert_eq!(c.runtime_class_id, class);
+            assert!(!c.frozen, "freezing is class-wide and decided before this set is built");
+            assert_eq!(
+                c.bonded,
+                effective_bond_status(b, anchor_daa) == BondStatus::Active,
+                "`bonded` must be the anchor's own answer for {:?}",
+                b.validator_pubkey_hash
+            );
+        }
+        assert_eq!(candidates.iter().filter(|c| c.bonded).count(), 1, "exactly the one active bond is eligible");
+        assert!(candidates[0].bonded, "the active bond");
+        for i in 1..4 {
+            assert!(!candidates[i].bonded, "pending/unbonding/slashed must not be eligible (index {i})");
+        }
+
+        // And the point of view moves the answer: at a later anchor the pending bond is active and
+        // the unbonding one is still out.
+        let later = panel_candidates_at_anchor_v1(&bonds, class, 6_000);
+        assert!(later[1].bonded, "the pending bond activated by 6 000");
+        assert!(!later[2].bonded && !later[3].bonded);
+
+        // The lottery then applies the flags rather than re-deciding them.
+        let panel = select_replay_panel_v1(&h64(0x71), &h64(0xE0), &h64(0x04), &class, &candidates, 4);
+        assert_eq!(panel, vec![h64(0x01)], "only the active bond can be drawn");
     }
 
     /// The paid ids, for assertions that are about panel ORDER rather than about the payee.
