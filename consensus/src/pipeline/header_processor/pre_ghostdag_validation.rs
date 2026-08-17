@@ -180,7 +180,31 @@ impl HeaderProcessor {
         // finalizer; the block level is derived from the 512-bit pow value
         // (ADR-0007 / ADR-0008).
         let state = kaspa_pow::StateLayer0::new(header, &self.network_id);
-        let (passed, pow_512) = state.check_pow_layer0(header.nonce).map_err(|_| RuleError::InvalidPoW)?;
+        // An ENVIRONMENTAL PALW failure is not a statement about this header.
+        //
+        // `map_err(|_| RuleError::InvalidPoW)` collapsed every error into "this header's PoW is
+        // invalid", including `PalwUnavailable` and `PalwWorkerFailed` — a missing worker, an
+        // unusable runtime, a GGUF this node cannot load. Those are facts about the NODE: they apply
+        // to every header equally, so a node in that state rejected every honest block and banned
+        // every honest peer, exactly the outcome `kaspa_pow::calc_block_level_check_pow_layer0`
+        // panics to prevent and documents at length. This path did the thing that function's comment
+        // calls the wrong answer.
+        //
+        // Same discipline as that function, so the two cannot drift: fail LOUD. Reaching here is a
+        // persistent fault — the transient half is already absorbed by
+        // `palw::native::run_worker_with_retry`'s bounded attempts — and a visible halt is the
+        // designed response on every network, mainnet included (ADR-0036 Decision 4 as superseded by
+        // ADR-0039 W6′: the liveness floor is a portable integer-only PALW class, not a hash lane).
+        let (passed, pow_512) = match state.check_pow_layer0(header.nonce) {
+            Ok(ok) => ok,
+            Err(
+                e @ (kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwUnavailable(_)
+                | kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwWorkerFailed(_)),
+            ) => panic!("PALW PoW validation cannot run on this node: {e}"),
+            // The rest are finalizer-internal misuse, impossible for a well-formed header, and a
+            // failed PoW is the fail-closed reading of them.
+            Err(_) => return Err(RuleError::InvalidPoW),
+        };
         if passed || self.skip_proof_of_work {
             Ok(kaspa_pow::calc_level_from_pow_512(pow_512, self.max_block_level))
         } else {
