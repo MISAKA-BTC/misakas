@@ -275,9 +275,17 @@ impl PalwBisectLadderV1 {
         (self.lo, self.hi)
     }
 
-    /// The index the terminal check adjudicates (only meaningful at `Terminal`).
+    /// The index the terminal check adjudicates: `Some` only at `Terminal` AND when the interval
+    /// really is one index wide.
+    ///
+    /// A width-0 interval has no index, and answering `Some(lo)` for one would point a future terminal
+    /// check at a step OUTSIDE the disputed interval — an index nobody agreed to bisect toward. Today
+    /// `apply_verdict` cannot produce width 0 (`open` refuses `space_size < 2`, and narrowing to the
+    /// pinned midpoint always leaves `hi - lo >= 1`), so this is a guard on an unreachable state
+    /// rather than a fix. It is written anyway because the state is one arithmetic edit away and the
+    /// failure it would cause is a conviction on the wrong step.
     pub fn terminal_index(&self) -> Option<u64> {
-        (self.turn == PalwBisectTurnV1::Terminal).then_some(self.lo)
+        (self.turn == PalwBisectTurnV1::Terminal && self.hi.saturating_sub(self.lo) == 1).then_some(self.lo)
     }
 
     /// The midpoint the next disclosure must be about.
@@ -412,6 +420,34 @@ mod tests {
 
     fn h64(fill: u8) -> Hash64 {
         Hash64::from_bytes([fill; 64])
+    }
+
+    /// `terminal_index` answers only for a genuinely one-wide interval.
+    ///
+    /// A width-0 interval has no index; answering `Some(lo)` would point a terminal check at a step
+    /// outside the disputed interval. The state is unreachable through the public API today, which is
+    /// why the guard is asserted directly on a constructed ladder rather than reached through moves.
+    #[test]
+    fn a_width_zero_interval_has_no_terminal_index() {
+        let mut ladder = open_ladder(16);
+        // Walked to a real terminal: one index wide, so it answers.
+        while ladder.turn() != PalwBisectTurnV1::Terminal {
+            let round = ladder.round();
+            let mid = ladder.expected_midpoint().expect("a non-terminal ladder has a midpoint");
+            ladder
+                .apply_disclosure(
+                    &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round, midpoint: mid, mid_state: h64(1) },
+                    100,
+                    10,
+                )
+                .unwrap();
+            ladder
+                .apply_verdict(&PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round, agree: false }, 110, 10)
+                .unwrap();
+        }
+        let (lo, hi) = ladder.interval();
+        assert_eq!(hi - lo, 1, "a walked ladder terminates one index wide");
+        assert_eq!(ladder.terminal_index(), Some(lo));
     }
 
     fn open_ladder(space_size: u64) -> PalwBisectLadderV1 {

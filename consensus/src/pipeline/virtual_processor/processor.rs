@@ -2125,9 +2125,26 @@ impl VirtualStateProcessor {
     /// walk is a no-op there.
     /// The per-class state as this node's store holds it.
     ///
-    /// Same shape as [`Self::initial_active_bond_view`] and the same reason: consumers read a VIEW,
-    /// so a class fact is scoped to the chain being evaluated rather than to wherever the virtual
-    /// tip happens to point (blocker 6(b)).
+    /// **This is NOT chain-scoped, and the view type does not make it so.** It iterates the whole
+    /// store at whatever the virtual chain last wrote, so blocker 6(b) is open for every fact it
+    /// carries — an earlier version of this comment claimed the view answered that blocker, and it
+    /// does not: a view is only as chain-scoped as the records handed to it, and these come from the
+    /// node's own sink. (`initial_active_bond_view` has the same shape, and its consumers advance it
+    /// per chain point — see `stage_palw_class_credit_marks`, which had to be fixed for exactly this.)
+    ///
+    /// What it gates: `is_frozen` and `credit_interval_elapsed`, read on BOTH the template path and
+    /// the validation path, and both gate the credit outputs that go in a coinbase. Two nodes with
+    /// different sink histories can therefore disagree about a coinbase.
+    ///
+    /// Why that is currently harmless, and exactly how far the harmlessness extends: **no code creates
+    /// a first row.** The store's only insert site rewrites `last_credited_daa` on an already-existing
+    /// row, so the store is provably empty on every network, `is_frozen` answers `true` for every
+    /// class, and `compute_palw_credit_outputs` returns empty everywhere. The PALW credit gate is shut
+    /// by a missing row rather than by a rule. The exposure activates the moment a row exists, so a
+    /// seed writer must arrive together with per-chain-point scoping, never before it.
+    ///
+    /// The DAA target used to live here too and was removed for this reason — see the store's module
+    /// header. The remaining two fields cannot be removed; they have to be scoped.
     pub(crate) fn initial_palw_class_state_view(&self) -> crate::model::stores::palw_class_state::PalwClassStateView {
         crate::model::stores::palw_class_state::PalwClassStateView::from_records(
             self.palw_class_state_store.read().iterator().filter_map(|r| r.ok()).map(|(id, rec)| (id, (*rec).clone())),
