@@ -2674,13 +2674,26 @@ impl VirtualStateProcessor {
             matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, PALW_S_MLDSA87_ATTESTATION_CONTEXT), Ok(true))
         };
         let fence = self.palw_credit_params.is_some();
-        let mut out = palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, fence, verify);
+        // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash. Passed from the
+        // chain rather than read out of the evidence, so a certificate honestly signed on another
+        // network cannot slash a bond here.
+        let chain_network_id = self.genesis.hash;
+        let mut out =
+            palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, chain_network_id.as_byte_slice(), fence, verify);
         // Arithmetic convictions need the model's weight rows to recompute a step. Serving them
         // is a node-local capability, not a consensus input, and a node that cannot serve them
         // adjudicates `Unadjudicable` — which convicts nobody, so the derivation stays a pure
         // function of the chain for every node that CAN. Wiring a real oracle is the Track-D
         // step that turns this arm on; until then it is structurally present and derives nothing.
-        out.extend(palw_step_conviction_slashes_v1(txs, bond_view, accepted_daa_score, fence, &NoStepWeights, verify));
+        out.extend(palw_step_conviction_slashes_v1(
+            txs,
+            bond_view,
+            accepted_daa_score,
+            chain_network_id.as_byte_slice(),
+            fence,
+            &NoStepWeights,
+            verify,
+        ));
         out
     }
 
@@ -8065,6 +8078,7 @@ pub(super) fn palw_equivocation_slashes_v1<F>(
     txs: &[Transaction],
     bond_view: &ActiveBondView,
     accepted_daa_score: u64,
+    chain_network_id: &[u8],
     fence_active: bool,
     verify: F,
 ) -> Vec<BondMutation>
@@ -8092,7 +8106,7 @@ where
         let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
             continue;
         };
-        if let Ok(slashed) = adjudicate_equivocation_carriage_v1(&carriage, bond, accepted_daa_score, &verify) {
+        if let Ok(slashed) = adjudicate_equivocation_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, &verify) {
             out.push(BondMutation::Slash(slashed, accepted_daa_score));
         }
     }
@@ -8158,6 +8172,7 @@ pub(super) fn palw_step_conviction_slashes_v1<F>(
     txs: &[Transaction],
     bond_view: &ActiveBondView,
     accepted_daa_score: u64,
+    chain_network_id: &[u8],
     fence_active: bool,
     weights: &dyn kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1,
     verify: F,
@@ -8185,7 +8200,7 @@ where
         let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
             continue;
         };
-        if let Ok(slashed) = adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, weights, &verify) {
+        if let Ok(slashed) = adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, weights, &verify) {
             out.push(BondMutation::Slash(slashed, accepted_daa_score));
         }
     }
@@ -8194,6 +8209,10 @@ where
 
 #[cfg(test)]
 mod palw_equivocation_wiring_tests {
+    /// The chain identity these slash tests adjudicate under — it must equal the network the
+    /// fixtures' job context names, because a foreign-network certificate is refused now.
+    const SLASH_NET: &[u8] = b"misaka-devnet";
+
     use super::*;
     use kaspa_consensus_core::dns_finality::{BondStatus, StakeBondRecord};
     use kaspa_consensus_core::palw_carriage::{
@@ -8226,7 +8245,7 @@ mod palw_equivocation_wiring_tests {
     fn context() -> PalwJobContextV2 {
         PalwJobContextV2 {
             version: PALW_TRACE_COMMITMENT_VERSION_V2,
-            network_id: b"misaka-devnet".to_vec(),
+            network_id: SLASH_NET.to_vec(),
             job_id: h(0x11),
             job_nullifier: h(0x12),
             assignment_id: h(0x13),
@@ -8305,11 +8324,11 @@ mod palw_equivocation_wiring_tests {
     fn the_fence_off_path_derives_nothing_at_all() {
         let (signer, accused) = (h(0xE1), op(0xB1));
         let txs = vec![carriage_tx(&certificate(signer, accused))];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, false, mock_verify).is_empty());
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, false, mock_verify).is_empty());
         // ...and the same input DOES produce a slash once the fence is on, so the test above is
         // measuring the fence rather than a broken fixture.
         assert_eq!(
-            palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify),
+            palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify),
             vec![BondMutation::Slash(accused, 100)]
         );
     }
@@ -8323,7 +8342,7 @@ mod palw_equivocation_wiring_tests {
         let native = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![0xAB; 32]);
         let garbage = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_EQUIVOCATION, 0, vec![0xFF; 16]);
         let txs = vec![native, garbage];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify).is_empty());
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
     }
 
     /// A certificate naming a bond this view does not hold is skipped, not an error — it may name
@@ -8333,7 +8352,7 @@ mod palw_equivocation_wiring_tests {
         let (signer, accused) = (h(0xE1), op(0xB1));
         let txs = vec![carriage_tx(&certificate(signer, accused))];
         let elsewhere = ActiveBondView::from_records([(op(0xB2), bond(signer, op(0xB2)))]);
-        assert!(palw_equivocation_slashes_v1(&txs, &elsewhere, 100, true, mock_verify).is_empty());
+        assert!(palw_equivocation_slashes_v1(&txs, &elsewhere, 100, SLASH_NET, true, mock_verify).is_empty());
     }
 
     /// The innocent-bond attack, at the wiring layer: a genuine certificate pointed at somebody
@@ -8343,7 +8362,7 @@ mod palw_equivocation_wiring_tests {
         let (signer, victim_outpoint) = (h(0xE1), op(0xB9));
         let txs = vec![carriage_tx(&certificate(signer, victim_outpoint))];
         let victim_view = view(h(0x00CE), victim_outpoint); // a DIFFERENT validator's bond
-        assert!(palw_equivocation_slashes_v1(&txs, &victim_view, 100, true, mock_verify).is_empty());
+        assert!(palw_equivocation_slashes_v1(&txs, &victim_view, 100, SLASH_NET, true, mock_verify).is_empty());
     }
 
     /// A forged signature derives nothing: the real verifier is the only thing that decides, and
@@ -8354,6 +8373,6 @@ mod palw_equivocation_wiring_tests {
         let mut forged = certificate(signer, accused);
         forged.certificate.attestation_b.signature = vec![0xFF; 64];
         let txs = vec![carriage_tx(&forged)];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify).is_empty());
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
     }
 }
