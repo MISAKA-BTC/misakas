@@ -174,8 +174,15 @@ pub struct PalwBlockCommitmentV1 {
     pub trace_root: Hash64,
     /// Merkle root of the output/token stream.
     pub output_root: Hash64,
-    /// The canonical PWU this block claims under its class's frozen derivation
-    /// ([`crate::palw_class_daa`] — static intra-class, never wall-clock).
+    /// The canonical PWU this block claims under its class's frozen derivation.
+    ///
+    /// **Exactly one value is legal**, and it is not chosen here: see
+    /// [`crate::palw_pwu::check_pwu_claim_v1`], which requires equality with
+    /// `expected_attempts(class_target) × pwu_per_inference(class)`. Both factors are facts —
+    /// the class's own DAA target and its registered normative operation count — so this field
+    /// is a restatement of chain state that the ticket root and the executor's signature bind,
+    /// never a miner input. [`Self::validate_shape`] cannot enforce that (it has no class
+    /// state); [`Self::validate_against_class_v1`] does.
     pub pwu_claim: u64,
     /// ML-DSA-87 over [`palw_block_commitment_message_v1`] under
     /// [`PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT`]. Verified statefully (the bond registry
@@ -202,6 +209,23 @@ impl PalwBlockCommitmentV1 {
             return Err(PalwBlockCommitmentError::SignatureLength { got: self.signature.len(), expected });
         }
         Ok(())
+    }
+
+    /// The stateful half of admission that [`Self::validate_shape`] cannot do: `pwu_claim` must
+    /// EQUAL its derivation from the class's own DAA target and registered per-inference cost.
+    ///
+    /// Split from `validate_shape` rather than folded into it because the two have different
+    /// inputs and different call sites: shape is a pure function of the payload and runs
+    /// wherever bytes arrive, while this needs the class's chain state and therefore runs where
+    /// that state is resolved. Keeping them apart is what stops the stateful check being
+    /// quietly skipped by a caller that only had bytes — the shape function's own doc says its
+    /// stateful questions are consumer-entry checks, and this is one of them, now callable.
+    pub fn validate_against_class_v1(
+        &self,
+        class_target: u128,
+        pwu_per_inference: u64,
+    ) -> Result<(), crate::palw_pwu::PalwPwuError> {
+        crate::palw_pwu::check_pwu_claim_v1(self.pwu_claim, class_target, pwu_per_inference)
     }
 
     /// This commitment's challenge for a given attempt — [`palw_block_challenge_v1`] with the
@@ -447,6 +471,34 @@ mod tests {
 
         // Determinism: one attempt, one tag — a verifier recomputing it lands byte-identically.
         assert_eq!(c.l1_tag_bytes(base), c.l1_tag_bytes(at(1_000, 42)));
+    }
+
+    /// Re-audit blocker 6, pinned at the commitment: **`pwu_claim` has exactly one legal value.**
+    ///
+    /// Shape admission accepts any non-zero claim — correctly, it has no class state — so the
+    /// weight-inflation attack is refused here, at the stateful entry.
+    #[test]
+    fn pwu_claim_is_not_a_miner_input() {
+        use crate::palw_pwu::{PalwPwuError, palw_pwu_v1};
+        let (target, cost) = (u128::MAX / 1_000, 4_000u64);
+        let derived = palw_pwu_v1(target, cost);
+
+        let mut honest = commitment();
+        honest.pwu_claim = derived;
+        assert!(honest.validate_against_class_v1(target, cost).is_ok());
+
+        // The fixture's own hand-typed 100 is not the derivation — a plausible-looking number
+        // is still a rejection, which is the point of requiring equality rather than a bound.
+        assert!(commitment().validate_against_class_v1(target, cost).is_err());
+
+        // The attack: claim the maximum. Shape says fine; the class says no.
+        let mut greedy = commitment();
+        greedy.pwu_claim = u64::MAX;
+        assert!(greedy.validate_shape().is_ok(), "shape cannot catch this — it has no class state");
+        assert_eq!(
+            greedy.validate_against_class_v1(target, cost),
+            Err(PalwPwuError::ClaimMismatch { claimed: u64::MAX, derived })
+        );
     }
 
     /// The signing digest binds the exact ticket attempt: pre_pow_hash, timestamp and nonce

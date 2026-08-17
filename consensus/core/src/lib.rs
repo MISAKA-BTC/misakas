@@ -193,6 +193,7 @@ pub mod palw_dispute;
 pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;
+pub mod palw_pwu;
 pub mod palw_receipt;
 pub mod palw_weight;
 /// MISAKA PALW asynchronous job state machine (ADR-0037 Decision 2): the closed, monotone
