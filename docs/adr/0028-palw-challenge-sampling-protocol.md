@@ -285,6 +285,19 @@ economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
 > Raising bonds to 233 M MSK is not credible, and shortening unbonding is bounded below by
 > `W_challenge` (≤ 14×). Numbers and their derivation:
 > `scripts/misaka-palw-economics-sim.py`.
+>
+> **CORRECTED 2026-08-17.** Both remedies above price a job at `base(C)`, but a credited job
+> mints `base(C) + q · ρ_v · base(C)` — the executor's base plus one share per paid attester,
+> `3 × base(C)` at the live panel (`q = 2`, `ρ_v = 1 000‰`). The encoded check made the same
+> mistake, so it licensed 3× the mint it measured. **Remedy 1 does not exist at this panel:**
+> `jobs ≥ 1` at every interval and one full-subsidy job already pays 13 336.86 MSK against a
+> 20 000 MSK bond, so no rate cap can rescue full-subsidy credit (the ceiling for a single job
+> per unbonding period is `base(C) ≤ 749‰`). **Remedy 2 holds at (14 blocks, 0.1 %)**, not at
+> the printed (10 blocks, 0.2 %). The real lever set is
+> `(min_credit_interval_daa, base_subsidy_permille, q, ρ_v)`; shrinking `ρ_v` to 200‰ restores
+> 0.2 % at one job per 13 blocks. Corrected table and derivation:
+> `docs/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
+> `consensus/core/src/palw_schedule.rs`.
 
 ### 5. The audit layer: opening calls as the DA heartbeat — answerable, not correct
 

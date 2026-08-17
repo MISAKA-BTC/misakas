@@ -354,6 +354,22 @@ impl PalwClassRegistrationV1 {
         Ok(())
     }
 
+    /// ONE credited job's full mint, in sompi, at a given block subsidy: `base(C)` plus its
+    /// `q` attester shares, each `ρ_v · base(C)`.
+    ///
+    /// THE single definition of that amount. Two rules need it and must not be able to
+    /// disagree: the per-block crediting ceiling that actually pays it out
+    /// ([`crate::palw_credit::PalwCreditParamsV1::one_job_ceiling_sompi`], which delegates
+    /// here) and the §4e leverage inequality that decides whether the bond covers it
+    /// ([`max_leverage_holds_v1`]). They previously each did their own arithmetic and the
+    /// inequality's was smaller, so the check licensed a mint it had not measured.
+    ///
+    /// The arithmetic itself lives in [`crate::palw_schedule::one_job_payout_sompi_v1`], beside
+    /// the remedy it reads, so the inequality can reach it without a registration in hand.
+    pub fn one_job_payout_sompi(&self, block_subsidy_sompi: u64) -> u64 {
+        crate::palw_schedule::one_job_payout_sompi_v1(&self.leverage_remedy, self.rho_v_permille, self.windows.q, block_subsidy_sompi)
+    }
+
     /// Whether this class may operate at ADR-0027 §6 Stage 2 (slash-bearing credit), given the
     /// external facts a registration cannot know by itself.
     ///
@@ -363,7 +379,8 @@ impl PalwClassRegistrationV1 {
     /// against: the registered remedy must actually bound the aggregate mint — an asserted
     /// "remedy encoded" flag proved nothing, so the flag was replaced by the evaluation.
     pub fn stage2_eligible(&self, chunked_carriage_drilled: bool, economics: &PalwEconomicFactsV1) -> bool {
-        if !max_leverage_holds_v1(&self.leverage_remedy, economics) || self.credited_ceiling_tokens == 0 {
+        let payout = self.one_job_payout_sompi(economics.block_subsidy_sompi);
+        if !max_leverage_holds_v1(&self.leverage_remedy, economics, payout) || self.credited_ceiling_tokens == 0 {
             return false;
         }
         match self.commitment_form {
@@ -517,7 +534,11 @@ pub(crate) mod tests {
             credited_ceiling_tokens: ceiling,
             rho_v_permille: 1_000,
             p99_cold_replay_ms: 90_716,
-            leverage_remedy: PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 },
+            // One job per 14 blocks at 0.1 % of the subsidy. NOT the amendment's printed
+            // (10, 0.2 %): with ρ_v = 1 000‰ and q = 2, one job pays 3 × base(C), and §4e is
+            // now checked against that full payout — under which (10, 0.2 %) fails and 14 is
+            // the tightest interval 0.1 % admits. `palw_schedule` pins both directions.
+            leverage_remedy: PalwLeverageRemedyV1 { min_credit_interval_daa: 14, base_subsidy_permille: 1 },
             windows,
             transcendental_algorithms: vec![(PalwTranscendentalSiteV1::VectorExpPolynomial, h64(0x34))],
         }
@@ -693,7 +714,7 @@ pub(crate) mod tests {
         assert_ne!(mutate(&|r| r.pwu_per_inference = 1), base);
         assert_ne!(mutate(&|r| r.windows.q = 3), base);
         assert_ne!(mutate(&|r| r.leverage_remedy.min_credit_interval_daa = 5_042), base);
-        assert_ne!(mutate(&|r| r.leverage_remedy.base_subsidy_permille = 1), base);
+        assert_ne!(mutate(&|r| r.leverage_remedy.base_subsidy_permille = 2), base);
         // The ADR-0034 routing keys are part of the binding's identity: any of them moving
         // is a NEW binding id with its own activation epoch — re-banding-by-edit untypable.
         assert_ne!(mutate(&|r| r.class_tag = "misaka-palw-lite-cpu/aarch64-dotprod/v1".into()), base);

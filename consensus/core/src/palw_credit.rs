@@ -31,7 +31,9 @@
 //! network carries `None`.
 
 use crate::palw_registry::PalwClassRegistrationV1;
-use crate::palw_schedule::{PalwEconomicFactsV1, PalwPanelCandidateV1, job_schedule_v1, max_leverage_holds_v1, select_replay_panel_v1};
+use crate::palw_schedule::{
+    PalwEconomicFactsV1, PalwPanelCandidateV1, job_schedule_v1, max_leverage_holds_v1, select_replay_panel_v1,
+};
 use kaspa_hashes::Hash64;
 
 /// The ADR-0033 fence: the one registered class this network credits, and the chain facts
@@ -71,7 +73,7 @@ impl PalwCreditParamsV1 {
             s_eff_sompi: self.s_eff_sompi,
             unbonding_period_blocks: self.unbonding_period_blocks,
         };
-        max_leverage_holds_v1(&self.registration.leverage_remedy, &facts)
+        max_leverage_holds_v1(&self.registration.leverage_remedy, &facts, self.one_job_ceiling_sompi(block_subsidy_sompi))
     }
 
     /// `base(C)` at a given block subsidy: the registered fraction, floored — the size
@@ -85,16 +87,23 @@ impl PalwCreditParamsV1 {
         ((self.base_sompi(block_subsidy_sompi) as u128) * (self.registration.rho_v_permille as u128) / 1000) as u64
     }
 
-    /// ONE job's full payout: `base(C)` plus its `q` attester shares.
+    /// ONE job's full payout: `base(C)` plus its `q` attester shares — the per-block crediting
+    /// ceiling, and the unit ADR-0033 §4e reasons in.
     ///
-    /// This is the unit ADR-0033 §4e reasons in. `max_leverage_holds_v1` bounds an attacker's
-    /// pre-unbonding gain as `base(C) × (unbonding / min_credit_interval + 1)`, which ASSUMES one
-    /// credited job per interval — so a consumer that mints more than one job's worth in a block
-    /// makes the inequality it was validated against vacuous. Consumers use this as the per-block
-    /// ceiling; the value lives here because the arithmetic it must agree with does.
+    /// Two independent things must hold for the §4e bound to mean anything, and only one of
+    /// them was true when this doc was first written:
+    ///
+    /// 1. **At most one job's worth per block.** `max_leverage_holds_v1` bounds the
+    ///    pre-unbonding gain as `payout × (unbonding / min_credit_interval + 1)`, which assumes
+    ///    one credited job per interval — so a consumer that mints more than one job's worth in
+    ///    a block makes the inequality vacuous. Consumers apply this value as that ceiling.
+    /// 2. **The same `payout` on both sides.** The inequality used to derive its own unit as
+    ///    `base(C)` alone while this ceiling paid `base(C) + q · ρ_v · base(C)`, so the gate
+    ///    licensed `1 + q · ρ_v / 1000` times the mint it had measured. Both now delegate to
+    ///    [`crate::palw_registry::PalwClassRegistrationV1::one_job_payout_sompi`], so the
+    ///    agreement is structural rather than a comment asking for it.
     pub fn one_job_ceiling_sompi(&self, block_subsidy_sompi: u64) -> u64 {
-        let q = self.registration.windows.q as u64;
-        self.base_sompi(block_subsidy_sompi).saturating_add(self.attester_share_sompi(block_subsidy_sompi).saturating_mul(q))
+        self.registration.one_job_payout_sompi(block_subsidy_sompi)
     }
 }
 
@@ -309,9 +318,13 @@ mod tests {
         let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
         assert!(d.creditable);
         assert_eq!(paid_ids(&d), panel, "payout order is panel order, not arrival order");
-        // base = subsidy · 2‰ (floored); share = ρ_v(1.0) · base.
-        assert_eq!(d.base_sompi, SUBSIDY / 500);
+        // base = subsidy · 1‰ (floored); share = ρ_v(1.0) · base.
+        assert_eq!(d.base_sompi, SUBSIDY / 1000);
         assert_eq!(d.attester_share_sompi, d.base_sompi);
+        // And the ceiling that bounds a block's whole credit is the unit §4e was checked
+        // against: base + q · share, with q = 2. The two arithmetics agreeing is the point.
+        assert_eq!(params.one_job_ceiling_sompi(SUBSIDY), d.base_sompi * 3);
+        assert_eq!(params.one_job_ceiling_sompi(SUBSIDY), params.registration.one_job_payout_sompi(SUBSIDY));
     }
 
     #[test]

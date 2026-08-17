@@ -758,6 +758,9 @@ pub mod fixtures {
             rope_freq_base_bits: 0x4CBE_BC20,
             rms_eps_bits: 0x3583_37BD,
             l2_eps_bits: 0x3583_37BD,
+            // The registered BASE-0 epsilon (Q8), matching the registry's fleet fixture. A
+            // profile field, not an adjudicator constant: see `palw_step`'s own note.
+            base0_rms_eps_q: 1 << 8,
             gdn_heads: 1,
             gdn_head_k_dim: 16,
             gdn_head_v_dim: 16,
@@ -823,7 +826,11 @@ pub mod fixtures {
             credited_ceiling_tokens: ceiling,
             rho_v_permille: 1_000,
             p99_cold_replay_ms: 90_716,
-            leverage_remedy: PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 },
+            // Must track the registry's fleet fixture: (10, 0.2 %) stopped being Stage-2
+            // eligible when §4e began measuring the full per-job payout (base + q · ρ_v · base
+            // = 3 × base here) instead of base(C) alone. A binding this helper builds is meant
+            // to be a VALIDATING one, so a stale remedy here would quietly make it ineligible.
+            leverage_remedy: PalwLeverageRemedyV1 { min_credit_interval_daa: 14, base_subsidy_permille: 1 },
             windows,
             transcendental_algorithms: vec![(
                 kaspa_consensus_core::palw_step::PalwTranscendentalSiteV1::VectorExpPolynomial,

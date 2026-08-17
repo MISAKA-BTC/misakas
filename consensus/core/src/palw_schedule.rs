@@ -349,21 +349,60 @@ pub struct PalwEconomicFactsV1 {
     pub unbonding_period_blocks: u64,
 }
 
+/// ONE credited job's full mint in sompi: `base(C)` plus its `q` attester shares, each
+/// `ρ_v · base(C)`.
+///
+/// THE single definition of that amount. Three rules need it and must not be able to
+/// disagree: the per-block crediting ceiling that pays it out, the §4e inequality that
+/// decides whether the bond covers it, and the tests that pin the admissible remedies. It
+/// lives beside the remedy rather than on the registration because `max_leverage_holds_v1`
+/// must be able to reach it without a registration in hand;
+/// [`crate::palw_registry::PalwClassRegistrationV1::one_job_payout_sompi`] and
+/// [`crate::palw_credit::PalwCreditParamsV1::one_job_ceiling_sompi`] both delegate here.
+///
+/// Every step saturates. `q` is `u16` and `ρ_v` is per-mille, so the product is bounded in
+/// practice — but a saturated payout must read as "enormous", which fails the inequality,
+/// and never wrap to "small", which would pass it.
+pub fn one_job_payout_sompi_v1(remedy: &PalwLeverageRemedyV1, rho_v_permille: u32, q: u16, block_subsidy_sompi: u64) -> u64 {
+    let base = ((block_subsidy_sompi as u128) * (remedy.base_subsidy_permille as u128) / 1000) as u64;
+    let share = ((base as u128) * (rho_v_permille as u128) / 1000) as u64;
+    base.saturating_add(share.saturating_mul(q as u64))
+}
+
 /// The §4e aggregate inequality: `λ · G_max ≤ S_eff`, where `G_max` is the credit ONE
 /// validator can mint inside one unbonding period under this remedy.
+///
+/// `one_job_payout_sompi` is the caller's own per-job mint amount, and the choice of that
+/// unit is the whole correctness question. This function used to derive it from the remedy
+/// as `base(C)` alone, while the crediting walk's ceiling drained
+/// `base(C) + q · ρ_v · base(C)` — so the inequality was validated against strictly less
+/// than the code can mint, by a factor of `1 + q · ρ_v / 1000` (2× at illustrative live
+/// parameters, and unbounded in `q`). The attester shares belong in `G_max` because the
+/// party §4e reasons about is a party that also holds the panel bonds — a Sybil ring pays
+/// its own attesters — and because every sompi of that payout enters circulation on the
+/// strength of ONE refutable job, backed by the one bond refutation can reach.
+///
+/// So the unit is now supplied, and there is exactly one function that computes it:
+/// [`crate::palw_registry::PalwClassRegistrationV1::one_job_payout_sompi`], which both the
+/// ceiling and this check go through. A payout below the remedy's own `base(C)` fraction is
+/// refused rather than trusted: that is the shape of the bug this parameter replaced, and a
+/// caller that reintroduces it gets a closed gate instead of a silently weak bound.
 ///
 /// Counting is conservative in the attacker's favor: a period of `U` blocks holds
 /// `⌊U / interval⌋ + 1` credit opportunities (both ends included), so the continuous
 /// `S_eff / (λ · base)` job budget from the amendment (≈ 2.2 jobs at live parameters) rounds
 /// DOWN to an interval strictly wider than the continuous bound would suggest — the test
 /// suite pins that difference. `base(C)` floors exactly as the mint arithmetic will.
-pub fn max_leverage_holds_v1(remedy: &PalwLeverageRemedyV1, facts: &PalwEconomicFactsV1) -> bool {
+pub fn max_leverage_holds_v1(remedy: &PalwLeverageRemedyV1, facts: &PalwEconomicFactsV1, one_job_payout_sompi: u64) -> bool {
     if remedy.min_credit_interval_daa == 0 || remedy.base_subsidy_permille > 1000 {
         return false; // not a canonical remedy encoding
     }
-    let jobs = (facts.unbonding_period_blocks / remedy.min_credit_interval_daa) as u128 + 1;
     let base_sompi = (facts.block_subsidy_sompi as u128) * (remedy.base_subsidy_permille as u128) / 1000;
-    let g_max = base_sompi * jobs;
+    if (one_job_payout_sompi as u128) < base_sompi {
+        return false; // a unit smaller than the size lever cannot bound the mint it authorizes
+    }
+    let jobs = (facts.unbonding_period_blocks / remedy.min_credit_interval_daa) as u128 + 1;
+    let g_max = (one_job_payout_sompi as u128) * jobs;
     g_max * (PALW_LEVERAGE_LAMBDA_X10 as u128) <= (facts.s_eff_sompi as u128) * 10
 }
 
@@ -819,48 +858,93 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_b15_live_shape_violates_max_leverage_and_both_adr_remedies_hold() {
+    /// The live panel shape the payout unit is measured at: `q = 2` from the two-minute
+    /// defaults, and `ρ_v = 1 000‰` — a full `base(C)` per attester, which is the registry's
+    /// own fixture value and the most expensive admissible panel.
+    const B15_Q: u16 = 2;
+    const B15_RHO_PERMILLE: u32 = 1_000;
+
+    fn b15_holds(remedy: &PalwLeverageRemedyV1) -> bool {
         let facts = b15_facts();
+        let payout = one_job_payout_sompi_v1(remedy, B15_RHO_PERMILLE, B15_Q, facts.block_subsidy_sompi);
+        max_leverage_holds_v1(remedy, &facts, payout)
+    }
+
+    #[test]
+    fn the_live_panel_costs_three_bases_per_job_so_neither_adr_remedy_survives_as_written() {
+        let facts = b15_facts();
+        assert_eq!(PalwScheduleParamsV1::stage1_defaults_two_minute_bps().q, B15_Q, "the pinned panel size moved");
+
+        // The unit, first. One job pays base(C) + q · ρ_v · base(C) = 3 × base(C) here, and
+        // for a long time the §4e check derived base(C) alone — so it validated the bond
+        // against a THIRD of what the crediting walk's ceiling drains.
+        let full = PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 1_000 };
+        let base_only = PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 1_000 };
+        assert_eq!(
+            one_job_payout_sompi_v1(&full, B15_RHO_PERMILLE, B15_Q, facts.block_subsidy_sompi),
+            one_job_payout_sompi_v1(&base_only, 0, 0, facts.block_subsidy_sompi) * 3,
+            "one job costs 1 + q · ρ_v = 3 bases at the live panel"
+        );
+
         // The pre-amendment live shape — full subsidy, credit every block — is the B15
         // finding. Even counting only ONE job per block (the amendment's 11 655× uses the
         // physical multi-job-per-block rate), the violation is three orders of magnitude.
-        let unremedied = PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1_000 };
-        assert!(!max_leverage_holds_v1(&unremedied, &facts));
+        assert!(!b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1_000 }));
         let g_max = (facts.block_subsidy_sompi as u128) * (facts.unbonding_period_blocks as u128 + 1);
-        assert!(
-            g_max * 2 / (facts.s_eff_sompi as u128) > 4_000,
-            "one-job-per-block leverage is already >4 000× over the bond"
-        );
+        assert!(g_max * 2 / (facts.s_eff_sompi as u128) > 4_000, "one-job-per-block leverage is already >4 000× over the bond");
 
-        // ADR remedy 2 — fractional base(C): 0.2 % of the subsidy at one credit per 10
-        // blocks (the amendment's ≤ 9.92 MSK at that rate).
-        let fractional = PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 };
-        assert!(max_leverage_holds_v1(&fractional, &facts));
+        // ADR remedy 1 — the per-validator rate cap at FULL subsidy — is not merely narrowed
+        // by the corrected unit, it is GONE at this panel. `jobs ≥ 1` for every interval, and
+        // one full-subsidy job already pays 3 × 4 445.62 = 13 336.86 MSK, so λ · G_max exceeds
+        // a 20 000 MSK bond before the rate lever gets a say. Widening the interval cannot
+        // rescue it; only a smaller base(C), a smaller ρ_v, or a smaller q can. Pinned across
+        // a range that includes intervals far wider than the whole unbonding period.
+        for interval in [1u64, 5_042, 10_083, 10_084, 40_000] {
+            assert!(
+                !b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: interval, base_subsidy_permille: 1_000 }),
+                "full subsidy must be inadmissible at every rate once attester shares count (interval {interval})"
+            );
+        }
 
-        // ADR remedy 1 — the per-validator rate cap at full subsidy. The amendment's
-        // CONTINUOUS 2.2-job budget lands on one job per 4 483 blocks; conservative integer
-        // counting (⌊U/i⌋ + 1 opportunities, both period ends included) needs i > U/2.
-        // 5 042 holds, 4 483 does not — the rounding direction is deliberate and pinned so
-        // nobody "fixes" it back to the continuous value in the attacker's favor.
-        let cap = PalwLeverageRemedyV1 { min_credit_interval_daa: 5_042, base_subsidy_permille: 1_000 };
-        assert!(max_leverage_holds_v1(&cap, &facts));
-        let continuous = PalwLeverageRemedyV1 { min_credit_interval_daa: 4_483, base_subsidy_permille: 1_000 };
-        assert!(!max_leverage_holds_v1(&continuous, &facts));
+        // ADR remedy 2 — fractional base(C) — survives, but not at the pair the amendment
+        // printed. (10 blocks, 0.2 %) held only under the base-only unit; at 3 × base the
+        // smallest admissible interval for even 0.1 % is 14 blocks. 13 fails. Pinned in both
+        // directions so the boundary cannot drift toward the attacker unnoticed.
+        assert!(!b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 }));
+        assert!(b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 14, base_subsidy_permille: 1 }));
+        assert!(!b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 13, base_subsidy_permille: 1 }));
+
+        // A cheaper panel restores the amendment's own pair, which is the honest statement of
+        // what changed: the remedy space is (interval, base‰, q, ρ_v), not the two levers the
+        // ADR described while the shares were invisible to the check.
+        let printed = PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 2 };
+        let payout_no_shares = one_job_payout_sompi_v1(&printed, 0, B15_Q, facts.block_subsidy_sompi);
+        assert!(max_leverage_holds_v1(&printed, &facts, payout_no_shares), "the printed pair holds iff shares cost nothing");
     }
 
     #[test]
     fn a_degenerate_remedy_encoding_never_holds_and_zero_base_mints_nothing() {
         let facts = b15_facts();
         // A zero interval is not a rate; a fraction above the whole subsidy is not a base.
-        assert!(!max_leverage_holds_v1(&PalwLeverageRemedyV1 { min_credit_interval_daa: 0, base_subsidy_permille: 2 }, &facts));
-        assert!(!max_leverage_holds_v1(
-            &PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 1_001 },
-            &facts
-        ));
+        assert!(!b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 0, base_subsidy_permille: 2 }));
+        assert!(!b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 10, base_subsidy_permille: 1_001 }));
         // A zero fraction mints nothing, so the inequality holds trivially — the same
         // meaning as the §12 zero-credit stage, reached through the arithmetic itself.
-        assert!(max_leverage_holds_v1(&PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 0 }, &facts));
+        assert!(b15_holds(&PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 0 }));
+
+        // The unit is now an argument, so a caller could pass one smaller than the remedy's
+        // own base(C) — which is exactly the defect this parameter replaced. That is refused
+        // rather than believed: an under-stated unit closes the gate instead of widening it.
+        let fractional = PalwLeverageRemedyV1 { min_credit_interval_daa: 14, base_subsidy_permille: 1 };
+        let honest = one_job_payout_sompi_v1(&fractional, B15_RHO_PERMILLE, B15_Q, facts.block_subsidy_sompi);
+        assert!(max_leverage_holds_v1(&fractional, &facts, honest));
+        assert!(
+            !max_leverage_holds_v1(&fractional, &facts, honest / 3 - 1),
+            "a unit below base(C) must fail closed, not license the mint it under-measures"
+        );
+        // At the boundary — exactly base(C) — the gate still opens; the refusal is for units
+        // that are provably too small, not for a class whose panel genuinely costs nothing.
+        assert!(max_leverage_holds_v1(&fractional, &facts, honest / 3));
     }
 
     // -----------------------------------------------------------------------------------------

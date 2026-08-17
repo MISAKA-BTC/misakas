@@ -70,6 +70,39 @@ same bond. **This is a real defect at live parameters, not a modelling artifact.
 2. **Make PALW credit a small fraction of the subsidy**: crediting once every 10 blocks
    requires `base(C) ≤ 9.92 MSK` — i.e. PALW credit is **0.22 %** of a block subsidy, not all
    of it. This is the move that keeps a useful crediting *rate*.
+
+> **CORRECTED 2026-08-17 — both printed remedies were computed in the wrong unit, and
+> remedy 1 does not exist.** Everything above prices a job at `base(C)`. A credited job
+> actually mints `base(C) + q · ρ_v · base(C)`: the executor's base *plus* one share per paid
+> attester. At the live panel (`q = 2`, `ρ_v = 1 000‰`) that is **3 × base(C)**, and the
+> encoded check `max_leverage_holds_v1` derived the same base-only figure — so it validated
+> the bond against a third of what the crediting walk pays out. Consequences:
+>
+> * **Remedy 1 is unreachable at this panel, at every rate.** `jobs ≥ 1` for any interval, and
+>   one full-subsidy job pays `3 × 4 445.62 = 13 336.86 MSK`; `λ · G_max` exceeds a 20 000 MSK
+>   bond before the rate lever is consulted. Widening the interval past the whole unbonding
+>   period does not help. The largest base a *single* job per unbonding period admits is
+>   **749‰** (3 329.77 MSK base, 9 989.31 MSK paid) — so "full subsidy at a slow rate" was
+>   never available once the shares were counted.
+> * **Remedy 2 survives, at a different pair.** (10 blocks, 0.2 %) fails. The tightest
+>   interval 0.1 % admits is **14 blocks** (13 fails). Measured alternatives:
+>
+>   | `base(C)` | `ρ_v` | payout / job | max jobs per period | tightest interval |
+>   |---|---|---|---|---|
+>   | 1‰ (4.45 MSK) | 1 000‰ | 13.34 MSK | 749 | **14** |
+>   | 2‰ (8.89 MSK) | 1 000‰ | 26.67 MSK | 374 | 27 |
+>   | 1‰ (4.45 MSK) | 200‰ | 6.22 MSK | 1 606 | 7 |
+>   | 2‰ (8.89 MSK) | 200‰ | 12.45 MSK | 803 | 13 |
+>
+> * **The remedy space is four-dimensional**, not the two levers described above:
+>   `(min_credit_interval_daa, base_subsidy_permille, q, ρ_v)`. Shrinking `ρ_v` buys rate as
+>   directly as shrinking `base(C)` does — at `ρ_v = 200‰` the printed 0.2 % base is admissible
+>   at one job per 13 blocks, close to the original intent.
+>
+> The fleet fixture now registers **(14 blocks, 0.1 %)**. `consensus/core/src/palw_schedule.rs`
+> pins each boundary in both directions, and one function
+> (`one_job_payout_sompi_v1`) is now the sole source of the payout for both the per-block
+> ceiling and this inequality, so the two cannot drift apart again.
 3. Raise the bond to 233 M MSK per validator — not credible.
 4. Shorten the unbonding period — bounded below by `W_challenge`, so at best 14×; nowhere
    near four orders of magnitude.
