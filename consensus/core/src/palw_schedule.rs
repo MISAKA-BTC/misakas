@@ -86,6 +86,25 @@ pub struct PalwPanelCandidateV1 {
 /// `q` eligible members yields a smaller panel (whether that panel may credit is §1's gate,
 /// not this function's). Nothing here relies on the anchor being unpredictable — see the ADR:
 /// a known panel is safe because replays are full and refutation is permissionless.
+///
+/// # A duplicated `validator_id` removes that id from the draw, fail-closed
+///
+/// `validator_id` is a `validator_pubkey_hash`, which `dns_finality` states is NOT unique: two
+/// bonds may share one key. Two such candidates produce IDENTICAL ticket tuples here — same
+/// preimage, same tie-break — so both survived `truncate(q)` and the panel came back as
+/// `[X, X]`. That was mintable, not cosmetic: the credit walk matched one attestation against
+/// both seats and paid the same bond twice for one signature, inside the per-block ceiling. It
+/// also left the panel holding ONE real verifier, so with `q = 2` a single colluding partner
+/// satisfied the whole "≥ 1 assigned attestation" predicate alone, and the other bonded
+/// validator was undrawable forever.
+///
+/// Dropping the id entirely is deliberate and is the same construction
+/// `palw_routing::select_routed_replay_panel_v1` already uses. Picking one of two
+/// indistinguishable records would make the panel depend on candidate order — this function
+/// promises order-invariance — and a duplicate here means the CALLER failed to key its candidate
+/// set on a unique identity, which is a bug to surface rather than to average over. The
+/// seat-based `palw_job_panel::select_job_panel_v3` is the real answer, because it keys on the
+/// bond outpoint and can seat both bonds honestly.
 pub fn select_replay_panel_v1(
     commitment_root: &Hash64,
     executor_id: &Hash64,
@@ -97,8 +116,13 @@ pub fn select_replay_panel_v1(
     if q == 0 {
         return Vec::new();
     }
+    let mut occurrences: HashMap<Hash64, u32> = HashMap::new();
+    for c in candidates {
+        *occurrences.entry(c.validator_id).or_insert(0) += 1;
+    }
     let mut ticketed: Vec<(Hash64, Hash64)> = candidates
         .iter()
+        .filter(|c| occurrences[&c.validator_id] == 1)
         .filter(|c| c.bonded && !c.frozen && c.runtime_class_id == *runtime_class_id && c.validator_id != *executor_id)
         .map(|c| {
             let mut hasher = blake2b_simd::Params::new().hash_length(64).key(PALW_SCHEDULE_DOMAIN_ASSIGNMENT_TICKET).to_state();
@@ -675,6 +699,40 @@ mod tests {
         for excluded in [h64(0x02), cands[1].validator_id, cands[2].validator_id, cands[3].validator_id] {
             assert!(!panel.contains(&excluded));
         }
+    }
+
+    /// A `validator_pubkey_hash` shared by two bonds used to seat BOTH — identical tickets,
+    /// identical tie-break, so `truncate(q)` kept them both — and the credit walk then paid one
+    /// signature twice. `dns_finality` permits that key sharing, so this was reachable without
+    /// any protocol violation.
+    #[test]
+    fn two_bonds_under_one_validator_key_cannot_seat_the_same_id_twice() {
+        let mut cands = candidates();
+        // NOT `cands[1]`: its id is h64(2), which is the executor in these vectors, so it is
+        // excluded for a different reason and the duplicate would never be the thing under test.
+        let twin = cands[3].validator_id;
+        assert_ne!(twin, h64(0x02), "the twin must not be the executor");
+        cands.push(PalwPanelCandidateV1 { validator_id: twin, ..cands[3] });
+        let panel = select_replay_panel_v1(&h64(0x01), &h64(0x02), &h64(0x03), &h64(0xC1), &cands, 8);
+        // The panel contains no id twice — the property the mint arithmetic relies on.
+        let mut unique = panel.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), panel.len(), "a duplicated id must never seat twice: {panel:?}");
+        // And fail-closed: the ambiguous id is out of the draw entirely, rather than seated once
+        // by whichever record the caller happened to list first.
+        assert!(!panel.contains(&twin), "an ambiguous identity is not silently resolved");
+        // Every unambiguous candidate is unaffected — the refusal is scoped to the duplicate.
+        // (h64(0x02) is the executor in these vectors and is out for its own reason.)
+        for c in candidates().iter().filter(|c| c.validator_id != twin && c.validator_id != h64(0x02)) {
+            assert!(panel.contains(&c.validator_id), "an unambiguous candidate lost its seat: {:?}", c.validator_id);
+        }
+        assert_eq!(panel.len(), 6, "8 candidates minus the executor minus the ambiguous pair");
+        // Order-invariant, which is why dropping beats picking: listing the twin first must not
+        // change anything.
+        let mut reversed = cands.clone();
+        reversed.reverse();
+        assert_eq!(select_replay_panel_v1(&h64(0x01), &h64(0x02), &h64(0x03), &h64(0xC1), &reversed, 8), panel);
     }
 
     #[test]
