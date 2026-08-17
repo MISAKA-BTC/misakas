@@ -63,7 +63,13 @@ pub struct MultiConsensusMetadata {
 // header is bincode-serialized on disk (`database::access`), so the four new
 // EVM header fields change the stored header layout; per ADR-0001 we reject an
 // old-shape DB at open time (clean resync) rather than migrate it.
-pub const LATEST_DB_VERSION: u32 = 7;
+//
+// MISAKA ADR-0038: bumped 7 → 8. `Header` gained `palw_commitment`, a `Vec<u8>`, and the header
+// store is bincode over that struct — so a v7 database's rows no longer match the current layout.
+// Without the bump the version check passes and the mismatch surfaces as a deserialize PANIC deep
+// in an unrelated read path, which is precisely the "reject cleanly, never migrate" rule this
+// constant exists to enforce (mainnet-readiness audit §5).
+pub const LATEST_DB_VERSION: u32 = 8;
 impl Default for MultiConsensusMetadata {
     fn default() -> Self {
         Self {

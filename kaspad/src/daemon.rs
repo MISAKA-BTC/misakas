@@ -765,8 +765,20 @@ Do you confirm? (y/n)";
                 }
             }
         }
-        // if we reached here, db should be upgraded fully and we should exit the loop next
-        assert_eq!(mcms.version().unwrap(), LATEST_DB_VERSION);
+        // If we reached here the soft-upgrade ladder has run as far as it goes. It only climbs to
+        // version 6; 7 (ADR-0020's EVM header fields) and 8 (ADR-0038's `palw_commitment`) changed
+        // the bincode layout of the on-disk `Header`, and per ADR-0001 those are NOT migrated.
+        //
+        // Ask for a clean resync rather than asserting. The `assert_eq!` that stood here turned an
+        // ordinary "your database is from a previous layout" into a panic — the exact failure mode
+        // `LATEST_DB_VERSION` exists to prevent (mainnet-readiness audit §5). An operator upgrading
+        // across a layout bump must be told to delete and resync, not shown a backtrace.
+        let version = mcms.version().unwrap();
+        if version != LATEST_DB_VERSION {
+            info!("Node database is version {version}; this build requires version {LATEST_DB_VERSION}, whose on-disk block-header layout is different and is not migrated.");
+            is_db_reset_needed = request_database_deletion_approval(args.yes);
+            continue 'db_upgrade;
+        }
     }
 
     // Will be true if any of the other condition above except args.reset_db
