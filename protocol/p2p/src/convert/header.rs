@@ -123,7 +123,13 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
             // hardcoded to kHeavyHash, which silently split-brained an
             // Argon2id chain: relayed algo_id=2 headers re-hashed as algo_id=1
             // -> "requested X but got Y".)
-            item.pow_algo_id as u8,
+            //
+            // `try_into`, NOT `as u8`: the field is u32 on the wire and u8 in the header, and a
+            // truncating cast silently REINTERPRETS an out-of-range id — 259 arrives as 3, so a
+            // peer could hand us a header we re-hash under a different algorithm than the one it
+            // declared. Fail the conversion instead, exactly as `item.version` above does
+            // (mainnet-readiness audit §5).
+            item.pow_algo_id.try_into()?,
             item.daa_score,
             // We follow the golang specification of variable big-endian here
             BlueWorkType::from_be_bytes_var(&item.blue_work)?,

@@ -93,7 +93,10 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
         item.bits,
         item.nonce,
         // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the proto.
-        item.pow_algo_id as u8,
+        // `try_into`, NOT `as u8`: the proto field is u32 and the header field is u8, so a
+        // truncating cast silently reinterprets an out-of-range id (259 -> 3) instead of rejecting
+        // it. Fail the conversion, as `item.timestamp` above does (audit §5).
+        item.pow_algo_id.try_into()?,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,
@@ -127,7 +130,9 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         blue_work: kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         blue_score: item.blue_score,
         pruning_point: RpcHash::from_str(&item.pruning_point)?,
-        pow_algo_id: item.pow_algo_id as u8,
+        // See the note on the positional conversions above: narrowing u32 -> u8 must reject, not
+        // truncate, or a peer's out-of-range algo id is re-read as a different algorithm.
+        pow_algo_id: item.pow_algo_id.try_into()?,
         evm_payload_hash: hash64_or_zero(&item.evm_payload_hash)?,
         evm_commitment_root: hash64_or_zero(&item.evm_commitment_root)?,
         // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
@@ -150,7 +155,10 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcOptionalHeader, {
         item.bits,
         item.nonce,
         // kaspa-pq Phase 2 (ADR-0007): carry the declared Layer-1 algo id through the proto.
-        item.pow_algo_id as u8,
+        // `try_into`, NOT `as u8`: the proto field is u32 and the header field is u8, so a
+        // truncating cast silently reinterprets an out-of-range id (259 -> 3) instead of rejecting
+        // it. Fail the conversion, as `item.timestamp` above does (audit §5).
+        item.pow_algo_id.try_into()?,
         item.daa_score,
         kaspa_rpc_core::RpcBlueWorkType::from_rpc_hex(&item.blue_work)?,
         item.blue_score,
