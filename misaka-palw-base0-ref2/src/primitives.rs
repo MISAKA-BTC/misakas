@@ -8,6 +8,11 @@
 //! Where the specification itself says "arithmetic shift", this file writes `floor_div` — the
 //! same function, named. That is deliberate: it forces every such site to be *read* as a floor
 //! and answered for, rather than inherited from an operator that does it silently.
+//!
+//! The rule is **enforced, not merely stated**: [`tests::the_no_shift_discipline_holds`] reads this
+//! file's own source and fails if a shift operator appears in any code line. An independence
+//! argument that lives only in a doc comment decays on the first edit that finds a shift
+//! convenient — and it was already one line from decaying when the check was added.
 
 /// The pinned constants, **re-declared as literals rather than imported**.
 ///
@@ -22,7 +27,7 @@
 /// of surfacing as an unexplained value mismatch three functions away.
 pub mod consts {
     pub const K: u32 = 24;
-    pub const ONE: i128 = 1i128 << K;
+    pub const ONE: i128 = 2i128.pow(K);
     pub const LN2_Q: i128 = 11_629_080;
     pub const POLY2_A: i128 = 6_014_632;
     pub const POLY2_B: i128 = 22_699_573;
@@ -238,4 +243,53 @@ pub fn ref2_normalize(v: i64) -> Option<(i128, i32)> {
         exponent = exponent.checked_sub(1)?;
     }
     Some((mantissa, exponent))
+}
+
+#[cfg(test)]
+mod tests {
+    /// The independence discipline, checked against this file's actual source rather than trusted.
+    ///
+    /// The whole argument for this crate is that its formulation is *orthogonal to the axis the
+    /// first implementation was wrong on*: all three defects the differential found were silent
+    /// floors or silent wraps inside a shift. A single `>>` here would reintroduce exactly the
+    /// blind spot the crate exists to be free of, and would do it invisibly.
+    ///
+    /// Comments are excluded, since they legitimately quote the specification's shifts.
+    #[test]
+    fn the_no_shift_discipline_holds() {
+        // The needles are assembled rather than written, so this checker is not itself a hit.
+        let right = format!("{0}{0}", '>');
+        let left = format!("{0}{0}", '<');
+        let intrinsic = format!("leading_{}", "zeros");
+        let banned = [right.as_str(), left.as_str(), intrinsic.as_str()];
+
+        // Only the shipped code. The discipline is about the implementations; this module is the
+        // thing that verifies them, and scanning it would make the check unwritable.
+        let source = include_str!("primitives.rs");
+        let shipped = source.split("\n#[cfg(test)]\nmod tests {").next().expect("split yields at least one part");
+
+        let offenders: Vec<String> = shipped
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let code = line.split("//").next().unwrap_or("");
+                banned.iter().any(|needle| code.contains(needle))
+            })
+            .map(|(number, line)| format!("  line {}: {}", number + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "a shift operator reached the second implementation, which is exactly where the first \
+             implementation's three defects hid:\n{}",
+            offenders.join("\n")
+        );
+
+        // The check must be able to fail, or it is decoration. It very nearly was: `ONE` was
+        // defined with a shift until this test was written.
+        let planted = "    pub const ONE: i128 = 1i128 >> K;";
+        assert!(banned.iter().any(|needle| planted.split("//").next().unwrap_or("").contains(needle)));
+        // And a quoted shift inside a comment must NOT trip it, or the file could not describe
+        // the specification it implements.
+        assert!(!banned.iter().any(|n| "    let k = pow2(K); // the spec writes >> K here".split("//").next().unwrap().contains(n)));
+    }
 }
