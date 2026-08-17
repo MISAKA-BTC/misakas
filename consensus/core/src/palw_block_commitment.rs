@@ -369,6 +369,7 @@ mod tests {
         all.extend(crate::palw_job_identity::PALW_JOB_ALL_DOMAINS);
         all.extend(crate::palw_receipt::PALW_RECEIPT_ALL_DOMAINS);
         all.extend(crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS);
+        all.extend(crate::palw_job_panel::PALW_PANEL_ALL_DOMAINS);
         all.extend(crate::palw_slash::PALW_S_ALL_DOMAINS);
         all.extend(crate::palw_routing::PALW_ROUTING_ALL_DOMAINS);
         all.extend(crate::palw_registry::PALW_REGISTRY_ALL_DOMAINS);

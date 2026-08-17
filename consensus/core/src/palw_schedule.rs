@@ -772,6 +772,7 @@ mod tests {
     fn schedule_domains_are_unique_across_all_palw_modules() {
         let mut all: Vec<&[u8]> = Vec::new();
         all.extend_from_slice(PALW_SCHEDULE_ALL_DOMAINS);
+        all.extend_from_slice(crate::palw_job_panel::PALW_PANEL_ALL_DOMAINS);
         all.extend_from_slice(PALW_LEGS_ALL_DOMAINS);
         all.extend_from_slice(PALW_V2_ALL_DOMAINS);
         all.extend_from_slice(PALW_S_ALL_DOMAINS);

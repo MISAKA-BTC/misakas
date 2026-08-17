@@ -67,13 +67,28 @@ pub fn select_job_panel_v3(
     q: usize,
 ) -> Vec<PalwPanelSeatV3> {
     let seed = palw_panel_seed_v3(network_id, job_id, commitment_root, future_anchor_block_hash, eligible_set_snapshot_root);
+    let eligible = eligible_seats_v3(candidates, executor_id, execution_class_id);
+    select_from_eligible_v3(&seed, commitment_root, executor_id, execution_class_id, &eligible, q)
+}
 
-    // Deterministic pre-filter and dedup: order by validator_id so every node keeps the
-    // same single voice per bond outpoint / operator root, regardless of input order.
+/// The ADR-0037 Decision 4 eligible set, in canonical order.
+///
+/// Ordering is by `(validator_id, bond_outpoint)` and the filter runs over that order, so the
+/// single surviving voice per bond outpoint and per known operator root is the same on every node
+/// regardless of how the caller assembled its slice. Callers must never re-sort the result or hash
+/// their own input slice instead — `ActiveBondView::records()` is HashMap-ordered, so an unsorted
+/// preimage is a chain split waiting for two nodes with different insertion histories.
+fn eligible_seats_v3<'a>(
+    candidates: &'a [PalwPanelCandidateV3],
+    executor_id: &Hash64,
+    execution_class_id: &Hash64,
+) -> Vec<&'a PalwPanelCandidateV3> {
     let mut ordered: Vec<&PalwPanelCandidateV3> = candidates.iter().collect();
-    ordered.sort_by(|a, b| a.validator_id.cmp(&b.validator_id).then_with(|| {
-        (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
-    }));
+    ordered.sort_by(|a, b| {
+        a.validator_id.cmp(&b.validator_id).then_with(|| {
+            (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+        })
+    });
     let mut seen_bonds: BTreeSet<(Hash64, u32)> = BTreeSet::new();
     let mut seen_operators: BTreeSet<Hash64> = BTreeSet::new();
     let mut eligible: Vec<&PalwPanelCandidateV3> = Vec::new();
@@ -95,7 +110,17 @@ pub fn select_job_panel_v3(
         }
         eligible.push(candidate);
     }
+    eligible
+}
 
+fn select_from_eligible_v3(
+    seed: &Hash64,
+    commitment_root: Hash64,
+    executor_id: &Hash64,
+    execution_class_id: &Hash64,
+    eligible: &[&PalwPanelCandidateV3],
+    q: usize,
+) -> Vec<PalwPanelSeatV3> {
     // The audited lottery, with the V3 seed as its anchor. The v1 eligibility flags are
     // vacuously true here — eligibility was decided above from chain facts.
     //
@@ -116,7 +141,7 @@ pub fn select_job_panel_v3(
             PalwPanelCandidateV1 { validator_id: ticket_id, runtime_class_id: c.runtime_class_id, bonded: true, frozen: false }
         })
         .collect();
-    let drawn = select_replay_panel_v1(&commitment_root, executor_id, &seed, execution_class_id, &v1_candidates, q);
+    let drawn = select_replay_panel_v1(&commitment_root, executor_id, seed, execution_class_id, &v1_candidates, q);
 
     // Bind each drawn seat id back to the candidate it was minted from.
     drawn
@@ -130,6 +155,79 @@ pub fn select_job_panel_v3(
 
 /// Domain separator for the per-seat lottery id.
 pub const PALW_PANEL_DOMAIN_SEAT_TICKET_ID_V3: &[u8] = b"misaka-palw/panel/seat-ticket-id/v3\0\0\0\0\0";
+
+/// Domain separator for the eligible-set snapshot root.
+pub const PALW_PANEL_DOMAIN_ELIGIBLE_SET_ROOT_V3: &[u8] = b"misaka-palw/panel/eligible-set-root/v3";
+
+/// Every domain this module introduces (uniqueness-tested against every other PALW family).
+pub const PALW_PANEL_ALL_DOMAINS: &[&[u8]] = &[PALW_PANEL_DOMAIN_SEAT_TICKET_ID_V3, PALW_PANEL_DOMAIN_ELIGIBLE_SET_ROOT_V3];
+
+/// The `eligible_set_snapshot_root` the V3 seed binds, computed from the candidate set a chain
+/// point assembles.
+///
+/// There is no chain-stored source for this value — nothing on this branch records an eligible-set
+/// snapshot — so the only well-defined thing it can be is a commitment to the set the caller
+/// actually drew from. Be precise about what force that carries: the hash alone proves nothing
+/// against a lying caller, because a caller that hashes its own set is trivially self-consistent.
+/// What makes the set honest is CONSENSUS — construction and validation each derive candidates from
+/// their own chain-point bond view, so any disagreement moves the panel, moves the coinbase, and
+/// the block is rejected (ADR-0033 §5). The root's jobs are narrower and both real: it makes the
+/// seed a function of the WHOLE set rather than of one job's identifiers, so a caller cannot
+/// silently shrink the set without moving every ticket; and it is the value the ADR-0038 class
+/// state machine will record, so the two cannot drift when that lands.
+///
+/// Hashed over the SORTED output of the eligible filter. Never over the caller's input slice: that
+/// slice commonly comes from `ActiveBondView::records()`, which is HashMap iteration order, and a
+/// HashMap-ordered preimage is a chain split.
+///
+/// The count prefix is belt-and-braces, not load-bearing: every seat record is fixed-width under a
+/// fixed-width header, so the stream is unambiguous without it and no test can show otherwise. It
+/// earns its place only if a variable-width field is ever added — which is exactly when someone
+/// would forget it.
+pub fn eligible_seat_set_root_v3(
+    execution_class_id: &Hash64,
+    anchor_daa: u64,
+    executor_id: &Hash64,
+    candidates: &[PalwPanelCandidateV3],
+) -> Hash64 {
+    let eligible = eligible_seats_v3(candidates, executor_id, execution_class_id);
+    let mut hasher = blake2b_simd::Params::new().hash_length(64).key(PALW_PANEL_DOMAIN_ELIGIBLE_SET_ROOT_V3).to_state();
+    hasher.update(execution_class_id.as_byte_slice());
+    hasher.update(&anchor_daa.to_le_bytes());
+    hasher.update(&(eligible.len() as u32).to_le_bytes());
+    for seat in &eligible {
+        hasher.update(seat.validator_id.as_byte_slice());
+        hasher.update(seat.bond_outpoint.transaction_id.as_byte_slice());
+        hasher.update(&seat.bond_outpoint.index.to_le_bytes());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The V3 draw for a caller that has chain facts but no stored snapshot root: derive the root from
+/// the candidate set, then draw.
+///
+/// This is the entry point live wiring should use. [`select_job_panel_v3`] stays for a caller that
+/// already holds a recorded snapshot root (the ADR-0038 state machine, when it lands), and the two
+/// agree by construction because this one runs the same filter through the same function.
+#[allow(clippy::too_many_arguments)]
+pub fn select_job_panel_at_anchor_v3(
+    network_id: &[u8],
+    job_id: Hash64,
+    commitment_root: Hash64,
+    future_anchor_block_hash: Hash64,
+    anchor_daa: u64,
+    executor_id: &Hash64,
+    execution_class_id: &Hash64,
+    candidates: &[PalwPanelCandidateV3],
+    q: usize,
+) -> Vec<PalwPanelSeatV3> {
+    let snapshot_root = eligible_seat_set_root_v3(execution_class_id, anchor_daa, executor_id, candidates);
+    let seed = palw_panel_seed_v3(network_id, job_id, commitment_root, future_anchor_block_hash, snapshot_root);
+    let eligible = eligible_seats_v3(candidates, executor_id, execution_class_id);
+    select_from_eligible_v3(&seed, commitment_root, executor_id, execution_class_id, &eligible, q)
+}
 
 /// The unique identity a V3 seat enters the lottery under: `H(validator_id || bond_outpoint)`.
 ///
@@ -179,6 +277,132 @@ mod tests {
             candidates,
             q,
         )
+    }
+
+    fn draw_at_anchor(candidates: &[PalwPanelCandidateV3], q: usize) -> Vec<PalwPanelSeatV3> {
+        select_job_panel_at_anchor_v3(
+            NET,
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(2),
+            Hash64::from_u64_word(3),
+            5_000,
+            &Hash64::from_u64_word(999),
+            &class(),
+            candidates,
+            q,
+        )
+    }
+
+    /// The snapshot root commits to the WHOLE eligible set, in a canonical order, and to nothing
+    /// the caller can vary without varying the set.
+    #[test]
+    fn the_snapshot_root_is_a_commitment_to_the_sorted_eligible_set() {
+        let executor = Hash64::from_u64_word(999);
+        let cands: Vec<PalwPanelCandidateV3> = (10..16).map(candidate).collect();
+        let root = eligible_seat_set_root_v3(&class(), 5_000, &executor, &cands);
+
+        // Input order cannot move it — the whole reason the filter sorts. `ActiveBondView::records()`
+        // is HashMap-ordered, so an order-sensitive root would split the chain between two nodes
+        // with different insertion histories.
+        let mut shuffled = cands.clone();
+        shuffled.reverse();
+        assert_eq!(eligible_seat_set_root_v3(&class(), 5_000, &executor, &shuffled), root);
+        // Nor can a duplicate: the filter keeps one voice per bond outpoint.
+        let mut with_dup = cands.clone();
+        with_dup.push(cands[2].clone());
+        assert_eq!(eligible_seat_set_root_v3(&class(), 5_000, &executor, &with_dup), root);
+
+        // Dropping ONE eligible seat moves it — the property that makes shrinking the set visible.
+        assert_ne!(eligible_seat_set_root_v3(&class(), 5_000, &executor, &cands[1..]), root);
+        // So does an eligible candidate becoming ineligible, and every other bound input.
+        let mut slashed = cands.clone();
+        slashed[0].bond_status = BondStatus::Slashed;
+        assert_ne!(eligible_seat_set_root_v3(&class(), 5_000, &executor, &slashed), root);
+        assert_ne!(eligible_seat_set_root_v3(&class(), 5_001, &executor, &cands), root, "anchor daa is bound");
+        assert_ne!(eligible_seat_set_root_v3(&Hash64::from_u64_word(8), 5_000, &executor, &cands), root, "class is bound");
+        assert_ne!(
+            eligible_seat_set_root_v3(&class(), 5_000, &Hash64::from_u64_word(10), &cands),
+            root,
+            "the executor is bound — it changes who is excluded"
+        );
+        // Adding an eligible seat moves it too.
+        let mut widened = cands.clone();
+        widened.push(candidate(20));
+        assert_ne!(eligible_seat_set_root_v3(&class(), 5_000, &executor, &widened), root);
+        // NOT asserted: that the count prefix is load-bearing. Every seat record is fixed-width
+        // (64 + 64 + 4 bytes) under a fixed-width header, so the stream is already unambiguous
+        // without it and no mutation of this fixture can distinguish the two. It stays as
+        // belt-and-braces against a future variable-width field, and saying so is better than a
+        // test that appears to prove something it cannot — deleting the prefix passes this test.
+    }
+
+    /// The anchor entry point draws the same seats the stored-root one would, given the root it
+    /// derives — the two callers cannot disagree because they run one filter through one function.
+    #[test]
+    fn the_anchor_entry_point_agrees_with_the_stored_root_one() {
+        let executor = Hash64::from_u64_word(999);
+        let cands: Vec<PalwPanelCandidateV3> = (10..18).map(candidate).collect();
+        let root = eligible_seat_set_root_v3(&class(), 5_000, &executor, &cands);
+        let stored = select_job_panel_v3(
+            NET,
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(2),
+            Hash64::from_u64_word(3),
+            root,
+            &executor,
+            &class(),
+            &cands,
+            3,
+        );
+        assert_eq!(draw_at_anchor(&cands, 3), stored);
+        assert_eq!(stored.len(), 3);
+
+        // And the seed genuinely depends on the set: a panel drawn over a shrunken set is not the
+        // same panel with one seat removed, because every ticket moved.
+        let shrunk = draw_at_anchor(&cands[..7], 3);
+        assert_ne!(shrunk, stored, "shrinking the eligible set must move the whole draw");
+    }
+
+    /// Two bonds under ONE validator key both get seats — the liveness half of the seat rewrite.
+    /// `select_replay_panel_v1` has to drop such an id entirely (its ticket and tie-break are
+    /// identical for both, so it cannot seat them apart); the V3 draw keys on the seat, so both
+    /// bonds are drawable and payable.
+    #[test]
+    fn two_bonds_under_one_validator_key_both_get_seats() {
+        let mut twin = candidate(10);
+        twin.bond_outpoint = TransactionOutpoint::new(Hash64::from_u64_word(4242), 7);
+        let cands = vec![candidate(10), twin.clone()];
+        let seats = draw_at_anchor(&cands, 2);
+        assert_eq!(seats.len(), 2, "both bonds are seated: {seats:?}");
+        let mut outpoints: Vec<_> = seats.iter().map(|s| s.bond_outpoint).collect();
+        outpoints.sort_by_key(|o| (o.transaction_id, o.index));
+        let mut expected = vec![candidate(10).bond_outpoint, twin.bond_outpoint];
+        expected.sort_by_key(|o| (o.transaction_id, o.index));
+        assert_eq!(outpoints, expected, "each seat names its own bond, not whichever came first");
+        assert!(seats.iter().all(|s| s.validator_id == Hash64::from_u64_word(10)), "both share the key, and that is fine");
+
+        // Contrast, pinned: the v1 lottery cannot do this and correctly refuses to guess.
+        let v1: Vec<PalwPanelCandidateV1> = cands
+            .iter()
+            .map(|c| PalwPanelCandidateV1 {
+                validator_id: c.validator_id,
+                runtime_class_id: c.runtime_class_id,
+                bonded: true,
+                frozen: false,
+            })
+            .collect();
+        assert!(
+            select_replay_panel_v1(
+                &Hash64::from_u64_word(2),
+                &Hash64::from_u64_word(999),
+                &Hash64::from_u64_word(3),
+                &class(),
+                &v1,
+                2
+            )
+            .is_empty(),
+            "the id-keyed lottery drops the ambiguous id — that is the floor this replaces"
+        );
     }
 
     /// Only Active, unfrozen, exact-class, non-executor candidates are drawable; every
