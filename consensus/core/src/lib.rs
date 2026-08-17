@@ -194,6 +194,7 @@ pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;
 pub mod palw_base0;
+pub mod palw_base0_ops;
 pub mod palw_chain_weight;
 pub mod palw_pwu;
 pub mod palw_receipt;

@@ -178,6 +178,22 @@ pub fn int_rsqrt(v: i64) -> i64 {
     if e >= 0 { y >> e } else { y << (-e) }
 }
 
+/// `1/v` for `v > 0`, Qk in and out — ADR-0040 F2's composed form, `1/v = (1/√v)²`.
+///
+/// Composed rather than given its own Newton iteration so the class keeps ONE reciprocal
+/// algorithm. ADR-0040 admits either; what it forbids is drifting between them, so the choice is
+/// made here and frozen.
+///
+/// This is the only division-shaped operation applied to **data**. Division by a graph constant
+/// (a row length, `LN2_Q`) stays a plain integer division: it is exact, deterministic, and the
+/// divisor is frozen at registration. Division by a value that came from the activations is the
+/// case that needs a pinned algorithm, and it gets one.
+#[inline]
+pub fn int_recip(v: i64) -> i64 {
+    let r = int_rsqrt(v);
+    (r * r) >> K
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
