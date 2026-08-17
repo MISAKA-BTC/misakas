@@ -137,6 +137,8 @@ pub enum PalwStepLegError {
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("job context is malformed: {0}")]
     Context(PalwSlashError),
+    #[error("the binding's shape profile ({got}) is not the one the job context declares ({declared})")]
+    ShapeProfileNotTheDeclaredOne { declared: Hash64, got: Hash64 },
     #[error("step space error: {0}")]
     Step(PalwStepError),
     #[error("leaf count {got} is outside 1..={max}")]
@@ -816,6 +818,17 @@ fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64
     check_job_context_shape(&binding.job_context).map_err(PalwStepLegError::Context)?;
     let context_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
+    // The binding must carry the SAME profile the job declared. Without this the adjudicator
+    // recomputed a step under whatever profile the binding happened to include — different
+    // geometry, different epsilons, different kernel ids — and convicted the producer for not
+    // matching arithmetic its job never claimed (re-audit §3.3). The context already names the
+    // profile; it was simply never compared.
+    if profile_hash != binding.job_context.shape_profile_id {
+        return Err(PalwStepLegError::ShapeProfileNotTheDeclaredOne {
+            declared: binding.job_context.shape_profile_id,
+            got: profile_hash,
+        });
+    }
     let checkpoint_profile_hash = binding.checkpoint_profile.profile_hash();
     let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
     let step_root = step_leg_root_v1(&context_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
@@ -1183,6 +1196,8 @@ mod tests {
             model_profile_id: h64(4),
             runtime_manifest_hash: h64(5),
             runtime_class_id: h64(6),
+            // Placeholder; the fixtures below overwrite it with the profile they actually carry,
+            // because honest material declares the profile it was produced under.
             shape_profile_id: h64(7),
             trace_scheme_id: h64(8),
             cu_ruleset_id: h64(9),
@@ -1208,7 +1223,10 @@ mod tests {
     /// Builds the honest full commitment for the tiny job, returning everything a test needs.
     fn honest() -> (PalwStepBindingV2, PalwStepLegMaterialV1, Vec<Hash64>, Vec<PalwCheckpointLeafV2>) {
         let p = profile();
-        let ctx = context();
+        // Honest material declares the profile it was produced under — the equality the verifier
+        // now enforces. A fixture that leaves them inconsistent is not honest material.
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
         let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
         let main = b.expected_main_leaves();
         for i in 0..main {
@@ -1310,6 +1328,34 @@ mod tests {
         }
     }
 
+    /// **§3.3: a step is adjudicated under the profile its job DECLARED.**
+    ///
+    /// The context has always named a `shape_profile_id`; nothing compared it to the profile the
+    /// binding carried. So a binding could hand the court a different profile — different geometry,
+    /// different epsilons, different kernel ids — and the producer was judged against arithmetic its
+    /// job never claimed. The mismatch is refused, and it is refused by NAME so an operator can see
+    /// which two ids disagreed.
+    #[test]
+    fn a_binding_must_carry_the_profile_its_context_declares() {
+        let (binding, _material, _, _) = honest();
+        // Honest material passes: the fixture now declares what it carries.
+        assert!(verify_binding(&binding).is_ok());
+
+        // Swap in a profile the context does not name. Everything else is untouched.
+        let mut swapped = binding.clone();
+        let mut other = profile();
+        other.base0_rms_eps_q = binding.shape_profile.base0_rms_eps_q + 1;
+        let declared = swapped.job_context.shape_profile_id;
+        let got = other.shape_profile_id();
+        assert_ne!(declared, got, "the fixture must actually change the profile");
+        swapped.shape_profile = other;
+        assert_eq!(
+            verify_binding(&swapped),
+            Err(PalwStepLegError::ShapeProfileNotTheDeclaredOne { declared, got }),
+            "a profile the job never declared must be refused, by name"
+        );
+    }
+
     #[test]
     fn scheme_id_and_composite_root_golden_vectors() {
         // Frozen 2026-08-16 — layout changes are a new scheme version, never an edit.
@@ -1321,10 +1367,13 @@ mod tests {
         let (binding, ..) = honest();
         assert_eq!(
             binding.committed_execution_root.to_string(),
-            // Re-frozen 2026-08-17: this composite binds the shape profile id, which moved when the
-            // profile gained `base0_rms_eps_q` (see `palw_step`'s golden).
-            "79bc2e38d36cc1f4952f467881309d87099c466f29e71f1bb14bb1ef7750a01d\
-             ff20225631174d253e8470f23ee6b03805f0a2b0fddd2edc15c340a0c281f4ce"
+            // Re-frozen 2026-08-17, twice: the profile gained `base0_rms_eps_q` (see `palw_step`'s
+            // golden), and the fixture's job context now DECLARES the profile it carries, which the
+            // verifier began enforcing. The second move is the interesting one — the fixture had
+            // been incoherent (a context naming `h64(7)` while carrying a real profile) for as long
+            // as nothing compared them.
+            "7a3d770fbc69401b5b63aad12a035bc74285752718da301989ab327fdf3c968f\
+             54940dcf656ca828dca187eccf4a06e2200912f769d9a337ba5b77246ee0226a"
         );
     }
 

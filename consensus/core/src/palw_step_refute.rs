@@ -1153,6 +1153,8 @@ pub(crate) mod tests {
             model_profile_id: h64(4),
             runtime_manifest_hash: h64(5),
             runtime_class_id: h64(6),
+            // Placeholder; the fixtures below overwrite it with the profile they actually carry,
+            // because honest material declares the profile it was produced under.
             shape_profile_id: h64(7),
             trace_scheme_id: h64(8),
             cu_ruleset_id: h64(9),
@@ -1194,7 +1196,10 @@ pub(crate) mod tests {
 
     fn honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
         let p = profile();
-        let ctx = context();
+        // Honest material declares the profile it was produced under (the equality the step-leg
+        // verifier enforces).
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
         // rows[position_ordinal][node_slot] = full output row. Position ordinals: prefill
         // p0, p1, then decode call 1.
         let positions: Vec<(u32, u32)> = vec![(0, 0), (0, 1), (1, 0)];
@@ -1440,7 +1445,10 @@ pub(crate) mod tests {
     #[test]
     fn total_leaf_shape_sanity() {
         let p = profile();
-        let ctx = context();
+        // Honest material declares the profile it was produced under (the equality the step-leg
+        // verifier enforces).
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
         assert_eq!(kv_aux_leaf_count(&p, &ctx), 0);
         assert!(step_leaf_count(&p, &ctx).unwrap() > 0);
     }
