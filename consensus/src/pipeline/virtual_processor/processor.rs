@@ -5166,8 +5166,14 @@ impl VirtualStateProcessor {
             };
             let observed_atts: Vec<PalwObservedAttestationV1> = attestations
                 .iter()
+                // Joined on the SIGNED root, not the carriage's copy. Admission requires the two to
+                // agree, so this is belt-and-braces — but it is the belt that matters: the carriage
+                // field is free filer input, and joining on it let an attacker repoint an honest
+                // validator's published attestation at its own fabricated commitment and mint
+                // `base(C)` for zero inference. A consumer that reads the signed value cannot be
+                // reintroduced to that bug by a future wire form that forgets the equality.
                 .filter(|(a, _): &&(kaspa_consensus_core::palw_carriage::PalwAttestationCarriageV1, u64)| {
-                    a.commitment_root == commitment.committed_root
+                    a.attestation.committed_root == commitment.committed_root
                 })
                 // AUTHENTICATE each attestation the same way. A forged attestation naming a drawn
                 // panel member paid an attacker-chosen bond, because the payee is the filing bond

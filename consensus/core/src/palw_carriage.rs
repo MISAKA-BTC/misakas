@@ -215,6 +215,8 @@ pub enum PalwCarriageError {
     StepConvictionCommittedRootMismatch,
     #[error("the carriage names a different filing bond than the attestation it carries signs for")]
     AttestationBondMismatch,
+    #[error("the carriage names a different commitment than the attestation it carries signs for")]
+    AttestationCommitmentMismatch,
     #[error("the step conviction does not prove a fault: {0}")]
     StepConvictionNotProven(String),
     #[error("bisection space {got} is outside the openable range — no ladder could be played over it")]
@@ -272,6 +274,12 @@ pub struct PalwAttestationCarriageV1 {
     /// The commitment this attestation is filed against (the §1 credit gate's key). Whether
     /// the attested logits root matches that commitment is resolved against the commitment
     /// record — statefully, since the composite binding holds the logits root.
+    ///
+    /// Duplicated at carriage level ONLY as the dedup/index key, exactly like `attester_id` and
+    /// `bond_outpoint` below, and like them the equality against the SIGNED
+    /// `attestation.committed_root` is enforced at admission so it cannot drift. Consumers should
+    /// nevertheless join on the signed copy: this field being free input is what made a copied
+    /// attestation mint for zero work before the equality existed.
     pub commitment_root: Hash64,
     pub attestation: PalwExecutionAttestationV1,
     /// Must equal `attestation.executor_id`; duplicated at carriage level ONLY as the explicit
@@ -1029,6 +1037,21 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
             if a.bond_outpoint != a.attestation.bond_outpoint {
                 return Err(PalwCarriageError::AttestationBondMismatch);
             }
+            // THE THIRD PAIR, and the one that was missed when the two above were written.
+            //
+            // The carriage names the commitment this attestation stands behind, and so does the
+            // SIGNED attestation (`committed_root`, in the generation-3 preimage). The credit walk
+            // joined on the CARRIAGE's copy, which is free filer input, and never read the signed
+            // one — so an attacker could take any honest validator's published attestation, change
+            // only this one unsigned field to point at its OWN fabricated commitment, and have it
+            // credit: the signature still verifies because every field inside it is untouched.
+            //
+            // That minted `base(C)` for zero inference, with the attacker's bond never at risk
+            // because it had committed nothing false. The same reasoning as the two checks above,
+            // applied to the pair it was not applied to.
+            if a.commitment_root != a.attestation.committed_root {
+                return Err(PalwCarriageError::AttestationCommitmentMismatch);
+            }
             Ok(())
         }
         PalwCarriageV1::OpeningCall(c) => {
@@ -1588,6 +1611,44 @@ mod tests {
             let got = payload_hash_hex(&encode_palw_carriage_v1(carriage));
             assert_eq!(got, expected, "{name} payload moved");
         }
+    }
+
+    /// **The copied-attestation mint.** All three of the carriage's duplicated facts must agree with
+    /// the signed attestation, and the commitment root is the one that was missed.
+    ///
+    /// An attacker takes any honest validator's PUBLISHED attestation, changes only the carriage's
+    /// `commitment_root` to point at its own fabricated commitment, and files it. Every field inside
+    /// the signature is untouched, so the signature still verifies; the credit walk joined on the
+    /// unsigned copy; and the attacker's own bond was never at risk because it had committed nothing
+    /// false. That minted `base(C)` for zero inference.
+    ///
+    /// The fixture used to set the two roots EQUAL, which is exactly why nothing noticed — the same
+    /// vacuous-fixture shape as a bare-v2 test where two distinct roots coincide.
+    #[test]
+    fn a_carried_commitment_root_the_signature_does_not_name_is_inadmissible() {
+        let honest = attestation();
+        assert_eq!(honest.commitment_root, honest.attestation.committed_root, "the fixture is a self-consistent filing");
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::Attestation(honest.clone())).is_ok());
+
+        // The attack: repoint ONLY the unsigned carriage field at another commitment.
+        let mut repointed = honest.clone();
+        repointed.commitment_root = h64(0xAD);
+        assert_eq!(
+            repointed.attestation, honest.attestation,
+            "the attack changes nothing inside the signature — that is what made it work"
+        );
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::Attestation(repointed)),
+            Err(PalwCarriageError::AttestationCommitmentMismatch)
+        );
+
+        // Symmetric: editing the SIGNED side is refused too, so neither copy is the trusted one.
+        let mut signed_elsewhere = honest;
+        signed_elsewhere.attestation.committed_root = h64(0xAD);
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::Attestation(signed_elsewhere)),
+            Err(PalwCarriageError::AttestationCommitmentMismatch)
+        );
     }
 
     /// The carriage's copy of the filing bond and the SIGNED one must agree.
