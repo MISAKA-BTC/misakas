@@ -596,6 +596,12 @@ mod tests {
     /// was meant to redefine BASE-0, which requires a new class id and a new registration, because
     /// every block already mined under the old one claimed the old numbers.
     ///
+    /// The CLASS ID has since moved a second time, while these numbers did not. `digest_bytes`
+    /// gained a length prefix for `cos_q`/`sin_q` so a table with mismatched halves can no longer
+    /// alias a well-formed shorter one (audit 2.4). That changes what the artifact HASHES to
+    /// without changing what the engine COMPUTES — all four rows below are byte-identical across
+    /// that change, which is exactly the evidence that the digest fix was confined to the digest.
+    ///
     /// These numbers HAVE been reset once, and the precedent should be read narrowly. The
     /// ADR-0040 C1/C2 repair — `RoundingShiftRight` was not round-half-away-from-zero and `SRDHM`
     /// disagreed with gemmlowp on half its inputs — moved every negative activation by a unit, so
@@ -608,8 +614,8 @@ mod tests {
         assert_eq!(
             a.execution_class_id().to_string(),
             concat!(
-                "50f067ec24166aada7bf77c3507dcf48c3a04fa6d434a86a77d7c6ff5d35b7f29",
-                "50df76b0a022c5c28913167f2a10ed50c455923a9f4acb41ff78f8075c371a2"
+                "20d08577455fcd619b4047175a5d7888fda9f7ad89e3e2ca4eb391629a2586f9",
+                "af55ec12f0600d3820095c16ccdf6109aec541bcf2b02ac5ddc6a0a219a04965"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );
@@ -639,6 +645,7 @@ mod tests {
         assert!(out.iter().all(|t| *t < 64));
     }
 }
+
 
 
 

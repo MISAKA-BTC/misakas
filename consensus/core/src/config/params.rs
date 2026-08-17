@@ -431,9 +431,15 @@ pub struct Params {
     /// ADR-0033 lists. Everything the gate mints is validated against this same fence, so a
     /// node without it rejects any coinbase claiming PALW credit.
     pub palw_credit: Option<crate::palw_credit::PalwCreditParamsV1>,
-    /// ADR-0039 W4′: the PALW fork-choice fence. `None` on every shipped preset, and
-    /// [`Params::validate_palw_v1`] currently refuses `Some` — see there for why the refusal is
-    /// the point rather than a gap.
+    /// ADR-0039 W4′: the PALW fork-choice fence. **`None` on every shipped preset** — that is the
+    /// whole of today's dormancy guarantee, and it is a fact about the presets, not a structural
+    /// one. [`Params::validate_palw_v1`] does NOT refuse `Some` outright: it refuses `Some` only
+    /// when `palw_credit` is `None` (no registered class to weigh blocks against). Setting it is
+    /// therefore possible for anyone constructing `Params` directly, and setting it changes the
+    /// P2P fingerprint ([`Params::consensus_fingerprint`]) while changing no tip ordering — both
+    /// seam sites still pass `None` for the weights, so today it partitions the network without
+    /// altering fork choice. `params_do_not_set_the_palw_fork_choice_fence` asserts the preset
+    /// fact; nothing asserts more, because nothing more is true.
     pub palw_fork_choice: Option<crate::palw_chain_weight::PalwChainWeightParamsV1>,
 
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
@@ -568,8 +574,9 @@ impl Params {
     /// The tip-ordering rule this network runs — the single seam
     /// ([`crate::palw_chain_weight::order_tips_v1`]) both selection sites will consult.
     ///
-    /// Today it always answers `BlueWorkOnly`, because the fence above cannot be set. It exists
-    /// now so that turning the fence on is one edit in one place rather than a search for every
+    /// On every shipped preset it answers `BlueWorkOnly`, because none of them set the fence — not
+    /// because the fence *cannot* be set (it can; see [`Params::palw_fork_choice`]). It exists now
+    /// so that turning the fence on is one edit in one place rather than a search for every
     /// comparison that happens to order tips.
     pub fn palw_tip_order_v1(&self) -> crate::palw_chain_weight::PalwTipOrderV1 {
         match self.palw_fork_choice {

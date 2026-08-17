@@ -228,9 +228,16 @@ impl RopeTableV1 {
     /// Bytes fed to the artifact digest. Little-endian and length-prefixed so two tables of
     /// different shapes can never produce the same bytes.
     pub fn digest_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(16 + 8 * self.cos_q.len());
+        let mut out = Vec::with_capacity(24 + 8 * self.cos_q.len());
         out.extend_from_slice(&(self.d_head as u64).to_le_bytes());
         out.extend_from_slice(&(self.max_position as u64).to_le_bytes());
+        // Length-prefix the entries, and prefix BOTH lengths. `zip` stops at the shorter of the two
+        // vectors, so a table whose `cos_q` and `sin_q` disagree in length would otherwise hash the
+        // same bytes as a correctly-sized shorter table — the truncated tail simply vanishes from
+        // the digest. The class id must distinguish those: a malformed artifact has to be a
+        // DIFFERENT class, not an alias of a well-formed one (mainnet-readiness audit 2.4).
+        out.extend_from_slice(&(self.cos_q.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.sin_q.len() as u64).to_le_bytes());
         for (c, s) in self.cos_q.iter().zip(self.sin_q.iter()) {
             out.extend_from_slice(&c.to_le_bytes());
             out.extend_from_slice(&s.to_le_bytes());

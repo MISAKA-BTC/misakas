@@ -113,10 +113,22 @@ impl Base0ShapeV1 {
         {
             return Err(ArtifactError::BadShape);
         }
+        // Bound every dimension BEFORE any product is formed. `d_model()` is `n_heads · d_head` and
+        // the weight lengths are `vocab · d_model` / `d_ff · d_model`; on a shape supplied as data
+        // those multiplications overflow `usize` and wrap to a small number, which would then pass
+        // the reduction bound below and mis-size every tensor check in `from_parts`. Refusing
+        // absurd dimensions outright is cheaper than auditing each product (audit 2.4). No real
+        // shape approaches this: MAX_DOT_LEN is 133_144 and every dimension must fit under it.
+        let bound = kaspa_consensus_core::palw_base0::MAX_DOT_LEN;
+        for got in [self.n_layers, self.n_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
+            if got > bound {
+                return Err(ArtifactError::DotTooLong { got });
+            }
+        }
         // The longest reduction in the graph. `d_ff` feeds the down-projection, `d_model` feeds
         // every other matmul, and attention reduces over `d_head`.
         let longest = self.d_model().max(self.d_ff);
-        if longest > kaspa_consensus_core::palw_base0::MAX_DOT_LEN {
+        if longest > bound {
             return Err(ArtifactError::DotTooLong { got: longest });
         }
         Ok(())
