@@ -650,10 +650,18 @@ mod tests {
         tx.outputs = vec![];
         assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
-        // The band has hard edges: 0x46 (one past it) is NOT routed and still rejects with the
-        // blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        // The band grew by one: 0x46 is the equivocation kind, so it ROUTES — it is judged on its
+        // body like every other band member, not turned away at the subnetwork. (`base`'s payload
+        // is another kind's body, so the rejection is a decode failure, which is the proof that
+        // routing happened at all.)
         let mut tx = base.clone();
         tx.subnetwork_id = SubnetworkId::from_byte(0x46);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // The hard edge moved with it: 0x47 (one past the band) is NOT routed and still rejects
+        // with the blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x47);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
 
         // Stage-0 carriage is untouched: the SAME object with its magic envelope on the NATIVE

@@ -2541,7 +2541,39 @@ impl VirtualStateProcessor {
                 _ => true,
             });
         }
+        muts.extend(self.palw_equivocation_slashes(txs, bond_view, accepted_daa_score));
         muts
+    }
+
+    /// Slashes proved by PALW executor-equivocation certificates accepted in this block — the
+    /// first PALW offence that reaches a bond at all (re-audit blocker 8: nothing did, so every
+    /// `P(detection) × slash` in the design multiplied by zero).
+    ///
+    /// Unlike the VLT half above, this does not derive-then-filter. There, the mutations come
+    /// from payload decoding and a second pass drops the ones whose evidence was never proved —
+    /// necessary because evidence arriving by MERGE skips the own-body genuineness gates. Here
+    /// the adjudication IS the proof and it runs per certificate, so the only mutation that can
+    /// be emitted is one already proved against the accused bond's own key. There is nothing for
+    /// a filter to remove.
+    ///
+    /// Every rejection is a silent skip rather than an error: a certificate that fails to prove
+    /// an equivocation is simply not evidence, and a transaction carrying one is still a valid
+    /// transaction. Nothing here can reject a block.
+    ///
+    /// Fenced on `palw_credit`, so it is inert on every shipped preset. Enabling it means
+    /// enabling the PALW machinery as a whole, which `Params::validate_palw_v1` gates — and the
+    /// credit walk behind that same fence still carries the audit's blocker 11, so the fence is
+    /// not flippable for this path alone.
+    fn palw_equivocation_slashes(
+        &self,
+        txs: &[Transaction],
+        bond_view: &ActiveBondView,
+        accepted_daa_score: u64,
+    ) -> Vec<BondMutation> {
+        use kaspa_consensus_core::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT;
+        palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, self.palw_credit_params.is_some(), |key, digest, signature| {
+            matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, PALW_S_MLDSA87_ATTESTATION_CONTEXT), Ok(true))
+        })
     }
 
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
@@ -7787,4 +7819,220 @@ fn verified_commitment(
         accepted_blue_score,
         accepted_daa_score,
     })
+}
+
+/// The derivation loop behind [`VirtualStateProcessor::palw_equivocation_slashes`], as a free
+/// function so it can be exercised without standing up a processor.
+///
+/// Every rejection is a silent skip rather than an error: a certificate that fails to prove an
+/// equivocation is simply not evidence, and the transaction carrying it is still a valid
+/// transaction. Nothing here can reject a block.
+///
+/// Unlike the VLT half it runs beside, this does not derive-then-filter. There, mutations come
+/// from payload decoding and a second pass drops the ones whose evidence was never proved —
+/// necessary because evidence arriving by MERGE skips the own-body genuineness gates. Here the
+/// adjudication IS the proof and it runs per certificate, so the only mutation that can be
+/// emitted is one already proved against the accused bond's own key.
+pub(super) fn palw_equivocation_slashes_v1<F>(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    accepted_daa_score: u64,
+    fence_active: bool,
+    verify: F,
+) -> Vec<BondMutation>
+where
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+{
+    use kaspa_consensus_core::palw_carriage::{
+        PALW_CARRIAGE_KIND_EQUIVOCATION, PalwCarriageV1, adjudicate_equivocation_carriage_v1, decode_palw_stage1_body,
+        palw_carriage_tx_kind,
+    };
+    if !fence_active {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for tx in txs {
+        if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_EQUIVOCATION) {
+            continue;
+        }
+        let Ok(PalwCarriageV1::Equivocation(carriage)) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_EQUIVOCATION, &tx.payload) else {
+            continue;
+        };
+        // The accused bond must exist in THIS view. An absent bond is not a bond this node may
+        // take, and it is never an error: the certificate may name a bond that was pruned, or one
+        // this chain never had.
+        let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
+            continue;
+        };
+        if let Ok(slashed) = adjudicate_equivocation_carriage_v1(&carriage, bond, accepted_daa_score, &verify) {
+            out.push(BondMutation::Slash(slashed, accepted_daa_score));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod palw_equivocation_wiring_tests {
+    use super::*;
+    use kaspa_consensus_core::dns_finality::{BondStatus, StakeBondRecord};
+    use kaspa_consensus_core::palw_carriage::{
+        PALW_CARRIAGE_VERSION_V1, PalwCarriageV1, PalwEquivocationCarriageV1, encode_palw_carriage_v1,
+    };
+    use kaspa_consensus_core::palw_slash::{PALW_S_OBJECT_VERSION_V1, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1};
+    use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
+    use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_EQUIVOCATION};
+    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    fn h(seed: u64) -> Hash64 {
+        Hash64::from_u64_word(seed)
+    }
+    fn op(seed: u8) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
+    }
+    fn mock_key(signer: Hash64) -> Vec<u8> {
+        signer.as_byte_slice().to_vec()
+    }
+    fn mock_sign(key: &[u8], digest: &kaspa_hashes::Hash) -> Vec<u8> {
+        let mut s = key.to_vec();
+        s.extend_from_slice(digest.as_bytes().as_slice());
+        s
+    }
+    fn mock_verify(key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
+        signature == mock_sign(key, digest).as_slice()
+    }
+
+    fn context() -> PalwJobContextV2 {
+        PalwJobContextV2 {
+            version: PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-devnet".to_vec(),
+            job_id: h(0x11),
+            job_nullifier: h(0x12),
+            assignment_id: h(0x13),
+            execution_seed: [0x22; 32],
+            model_profile_id: h(0x31),
+            runtime_manifest_hash: h(0x32),
+            runtime_class_id: h(0x33),
+            shape_profile_id: h(0x34),
+            trace_scheme_id: trace_scheme_id_v2(),
+            cu_ruleset_id: h(0x36),
+            tokenizer_id: h(0x37),
+            prompt_token_ids_hash: h(0x38),
+            exact_decode_tokens: 16,
+            declared_prefill_tokens: 8,
+            max_context_tokens: 4_096,
+        }
+    }
+
+    fn certificate(signer: Hash64, accused: TransactionOutpoint) -> PalwEquivocationCarriageV1 {
+        let ctx = context();
+        let att = |root: Hash64| {
+            let mut a = PalwExecutionAttestationV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                executor_id: signer,
+                job_context_hash: ctx.context_hash(),
+                full_logits_trace_root: root,
+                signature: vec![],
+            };
+            a.signature = mock_sign(&mock_key(signer), &a.message(&ctx.network_id));
+            a
+        };
+        PalwEquivocationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: accused,
+            certificate: PalwClassContradictionCertificateV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                attestation_a: att(h(0x01)),
+                attestation_b: att(h(0x02)),
+                job_context: ctx,
+            },
+        }
+    }
+
+    /// A Stage-1 carriage tx: the body rides its own subnetwork id, no magic+kind prefix.
+    fn carriage_tx(c: &PalwEquivocationCarriageV1) -> Transaction {
+        let stage0 = encode_palw_carriage_v1(&PalwCarriageV1::Equivocation(c.clone()));
+        let body = stage0[7..].to_vec();
+        Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_EQUIVOCATION, 0, body)
+    }
+
+    fn bond(signer: Hash64, outpoint: TransactionOutpoint) -> StakeBondRecord {
+        StakeBondRecord {
+            version: 1,
+            bond_outpoint: outpoint,
+            owner_pubkey_hash: h(0x0A0A),
+            validator_pubkey_hash: signer,
+            validator_pubkey: mock_key(signer),
+            amount: 20_000_00000000,
+            activation_daa_score: 0,
+            created_daa_score: 0,
+            unbonding_period_blocks: 1_000,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    fn view(signer: Hash64, outpoint: TransactionOutpoint) -> ActiveBondView {
+        ActiveBondView::from_records([(outpoint, bond(signer, outpoint))])
+    }
+
+    /// **Fence OFF is not "approximately nothing" — it is nothing.** Every shipped preset runs
+    /// this arm, so a proven certificate against a live bond must still produce no mutation.
+    #[test]
+    fn the_fence_off_path_derives_nothing_at_all() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let txs = vec![carriage_tx(&certificate(signer, accused))];
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, false, mock_verify).is_empty());
+        // ...and the same input DOES produce a slash once the fence is on, so the test above is
+        // measuring the fence rather than a broken fixture.
+        assert_eq!(
+            palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify),
+            vec![BondMutation::Slash(accused, 100)]
+        );
+    }
+
+    /// Only the equivocation subnetwork is read, and only a decodable body counts. A native tx, a
+    /// tx on another PALW band id, and a garbage body all pass through without a mutation and
+    /// without an error.
+    #[test]
+    fn foreign_and_undecodable_transactions_are_skipped_not_failed() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let native = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![0xAB; 32]);
+        let garbage = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_EQUIVOCATION, 0, vec![0xFF; 16]);
+        let txs = vec![native, garbage];
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify).is_empty());
+    }
+
+    /// A certificate naming a bond this view does not hold is skipped, not an error — it may name
+    /// a bond that was pruned, or one this chain never had.
+    #[test]
+    fn a_certificate_against_an_unknown_bond_is_skipped() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let txs = vec![carriage_tx(&certificate(signer, accused))];
+        let elsewhere = ActiveBondView::from_records([(op(0xB2), bond(signer, op(0xB2)))]);
+        assert!(palw_equivocation_slashes_v1(&txs, &elsewhere, 100, true, mock_verify).is_empty());
+    }
+
+    /// The innocent-bond attack, at the wiring layer: a genuine certificate pointed at somebody
+    /// else's bond derives no mutation, because the accused bond's own key is not the signer's.
+    #[test]
+    fn a_genuine_certificate_against_an_innocent_bond_derives_nothing() {
+        let (signer, victim_outpoint) = (h(0xE1), op(0xB9));
+        let txs = vec![carriage_tx(&certificate(signer, victim_outpoint))];
+        let victim_view = view(h(0x00CE), victim_outpoint); // a DIFFERENT validator's bond
+        assert!(palw_equivocation_slashes_v1(&txs, &victim_view, 100, true, mock_verify).is_empty());
+    }
+
+    /// A forged signature derives nothing: the real verifier is the only thing that decides, and
+    /// a certificate that does not verify is not evidence.
+    #[test]
+    fn a_forged_certificate_derives_nothing() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let mut forged = certificate(signer, accused);
+        forged.certificate.attestation_b.signature = vec![0xFF; 64];
+        let txs = vec![carriage_tx(&forged)];
+        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, true, mock_verify).is_empty());
+    }
 }
