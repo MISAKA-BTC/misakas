@@ -51,10 +51,15 @@ use crate::palw_legs::{
     PALW_LEGS_OBJECT_VERSION_V1, PalwLegsBindingV1, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsRefutationV1,
     activation_leg_root_v1, canonical_decode_calls, checkpoint_leg_root_v1, execution_commitment_root_v1,
 };
-use crate::palw_slash::{PalwExecutionAttestationV1, PalwTraceSummaryRefutationV1, check_job_context_shape};
+use crate::dns_finality::StakeBondRecord;
+use crate::palw_slash::{
+    PalwClassContradictionCertificateV1, PalwClassContradictionKindV1, PalwExecutionAttestationV1, PalwTraceSummaryRefutationV1,
+    adjudicate_class_contradiction_v1, check_job_context_shape,
+};
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
 use crate::subnets::{
-    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EQUIVOCATION,
+    SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
     SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
 };
 use crate::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
@@ -84,6 +89,21 @@ pub const PALW_CARRIAGE_KIND_REFUTATION: u8 = 0x05;
 /// standard transaction (the bare-v2 logits-event row, ≈ 0.99 MiB → 3 chunks). Added before
 /// any Stage-1 validator deployed — the version-trap rule is about DEPLOYED validators.
 pub const PALW_CARRIAGE_KIND_EVIDENCE_CHUNK: u8 = 0x06;
+
+/// An executor-equivocation certificate — the ONE PALW offence that may slash at acceptance.
+///
+/// The rule is inherited verbatim from the VLT layer below
+/// ([`crate::vlt::ComputeFraudKind::ContradictoryVerification`]): only an objectively provable
+/// offence may slash, because slashing on an unprovable claim is worse than not slashing at all —
+/// it lets any bonded party burn any other party's stake. Two signatures from one bonded key over
+/// one job with different roots cannot both be true, and proving it requires no re-execution and
+/// no lookup beyond the accused bond's own public key.
+///
+/// Class DIVERGENCE — the same certificate shape with two *different* signers — is deliberately
+/// NOT carried here. It refutes the class rather than identifying an author, so under ADR-0027 P1
+/// it may only freeze, never slash; and verifying it needs both signers' keys, where this kind
+/// needs exactly one. It gets its own kind when the freeze machinery exists.
+pub const PALW_CARRIAGE_KIND_EQUIVOCATION: u8 = 0x07;
 
 /// Most openings one carried call may request across both legs (and one carried answer may
 /// hold). A CARRIAGE cap, deliberately below the wire cap — see the module doc.
@@ -149,6 +169,16 @@ pub enum PalwCarriageError {
     CommittedRootMismatch,
     #[error("carriage attester_id does not equal the attestation's executor_id")]
     AttesterMismatch,
+    #[error("an equivocation certificate must have ONE signer; two signers is class divergence, which may freeze but never slash")]
+    EquivocationNotOneSigner,
+    #[error("the resolved bond {resolved:?} is not the accused bond {accused:?}")]
+    EquivocationWrongBondRecord { resolved: TransactionOutpoint, accused: TransactionOutpoint },
+    #[error("the accused bond's validator key hash does not match the equivocating executor_id — a certificate may only accuse its own signer's bond")]
+    EquivocationBondNotTheSigner,
+    #[error("the accused bond is not active at the point of view — a slash may not reach a bond that is not at risk")]
+    EquivocationBondInactive,
+    #[error("the certificate does not prove an equivocation: {0}")]
+    EquivocationNotProven(String),
     #[error("carried call requests {got} openings; the carriage cap is {max} (wire cap unchanged — split the call)")]
     TooManyOpenings { got: usize, max: usize },
     #[error("carried object requests or holds zero openings")]
@@ -208,6 +238,24 @@ pub struct PalwAttestationCarriageV1 {
     /// dedup-key component, and the equality is enforced so it cannot drift.
     pub attester_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
+}
+
+/// An executor-equivocation certificate, carried, naming the bond it accuses.
+///
+/// The accused bond outpoint is at carriage level and is the **unique** key the slash targets.
+/// The inner attestations carry only `executor_id`, which is a validator-key hash and is
+/// explicitly not unique — nothing in consensus binds a validator key to a single bond. Resolving
+/// a payee or a slash target by that hash is how a process-random map iteration decides who pays
+/// (mainnet-readiness audit blocker 5); an outpoint cannot do that.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwEquivocationCarriageV1 {
+    /// = [`PALW_CARRIAGE_VERSION_V1`].
+    pub version: u16,
+    /// The bond this certificate accuses — the slash target, and the only key whose signature
+    /// can prove the offence.
+    pub accused_bond_outpoint: TransactionOutpoint,
+    /// The two contradictory attestations plus the job context they both bind.
+    pub certificate: PalwClassContradictionCertificateV1,
 }
 
 /// An opening challenge, carried. `PalwLegsOpeningCallV1` is already the complete message
@@ -371,6 +419,7 @@ pub enum PalwCarriageV1 {
     OpeningAnswer(PalwOpeningAnswerCarriageV1),
     Refutation(PalwRefutationCarriageV1),
     EvidenceChunk(PalwEvidenceChunkCarriageV1),
+    Equivocation(PalwEquivocationCarriageV1),
 }
 
 impl PalwCarriageV1 {
@@ -381,6 +430,7 @@ impl PalwCarriageV1 {
             PalwCarriageV1::OpeningCall(_) => PALW_CARRIAGE_KIND_OPENING_CALL,
             PalwCarriageV1::OpeningAnswer(_) => PALW_CARRIAGE_KIND_OPENING_ANSWER,
             PalwCarriageV1::Refutation(_) => PALW_CARRIAGE_KIND_REFUTATION,
+            PalwCarriageV1::Equivocation(_) => PALW_CARRIAGE_KIND_EQUIVOCATION,
             PalwCarriageV1::EvidenceChunk(_) => PALW_CARRIAGE_KIND_EVIDENCE_CHUNK,
         }
     }
@@ -564,6 +614,7 @@ pub fn encode_palw_carriage_v1(carriage: &PalwCarriageV1) -> Vec<u8> {
         PalwCarriageV1::OpeningAnswer(a) => borsh::to_vec(a),
         PalwCarriageV1::Refutation(r) => borsh::to_vec(r),
         PalwCarriageV1::EvidenceChunk(c) => borsh::to_vec(c),
+        PalwCarriageV1::Equivocation(e) => borsh::to_vec(e),
     }
     .expect("borsh of an in-memory carriage body cannot fail");
     let mut out = Vec::with_capacity(PALW_CARRIAGE_MAGIC.len() + 1 + body.len());
@@ -591,6 +642,7 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
         PALW_CARRIAGE_KIND_OPENING_ANSWER => PalwCarriageV1::OpeningAnswer(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     };
     Ok(Some(carriage))
@@ -600,11 +652,84 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
 // Stateless validation — the future Stage-1 admission validators, verbatim
 // ---------------------------------------------------------------------------------------------
 
+/// The acceptance-stage adjudication of an equivocation certificate: **the one PALW path that
+/// may cost somebody their bond.**
+///
+/// Returns the outpoint to slash, or an error. There is no third answer and no "probably": this
+/// is the objectively-provable line the VLT layer already draws, and the reason it is drawn is
+/// that slashing on an unprovable claim lets any bonded party burn any other party's stake.
+///
+/// The order of the checks is the security argument, so it is worth reading as one:
+///
+/// 1. **The record is the accused record.** A caller that resolved the wrong bond is refused
+///    rather than trusted, so a lookup bug upstream cannot become a slash of the wrong party.
+/// 2. **The accused bond's own validator key is the equivocating signer.** Without this, a
+///    certificate proving *someone* equivocated could be pointed at *anyone's* bond — the
+///    signatures would still verify against the signer's key while the outpoint named a victim.
+/// 3. **The bond is active at the point of view.** A bond that is not at risk cannot be taken.
+/// 4. **Both signatures verify under that one key**, over the two messages the certificate itself
+///    reconstructs — delegated to [`adjudicate_class_contradiction_v1`], which also enforces that
+///    both attestations bind the same job context and that the roots actually differ.
+/// 5. **The verdict is equivocation, not divergence.** Step 2 already implies it; checking it
+///    anyway means a future change to either function cannot silently make divergence slashable.
+///
+/// `verify_signature` receives `(public_key, digest, signature)` and must verify ML-DSA-87 under
+/// [`crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT`]. Crypto stays outside consensus-core
+/// (`verify_mldsa87_with_context` lives in `crypto/txscript`), which is also what lets every
+/// branch above be unit-tested without a keypair.
+pub fn adjudicate_equivocation_carriage_v1<F>(
+    carriage: &PalwEquivocationCarriageV1,
+    accused_bond: &StakeBondRecord,
+    pov_daa_score: u64,
+    verify_signature: F,
+) -> Result<TransactionOutpoint, PalwCarriageError>
+where
+    F: Fn(&[u8], &Hash, &[u8]) -> bool,
+{
+    require_version(carriage.version)?;
+    if accused_bond.bond_outpoint != carriage.accused_bond_outpoint {
+        return Err(PalwCarriageError::EquivocationWrongBondRecord {
+            resolved: accused_bond.bond_outpoint,
+            accused: carriage.accused_bond_outpoint,
+        });
+    }
+    let signer = carriage.certificate.attestation_a.executor_id;
+    if signer != accused_bond.validator_pubkey_hash || carriage.certificate.attestation_b.executor_id != signer {
+        return Err(PalwCarriageError::EquivocationBondNotTheSigner);
+    }
+    if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+        return Err(PalwCarriageError::EquivocationBondInactive);
+    }
+    let verdict = adjudicate_class_contradiction_v1(&carriage.certificate, |digest, attestation| {
+        verify_signature(&accused_bond.validator_pubkey, digest, &attestation.signature)
+    })
+    .map_err(|e| PalwCarriageError::EquivocationNotProven(e.to_string()))?;
+    match verdict.kind {
+        PalwClassContradictionKindV1::ExecutorEquivocation { .. } => Ok(carriage.accused_bond_outpoint),
+        PalwClassContradictionKindV1::ClassDivergence { .. } => Err(PalwCarriageError::EquivocationNotOneSigner),
+    }
+}
+
 /// Everything decidable from the bytes alone, per kind. See the module doc for what stateless
 /// does NOT mean: a valid object can still be a lie; it cannot be *incoherent*.
 pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCarriageError> {
     match carriage {
         PalwCarriageV1::Commitment(c) => validate_commitment_carriage(c),
+        PalwCarriageV1::Equivocation(e) => {
+            require_version(e.version)?;
+            // Shape only, and deliberately NOT the contradiction itself: proving it needs the
+            // accused bond's public key, which is chain state. Admission's job is to refuse the
+            // incoherent, so that `adjudicate_equivocation_carriage_v1` is never handed a
+            // certificate whose two attestations disagree about which job they are about.
+            e.certificate.attestation_a.validate_shape().map_err(|x| PalwCarriageError::Inner(x.to_string()))?;
+            e.certificate.attestation_b.validate_shape().map_err(|x| PalwCarriageError::Inner(x.to_string()))?;
+            // One signer is what makes this kind slashable at all; two signers is class
+            // divergence, which may only freeze and is not carried here.
+            if e.certificate.attestation_a.executor_id != e.certificate.attestation_b.executor_id {
+                return Err(PalwCarriageError::EquivocationNotOneSigner);
+            }
+            Ok(())
+        }
         PalwCarriageV1::Attestation(a) => {
             require_version(a.version)?;
             a.attestation.validate_shape().map_err(|e| PalwCarriageError::Inner(e.to_string()))?;
@@ -789,6 +914,8 @@ pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
         Some(PALW_CARRIAGE_KIND_REFUTATION)
     } else if *subnetwork_id == SUBNETWORK_ID_PALW_EVIDENCE_CHUNK {
         Some(PALW_CARRIAGE_KIND_EVIDENCE_CHUNK)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_EQUIVOCATION {
+        Some(PALW_CARRIAGE_KIND_EQUIVOCATION)
     } else {
         None
     }
@@ -807,6 +934,7 @@ pub fn decode_palw_stage1_body(kind: u8, body: &[u8]) -> Result<PalwCarriageV1, 
         PALW_CARRIAGE_KIND_OPENING_ANSWER => PalwCarriageV1::OpeningAnswer(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     })
 }
@@ -1382,7 +1510,48 @@ mod tests {
         }
     }
 
-    fn all_six() -> Vec<(SubnetworkId, PalwCarriageV1)> {
+    /// A minimal, shape-valid equivocation carriage for the band round-trip. Its adjudication
+    /// is covered in `equivocation_tests`; here it only has to encode and route.
+    fn equivocation_for_band() -> PalwEquivocationCarriageV1 {
+        let ctx = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-devnet".to_vec(),
+            job_id: h64(0x11),
+            job_nullifier: h64(0x12),
+            assignment_id: h64(0x13),
+            execution_seed: [0x22; 32],
+            model_profile_id: h64(0x31),
+            runtime_manifest_hash: h64(0x32),
+            runtime_class_id: h64(0x33),
+            shape_profile_id: h64(0x34),
+            trace_scheme_id: crate::palw_v2::trace_scheme_id_v2(),
+            cu_ruleset_id: h64(0x36),
+            tokenizer_id: h64(0x37),
+            prompt_token_ids_hash: h64(0x38),
+            exact_decode_tokens: 16,
+            declared_prefill_tokens: 8,
+            max_context_tokens: 4_096,
+        };
+        let att = |root: Hash64| PalwExecutionAttestationV1 {
+            version: PALW_S_OBJECT_VERSION_V1,
+            executor_id: h64(0xE1),
+            job_context_hash: ctx.context_hash(),
+            full_logits_trace_root: root,
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        PalwEquivocationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: outpoint(0xB1, 0),
+            certificate: PalwClassContradictionCertificateV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                attestation_a: att(h64(0x01)),
+                attestation_b: att(h64(0x02)),
+                job_context: ctx,
+            },
+        }
+    }
+
+    fn all_band_members() -> Vec<(SubnetworkId, PalwCarriageV1)> {
         let mut out: Vec<(SubnetworkId, PalwCarriageV1)> = vec![
             (SUBNETWORK_ID_PALW_COMMITMENT, PalwCarriageV1::Commitment(commitment_composite())),
             (SUBNETWORK_ID_PALW_ATTESTATION, PalwCarriageV1::Attestation(attestation())),
@@ -1390,8 +1559,9 @@ mod tests {
             (SUBNETWORK_ID_PALW_OPENING_ANSWER, PalwCarriageV1::OpeningAnswer(opening_answer())),
             (SUBNETWORK_ID_PALW_REFUTATION, PalwCarriageV1::Refutation(refutation())),
             (SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, PalwCarriageV1::EvidenceChunk(evidence_chunk())),
+            (SUBNETWORK_ID_PALW_EQUIVOCATION, PalwCarriageV1::Equivocation(equivocation_for_band())),
         ];
-        debug_assert_eq!(out.len(), 6);
+        debug_assert_eq!(out.len(), 7);
         out.sort_by_key(|(_, c)| c.kind_byte());
         out
     }
@@ -1401,7 +1571,7 @@ mod tests {
     /// prefix — so the goldens above cover both stages and the two decode paths cannot drift.
     #[test]
     fn stage1_ids_route_and_bodies_are_stage0_minus_the_envelope() {
-        for (id, carriage) in all_six() {
+        for (id, carriage) in all_band_members() {
             let kind = palw_carriage_tx_kind(&id).expect("a PALW band id routes");
             assert_eq!(kind, carriage.kind_byte(), "id {id} routes to its own kind");
             let stage0 = encode_palw_carriage_v1(&carriage);
@@ -1416,7 +1586,7 @@ mod tests {
             SUBNETWORK_ID_COINBASE,
             crate::subnets::SUBNETWORK_ID_TOKEN_BURN,
             SubnetworkId::from_byte(0x3F),
-            SubnetworkId::from_byte(0x46),
+            SubnetworkId::from_byte(0x47),
         ] {
             assert_eq!(palw_carriage_tx_kind(&id), None);
         }
@@ -1550,5 +1720,224 @@ mod tests {
         let native =
             Transaction::new(0, vec![], vec![TransactionOutput::new(1_000, Default::default())], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
         assert_eq!(palw_audit_call_bond_outpoint(&native), None);
+    }
+}
+
+#[cfg(test)]
+mod equivocation_tests {
+    use super::*;
+    use crate::dns_finality::{BondStatus, StakeBondRecord};
+    use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V1};
+    use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
+    use crate::tx::TransactionId;
+
+    fn h(seed: u64) -> Hash64 {
+        Hash64::from_u64_word(seed)
+    }
+    fn op(seed: u8) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
+    }
+
+    /// A key is its own bytes; a signature is the key bytes followed by the digest. Deterministic,
+    /// forgeable only by knowing the key — enough to exercise every branch without a keypair, and
+    /// the real verifier is supplied by the pipeline.
+    fn mock_key(signer: Hash64) -> Vec<u8> {
+        signer.as_byte_slice().to_vec()
+    }
+    fn mock_sign(key: &[u8], digest: &Hash) -> Vec<u8> {
+        let mut s = key.to_vec();
+        s.extend_from_slice(digest.as_bytes().as_slice());
+        s
+    }
+    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8]) -> bool {
+        signature == mock_sign(key, digest).as_slice()
+    }
+
+    fn context() -> PalwJobContextV2 {
+        PalwJobContextV2 {
+            version: PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-devnet".to_vec(),
+            job_id: h(0x11),
+            job_nullifier: h(0x12),
+            assignment_id: h(0x13),
+            execution_seed: [0x22; 32],
+            model_profile_id: h(0x31),
+            runtime_manifest_hash: h(0x32),
+            runtime_class_id: h(0x33),
+            shape_profile_id: h(0x34),
+            trace_scheme_id: trace_scheme_id_v2(),
+            cu_ruleset_id: h(0x36),
+            tokenizer_id: h(0x37),
+            prompt_token_ids_hash: h(0x38),
+            exact_decode_tokens: 16,
+            declared_prefill_tokens: 8,
+            max_context_tokens: 4_096,
+        }
+    }
+
+    fn attested(signer: Hash64, ctx: &PalwJobContextV2, root: Hash64) -> PalwExecutionAttestationV1 {
+        let mut a = PalwExecutionAttestationV1 {
+            version: PALW_S_OBJECT_VERSION_V1,
+            executor_id: signer,
+            job_context_hash: ctx.context_hash(),
+            full_logits_trace_root: root,
+            signature: vec![],
+        };
+        let digest = a.message(&ctx.network_id);
+        a.signature = mock_sign(&mock_key(signer), &digest);
+        a
+    }
+
+    fn bond(signer: Hash64, outpoint: TransactionOutpoint) -> StakeBondRecord {
+        StakeBondRecord {
+            version: 1,
+            bond_outpoint: outpoint,
+            owner_pubkey_hash: h(0x0A0A),
+            validator_pubkey_hash: signer,
+            validator_pubkey: mock_key(signer),
+            amount: 20_000_00000000,
+            activation_daa_score: 0,
+            created_daa_score: 0,
+            unbonding_period_blocks: 1_000,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    fn carriage(signer: Hash64, accused: TransactionOutpoint, root_a: Hash64, root_b: Hash64) -> PalwEquivocationCarriageV1 {
+        let ctx = context();
+        PalwEquivocationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: accused,
+            certificate: PalwClassContradictionCertificateV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                attestation_a: attested(signer, &ctx, root_a),
+                attestation_b: attested(signer, &ctx, root_b),
+                job_context: ctx,
+            },
+        }
+    }
+
+    /// The honest path: one bonded signer, two roots, one job — the bond is slashable.
+    #[test]
+    fn a_proven_equivocation_slashes_the_accused_bond() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let c = carriage(signer, accused, h(0x01), h(0x02));
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::Equivocation(c.clone())).is_ok());
+        assert_eq!(adjudicate_equivocation_carriage_v1(&c, &bond(signer, accused), 100, mock_verify), Ok(accused));
+    }
+
+    /// **The attack this design exists to refuse: accusing somebody else's bond.**
+    ///
+    /// The certificate is genuine — a real signer really did equivocate — but the outpoint names
+    /// a victim. Both signatures still verify under the SIGNER's key, so a check that only
+    /// verified signatures would slash the victim. Binding the accused bond's own validator key
+    /// to the equivocating signer is what refuses it.
+    #[test]
+    fn a_genuine_certificate_cannot_be_pointed_at_an_innocent_bond() {
+        let (signer, victim_outpoint) = (h(0xE1), op(0xB9));
+        let victim = bond(h(0x00CE), victim_outpoint);
+        let c = carriage(signer, victim_outpoint, h(0x01), h(0x02));
+        assert_eq!(
+            adjudicate_equivocation_carriage_v1(&c, &victim, 100, mock_verify),
+            Err(PalwCarriageError::EquivocationBondNotTheSigner)
+        );
+    }
+
+    /// A caller that resolved the wrong record is refused rather than trusted — an upstream
+    /// lookup bug must not be able to become a slash of the wrong party.
+    #[test]
+    fn a_mismatched_bond_record_is_refused() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let c = carriage(signer, accused, h(0x01), h(0x02));
+        let wrong = bond(signer, op(0xB2));
+        assert_eq!(
+            adjudicate_equivocation_carriage_v1(&c, &wrong, 100, mock_verify),
+            Err(PalwCarriageError::EquivocationWrongBondRecord { resolved: op(0xB2), accused })
+        );
+    }
+
+    /// Forged signatures prove nothing, and neither does a certificate whose two attestations
+    /// agree — the latter is not an offence at all.
+    #[test]
+    fn forgery_and_non_contradiction_are_both_refused() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+
+        let mut forged = carriage(signer, accused, h(0x01), h(0x02));
+        forged.certificate.attestation_b.signature = vec![0xFF; 64];
+        assert!(matches!(
+            adjudicate_equivocation_carriage_v1(&forged, &bond(signer, accused), 100, mock_verify),
+            Err(PalwCarriageError::EquivocationNotProven(_))
+        ));
+
+        // Same root twice: the signer said one thing twice, which is not equivocation.
+        let agreeing = carriage(signer, accused, h(0x01), h(0x01));
+        assert!(matches!(
+            adjudicate_equivocation_carriage_v1(&agreeing, &bond(signer, accused), 100, mock_verify),
+            Err(PalwCarriageError::EquivocationNotProven(_))
+        ));
+    }
+
+    /// A bond that is not at risk cannot be taken: slashed already, or not yet active.
+    #[test]
+    fn an_inactive_bond_cannot_be_slashed() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let c = carriage(signer, accused, h(0x01), h(0x02));
+
+        let mut already_slashed = bond(signer, accused);
+        already_slashed.slashed_at_daa_score = Some(50);
+        already_slashed.status = BondStatus::Slashed;
+        assert_eq!(
+            adjudicate_equivocation_carriage_v1(&c, &already_slashed, 100, mock_verify),
+            Err(PalwCarriageError::EquivocationBondInactive)
+        );
+
+        let mut not_yet = bond(signer, accused);
+        not_yet.activation_daa_score = 10_000;
+        not_yet.status = BondStatus::Pending;
+        assert_eq!(
+            adjudicate_equivocation_carriage_v1(&c, &not_yet, 100, mock_verify),
+            Err(PalwCarriageError::EquivocationBondInactive)
+        );
+    }
+
+    /// Class divergence — two different signers — may freeze but never slash (ADR-0027 P1), so it
+    /// is refused at admission and would be refused again at adjudication.
+    #[test]
+    fn class_divergence_is_not_carried_here_and_never_slashes() {
+        let ctx = context();
+        let divergent = PalwEquivocationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: op(0xB1),
+            certificate: PalwClassContradictionCertificateV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                attestation_a: attested(h(0xE1), &ctx, h(0x01)),
+                attestation_b: attested(h(0xE2), &ctx, h(0x02)),
+                job_context: ctx,
+            },
+        };
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::Equivocation(divergent.clone())),
+            Err(PalwCarriageError::EquivocationNotOneSigner)
+        );
+        assert_eq!(
+            adjudicate_equivocation_carriage_v1(&divergent, &bond(h(0xE1), op(0xB1)), 100, mock_verify),
+            Err(PalwCarriageError::EquivocationBondNotTheSigner)
+        );
+    }
+
+    /// The kind round-trips on its own subnetwork id, like every other band member.
+    #[test]
+    fn the_kind_routes_and_roundtrips() {
+        let c = carriage(h(0xE1), op(0xB1), h(0x01), h(0x02));
+        let obj = PalwCarriageV1::Equivocation(c);
+        assert_eq!(obj.kind_byte(), PALW_CARRIAGE_KIND_EQUIVOCATION);
+        assert_eq!(palw_carriage_tx_kind(&SUBNETWORK_ID_PALW_EQUIVOCATION), Some(PALW_CARRIAGE_KIND_EQUIVOCATION));
+        let encoded = encode_palw_carriage_v1(&obj);
+        let body = &encoded[7..];
+        assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_EQUIVOCATION, body).unwrap(), obj);
+        assert_eq!(PALW_S_MLDSA87_ATTESTATION_CONTEXT.is_empty(), false);
     }
 }

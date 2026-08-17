@@ -273,6 +273,13 @@ pub const SUBNETWORK_ID_PALW_REFUTATION: SubnetworkId = SubnetworkId::from_byte(
 /// [`crate::palw_carriage::PalwEvidenceChunkCarriageV1`]. Pure evidence
 /// carrier like the refutation it reassembles into.
 pub const SUBNETWORK_ID_PALW_EVIDENCE_CHUNK: SubnetworkId = SubnetworkId::from_byte(0x45);
+/// An executor-equivocation certificate (kind 0x07) —
+/// [`crate::palw_carriage::PalwEquivocationCarriageV1`]. Unlike every band member
+/// above it, this one can COST somebody their bond: it is the single PALW offence
+/// that is objectively provable at acceptance, by two signatures from one bonded
+/// key that cannot both be true. Nothing is re-executed and nothing is looked up
+/// beyond the accused bond's own public key.
+pub const SUBNETWORK_ID_PALW_EQUIVOCATION: SubnetworkId = SubnetworkId::from_byte(0x46);
 
 #[cfg(test)]
 mod tests {

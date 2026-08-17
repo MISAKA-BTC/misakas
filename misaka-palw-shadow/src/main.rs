@@ -480,6 +480,14 @@ enum Event {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CarriageEvent {
+    /// An executor-equivocation certificate — the one PALW object that can cost a bond. The
+    /// watcher reports it; adjudicating it is consensus's job, not a telemetry binary's.
+    Equivocation {
+        accused_bond: String,
+        signer: String,
+        root_a: String,
+        root_b: String,
+    },
     Commitment {
         root: String,
         class: String,
@@ -592,6 +600,12 @@ fn carriage_event_of(carriage: &PalwCarriageV1) -> CarriageEvent {
             index: c.chunk_index,
             count: c.chunk_count,
             bytes: c.bytes.len(),
+        },
+        PalwCarriageV1::Equivocation(e) => CarriageEvent::Equivocation {
+            accused_bond: format!("{}:{}", e.accused_bond_outpoint.transaction_id, e.accused_bond_outpoint.index),
+            signer: hex64(&e.certificate.attestation_a.executor_id),
+            root_a: hex64(&e.certificate.attestation_a.full_logits_trace_root),
+            root_b: hex64(&e.certificate.attestation_b.full_logits_trace_root),
         },
     }
 }
@@ -720,6 +734,7 @@ fn kind_name(carriage: &PalwCarriageV1) -> &'static str {
         PalwCarriageV1::OpeningAnswer(_) => "opening-answer",
         PalwCarriageV1::Refutation(_) => "refutation",
         PalwCarriageV1::EvidenceChunk(_) => "evidence-chunk",
+        PalwCarriageV1::Equivocation(_) => "equivocation",
     }
 }
 
@@ -921,6 +936,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
     // "complete" when every declared index has been seen — the reporter counts, it does not
     // reassemble (that is the adjudicating node's job).
     let mut evidence_chunks = 0usize;
+    let mut equivocations = 0usize;
     let mut chunk_groups: std::collections::HashMap<String, std::collections::HashSet<u8>> = std::collections::HashMap::new();
     let mut chunk_group_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for event in &events {
@@ -955,6 +971,11 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
                     chunk_groups.entry(group.clone()).or_default().insert(*index);
                     chunk_group_counts.insert(group.clone(), *count);
                 }
+                // Counted, not adjudicated: proving an equivocation needs the accused bond's
+                // public key, which is chain state this binary deliberately does not hold. A
+                // shadow watcher that decided who loses a bond would be a second opinion, and
+                // the whole point of the carriage kind is that consensus is the only one.
+                CarriageEvent::Equivocation { .. } => equivocations += 1,
             },
         }
     }
@@ -1035,6 +1056,9 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
         "opening_calls_seen": calls,
         "opening_answers_seen": answers,
         "evidence_chunks_seen": evidence_chunks,
+        // Seen, never adjudicated — a non-zero count is an alarm for an operator to look at, not
+        // a verdict this binary is entitled to reach.
+        "equivocation_certificates_seen": equivocations,
         "evidence_groups_complete": chunk_groups
             .iter()
             .filter(|(g, seen)| chunk_group_counts.get(*g).is_some_and(|c| seen.len() == *c as usize))
