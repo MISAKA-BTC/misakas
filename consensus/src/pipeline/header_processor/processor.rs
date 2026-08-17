@@ -118,6 +118,10 @@ pub struct HeaderProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation. Supersedes the
     /// BLAKE2b-SHA3 rule where active; drives the same per-header `pow_algo_id` check.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
+    /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
+    /// than re-deriving it per header.
+    pub(super) palw_tip_order: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
@@ -215,6 +219,7 @@ impl HeaderProcessor {
             network_id: params.net.to_string().into_bytes(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
+            palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
         }
@@ -413,9 +418,17 @@ impl HeaderProcessor {
         // Note we need to keep the lock write guards until the batch is written.
         let mut hst_write = self.headers_selected_tip_store.write();
         let prev_hst = hst_write.get().unwrap();
-        if SortableBlock::new(ctx.hash, header.blue_work) > prev_hst
-            && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap()
-        {
+        // ADR-0039 W4′: tip order goes through the ONE seam. With no fork-choice fence — every
+        // shipped preset — `BlueWorkOnly` compares `SortableBlock`s, so this is byte-identical to
+        // the `>` it replaces, hash tie-break included. The PALW weights are `None` because
+        // nothing resolves them yet; when they are resolved this line does not change.
+        let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
+        let heavier = kaspa_consensus_core::palw_chain_weight::order_tips_v1(
+            self.palw_tip_order,
+            (None, &candidate_tip),
+            (None, &prev_hst),
+        ) == std::cmp::Ordering::Greater;
+        if heavier && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap() {
             // Hint reachability about the new tip.
             reachability::hint_virtual_selected_parent(&mut staging, ctx.hash).unwrap();
             hst_write.set_batch(&mut batch, SortableBlock::new(ctx.hash, header.blue_work)).unwrap();

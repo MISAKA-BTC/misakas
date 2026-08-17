@@ -538,24 +538,28 @@ impl Params {
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
         // ADR-0039 W4′: the fork-choice fence exists, defaults off, and CANNOT YET BE TURNED ON.
         //
-        // The arithmetic is landed and tested (`palw_chain_weight`), but the fact assembly it
-        // consumes is not: nothing yet resolves a block's ramp stage or its derived pwu from
-        // chain state, and both tip-ordering call sites still order by blue work. A fence that
-        // could be set today would therefore select tips from weights nobody computes.
+        // Both tip-ordering sites now go through the seam (`order_tips_v1`), the weight
+        // arithmetic is landed and tested, and the fact ASSEMBLY is landed too
+        // (`palw_facts`). What is still missing is the RESOLVER: nothing reads a block's
+        // receipts, class target, conviction or dispute state out of chain state, so both sites
+        // pass `None` weights.
         //
-        // Refusing `Some` rather than merely leaving it unset is the same discipline the
-        // palw_commitment malleability fix used: a fence is a switch somebody can flip before the
-        // machinery exists, an unrepresentable state is not. This refusal is deleted in the same
-        // change that lands the fact assembly and routes BOTH call sites — they must move
-        // together, because a header-selected tip and a virtual sink that disagree about the
-        // order are a partition.
+        // With `None` on both sides the seam falls back to blue work, so setting the fence today
+        // would not diverge anything — it would silently do NOTHING, while telling an operator
+        // that PALW weight governs fork choice. That is an over-claim of exactly the kind this
+        // codebase has already been audited for, so the refusal is narrowed rather than deleted:
+        // it now names the one remaining precondition instead of the three it started with.
+        //
+        // Removing it requires a resolver, which requires stores this tree does not have (a
+        // class-DAA store and a conviction/dispute store). That is the next change, and it is
+        // the last one before a fence could honestly be set.
         if let Some(fork_choice) = self.palw_fork_choice.as_ref() {
             fork_choice.validate().map_err(|_| {
                 crate::palw_registry::PalwRegistryError::NotCanonical("palw_fork_choice bound is out of range")
             })?;
             return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                "palw_fork_choice is set, but no code resolves PALW weight facts or orders tips by them yet — \
-                 landing the fact assembly and both call sites is what removes this refusal",
+                "palw_fork_choice is set, but nothing resolves PALW weight facts from chain state yet — \
+                 both tip sites route through the seam and would silently fall back to blue work",
             ));
         }
         let Some(credit) = self.palw_credit.as_ref() else {

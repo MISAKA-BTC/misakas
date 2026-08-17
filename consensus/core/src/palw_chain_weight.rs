@@ -161,8 +161,24 @@ pub enum PalwTipOrderV1 {
 
 /// The one place a candidate tip order is decided.
 ///
-/// `blue_work` is compared last in both rules, which is what makes `BlueWorkOnly` an exact
-/// restatement of the existing comparison rather than an approximation of it
+/// # Precondition: `W` must be TOTAL on distinct candidates
+///
+/// The seam is only as total as its fallback. If two distinct candidates compare `Equal` — same
+/// PALW weights and a fallback that cannot separate them — then a stable sort or a heap keeps
+/// whichever arrived first, and the selected tip depends on insertion order. The adversarial
+/// suite found this by sorting candidates with duplicate fallbacks and getting different
+/// sequences from different permutations.
+///
+/// At both call sites `W` is [`crate::sortable_block::SortableBlock`], whose `Ord` is
+/// `blue_work` then `hash`, so distinct blocks can never tie and the precondition holds. Passing
+/// a fallback that is not total on distinct candidates reintroduces insertion-order dependence,
+/// which is the partition this seam exists to prevent.
+///
+/// The `W` fallback is the caller's EXISTING total order, not a work scalar. At both call sites
+/// that is `SortableBlock`, whose `Ord` is `blue_work` then `hash` — passing only the blue work
+/// would silently drop the hash tie-break and change which of two equal-work tips wins, which is
+/// exactly the kind of quiet behaviour change a seam is supposed to prevent. `BlueWorkOnly` is
+/// therefore an exact restatement of the existing comparison rather than an approximation of it
 /// ([`tests::fence_off_is_exactly_the_blue_work_order`]).
 ///
 /// Under `PalwWeighted`, a candidate whose PALW weights this node could not resolve is ordered as
@@ -398,5 +414,197 @@ mod tests {
         // 7 × 100‰ floors to 0), so pin the case that exposes it.
         let lossy: Vec<_> = (0..100).map(|_| b(7, S::Provisional)).collect();
         assert_eq!(weights(&lossy).live, 70, "700 pwu at 100‰ is 70, however it was split");
+    }
+}
+
+/// ADR-0039's release gate: the adversarial suite that must pass before any value network.
+///
+/// The theorem is one sentence — **equal DAGs give equal weights** — and the suite's job is to
+/// try to break it from every direction a real node differs from another: the order facts
+/// arrived in, the depth a conviction was observed at, where a pruned node started its walk, and
+/// which candidate a tip comparison saw first. ADR-0038 named mutable-weight fork choice as its
+/// own hardest correctness target; this makes that a gate rather than an intention.
+#[cfg(test)]
+mod adversarial_suite {
+    use super::*;
+    use PalwWorkRampStageV1 as S;
+
+    const PARAMS: PalwChainWeightParamsV1 = PalwChainWeightParamsV1 { immature_bound_permille: 100 };
+
+    fn b(pwu: u64, stage: S) -> Option<PalwBlockWeightV1> {
+        Some(PalwBlockWeightV1 { pwu, stage })
+    }
+
+    /// A deterministic shuffle — no `rand`, so the suite cannot introduce the nondeterminism it
+    /// is checking for, and a failure is reproducible from its seed.
+    fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+        let mut out = items.to_vec();
+        let mut state = seed | 1;
+        for i in (1..out.len()).rev() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.swap(i, (state % (i as u64 + 1)) as usize);
+        }
+        out
+    }
+
+    fn dag() -> Vec<Option<PalwBlockWeightV1>> {
+        (0..96)
+            .map(|i| {
+                let stage = match i % 4 {
+                    0 => S::Final,
+                    1 => S::ReceiptLicensed,
+                    2 => S::Provisional,
+                    _ => S::Voided,
+                };
+                b((i as u64 + 1) * 1_000, stage)
+            })
+            .collect()
+    }
+
+    /// **Receipt arrival order.** Receipts ride successor blocks, so two nodes learn them in
+    /// different orders as blocks relay. That must not change either weight.
+    #[test]
+    fn arrival_order_cannot_change_either_weight() {
+        let facts = dag();
+        let expected = chain_weights_v1(&facts, &PARAMS).unwrap();
+        for seed in 1..500u64 {
+            assert_eq!(chain_weights_v1(&permute(&facts, seed), &PARAMS).unwrap(), expected, "seed {seed}");
+        }
+    }
+
+    /// **Conviction observation depth.** A conviction seen early and one seen late are the same
+    /// fact about the same block; only `convicted_before_close` distinguishes them, and that is
+    /// already resolved before it reaches here. Moving a Voided block anywhere in the walk must
+    /// not move the totals.
+    #[test]
+    fn where_a_conviction_sits_in_the_walk_does_not_matter() {
+        let mut facts = dag();
+        let expected = chain_weights_v1(&facts, &PARAMS).unwrap();
+        // Move the first Voided entry to every position in turn.
+        let voided_at = facts.iter().position(|f| matches!(f, Some(w) if w.stage == S::Voided)).unwrap();
+        let voided = facts.remove(voided_at);
+        for position in 0..=facts.len() {
+            let mut moved = facts.clone();
+            moved.insert(position, voided);
+            assert_eq!(chain_weights_v1(&moved, &PARAMS).unwrap(), expected, "voided at {position}");
+        }
+    }
+
+    /// **Pruned start height.** A node that begins its walk later sees a SUFFIX. Its answer must
+    /// be the suffix's answer — never the full chain's, and never a silently lighter version of
+    /// it. This is the property that makes a pruned node's disagreement visible instead of
+    /// plausible.
+    #[test]
+    fn a_suffix_weighs_the_suffix_and_says_so() {
+        let facts = dag();
+        let whole = chain_weights_v1(&facts, &PARAMS).unwrap();
+        for start in 1..facts.len() {
+            let suffix = chain_weights_v1(&facts[start..], &PARAMS).unwrap();
+            assert!(suffix.safe <= whole.safe, "a suffix cannot outweigh the whole");
+            assert!(suffix.live <= whole.live);
+        }
+        // And a walk that cannot resolve one of its blocks refuses outright rather than
+        // returning the lighter chain that skipping it would produce.
+        let mut holed = facts.clone();
+        holed[40] = None;
+        assert_eq!(chain_weights_v1(&holed, &PARAMS), Err(PalwChainWeightError::UnresolvedBlock { index: 40 }));
+    }
+
+    /// **Comparison order.** `order_tips_v1` must be a strict total order: antisymmetric,
+    /// transitive, and reflexive-equal — otherwise a `BinaryHeap` built from it can pop a
+    /// different tip depending on insertion order, which is the same partition by another route.
+    #[test]
+    fn the_tip_order_is_a_total_order_under_both_rules() {
+        let weights: Vec<Option<PalwChainWeightsV1>> = vec![
+            None,
+            Some(PalwChainWeightsV1 { safe: 0, live: 0 }),
+            Some(PalwChainWeightsV1 { safe: 0, live: 5 }),
+            Some(PalwChainWeightsV1 { safe: 10, live: 10 }),
+            Some(PalwChainWeightsV1 { safe: 10, live: 99 }),
+        ];
+        let fallbacks: Vec<u64> = vec![0, 1, 7, 7, 42];
+        for rule in [PalwTipOrderV1::BlueWorkOnly, PalwTipOrderV1::PalwWeighted] {
+            let items: Vec<_> = weights.iter().flat_map(|w| fallbacks.iter().map(move |f| (w.as_ref(), f))).collect();
+            for a in &items {
+                assert_eq!(order_tips_v1(rule, (a.0, a.1), (a.0, a.1)), core::cmp::Ordering::Equal, "reflexive");
+                for z in &items {
+                    // Antisymmetry.
+                    assert_eq!(
+                        order_tips_v1(rule, (a.0, a.1), (z.0, z.1)),
+                        order_tips_v1(rule, (z.0, z.1), (a.0, a.1)).reverse(),
+                        "antisymmetric"
+                    );
+                    for c in &items {
+                        // Transitivity, on the strict relation.
+                        if order_tips_v1(rule, (a.0, a.1), (z.0, z.1)) == core::cmp::Ordering::Greater
+                            && order_tips_v1(rule, (z.0, z.1), (c.0, c.1)) == core::cmp::Ordering::Greater
+                        {
+                            assert_eq!(
+                                order_tips_v1(rule, (a.0, a.1), (c.0, c.1)),
+                                core::cmp::Ordering::Greater,
+                                "transitive"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **Sorting is insertion-order independent — GIVEN a total fallback.**
+    ///
+    /// The property a heap actually relies on. It holds exactly when `W` separates distinct
+    /// candidates: this suite's first version used duplicate `u64` fallbacks, two distinct
+    /// candidates therefore compared `Equal`, and a stable sort kept whichever arrived first —
+    /// different permutations, different sequences. That is a real precondition rather than a
+    /// bad test, and it is now stated on `order_tips_v1`. At both call sites `W` is
+    /// `SortableBlock`, whose hash tie-break makes ties between distinct blocks impossible; the
+    /// fallbacks below are distinct for the same reason.
+    #[test]
+    fn the_same_candidates_sort_the_same_however_they_arrive() {
+        let candidates: Vec<(Option<PalwChainWeightsV1>, u64)> = (0..40)
+            .map(|i| {
+                let w = if i % 3 == 0 { None } else { Some(PalwChainWeightsV1 { safe: (i % 5) as u128, live: (i % 7) as u128 }) };
+                // DISTINCT fallbacks — the `SortableBlock` property, modelled.
+                (w, i as u64)
+            })
+            .collect();
+        let sort = |v: &[(Option<PalwChainWeightsV1>, u64)], rule| {
+            let mut v = v.to_vec();
+            v.sort_by(|a, z| order_tips_v1(rule, (a.0.as_ref(), &a.1), (z.0.as_ref(), &z.1)));
+            v
+        };
+        for rule in [PalwTipOrderV1::BlueWorkOnly, PalwTipOrderV1::PalwWeighted] {
+            let expected = sort(&candidates, rule);
+            for seed in 1..200u64 {
+                assert_eq!(sort(&permute(&candidates, seed), rule), expected, "rule {rule:?} seed {seed}");
+            }
+        }
+    }
+
+    /// The precondition, stated as a test so it cannot be forgotten: a fallback that CANNOT
+    /// separate two distinct candidates makes them compare `Equal`, and an `Equal` pair is where
+    /// insertion order leaks in. `SortableBlock` avoids it by construction.
+    #[test]
+    fn a_non_total_fallback_produces_ties_and_that_is_the_precondition() {
+        let a = (Some(PalwChainWeightsV1 { safe: 1, live: 1 }), 7u64);
+        let z = (Some(PalwChainWeightsV1 { safe: 1, live: 1 }), 7u64);
+        assert_eq!(
+            order_tips_v1(PalwTipOrderV1::PalwWeighted, (a.0.as_ref(), &a.1), (z.0.as_ref(), &z.1)),
+            core::cmp::Ordering::Equal,
+            "identical weights and an equal fallback tie — which is why the fallback must be total"
+        );
+        // SortableBlock cannot do this: distinct blocks differ in the hash even at equal work.
+        use crate::sortable_block::SortableBlock;
+        use kaspa_hashes::Hash64;
+        let heavy = SortableBlock::new(Hash64::from_u64_word(1), 100u64.into());
+        let other = SortableBlock::new(Hash64::from_u64_word(2), 100u64.into());
+        assert_ne!(
+            order_tips_v1(PalwTipOrderV1::BlueWorkOnly, (None, &heavy), (None, &other)),
+            core::cmp::Ordering::Equal,
+            "the hash tie-break is what makes the real fallback total"
+        );
     }
 }

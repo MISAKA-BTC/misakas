@@ -306,6 +306,8 @@ pub struct VirtualStateProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation — supersedes the
     /// BLAKE2b-SHA3 rule for the template's `pow_algo_id` where active.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0039 W4′: the tip-ordering rule, cloned from `Params` at construction.
+    pub(super) palw_tip_order: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
 
@@ -562,6 +564,7 @@ impl VirtualStateProcessor {
             genesis: params.genesis.clone(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
+            palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
@@ -6244,9 +6247,18 @@ impl VirtualStateProcessor {
             );
         }
 
+        // ADR-0039 W4′: sink selection goes through the ONE seam, same as the header-selected
+        // tip. `RankedTip`'s `Ord` calls `order_tips_v1`, which under `BlueWorkOnly` — every
+        // shipped preset — compares the inner `SortableBlock`s and is therefore byte-identical to
+        // the heap this replaces, hash tie-break included.
+        let tip_order = self.palw_tip_order;
         let mut heap = tips
             .into_iter()
-            .map(|block| SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() })
+            .map(|block| RankedTip {
+                block: SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() },
+                palw: None,
+                rule: tip_order,
+            })
             .collect::<BinaryHeap<_>>();
 
         // Self-wedge diagnostics (incident 2026-07-19 §2-1): the heaviest candidate the DNS gate
@@ -6259,7 +6271,7 @@ impl VirtualStateProcessor {
         // since we check that every pushed block is not in the past of current heap
         // (and it can't be in the future by induction)
         loop {
-            let candidate = heap.pop().expect("valid sink must exist").hash;
+            let candidate = heap.pop().expect("valid sink must exist").block.hash;
             // QR reachability hardening: skip a candidate whose reachability is missing (half-pruned)
             // instead of panicking; it is below finality and recovery will complete the prune. Consensus-neutral.
             let candidate_at_or_above_finality = match self.reachability_service.try_is_chain_ancestor_of(finality_point, candidate) {
@@ -6308,7 +6320,7 @@ impl VirtualStateProcessor {
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
                         return (
                             candidate,
-                            heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
+                            heap.into_sorted_iter().take_while(|s| s.block.blue_work >= filtering_blue_work).map(|s| s.block.hash).collect(),
                         );
                     }
                     if gate_rejected.is_none() {
@@ -6330,9 +6342,13 @@ impl VirtualStateProcessor {
             let prune_guard = self.pruning_lock.blocking_read();
             for parent in self.relations_service.get_parents(candidate).unwrap().iter().copied() {
                 if self.reachability_service.is_dag_ancestor_of(finality_point, parent)
-                    && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.hash))
+                    && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.block.hash))
                 {
-                    heap.push(SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() });
+                    heap.push(RankedTip {
+                        block: SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() },
+                        palw: None,
+                        rule: tip_order,
+                    });
                 }
             }
             drop(prune_guard);
@@ -7878,6 +7894,38 @@ where
         }
     }
     out
+}
+
+/// A candidate tip ranked by the ADR-0039 W4′ seam.
+///
+/// The rule rides every element so `Ord` stays a total order on the type rather than depending on
+/// ambient state — a `BinaryHeap` may compare any two elements at any time, and an `Ord` that
+/// consulted something outside the values would not be one. Every element in a given heap carries
+/// the same rule, because it comes from the same `Params`.
+///
+/// `palw` is `None` until a resolver assembles the weight facts from chain state. With
+/// `BlueWorkOnly` that field is not read at all, so the ordering is exactly `SortableBlock`'s.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RankedTip {
+    block: SortableBlock,
+    palw: Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1>,
+    rule: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
+}
+
+impl Ord for RankedTip {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        kaspa_consensus_core::palw_chain_weight::order_tips_v1(
+            self.rule,
+            (self.palw.as_ref(), &self.block),
+            (other.palw.as_ref(), &other.block),
+        )
+    }
+}
+
+impl PartialOrd for RankedTip {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// The weight oracle a node without the model artifact can offer: none.
