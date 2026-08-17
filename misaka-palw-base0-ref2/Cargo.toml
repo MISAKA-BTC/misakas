@@ -1,0 +1,14 @@
+[package]
+name = "misaka-palw-base0-ref2"
+description = "PALW-BASE-0 second implementation: the ADR-0040 primitives re-derived with exact i128 division and no shift operator, plus the bit-exact differential. Test/verification-only — never a consensus dependency"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true

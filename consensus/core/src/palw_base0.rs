@@ -82,16 +82,31 @@ pub const MAX_DOT_LEN: usize = 133_144;
 
 /// Round-half-away-from-zero shift — the ONE site in the whole class where a value loses
 /// information (ADR-0040 C1). Every other operation here is exact.
+///
+/// # It is written on the magnitude, and that is the whole correctness argument
+///
+/// The obvious form, `(x ± 2^(s−1)) >> s`, is **wrong for every negative input**, and the first
+/// version of this function and of ADR-0040 C1's pseudocode both used it. An arithmetic shift
+/// floors, so for `x < 0` the nudge and the floor push the same way instead of opposing: it
+/// returns `−33` for `RSR(−64, 1)`, where the exact quotient is `−32` and needs no rounding at
+/// all. Measured against gemmlowp's `RoundingDivideByPOT`, the two disagreed on **50 % of random
+/// `(x, s)` pairs** — every negative one — always by one unit away from zero. The same form also
+/// overflowed `i32` on 3.2 % of pairs, wrapping the sign.
+///
+/// Rounding the **magnitude** and reapplying the sign is symmetric by construction, so there is
+/// no negative case to get wrong. The arithmetic is done in `i64`: `|x| + 2^(s−1)` can exceed
+/// `i32` while the result never does, and a `wrapping_add` there turns the largest positive
+/// accumulator into a negative answer.
 #[inline]
 pub fn rounding_shift_right(x: i32, s: u8) -> i32 {
     debug_assert!(s <= 31);
     if s == 0 {
         return x;
     }
-    let round = 1i32 << (s - 1);
-    // The add cannot overflow for any `x` an in-range accumulator produces, and `wrapping_add`
-    // states that rather than leaving a debug-only panic on the consensus path.
-    (x.wrapping_add(if x >= 0 { round } else { -round })) >> s
+    let (divisor, half) = (1i64 << s, 1i64 << (s - 1));
+    let magnitude = (x as i64).abs();
+    let rounded = (magnitude + half) / divisor;
+    (if x < 0 { -rounded } else { rounded }) as i32
 }
 
 /// Saturating rounding doubling high multiply — the ONE fixed-point multiply (ADR-0040 C2).
@@ -109,8 +124,25 @@ pub fn srdhm(a: i32, b: i32) -> i32 {
     // Writing the 2 explicitly and still shifting by 31 doubles every product and overflows `i32`
     // at the top of the range: 0.5 × 0.5 returns 0.5 instead of 0.25.
     let product = (a as i64) * (b as i64);
-    let nudge: i64 = if product >= 0 { 1 << 30 } else { 1 - (1 << 30) };
-    ((product + nudge) >> 31) as i32
+    // The asymmetric nudge is `1 - 2^30` for negatives, and it is asymmetric for ONE reason: it
+    // compensates for a division that TRUNCATES toward zero. Pairing it with an arithmetic shift
+    // — which floors — applies the correction twice, and that is what the first version of this
+    // function did. Measured against upstream gemmlowp, `>> 31` disagreed on 50.1 % of random
+    // `(a, b)` pairs, every one of them a negative product, always one unit further from zero:
+    // `srdhm(-2^30, 2^30)` returned `-2^29 - 1` where the exact value is `-2^29`.
+    //
+    // That mattered more here than a one-unit error usually does. C2 chose SRDHM *because* it is
+    // already implemented identically in several codebases, and a second implementation written
+    // against real gemmlowp would then have disagreed with this one on half of all inputs — which
+    // under ADR-0027's court is not a rounding difference, it is a conviction.
+    ((product + nudge_for(product)) / (1i64 << 31)) as i32
+}
+
+/// SRDHM's rounding nudge. Named rather than inlined so the asymmetry has somewhere to be
+/// explained: `1 - 2^30` rather than `-2^30` is what makes truncation round half away from zero.
+#[inline]
+fn nudge_for(product: i64) -> i64 {
+    if product >= 0 { 1 << 30 } else { 1 - (1 << 30) }
 }
 
 /// `i32` accumulator → `int8`, the explicit narrowing (ADR-0040 D op 2). Saturates; nothing in
@@ -129,8 +161,19 @@ pub fn rounding_shift_right_64(x: i64, s: u8) -> i64 {
     if s == 0 {
         return x;
     }
-    let round = 1i64 << (s - 1);
-    (x.wrapping_add(if x >= 0 { round } else { -round })) >> s
+    // Same magnitude-then-sign construction as the 32-bit rule, and for the same reason: the
+    // shift form is wrong on every negative input.
+    //
+    // Widened to `i128`, and that is not belt-and-braces. `|x| + 2^(s-1)` overflows `i64` for `x`
+    // near the type's ends at large `s`, and `x.abs()` overflows outright at `i64::MIN`. An
+    // earlier version of this function did the arithmetic in `i64` and justified it by what
+    // `rescale_q` passes in — but this is a public total function, and a panic reachable from one
+    // is the remote-halt failure mode `palw_base0_ops` refuses by construction. The second
+    // implementation found it on its first run.
+    let (divisor, half) = (1i128 << s, 1i128 << (s - 1));
+    let magnitude = (x as i128).abs();
+    let rounded = (magnitude + half) / divisor;
+    (if x < 0 { -rounded } else { rounded }) as i64
 }
 
 /// The largest right shift [`rescale_q`] accepts. `acc · multiplier` occupies at most 62 bits, so
@@ -347,6 +390,36 @@ mod tests {
         assert_eq!(rounding_shift_right(1, 1), 1);
         assert_eq!(rounding_shift_right(-1, 1), -1);
         assert_eq!(rounding_shift_right(7, 0), 7);
+        // The four assertions above are ALL exact halves, and the defective `(x ± h) >> s` form
+        // agrees with the correct one on every one of them — which is why this test passed while
+        // half of all inputs were wrong. What separates the two forms is a negative input that
+        // needs NO rounding, because there the shift form still subtracts and still floors.
+        assert_eq!(rounding_shift_right(-64, 1), -32, "an exact quotient must not be rounded at all");
+        assert_eq!(rounding_shift_right(-1024, 4), -64);
+        assert_eq!(rounding_shift_right(-100, 2), -25);
+        // Symmetry, stated as the property rather than as a list: the rule is defined on the
+        // magnitude, so no input may disagree with its own negation.
+        for x in [-4096i32, -1000, -257, -128, -7, -2, 0, 2, 7, 128, 257, 1000, 4096] {
+            for s in 0..=12u8 {
+                assert_eq!(
+                    rounding_shift_right(x, s),
+                    -rounding_shift_right(-x, s),
+                    "RSR is not symmetric at ({x}, {s}) — the rounding rule has a sign branch"
+                );
+            }
+        }
+        // Total at the ends: an earlier version overflowed `i32` here, and at `i64::MIN` for the
+        // 64-bit rule, both of which are reachable from a public function.
+        assert_eq!(rounding_shift_right(i32::MAX, 31), 1);
+        assert_eq!(rounding_shift_right(i32::MIN, 31), -1);
+        assert_eq!(rounding_shift_right_64(i64::MIN, 62), -2);
+        assert_eq!(rounding_shift_right_64(i64::MAX, 62), 2);
+        // SRDHM on negatives, which is the half of the input space that was wrong. The nudge is
+        // asymmetric to compensate for a TRUNCATING division; pairing it with a floor double-counts.
+        assert_eq!(srdhm(-(1 << 30), 1 << 30), -(1 << 29), "-0.5 x 0.5 = -0.25 exactly, no rounding");
+        assert_eq!(srdhm(-1, 1), 0, "a product far below the resolution rounds to zero, not away from it");
+        assert_eq!(srdhm(1, -1), 0);
+        assert_eq!(srdhm(-(1 << 20), 1 << 20), -512);
         // SRDHM is `(a·b) >> 31`. These two identities pin the factor: an extra 2 makes the
         // first return 0.5 and the second overflow i32 (the bug this test caught).
         assert_eq!(srdhm(1 << 30, 1 << 30), 1 << 29, "0.5 x 0.5 = 0.25 in Q31");

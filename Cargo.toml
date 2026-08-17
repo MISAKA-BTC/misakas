@@ -33,6 +33,7 @@ members = [
     "misaka-palw-agent",
     "misaka-palw-worker",
     "misaka-palw-base0",
+    "misaka-palw-base0-ref2",
     "misaka-palw-reference2",
     "misaka-palw-reexecutor",
     "simpa",

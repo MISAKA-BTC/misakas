@@ -595,6 +595,13 @@ mod tests {
     /// If this test fails, the question is not how to update the numbers. It is whether the change
     /// was meant to redefine BASE-0, which requires a new class id and a new registration, because
     /// every block already mined under the old one claimed the old numbers.
+    ///
+    /// These numbers HAVE been reset once, and the precedent should be read narrowly. The
+    /// ADR-0040 C1/C2 repair — `RoundingShiftRight` was not round-half-away-from-zero and `SRDHM`
+    /// disagreed with gemmlowp on half its inputs — moved every negative activation by a unit, so
+    /// the trace moved with it. That was allowed because BASE-0 is registered nowhere and no block
+    /// has ever claimed these numbers. The class id did not change, which is exactly the situation
+    /// that would have been unacceptable after registration: same id, different arithmetic.
     #[test]
     fn the_engine_matches_its_golden_trace() {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
@@ -609,10 +616,10 @@ mod tests {
         let engine = Base0Engine::new(&a);
         let mut cache = KvCache::new(&a);
         let golden: [[i32; 16]; 4] = [
-            [2839, 26875, -524, 398, -18073, -16265, -3798, -5404, -9202, -3371, -8499, 9763, -2524, -59, 18795, 5813],
-            [2335, 264, -4599, 11908, 6320, 12503, 1232, -6764, -9219, -8729, 5614, -5282, 14414, 13493, 10099, 2967],
-            [-13857, 22419, 2758, 9039, 12249, 29014, -2991, -2931, 6459, 13519, 349, 9922, 18779, 9581, -1112, -2402],
-            [-8960, -8518, -11500, 2337, 8517, 7653, -18509, -2415, 2510, -3092, 3380, -9859, 12101, 4865, 9840, 19874],
+            [-4813, 23680, 2567, 1711, -17100, -16931, -1634, -10283, -285, 5990, -772, 13827, -3332, 1043, 22085, 10572],
+            [-2464, -2477, -4101, 11787, 7715, 10135, 5846, -9800, -10815, -6606, 11852, -1424, 13586, 11268, 9417, 740],
+            [-10519, 21105, 1050, 12475, 9437, 29971, -989, -3329, 4319, 11861, 2239, 11824, 17851, 9288, 270, -5377],
+            [-9868, -8608, -10523, 4689, 6480, 6731, -14468, -4733, 4236, -78, 6275, -7267, 11591, 5497, 12565, 20501],
         ];
         for (position, (token, want)) in [3usize, 9, 1, 14].iter().zip(golden.iter()).enumerate() {
             let got = engine.forward_token(&mut cache, *token, position).unwrap();
@@ -632,5 +639,6 @@ mod tests {
         assert!(out.iter().all(|t| *t < 64));
     }
 }
+
 
 

@@ -56,14 +56,25 @@ by one ulp about a range would diverge on everything downstream.
 **C1. Rounding is round-half-away-from-zero, and it happens only in `RoundingShiftRight`.**
 
 ```
-RoundingShiftRight(x: i32, s: u8) -> i32          // s in 0..=31
+RoundingShiftRight(x, s) -> i32                   // s in 0..=31
     if s == 0 { return x }
-    let round = 1i32 << (s - 1)
-    (x + if x >= 0 { round } else { -round }) >> s     // arithmetic shift
+    let magnitude = |x|                           // widened; |i32::MIN| does not fit i32
+    let rounded   = (magnitude + 2^(s-1)) / 2^s   // exact division; the numerator is >= 0
+    if x < 0 { -rounded } else { rounded }
 ```
 
 One rule, one site. Every other integer operation is exact, so this is the *only* place a value
 loses information — which is what makes an exact-bits second implementation tractable at all.
+
+**Round the MAGNITUDE, then reapply the sign. Do not write `(x ± 2^(s−1)) >> s`.** That form was
+this ADR's original pseudocode and the first implementation followed it, and it is wrong for every
+negative input: an arithmetic shift floors, so for `x < 0` the nudge and the floor push the same
+way instead of opposing. `RSR(−64, 1)` returns `−33` where the exact quotient is `−32` and needs no
+rounding at all. Measured against gemmlowp's `RoundingDivideByPOT`, the two disagreed on **50 % of
+random `(x, s)` pairs** — every negative one — and the same form overflowed `i32` on a further
+3.2 %, wrapping the sign of the largest accumulators. Found by the second implementation
+(`misaka-palw-base0-ref2`) on its first run; the rule as *stated* was always correct, only the
+pseudocode under it was not.
 
 **C2. `SaturatingRoundingDoublingHighMul` is the one fixed-point multiply.**
 
@@ -72,11 +83,24 @@ SRDHM(a: i32, b: i32) -> i32
     if a == i32::MIN && b == i32::MIN { return i32::MAX }   // the single saturating case
     let p: i64 = (a as i64) * (b as i64)                    // a·b — NOT 2·a·b
     let nudge: i64 = if p >= 0 { 1 << 30 } else { 1 - (1 << 30) }
-    ((p + nudge) >> 31) as i32
+    ((p + nudge) / (1 << 31)) as i32                        // TRUNCATING division, not a shift
 ```
 
 This is gemmlowp's primitive verbatim, deliberately: it is already implemented identically in
 several independent codebases, which is exactly the property a second implementation needs.
+
+**The division truncates toward zero; it is not a shift.** The nudge is asymmetric — `1 − 2^30`
+for negatives rather than `−2^30` — for exactly one reason: it compensates for truncation. Pairing
+it with an arithmetic shift, which floors, applies the correction twice, and the first
+implementation of this ADR did precisely that. Measured against upstream gemmlowp, `>> 31`
+disagreed on **50.1 % of random `(a, b)` pairs**, every one a negative product, always one unit
+further from zero: `SRDHM(−2^30, 2^30)` returned `−2^29 − 1` where the exact value is `−2^29`.
+
+This mattered out of proportion to its size, and the reason is the paragraph below it: SRDHM was
+chosen *because* it is already implemented identically elsewhere. A third party writing BASE-0
+against real gemmlowp would have disagreed with the reference on half of all inputs — and under
+optimistic verification a systematic disagreement is not a rounding difference, it is a conviction
+and a slashed bond.
 
 **The product is `a·b`, not `2·a·b`.** The "doubling" in the name describes the relationship to
 the hardware `VQRDMULH` — `(a·b) >> 31` *is* `(2·a·b) >> 32` — it is not a factor to apply on top
@@ -318,9 +342,30 @@ already-pinned narrowing, which is a different and worse change than adding an o
 
 ## Consequences
 
-* **A second implementation is tractable and is required.** Six total integer functions with
-  pinned constants is a differential-testable surface; `misaka-palw-reference2` already
-  demonstrates the shape for the float ruleset (Berkeley SoftFloat, exact-equality differential).
+* **A second implementation is tractable, is required, and has now been built.**
+  `misaka-palw-base0-ref2` re-derives all seven primitives with exact `i128` division and **no
+  shift operator anywhere**, and `tests/differential.rs` compares them at exact equality over ~3M
+  inputs — exhaustive on small windows, complete on the type boundaries, then sampled.
+
+  It earned its cost on the first run, finding three defects that the first implementation's own
+  tests had passed: the C1 rounding rule (above), the C2 truncation (above), and a
+  `RoundingShiftRight64` that **panicked on overflow** for inputs near `i64`'s ends — a panic
+  reachable from a public function, which is the remote-halt failure mode `palw_base0_ops` refuses
+  by construction.
+
+  Two lessons generalise. First, all three defects were on **negative or extreme inputs**, and all
+  three survived tests that used positive mid-range values; the first implementation's own
+  negative cases were all exact halves, where the defective and correct forms happen to agree.
+  Second, the second implementation must **re-declare the pinned constants rather than import
+  them**: sharing them made a mutation of `RSQRT_ITERS` invisible to the differential, because
+  both sides moved together. Constants are specification (F2), so they are compared, not shared.
+
+* **Structural independence is not authorship independence.** One author wrote both sides here, so
+  a misreading of the *specification* would be reproduced rather than caught — unlike
+  `misaka-palw-reference2`, whose independence comes from vendoring Berkeley SoftFloat. Closing
+  that gap means an implementation this project did not write. For `SRDHM` and
+  `RoundingShiftRight` upstream gemmlowp is directly vendorable and is the obvious next step,
+  since those two are exactly where a third party proved most likely to differ.
 * **ADR-0031 does not apply to this class.** Its canonical-transcendental machinery exists to pin
   libm; there is no libm here. The class identity records "no libm" as a fact rather than
   recording a version — and the `libm_transcribed` registry flag is trivially satisfiable for
