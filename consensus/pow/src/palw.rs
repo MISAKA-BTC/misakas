@@ -205,7 +205,7 @@ mod native {
             if let Some(tag) = cache().lock().unwrap().get(seed) {
                 return Ok(*tag);
             }
-            run_worker(&worker, seed)?
+            run_worker_with_retry(&worker, seed)?
         };
         let mut cache = cache().lock().unwrap();
         if cache.len() >= TAG_CACHE_MAX {
@@ -213,6 +213,38 @@ mod native {
         }
         cache.insert(*seed, tag);
         Ok(tag)
+    }
+
+    /// Attempts a `PalwWorkerFailed` gets before it is treated as permanent (ADR-0036 Decision 4).
+    ///
+    /// The tag is a pure function of the seed, so a retry is free of correctness risk: it either
+    /// produces the same tag or it fails again. What it buys is the distinction the caller cannot
+    /// otherwise make — `PalwWorkerFailed` covers a *transient* fault (a spawn failure, an OOM
+    /// kill, or a timeout under validation load) as well as a permanent one, and the caller
+    /// `calc_block_level_check_pow_layer0` panics on it. Panicking a node because one subprocess
+    /// lost a race under load is a self-inflicted outage; three attempts convert the common
+    /// transient into a delay, and a genuinely broken runtime still reaches the panic.
+    const WORKER_ATTEMPTS: u32 = 3;
+
+    fn run_worker_with_retry(worker: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
+        let mut last = None;
+        for attempt in 1..=WORKER_ATTEMPTS {
+            match run_worker(worker, seed) {
+                Ok(tag) => return Ok(tag),
+                // A missing/unspawnable worker is a configuration fault: retrying cannot fix it
+                // and would only delay the operator's error message.
+                Err(e @ PowLayer0Error::PalwUnavailable(_)) => return Err(e),
+                Err(e) => {
+                    if attempt < WORKER_ATTEMPTS {
+                        // Linear backoff: the common cause is transient memory or CPU pressure
+                        // from concurrent validation, which needs time more than it needs jitter.
+                        std::thread::sleep(Duration::from_millis(250 * attempt as u64));
+                    }
+                    last = Some(e);
+                }
+            }
+        }
+        Err(last.expect("the loop runs at least once and only stores Err"))
     }
 
     fn timeout() -> Duration {

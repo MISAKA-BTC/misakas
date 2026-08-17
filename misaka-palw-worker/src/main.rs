@@ -48,7 +48,7 @@ use kaspa_consensus_core::palw_v2::{
     trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2, PalwGoldenVectorSetV2, PalwJobContextV2,
     PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2,
     PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2,
-    PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V2,
+    PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V3,
     PALW_V2_MAX_FRAME_BYTES,
 };
 use kaspa_consensus_core::palw_legs::{
@@ -144,58 +144,6 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
 
 fn hex(h: Hash64) -> String {
     faster_hex::hex_string(h.as_byte_slice())
-}
-
-// ---------------------------------------------------------------------------------------------
-// Model artifact check: refuse to run anything but the pinned GGUF.
-// ---------------------------------------------------------------------------------------------
-
-/// SHA-256 of the model file, cached beside the working directory keyed on (path, size, mtime) —
-/// the file is 1.2 GB and every job is its own process.
-fn gguf_sha256(path: &Path) -> String {
-    let meta = std::fs::metadata(path).unwrap_or_else(|e| die(format!("cannot stat model at {}: {e}", path.display())));
-    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-    let cache_key = format!("{}|{}|{}", path.display(), meta.len(), mtime);
-    let cache_path = PathBuf::from(".palw-gguf-sha.json");
-    if let Ok(bytes) = std::fs::read(&cache_path)
-        && let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes)
-        && doc.get("key").and_then(|v| v.as_str()) == Some(cache_key.as_str())
-        && let Some(sha) = doc.get("sha256").and_then(|v| v.as_str())
-    {
-        return sha.to_owned();
-    }
-    let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("cannot open model at {}: {e}", path.display())));
-    let mut hasher = sha2::Sha256::new();
-    std::io::copy(&mut file, &mut hasher).unwrap_or_else(|e| die(format!("cannot read model at {}: {e}", path.display())));
-    let sha = faster_hex::hex_string(&hasher.finalize());
-    let _ = std::fs::write(&cache_path, serde_json::json!({ "key": cache_key, "sha256": sha }).to_string());
-    sha
-}
-
-fn pinned_model_path() -> PathBuf {
-    let path = std::env::var("MISAKA_PALW_GGUF")
-        .unwrap_or_else(|_| die("MISAKA_PALW_GGUF is not set; point it at the pinned Qwen3.5-2B-Q4_K_M.gguf".into()));
-    let path = PathBuf::from(path);
-    let meta = std::fs::metadata(&path).unwrap_or_else(|e| die(format!("cannot stat model at {}: {e}", path.display())));
-    if meta.len() != qwen35_pins::GGUF_SIZE {
-        die(format!(
-            "model at {} is {} bytes, but the pinned {} is {} bytes — refusing to run an unpinned artifact",
-            path.display(),
-            meta.len(),
-            qwen35_pins::GGUF_FILENAME,
-            qwen35_pins::GGUF_SIZE
-        ));
-    }
-    let sha = gguf_sha256(&path);
-    if sha != qwen35_pins::GGUF_SHA256 {
-        die(format!(
-            "model at {} has SHA-256 {sha}, but the pinned {} is {} — refusing to run an unpinned artifact",
-            path.display(),
-            qwen35_pins::GGUF_FILENAME,
-            qwen35_pins::GGUF_SHA256
-        ));
-    }
-    path
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -300,6 +248,61 @@ const FP_ENVIRONMENT_PROFILE_V2: &str = "rounding=rne,ftz=0,daz=0";
 /// is itself pinned so a templated variant can never share this manifest.
 const PALW_PROMPT_TEMPLATE_V2: &str = "none/token-ids-input/v2";
 
+/// The resolved libm, probed behaviourally — the missing half of ADR-0031 (audit B8).
+///
+/// llama.cpp's GDN decay calls the C `expf` per (token, head) across 18 of 24 layers and that
+/// arithmetic lands in the PoW tag, so *which* libm is linked is a class property. We resolve the
+/// **same dynamic symbols llama.cpp resolves** — declared here rather than reached through
+/// `f32::exp`, whose lowering Rust does not guarantee to be the libm call — and digest their
+/// outputs over the frozen [`PALW_LIBM_PROBE_V1`] vector.
+mod libm_probe {
+    use kaspa_consensus_core::palw_v2::PALW_LIBM_PROBE_V1;
+    use sha2::{Digest, Sha256};
+
+    // The libm entry points llama.cpp itself calls. Linking these makes the probe measure the
+    // resolved implementation (including an LD_PRELOAD or a patched build), not Rust's std.
+    unsafe extern "C" {
+        fn expf(x: f32) -> f32;
+        fn logf(x: f32) -> f32;
+    }
+
+    /// Digest of `expf` then `logf` over the frozen probe vector. Raw output bits are hashed, so
+    /// a one-ulp difference in either function is a different digest — and therefore a different
+    /// class id — which is precisely the divergence B8 said could pass unannounced.
+    pub fn arithmetic_digest() -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"misaka-palw/libm-probe/v1");
+        for &bits in PALW_LIBM_PROBE_V1 {
+            let x = f32::from_bits(bits);
+            // SAFETY: both are pure, total libm functions on any float input (NaN/inf included).
+            let (e, l) = unsafe { (expf(x), logf(x.abs())) };
+            h.update(e.to_bits().to_le_bytes());
+            h.update(l.to_bits().to_le_bytes());
+        }
+        h.finalize().into()
+    }
+
+    /// Human-readable identity for refusal messages. Diagnostic only — never load-bearing, since
+    /// a version string can neither prove nor disprove that two hosts share the arithmetic.
+    pub fn identity() -> String {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            unsafe extern "C" {
+                fn gnu_get_libc_version() -> *const core::ffi::c_char;
+            }
+            // SAFETY: glibc always returns a valid static NUL-terminated string.
+            let v = unsafe { core::ffi::CStr::from_ptr(gnu_get_libc_version()) };
+            return format!("glibc/{}", v.to_string_lossy());
+        }
+        #[cfg(all(target_os = "linux", target_env = "musl"))]
+        return "musl/unversioned".to_string();
+        #[cfg(target_vendor = "apple")]
+        return "apple/libsystem_m".to_string();
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        return format!("unknown/{}", std::env::consts::OS);
+    }
+}
+
 /// The v2 execution shape, built from the ACTUAL constants (the v1 `SHAPE_STRING` hardcoded
 /// `n_threads=4` beside a `CPU_THREADS` constant that could drift; here drift is impossible).
 fn shape_string_v2() -> String {
@@ -366,7 +369,7 @@ fn ggml_flag(v: &str) -> bool {
 /// class registration.
 fn runtime_manifest_v2(worker_sha: [u8; 32], golden_root: Hash64) -> PalwRuntimeManifestV2 {
     PalwRuntimeManifestV2 {
-        version: PALW_RUNTIME_MANIFEST_VERSION_V2,
+        version: PALW_RUNTIME_MANIFEST_VERSION_V3,
         target_arch: std::env::consts::ARCH.to_string(),
         target_triple: env!("MISAKA_PALW_TARGET_TRIPLE").to_string(),
         compiler_name: "rustc+cc".to_string(),
@@ -403,15 +406,29 @@ fn runtime_manifest_v2(worker_sha: [u8; 32], golden_root: Hash64) -> PalwRuntime
             h.update(PALW_PROMPT_TEMPLATE_V2.as_bytes());
             h.finalize().into()
         },
+        libm_identity: libm_probe::identity(),
+        libm_arithmetic_digest: libm_probe::arithmetic_digest(),
         trace_scheme_id: trace_scheme_id_v2(),
         golden_vector_root: golden_root,
     }
 }
 
-/// The v2 model gate: same pins as v1, but the SHA-256 is ALWAYS recomputed from the bytes —
-/// the canonical policy forbids trusting a (path, size, mtime) cache for artifact identity
-/// (VPS design §4.4). Costs a full read of the 1.2 GB file per job process; the persistent
-/// agent (P1) amortizes it, correctness does not wait for it.
+/// The model gate — now the ONLY one, for every mode, always recomputing the SHA-256 from bytes.
+///
+/// The canonical policy forbids trusting a `(path, size, mtime)` cache for artifact identity
+/// (VPS design §4.4). Costs a full read of the 1.2 GB file per job process; the persistent agent
+/// (P1) amortizes it, correctness does not wait for it.
+///
+/// **There used to be a second gate with a hole (mainnet-readiness audit B15).** A v1
+/// `pinned_model_path` consulted a `.palw-gguf-sha.json` in the *process working directory*, keyed
+/// on `path|size|mtime`, and returned the cached digest on a key match — so writing that file made
+/// any same-sized model pass the pin. Its one caller was `--mode verify`, the mode **block
+/// validation itself invokes** (`consensus/pow/src/palw.rs::run_worker`), which put the bypass on
+/// the consensus PoW path: a node running an unpinned model computes a different tag for every
+/// header and silently forks itself off the network. v1 was folded into this function rather than
+/// patched, so there is one policy and no second implementation to drift. Any cheaper check is
+/// forgeable by whoever can write the cache, and the size check alone admits a same-size
+/// substitute — the full read *is* the check.
 fn pinned_model_path_v2() -> PathBuf {
     let path = std::env::var("MISAKA_PALW_GGUF")
         .unwrap_or_else(|_| die("MISAKA_PALW_GGUF is not set; point it at the pinned Qwen3.5-2B-Q4_K_M.gguf".into()));
@@ -2034,7 +2051,7 @@ fn main() {
                 die("the prompt on stdin is empty".into());
             }
             eprintln!("[palw-worker] mode={m} n_predict={n_predict} input={} bytes", input.len());
-            let model_path = pinned_model_path();
+            let model_path = pinned_model_path_v2();
             let exec = execute(&model_path, &input, n_predict);
 
             // The replay-stable projection. Job identity mixes the input, the ceiling and the

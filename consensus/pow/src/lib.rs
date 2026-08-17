@@ -120,6 +120,17 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
         // node cannot judge ANY header on a PALW network. Returning `false` here would silently
         // reject every valid block — stall the node, ban honest peers — so fail loud instead,
         // exactly like the VLT devnet fence panics a kaspad missing its runtime.
+        //
+        // Reaching here is now a statement about a PERSISTENT fault, not a momentary one: the
+        // transient half of `PalwWorkerFailed` (spawn failure, OOM kill, timeout under validation
+        // load) is absorbed by `palw::native::run_worker_with_retry`'s bounded attempts, so a node
+        // is no longer killed because one subprocess lost a race (mainnet-readiness audit B7,
+        // ADR-0036 Decision 4). What survives retry is a runtime this node genuinely cannot use.
+        //
+        // This panic is also the reason ADR-0036 makes the permanent hash floor a hard gate on the
+        // MAINNET identity: on a single-algo net there is no lane left to make progress in, so the
+        // honest response to an unusable runtime is to stop loudly rather than fork silently. TN11
+        // and devnet accept that trade deliberately; mainnet may not, and must carry the floor.
         Err(e @ (PowLayer0Error::PalwUnavailable(_) | PowLayer0Error::PalwWorkerFailed(_))) => {
             panic!("PALW PoW validation cannot run on this node: {e}")
         }

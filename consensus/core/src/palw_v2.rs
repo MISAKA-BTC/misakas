@@ -71,7 +71,44 @@ pub const PALW_EXECUTION_ALGO_ID_V2: PalwExecutionAlgoId = PalwExecutionAlgoId(2
 pub const PALW_TRACE_SCHEME_NAME_V2: &str = "misaka-palw/full-logits-trace/v2";
 
 /// `runtime_manifest_version` (v2 design §2.1).
+///
+/// **v3 (2026-08-17):** the manifest gained `libm_identity` + `libm_arithmetic_digest`
+/// (mainnet-readiness audit B8 — ADR-0031 makes libm normative PoW arithmetic, and the manifest
+/// never named it). A v2 manifest and a v3 manifest of the same host are deliberately *different*
+/// class identities: v2 could not distinguish two libms, so its class claim was under-specified
+/// and must not be honoured as equal to a v3 one.
+pub const PALW_RUNTIME_MANIFEST_VERSION_V3: u16 = 3;
+/// The superseded v2 manifest version — retained so historical manifests remain *parseable*
+/// (their hashes are still derivable); it is not a version any new manifest may claim.
 pub const PALW_RUNTIME_MANIFEST_VERSION_V2: u16 = 2;
+
+/// The frozen probe vector for [`PalwRuntimeManifestV2::libm_arithmetic_digest`] — f32 bit
+/// patterns, hashed as `expf(x)` then `logf(|x|)` outputs in this order.
+///
+/// Chosen to straddle the places float libms actually differ, not to be pretty: subnormal and
+/// zero, the small-|x| region where `expf` is near 1 and cancellation shows, the ordinary decay
+/// range the GDN gate lives in (ADR-0031's `glibc_expf_v1` call site), the argument-reduction
+/// boundaries near `ln 2` multiples where table-vs-polynomial implementations diverge in the last
+/// ulp, and the overflow/underflow edges. Frozen: changing this list changes every class id.
+/// Measured on this vector (Apple libsystem_m, 2026-08-17): `expf` yields **11 distinct results
+/// out of 12** with a single deliberate infinity, one subnormal, and `logf` 10 distinct — i.e.
+/// nearly every entry carries discriminating information. An earlier draft saturated three entries
+/// to `+inf`, which carry none; it was corrected before freezing, because changing this vector
+/// later re-keys every registered class.
+pub const PALW_LIBM_PROBE_V1: &[u32] = &[
+    0x0000_0001, // smallest positive subnormal
+    0x0080_0000, // smallest positive normal
+    0x3F80_0000, // 1.0
+    0x3F31_7218, // ln 2 — the argument-reduction boundary table and polynomial libms split on
+    0x4038_AA3B, // ~2.885 (2/ln 2)
+    0xBF80_0000, // -1.0
+    0xC120_0000, // -10.0
+    0xC2AF_0000, // -87.5 — expf lands in the SUBNORMAL range; gradual-underflow handling differs
+    0x42B0_0000, // +88.0 — the largest finite expf, the hardest rounding case before overflow
+    0x3727_C5AC, // 1e-5 — expf ≈ 1+x, where cancellation shows
+    0x4120_0000, // 10.0 — ordinary range
+    0x7F7F_FFFF, // f32::MAX — the logf edge (expf saturates here by design)
+];
 /// `trace_commitment_version` (v2 design §2.1).
 pub const PALW_TRACE_COMMITMENT_VERSION_V2: u16 = 2;
 /// The job envelope / job result wire version (VPS design §5.2).
@@ -918,6 +955,29 @@ pub struct PalwRuntimeManifestV2 {
     pub gguf_sha256: [u8; 32],
     pub tokenizer_sha256: [u8; 32],
     pub prompt_template_sha256: [u8; 32],
+    /// Human-readable identity of the resolved libm — e.g. `"glibc/2.39"`, `"apple/libsystem_m"`.
+    /// **Diagnostic only**: it names the implementation for an operator reading a refusal message.
+    /// The load-bearing field is [`Self::libm_arithmetic_digest`], because a version string is
+    /// neither necessary nor sufficient for the arithmetic to agree.
+    pub libm_identity: String,
+    /// Behavioural fingerprint of the resolved libm's `expf`/`logf` over the frozen probe vector
+    /// [`PALW_LIBM_PROBE_V1`] — the missing half of ADR-0031.
+    ///
+    /// ADR-0031 Facts 2/4 make glibc's `expf`/`logf` **normative arithmetic inside the PoW tag**
+    /// (the GDN decay calls `expf` per (token, head) across 18 of 24 layers), and say the binding
+    /// is resolvable only by disassembling `libm.so.6`. Until this field existed the manifest —
+    /// which *is* the class identity — never named libm at all: two hosts with different glibc
+    /// builds produced the same `runtime_manifest_hash` and different arithmetic, so a routine
+    /// distro upgrade silently changed the PoW tag with no identity field to announce it
+    /// (mainnet-readiness audit B8).
+    ///
+    /// A **behavioural** digest rather than a build id or a version string, deliberately: a build
+    /// id moves on rebuilds that do not change arithmetic (spurious class splits), and a version
+    /// string can hide a patched or LD_PRELOAD-ed libm. This digest moves **iff the arithmetic
+    /// this class depends on moves**, which is exactly the class property. It is a cheap runtime
+    /// resolution of the disassembly ADR-0031 calls for — not a replacement for that audit, which
+    /// remains what licenses `libm_transcribed` in the registry.
+    pub libm_arithmetic_digest: [u8; 32],
     pub trace_scheme_id: Hash64,
     pub golden_vector_root: Hash64,
 }
@@ -960,6 +1020,8 @@ impl PalwRuntimeManifestV2 {
         w.put_fixed32(&self.gguf_sha256);
         w.put_fixed32(&self.tokenizer_sha256);
         w.put_fixed32(&self.prompt_template_sha256);
+        w.put_var_str(&self.libm_identity);
+        w.put_fixed32(&self.libm_arithmetic_digest);
         w.put_hash64(&self.trace_scheme_id);
         w.put_hash64(&self.golden_vector_root);
         w.keyed64(PALW_V2_DOMAIN_RUNTIME_MANIFEST)
@@ -1913,6 +1975,8 @@ mod tests {
             gguf_sha256: [4; 32],
             tokenizer_sha256: [4; 32],
             prompt_template_sha256: [5; 32],
+            libm_identity: "glibc/2.39".to_string(),
+            libm_arithmetic_digest: [6; 32],
             trace_scheme_id: trace_scheme_id_v2(),
             golden_vector_root: golden_vector_root_unpopulated_v2(),
         };
@@ -1933,5 +1997,33 @@ mod tests {
         let mut m = base.clone();
         m.ggml_cpu_all_variants = true;
         assert_ne!(base_hash, m.manifest_hash(), "runtime kernel dispatch is a different runtime");
+
+        // audit B8: libm is normative PoW arithmetic (ADR-0031 Facts 2/4 — the GDN decay calls
+        // `expf` per (token, head) across 18 of 24 layers), so a libm whose arithmetic differs by
+        // one ulp MUST be a different class. Before v3 the manifest could not say so at all.
+        let mut m = base.clone();
+        m.libm_arithmetic_digest[0] ^= 1;
+        assert_ne!(base_hash, m.manifest_hash(), "a one-bit libm arithmetic change is a different class");
+        let mut m = base.clone();
+        m.libm_identity = "musl/unversioned".into();
+        assert_ne!(base_hash, m.manifest_hash(), "a different libm implementation is a different manifest");
+    }
+
+    /// The probe vector is frozen: its length and contents are class-identity inputs, so a silent
+    /// edit would re-key every registered class. Pins the shape rather than a golden digest,
+    /// because the digest is host arithmetic and this test must pass off-fleet too.
+    #[test]
+    fn libm_probe_vector_is_frozen() {
+        assert_eq!(PALW_LIBM_PROBE_V1.len(), 12, "probe length is a class-identity input");
+        // The edges that make the probe discriminating, asserted by value so a reorder is caught.
+        assert_eq!(PALW_LIBM_PROBE_V1[0], 0x0000_0001, "smallest subnormal must lead");
+        assert_eq!(PALW_LIBM_PROBE_V1[3], 0x3F31_7218, "ln 2 — the argument-reduction boundary");
+        assert_eq!(PALW_LIBM_PROBE_V1[8], 0x42B0_0000, "the largest-finite-expf rounding case");
+        assert_eq!(PALW_LIBM_PROBE_V1[11], 0x7F7F_FFFF, "f32::MAX must close the vector");
+        // Every entry distinct: a duplicate would silently weaken the probe.
+        let mut seen = PALW_LIBM_PROBE_V1.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), PALW_LIBM_PROBE_V1.len(), "probe entries must be distinct");
     }
 }

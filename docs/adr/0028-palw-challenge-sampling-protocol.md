@@ -348,6 +348,17 @@ Stage 3 Full         wider exposure; requires the second independent reference
   be a solution to a dependency this design refuses to have; the selected-chain anchor hash is
   sufficient for scheduling, and hardening beyond it buys nothing load-bearing.
 * **Mainnet.** Separate ADR, separate activation, after Stage 3 (v2 design §13 step 7).
+  > **Resolved 2026-08-17 (ADR-0036).** A parallel Accepted ADR — ADR-0041, on the non-ancestral
+  > `main-backup-8107bfb-20260807` snapshot — decided mainnet ships PALW active from a new v4
+  > genesis. It is **not** in contradiction with this clause once its layers are separated:
+  > ADR-0041 decides only the *land* shape (a new genesis-active identity, with credit / accept /
+  > mint still OFF behind gates), which is this lineage's Stage 0. ADR-0036 records the settlement:
+  > the live `palw_credit` lineage governs; ADR-0041's *mechanism* (`palw_spam` / `palw_algo4_accept`)
+  > is superseded (it does not exist on the live tree); its two surviving conclusions — mainnet PALW
+  > needs a **new network identity** (the current `MAINNET_PARAMS` can never carry it: both window
+  > presets fail `finality_depth < W_challenge` at 10 BPS) and the *land → accept → mint* separation —
+  > are carried into the future parameterized mainnet ADR. That ADR still comes after Stage 3, and
+  > may not be signed while any of the 2026-08-16/17 audit's 9 blockers is open.
 
 ## Assumptions that remain (stated so they can be attacked)
 
