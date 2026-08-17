@@ -134,7 +134,7 @@ pub fn palw_job_id_v3(
 }
 
 /// The V3 commitment signing digest: network, job, context, class, bond, and all three roots.
-/// Layout mirrors [`crate::palw_slash::palw_execution_attestation_message_v1`]: length-prefixed
+/// Layout mirrors [`crate::palw_slash::palw_execution_attestation_message_v2`]: length-prefixed
 /// network id, then fixed-width fields in struct order.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_commit_message_v3(

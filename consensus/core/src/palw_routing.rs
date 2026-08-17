@@ -342,7 +342,7 @@ pub struct ModelDefinitionV1 {
 }
 
 /// Keyed-BLAKE2b-256 signing message of a model definition — network-bound, layout mirroring
-/// `palw_execution_attestation_message_v1`: length-prefixed network id, then fixed-width
+/// `palw_execution_attestation_message_v2`: length-prefixed network id, then fixed-width
 /// fields in struct order, signature excluded.
 pub fn model_definition_message_v1(network_id: &[u8], definition: &ModelDefinitionV1) -> Hash {
     let mut hasher = blake2b_simd::Params::new().hash_length(32).key(PALW_ROUTING_DOMAIN_MODEL_DEFINITION_MESSAGE).to_state();

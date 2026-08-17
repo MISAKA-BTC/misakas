@@ -47,21 +47,21 @@
 //! recommended registered form.
 
 use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+use crate::dns_finality::StakeBondRecord;
 use crate::palw_legs::{
     PALW_LEGS_OBJECT_VERSION_V1, PalwLegsBindingV1, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsRefutationV1,
     activation_leg_root_v1, canonical_decode_calls, checkpoint_leg_root_v1, execution_commitment_root_v1,
 };
-use crate::dns_finality::StakeBondRecord;
 use crate::palw_slash::{
     PalwClassContradictionCertificateV1, PalwClassContradictionKindV1, PalwExecutionAttestationV1, PalwTraceSummaryRefutationV1,
     adjudicate_class_contradiction_v1, check_job_context_shape,
 };
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
 use crate::subnets::{
-    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EQUIVOCATION,
-    SUBNETWORK_ID_PALW_BISECT_MOVE, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, SUBNETWORK_ID_PALW_RECEIPT,
-    SUBNETWORK_ID_PALW_STEP_CONVICTION,
-    SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
+    SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_BISECT_MOVE, SUBNETWORK_ID_PALW_COMMITMENT,
+    SUBNETWORK_ID_PALW_EQUIVOCATION, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, SUBNETWORK_ID_PALW_OPENING_ANSWER,
+    SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_RECEIPT, SUBNETWORK_ID_PALW_REFUTATION, SUBNETWORK_ID_PALW_STEP_CONVICTION,
+    SubnetworkId,
 };
 use crate::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -197,16 +197,22 @@ pub enum PalwCarriageError {
     EquivocationNotOneSigner,
     #[error("the resolved bond {resolved:?} is not the accused bond {accused:?}")]
     EquivocationWrongBondRecord { resolved: TransactionOutpoint, accused: TransactionOutpoint },
-    #[error("the accused bond's validator key hash does not match the equivocating executor_id — a certificate may only accuse its own signer's bond")]
+    #[error(
+        "the accused bond's validator key hash does not match the equivocating executor_id — a certificate may only accuse its own signer's bond"
+    )]
     EquivocationBondNotTheSigner,
     #[error("the accused bond is not active at the point of view — a slash may not reach a bond that is not at risk")]
     EquivocationBondInactive,
     #[error("the certificate does not prove an equivocation: {0}")]
     EquivocationNotProven(String),
-    #[error("the attestation and the refutation name different job contexts — the certificate accuses one execution and refutes another")]
+    #[error(
+        "the attestation and the refutation name different job contexts — the certificate accuses one execution and refutes another"
+    )]
     StepConvictionContextMismatch,
     #[error("the attestation signs a different trace root than the refutation binds")]
     StepConvictionRootMismatch,
+    #[error("the attestation does not stand behind the composite execution root the refutation refutes")]
+    StepConvictionCommittedRootMismatch,
     #[error("the step conviction does not prove a fault: {0}")]
     StepConvictionNotProven(String),
     #[error("bisection space {got} is outside the openable range — no ladder could be played over it")]
@@ -522,12 +528,10 @@ impl PalwCarriedEvidenceV1 {
     pub fn refutes(&self, committed_root: &Hash64, logits_root: &Hash64) -> bool {
         match self {
             PalwCarriedEvidenceV1::Legs(legs) => {
-                legs.binding.committed_execution_root == *committed_root
-                    && crate::palw_legs::check_legs_refutation_v1(legs).is_ok()
+                legs.binding.committed_execution_root == *committed_root && crate::palw_legs::check_legs_refutation_v1(legs).is_ok()
             }
             PalwCarriedEvidenceV1::Summary(summary) => {
-                summary.committed_trace_root == *logits_root
-                    && crate::palw_slash::check_trace_summary_refutation_v1(summary).is_ok()
+                summary.committed_trace_root == *logits_root && crate::palw_slash::check_trace_summary_refutation_v1(summary).is_ok()
             }
         }
     }
@@ -847,9 +851,13 @@ where
     if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
-    let verdict = adjudicate_class_contradiction_v1(&carriage.certificate, chain_network_id, |digest, attestation: &crate::palw_slash::PalwExecutionAttestationV1| {
-        verify_signature(&accused_bond.validator_pubkey, digest, &attestation.signature)
-    })
+    let verdict = adjudicate_class_contradiction_v1(
+        &carriage.certificate,
+        chain_network_id,
+        |digest, attestation: &crate::palw_slash::PalwExecutionAttestationV1| {
+            verify_signature(&accused_bond.validator_pubkey, digest, &attestation.signature)
+        },
+    )
     .map_err(|e| PalwCarriageError::EquivocationNotProven(e.to_string()))?;
     match verdict.kind {
         PalwClassContradictionKindV1::ExecutorEquivocation { .. } => Ok(carriage.accused_bond_outpoint),
@@ -873,8 +881,10 @@ where
 ///    from opened tiles and compares exact bytes.
 ///
 /// Shape admission has already established that both halves are about the same execution (same
-/// job context, same trace root), so nothing here can convict a bond of a lie told about a
-/// different job.
+/// job context, same logits root, same COMPOSITE root), so nothing here can convict a bond of a
+/// lie told about a different job. The composite-root conjunct is repeated in this function
+/// anyway: for a long time it did not exist at all, and matching only the job and the logits leg
+/// left every other part of the refuted root as free filer input.
 ///
 /// `Unadjudicable` is NOT a conviction and never slashes: it means this build's catalog cannot
 /// decide the question, which is a fact about the class's coverage rather than about the accused
@@ -909,6 +919,15 @@ where
     // signed for devnet verified here and slashed a MAINNET bond (audit).
     if carriage.refutation.binding.job_context.network_id.as_slice() != chain_network_id {
         return Err(PalwCarriageError::EquivocationNotProven("the evidence names a different network than this chain".into()));
+    }
+    // Re-checked HERE and not left to admission alone: this function IS the slash decision, and
+    // it is reachable from the weight path too. Admission running first is a property of the
+    // current wiring, not of this function's contract, and a conviction whose signed composite
+    // root is not the refuted one must never slash regardless of who called.
+    if carriage.attestation.committed_root != carriage.refutation.binding.committed_execution_root {
+        return Err(PalwCarriageError::EquivocationNotProven(
+            "the attestation does not stand behind the refuted execution root".into(),
+        ));
     }
     let message = carriage.attestation.message(chain_network_id);
     if !verify_signature(&accused_bond.validator_pubkey, &message, &carriage.attestation.signature) {
@@ -954,6 +973,20 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
             }
             if c.attestation.full_logits_trace_root != c.refutation.binding.full_logits_trace_root {
                 return Err(PalwCarriageError::StepConvictionRootMismatch);
+            }
+            // The COMPOSITE root, and this is the conjunct that makes the other two mean
+            // something. A step refutation refutes `committed_execution_root`, whose other parts
+            // — `step_leaf_count`, `step_merkle_root`, `checkpoint_count`, `checkpoint_merkle_root`,
+            // `activation_leg_root`, `state_chunk_map_id`, `checkpoint_profile` — are the FILER's
+            // input and are only ever checked against each other by `verify_binding`. Matching the
+            // job context and the logits leg therefore did not establish that the accused stands
+            // behind the refuted object: a filer could take any genuine attestation, rebuild a
+            // self-consistent binding around the same job with a non-canonical `checkpoint_count`,
+            // and collect a structural conviction against a bond that had done nothing wrong (the
+            // shape pass returns a verdict from the binding alone, before any opening is read).
+            // Since generation 2 the accused signs the composite root, so the tie is checkable.
+            if c.attestation.committed_root != c.refutation.binding.committed_execution_root {
+                return Err(PalwCarriageError::StepConvictionCommittedRootMismatch);
             }
             Ok(())
         }
@@ -1011,7 +1044,7 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
                     }
                 }
                 PalwCarriedEvidenceV1::Summary(summary) => {
-                    if summary.version != crate::palw_slash::PALW_S_OBJECT_VERSION_V1 {
+                    if summary.version != crate::palw_slash::PALW_S_OBJECT_VERSION_V2 {
                         return Err(PalwCarriageError::Inner(format!("summary refutation version {} is not v1", summary.version)));
                     }
                 }
@@ -1264,7 +1297,7 @@ mod tests {
     };
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
-    use crate::palw_slash::{PALW_S_ALL_DOMAINS, PALW_S_OBJECT_VERSION_V1};
+    use crate::palw_slash::{PALW_S_ALL_DOMAINS, PALW_S_OBJECT_VERSION_V2};
     use crate::palw_v2::{
         PALW_JOB_WIRE_VERSION_V2, PALW_V2_ALL_DOMAINS, PalwLogitsDtypeV2, PalwStopReasonV2, PalwTracePhaseV2, PalwTraceSummaryV2,
     };
@@ -1360,10 +1393,11 @@ mod tests {
             version: PALW_CARRIAGE_VERSION_V1,
             commitment_root: test_binding().committed_execution_root,
             attestation: PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 executor_id: h64(0xA2),
                 job_context_hash: PalwJobContextV2::from_envelope(&test_envelope(), h64(0x37)).context_hash(),
                 full_logits_trace_root: h64(0x71),
+                committed_root: test_binding().committed_execution_root,
                 signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
             },
             attester_id: h64(0xA2),
@@ -1416,7 +1450,7 @@ mod tests {
         PalwRefutationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             evidence: PalwCarriedEvidenceV1::Summary(PalwTraceSummaryRefutationV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 job_context: PalwJobContextV2::from_envelope(&test_envelope(), h64(0x37)),
                 summary: PalwTraceSummaryV2 {
                     vocab_size: 8,
@@ -1469,10 +1503,7 @@ mod tests {
         let binding = test_binding();
         let named = binding.committed_execution_root;
         let legs = PalwLegsRefutationV1 { binding, evidence: crate::palw_legs::PalwLegsEvidenceV1::Shape };
-        assert!(
-            crate::palw_legs::check_legs_refutation_v1(&legs).is_err(),
-            "the legs fixture must also be the fabricated case"
-        );
+        assert!(crate::palw_legs::check_legs_refutation_v1(&legs).is_err(), "the legs fixture must also be the fabricated case");
         assert!(
             !PalwCarriedEvidenceV1::Legs(legs).refutes(&named, &h64(0xAA)),
             "a legs record that names the right root but proves no fault must not void credit"
@@ -1523,12 +1554,14 @@ mod tests {
     /// here first. Regenerating them is a conscious wire change, never a side effect.
     #[test]
     fn encoded_payloads_are_golden() {
+        // Re-frozen 2026-08-17: PALW-S generation 2 (the attestation gained `committed_root`),
+        // so the attestation payload and every payload carrying a PALW-S object version moved.
         let golden: [(&str, &str); 5] = [
             ("commitment", "2ef18007f17d928e80c6ecf94e6e9b71eabd24ba9b879f7045a18b72665fef14"),
-            ("attestation", "50331d96be49a36fca5cdb9638db467e7264c3b915609686927edfab120fd208"),
+            ("attestation", "3bd9d6fa59419c3d306d57a00d6b98170fc3935319e64af50ca288966e2c86d1"),
             ("opening-call", "aa0328847eae54b9fab887704631f020fed2e468d2906c564c32f2577001eea1"),
             ("opening-answer", "bb106d592e6d7ce811f40471497198d230cd6611106689b70bba180f6113bea7"),
-            ("refutation", "b18fc4d07f142e6d424dafa9a2d45b26ceebb7db98132c39c2342e64f7f80680"),
+            ("refutation", "d908699accd4545f3b1b61818d05b832f41bae2db7c7c78dd13af281a1266576"),
         ];
         for (carriage, (name, expected)) in all_five().iter().zip(golden) {
             let got = payload_hash_hex(&encode_palw_carriage_v1(carriage));
@@ -1828,18 +1861,20 @@ mod tests {
             declared_prefill_tokens: 8,
             max_context_tokens: 4_096,
         };
+        // A bare-v2 shape: the committed object IS the logits root, so the two move together.
         let att = |root: Hash64| PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V1,
+            version: PALW_S_OBJECT_VERSION_V2,
             executor_id: h64(0xE1),
             job_context_hash: ctx.context_hash(),
             full_logits_trace_root: root,
+            committed_root: root,
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
         PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: outpoint(0xB1, 0),
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 attestation_a: att(h64(0x01)),
                 attestation_b: att(h64(0x02)),
                 job_context: ctx,
@@ -1855,10 +1890,11 @@ mod tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: outpoint(0xB1, 0),
             attestation: PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 executor_id: h64(0xE1),
                 job_context_hash: refutation.binding.job_context.context_hash(),
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
+                committed_root: refutation.binding.committed_execution_root,
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
             },
             refutation,
@@ -2071,8 +2107,7 @@ mod tests {
         );
         assert_eq!(palw_audit_call_bond_outpoint(&call_with_bond), Some(TransactionOutpoint::new(call_with_bond.id(), 0)));
         // A call without outputs carries no bond (Stage-1 admission deliberately unchanged).
-        let bare_call =
-            Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_OPENING_CALL, 0, vec![]);
+        let bare_call = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_OPENING_CALL, 0, vec![]);
         assert_eq!(palw_audit_call_bond_outpoint(&bare_call), None);
         // A non-call carriage or native transaction is never a bond slot.
         let native =
@@ -2085,7 +2120,7 @@ mod tests {
 mod equivocation_tests {
     use super::*;
     use crate::dns_finality::{BondStatus, StakeBondRecord};
-    use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V1};
+    use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V2};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use crate::tx::TransactionId;
 
@@ -2138,10 +2173,11 @@ mod equivocation_tests {
 
     fn attested(signer: Hash64, ctx: &PalwJobContextV2, root: Hash64) -> PalwExecutionAttestationV1 {
         let mut a = PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V1,
+            version: PALW_S_OBJECT_VERSION_V2,
             executor_id: signer,
             job_context_hash: ctx.context_hash(),
             full_logits_trace_root: root,
+            committed_root: root,
             signature: vec![],
         };
         let digest = a.message(&ctx.network_id);
@@ -2173,7 +2209,7 @@ mod equivocation_tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: accused,
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 attestation_a: attested(signer, &ctx, root_a),
                 attestation_b: attested(signer, &ctx, root_b),
                 job_context: ctx,
@@ -2273,7 +2309,7 @@ mod equivocation_tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: op(0xB1),
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 attestation_a: attested(h(0xE1), &ctx, h(0x01)),
                 attestation_b: attested(h(0xE2), &ctx, h(0x02)),
                 job_context: ctx,
@@ -2311,7 +2347,7 @@ mod step_conviction_tests {
 
     use super::*;
     use crate::dns_finality::{BondStatus, StakeBondRecord};
-    use crate::palw_slash::PALW_S_OBJECT_VERSION_V1;
+    use crate::palw_slash::PALW_S_OBJECT_VERSION_V2;
     use crate::palw_step_refute::PalwWeightOracleV1;
     use crate::tx::TransactionId;
 
@@ -2365,20 +2401,16 @@ mod step_conviction_tests {
     fn conviction(signer: Hash64, accused: TransactionOutpoint) -> PalwStepConvictionCarriageV1 {
         let refutation = crate::palw_step_refute::tests::skeleton_refutation();
         let mut attestation = PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V1,
+            version: PALW_S_OBJECT_VERSION_V2,
             executor_id: signer,
             job_context_hash: refutation.binding.job_context.context_hash(),
             full_logits_trace_root: refutation.binding.full_logits_trace_root,
+            committed_root: refutation.binding.committed_execution_root,
             signature: vec![],
         };
         let network_id = refutation.binding.job_context.network_id.clone();
         attestation.signature = mock_sign(&mock_key(signer), &attestation.message(&network_id));
-        PalwStepConvictionCarriageV1 {
-            version: PALW_CARRIAGE_VERSION_V1,
-            accused_bond_outpoint: accused,
-            attestation,
-            refutation,
-        }
+        PalwStepConvictionCarriageV1 { version: PALW_CARRIAGE_VERSION_V1, accused_bond_outpoint: accused, attestation, refutation }
     }
 
     /// Shape admission binds the two halves to ONE execution. A certificate that signs one job
@@ -2401,6 +2433,90 @@ mod step_conviction_tests {
         assert_eq!(
             validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(wrong_root)),
             Err(PalwCarriageError::StepConvictionRootMismatch)
+        );
+    }
+
+    /// The forgery the generation-2 `committed_root` closes, built end to end.
+    ///
+    /// Matching the job context and the logits leg was NOT enough. A step refutation refutes the
+    /// COMPOSITE root, and every other part of it — here `checkpoint_count` — is the filer's own
+    /// input that `verify_binding` only checks against the rest of the filer's input. So anyone
+    /// could take a genuine attestation off the chain, rebuild a self-consistent binding around
+    /// the same job with a non-canonical count, and slash a bond that had done nothing wrong.
+    ///
+    /// The test proves both halves of that claim: the forged refutation really does convict on its
+    /// own (so nothing else was stopping it), and the conviction carrying it is refused because
+    /// the accused never signed that composite root.
+    #[test]
+    fn a_forged_binding_around_a_genuine_attestation_cannot_slash() {
+        let (signer, victim) = (h(0xE1), op(0xB1));
+        let honest = conviction(signer, victim);
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(honest.clone())).is_ok());
+
+        // Forge: same job, same logits leg, one tampered part, composite root recomputed so the
+        // binding is internally consistent.
+        let mut forged = honest.refutation.clone();
+        forged.binding.checkpoint_count = honest.refutation.binding.checkpoint_count + 1;
+        forged.binding.committed_execution_root = {
+            // Recomputed exactly the way `verify_binding` does — leg roots first, then the
+            // composite. A forger has every input it needs; that is the point.
+            let ctx = forged.binding.job_context.context_hash();
+            let profile = forged.binding.shape_profile.shape_profile_id();
+            let step_root = crate::palw_step_leg::step_leg_root_v1(
+                &ctx,
+                &profile,
+                forged.binding.step_leaf_count,
+                &forged.binding.step_merkle_root,
+            );
+            let ckpt_root = crate::palw_step_leg::checkpoint_leg_root_v2(
+                &ctx,
+                &forged.binding.checkpoint_profile.profile_hash(),
+                &forged.binding.state_chunk_map_id,
+                forged.binding.job_context.exact_decode_tokens.saturating_sub(1),
+                forged.binding.checkpoint_count,
+                &forged.binding.checkpoint_merkle_root,
+            );
+            crate::palw_step_leg::execution_commitment_root_v2(
+                &ctx,
+                &forged.binding.full_logits_trace_root,
+                &forged.binding.activation_leg_root,
+                &ckpt_root,
+                &step_root,
+            )
+        };
+        assert_ne!(forged.binding.committed_execution_root, honest.refutation.binding.committed_execution_root);
+
+        // Half one: the forgery convicts. The shape pass answers from the binding alone, before
+        // any opening or weight is read, so no oracle and no honest material can save the victim.
+        let verdict = crate::palw_step_refute::check_execution_step_refutation_v1(&forged, &NoWeights)
+            .expect("a non-canonical checkpoint count is a structural fault");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::CheckpointCountNotCanonical);
+
+        // Half two: paired with the genuine attestation it is refused at the door, because the
+        // signature does not stand behind the root being refuted.
+        let attack = PalwStepConvictionCarriageV1 { refutation: forged.clone(), ..honest.clone() };
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(attack.clone())),
+            Err(PalwCarriageError::StepConvictionCommittedRootMismatch)
+        );
+        // And refused again by the adjudicator, which is the function that actually slashes and
+        // must not rely on admission having run.
+        let bond = bond(signer, victim);
+        assert!(matches!(
+            adjudicate_step_conviction_carriage_v1(&attack, &bond, 1_000, NET, &NoWeights, mock_verify),
+            Err(PalwCarriageError::EquivocationNotProven(_))
+        ));
+        // Re-signing the forged root is not a way around it: the attacker does not hold the key,
+        // and with the victim's key the composite root is one the victim genuinely stands behind.
+        let mut resigned = attack;
+        resigned.attestation.committed_root = forged.binding.committed_execution_root;
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(resigned.clone())).is_ok());
+        assert!(
+            matches!(
+                adjudicate_step_conviction_carriage_v1(&resigned, &bond, 1_000, NET, &NoWeights, mock_verify),
+                Err(PalwCarriageError::EquivocationNotProven(ref why)) if why.contains("signature")
+            ),
+            "the message covers committed_root, so editing it invalidates the signature"
         );
     }
 
@@ -2548,13 +2664,17 @@ mod bisect_move_tests {
         let mut moves = 0;
         while ladder.turn() != PalwBisectTurnV1::Terminal {
             let mid = ladder.expected_midpoint().expect("not terminal");
-            let disclosure =
-                PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: ladder.round(), midpoint: mid, mid_state: h(mid) };
+            let disclosure = PalwBisectDisclosureV1 {
+                version: 1,
+                session_id: ladder.session_id(),
+                round: ladder.round(),
+                midpoint: mid,
+                mid_state: h(mid),
+            };
             // Round-trip the move through the wire before applying it — a game whose transport
             // loses a field is a game two nodes play differently.
-            let encoded = encode_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(PalwBisectMoveBodyV1::Disclosure(
-                disclosure.clone(),
-            ))));
+            let encoded =
+                encode_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(PalwBisectMoveBodyV1::Disclosure(disclosure.clone()))));
             let PalwCarriageV1::BisectMove(back) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_BISECT_MOVE, &encoded[7..]).unwrap()
             else {
                 panic!("kind must round-trip")

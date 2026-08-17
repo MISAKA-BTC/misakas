@@ -35,7 +35,7 @@ use kaspa_consensus_core::palw_schedule::{
     PalwDutyObservationV1, PalwPanelCandidateV1, PalwScheduleParamsV1, PalwShadowJobObservationV1, PalwShadowLedgerV1,
     job_schedule_v1, select_replay_panel_v1,
 };
-use kaspa_consensus_core::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V1, PalwExecutionAttestationV1};
+use kaspa_consensus_core::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V2, PalwExecutionAttestationV1};
 use kaspa_consensus_core::palw_v2::{PalwJobEnvelopeV2, decode_framed_borsh, read_framed, write_framed};
 use kaspa_consensus_core::tx::{Transaction, TransactionOutpoint};
 use kaspa_hashes::Hash64;
@@ -912,10 +912,16 @@ fn attest(
                 kaspa_consensus_core::palw_v2::PalwJobContextV2::from_envelope(&envelope, result.binding.job_context.tokenizer_id)
                     .context_hash();
             let mut attestation = PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 executor_id: key.validator_id,
                 job_context_hash: context_hash,
                 full_logits_trace_root: our_logits_root,
+                // OUR recomputed composite, not the announced `root_h` they happen to be equal
+                // here only because the mismatch branch above already returned. Signing our own
+                // computation is the whole point of the generation-2 field: an attester states
+                // what it reproduced, so the signature cannot be pointed at a binding it never
+                // saw.
+                committed_root: our_composite,
                 signature: Vec::new(),
             };
             let message = attestation.message(&envelope.network_id);

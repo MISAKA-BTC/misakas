@@ -8218,7 +8218,7 @@ mod palw_equivocation_wiring_tests {
     use kaspa_consensus_core::palw_carriage::{
         PALW_CARRIAGE_VERSION_V1, PalwCarriageV1, PalwEquivocationCarriageV1, encode_palw_carriage_v1,
     };
-    use kaspa_consensus_core::palw_slash::{PALW_S_OBJECT_VERSION_V1, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1};
+    use kaspa_consensus_core::palw_slash::{PALW_S_OBJECT_VERSION_V2, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1};
     use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_EQUIVOCATION};
     use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
@@ -8268,10 +8268,12 @@ mod palw_equivocation_wiring_tests {
         let ctx = context();
         let att = |root: Hash64| {
             let mut a = PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 executor_id: signer,
                 job_context_hash: ctx.context_hash(),
                 full_logits_trace_root: root,
+                // A bare-v2 shape: the committed object IS the logits root.
+                committed_root: root,
                 signature: vec![],
             };
             a.signature = mock_sign(&mock_key(signer), &a.message(&ctx.network_id));
@@ -8281,7 +8283,7 @@ mod palw_equivocation_wiring_tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: accused,
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V1,
+                version: PALW_S_OBJECT_VERSION_V2,
                 attestation_a: att(h(0x01)),
                 attestation_b: att(h(0x02)),
                 job_context: ctx,

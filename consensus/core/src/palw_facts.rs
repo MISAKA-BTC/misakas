@@ -949,17 +949,18 @@ mod resolver_tests {
         use crate::palw_carriage::{PALW_CARRIAGE_KIND_EQUIVOCATION, PalwEquivocationCarriageV1};
         let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
         let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
-            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V2,
             executor_id: h(0xE1),
             job_context_hash: ctx.context_hash(),
             full_logits_trace_root: root,
+            committed_root: root,
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
         let e = PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: op(0xB1),
             certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
-                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V2,
                 attestation_a: att(h(0xC0)),
                 attestation_b: att(h(0x02)),
                 job_context: ctx,
@@ -1040,17 +1041,18 @@ mod resolver_tests {
         let equivocation = |daa: u64| {
             let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
             let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
-                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V2,
                 executor_id: h(0xE1),
                 job_context_hash: ctx.context_hash(),
                 full_logits_trace_root: root,
+                committed_root: root,
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
             };
             let e = PalwEquivocationCarriageV1 {
                 version: PALW_CARRIAGE_VERSION_V1,
                 accused_bond_outpoint: op(0xB1),
                 certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
-                    version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                    version: crate::palw_slash::PALW_S_OBJECT_VERSION_V2,
                     attestation_a: att(h(0xC0)), // this block's commitment root
                     attestation_b: att(h(0x02)),
                     job_context: ctx,
