@@ -2304,6 +2304,33 @@ impl VirtualStateProcessor {
     /// first-accepted-wins per `committed_root`, `(commitment_root, attester_id)`, `call_tx_id` —
     /// is the Stage-2 reader's business, exactly where ADR-0029 §2 assigns it: an index that
     /// dropped "duplicate" rows would erase the very carriers a reorg could promote to first.
+    /// Verify a commitment carriage's ML-DSA-87 signature under ITS OWN context.
+    ///
+    /// The two PALW signature families use different contexts on purpose — a commitment signature
+    /// must not verify as an attestation or vice versa — so they get two helpers rather than one
+    /// with a parameter a caller can pass the wrong value for. A verification error (malformed key
+    /// or signature) is `false`: unverifiable is not verified.
+    fn verify_palw_commitment_signature(public_key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
+        kaspa_txscript::verify_mldsa87_with_context(
+            public_key,
+            digest.as_bytes().as_slice(),
+            signature,
+            kaspa_consensus_core::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+        )
+        .unwrap_or(false)
+    }
+
+    /// Verify an execution attestation's ML-DSA-87 signature under the attestation context.
+    fn verify_palw_attestation_signature(public_key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
+        kaspa_txscript::verify_mldsa87_with_context(
+            public_key,
+            digest.as_bytes().as_slice(),
+            signature,
+            kaspa_consensus_core::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+        )
+        .unwrap_or(false)
+    }
+
     /// Remember, per class, the DAA at which it last had a commitment credited.
     ///
     /// ADR-0033 §4e bounds an attacker's pre-unbonding gain as
@@ -5047,6 +5074,31 @@ impl VirtualStateProcessor {
             let Some((anchor_hash, _)) = chain_rev.iter().rev().find(|(_, daa)| *daa >= anchor_daa) else {
                 continue; // no anchor on this chain — the job is not decidable here
             };
+            // AUTHENTICATE THE COMMITMENT before it is treated as a claim at all. Nothing in this
+            // walk verified a signature, so a single bonded attacker minted base(C) per crossing
+            // with zero inference: the carriage's ML-DSA-87 signature and the digest it covers both
+            // existed and neither was ever checked (audit, credit-path critical).
+            //
+            // Resolved by bond OUTPOINT and then required to match the claimed validator id — the
+            // outpoint is the unique identity, and without the cross-check a commitment could name
+            // one bond's outpoint while claiming another's id, which is also the id that excludes
+            // the executor from its own panel.
+            let Some(executor_bond) = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint) else { continue };
+            if executor_bond.validator_pubkey_hash != commitment.validator_id
+                || !kaspa_consensus_core::dns_finality::is_bond_active_at(executor_bond, *accepted)
+            {
+                continue;
+            }
+            let commitment_digest = kaspa_consensus_core::palw_carriage::palw_commitment_carriage_message_v1(
+                commitment.validator_id,
+                commitment.bond_outpoint,
+                commitment.committed_form,
+                commitment.committed_root,
+                kaspa_consensus_core::palw_carriage::palw_carriage_envelope_hash_v1(&commitment.envelope),
+            );
+            if !Self::verify_palw_commitment_signature(&executor_bond.validator_pubkey, &commitment_digest, &commitment.signature) {
+                continue;
+            }
             let observed = PalwObservedCommitmentV1 {
                 committed_root: commitment.committed_root,
                 logits_root,
@@ -5058,6 +5110,22 @@ impl VirtualStateProcessor {
                 .iter()
                 .filter(|(a, _): &&(kaspa_consensus_core::palw_carriage::PalwAttestationCarriageV1, u64)| {
                     a.commitment_root == commitment.committed_root
+                })
+                // AUTHENTICATE each attestation the same way. A forged attestation naming a drawn
+                // panel member paid an attacker-chosen bond, because the payee is the filing bond
+                // and nothing checked that the filer signed anything.
+                .filter(|(a, daa)| {
+                    let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == a.bond_outpoint) else { return false };
+                    bond.validator_pubkey_hash == a.attester_id
+                        && kaspa_consensus_core::dns_finality::is_bond_active_at(bond, *daa)
+                        && Self::verify_palw_attestation_signature(
+                            &bond.validator_pubkey,
+                            // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash,
+                            // the same one every other PALW signature path on this node uses. Binding
+                            // it means a devnet attestation cannot be replayed on mainnet.
+                            &a.attestation.message(self.genesis.hash.as_byte_slice()),
+                            &a.attestation.signature,
+                        )
                 })
                 .map(|(a, daa)| PalwObservedAttestationV1 {
                     attester_id: a.attester_id,
@@ -5111,9 +5179,10 @@ impl VirtualStateProcessor {
             // validator key the reward went to whichever the walk happened to reach first, i.e. a
             // payee decided by iteration order rather than by the claim (audit B5). The outpoint is
             // unique by construction and is the same key the panel, the receipts and the slash
-            // paths use.
-            let executor_bond = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint);
-            if let (Some(executor_bond), true) = (executor_bond, decision.base_sompi > 0) {
+            // paths use. `executor_bond` is the one resolved and AUTHENTICATED at the top of this
+            // iteration — resolving it a second time here would be a second chance to disagree with
+            // the bond whose signature was actually checked.
+            if decision.base_sompi > 0 {
                 outputs.push(TransactionOutput::new(decision.base_sompi, p2pkh_mldsa87_spk(&executor_bond.owner_reward_spk_payload)));
             }
             for paid in &decision.paid_attesters {
