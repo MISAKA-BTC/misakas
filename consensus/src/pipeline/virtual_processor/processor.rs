@@ -1003,8 +1003,12 @@ impl VirtualStateProcessor {
                             // Advance the bond view by THIS block's mutations,
                             // derived from the in-memory acceptance data (its
                             // store entry is written by the commit just below).
-                            let bond_muts =
-                                self.dns_bond_mutations_from_acceptance(current, &ctx.mergeset_acceptance_data, &bond_view, pov_daa_score);
+                            let bond_muts = self.dns_bond_mutations_from_acceptance(
+                                current,
+                                &ctx.mergeset_acceptance_data,
+                                &bond_view,
+                                pov_daa_score,
+                            );
                             bond_view.apply(&bond_muts);
                         }
                         // Commit UTXO data for current chain block
@@ -2360,10 +2364,35 @@ impl VirtualStateProcessor {
                 mark = None;
             }
         }
+        // The bond set must ADVANCE with the walk, at each added block's own chain point.
+        //
+        // `initial_active_bond_view()` is the node's pre-batch store snapshot — the set as of the
+        // OLD sink — while the mint paths score a block against the set as of its selected parent
+        // (`template_bond_view` when building, `selected_parent_bond_view` when validating). Using
+        // the pre-batch snapshot for every added block scored blocks 2..n against a set that
+        // excludes the bonds their own predecessors created, and scored every added block against
+        // bonds that the removed side had created and that this chain move deletes. The mark it
+        // writes is a consensus store row that `credit_interval_elapsed` reads back to gate the
+        // MINT, so the disagreement does not stay local: it decides whether a later block is
+        // allowed to credit at all.
+        //
+        // The construction mirrors `stage_dns_bond_mutations` deliberately, including its choice to
+        // derive the removed side's mutations against the STARTING view — those mutations were
+        // derived under that view when they were applied, so re-deriving under it is what makes the
+        // revert an exact inverse. Two different reconstructions of the same walk are two chances
+        // to disagree with the store, so this one copies rather than improves.
+        let mut bond_view = self.initial_active_bond_view();
+        let removed_muts: Vec<Vec<BondMutation>> =
+            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &bond_view)).collect();
+        for muts in removed_muts {
+            bond_view.revert(&muts);
+        }
         for added in chain_path.added.iter() {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };
             let Ok(parent) = self.ghostdag_store.get_selected_parent(*added) else { continue };
-            let bonds = self.initial_active_bond_view().records();
+            // Scored against the parent's set, then advanced past this block — the same order the
+            // mint paths see, and the reason `apply` happens after `compute_palw_credit_outputs`.
+            let bonds = bond_view.records();
             let view = crate::model::stores::palw_class_state::PalwClassStateView::from_records([(
                 class_id,
                 crate::model::stores::palw_class_state::PalwClassStateRecord { last_credited_daa: mark, ..(*existing).clone() },
@@ -2371,12 +2400,11 @@ impl VirtualStateProcessor {
             if !self.compute_palw_credit_outputs(credit, header.daa_score, parent, &bonds, &view).is_empty() {
                 mark = Some(header.daa_score);
             }
+            bond_view.apply(&self.dns_bond_mutations_for_chain_block(*added, &bond_view));
         }
         if mark != existing.last_credited_daa {
-            let updated = crate::model::stores::palw_class_state::PalwClassStateRecord {
-                last_credited_daa: mark,
-                ..(*existing).clone()
-            };
+            let updated =
+                crate::model::stores::palw_class_state::PalwClassStateRecord { last_credited_daa: mark, ..(*existing).clone() };
             if let Err(err) = store.insert_batch(batch, class_id, std::sync::Arc::new(updated)) {
                 kaspa_core::warn!("[palw-class-state] could not stage the last-credit mark: {err}");
             }
@@ -3721,11 +3749,9 @@ impl VirtualStateProcessor {
                     accepted_daa_score: block_daa,
                     // Numerator from the same frozen snapshot the vote signed — see the prevote walk.
                     signed_weight: match frozen {
-                        Some(snap) => snap
-                            .validators
-                            .iter()
-                            .find(|v| v.validator_id == p.validator_id)
-                            .map_or(0, |v| v.effective_weight),
+                        Some(snap) => {
+                            snap.validators.iter().find(|v| v.validator_id == p.validator_id).map_or(0, |v| v.effective_weight)
+                        }
                         None => weight.of(bond, bonds, anchor.anchor_daa_score, p.epoch),
                     },
                     snapshot_commitment: p.snapshot_commitment,
@@ -4731,9 +4757,7 @@ impl VirtualStateProcessor {
             .all()
             .into_iter()
             .chain(walk.capabilities.iter().cloned())
-            .filter(|r| {
-                seen_caps.insert((r.declaration_block, r.validator_id, r.bond_outpoint, r.model_weights_hash, r.runtime_hash))
-            })
+            .filter(|r| seen_caps.insert((r.declaration_block, r.validator_id, r.bond_outpoint, r.model_weights_hash, r.runtime_hash)))
             .filter(|r| {
                 r.declaration_block == beacon_anchor.anchor_hash
                     || self.reachability_service.is_chain_ancestor_of(r.declaration_block, beacon_anchor.anchor_hash)
@@ -5004,9 +5028,7 @@ impl VirtualStateProcessor {
                 break;
             }
             chain_rev.push((current, cur_daa));
-            for (tx_id, record) in
-                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa)
-            {
+            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa) {
                 match decode_palw_stage1_body(record.kind, &record.body) {
                     Ok(PalwCarriageV1::Commitment(c)) => commitments.push((tx_id, c, cur_daa)),
                     Ok(PalwCarriageV1::Attestation(a)) => attestations.push((a, cur_daa)),
@@ -5021,14 +5043,13 @@ impl VirtualStateProcessor {
             current = parent;
         }
         // Crossing commitments, in one pinned order (construction == validation).
-        let mut crossing: Vec<&(TransactionId, kaspa_consensus_core::palw_carriage::PalwCommitmentCarriageV1, u64)> =
-            commitments
-                .iter()
-                .filter(|(_, _, accepted)| {
-                    parent_daa.saturating_sub(*accepted) <= windows.w_challenge
-                        && daa_score.saturating_sub(*accepted) > windows.w_challenge
-                })
-                .collect();
+        let mut crossing: Vec<&(TransactionId, kaspa_consensus_core::palw_carriage::PalwCommitmentCarriageV1, u64)> = commitments
+            .iter()
+            .filter(|(_, _, accepted)| {
+                parent_daa.saturating_sub(*accepted) <= windows.w_challenge
+                    && daa_score.saturating_sub(*accepted) > windows.w_challenge
+            })
+            .collect();
         crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
         // B2: one credit per COMMITTED ROOT. The same root carried by two transactions crossed
         // twice and was paid twice — the carriage is relayable, so duplicating it costs a fee and
@@ -5161,11 +5182,8 @@ impl VirtualStateProcessor {
             // by construction (audit B4). The view remembers; this is where the assumption becomes
             // a rule. `continue`, not `break`: a commitment too close to the last credit is not a
             // budget exhaustion, and a later one in the pinned order may still be far enough.
-            if !class_state.credit_interval_elapsed(
-                &class_id,
-                *accepted,
-                credit.registration.leverage_remedy.min_credit_interval_daa,
-            ) {
+            if !class_state.credit_interval_elapsed(&class_id, *accepted, credit.registration.leverage_remedy.min_credit_interval_daa)
+            {
                 continue;
             }
             let decision = decide_credit_v1(credit, &observed, anchor_hash, &candidates, &observed_atts, &refutation_daas, subsidy);
@@ -5174,9 +5192,8 @@ impl VirtualStateProcessor {
             }
             // What this record would mint, counted BEFORE any output is pushed so a record either
             // pays in full or not at all.
-            let this_job = decision
-                .base_sompi
-                .saturating_add(decision.attester_share_sompi.saturating_mul(decision.paid_attesters.len() as u64));
+            let this_job =
+                decision.base_sompi.saturating_add(decision.attester_share_sompi.saturating_mul(decision.paid_attesters.len() as u64));
             let Some(remaining) = one_job_ceiling.checked_sub(spent) else { break };
             if this_job > remaining {
                 break; // prefix-mandatory: stop, never skip past it to a smaller one
@@ -5997,11 +6014,9 @@ impl VirtualStateProcessor {
                     // bond), so requiring the vote's bond to be the row's canonical one would
                     // silently zero every vote signed under a validator's other bond.
                     let signed_weight = match frozen {
-                        Some(snap) => snap
-                            .validators
-                            .iter()
-                            .find(|v| v.validator_id == att.validator_id)
-                            .map_or(0, |v| v.effective_weight),
+                        Some(snap) => {
+                            snap.validators.iter().find(|v| v.validator_id == att.validator_id).map_or(0, |v| v.effective_weight)
+                        }
                         None => weight.of(bond, bonds, anchor.anchor_daa_score, att.epoch),
                     };
                     contributions.push(AttestationContribution {
@@ -6535,7 +6550,10 @@ impl VirtualStateProcessor {
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
                         return (
                             candidate,
-                            heap.into_sorted_iter().take_while(|s| s.block.blue_work >= filtering_blue_work).map(|s| s.block.hash).collect(),
+                            heap.into_sorted_iter()
+                                .take_while(|s| s.block.blue_work >= filtering_blue_work)
+                                .map(|s| s.block.hash)
+                                .collect(),
                         );
                     }
                     if gate_rejected.is_none() {
@@ -8192,15 +8210,16 @@ where
         if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_STEP_CONVICTION) {
             continue;
         }
-        let Ok(PalwCarriageV1::StepConviction(carriage)) =
-            decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &tx.payload)
+        let Ok(PalwCarriageV1::StepConviction(carriage)) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &tx.payload)
         else {
             continue;
         };
         let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
             continue;
         };
-        if let Ok(slashed) = adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, weights, &verify) {
+        if let Ok(slashed) =
+            adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, weights, &verify)
+        {
             out.push(BondMutation::Slash(slashed, accepted_daa_score));
         }
     }
@@ -8218,7 +8237,9 @@ mod palw_equivocation_wiring_tests {
     use kaspa_consensus_core::palw_carriage::{
         PALW_CARRIAGE_VERSION_V1, PalwCarriageV1, PalwEquivocationCarriageV1, encode_palw_carriage_v1,
     };
-    use kaspa_consensus_core::palw_slash::{PALW_S_OBJECT_VERSION_V2, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1};
+    use kaspa_consensus_core::palw_slash::{
+        PALW_S_OBJECT_VERSION_V2, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1,
+    };
     use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_EQUIVOCATION};
     use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
