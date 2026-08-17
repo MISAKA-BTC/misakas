@@ -476,6 +476,7 @@ fn attack_finalized_without_replay_is_untypable() {
         s_eff_sompi: 20_000 * 100_000_000,
         unbonding_period_blocks: 10_083,
         activation_daa: 0,
+        class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
     };
     let commitment = PalwObservedCommitmentV1 {
         committed_root: h64(0x01),

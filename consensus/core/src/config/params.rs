@@ -569,6 +569,13 @@ impl Params {
         // The registration's own coherence, checked against THIS network's real constants
         // rather than a guess — that is what `validate` takes them for.
         credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)?;
+        // ADR-0038 Decision D: the class's own retarget constants, checked against THIS network's
+        // real pruning depth for the same reason the windows are checked against its real horizons —
+        // a fold whose memory outruns the horizon makes a target depend on how much history the
+        // reading node holds, which is a partition rather than a slow node.
+        credit.class_daa.validate(&self.blockrate).map_err(|_| {
+            crate::palw_registry::PalwRegistryError::NotCanonical("palw_credit's class DAA params are not canonical for this network")
+        })?;
         // ADR-0039 1a, the LOUD half of the coverage rule: no class carries weight or credit
         // before its catalog coverage is complete. `palw_fork_choice` cannot be set without
         // `palw_credit` (just above) and `palw_credit` carries the one registration, so refusing
@@ -2394,6 +2401,7 @@ mod consensus_params_id_tests {
             s_eff_sompi: 20_000_00000000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
+            class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         });
         assert!(broken.validate_palw_v1().is_err(), "an invalid registration must be refused, not run");
     }
@@ -2439,6 +2447,7 @@ mod consensus_params_id_tests {
             s_eff_sompi: 20_000_00000000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
+            class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         });
         assert!(
             with_class.validate_palw_v1().is_err(),
@@ -2450,8 +2459,30 @@ mod consensus_params_id_tests {
             s_eff_sompi: 20_000_00000000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
+            class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         });
         assert!(with_class.validate_palw_v1().is_ok(), "a fence with a registration whose windows fit this network is now runnable");
+
+        // ADR-0038 Decision D: the class's retarget constants are checked against THIS network too.
+        // A fold whose memory outruns the pruning horizon makes a target depend on how much history
+        // the reading node holds, so a node synced from a pruning point would weigh the same block
+        // differently — permanently. Refused at startup rather than discovered at a fork.
+        let mut bad_daa = with_class.clone();
+        let credit = bad_daa.palw_credit.as_mut().expect("just installed");
+        credit.class_daa.retarget_interval_daa = bad_daa_interval(&bad_daa.blockrate);
+        assert!(bad_daa.validate_palw_v1().is_err(), "a retarget memory past the pruning horizon must not be installable");
+        // And it is the memory that binds, not the interval alone: the same interval with no history
+        // to remember is still refused, while a shorter interval over the same history is fine.
+        let mut long_history = with_class;
+        let credit = long_history.palw_credit.as_mut().expect("just installed");
+        credit.class_daa.retarget_interval_daa = long_history.blockrate.pruning_depth / 2;
+        credit.class_daa.history_retargets = 3;
+        assert!(long_history.validate_palw_v1().is_err(), "the PRODUCT is what must fit");
+    }
+
+    /// An interval whose single-boundary memory already reaches the horizon.
+    fn bad_daa_interval(blockrate: &crate::config::params::BlockrateParams) -> u64 {
+        blockrate.pruning_depth
     }
 
     #[test]

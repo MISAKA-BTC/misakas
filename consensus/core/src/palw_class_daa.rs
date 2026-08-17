@@ -30,6 +30,7 @@
 //! feed the lottery; this module owns the arithmetic being deterministic, clamped and
 //! share-conserving on every node.
 
+use crate::config::params::BlockrateParams;
 use kaspa_hashes::Hash64;
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -69,6 +70,120 @@ pub enum PalwClassDaaError {
     StepCensusMismatch { advance: u64, counted: u64 },
     #[error("steps are not a contiguous chain: expected a parent at DAA {expected_parent_daa}, got {got}")]
     DiscontiguousSteps { expected_parent_daa: u64, got: u64 },
+    #[error("unsupported class-DAA params version {got} (expected {expected})")]
+    UnsupportedParamsVersion { got: u16, expected: u16 },
+    #[error("history_retargets must be nonzero — a loop with no memory has no anchor but the boot target")]
+    ZeroHistory,
+    #[error(
+        "the fold's memory is {memory_daa} DAA but the pruning horizon is {pruning_depth} — a node synced from a \
+         pruning point could not re-derive the target, and two nodes would weigh the same block differently"
+    )]
+    MemoryOverflowsHorizon { memory_daa: u64, pruning_depth: u64 },
+}
+
+pub const PALW_CLASS_DAA_PARAMS_VERSION_V1: u16 = 1;
+
+/// The consensus constants one class's DAA loop runs on, frozen per network and carried in the same
+/// fence the class itself arrives in ([`crate::palw_credit::PalwCreditParamsV1`]) — so a network
+/// cannot have a registered class without a retarget, or a retarget without a class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassDaaParamsV1 {
+    pub version: u16,
+    /// DAA scores per retarget boundary. Boundaries are ABSOLUTE multiples of this, so which spans
+    /// close is a property of the chain rather than of where a reader started folding.
+    pub retarget_interval_daa: u64,
+    /// How many boundaries back the fold reads — the loop's MEMORY. Nothing older than
+    /// `retarget_interval_daa × history_retargets` influences a target.
+    ///
+    /// Bounded on purpose. An unbounded iterative retarget cannot survive pruning: a node that
+    /// synced from a pruning point cannot re-derive the chain of targets a long-running node holds,
+    /// and the two would then weigh the same block differently — a partition, not a slow node.
+    /// Bitcoin avoids this by DECLARING the target in the header; until a PoW-path digest binds
+    /// `Header::palw_commitment` there is nowhere to declare it, so the loop forgets instead, inside
+    /// the pruning horizon, by rule. [`Self::validate`] is what makes that a rule.
+    pub history_retargets: u32,
+    /// Per-adjustment clamp (≥ 2), passed through to [`adjust_class_target_v1`].
+    pub max_factor: u32,
+    /// The target in force before any boundary has been crossed, and the anchor of every fold.
+    ///
+    /// Validated nonzero: `palw_pwu::palw_expected_attempts_v1(0)` saturates, so a zero here is the
+    /// MAXIMUM pwu on the network, not a neutral or empty value.
+    pub boot_target: u128,
+}
+
+impl PalwClassDaaParamsV1 {
+    /// Checked against THIS network's real constants, exactly as
+    /// [`crate::palw_schedule::PalwScheduleParamsV1::validate`] is.
+    pub fn validate(&self, blockrate: &BlockrateParams) -> Result<(), PalwClassDaaError> {
+        if self.version != PALW_CLASS_DAA_PARAMS_VERSION_V1 {
+            return Err(PalwClassDaaError::UnsupportedParamsVersion { got: self.version, expected: PALW_CLASS_DAA_PARAMS_VERSION_V1 });
+        }
+        if self.boot_target == 0 {
+            return Err(PalwClassDaaError::ZeroPreviousTarget);
+        }
+        if self.retarget_interval_daa == 0 {
+            return Err(PalwClassDaaError::ZeroRetargetInterval);
+        }
+        if self.max_factor < 2 {
+            return Err(PalwClassDaaError::MaxFactorTooSmall);
+        }
+        if self.history_retargets == 0 {
+            return Err(PalwClassDaaError::ZeroHistory);
+        }
+        // THE BINDING CONSTRAINT: the fold's memory must fit inside the pruning horizon.
+        //
+        // A node that synced from a pruning point cannot walk further back than the horizon, so a
+        // memory longer than it makes the target depend on how much history the reader happens to
+        // hold. Two nodes would then weigh the same block differently and prefer different tips —
+        // and unlike a slow node that is a partition, because the disagreement is permanent. This is
+        // the one inequality that is about consensus rather than about tuning.
+        let memory = (self.retarget_interval_daa)
+            .checked_mul(self.history_retargets as u64)
+            .ok_or(PalwClassDaaError::MemoryOverflowsHorizon { memory_daa: u64::MAX, pruning_depth: blockrate.pruning_depth })?;
+        if memory >= blockrate.pruning_depth {
+            return Err(PalwClassDaaError::MemoryOverflowsHorizon { memory_daa: memory, pruning_depth: blockrate.pruning_depth });
+        }
+        Ok(())
+    }
+
+    /// The fold's memory in DAA scores — how far back a gatherer must walk, and no further.
+    pub fn memory_daa(&self) -> u64 {
+        self.retarget_interval_daa.saturating_mul(self.history_retargets as u64)
+    }
+
+    /// A parameter set a fence may carry on ANY shipped network: a 180-DAA interval remembered four
+    /// boundaries back, clamped at 4x, booting from a target that expects ~2^20 attempts.
+    ///
+    /// Deliberately ONE constructor rather than a literal per call site: every consumer of the fence
+    /// needs a `class_daa`, and five copies of five numbers is five chances for a fixture to stop
+    /// exercising what it claims to.
+    ///
+    /// The memory is `180 × 4 = 720` DAA, which fits the TIGHTEST shipped pruning horizon — the 120 s
+    /// PALW testnet's **1 144**. My first draft used a 720-DAA interval, whose 2 880 memory does not,
+    /// and the doc claimed it was universally valid; the fence-installability test caught it. The
+    /// bound is asserted against every shipped preset now rather than described.
+    pub fn stage1_defaults() -> Self {
+        Self {
+            version: PALW_CLASS_DAA_PARAMS_VERSION_V1,
+            retarget_interval_daa: 180,
+            history_retargets: 4,
+            max_factor: 4,
+            boot_target: u128::MAX >> 20,
+        }
+    }
+
+    /// The one-class domain set a single-registration fence implies: this class at the whole 1000‰.
+    ///
+    /// A fence carries exactly ONE registration, and a block does not record its class
+    /// (`pow_layer0::check_palw_commitment_shape` requires an empty `palw_commitment` on PALW headers
+    /// too), so "PALW header ⇒ that class" is EXACT here and would be a LIE on a multi-class network.
+    /// Taking the share from this set rather than from a caller's argument is what makes the
+    /// single-class assumption visible at the one place it holds — and a one-class set at 1000‰ makes
+    /// the retarget a deliberate no-op, which is the honest behaviour when there is no second class
+    /// to redistribute share with.
+    pub fn single_class_domain(&self, class_id: Hash64) -> Result<PalwDifficultyDomainSetV1, PalwClassDaaError> {
+        PalwDifficultyDomainSetV1::new(class_id, BTreeMap::from([(class_id, PALW_CLASS_SHARE_DENOMINATOR)]))
+    }
 }
 
 /// The Active difficulty domains: class → cadence share (permille), plus the anti-stall
@@ -561,6 +676,7 @@ fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::params::BlockrateParams;
 
     fn id(seed: u64) -> Hash64 {
         Hash64::from_u64_word(seed)
@@ -992,6 +1108,152 @@ mod tests {
         let boot = u128::MAX >> 20;
         assert_eq!(fold_class_target_v1(boot, &[], 1_000, 10, 4).unwrap(), boot);
         assert_eq!(fold_class_target_v1(boot, &[], 1, 10, 4).unwrap(), boot);
+    }
+
+    /// The fold's memory must fit inside the pruning horizon, and that is the one inequality here
+    /// that is about consensus rather than tuning.
+    ///
+    /// A node synced from a pruning point cannot walk further back than the horizon. A memory longer
+    /// than it makes the target depend on how much history the reader happens to hold, so two nodes
+    /// weigh the same block differently and prefer different tips — permanently, which is a partition
+    /// rather than a slow node.
+    #[test]
+    fn the_folds_memory_must_fit_inside_the_pruning_horizon() {
+        let blockrate = BlockrateParams::new_deci_bps();
+        let horizon = blockrate.pruning_depth;
+        assert!(horizon > 0);
+
+        let params = |interval: u64, history: u32| PalwClassDaaParamsV1 {
+            version: PALW_CLASS_DAA_PARAMS_VERSION_V1,
+            retarget_interval_daa: interval,
+            history_retargets: history,
+            max_factor: 4,
+            boot_target: u128::MAX >> 20,
+        };
+
+        // One DAA short of the horizon is admissible; the horizon itself is not — a memory that
+        // reaches exactly as far as the oldest block a pruned node holds cannot be re-derived by it.
+        let fits = params(horizon - 1, 1);
+        fits.validate(&blockrate).unwrap();
+        assert_eq!(fits.memory_daa(), horizon - 1);
+        assert_eq!(
+            params(horizon, 1).validate(&blockrate),
+            Err(PalwClassDaaError::MemoryOverflowsHorizon { memory_daa: horizon, pruning_depth: horizon })
+        );
+        // The product, not just the interval: a short interval with a long history overruns too.
+        assert!(params(horizon / 2, 3).validate(&blockrate).is_err());
+        assert!(params(horizon / 4, 3).validate(&blockrate).is_ok());
+        // And it cannot be wrapped past the check.
+        assert!(matches!(params(u64::MAX, u32::MAX).validate(&blockrate), Err(PalwClassDaaError::MemoryOverflowsHorizon { .. })));
+
+        // A tighter network has a tighter bound — the check reads THIS network's constant, not a
+        // constant of its own.
+        let two_minute = BlockrateParams::new_two_minute_bps();
+        assert!(two_minute.pruning_depth < horizon, "the fixture needs two genuinely different horizons");
+        let admissible_on_deci = params(two_minute.pruning_depth, 1);
+        admissible_on_deci.validate(&blockrate).unwrap();
+        assert!(admissible_on_deci.validate(&two_minute).is_err(), "the same params must not pass on a tighter horizon");
+    }
+
+    /// The stage-1 defaults must be installable on EVERY shipped network, and the tightest horizon is
+    /// the one that binds.
+    ///
+    /// Measured: MAINNET and SIMNET 1 080 000, DEVNET 10 800, TESTNET **1 144** — the 120 s PALW
+    /// testnet. My first draft of these defaults used a 720-DAA interval, whose 2 880 memory does not
+    /// fit 1 144, and its doc asserted universal validity in prose. Prose does not hold; this does.
+    #[test]
+    fn the_stage1_defaults_fit_every_shipped_pruning_horizon() {
+        let defaults = PalwClassDaaParamsV1::stage1_defaults();
+        assert_eq!(defaults.memory_daa(), 720);
+        let presets = [
+            ("mainnet", &crate::config::params::MAINNET_PARAMS),
+            ("testnet", &crate::config::params::TESTNET_PARAMS),
+            ("devnet", &crate::config::params::DEVNET_PARAMS),
+            ("simnet", &crate::config::params::SIMNET_PARAMS),
+        ];
+        let mut tightest = u64::MAX;
+        for (name, params) in presets {
+            defaults.validate(&params.blockrate).unwrap_or_else(|e| panic!("{name}: {e}"));
+            tightest = tightest.min(params.blockrate.pruning_depth);
+        }
+        assert_eq!(tightest, 1_144, "the tightest shipped horizon moved — re-check the defaults against it");
+        assert!(defaults.memory_daa() < tightest);
+        // And the margin is not accidental: a memory at the tightest horizon is refused there while
+        // still passing on the roomiest, which is exactly the asymmetry the check exists for.
+        let at_horizon = PalwClassDaaParamsV1 { retarget_interval_daa: tightest, history_retargets: 1, ..defaults };
+        assert!(at_horizon.validate(&crate::config::params::MAINNET_PARAMS.blockrate).is_ok());
+        assert!(at_horizon.validate(&crate::config::params::TESTNET_PARAMS.blockrate).is_err());
+    }
+
+    /// Every other degenerate value is a refusal, and each refusal is the fail-closed one.
+    #[test]
+    fn degenerate_class_daa_params_are_refused() {
+        let blockrate = BlockrateParams::new_deci_bps();
+        let good = PalwClassDaaParamsV1 {
+            version: PALW_CLASS_DAA_PARAMS_VERSION_V1,
+            retarget_interval_daa: 720,
+            history_retargets: 4,
+            max_factor: 4,
+            boot_target: u128::MAX >> 20,
+        };
+        good.validate(&blockrate).unwrap();
+
+        assert!(matches!(
+            PalwClassDaaParamsV1 { version: 2, ..good }.validate(&blockrate),
+            Err(PalwClassDaaError::UnsupportedParamsVersion { got: 2, .. })
+        ));
+        // A zero boot target is not "no target" — `palw_pwu` reads it as the MAXIMUM work on the
+        // network, so it would make the class the heaviest thing on the DAG from genesis.
+        assert_eq!(PalwClassDaaParamsV1 { boot_target: 0, ..good }.validate(&blockrate), Err(PalwClassDaaError::ZeroPreviousTarget));
+        assert_eq!(
+            PalwClassDaaParamsV1 { retarget_interval_daa: 0, ..good }.validate(&blockrate),
+            Err(PalwClassDaaError::ZeroRetargetInterval)
+        );
+        assert_eq!(PalwClassDaaParamsV1 { max_factor: 1, ..good }.validate(&blockrate), Err(PalwClassDaaError::MaxFactorTooSmall));
+        assert_eq!(PalwClassDaaParamsV1 { history_retargets: 0, ..good }.validate(&blockrate), Err(PalwClassDaaError::ZeroHistory));
+    }
+
+    /// The single-class domain is where the one-registration assumption becomes visible, and it
+    /// composes with the fold into the no-op the assumption implies.
+    #[test]
+    fn the_single_class_domain_makes_the_retarget_a_deliberate_no_op() {
+        let blockrate = BlockrateParams::new_deci_bps();
+        let params = PalwClassDaaParamsV1 {
+            version: PALW_CLASS_DAA_PARAMS_VERSION_V1,
+            retarget_interval_daa: 20,
+            history_retargets: 4,
+            max_factor: 4,
+            boot_target: u128::MAX >> 20,
+        };
+        params.validate(&blockrate).unwrap();
+        let class = id(0xC1);
+        let domains = params.single_class_domain(class).unwrap();
+        assert_eq!(domains.base_class_id, class, "the one class is also the liveness floor");
+        assert_eq!(domains.base_share_permille(), PALW_CLASS_SHARE_DENOMINATOR);
+        assert_eq!(domains.class_shares_permille.len(), 1);
+
+        // Folded over a chain where every block is that class: the target never moves. On a
+        // one-class network there is no second class to redistribute share with, so a retarget that
+        // moved anything would be measuring cadence — which is the other loop's job.
+        let steps: Vec<_> = (0..50u64).map(|i| step(i, 1, 1)).collect();
+        let folded = fold_class_target_v1(
+            params.boot_target,
+            &steps,
+            domains.base_share_permille(),
+            params.retarget_interval_daa,
+            params.max_factor,
+        )
+        .unwrap();
+        assert_eq!(folded, params.boot_target);
+
+        // The same chain with blocks NOT attributed to the class does move it — so the no-op above is
+        // a consequence of the attribution, not of the fold being inert.
+        let foreign: Vec<_> = (0..50u64).map(|i| step(i, 1, 0)).collect();
+        assert_ne!(
+            fold_class_target_v1(params.boot_target, &foreign, domains.base_share_permille(), params.retarget_interval_daa, 4)
+                .unwrap(),
+            params.boot_target
+        );
     }
 
     /// `id(0)` is the base class in every fixture below — the liveness floor.

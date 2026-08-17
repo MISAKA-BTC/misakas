@@ -56,6 +56,12 @@ pub struct PalwCreditParamsV1 {
     /// No commitment accepted before this DAA score is ever evaluated (the wiring's own
     /// activation edge; distinct from any PoW activation).
     pub activation_daa: u64,
+    /// ADR-0038 Decision D: this class's own DAA loop.
+    ///
+    /// NOT an `Option`. A network that registers a class registers its difficulty domain with it, and
+    /// an `Option::None` here would be a silent absence for a value whose zero
+    /// (`PalwClassDaaParamsV1::boot_target`) is the MAXIMUM block weight on the network.
+    pub class_daa: crate::palw_class_daa::PalwClassDaaParamsV1,
 }
 
 impl PalwCreditParamsV1 {
@@ -389,6 +395,7 @@ mod tests {
             s_eff_sompi: 20_000 * 100_000_000,
             unbonding_period_blocks: 10_083,
             activation_daa: 0,
+            class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         }
     }
 
