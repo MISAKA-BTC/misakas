@@ -431,6 +431,10 @@ pub struct Params {
     /// ADR-0033 lists. Everything the gate mints is validated against this same fence, so a
     /// node without it rejects any coinbase claiming PALW credit.
     pub palw_credit: Option<crate::palw_credit::PalwCreditParamsV1>,
+    /// ADR-0039 W4′: the PALW fork-choice fence. `None` on every shipped preset, and
+    /// [`Params::validate_palw_v1`] currently refuses `Some` — see there for why the refusal is
+    /// the point rather than a gap.
+    pub palw_fork_choice: Option<crate::palw_chain_weight::PalwChainWeightParamsV1>,
 
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
     /// Layer-1 (`POW_ALGO_ID_BLAKE2B_SHA3 = 3`), which supersedes the Phase-2 Argon2id to make header
@@ -532,12 +536,47 @@ impl Params {
     /// `Ok(())` when the fence is `None`: a network with no PALW credit params has nothing to
     /// check, which is every shipped preset today.
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
+        // ADR-0039 W4′: the fork-choice fence exists, defaults off, and CANNOT YET BE TURNED ON.
+        //
+        // The arithmetic is landed and tested (`palw_chain_weight`), but the fact assembly it
+        // consumes is not: nothing yet resolves a block's ramp stage or its derived pwu from
+        // chain state, and both tip-ordering call sites still order by blue work. A fence that
+        // could be set today would therefore select tips from weights nobody computes.
+        //
+        // Refusing `Some` rather than merely leaving it unset is the same discipline the
+        // palw_commitment malleability fix used: a fence is a switch somebody can flip before the
+        // machinery exists, an unrepresentable state is not. This refusal is deleted in the same
+        // change that lands the fact assembly and routes BOTH call sites — they must move
+        // together, because a header-selected tip and a virtual sink that disagree about the
+        // order are a partition.
+        if let Some(fork_choice) = self.palw_fork_choice.as_ref() {
+            fork_choice.validate().map_err(|_| {
+                crate::palw_registry::PalwRegistryError::NotCanonical("palw_fork_choice bound is out of range")
+            })?;
+            return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
+                "palw_fork_choice is set, but no code resolves PALW weight facts or orders tips by them yet — \
+                 landing the fact assembly and both call sites is what removes this refusal",
+            ));
+        }
         let Some(credit) = self.palw_credit.as_ref() else {
             return Ok(());
         };
         // The registration's own coherence, checked against THIS network's real constants
         // rather than a guess — that is what `validate` takes them for.
         credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)
+    }
+
+    /// The tip-ordering rule this network runs — the single seam
+    /// ([`crate::palw_chain_weight::order_tips_v1`]) both selection sites will consult.
+    ///
+    /// Today it always answers `BlueWorkOnly`, because the fence above cannot be set. It exists
+    /// now so that turning the fence on is one edit in one place rather than a search for every
+    /// comparison that happens to order tips.
+    pub fn palw_tip_order_v1(&self) -> crate::palw_chain_weight::PalwTipOrderV1 {
+        match self.palw_fork_choice {
+            Some(_) => crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted,
+            None => crate::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly,
+        }
     }
 
     /// A fingerprint of the consensus rules this node runs, for the P2P handshake.
@@ -604,6 +643,7 @@ impl Params {
             crescendo_activation,
             dns_params,
             palw_credit,
+            palw_fork_choice,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
             pow_palw_ollama_activation,
@@ -686,6 +726,13 @@ impl Params {
         // Length-prefixed so distinct fences cannot collide with the fixed-width tail above.
         if let Some(credit) = palw_credit {
             let bytes = borsh::to_vec(credit).expect("PalwCreditParamsV1 is borsh-serializable");
+            h.write((bytes.len() as u64).to_le_bytes());
+            h.write(&bytes);
+        }
+        // ADR-0039 W4′ fork-choice fence, Some-only for the same reason: a network that does not
+        // install one must fingerprint byte-identically to before the field existed.
+        if let Some(fork_choice) = palw_fork_choice {
+            let bytes = borsh::to_vec(fork_choice).expect("PalwChainWeightParamsV1 is borsh-serializable");
             h.write((bytes.len() as u64).to_le_bytes());
             h.write(&bytes);
         }
@@ -904,6 +951,7 @@ impl Params {
             // kaspa-pq DNS overlay params are not CLI-overridable; carried as-is.
             dns_params: self.dns_params,
             palw_credit: self.palw_credit,
+            palw_fork_choice: self.palw_fork_choice,
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
@@ -1691,6 +1739,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(PRODUCTION_DNS_PARAMS),
     palw_credit: None,
+    palw_fork_choice: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
@@ -1811,6 +1860,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // genesis hash is unchanged.
     dns_params: Some(TESTNET_DNS_PARAMS),
     palw_credit: None,
+    palw_fork_choice: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
     // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
@@ -1913,6 +1963,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // GENESIS_ACTIVE_DNS_PARAMS). Not a genesis-block input, so the genesis hash is unchanged.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
+    palw_fork_choice: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
@@ -2053,6 +2104,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // every consensus invariant are unchanged, but VLT harness timings must budget for it.
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
+    palw_fork_choice: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
@@ -2328,6 +2380,33 @@ mod consensus_params_id_tests {
             activation_daa: 0,
         });
         assert!(broken.validate_palw_v1().is_err(), "an invalid registration must be refused, not run");
+    }
+
+    /// ADR-0039 W4′ fence: OFF must be indistinguishable from the field not existing.
+    ///
+    /// The fingerprint separates nodes at handshake, so a `None` fence that still wrote bytes
+    /// would split every shipped network from every prior build for a rule none of them run.
+    #[test]
+    fn an_absent_fork_choice_fence_does_not_move_the_fingerprint() {
+        for (name, params) in [
+            ("mainnet", &MAINNET_PARAMS),
+            ("testnet", &TESTNET_PARAMS),
+            ("testnet11", &TESTNET11_PARAMS),
+            ("devnet", &DEVNET_PARAMS),
+            ("simnet", &SIMNET_PARAMS),
+        ] {
+            assert!(params.palw_fork_choice.is_none(), "{name}: no preset installs the fence");
+            // The rule this network orders tips by is today's rule, stated as a value.
+            assert_eq!(params.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly, "{name}");
+        }
+        // Setting the fence DOES move the fingerprint — otherwise two nodes disagreeing about
+        // fork choice could peer.
+        let mut fenced = SIMNET_PARAMS;
+        fenced.palw_fork_choice = Some(crate::palw_chain_weight::PalwChainWeightParamsV1 { immature_bound_permille: 100 });
+        assert_ne!(fenced.consensus_params_id(), SIMNET_PARAMS.consensus_params_id());
+        assert_eq!(fenced.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted);
+        // ...and it is refused until the fact assembly and both call sites land.
+        assert!(fenced.validate_palw_v1().is_err(), "the fence must not be flippable before its machinery exists");
     }
 
     #[test]

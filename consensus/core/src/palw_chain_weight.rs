@@ -67,7 +67,7 @@ pub struct PalwBlockWeightV1 {
 }
 
 /// The registration-time bound on how much immature work may count toward live weight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwChainWeightParamsV1 {
     /// β — the fraction of an immature block's pwu that counts toward LIVE weight, in permille.
     ///
@@ -144,6 +144,46 @@ pub fn chain_weights_v1(
 /// `Equal` means the PALW layer is indifferent and the caller's existing tie-break applies.
 pub fn compare_tips_v1(a: &PalwChainWeightsV1, b: &PalwChainWeightsV1) -> core::cmp::Ordering {
     a.safe.cmp(&b.safe).then(a.live.cmp(&b.live))
+}
+
+/// Which rule a network orders candidate tips by.
+///
+/// The two rules exist so the OFF case is a value rather than an absence: a network with no PALW
+/// fork-choice fence orders by blue work exactly as it does today, and that is stated here rather
+/// than implied by skipping a branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwTipOrderV1 {
+    /// No fence: blue work alone, byte-for-byte today's behaviour.
+    BlueWorkOnly,
+    /// Fence active: ADR-0039 W4′ — `(safe, live)` first, blue work as the tie-break.
+    PalwWeighted,
+}
+
+/// The one place a candidate tip order is decided.
+///
+/// `blue_work` is compared last in both rules, which is what makes `BlueWorkOnly` an exact
+/// restatement of the existing comparison rather than an approximation of it
+/// ([`tests::fence_off_is_exactly_the_blue_work_order`]).
+///
+/// Under `PalwWeighted`, a candidate whose PALW weights this node could not resolve is ordered as
+/// `None` — and `None` loses to any resolved candidate rather than being treated as zero-weight
+/// or as an error here, because tip ordering must remain total. Refusing an unresolvable fact is
+/// [`chain_weights_v1`]'s job, upstream; by the time a candidate reaches this comparison it has
+/// either resolved weights or it is not a candidate this node will build on.
+pub fn order_tips_v1<W: Ord>(
+    rule: PalwTipOrderV1,
+    a: (Option<&PalwChainWeightsV1>, &W),
+    b: (Option<&PalwChainWeightsV1>, &W),
+) -> core::cmp::Ordering {
+    match rule {
+        PalwTipOrderV1::BlueWorkOnly => a.1.cmp(b.1),
+        PalwTipOrderV1::PalwWeighted => match (a.0, b.0) {
+            (Some(x), Some(y)) => compare_tips_v1(x, y).then_with(|| a.1.cmp(b.1)),
+            (Some(_), None) => core::cmp::Ordering::Greater,
+            (None, Some(_)) => core::cmp::Ordering::Less,
+            (None, None) => a.1.cmp(b.1),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +344,46 @@ mod tests {
             chain_weights_v1(&[b(1, S::Final)], &PalwChainWeightParamsV1 { immature_bound_permille: 1_001 }),
             Err(PalwChainWeightError::BoundOutOfRange { got: 1_001 })
         );
+    }
+
+    /// **Fence OFF is not "approximately today" — it is today.** Every shipped preset runs this
+    /// arm, so it must reproduce the existing blue-work comparison for every pair, including the
+    /// equal case, and must ignore PALW weights entirely even when they are present.
+    #[test]
+    fn fence_off_is_exactly_the_blue_work_order() {
+        let heavy = PalwChainWeightsV1 { safe: u128::MAX, live: u128::MAX };
+        let nothing = PalwChainWeightsV1 { safe: 0, live: 0 };
+        for a in 0u64..24 {
+            for z in 0u64..24 {
+                // With PALW weights deliberately contradicting the blue-work order, the OFF arm
+                // must still answer exactly what blue work says.
+                assert_eq!(
+                    order_tips_v1(PalwTipOrderV1::BlueWorkOnly, (Some(&nothing), &a), (Some(&heavy), &z)),
+                    a.cmp(&z),
+                    "({a},{z}): the fence-off order must be the blue-work order"
+                );
+                // And with no weights at all, which is the state every preset is actually in.
+                assert_eq!(order_tips_v1(PalwTipOrderV1::BlueWorkOnly, (None, &a), (None, &z)), a.cmp(&z));
+            }
+        }
+    }
+
+    /// Fence ON: PALW weights decide, blue work becomes the tie-break, and an unresolved
+    /// candidate loses to a resolved one without making the order partial.
+    #[test]
+    fn fence_on_puts_palw_first_and_blue_work_last() {
+        use core::cmp::Ordering::*;
+        let more_safe = PalwChainWeightsV1 { safe: 10, live: 10 };
+        let less_safe = PalwChainWeightsV1 { safe: 9, live: u128::MAX };
+        // PALW outranks blue work: the lighter-blue-work candidate wins on safe weight.
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (Some(&more_safe), &0u64), (Some(&less_safe), &999u64)), Greater);
+        // Equal PALW weights ⇒ blue work breaks the tie, so the order stays total.
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (Some(&more_safe), &7u64), (Some(&more_safe), &8u64)), Less);
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (Some(&more_safe), &7u64), (Some(&more_safe), &7u64)), Equal);
+        // Unresolved loses to resolved; two unresolved fall back to blue work.
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (None, &999u64), (Some(&less_safe), &0u64)), Less);
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (Some(&less_safe), &0u64), (None, &999u64)), Greater);
+        assert_eq!(order_tips_v1(PalwTipOrderV1::PalwWeighted, (None, &7u64), (None, &8u64)), Less);
     }
 
     /// β applies to the immature TOTAL, so splitting the same work across more blocks cannot
