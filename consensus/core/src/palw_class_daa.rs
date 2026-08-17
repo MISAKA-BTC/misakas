@@ -53,6 +53,22 @@ pub enum PalwClassDaaError {
     MaxFactorTooSmall,
     #[error("expected_blocks must be nonzero")]
     ZeroExpectedBlocks,
+    #[error("the previous target is zero — a zero target is the MAXIMUM-weight value, never a neutral one")]
+    ZeroPreviousTarget,
+    #[error("share {got}‰ is outside (0, 1000‰]")]
+    ShareOutOfRange { got: u16 },
+    #[error("retarget_interval_daa must be nonzero")]
+    ZeroRetargetInterval,
+    #[error("the span counted no DAA blocks — an empty span is unanswerable, not a starving class")]
+    EmptySpan,
+    #[error("census counts {class} class blocks in a span of {total} — a class cannot exceed its own span")]
+    CensusExceedsSpan { class: u64, total: u64 },
+    #[error("a chain step's DAA score went backward: parent {parent_daa} → block {block_daa}")]
+    NonMonotonicStep { parent_daa: u64, block_daa: u64 },
+    #[error("a step's DAA advance is {advance} but its census counted {counted} blocks — the gatherer miscounted")]
+    StepCensusMismatch { advance: u64, counted: u64 },
+    #[error("steps are not a contiguous chain: expected a parent at DAA {expected_parent_daa}, got {got}")]
+    DiscontiguousSteps { expected_parent_daa: u64, got: u64 },
 }
 
 /// The Active difficulty domains: class → cadence share (permille), plus the anti-stall
@@ -376,6 +392,163 @@ pub fn adjust_class_target_v1(
     Ok(scaled.clamp(floor, ceiling))
 }
 
+// =============================================================================================
+// The retarget as a pure fold over one chain's steps (ADR-0038 Decision D)
+// =============================================================================================
+
+/// One chain step, as the gatherer measured it: the DAA scores either side, and the DAA-counted
+/// blocks the step merged split by class.
+///
+/// `total_daa_blocks` MUST equal `block_daa - parent_daa`, and [`fold_class_target_v1`] refuses a
+/// step where it does not. The check is the whole point of carrying both: the gatherer walks a DAG
+/// and this fold cannot see the DAG, so this is the only place a miscount can be caught — a
+/// double-counted selected parent (`mergeset_blues[0]` IS the selected parent), a forgotten
+/// `mergeset_non_daa` filter, a skipped chain block. A miscount that got through would ease a
+/// class's target and inflate the pwu of every block it produces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRetargetStepV1 {
+    pub parent_daa: u64,
+    pub block_daa: u64,
+    /// DAA-counted blocks of THIS class the step merged.
+    pub class_daa_blocks: u64,
+    /// DAA-counted blocks of every class the step merged.
+    pub total_daa_blocks: u64,
+}
+
+/// One class's realized production over one closed span, all classes' totals alongside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClassSpanCensusV1 {
+    pub class_daa_blocks: u64,
+    pub total_daa_blocks: u64,
+}
+
+/// One class's retarget over one closed span, **with the expectation derived here**.
+///
+/// [`adjust_class_target_v1`] takes `expected_blocks` as an argument, so any caller that computes it
+/// is a caller that owns the rule — the shape this codebase kept finding in audit after audit (a
+/// hardcoded `bonded: true`, a hardcoded `frozen: false`, a `weight` cap whose unit the caller
+/// picked). The share rule IS the rule, so it lives here and nothing outside may supply the number.
+///
+/// **The expectation is a share of REALIZED production, not a wall-clock cadence.** A class expects
+/// `share_c · total`, where `total` is what the span actually produced. Two consequences, and both
+/// are the reason it is written this way:
+///
+/// * `Σ_c expected_c = total`, so this loop only ever redistributes share BETWEEN classes. Block
+///   interval stays `DifficultyManager::calculate_difficulty_bits`'s job, and the two retargets
+///   cannot fight each other over one cadence.
+/// * no timestamp enters, so no host's clock reaches fork-choice weight — which ADR-0038 Decision D
+///   refuses in one line.
+///
+/// It also makes a ONE-class network a deliberate no-op: at 1000‰ with every block in the class,
+/// observed equals expected exactly and the target never moves. That is the correct behaviour for
+/// the single-registration fence every shipped preset would carry, and it is the property that
+/// catches a mutation to a cadence-based expectation.
+pub fn retarget_over_span_v1(
+    current_target: u128,
+    census: &PalwClassSpanCensusV1,
+    share_permille: u16,
+    max_factor: u32,
+) -> Result<u128, PalwClassDaaError> {
+    if current_target == 0 {
+        return Err(PalwClassDaaError::ZeroPreviousTarget);
+    }
+    if share_permille == 0 || share_permille > PALW_CLASS_SHARE_DENOMINATOR {
+        return Err(PalwClassDaaError::ShareOutOfRange { got: share_permille });
+    }
+    if census.total_daa_blocks == 0 {
+        return Err(PalwClassDaaError::EmptySpan);
+    }
+    if census.class_daa_blocks > census.total_daa_blocks {
+        return Err(PalwClassDaaError::CensusExceedsSpan { class: census.class_daa_blocks, total: census.total_daa_blocks });
+    }
+    // `share · total / 1000`, rounded to nearest so a class is not systematically under-expected by
+    // truncation on every span — a floor here biases every class toward "produced more than
+    // expected" and hardens targets network-wide over time.
+    let denominator = PALW_CLASS_SHARE_DENOMINATOR as u64;
+    let expected = (census.total_daa_blocks * share_permille as u64 + denominator / 2) / denominator;
+    // A span too short for this class's share to round up to one block expects nothing, and nothing
+    // is unanswerable rather than a miss: retargeting on it would ease the target of every
+    // small-share class on every short span.
+    if expected == 0 {
+        return Ok(current_target);
+    }
+    adjust_class_target_v1(current_target, census.class_daa_blocks, expected, max_factor)
+}
+
+/// The whole retarget rule as a pure function of one chain's steps: fold from `boot_target` in chain
+/// order (oldest first), retargeting once at each boundary the steps cross.
+///
+/// A boundary is an absolute multiple of `interval_daa`, so which spans close is a property of the
+/// chain and not of where the fold happened to start. The trailing span is deliberately NOT applied
+/// — it has not closed yet, and applying it would make a target depend on how far along the current
+/// span the reader is.
+///
+/// Spans need not be equal length. Because each span's expectation scales with its OWN realized
+/// total, a leading span that begins mid-interval is measured correctly rather than short, which is
+/// what makes a bounded-memory fold legitimate rather than an approximation.
+///
+/// This exists so the rule is reachable by a unit test with no database. The consensus-side caller
+/// gathers steps and owns no arithmetic.
+pub fn fold_class_target_v1(
+    boot_target: u128,
+    steps: &[PalwRetargetStepV1],
+    share_permille: u16,
+    interval_daa: u64,
+    max_factor: u32,
+) -> Result<u128, PalwClassDaaError> {
+    if boot_target == 0 {
+        return Err(PalwClassDaaError::ZeroPreviousTarget);
+    }
+    if interval_daa == 0 {
+        return Err(PalwClassDaaError::ZeroRetargetInterval);
+    }
+    let mut target = boot_target;
+    let mut open = PalwClassSpanCensusV1::default();
+    let mut previous_block_daa: Option<u64> = None;
+    for step in steps {
+        if step.block_daa < step.parent_daa {
+            return Err(PalwClassDaaError::NonMonotonicStep { parent_daa: step.parent_daa, block_daa: step.block_daa });
+        }
+        // The gatherer's own consistency check — see `PalwRetargetStepV1`.
+        if step.block_daa - step.parent_daa != step.total_daa_blocks {
+            return Err(PalwClassDaaError::StepCensusMismatch {
+                advance: step.block_daa - step.parent_daa,
+                counted: step.total_daa_blocks,
+            });
+        }
+        if step.class_daa_blocks > step.total_daa_blocks {
+            return Err(PalwClassDaaError::CensusExceedsSpan { class: step.class_daa_blocks, total: step.total_daa_blocks });
+        }
+        // Steps must be a contiguous chain in order, or the fold is silently measuring a different
+        // chain than the caller thinks it walked.
+        if let Some(previous) = previous_block_daa
+            && previous != step.parent_daa
+        {
+            return Err(PalwClassDaaError::DiscontiguousSteps { expected_parent_daa: previous, got: step.parent_daa });
+        }
+        previous_block_daa = Some(step.block_daa);
+
+        open.class_daa_blocks += step.class_daa_blocks;
+        open.total_daa_blocks += step.total_daa_blocks;
+        // A step that crosses at least one boundary closes the open span — ONCE, however many
+        // multiples of the interval it jumped.
+        //
+        // Retargeting once per boundary crossed was the obvious reading and it is wrong: the second
+        // crossing would close an EMPTY census, which is `EmptySpan`, and a step merging a wide
+        // mergeset legitimately jumps several intervals. There is no honest alternative either,
+        // because a step's merged blocks have no order that would let them be split between the
+        // intervals they span. So the span runs from the previous crossing to this one, and its
+        // expectation scales with its own realized total — which is exactly what makes an unequal
+        // span measured correctly rather than short. Retargeting once is also the conservative
+        // direction: the per-adjustment clamp binds once instead of `k` times.
+        if step.block_daa / interval_daa > step.parent_daa / interval_daa {
+            target = retarget_over_span_v1(target, &open, share_permille, max_factor)?;
+            open = PalwClassSpanCensusV1::default();
+        }
+    }
+    Ok(target)
+}
+
 /// `⌊a × b / d⌋` where `b`, `d` fit u64 widened to u128. Exact by the identity
 /// `a·b = (a/d)·d·b + (a%d)·b`, so `⌊a·b/d⌋ = (a/d)·b + ⌊(a%d)·b/d⌋` — the second term's
 /// product fits u128 because both factors are < 2^64. The first term saturates only when the
@@ -651,6 +824,174 @@ mod tests {
             truncated_total += (*share as u128) * 137u128 * pwu / denom;
         }
         assert_ne!(truncated_total, w_e_scaled / denom, "the fixture must actually exercise the residue");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The retarget fold
+    // -----------------------------------------------------------------------------------------
+
+    /// One step of `n` DAA blocks, `c` of them this class's, starting at `from`.
+    fn step(from: u64, total: u64, class: u64) -> PalwRetargetStepV1 {
+        PalwRetargetStepV1 { parent_daa: from, block_daa: from + total, class_daa_blocks: class, total_daa_blocks: total }
+    }
+
+    /// **A one-class network is a deliberate no-op**, and that is the property that catches a
+    /// cadence-based expectation.
+    ///
+    /// The expectation is a share of REALIZED production, so at 1000‰ with every block in the class
+    /// observed equals expected exactly and the target never moves — however many boundaries are
+    /// crossed, and whatever the block rate. A wall-clock expectation would move it, start fighting
+    /// `calculate_difficulty_bits` over one cadence, and put a host's clock into fork-choice weight.
+    #[test]
+    fn a_single_class_holding_the_whole_share_never_retargets() {
+        let boot = u128::MAX >> 20;
+        for (label, steps) in [
+            ("one block per step", (0..40u64).map(|i| step(i, 1, 1)).collect::<Vec<_>>()),
+            ("wide mergesets", (0..10u64).map(|i| step(i * 7, 7, 7)).collect()),
+            ("uneven steps", vec![step(0, 3, 3), step(3, 11, 11), step(14, 1, 1), step(15, 25, 25)]),
+        ] {
+            let folded = fold_class_target_v1(boot, &steps, 1_000, 10, 4).unwrap();
+            assert_eq!(folded, boot, "{label}: a class that IS the network cannot miss its share");
+        }
+        // And the rate is irrelevant: ten times the blocks over the same boundaries is still a no-op.
+        let dense: Vec<_> = (0..40u64).map(|i| step(i * 10, 10, 10)).collect();
+        assert_eq!(fold_class_target_v1(boot, &dense, 1_000, 10, 4).unwrap(), boot);
+    }
+
+    /// A class that misses its share of realized production gets EASIER, by the observed ratio,
+    /// clamped; one that exceeds it gets harder.
+    #[test]
+    fn a_class_that_misses_its_share_eases_and_one_that_floods_hardens() {
+        let boot = u128::MAX >> 20;
+        // Two classes at 500‰ each. Over a 20-block span this class produced 5, expecting 10.
+        let steps = vec![step(0, 20, 5)];
+        let eased = fold_class_target_v1(boot, &steps, 500, 20, 4).unwrap();
+        assert_eq!(eased, boot * 2, "5 of an expected 10 doubles the target");
+
+        // The mirror: 15 of an expected 10 hardens it by exactly 10/15.
+        let hardened = fold_class_target_v1(boot, &[step(0, 20, 15)], 500, 20, 4).unwrap();
+        assert_eq!(hardened, boot * 10 / 15);
+
+        // Zero production is the full easing clamp, not a division.
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 20, 0)], 500, 20, 4).unwrap(), boot * 4);
+        // And the clamp binds in the hardening direction too.
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 1_000, 1_000)], 1, 1_000, 4).unwrap(), boot / 4);
+    }
+
+    /// The trailing span is not applied: a target must not depend on how far into the open span the
+    /// reader happens to be.
+    #[test]
+    fn only_closed_spans_retarget() {
+        let boot = u128::MAX >> 20;
+        // 19 blocks of a 20-block interval: no boundary crossed, no retarget, however lopsided.
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 19, 0)], 500, 20, 4).unwrap(), boot);
+        // The 20th closes it.
+        assert_ne!(fold_class_target_v1(boot, &[step(0, 20, 0)], 500, 20, 4).unwrap(), boot);
+        // Reading one block further into the NEXT span does not change the answer.
+        assert_eq!(
+            fold_class_target_v1(boot, &[step(0, 20, 0), step(20, 1, 0)], 500, 20, 4).unwrap(),
+            fold_class_target_v1(boot, &[step(0, 20, 0)], 500, 20, 4).unwrap()
+        );
+    }
+
+    /// Boundaries are ABSOLUTE multiples of the interval, so which spans close is a property of the
+    /// chain and not of where the fold started — the property a bounded-memory fold needs to be a
+    /// rule rather than an approximation. And a leading partial span is measured against its OWN
+    /// realized total, so it is not systematically under-expected.
+    #[test]
+    fn boundaries_are_absolute_and_a_partial_leading_span_is_measured_correctly() {
+        let boot = u128::MAX >> 20;
+        // Start mid-interval at DAA 15 and run to 40: boundaries at 20 and 40 close two spans, the
+        // first only five blocks long. Each expects HALF OF ITS OWN total, so the five-block span is
+        // measured against 3 expected rather than against a full interval's 10 — a leading partial
+        // span is not systematically starved. Producing none of either is two full easings, and the
+        // clamp binds PER ADJUSTMENT, so they compose to 16x rather than being re-clamped to 4x.
+        let late = fold_class_target_v1(boot, &[step(15, 5, 0), step(20, 20, 0)], 500, 20, 4).unwrap();
+        assert_eq!(late, boot * 16, "two adjustments, each clamped at 4x");
+
+        // A step that jumps TWO boundaries at once closes ONE span, on the census it accumulated. Its
+        // merged blocks have no order that would let them be split between the intervals they span,
+        // and the second crossing would otherwise close an empty census.
+        let wide = fold_class_target_v1(boot, &[step(0, 45, 45)], 1_000, 20, 4).unwrap();
+        assert_eq!(wide, boot, "a class that is the whole network stays exact across the jump");
+        // Pinned against the per-crossing reading: a 45-block jump at 500‰ producing nothing eases
+        // ONCE (4x), not twice (16x).
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 45, 0)], 500, 20, 4).unwrap(), boot * 4);
+    }
+
+    /// A span too short for a small share to round up to one expected block is unanswerable, not a
+    /// miss — otherwise every short span would ease every small class's target.
+    #[test]
+    fn a_span_that_expects_less_than_one_block_does_not_retarget() {
+        let boot = u128::MAX >> 20;
+        // 1‰ of 4 blocks rounds to 0.
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 4, 0)], 1, 4, 4).unwrap(), boot);
+        // 1‰ of 500 rounds to 1, and producing none of it eases.
+        assert_eq!(fold_class_target_v1(boot, &[step(0, 500, 0)], 1, 500, 4).unwrap(), boot * 4);
+        // Rounding is to NEAREST, not down: 1‰ of 500 is exactly 0.5 and rounds up to 1. A floor
+        // would bias every class toward "produced more than expected" and harden the network's
+        // targets over time.
+        assert_eq!(
+            retarget_over_span_v1(boot, &PalwClassSpanCensusV1 { class_daa_blocks: 1, total_daa_blocks: 500 }, 1, 4).unwrap(),
+            boot,
+            "one produced against one expected is exact"
+        );
+    }
+
+    /// Every degenerate input is a refusal, and the refusals are the fail-closed ones: a zero target
+    /// is the MAXIMUM-weight value, and a miscounted step would ease a class and inflate its pwu.
+    #[test]
+    fn the_fold_refuses_every_incoherent_input_rather_than_easing_a_target() {
+        let boot = u128::MAX >> 20;
+        let good = vec![step(0, 20, 10)];
+        assert!(fold_class_target_v1(boot, &good, 500, 20, 4).is_ok());
+
+        assert_eq!(fold_class_target_v1(0, &good, 500, 20, 4), Err(PalwClassDaaError::ZeroPreviousTarget));
+        assert_eq!(fold_class_target_v1(boot, &good, 500, 0, 4), Err(PalwClassDaaError::ZeroRetargetInterval));
+        assert_eq!(fold_class_target_v1(boot, &good, 0, 20, 4), Err(PalwClassDaaError::ShareOutOfRange { got: 0 }));
+        assert_eq!(fold_class_target_v1(boot, &good, 1_001, 20, 4), Err(PalwClassDaaError::ShareOutOfRange { got: 1_001 }));
+
+        // The gatherer's consistency check: an advance that does not equal the census is a miscount,
+        // and a miscount in the class's favour is exactly what must not be believed.
+        let miscounted = vec![PalwRetargetStepV1 { parent_daa: 0, block_daa: 20, class_daa_blocks: 5, total_daa_blocks: 10 }];
+        assert_eq!(
+            fold_class_target_v1(boot, &miscounted, 500, 20, 4),
+            Err(PalwClassDaaError::StepCensusMismatch { advance: 20, counted: 10 })
+        );
+        let backward = vec![PalwRetargetStepV1 { parent_daa: 20, block_daa: 10, class_daa_blocks: 0, total_daa_blocks: 0 }];
+        assert_eq!(
+            fold_class_target_v1(boot, &backward, 500, 20, 4),
+            Err(PalwClassDaaError::NonMonotonicStep { parent_daa: 20, block_daa: 10 })
+        );
+        let over = vec![PalwRetargetStepV1 { parent_daa: 0, block_daa: 10, class_daa_blocks: 11, total_daa_blocks: 10 }];
+        assert_eq!(fold_class_target_v1(boot, &over, 500, 20, 4), Err(PalwClassDaaError::CensusExceedsSpan { class: 11, total: 10 }));
+        // A gap in the walk means the fold is measuring a different chain than the caller walked.
+        let gapped = vec![step(0, 10, 5), step(11, 10, 5)];
+        assert_eq!(
+            fold_class_target_v1(boot, &gapped, 500, 20, 4),
+            Err(PalwClassDaaError::DiscontiguousSteps { expected_parent_daa: 10, got: 11 })
+        );
+        // An empty span reaching the span rule directly is unanswerable rather than a miss.
+        assert_eq!(retarget_over_span_v1(boot, &PalwClassSpanCensusV1::default(), 500, 4), Err(PalwClassDaaError::EmptySpan));
+        // `retarget_over_span_v1` is public, so its own consistency check has to hold for a caller
+        // that does not come through the fold — the fold catches this per STEP and would otherwise
+        // be the only thing standing between an impossible census and an eased target.
+        assert_eq!(
+            retarget_over_span_v1(boot, &PalwClassSpanCensusV1 { class_daa_blocks: 11, total_daa_blocks: 10 }, 500, 4),
+            Err(PalwClassDaaError::CensusExceedsSpan { class: 11, total: 10 })
+        );
+        assert_eq!(
+            retarget_over_span_v1(0, &PalwClassSpanCensusV1 { class_daa_blocks: 1, total_daa_blocks: 10 }, 500, 4),
+            Err(PalwClassDaaError::ZeroPreviousTarget)
+        );
+    }
+
+    /// No steps is the boot target, not an error and not a retarget — the genesis case.
+    #[test]
+    fn an_empty_chain_folds_to_the_boot_target() {
+        let boot = u128::MAX >> 20;
+        assert_eq!(fold_class_target_v1(boot, &[], 1_000, 10, 4).unwrap(), boot);
+        assert_eq!(fold_class_target_v1(boot, &[], 1, 10, 4).unwrap(), boot);
     }
 
     /// `id(0)` is the base class in every fixture below — the liveness floor.
