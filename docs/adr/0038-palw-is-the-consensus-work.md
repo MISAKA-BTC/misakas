@@ -1,9 +1,17 @@
 # ADR-0038: PALW is the consensus work — sampled-verified LLM PoW, a receipt-licensed weight ramp, and a hash anti-stall floor
 
-Status: **Accepted (architecture decision).** Supersedes **ADR-0037 Decision 1** (the layer
-inversion below) while carrying forward ADR-0037's machinery (Decisions 2–9) re-seated under the
-new layer assignment. Everything else in ADR-0036 (lineage, new-identity requirement,
+Status: **Accepted (architecture decision), amended.** Supersedes **ADR-0037 Decision 1** (the
+layer inversion below) while carrying forward ADR-0037's machinery (Decisions 2–9) re-seated
+under the new layer assignment. Everything else in ADR-0036 (lineage, new-identity requirement,
 land→accept→mint separation, no per-job override) stands.
+
+> **Amended 2026-08-17 by ADR-0039** (`0039-palw-only-block-production.md`): invariants **W4 and
+> W6 are superseded**, and Decisions B and E are amended, to remove the last two hash paths to
+> consensus participation — the anti-stall floor as a block-production path, and `spam_hash_work`
+> as a fork-choice weight term. The hash floor is replaced by a portable integer-only
+> `PALW-BASE-0` class held permanently Active; total PALW unavailability halts the chain loudly
+> rather than producing hash blocks. The layer inversion, sampled verification, the court,
+> per-class DAA and bonded producers are unchanged.
 
 Date: 2026-08-17
 Relates to: ADR-0021 (algo-4 — its *lottery shape* is kept, its *verification shape* is replaced),
@@ -147,6 +155,14 @@ The anti-stall floor is deliberately unattractive (tiny share of subsidy, slow c
 exists so "every class dead" is an incident, not an extinction — and so no one can profitably
 mine it while any class lives.
 
+> **Superseded 2026-08-17 by ADR-0039 (W6′) — do not implement the block-producing floor.**
+> "Deliberately unattractive" bounds who *wants* the path; it does not remove the path, and while
+> a hash path to block production exists the chain's production right is not PALW-only. ADR-0039
+> replaces it with a portable integer-only `PALW-BASE-0` class held permanently Active at ~5 %
+> share, so "all classes dead" degrades to a slower PALW class rather than to hash. The honest
+> cost is that a total PALW outage now **halts the chain loudly**, and I2' ("never halts") does
+> not survive — it was only ever obtainable by keeping a non-PALW production path.
+
 ## Decision E — What hash still does
 
 1. **Spam ticket:** `spam_hash < spam_target`, cheap but nonzero — a candidate PALW block
@@ -203,12 +219,18 @@ W1  A full node validates every block, and adjudicates every dispute, with no LL
 W2  One PALW ticket costs one canonical inference, bound to (network, header, nonce);
     tickets are non-transferable and non-replayable across headers
 W3  weight(B) is a pure function of the DAG; equal DAGs ⟹ equal weights everywhere
-W4  Unverified (receipt-less, non-final) pwu never exceeds spam-hash backbone influence
-    in fork choice
+W4  SUPERSEDED by ADR-0039 W4′. (Was: unverified pwu never exceeds spam-hash backbone
+    influence in fork choice — meaningless once ADR-0039 removes the backbone from
+    weight(B). Replaced by two derived weights: safe = MATURE only, live = bounded
+    published work above the safe frontier, one ordered fork choice over both.)
 W5  PALW-final weight is immutable; pre-final conviction voids exactly the convicted
     block's pwu, nothing else
-W6  Chain produces blocks while ≥1 ExecutionClass is Active; with zero, the anti-stall
-    floor produces degraded blocks; no input whatsoever halts the chain or panics a node
+W6  SUPERSEDED by ADR-0039 W6′. (Was: with zero Active classes, the anti-stall floor
+    produces degraded blocks and nothing halts the chain. ADR-0039 removes the hash
+    floor: a portable integer-only Base PALW class carries the degradation instead, and
+    a total PALW outage halts the chain loudly rather than producing hash blocks. The
+    "no input halts the chain" clause does not survive — it was only obtainable by
+    keeping a non-PALW production path.)
 W7  Class freeze removes a difficulty domain and redistributes cadence; it never
     invalidates already-final weight
 W8  Producer and attester accountability is bonded: no bond, no block; no bond, no receipt
@@ -224,7 +246,7 @@ Disposition of the 2026-08-16/17 blocker classes under this design:
 | Blocker class (audit) | Disposition |
 | --- | --- |
 | Every full node depends on one giant runtime; `panic!` on `PalwUnavailable`/`PalwWorkerFailed` | **Eliminated by construction** (W1, W6): full nodes never invoke a runtime. The panic sites die with the re-verification path itself, not by wrapping them. |
-| Exclusive `algo_id = 4` = single point of chain death | **Eliminated** (Decision D): N Active classes are N independent production paths + the anti-stall floor. Note: NOT by demoting PALW — by multiplying classes. |
+| Exclusive `algo_id = 4` = single point of chain death | **Eliminated** (Decision D): N Active classes are N independent production paths. Note: NOT by demoting PALW — by multiplying classes. *(Amended by ADR-0039: the "+ anti-stall floor" term is withdrawn. Survivability rests entirely on class multiplicity plus a permanently-Active portable Base class; with zero Active classes the chain halts loudly by design. The blocker stays eliminated — N independent PALW production paths is the load-bearing half — but the residual case is now a deliberate halt, not a hash lane.)* |
 | 100 ms block interval physically incompatible with 37–91 s replay | **Eliminated** (Decision B): replay is off the admission path; it constrains `W_challenge` only. The `finality_depth < W_challenge` preset failure becomes a parameter re-derivation, not a wall. |
 | Consumer layer fail-open ×10 (lookup collisions, missing-as-empty, unverified carriage at credit entry) | **Not addressed by this ADR's shape — addressed by the carried Track-C machinery** (ledger state instead of horizon re-walks, verified-entry types, I5/I7). These blockers were never about the layer assignment and would recur in ANY design if Track C is skipped. |
 | Payee by `validator_pubkey_hash`; unbounded coinbase append | Carried fix (Decision G: exact bond-outpoint payees, budgeted batch — I4/I6). |
