@@ -281,6 +281,87 @@ agree, and it enters at a share set by finalized class-health transition rather 
 self-declaration. A class whose producers all leave stalls its own domain and loses share at the
 next finalized boundary; its share is redistributed, never stranded.
 
+### Decision 5 amendment (2026-08-17) — the clause as written cannot be enforced at admission
+
+An attempt to build the enforcement point found four defects in the clause itself, not in the
+wiring. They are recorded here because the code cannot be written correctly against the clause as
+stated, and shipping *something* that type-checks would have been worse than saying so.
+
+**(a) The currency must be `pwu`, not `weight`.** A block's `weight` is its `pwu` scaled by a
+maturity stage (`palw_chain_weight::PalwBlockWeightV1 { pwu, stage }`, split into `safe` and `live`
+by `chain_weights_v1`). A block's contribution therefore CHANGES as its stage advances. So
+`Σ_{b ∈ class c, epoch e} weight(b)` is a moving sum: the same block set consumes a different
+amount of the budget at a later point of view, and a block is admissible or not depending on WHEN
+it is validated. That is not a predicate. It also contradicts the reason this decision gives for
+rejecting the zeroing alternative — "a second way for a block's weight to change after acceptance,
+which is the exact class of mutation Decision 3 exists to bound" — because summing a ramped weight
+imports exactly that mutation into the cap. The cap's currency is `pwu`: immutable per block,
+class-scoped, and already the thing `palw_pwu` makes miner-independent.
+
+**(b) `W_e` must be frozen at the epoch boundary.** The clause leaves `W_e` (the epoch's total
+work) undefined in time. If it is read as the running total, the budget grows as the epoch fills
+and the cap is self-defeating — a class that floods raises the very ceiling it is measured
+against. `W_e` is the value derived at the epoch's first block from the previous epoch's finalized
+facts, and it is constant for the epoch.
+
+**(c) Attribution is unspecified, and one reading specifies a dead chain.** "A block that would
+exceed its class's epoch budget is not a block" does not say whose production a breach is charged
+to. In a DAG, an honest merger can be the first block whose *mergeset* pushes a class over — and
+rejecting the merger punishes a party that produced nothing over budget, while letting a wide
+parallel fan through unbounded. Worse: if an epoch's class total is already past budget (a
+transiently mis-tuned DAA is precisely the case this decision exists for), then EVERY subsequent
+block that merges that history is unacceptable, and the chain wedges permanently with no move
+available to anyone. A cap must be a predicate on the PRODUCING block's own class production along
+its OWN selected chain, counted at that block. Any formulation that counts a mergeset and rejects
+the merger is not implementable.
+
+**(d) The clause is in tension with `pwu`'s own boundary.** `palw_pwu`'s module note says the
+epoch share cap is what provides cross-class fairness, and that any use of `pwu` magnitude as a
+cross-class price "has reintroduced the coefficient table by the back door". A cap denominated in
+`pwu` and summed per class does compare classes — via `s_c(e)`, which is the intended lever, but
+the two documents must agree on that explicitly rather than each deferring to the other.
+
+**(e) The inequality is unsatisfiable for a class heavier than the share-weighted mean, and the
+tolerance that would fix it is a cross-class price.** With `W_e = L · Σ_k s_k · pwu_k`, class `c`'s
+budget is `s_c · W_e · tol` while its own cadence share expects `L · s_c · pwu_c`. The share cancels
+entirely, leaving
+
+```
+budget_c ≥ expected_c   ⟺   tol · (share-weighted mean pwu)  ≥  pwu_c
+```
+
+so at unity tolerance EVERY class above the mean is capped below the cadence its own DAA is
+targeting for it. The requirement is bounded — as `pwu_c` grows it dominates the mean too, so
+`pwu_c / mean → 1000/s_c` — which makes the consequence exact rather than open-ended: a tolerance
+ceiling of `T‰` protects every class with `s_c ≥ 1000000/T` permille unconditionally and can never
+protect a class below that, however the tolerance is set. At the 4 000‰ ceiling this module ships,
+that is `s_c ≥ 250‰`; a 100‰ class needs up to 10 000‰ and is not expressible.
+
+Setting the tolerance per class would fix each case, and that is precisely the cross-class
+coefficient table ADR-0038 Decision D rejects: the value needed is a function of the class's pwu
+relative to the others, which is a price. So a set that cannot satisfy the inequality is refused at
+derivation (`StarvedClass`) rather than shipped as a cap that throttles the class the network most
+wants running. Measured: shares 600/400 with pwu 100/10 000 gives the heavy class 0.406× its own
+expected production.
+
+**What is landing now, and what is not.** The per-class budget DERIVATION lands as a pure function
+in `pwu` currency, with the epoch divisor as its input (never a free blocks-per-epoch argument), a
+single division at the end, and refusals for a zero or saturated budget — a class that can never
+admit a block is starved, not capped, and that must be an error rather than a cap. A network whose
+configured shares cannot satisfy the inequality is refused at startup. **No admission-time
+rejection lands**, and that is deliberate: the only altitude at which a header is validated has no
+legal source for a class's DAA target (the class-state store is written by the virtual processor at
+this node's own sink, and its own module doc forbids weight-bearing reads of it), so a check there
+would make one node reject a header another accepts — permanently, since a rejected header is
+banned. The same shape would also make an IBD-synced node reject what an archival node accepts, in
+violation of this ADR's own release gate requiring invariance under pruning point and IBD start
+height.
+
+The enforcement point is therefore blocked on (c): a formulation of the cap as a predicate on the
+producing block's own selected-chain class production, evaluable at a chain point the validating
+node can reconstruct for the block itself. Until that exists in this ADR, the budget numbers are
+derivable and testable but nothing rejects on them.
+
 ## Decision 6 — Bonded is not permissioned
 
 ADR-0038's phrasing that "pure permissionless PALW mining is not achievable" is withdrawn as

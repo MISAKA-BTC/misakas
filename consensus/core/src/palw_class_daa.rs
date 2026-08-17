@@ -92,10 +92,7 @@ impl PalwDifficultyDomainSetV1 {
         }
         let classes: u32 = self.class_shares_permille.values().map(|s| *s as u32).sum();
         if classes != PALW_CLASS_SHARE_DENOMINATOR as u32 {
-            return Err(PalwClassDaaError::SharesDoNotConserve {
-                got: classes,
-                denominator: PALW_CLASS_SHARE_DENOMINATOR,
-            });
+            return Err(PalwClassDaaError::SharesDoNotConserve { got: classes, denominator: PALW_CLASS_SHARE_DENOMINATOR });
         }
         Ok(())
     }
@@ -153,6 +150,203 @@ impl PalwDifficultyDomainSetV1 {
     }
 }
 
+// =============================================================================================
+// Decision 5 — the per-class epoch budget, DERIVED (no enforcement point; see the ADR amendment)
+// =============================================================================================
+
+/// Errors of the epoch-budget derivation. Every one of them is a refusal to produce a number, never
+/// a cap of zero: a class that can never admit a block is starved, not capped, and the difference
+/// matters because a starved class silently loses its whole domain.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwClassBudgetError {
+    #[error("the epoch length is zero — blocks per epoch is the divisor and cannot be zero")]
+    ZeroEpochLength,
+    #[error("tolerance {got}‰ is below unity — a budget under the class's own expected production starves it")]
+    ToleranceBelowUnity { got: u32 },
+    #[error("tolerance {got}‰ exceeds the {max}‰ ceiling — a budget no epoch can approach is not a cap")]
+    ToleranceAboveCeiling { got: u32, max: u32 },
+    #[error("class {class_id} derives a zero epoch budget — a class that can never admit a block is starved, not capped")]
+    ZeroBudget { class_id: Hash64 },
+    #[error(
+        "class {class_id} would be capped at {budget_pwu} pwu but its own cadence share expects {own_expected_pwu} — the \
+         inequality is unsatisfiable for any class above the share-weighted mean pwu (ADR-0039 Decision 5 amendment (e))"
+    )]
+    StarvedClass { class_id: Hash64, budget_pwu: u128, own_expected_pwu: u128 },
+    #[error("class {class_id} has a saturated pwu — two unequal classes would compare equal, so the share is meaningless")]
+    SaturatedClassPwu { class_id: Hash64 },
+    #[error("class {class_id} is not in the domain set, so it has no share and no budget")]
+    UnknownClass { class_id: Hash64 },
+    #[error("the epoch budget arithmetic overflowed computing {what}")]
+    Overflow { what: &'static str },
+}
+
+/// The largest tolerance a budget may carry, in permille of the class's own expected production.
+///
+/// A ceiling is as necessary as the unity floor and was missing from the first draft: with only a
+/// floor, `tolerance_permille = u32::MAX` yields a budget no honest epoch can approach, which is a
+/// cap in name only and passes every test a floor-only rule can write. 4× is deliberately generous
+/// — the cap exists for a *transiently* mis-tuned DAA, and a class legitimately running 4× its share
+/// for a whole epoch is a retarget problem, not a flood.
+pub const PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE: u32 = 4_000;
+
+/// One class's epoch budget, in **pwu** — never in ramped `weight`.
+///
+/// The ADR clause says `weight(b)`, and that is amended: a block's weight is its pwu scaled by a
+/// maturity stage, so `Σ weight(b)` is a moving sum and "the budget this block would exceed" is not
+/// a predicate. `pwu` is immutable per block and already miner-independent. See the Decision 5
+/// amendment in ADR-0039.
+///
+/// `budget_pwu` is private and there is no constructor but the derivation below, so a caller cannot
+/// assert a budget it did not derive. That is worth stating precisely, because it is a weaker
+/// guarantee than it looks: the derivation multiplies numbers the caller supplied, so the private
+/// field prevents a fabricated STRUCT, not a fabricated INPUT. The inputs are constrained instead —
+/// the divisor comes from the network's own epoch length, the shares from a validated domain set,
+/// and the tolerance is fenced above and below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClassEpochBudgetV1 {
+    /// The epoch this budget is for. A budget is only ever comparable within its own epoch.
+    pub epoch: u64,
+    /// The class it bounds.
+    pub class_id: Hash64,
+    budget_pwu: u128,
+}
+
+impl PalwClassEpochBudgetV1 {
+    /// The ceiling, in pwu, on this class's production for this epoch.
+    pub fn budget_pwu(&self) -> u128 {
+        self.budget_pwu
+    }
+}
+
+/// Every Active class's epoch budget, derived from the domain set's shares and each class's own
+/// per-block pwu.
+///
+/// `epoch_len_blue_score` is the epoch DIVISOR — the network's blocks-per-epoch — and not a free
+/// "how many blocks are in this epoch" argument. Those are the same number and taking it twice is
+/// how they come to differ: the value that divides a blue score into an epoch index must be the
+/// value that says how many blocks an epoch holds, or the budget is denominated in a different
+/// epoch than the one it is enforced over.
+///
+/// `class_targets` and `pwu_per_inference` are per class; a class present in the domain set with no
+/// entry in either is `UnknownClass` rather than a zero, because "we have no idea what this class's
+/// work costs" must not read as "this class costs nothing".
+///
+/// Arithmetic: `W_e` is the sum over classes of `share · epoch_blocks · pwu(class)`, and each
+/// class's budget is `W_e · share · tolerance` — with the permille denominators divided out ONCE at
+/// the end. Dividing per class first truncates three times per class and the residues do not
+/// cancel, so two nodes summing in different orders could differ; one division at the end is exact.
+pub fn class_epoch_budgets_v1(
+    epoch: u64,
+    domains: &PalwDifficultyDomainSetV1,
+    epoch_len_blue_score: u64,
+    class_targets: &BTreeMap<Hash64, u128>,
+    pwu_per_inference: &BTreeMap<Hash64, u64>,
+    tolerance_permille: u32,
+) -> Result<BTreeMap<Hash64, PalwClassEpochBudgetV1>, PalwClassBudgetError> {
+    if epoch_len_blue_score == 0 {
+        return Err(PalwClassBudgetError::ZeroEpochLength);
+    }
+    if tolerance_permille < PALW_CLASS_SHARE_DENOMINATOR as u32 {
+        return Err(PalwClassBudgetError::ToleranceBelowUnity { got: tolerance_permille });
+    }
+    if tolerance_permille > PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE {
+        return Err(PalwClassBudgetError::ToleranceAboveCeiling {
+            got: tolerance_permille,
+            max: PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE,
+        });
+    }
+    domains.validate().map_err(|_| PalwClassBudgetError::Overflow { what: "an invalid domain set reached the budget" })?;
+
+    // Per class: share‰ · epoch_blocks · pwu(class), UNDIVIDED. The permille denominators come out
+    // once, at the end.
+    let mut scaled: BTreeMap<Hash64, u128> = BTreeMap::new();
+    let mut w_e_scaled: u128 = 0;
+    for (class_id, share) in domains.class_shares_permille.iter() {
+        let target = class_targets.get(class_id).ok_or(PalwClassBudgetError::UnknownClass { class_id: *class_id })?;
+        let per_inference = pwu_per_inference.get(class_id).ok_or(PalwClassBudgetError::UnknownClass { class_id: *class_id })?;
+        let class_pwu = crate::palw_pwu::palw_pwu_v1(*target, *per_inference);
+        // `palw_pwu_v1` saturates at u64::MAX, and a saturated value has lost the magnitude the
+        // share is applied to — two classes an order of magnitude apart would compare equal. Refuse
+        // rather than compare meaningless numbers.
+        if class_pwu == u64::MAX {
+            return Err(PalwClassBudgetError::SaturatedClassPwu { class_id: *class_id });
+        }
+        let own = (*share as u128)
+            .checked_mul(epoch_len_blue_score as u128)
+            .and_then(|x| x.checked_mul(class_pwu as u128))
+            .ok_or(PalwClassBudgetError::Overflow { what: "a class's expected epoch pwu" })?;
+        w_e_scaled = w_e_scaled.checked_add(own).ok_or(PalwClassBudgetError::Overflow { what: "W_e" })?;
+        scaled.insert(*class_id, own);
+    }
+
+    let denom = PALW_CLASS_SHARE_DENOMINATOR as u128;
+    let mut out = BTreeMap::new();
+    for (class_id, _) in scaled.iter() {
+        let share = *domains.class_shares_permille.get(class_id).expect("iterating the same set") as u128;
+        // W_e · share‰ · tolerance‰, then the three permille denominators (share inside W_e, share
+        // here, tolerance here) divided out together.
+        let numerator = w_e_scaled
+            .checked_mul(share)
+            .and_then(|x| x.checked_mul(tolerance_permille as u128))
+            .ok_or(PalwClassBudgetError::Overflow { what: "a class's budget numerator" })?;
+        let budget_pwu = numerator / (denom * denom * denom);
+        if budget_pwu == 0 {
+            return Err(PalwClassBudgetError::ZeroBudget { class_id: *class_id });
+        }
+        // THE INEQUALITY IS UNSATISFIABLE FOR A HEAVY CLASS, and that has to surface here rather
+        // than as a mid-epoch liveness cliff.
+        //
+        // A class's own cadence share expects `L · share_c · pwu_c` pwu per epoch. Its budget is
+        // `W_e · share_c · tol` where `W_e = L · Σ_k share_k · pwu_k`, so
+        //
+        //     budget_c ≥ expected_c   ⟺   tol · (share-weighted mean pwu) ≥ pwu_c
+        //
+        // The share cancels entirely: what remains is a comparison of this class's per-block pwu
+        // against the mean. EVERY class above the mean is capped below its own cadence at unity
+        // tolerance — the heaviest class cannot produce the share the DAA is targeting for it. No
+        // per-class tolerance fixes it, because a per-class tolerance IS the cross-class coefficient
+        // table ADR-0038 Decision D rejects. So this is refused as an incoherent parameter set, not
+        // silently shipped as a cap that throttles the class the network most wants running.
+        //
+        // The first draft of this function did not check it, and the test suite did not catch it,
+        // because every fixture gave both classes the SAME pwu — under which the comparison is
+        // vacuously true. That is the fixture-calibration failure mode, and the test below now uses
+        // a deliberately unequal spread.
+        let own_expected_pwu = scaled.get(class_id).copied().expect("iterating the same set") / denom;
+        if budget_pwu < own_expected_pwu {
+            return Err(PalwClassBudgetError::StarvedClass { class_id: *class_id, budget_pwu, own_expected_pwu });
+        }
+        out.insert(*class_id, PalwClassEpochBudgetV1 { epoch, class_id: *class_id, budget_pwu });
+    }
+    Ok(out)
+}
+
+/// Whether one more block of `class_id` fits its epoch budget.
+///
+/// `admitted_pwu` is the class's own production SO FAR in this epoch, along the chain the caller is
+/// deciding on. This function is arithmetic and nothing else: it does not know where that number
+/// came from, and the honest reading is that the guarantee lives entirely in the caller. That is why
+/// no admission path calls it yet — the ADR amendment records that the cap has no formulation whose
+/// accumulator a validating node can reconstruct for the block it is validating.
+///
+/// The budget must be the budget for THIS class and THIS epoch; mismatches are refused rather than
+/// coerced, so a caller cannot present a roomier class's ceiling. That check catches a wiring
+/// mistake, not an attacker — both sides come from the caller — and the doc says so rather than
+/// implying a defence.
+pub fn class_epoch_pwu_fits_v1(
+    budget: &PalwClassEpochBudgetV1,
+    class_id: &Hash64,
+    epoch: u64,
+    admitted_pwu: u128,
+    block_pwu: u64,
+) -> Result<bool, PalwClassBudgetError> {
+    if budget.class_id != *class_id || budget.epoch != epoch {
+        return Err(PalwClassBudgetError::UnknownClass { class_id: *class_id });
+    }
+    let after = admitted_pwu.checked_add(block_pwu as u128).ok_or(PalwClassBudgetError::Overflow { what: "the epoch accumulator" })?;
+    Ok(after <= budget.budget_pwu)
+}
+
 /// One class's clamped retarget over its own window. `current_target` is the class lottery
 /// target (bigger = easier); a class that produced fewer blocks than its share expected gets
 /// easier, one that flooded gets harder — by the exact observed ratio, clamped to
@@ -197,6 +391,266 @@ mod tests {
 
     fn id(seed: u64) -> Hash64 {
         Hash64::from_u64_word(seed)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Decision 5 — the derived epoch budget
+    // -----------------------------------------------------------------------------------------
+
+    fn two_class_domains() -> (Hash64, Hash64, PalwDifficultyDomainSetV1) {
+        let base = id(0xB0);
+        let other = id(0xC1);
+        let set = PalwDifficultyDomainSetV1::new(base, BTreeMap::from([(base, 600u16), (other, 400u16)])).unwrap();
+        (base, other, set)
+    }
+
+    /// Shares govern the split, the tolerance scales it, and every input is bound.
+    #[test]
+    fn an_epoch_budget_is_the_class_share_of_the_epochs_own_work() {
+        let (base, other, domains) = two_class_domains();
+        // Equal per-block pwu for both classes keeps the arithmetic checkable by hand: with one
+        // easy target and one per-inference cost each, W_e is (600 + 400) · L · pwu, and each
+        // class's budget is that times its own share times the tolerance.
+        let targets = BTreeMap::from([(base, u128::MAX / 4), (other, u128::MAX / 4)]);
+        let costs = BTreeMap::from([(base, 1_000u64), (other, 1_000u64)]);
+        let budgets = class_epoch_budgets_v1(7, &domains, 100, &targets, &costs, 1_000).unwrap();
+        assert_eq!(budgets.len(), 2);
+        let b = budgets[&base];
+        let o = budgets[&other];
+        assert_eq!((b.epoch, b.class_id), (7, base));
+        // 600/400 shares over the same W_e: the budgets are in exactly that ratio.
+        assert_eq!(b.budget_pwu() * 400, o.budget_pwu() * 600, "budgets follow the shares exactly");
+        assert!(b.budget_pwu() > o.budget_pwu());
+
+        // The tolerance scales linearly, and the epoch length does too — both are bound.
+        let generous = class_epoch_budgets_v1(7, &domains, 100, &targets, &costs, 2_000).unwrap();
+        assert_eq!(generous[&base].budget_pwu(), b.budget_pwu() * 2);
+        let longer = class_epoch_budgets_v1(7, &domains, 200, &targets, &costs, 1_000).unwrap();
+        assert_eq!(longer[&base].budget_pwu(), b.budget_pwu() * 2);
+        // A different epoch is a different budget object even at identical numbers, because a
+        // budget is only ever comparable within its own epoch.
+        assert_ne!(class_epoch_budgets_v1(8, &domains, 100, &targets, &costs, 1_000).unwrap()[&base], b);
+    }
+
+    /// The tolerance is fenced on BOTH sides. A floor-only rule passes every test while admitting a
+    /// budget no epoch can approach, which is a cap in name only.
+    #[test]
+    fn a_tolerance_outside_the_fence_is_refused_in_both_directions() {
+        let (base, other, domains) = two_class_domains();
+        let targets = BTreeMap::from([(base, u128::MAX / 4), (other, u128::MAX / 4)]);
+        let costs = BTreeMap::from([(base, 1_000u64), (other, 1_000u64)]);
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 999),
+            Err(PalwClassBudgetError::ToleranceBelowUnity { got: 999 })
+        );
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE + 1),
+            Err(PalwClassBudgetError::ToleranceAboveCeiling {
+                got: PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE + 1,
+                max: PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE
+            })
+        );
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, u32::MAX),
+            Err(PalwClassBudgetError::ToleranceAboveCeiling { got: u32::MAX, max: PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE }),
+            "an unbounded tolerance is the shape a floor-only fence lets through"
+        );
+        // The exact boundaries hold.
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 1_000).is_ok());
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE).is_ok());
+        // And the divisor is not optional.
+        assert_eq!(class_epoch_budgets_v1(1, &domains, 0, &targets, &costs, 1_000), Err(PalwClassBudgetError::ZeroEpochLength));
+    }
+
+    /// A class that could never admit a block is STARVED, not capped, and that is an error.
+    ///
+    /// The failure is quiet by nature: a zero budget looks like a working cap and silently removes a
+    /// class's whole domain. It is reachable at honest parameters — a tiny share on a short epoch
+    /// with a cheap class truncates to nothing.
+    #[test]
+    fn a_class_that_can_never_admit_a_block_is_refused_not_capped() {
+        let base = id(0xB0);
+        let dust = id(0xD1);
+        let domains = PalwDifficultyDomainSetV1::new(base, BTreeMap::from([(base, 999u16), (dust, 1u16)])).unwrap();
+        // A hard target: one expected attempt, so pwu(class) is just `pwu_per_inference`.
+        let targets = BTreeMap::from([(base, u128::MAX), (dust, u128::MAX)]);
+        let costs = BTreeMap::from([(base, 1u64), (dust, 1u64)]);
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 2, &targets, &costs, 1_000),
+            Err(PalwClassBudgetError::ZeroBudget { class_id: dust }),
+            "a truncated-to-zero budget must be an error, never a silent cap of nothing"
+        );
+    }
+
+    /// **The ADR's inequality is unsatisfiable for any class above the share-weighted mean pwu**, and
+    /// the derivation refuses such a set instead of shipping a cap that throttles it.
+    ///
+    /// `budget_c ≥ expected_c ⟺ tolerance · mean_pwu ≥ pwu_c` — the share cancels out entirely, so
+    /// what is left is a comparison of one class's per-block pwu against the mean. At unity
+    /// tolerance every class above the mean is capped below its own cadence share, which is the
+    /// opposite of what the DAA is targeting for it.
+    ///
+    /// This defect survived the first draft of the whole module because every fixture gave both
+    /// classes the SAME pwu, under which the comparison is vacuously true. Measured: shares 600/400
+    /// with pwu 100/10 000 gives the heavy class 0.406x its own expected production.
+    #[test]
+    fn a_class_heavier_than_the_mean_is_refused_rather_than_throttled() {
+        let base = id(0xB0);
+        let heavy = id(0xC1);
+        let domains = PalwDifficultyDomainSetV1::new(base, BTreeMap::from([(base, 600u16), (heavy, 400u16)])).unwrap();
+        let easy = u128::MAX / 4;
+        let targets = BTreeMap::from([(base, easy), (heavy, easy)]);
+        // 100x apart: the heavy class is far above the share-weighted mean.
+        let costs = BTreeMap::from([(base, 100u64), (heavy, 10_000u64)]);
+
+        let err = class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 1_000).unwrap_err();
+        match err {
+            PalwClassBudgetError::StarvedClass { class_id, budget_pwu, own_expected_pwu } => {
+                assert_eq!(class_id, heavy, "the class above the mean is the starved one");
+                assert!(budget_pwu < own_expected_pwu);
+                // The measured ratio, pinned: 0.406x. Its being well below 1 is the whole finding.
+                assert_eq!(budget_pwu * 1_000 / own_expected_pwu, 406);
+            }
+            other => panic!("expected StarvedClass, got {other:?}"),
+        }
+
+        // A tolerance large enough absorbs THIS spread — 2.464x by measurement — which is exactly why
+        // a per-class tolerance would be the cross-class coefficient table ADR-0038 Decision D
+        // rejects: the value needed depends on the spread, so it prices classes against each other.
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 2_463).is_err());
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 2_464).is_ok());
+
+        // The tolerance a class needs is BOUNDED, and the bound is `1000/share_c`‰ — not the pwu
+        // spread. As `pwu_c` grows it dominates the mean too, so `pwu_c / mean → 1000/share_c`. My
+        // first version of this test claimed a wide enough spread is never expressible, which is
+        // FALSE and the suite caught it: at share 400‰ the requirement converges to 2 500‰ no matter
+        // how heavy the class gets, so a 10 000x spread is admissible at tolerance 3 000‰.
+        let wilder = BTreeMap::from([(base, 100u64), (heavy, 1_000_000u64)]);
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &wilder, 2_499).is_err());
+        assert!(class_epoch_budgets_v1(1, &domains, 100, &targets, &wilder, 2_500).is_ok(), "the bound is 1000/400 = 2 500‰");
+        let absurd = BTreeMap::from([(base, 1u64), (heavy, u64::MAX / 4)]);
+        assert!(
+            class_epoch_budgets_v1(1, &domains, 100, &targets, &absurd, 2_500).is_ok(),
+            "the requirement converges to the share bound and never exceeds it"
+        );
+
+        // What the fence's 4 000‰ ceiling therefore means, exactly: it protects any class with
+        // share ≥ 250‰ unconditionally, and can NEVER protect a class below that against a heavy
+        // enough pwu. A 100‰ class needs up to 10 000‰, which is not expressible.
+        let thin = id(0xD2);
+        let thin_domains = PalwDifficultyDomainSetV1::new(base, BTreeMap::from([(base, 900u16), (thin, 100u16)])).unwrap();
+        let thin_targets = BTreeMap::from([(base, easy), (thin, easy)]);
+        let thin_costs = BTreeMap::from([(base, 1u64), (thin, 1_000_000_000u64)]);
+        for tolerance in [1_000, 2_500, PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE] {
+            assert!(
+                matches!(
+                    class_epoch_budgets_v1(1, &thin_domains, 100, &thin_targets, &thin_costs, tolerance),
+                    Err(PalwClassBudgetError::StarvedClass { .. })
+                ),
+                "a 100‰ class needs up to 10 000‰ and the ceiling is 4 000‰ (tolerance {tolerance})"
+            );
+        }
+
+        // An equal-pwu set is coherent at unity — the case the original fixtures used, and the
+        // reason the defect was invisible. Kept as the contrast rather than deleted.
+        let flat = BTreeMap::from([(base, 1_000u64), (heavy, 1_000u64)]);
+        let ok = class_epoch_budgets_v1(1, &domains, 100, &targets, &flat, 1_000).unwrap();
+        assert_eq!(ok.len(), 2);
+    }
+
+    /// A missing per-class fact is `UnknownClass`, never a zero — "we do not know what this class's
+    /// work costs" must not read as "this class costs nothing", which would give it the whole epoch.
+    #[test]
+    fn a_class_with_no_recorded_cost_has_no_budget_rather_than_a_free_one() {
+        let (base, other, domains) = two_class_domains();
+        let targets = BTreeMap::from([(base, u128::MAX / 4), (other, u128::MAX / 4)]);
+        let only_base = BTreeMap::from([(base, 1_000u64)]);
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 100, &targets, &only_base, 1_000),
+            Err(PalwClassBudgetError::UnknownClass { class_id: other })
+        );
+        let only_base_target = BTreeMap::from([(base, u128::MAX / 4)]);
+        let costs = BTreeMap::from([(base, 1_000u64), (other, 1_000u64)]);
+        assert_eq!(
+            class_epoch_budgets_v1(1, &domains, 100, &only_base_target, &costs, 1_000),
+            Err(PalwClassBudgetError::UnknownClass { class_id: other })
+        );
+    }
+
+    /// A saturated pwu has lost the magnitude the share is applied to, so it is refused rather than
+    /// compared. `palw_pwu_v1` saturates at `u64::MAX`, and two classes an order of magnitude apart
+    /// would then carry identical budgets.
+    #[test]
+    fn a_saturated_class_pwu_is_refused_rather_than_silently_flattened() {
+        let (base, other, domains) = two_class_domains();
+        // The easiest possible target maximizes expected attempts; a huge per-inference cost then
+        // saturates the product.
+        let targets = BTreeMap::from([(base, u128::MAX), (other, u128::MAX)]);
+        let costs = BTreeMap::from([(base, u64::MAX), (other, u64::MAX)]);
+        let err = class_epoch_budgets_v1(1, &domains, 100, &targets, &costs, 1_000).unwrap_err();
+        assert!(matches!(err, PalwClassBudgetError::SaturatedClassPwu { .. }), "got {err:?}");
+    }
+
+    /// The fits predicate is arithmetic, refuses a budget for another class or epoch, and does not
+    /// overflow at the extremes.
+    #[test]
+    fn the_fits_predicate_bounds_the_epoch_and_refuses_a_foreign_budget() {
+        let (base, other, domains) = two_class_domains();
+        let targets = BTreeMap::from([(base, u128::MAX / 4), (other, u128::MAX / 4)]);
+        let costs = BTreeMap::from([(base, 1_000u64), (other, 1_000u64)]);
+        let budgets = class_epoch_budgets_v1(7, &domains, 100, &targets, &costs, 1_000).unwrap();
+        let b = budgets[&base];
+        let cap = b.budget_pwu();
+
+        assert!(class_epoch_pwu_fits_v1(&b, &base, 7, 0, 1).unwrap());
+        assert!(class_epoch_pwu_fits_v1(&b, &base, 7, cap - 1, 1).unwrap(), "exactly filling the budget still fits");
+        assert!(!class_epoch_pwu_fits_v1(&b, &base, 7, cap, 1).unwrap(), "one pwu past it does not");
+
+        // A budget for another class or another epoch is refused, not coerced.
+        assert!(class_epoch_pwu_fits_v1(&b, &other, 7, 0, 1).is_err());
+        assert!(class_epoch_pwu_fits_v1(&b, &base, 8, 0, 1).is_err());
+        // And the accumulator cannot be wrapped into fitting.
+        assert!(matches!(class_epoch_pwu_fits_v1(&b, &base, 7, u128::MAX, u64::MAX), Err(PalwClassBudgetError::Overflow { .. })));
+    }
+
+    /// Order-invariance and exactness: the budget divides ONCE.
+    ///
+    /// Dividing per class first truncates three permille denominators per class and the residues do
+    /// not cancel, so the sum would depend on how the classes were grouped. This pins that the
+    /// derivation is a function of the set and not of its traversal.
+    #[test]
+    fn the_budget_divides_once_so_it_is_exact_and_order_free() {
+        let base = id(0xB0);
+        let (a, b, c) = (id(0xA1), id(0xA2), id(0xA3));
+        let domains =
+            PalwDifficultyDomainSetV1::new(base, BTreeMap::from([(base, 397u16), (a, 201u16), (b, 199u16), (c, 203u16)])).unwrap();
+        // A COHERENT spread: every class's pwu is within the tolerance of the share-weighted mean, so
+        // nothing is starved and the test is about the arithmetic. The original fixture used a
+        // 2000x spread and now correctly fails `StarvedClass` — which is how that defect was found.
+        // Equal targets keep pwu proportional to the registered cost, so the spread is legible.
+        let easy = u128::MAX / 3;
+        let targets = BTreeMap::from([(base, easy), (a, easy), (b, easy), (c, easy)]);
+        let costs = BTreeMap::from([(base, 7_919u64), (a, 9_973u64), (b, 8_093u64), (c, 8_111u64)]);
+        let budgets = class_epoch_budgets_v1(3, &domains, 137, &targets, &costs, 1_337).unwrap();
+
+        // W_e computed independently here, undivided, then each budget checked against it exactly.
+        let denom = PALW_CLASS_SHARE_DENOMINATOR as u128;
+        let mut w_e_scaled: u128 = 0;
+        for (id, share) in domains.class_shares_permille.iter() {
+            let pwu = crate::palw_pwu::palw_pwu_v1(targets[id], costs[id]) as u128;
+            w_e_scaled += (*share as u128) * 137u128 * pwu;
+        }
+        for (id, share) in domains.class_shares_permille.iter() {
+            let expected = w_e_scaled * (*share as u128) * 1_337u128 / (denom * denom * denom);
+            assert_eq!(budgets[id].budget_pwu(), expected, "class {id:?} budget is not the single-division value");
+        }
+        // Non-trivial: at these numbers a per-class-first division really does differ.
+        let mut truncated_total: u128 = 0;
+        for (id, share) in domains.class_shares_permille.iter() {
+            let pwu = crate::palw_pwu::palw_pwu_v1(targets[id], costs[id]) as u128;
+            truncated_total += (*share as u128) * 137u128 * pwu / denom;
+        }
+        assert_ne!(truncated_total, w_e_scaled / denom, "the fixture must actually exercise the residue");
     }
 
     /// `id(0)` is the base class in every fixture below — the liveness floor.
@@ -333,4 +787,3 @@ mod tests {
         assert_eq!(s, borsh::from_slice::<PalwDifficultyDomainSetV1>(&borsh::to_vec(&s).unwrap()).unwrap());
     }
 }
-
