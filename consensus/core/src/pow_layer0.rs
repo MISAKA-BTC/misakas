@@ -473,6 +473,29 @@ pub fn check_algo_id(
     }
 }
 
+/// Does Layer-0 PoW verification short-circuit for this header instead of reaching the Layer-1
+/// finalizer?
+///
+/// **The one definition of "parentless root", shared by the PoW entry points and by every gate that
+/// must run before them.** `kaspa_pow::calc_block_level_check_pow_layer0` returns
+/// `(max_block_level, true)` without touching the finalizer exactly when this is true.
+///
+/// It is `parents_by_level.is_empty()`, NOT `direct_parents().is_empty()`, and the difference is a
+/// live remote-panic vector rather than a nicety. [`crate::header::Header::direct_parents`] reads
+/// `parents_by_level[0]` and yields `&[]` when that run exists but is EMPTY — so for a header whose
+/// `parents_by_level` is `[[]]`, `direct_parents()` says "parentless" while the PoW short-circuit
+/// does not fire. A gate exempting parentless headers on the `direct_parents` predicate therefore
+/// skipped `check_algo_id` on precisely the header shape whose PoW still runs, letting
+/// `algo_id = 4` reach the PALW arm on a worker-less node and panic it. Found by an adversarial
+/// verifier with a proof-of-concept after the first version of the pruning-proof gate shipped with
+/// the mismatched predicate (mainnet-readiness audit P0-1, trigger b).
+///
+/// Callers that mean "the PoW will actually run, so gate the input first" must use this.
+#[inline]
+pub fn pow_short_circuits_as_parentless_root(header: &crate::header::Header) -> bool {
+    header.parents_by_level.is_empty()
+}
+
 /// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3,
 /// PALW LLM, PALW Ollama}). Used where the PoW itself is independently verified and only an
 /// unknown/garbage id must be rejected (e.g. the pruning-proof path); the exact per-network/

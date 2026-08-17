@@ -82,6 +82,18 @@ impl HeaderProcessor {
     /// DAG) and is checked before the PoW seed (which consumes `algo_id`) is derived. Genesis — the
     /// parentless trusted root — is exempt (its PoW is never validated; it may carry either id).
     fn check_pow_algo_id(&self, header: &Header) -> BlockProcessResult<()> {
+        // NOTE the predicate. This is `direct_parents()`, which reports "parentless" both for a real
+        // root (no levels) and for a header whose level-0 run exists but is EMPTY — and for the
+        // latter the PoW does NOT short-circuit (see
+        // `pow_layer0::pow_short_circuits_as_parentless_root`). That mismatch is a remote-panic
+        // vector wherever nothing else rejects the empty-run shape, and it was exactly the bug in
+        // the first pruning-proof gate.
+        //
+        // It is safe HERE only because `check_parents_limit` rejects `direct_parents().is_empty()`
+        // with `RuleError::NoParents`, and it runs in the same pre-PoW group
+        // (`validate_header_in_isolation_sans_pow`) — so the empty-run header never reaches the
+        // finalizer on this path. Moving `check_parents_limit` after the PoW, or dropping it, would
+        // re-open the hole; a gate without that backstop must use the shared predicate instead.
         if header.direct_parents().is_empty() {
             return Ok(());
         }

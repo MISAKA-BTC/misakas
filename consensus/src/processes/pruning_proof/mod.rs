@@ -214,7 +214,11 @@ impl PruningProofManager {
     /// [`check_algo_id`]: kaspa_consensus_core::pow_layer0::check_algo_id
     /// [`check_palw_commitment_shape`]: kaspa_consensus_core::pow_layer0::check_palw_commitment_shape
     pub(super) fn check_proof_header_shape(&self, header: &Header, level: BlockLevel) -> PruningImportResult<()> {
-        if !header.direct_parents().is_empty() {
+        // Exempt EXACTLY the headers whose PoW short-circuits, using the shared predicate rather
+        // than `direct_parents().is_empty()`. The two differ for `parents_by_level == [[]]`, where
+        // `direct_parents()` reports parentless but the finalizer still runs — which let algo_id = 4
+        // reach the panicking PALW arm through this very gate (see the predicate's own docs).
+        if !kaspa_consensus_core::pow_layer0::pow_short_circuits_as_parentless_root(header) {
             let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
             let palw_active = self.pow_palw_activation.is_active(header.daa_score);
             let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);

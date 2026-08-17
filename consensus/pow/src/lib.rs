@@ -108,7 +108,10 @@ pub fn calc_level_from_pow_512(pow_512: Uint512, max_block_level: BlockLevel) ->
 /// `network_id` is the per-network domain-separation tag fed to the
 /// Layer 0 finalizer (see [`StateLayer0::new`]).
 pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max_block_level: BlockLevel) -> (BlockLevel, bool) {
-    if header.parents_by_level.is_empty() {
+    // Through the SHARED predicate, so that any gate which must run before this function can ask the
+    // same question and cannot drift from it. Inlining `parents_by_level.is_empty()` here is what let
+    // the pruning-proof gate exempt a header shape whose PoW still ran (see the predicate's docs).
+    if kaspa_consensus_core::pow_layer0::pow_short_circuits_as_parentless_root(header) {
         return (max_block_level, true); // Genesis has the max block level
     }
 
@@ -593,5 +596,75 @@ mod tests_pq {
             let (level, passes) = calc_block_level_check_pow_layer0(&h, b"mainnet", 100);
             assert_eq!((level, passes), (0, false), "unknown algo id {bad} must be a failed PoW at level 0, never a panic");
         }
+    }
+
+    /// The predicate-drift regression, found by an adversarial verifier's proof-of-concept after the
+    /// first pruning-proof gate shipped.
+    ///
+    /// `Header::direct_parents()` reads `parents_by_level[0]` and returns `&[]` when that run exists
+    /// but is empty, whereas the PoW short-circuit asks `parents_by_level.is_empty()`. For
+    /// `parents_by_level == [[]]` the two disagree: the gate called such a header "parentless" and
+    /// skipped `check_algo_id`, while the finalizer still ran — so `algo_id = 4` reached the PALW arm
+    /// on a worker-less node and panicked it, the exact P0-1 trigger (b) the gate exists to close.
+    ///
+    /// Both sides now ask [`pow_short_circuits_as_parentless_root`]. This pins the predicate itself,
+    /// which is what the drift was about; the gate's use of it is covered in `kaspa-consensus`.
+    #[test]
+    fn the_parentless_predicate_does_not_drift_from_the_pow_short_circuit() {
+        use kaspa_consensus_core::pow_layer0::pow_short_circuits_as_parentless_root;
+
+        // `parents_by_level == [[]]`: a level-0 run that EXISTS and is EMPTY.
+        let empty_level0 = Header::new_finalized(
+            1,
+            vec![vec![]].try_into().unwrap(),
+            ZERO_HASH64,
+            ZERO_HASH64,
+            ZERO_HASH64,
+            1_700_000_000,
+            0x207fffff,
+            0,
+            POW_ALGO_ID_KHEAVYHASH,
+            0,
+            BlueWorkType::from_u64(0),
+            0,
+            ZERO_HASH64,
+        );
+        // The trap: `direct_parents()` calls this parentless...
+        assert!(empty_level0.direct_parents().is_empty(), "direct_parents() reports parentless for [[]]");
+        // ...but the PoW does NOT short-circuit, so a gate must NOT exempt it.
+        assert!(
+            !pow_short_circuits_as_parentless_root(&empty_level0),
+            "[[]] must NOT be treated as a parentless root: its PoW runs, so gates must check it"
+        );
+
+        // A header with real parents: PoW runs, no exemption.
+        let with_parents = dummy_header(0x207fffff, 0, 1_700_000_000);
+        assert!(!with_parents.direct_parents().is_empty());
+        assert!(!pow_short_circuits_as_parentless_root(&with_parents));
+
+        // The genuine parentless root — no levels at all — is the one case that short-circuits, and
+        // `calc_block_level_check_pow_layer0` must return max level without touching the finalizer
+        // (proved here by using an algo id that would otherwise error).
+        let genesis = Header::new_finalized(
+            1,
+            Vec::<Vec<kaspa_hashes::Hash64>>::new().try_into().unwrap(),
+            ZERO_HASH64,
+            ZERO_HASH64,
+            ZERO_HASH64,
+            1_700_000_000,
+            0x207fffff,
+            0,
+            200, // an unknown id: reaching the finalizer would return UnknownAlgoId, not max level
+            0,
+            BlueWorkType::from_u64(0),
+            0,
+            ZERO_HASH64,
+        );
+        assert!(pow_short_circuits_as_parentless_root(&genesis));
+        assert_eq!(
+            calc_block_level_check_pow_layer0(&genesis, b"mainnet", 100),
+            (100, true),
+            "the true parentless root short-circuits to max level without running the finalizer"
+        );
     }
 }
