@@ -39,8 +39,17 @@ pub const PALW_SCHEDULE_DOMAIN_ASSIGNMENT_TICKET: &[u8] = b"misaka-palw/v2-repla
 /// Every domain this module introduces (uniqueness-tested against every other PALW family).
 pub const PALW_SCHEDULE_ALL_DOMAINS: &[&[u8]] = &[PALW_SCHEDULE_DOMAIN_ASSIGNMENT_TICKET];
 
-/// The degraded-ladder round budget the challenge window must fit (ADR-0028 §3, ADR-0027 §1:
-/// ≈ log₂ of the step count at the credited ceiling).
+/// The degraded-ladder round budget the challenge window was intended to fit (ADR-0028 §3,
+/// ADR-0027 §1: ≈ log₂ of the step count at the credited ceiling).
+///
+/// **An aspiration, not a fact about any shipped preset.** A rung costs
+/// [`PALW_SCHEDULE_WINDOWS_PER_RUNG`] windows and the terminal opening plus the conviction cost
+/// [`PALW_SCHEDULE_WINDOWS_AFTER_LADDER`] more, so 20 rounds needs `w_replay + 42 · w_round` — 15 480
+/// DAA at the deci-bps defaults against a `w_challenge` of 8 640, and the pruning horizon caps that
+/// preset at 12 rounds no matter how `w_challenge` is raised. The 120 s preset affords 10 and caps at
+/// 17. What a parameter set can actually walk is [`affordable_ladder_rounds_v1`]; the space it can
+/// adjudicate is [`max_ladder_space_v1`]. Keep this constant as the target the ADR set, and read the
+/// derived pair for what is true.
 pub const PALW_SCHEDULE_LADDER_ROUNDS: u64 = 20;
 
 /// `κ` — every response window must be at least this multiple of the class's measured
@@ -146,6 +155,55 @@ pub fn select_replay_panel_v1(
 // §3 — windows
 // ---------------------------------------------------------------------------------------------
 
+/// Windows one bisection RUNG actually consumes: two, not one.
+///
+/// `apply_disclosure` sets the deadline for the challenger's verdict, and `apply_verdict` then sets
+/// the deadline for the next disclosure — so one rung of the ladder burns `2 · w_round`. The
+/// original budget charged one window per round and was therefore short by a factor of two, plus the
+/// terminal opening and the conviction that follow the last rung. The cost of being short is not a
+/// slow ladder: a step conviction counts only if it is accepted at or before
+/// `commitment_accepted_daa + w_challenge`, so a ladder that overruns produces a conviction that is
+/// DISCARDED and an executor that is never slashed.
+pub const PALW_SCHEDULE_WINDOWS_PER_RUNG: u64 = 2;
+
+/// Windows the ladder needs AFTER its last rung: one for the terminal opening the responder owes,
+/// one for the conviction it enables. Both must land inside `w_challenge` or they are telemetry.
+pub const PALW_SCHEDULE_WINDOWS_AFTER_LADDER: u64 = 2;
+
+/// How many bisection rounds a parameter set can actually afford inside its own challenge window.
+///
+/// `(w_challenge − w_replay − after · w_round) / (per_rung · w_round)`, floored at zero. This is the
+/// number [`PALW_SCHEDULE_LADDER_ROUNDS`] aspires to and **no shipped preset reaches**: measured on
+/// the two Stage-1 defaults, deci-bps affords 10 rounds and the 120 s preset affords 10, against the
+/// 20 the constant names. Raising `w_challenge` does not rescue it either — the pruning horizon caps
+/// deci-bps at 12 rounds and the 120 s preset at 17.
+///
+/// The consequence is a real limit on what can be adjudicated, and it is better stated than
+/// discovered: a step space larger than `2^affordable` cannot be bisected to a terminal index before
+/// the challenge window closes, so a fraud that deep is unprosecutable at these parameters. See
+/// [`max_ladder_space_v1`].
+pub fn affordable_ladder_rounds_v1(params: &PalwScheduleParamsV1) -> u64 {
+    if params.w_round == 0 {
+        return 0;
+    }
+    let after = PALW_SCHEDULE_WINDOWS_AFTER_LADDER.saturating_mul(params.w_round);
+    let usable = params.w_challenge.saturating_sub(params.w_replay).saturating_sub(after);
+    usable / (PALW_SCHEDULE_WINDOWS_PER_RUNG * params.w_round)
+}
+
+/// The largest bisection space these parameters can walk to a terminal index in time.
+///
+/// `2^affordable_rounds`, capped at [`crate::palw_bisect::PALW_BISECT_MAX_SPACE`]. A ladder opened
+/// over a larger space is not merely slow — its terminal opening and conviction land past
+/// `w_challenge` and are discarded, so the ladder cannot convict anyone and the honest challenger
+/// spends its rungs for nothing. `PALW_STEP_MAX_LEAVES` is `2^22` and the global bisect cap is
+/// `2^40`; neither is reachable at any parameters a shipped preset can carry, which is the fact this
+/// function exists to make visible rather than to hide.
+pub fn max_ladder_space_v1(params: &PalwScheduleParamsV1) -> u64 {
+    let rounds = affordable_ladder_rounds_v1(params);
+    if rounds >= 40 { crate::palw_bisect::PALW_BISECT_MAX_SPACE } else { 1u64 << rounds }
+}
+
 pub const PALW_SCHEDULE_PARAMS_VERSION_V1: u16 = 1;
 
 /// The per-class window parameters, DAA-denominated. Registered at class registration in later
@@ -219,16 +277,32 @@ impl PalwScheduleParamsV1 {
         if self.delta_bind == 0 || self.w_replay == 0 || self.w_answer == 0 || self.w_round == 0 || self.w_challenge == 0 {
             return Err(PalwScheduleError::ParamsNotCanonical { reason: "a window is zero" });
         }
-        let ladder = self
+        // The ladder must be able to reach a VERDICT inside the challenge window, not merely to
+        // start. The original form charged one window per round; a rung burns two (the disclosure
+        // sets the verdict's deadline, the verdict sets the next disclosure's), and the terminal
+        // opening plus the conviction need one each after the last rung. Being short here does not
+        // make a ladder slow — a conviction accepted past `w_challenge` is discarded, so the
+        // executor is never slashed.
+        //
+        // The check is on ONE affordable rung plus the tail rather than on
+        // `PALW_SCHEDULE_LADDER_ROUNDS`, because no shipped preset can afford 20 at any
+        // `w_challenge` its pruning horizon permits (measured: deci-bps 12, the 120 s preset 17).
+        // Demanding 20 here would reject every preset in the tree; what the network can actually
+        // adjudicate is exposed by `affordable_ladder_rounds_v1` and bounded by
+        // `max_ladder_space_v1` instead of asserted.
+        let minimum = self
             .w_replay
             .checked_add(
-                PALW_SCHEDULE_LADDER_ROUNDS
-                    .checked_mul(self.w_round)
+                PALW_SCHEDULE_WINDOWS_PER_RUNG
+                    .checked_add(PALW_SCHEDULE_WINDOWS_AFTER_LADDER)
+                    .and_then(|w| w.checked_mul(self.w_round))
                     .ok_or(PalwScheduleError::DaaOverflow { what: "ladder budget" })?,
             )
             .ok_or(PalwScheduleError::DaaOverflow { what: "ladder budget" })?;
-        if self.w_challenge < ladder {
-            return Err(PalwScheduleError::WindowInequalityViolated { rule: "w_challenge ≥ w_replay + LADDER_ROUNDS · w_round" });
+        if self.w_challenge < minimum {
+            return Err(PalwScheduleError::WindowInequalityViolated {
+                rule: "w_challenge ≥ w_replay + (WINDOWS_PER_RUNG + WINDOWS_AFTER_LADDER) · w_round",
+            });
         }
         // Duties must resolve before the credit gate evaluates.
         let duty_close = self.delta_bind.checked_add(self.w_replay).ok_or(PalwScheduleError::DaaOverflow { what: "duty close" })?;
@@ -820,6 +894,70 @@ mod tests {
         );
     }
 
+    /// **No shipped preset can afford the ladder ADR-0028 §3 budgets, and the shortfall is a
+    /// silently-discarded conviction rather than a slow dispute.**
+    ///
+    /// A rung costs two windows (the disclosure sets the verdict's deadline, the verdict sets the
+    /// next disclosure's), and the terminal opening plus the conviction cost one each after the last
+    /// rung. The old inequality charged ONE window per round, so it certified a 20-round ladder that
+    /// needs `w_replay + 42 · w_round` against a budget of `w_replay + 20 · w_round`.
+    ///
+    /// Every number below is measured, and each is pinned so a parameter edit that quietly shrinks
+    /// what the network can adjudicate fails here.
+    #[test]
+    fn no_shipped_preset_affords_the_twenty_round_ladder_the_adr_budgets() {
+        for (name, params, blockrate, affordable, ceiling_rounds) in [
+            ("deci-bps", PalwScheduleParamsV1::stage1_defaults_deci_bps(), BlockrateParams::new_deci_bps(), 10u64, 12u64),
+            ("two-minute", PalwScheduleParamsV1::stage1_defaults_two_minute_bps(), BlockrateParams::new_two_minute_bps(), 10, 17),
+        ] {
+            // The preset is valid — the corrected inequality demands one rung plus the tail, which
+            // both presets clear.
+            params.validate(&blockrate).unwrap();
+
+            // But it affords far fewer rounds than the ADR's 20.
+            assert_eq!(affordable_ladder_rounds_v1(&params), affordable, "{name} affordable rounds moved");
+            assert!(affordable < PALW_SCHEDULE_LADDER_ROUNDS, "{name} must not be read as affording the aspiration");
+            assert_eq!(max_ladder_space_v1(&params), 1u64 << affordable, "{name} adjudicable space moved");
+
+            // The 20-round cost, stated: what `w_challenge` would have to be.
+            let needed = params.w_replay
+                + (PALW_SCHEDULE_WINDOWS_PER_RUNG * PALW_SCHEDULE_LADDER_ROUNDS + PALW_SCHEDULE_WINDOWS_AFTER_LADDER) * params.w_round;
+            assert!(needed > params.w_challenge, "{name}: 20 rounds would need {needed} > {}", params.w_challenge);
+
+            // And raising `w_challenge` does NOT rescue it: the pruning horizon is the hard cap, and
+            // even at the largest admissible window the affordable rounds stay below 20.
+            let max_challenge = blockrate.pruning_depth - params.prosecution_slack - 1;
+            let stretched = PalwScheduleParamsV1 { w_challenge: max_challenge, ..params };
+            assert_eq!(affordable_ladder_rounds_v1(&stretched), ceiling_rounds, "{name} pruning-capped rounds moved");
+            assert!(ceiling_rounds < PALW_SCHEDULE_LADDER_ROUNDS, "{name}: the horizon itself forbids the aspiration");
+            // One DAA further and the pruning inequality refuses it, so this really is the ceiling.
+            let over = PalwScheduleParamsV1 { w_challenge: max_challenge + 1, ..params };
+            assert!(over.validate(&blockrate).is_err(), "{name}: the horizon must bind");
+        }
+
+        // The step-leg cap and the global bisect cap are both far past anything reachable, which is
+        // the fact these accessors exist to surface rather than to hide.
+        let deci = PalwScheduleParamsV1::stage1_defaults_deci_bps();
+        assert!(max_ladder_space_v1(&deci) < crate::palw_step::PALW_STEP_MAX_LEAVES);
+        assert!(max_ladder_space_v1(&deci) < crate::palw_bisect::PALW_BISECT_MAX_SPACE);
+    }
+
+    /// The derived pair is monotone and degenerate-safe: a zero round window affords nothing rather
+    /// than dividing by zero, and a window that cannot even fit the tail affords zero rounds.
+    #[test]
+    fn the_affordable_ladder_is_monotone_and_never_divides_by_zero() {
+        let base = PalwScheduleParamsV1::stage1_defaults_deci_bps();
+        assert_eq!(affordable_ladder_rounds_v1(&PalwScheduleParamsV1 { w_round: 0, ..base }), 0);
+        assert_eq!(max_ladder_space_v1(&PalwScheduleParamsV1 { w_round: 0, ..base }), 1, "no rung means no bisection");
+        // Below the tail's own cost: zero rounds, not a wrapped huge number.
+        assert_eq!(affordable_ladder_rounds_v1(&PalwScheduleParamsV1 { w_challenge: base.w_replay, ..base }), 0);
+        // Monotone in the window and inversely monotone in the rung cost.
+        let wider = PalwScheduleParamsV1 { w_challenge: base.w_challenge * 2, ..base };
+        assert!(affordable_ladder_rounds_v1(&wider) > affordable_ladder_rounds_v1(&base));
+        let slower = PalwScheduleParamsV1 { w_round: base.w_round * 2, ..base };
+        assert!(affordable_ladder_rounds_v1(&slower) < affordable_ladder_rounds_v1(&base));
+    }
+
     #[test]
     fn every_window_inequality_rejects_on_its_own() {
         let blockrate = BlockrateParams::new_deci_bps();
@@ -837,12 +975,22 @@ mod tests {
         zero_window.w_answer = 0;
         assert!(matches!(zero_window.validate(&blockrate), Err(PalwScheduleError::ParamsNotCanonical { .. })));
 
+        // One rung plus the terminal opening plus the conviction — four windows — must fit. At
+        // w_round = 2 100 that is 360 + 8 400 = 8 760 against a w_challenge of 8 640.
         let mut ladder_broken = good;
-        ladder_broken.w_round = 1_000; // 20 rounds no longer fit inside 24 h
+        ladder_broken.w_round = 2_100;
         assert_eq!(
             ladder_broken.validate(&blockrate),
-            Err(PalwScheduleError::WindowInequalityViolated { rule: "w_challenge ≥ w_replay + LADDER_ROUNDS · w_round" })
+            Err(PalwScheduleError::WindowInequalityViolated {
+                rule: "w_challenge ≥ w_replay + (WINDOWS_PER_RUNG + WINDOWS_AFTER_LADDER) · w_round"
+            })
         );
+        // And the boundary: 2 070 fits exactly (360 + 8 280 = 8 640), affording one rung and no more.
+        let mut exactly_one_rung = good;
+        exactly_one_rung.w_round = 2_070;
+        exactly_one_rung.validate(&blockrate).unwrap();
+        assert_eq!(affordable_ladder_rounds_v1(&exactly_one_rung), 1);
+        assert_eq!(max_ladder_space_v1(&exactly_one_rung), 2, "one rung bisects a space of two");
 
         let mut duty_after_close = good;
         duty_after_close.delta_bind = 9_000;
