@@ -5,8 +5,8 @@
 //!
 //! ```text
 //! integer add, integer multiply    (native, exact — not wrapped in a function)
-//! rounding_shift_right             the ONLY site where a value loses information
-//! srdhm                            the ONE fixed-point multiply
+//! rounding_shift_right             loses information, rounding half AWAY from zero (one of two lossy sites)
+//! srdhm                            the ONE fixed-point multiply; loses information too, rounding half UP (gemmlowp's rule)
 //! int_exp                          softmax, and (through sigmoid) SiLU
 //! int_rsqrt                        RMS norm
 //! ```
@@ -80,8 +80,9 @@ pub const RSQRT_SEED: [i64; 16] = [
 /// must accumulate in `i64` and say so.
 pub const MAX_DOT_LEN: usize = 133_144;
 
-/// Round-half-away-from-zero shift — the ONE site in the whole class where a value loses
-/// information (ADR-0040 C1). Every other operation here is exact.
+/// Round-half-away-from-zero shift — ONE of the two sites in the class where a value loses
+/// information (ADR-0040 C1); the other is [`srdhm`], which rounds half UP, not half-away. Every
+/// operation other than these two is exact.
 ///
 /// # It is written on the magnitude, and that is the whole correctness argument
 ///
@@ -99,7 +100,14 @@ pub const MAX_DOT_LEN: usize = 133_144;
 /// accumulator into a negative answer.
 #[inline]
 pub fn rounding_shift_right(x: i32, s: u8) -> i32 {
+    // The `debug_assert` documents the C1 domain and catches a caller bug in tests; the `min`
+    // makes the function TOTAL in release. Without it a shift decoded from oracle bytes on the
+    // refutation path (`palw_step_refute` reads `shift: c[4]`, 0..=255, unvalidated) panics for
+    // `s >= 64` under `overflow-checks = true` — a `pub` total-arithmetic function must never
+    // panic on peer-influenced input. This mirrors `rescale_q`'s `shift.min(RESCALE_MAX_SHIFT)`.
+    // Beyond the Qk resolution the result is 0 anyway, so clamping the shift to 31 loses nothing.
     debug_assert!(s <= 31);
+    let s = s.min(31);
     if s == 0 {
         return x;
     }
@@ -113,6 +121,12 @@ pub fn rounding_shift_right(x: i32, s: u8) -> i32 {
 ///
 /// gemmlowp's primitive verbatim, deliberately: it is already implemented identically in several
 /// independent codebases, which is exactly the property a second implementation needs.
+///
+/// **Rounds half UP (toward +∞), NOT half-away-from-zero** — the asymmetric nudge `1 − 2^30`
+/// composed with truncating division gives `srdhm(-1, 2^30) = 0` where half-away gives `-1`. This
+/// differs from [`rounding_shift_right`]'s rule on the negative exact-half products, and it is
+/// intentional: matching gemmlowp bit-for-bit is C2's whole purpose. ADR-0040 C1 records why the
+/// distinction matters (a third party rounding half-away here would be convicted).
 #[inline]
 pub fn srdhm(a: i32, b: i32) -> i32 {
     // The single saturating case: -2^31 × -2^31 doubled is 2^63, one past `i64`'s range.
@@ -286,8 +300,14 @@ pub fn int_rsqrt(v: i64) -> i64 {
 /// case that needs a pinned algorithm, and it gets one.
 #[inline]
 pub fn int_recip(v: i64) -> i64 {
-    let r = int_rsqrt(v);
-    (r * r) >> K
+    // `r = int_rsqrt(v)` can be as large as ~2^36 (at v = 1, the smallest in-domain input), so
+    // `r * r` reaches ~2^72 and overflows `i64` — a release panic under `overflow-checks = true`
+    // for EVERY v in 1..=511, on a function whose declared domain is v > 0. The final `>> K`
+    // result always fits `i64` (`1/v` in Qk is at most 2^48), so the fix is to widen the square to
+    // `i128` and narrow back. `misaka-palw-base0-ref2` already computes it this way; this makes the
+    // spec total on its own domain and keeps the two bit-identical there.
+    let r = int_rsqrt(v) as i128;
+    ((r * r) >> K) as i64
 }
 
 #[cfg(test)]
@@ -420,6 +440,18 @@ mod tests {
         assert_eq!(srdhm(-1, 1), 0, "a product far below the resolution rounds to zero, not away from it");
         assert_eq!(srdhm(1, -1), 0);
         assert_eq!(srdhm(-(1 << 20), 1 << 20), -512);
+        // SRDHM rounds half UP (toward +∞), NOT half-away — ADR-0040 C1. Pin it on the negative
+        // exact-half products, where the two rules diverge. `-(2m+1)·2^30 / 2^31 = -(2m+1)/2` is an
+        // exact half; half-up gives -m, half-away gives -(m+1). These freeze the gemmlowp rule so a
+        // "correction" toward symmetry (which would convict honest gemmlowp-based third parties)
+        // fails here rather than silently.
+        assert_eq!(srdhm(-1, 1 << 30), 0, "-1/2 rounds UP to 0, not away to -1");
+        assert_eq!(srdhm(-3, 1 << 30), -1, "-3/2 rounds UP to -1, not away to -2");
+        assert_eq!(srdhm(-5, 1 << 30), -2, "-5/2 rounds UP to -2, not away to -3");
+        // The positive exact-halves round the same way under both rules (up == away for x>0), so
+        // they must NOT change: this is what makes the divergence negative-only.
+        assert_eq!(srdhm(1, 1 << 30), 1, "1/2 rounds to 1 under both rules");
+        assert_eq!(srdhm(3, 1 << 30), 2, "3/2 rounds to 2 under both rules");
         // SRDHM is `(a·b) >> 31`. These two identities pin the factor: an extra 2 makes the
         // first return 0.5 and the second overflow i32 (the bug this test caught).
         assert_eq!(srdhm(1 << 30, 1 << 30), 1 << 29, "0.5 x 0.5 = 0.25 in Q31");

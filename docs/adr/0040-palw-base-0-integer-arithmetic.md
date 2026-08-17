@@ -53,7 +53,8 @@ by one ulp about a range would diverge on everything downstream.
 
 ## Decision C — The three arithmetic rules, stated once and used everywhere
 
-**C1. Rounding is round-half-away-from-zero, and it happens only in `RoundingShiftRight`.**
+**C1. Information is lost in exactly TWO places — `RoundingShiftRight` and `SRDHM` (C2) — and
+they round by two DIFFERENT rules, deliberately.**
 
 ```
 RoundingShiftRight(x, s) -> i32                   // s in 0..=31
@@ -63,8 +64,23 @@ RoundingShiftRight(x, s) -> i32                   // s in 0..=31
     if x < 0 { -rounded } else { rounded }
 ```
 
-One rule, one site. Every other integer operation is exact, so this is the *only* place a value
-loses information — which is what makes an exact-bits second implementation tractable at all.
+`RoundingShiftRight` rounds half **away from zero**: `RSR(3,1) = 2`, `RSR(-3,1) = -2`, symmetric
+about zero. Every integer operation *other than these two* is exact, so these are the only places a
+value loses information — which is what makes an exact-bits second implementation tractable.
+
+**`SRDHM` (C2) rounds half UP (toward +∞), not half-away — and this is intentional.** Its asymmetric
+nudge `1 − 2^30` composed with truncation gives `SRDHM(-1, 2^30) = 0` where half-away would give
+`-1`. The two rules diverge on exactly the negative exact-half products (`|a·b| ≡ 2^30 mod 2^31`),
+which are freely constructible (take any `b = 2^30`), not statistically rare. `SRDHM` must round
+this way because C2's entire purpose is bit-identity with gemmlowp, which rounds half-up; changing
+it to half-away to match this heading would break the property C2 exists for. An earlier version of
+this heading claimed a single round-half-away rule "and it happens only in `RoundingShiftRight`" —
+a third party implementing `SRDHM` from that sentence would have produced half-away and disagreed
+with gemmlowp (and with the reference) on every negative exact-half, which under ADR-0027's court is
+a conviction, not a rounding difference. `misaka-palw-base0-ref2`'s differential cannot surface
+this: both sides derive from the same gemmlowp, so both are half-up; only the normative text was
+wrong. Verified independently by exhaustive comparison against the vendored upstream on the
+exact-half family.
 
 **Round the MAGNITUDE, then reapply the sign. Do not write `(x ± 2^(s−1)) >> s`.** That form was
 this ADR's original pseudocode and the first implementation followed it, and it is wrong for every

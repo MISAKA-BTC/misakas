@@ -235,6 +235,12 @@ fn int_exp_agrees_bit_for_bit() {
 fn int_rsqrt_agrees_bit_for_bit() {
     for v in 1..=20_000i64 {
         assert_eq!(spec::int_rsqrt(v), ref2::ref2_int_rsqrt(v), "IntRsqrt({v})");
+        // `int_recip` MUST be swept exhaustively over small v, not only sampled. Its `r * r`
+        // overflows `i64` for every v in 1..=511 (a release panic under overflow-checks), and the
+        // random loop below hits that range with probability ~1e-4 — so it passed for a long time
+        // while being non-total on its own domain (mainnet-readiness audit 2.4). This is the sweep
+        // that would have caught it, and now pins the i128-widened spec against ref2.
+        assert_eq!(spec::int_recip(v), ref2::ref2_int_recip(v), "IntRecip({v})");
     }
     // Non-positive inputs are defined as 0 rather than left to diverge.
     for v in [0i64, -1, -1000, i64::MIN] {

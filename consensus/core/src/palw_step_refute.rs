@@ -264,6 +264,14 @@ fn base0_row(
                     if row.len() != 5 * inputs[0].len() {
                         return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize params are not 5 bytes per channel"));
                     }
+                    // Reject a shift outside the C1 domain (0..=31) as non-canonical rather than
+                    // recomputing with it. `rounding_shift_right` now clamps such a shift so it can
+                    // never panic, but a step that COMMITTED an out-of-domain shift is malformed by
+                    // construction — an honest producer never emits one — so the court must refuse
+                    // the step, not silently clamp-and-compare it (mainnet-readiness audit 2.3).
+                    if row.chunks_exact(5).any(|c| c[4] > 31) {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize shift exceeds the 0..=31 domain"));
+                    }
                     let params: Vec<ops::QuantParams> = row
                         .chunks_exact(5)
                         .map(|c| ops::QuantParams {

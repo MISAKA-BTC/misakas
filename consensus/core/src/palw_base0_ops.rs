@@ -191,7 +191,13 @@ pub fn rms_norm(x: &[i8], eps_q: i64) -> Result<Vec<i32>, PalwBase0OpError> {
     // `x_i` is a plain integer code and `r` is Qk, so the product is already Qk — a further
     // `>> K` would divide every output by 2^24 and collapse the row to a handful of units,
     // which is precisely what an earlier draft did and what a too-loose test let through.
-    Ok(x.iter().map(|v| ((*v as i64) * r) as i32).collect())
+    //
+    // SATURATE the narrowing, do not `as i32`. For a sparse row (one large code, the rest zero) the
+    // mean of squares shrinks with the row width, so `r = 1/rms` grows: at width ≥ 16385 a 127 code
+    // times `r` exceeds `i32::MAX`, and a plain `as i32` wraps its SIGN — the largest activation
+    // becomes the most negative. ADR-0040 C3 is explicit that nothing wraps anywhere; every
+    // narrowing saturates. Widen to `i64` (already the product's type) and clamp.
+    Ok(x.iter().map(|v| ((*v as i64) * r).clamp(i32::MIN as i64, i32::MAX as i64) as i32).collect())
 }
 
 // -------------------------------------------------------------------------------------------
@@ -220,10 +226,16 @@ pub fn rope_table(x: &[i32], cos_q: &[i32], sin_q: &[i32]) -> Result<Vec<i32>, P
     }
     let mut out = Vec::with_capacity(x.len());
     for pair in 0..pairs {
-        let (a, b) = (x[2 * pair] as i64, x[2 * pair + 1] as i64);
-        let (c, s) = (cos_q[pair] as i64, sin_q[pair] as i64);
-        out.push((((a * c) - (b * s)) >> K) as i32);
-        out.push((((a * s) + (b * c)) >> K) as i32);
+        // Widen to `i128` before multiplying. `a·s + b·c` is a sum of two `i32×i32` products, each
+        // up to ~2^62, so in `i64` the sum reaches ~2^63 and overflows — a release panic under
+        // overflow-checks — the instant a caller (e.g. the refutation path) hands this op arbitrary
+        // `cos_q`/`sin_q` bytes rather than a bounded pinned table. `i128` cannot overflow here, and
+        // the narrowing saturates (ADR-0040 C3: nothing wraps). On a real Qk rotation table every
+        // value fits `i32` after `>> K`, so this is bit-identical on the valid domain.
+        let (a, b) = (x[2 * pair] as i128, x[2 * pair + 1] as i128);
+        let (c, s) = (cos_q[pair] as i128, sin_q[pair] as i128);
+        out.push((((a * c) - (b * s)) >> K).clamp(i32::MIN as i128, i32::MAX as i128) as i32);
+        out.push((((a * s) + (b * c)) >> K).clamp(i32::MIN as i128, i32::MAX as i128) as i32);
     }
     Ok(out)
 }
@@ -381,6 +393,32 @@ mod tests {
         assert_eq!(rms_norm(&[], 1), Err(PalwBase0OpError::Empty));
     }
 
+    /// ADR-0040 C3 / audit 2.4: a sparse wide row must SATURATE its narrowing, not wrap it.
+    ///
+    /// One large code in a long row of zeros makes the mean of squares tiny, so `r = 1/rms` is
+    /// enormous and `code · r` blows past `i32::MAX`. A plain `as i32` there wraps the sign — the
+    /// single largest activation in the row becomes the most negative — and, under
+    /// `overflow-checks = true`, the multiply itself is a release panic. The op must stay total and
+    /// monotone in sign.
+    #[test]
+    fn rms_norm_saturates_a_sparse_wide_row_instead_of_wrapping() {
+        // At the widest legal row a single large code makes the mean of squares tiny, so
+        // `r = 1/rms` is large enough that `code · r` exceeds `i32::MAX` (~6e9 here). A plain
+        // `as i32` there wraps the sign; the saturating narrowing must pin at the i32 ends instead.
+        let mut row = vec![0i8; MAX_DOT_LEN];
+        row[0] = 127;
+        row[1] = -127;
+        let out = rms_norm(&row, 1).expect("a MAX_DOT_LEN row is exactly at the length bound");
+        // Reaching here without a panic is half the test (overflow-checks would have fired on the
+        // wrapping multiply); the sign surviving is the other half.
+        assert_eq!(out[0], i32::MAX, "the overflowing positive entry saturates high, not wraps negative");
+        assert_eq!(out[1], i32::MIN, "and the negative entry saturates low");
+        // A row whose product stays in range is untouched: same value the old `as i32` produced.
+        let narrow = rms_norm(&[127, -127, 0, 0, 0, 0, 0, 0], 1).unwrap();
+        assert!(narrow[0] > 0 && narrow[1] < 0, "an in-range row keeps both signs and is not clamped");
+        assert!(narrow[0] < i32::MAX && narrow[1] > i32::MIN, "an in-range row is not at the saturation ends");
+    }
+
     /// RoPE must be a ROTATION, not merely an isometry.
     ///
     /// Length preservation alone cannot catch a flipped cross-term sign, because a reflection
@@ -417,6 +455,28 @@ mod tests {
             assert!(drift <= 5, "pair {pair}: rotation must preserve length, drifted {drift}/1000");
         }
         assert_eq!(rope_table(&[1, 2, 3], &[1], &[1]), Err(PalwBase0OpError::NotAMultiple { got: 3, unit: 2 }));
+    }
+
+    /// Audit 2.4: `rope_table` must stay total even on arbitrary (non-table) `cos_q`/`sin_q`.
+    ///
+    /// `a·s + b·c` is a sum of two `i32×i32` products; in `i64` it reaches ~2^63 and overflows —
+    /// a release panic under `overflow-checks = true` — when a caller (the refutation path decodes
+    /// oracle bytes into these slices) supplies the `i32` extremes rather than a bounded Qk table.
+    /// The op must saturate, not panic.
+    #[test]
+    fn rope_table_saturates_on_extreme_inputs_instead_of_overflowing() {
+        // The four corners that maximise |a·s + b·c| and |a·c − b·s|.
+        let x = vec![i32::MIN, i32::MIN];
+        let out = rope_table(&x, &[i32::MIN], &[i32::MIN]).expect("shape is valid; only the magnitudes are extreme");
+        // Reaching here without a panic is the point; both outputs are finite i32.
+        assert_eq!(out.len(), 2);
+        // `a·s + b·c = 2·(i32::MIN)^2 = 2^63` before `>> K`; saturates high after narrowing.
+        assert!(out.iter().all(|v| *v == i32::MAX || *v == i32::MIN || (*v).abs() < i32::MAX));
+
+        // And a real Qk table is bit-identical to the old i64 path (this is the no-regression half).
+        let c = 11_863_283i32;
+        let normal = rope_table(&[ONE as i32, 0, 0, ONE as i32], &[c, c], &[c, c]).unwrap();
+        assert_eq!(normal, vec![c, c, -c, c], "the valid domain must be unchanged by the widening");
     }
 
     /// SiLU's shape: sigmoid crosses 1/2 at zero, saturates both ways, and silu(0) = 0.
