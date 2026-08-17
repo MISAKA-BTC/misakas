@@ -5138,6 +5138,7 @@ impl VirtualStateProcessor {
                 bonds,
                 credit.registration.runtime_class_id,
                 *anchor_block_daa,
+                executor_bond.owner_pubkey_hash,
             );
             let observed = PalwObservedCommitmentV1 {
                 committed_root: commitment.committed_root,

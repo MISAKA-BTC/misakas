@@ -131,18 +131,30 @@ impl PalwCreditParamsV1 {
 /// with. `frozen` is `false` for every candidate on purpose — freezing is decided class-wide, once,
 /// and fail-closed before this set is built, so a per-candidate copy could only disagree with it.
 ///
-/// The executor's own exclusion and `q` are the lottery's job, not this function's.
+/// `executor_owner` closes self-attestation, which the lottery cannot: it excludes the executor by
+/// `validator_id` alone, so an executor that funds a SECOND bond under a different validator key
+/// draws itself onto its own panel and licenses its own work. The two keys are different, so no
+/// rule the lottery can state catches it; the OWNER is the same, and only the bond records carry
+/// that. Same-owner candidates are marked ineligible here.
+///
+/// This excludes an operator from attesting to ITS OWN executions, not from attesting at all — one
+/// operator running several validators stays useful for every other executor's jobs. It also does
+/// NOT close the one-signature-two-bonds hole: two bonds under one validator key may carry
+/// different owners, which is what the lottery's own duplicate rejection is for.
+///
+/// `q` and the executor's `validator_id` exclusion remain the lottery's job.
 pub fn panel_candidates_at_anchor_v1(
     bonds: &[crate::dns_finality::StakeBondRecord],
     runtime_class_id: Hash64,
     anchor_daa: u64,
+    executor_owner: Hash64,
 ) -> Vec<PalwPanelCandidateV1> {
     bonds
         .iter()
         .map(|b| PalwPanelCandidateV1 {
             validator_id: b.validator_pubkey_hash,
             runtime_class_id,
-            bonded: crate::dns_finality::is_bond_active_at(b, anchor_daa),
+            bonded: crate::dns_finality::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner,
             frozen: false,
         })
         .collect()
@@ -390,7 +402,7 @@ mod tests {
             rec(0x04, 500, None, Some(800)),
         ];
         let anchor_daa = 1_000;
-        let candidates = panel_candidates_at_anchor_v1(&bonds, class, anchor_daa);
+        let candidates = panel_candidates_at_anchor_v1(&bonds, class, anchor_daa, h64(0xE0));
         assert_eq!(candidates.len(), bonds.len(), "every record is a candidate; only `bonded` differs");
         for (c, b) in candidates.iter().zip(&bonds) {
             assert_eq!(c.runtime_class_id, class);
@@ -410,13 +422,33 @@ mod tests {
 
         // And the point of view moves the answer: at a later anchor the pending bond is active and
         // the unbonding one is still out.
-        let later = panel_candidates_at_anchor_v1(&bonds, class, 6_000);
+        let later = panel_candidates_at_anchor_v1(&bonds, class, 6_000, h64(0xE0));
         assert!(later[1].bonded, "the pending bond activated by 6 000");
         assert!(!later[2].bonded && !later[3].bonded);
 
         // The lottery then applies the flags rather than re-deciding them.
         let panel = select_replay_panel_v1(&h64(0x71), &h64(0xE0), &h64(0x04), &class, &candidates, 4);
         assert_eq!(panel, vec![h64(0x01)], "only the active bond can be drawn");
+
+        // Self-attestation: the executor funds a SECOND bond under a different validator key but
+        // its own owner. The lottery cannot see this — the validator keys genuinely differ — so a
+        // panel drawn on validator id alone seats the executor's own sibling and lets it license
+        // the executor's work.
+        let mut sibling = rec(0x09, 500, None, None);
+        sibling.owner_pubkey_hash = h64(0xE0); // the executor's operator
+        let with_sibling = vec![bonds[0].clone(), sibling.clone()];
+        let drawn = panel_candidates_at_anchor_v1(&with_sibling, class, anchor_daa, h64(0xE0));
+        assert!(drawn[0].bonded, "an unrelated active bond is untouched");
+        assert!(!drawn[1].bonded, "the executor's own second bond must not be eligible for its own job");
+        assert_eq!(
+            select_replay_panel_v1(&h64(0x71), &h64(0xE0), &h64(0x04), &class, &drawn, 4),
+            vec![h64(0x01)],
+            "the sibling is out of the draw entirely"
+        );
+        // It is excluded from THIS executor's panel, not from attesting at all: for another
+        // executor's job the same bond is a perfectly good verifier.
+        let other_job = panel_candidates_at_anchor_v1(&with_sibling, class, anchor_daa, h64(0xEE));
+        assert!(other_job[1].bonded, "an operator stays useful for every other executor's jobs");
     }
 
     /// The paid ids, for assertions that are about panel ORDER rather than about the payee.
