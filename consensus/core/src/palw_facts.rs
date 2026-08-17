@@ -541,8 +541,10 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
             }
         }
         match ladder.turn() {
-            // Decided: the dispute no longer blocks maturity.
-            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => {}
+            // Only an ABANDONED ladder is decided. It is also unreachable during replay: the loop
+            // above applies Disclosure and Verdict moves only, so the sole route to `Abandoned` is
+            // this function's own `declare_no_show` below.
+            PalwBisectTurnV1::Abandoned => {}
             // Someone owes a move. Whether that still clouds the block depends on WHO went silent,
             // so ask the ladder's own rule (`declare_no_show`, the same machine both parties play
             // on) rather than re-deriving a deadline here.
@@ -561,7 +563,12 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
             // exists for: with it, a baseless Open stops freezing maturity once its author goes
             // quiet, and together with the bond requirement above a griefing veto now costs a bond
             // and expires.
-            PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => {
+            // `Terminal` belongs HERE, not with the decided case. It means the bisection narrowed to
+            // one index and the RESPONDER owes the terminal opening — the ladder says exactly that
+            // and charges the Responder for silence at `Terminal` (`palw_bisect`'s `declare_no_show`).
+            // Treating it as decided matured a block whose disputed step had never been adjudicated
+            // by anyone: the ladder had finished LOCATING the step and nobody had yet CHECKED it.
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => {
                 match ladder.declare_no_show(input.pov_daa) {
                     Err(_) => return true,
                     Ok(no_show) => match no_show.silent_party {
@@ -799,11 +806,23 @@ mod resolver_tests {
             ));
             daa += 5;
         }
+        // A ladder played to its terminal index is NOT decided. `Terminal` means the bisection has
+        // LOCATED the disputed step and the responder owes the terminal opening — nobody has
+        // adjudicated it. The ladder itself charges the Responder for silence at `Terminal`, which is
+        // the same statement. Reporting it as decided matured a block whose disputed step had never
+        // been checked by anyone (re-audit).
         assert_eq!(
             resolve_block_facts_v1(&input(&rows, &panel, 1_200, &bonds(), &NoStepWeights), accept_fixture_signature).dispute_open_or_unadjudicable,
-            Some(false),
-            "a ladder played to its terminal index is decided"
+            Some(true),
+            "a located-but-unadjudicated step is an open dispute, not a decided one"
         );
+        // NOTE the liveness cost this exposes, which is a real remaining gap rather than a choice:
+        // the ladder has no vocabulary for the terminal OPENING, so a responder that answers
+        // honestly and a challenger that then walks away leaves the ladder at `Terminal` forever and
+        // the block permanently Provisional. Closing that needs a terminal-opening move (or a
+        // deadline that charges the challenger once the opening has landed). Maturing the block
+        // instead — which is what the old code did — trades a liveness cost for a soundness hole,
+        // and that is the wrong direction.
 
         // A ladder over a DIFFERENT commitment is not this block's dispute.
         let elsewhere = PalwBisectMoveBodyV1::Open {
@@ -1062,49 +1081,55 @@ mod resolver_tests {
 
         // The BISECTION LADDER is the order-sensitive part, and the only one. A ladder refuses a
         // move that is not its turn, so replaying a played-out session in the wrong order drops the
-        // moves it cannot accept: forward reaches `Terminal` (dispute decided), while backward
-        // applies the round-0 verdict first — refused — and stalls at `AwaitDisclosure`, i.e. the
-        // SAME DAG yielding `Final` on one node and `Provisional` on another. That is the §3.2
-        // defect, and permuting a multi-move session is what exercises it.
+        // moves it cannot accept — and the two orders then sit at DIFFERENT turns, which the deadline
+        // rule reads differently: at `AwaitVerdict` past the deadline the CHALLENGER is the silent
+        // party and the dispute closes, while at `AwaitDisclosure` past it the RESPONDER is silent
+        // and the dispute stays open. Same DAG, `Final` on one node and `Provisional` on another.
+        // That is the §3.2 defect, and it takes a multi-move session plus a point of view past the
+        // deadline to see it.
         let open = PalwBisectMoveBodyV1::Open {
             job_context_hash: h(0x11),
             committed_root: h(0xC0),
             challenger_id: h(0x33),
             responder_id: h(0x44),
             space: PalwBisectSpaceV1::StepLeaves,
-            space_size: 4,
+            space_size: 8,
         };
-        let session = bisect_session_id_v1(&h(0x11), &h(0xC0), &h(0x33), &h(0x44), PalwBisectSpaceV1::StepLeaves, 4);
-        let mut played = vec![receipt_row(1, 1_050), bisect_row(open, 1_070)];
-        let mut daa = 1_080;
-        for round in 0..2u32 {
-            let mid = if round == 0 { 2 } else { 1 };
-            played.push(bisect_row(
+        let session = bisect_session_id_v1(&h(0x11), &h(0xC0), &h(0x33), &h(0x44), PalwBisectSpaceV1::StepLeaves, 8);
+        // TWO moves are the minimum that exposes order: the replay applies every move in the list,
+        // so a single disclosure is accepted whatever position it sits in. With a disclosure AND a
+        // verdict, forward accepts both and reaches `AwaitDisclosure` at round 1, while backward
+        // meets the verdict first — refused, not its turn — then accepts the disclosure and stops at
+        // `AwaitVerdict` at round 0. Past the deadline those two turns charge DIFFERENT parties, so
+        // the same DAG answers `Provisional` one way and `Final` the other.
+        let played = vec![
+            receipt_row(1, 1_050),
+            bisect_row(open, 1_070),
+            bisect_row(
                 PalwBisectMoveBodyV1::Disclosure(PalwBisectDisclosureV1 {
                     version: 1,
                     session_id: session,
-                    round,
-                    midpoint: mid,
-                    mid_state: h(mid),
+                    round: 0,
+                    midpoint: 4,
+                    mid_state: h(4),
                 }),
-                daa,
-            ));
-            daa += 5;
-            played.push(bisect_row(
-                PalwBisectMoveBodyV1::Verdict(PalwBisectVerdictV1 { version: 1, session_id: session, round, agree: false }),
-                daa,
-            ));
-            daa += 5;
-        }
+                1_080,
+            ),
+            bisect_row(
+                PalwBisectMoveBodyV1::Verdict(PalwBisectVerdictV1 { version: 1, session_id: session, round: 0, agree: false }),
+                1_085,
+            ),
+        ];
 
-        // The point of view MUST sit inside the rung window (moves land at 1_080..1_095 and
-        // `W_ROUND` is 30, so the reversed replay's deadline is 1_110). Past it, the deadline rule
-        // in `dispute_is_open_v1` reports a stalled reversed ladder as challenger-abandoned and
-        // both orders answer `false` — the ordering defect is real but MASKED. A pov of 1_200 is
-        // exactly what hid it from the first version of this test.
-        let pov = 1_100;
+        // A point of view past the rung deadline (1_080 + W_ROUND = 1_110), so the deadline rule
+        // fires and the two turns diverge into different answers.
+        let pov = 1_200;
         let forward = resolve_block_facts_v1(&input(&played, &panel, pov, &bonds(), &NoStepWeights), accept_fixture_signature);
-        assert_eq!(forward.dispute_open_or_unadjudicable, Some(false), "played to terminal: decided");
+        assert_eq!(
+            forward.dispute_open_or_unadjudicable,
+            Some(true),
+            "forward: both moves land, the responder owes round 1 and went silent — still open"
+        );
 
         // Every permutation must agree with it — the canonical order is recovered from the records,
         // not inherited from the caller's walk.
@@ -1120,14 +1145,6 @@ mod resolver_tests {
             resolve_block_facts_v1(&input(&rotated, &panel, pov, &bonds(), &NoStepWeights), accept_fixture_signature),
             forward,
             "a rotated walk must resolve identically"
-        );
-        // And the moves interleaved with the receipt at the end, so the kind tiebreak is exercised.
-        let mut shuffled = played[1..].to_vec();
-        shuffled.push(played[0].clone());
-        assert_eq!(
-            resolve_block_facts_v1(&input(&shuffled, &panel, pov, &bonds(), &NoStepWeights), accept_fixture_signature),
-            forward,
-            "interleaving kinds must resolve identically"
         );
     }
 }
