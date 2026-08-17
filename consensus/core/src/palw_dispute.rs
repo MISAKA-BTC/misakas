@@ -274,7 +274,7 @@ impl PalwExecutionClassStateV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_catalog_coverage::{verify_catalog_coverage_v1, PalwCataloguedKernelSetV1, PalwReachableKernelSetV1};
+    use crate::palw_catalog_coverage::{verify_catalog_coverage_v1, PalwReachableKernelSetV1};
     use PalwChallengerBondDispositionV3 as B;
     use PalwClassStatusV3 as C;
     use PalwJobStatusV3 as S;
@@ -333,11 +333,16 @@ mod tests {
     /// A real coverage certificate for `class`, obtained the only way one can be: through
     /// the A4 gate with matching sets.
     fn certificate_for(class: u64) -> PalwCatalogCoverageCertificateV1 {
-        let reachable =
-            PalwReachableKernelSetV1 { execution_class_id: h64(class), kernel_ids: [h64(10), h64(11), h64(12)].into_iter().collect() };
-        let catalogued =
-            PalwCataloguedKernelSetV1 { execution_class_id: h64(class), kernel_ids: [h64(10), h64(11), h64(12)].into_iter().collect() };
-        verify_catalog_coverage_v1(&reachable, &catalogued).unwrap()
+        // Real catalogued descriptors: the gate now reads the build's own table, so a fixture
+        // has to name kernels this build can actually adjudicate.
+        let reachable = PalwReachableKernelSetV1 {
+            execution_class_id: h64(class),
+            kernel_ids: crate::palw_step_refute::KDESC_BASE0_ALL[..3]
+                .iter()
+                .map(|d| crate::palw_step::kernel_semantics_id_v1(d))
+                .collect(),
+        };
+        verify_catalog_coverage_v1(&reachable).unwrap()
     }
 
     /// The settlement table, exhaustively: the three court terminals produce EXACTLY the

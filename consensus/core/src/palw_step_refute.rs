@@ -57,6 +57,63 @@ pub const KDESC_SOFTPLUS_GLIBC_FMA: &str = "softplus/scalar/glibc-2.39-expf-logf
 pub const KDESC_GDN_CORE_NEON: &str = "gated-delta-net/fused-seq/f32dot-step16-epr4/glibc-2.39-expf-fma/llama-030ebb558/v1";
 pub const KDESC_GDN_CORE_AVX2: &str = "gated-delta-net/fused-seq/f32dot-step32-epr8/glibc-2.39-expf-fma/llama-030ebb558/v1";
 
+// --- PALW-BASE-0 (ADR-0040): the integer class, whose catalog can actually close ------------
+//
+// Every descriptor names `base0/v1` and no toolchain, because there is nothing toolchain-shaped
+// left to name: no libm version, no FMA contraction flag, no SIMD lane structure. The float
+// descriptors above each pin a reduction order because float addition is not associative; the
+// integer ones cannot need to, because it is (ADR-0040 Decision E). That absence is the reason
+// this class's coverage reaches 100% while the float classes' stalls at 6 of 17.
+pub const KDESC_BASE0_MATMUL: &str = "base0/matmul-quant/i8xi8-i32-exact/v1";
+pub const KDESC_BASE0_REQUANTIZE: &str = "base0/requantize/srdhm-rshift-sat8/v1";
+pub const KDESC_BASE0_RMS_NORM: &str = "base0/rms-norm/i64-sumsq-intrsqrt/v1";
+pub const KDESC_BASE0_ROPE: &str = "base0/rope/pinned-table-pairwise/v1";
+pub const KDESC_BASE0_SOFTMAX: &str = "base0/softmax/rowmax-intexp-intrecip/v1";
+pub const KDESC_BASE0_SILU: &str = "base0/silu/intexp-sigmoid/v1";
+pub const KDESC_BASE0_MUL_ELEM: &str = "base0/mul-elem/i32-exact/v1";
+pub const KDESC_BASE0_ADD_ELEM: &str = "base0/add-elem/i32-exact/v1";
+pub const KDESC_BASE0_EMBED: &str = "base0/embed-lookup/row-gather/v1";
+
+/// Every descriptor this build can adjudicate, in one place so the coverage gate reads the same
+/// table the adjudicator resolves against.
+pub const KDESC_ALL: &[&str] = &[
+    KDESC_L2_NORM,
+    KDESC_RMS_NORM_FUSED,
+    KDESC_SWIGLU,
+    KDESC_SIGMOID_GLIBC_FMA,
+    KDESC_SOFTPLUS_GLIBC_FMA,
+    KDESC_GDN_CORE_NEON,
+    KDESC_GDN_CORE_AVX2,
+    KDESC_BASE0_MATMUL,
+    KDESC_BASE0_REQUANTIZE,
+    KDESC_BASE0_RMS_NORM,
+    KDESC_BASE0_ROPE,
+    KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_SILU,
+    KDESC_BASE0_MUL_ELEM,
+    KDESC_BASE0_ADD_ELEM,
+    KDESC_BASE0_EMBED,
+];
+
+/// The `kernel_semantics_id`s this build can adjudicate — the catalog side of the ADR-0038 A4
+/// coverage gate, read from the adjudicator rather than claimed by a caller.
+pub fn catalogued_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
+    KDESC_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect()
+}
+
+/// The nine BASE-0 kernels, for a caller assembling that class's reachable set (ADR-0040 D).
+pub const KDESC_BASE0_ALL: &[&str] = &[
+    KDESC_BASE0_MATMUL,
+    KDESC_BASE0_REQUANTIZE,
+    KDESC_BASE0_RMS_NORM,
+    KDESC_BASE0_ROPE,
+    KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_SILU,
+    KDESC_BASE0_MUL_ELEM,
+    KDESC_BASE0_ADD_ELEM,
+    KDESC_BASE0_EMBED,
+];
+
 /// The programs this build can adjudicate. Resolution is by id, never by guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KernelProgram {
@@ -66,6 +123,23 @@ enum KernelProgram {
     SigmoidGlibcFma,
     SoftplusGlibcFma,
     GdnCore { dot: DotStructure },
+    /// ADR-0040's nine. One variant per op; no lane structure and no libm flavour, because an
+    /// integer kernel has neither.
+    Base0(Base0Op),
+}
+
+/// The BASE-0 op a catalogued kernel id resolves to (ADR-0040 Decision D).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Base0Op {
+    MatMul,
+    Requantize,
+    RmsNorm,
+    Rope,
+    Softmax,
+    Silu,
+    MulElem,
+    AddElem,
+    Embed,
 }
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
@@ -88,8 +162,134 @@ fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
         (KDESC_SOFTPLUS_GLIBC_FMA, KernelProgram::SoftplusGlibcFma),
         (KDESC_GDN_CORE_NEON, KernelProgram::GdnCore { dot: DotStructure::Step16Epr4 }),
         (KDESC_GDN_CORE_AVX2, KernelProgram::GdnCore { dot: DotStructure::Step32Epr8 }),
+        (KDESC_BASE0_MATMUL, KernelProgram::Base0(Base0Op::MatMul)),
+        (KDESC_BASE0_REQUANTIZE, KernelProgram::Base0(Base0Op::Requantize)),
+        (KDESC_BASE0_RMS_NORM, KernelProgram::Base0(Base0Op::RmsNorm)),
+        (KDESC_BASE0_ROPE, KernelProgram::Base0(Base0Op::Rope)),
+        (KDESC_BASE0_SOFTMAX, KernelProgram::Base0(Base0Op::Softmax)),
+        (KDESC_BASE0_SILU, KernelProgram::Base0(Base0Op::Silu)),
+        (KDESC_BASE0_MUL_ELEM, KernelProgram::Base0(Base0Op::MulElem)),
+        (KDESC_BASE0_ADD_ELEM, KernelProgram::Base0(Base0Op::AddElem)),
+        (KDESC_BASE0_EMBED, KernelProgram::Base0(Base0Op::Embed)),
     ];
     table.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
+}
+
+/// Recompute one BASE-0 node's output row (ADR-0040 Decision D).
+///
+/// Values ride the step leg as little-endian 4-byte groups, so a BASE-0 tile is `i32` bit
+/// patterns — the same container the float classes use for `f32` bits, reinterpreted. Nothing is
+/// converted: an integer class stores integers.
+///
+/// Every arm delegates to [`crate::palw_base0_ops`]. The adjudicator must run the SAME code a
+/// conforming implementation runs, not a second transcription of it — a court whose reference
+/// diverges from the class convicts honest producers, which is exactly the false-positive this
+/// class was chosen to make unrepresentable.
+fn base0_row(
+    op: Base0Op,
+    node: &crate::palw_step::PalwStepNodeV1,
+    layer: Option<u16>,
+    inputs: &[Vec<u32>],
+    weights: &dyn PalwWeightOracleV1,
+) -> Result<Vec<u32>, PalwStepRefuteError> {
+    use crate::palw_base0_ops as ops;
+    let need = |n: usize| -> Result<(), PalwStepRefuteError> {
+        if inputs.len() < n {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("base0 node has too few input rows"));
+        }
+        Ok(())
+    };
+    let as_i32 = |row: &Vec<u32>| -> Vec<i32> { row.iter().map(|v| *v as i32).collect() };
+    let out = |row: Vec<i32>| -> Vec<u32> { row.into_iter().map(|v| v as u32).collect() };
+    // int8 codes ride the same i32 lanes; anything outside the range is not a BASE-0 activation.
+    let as_i8 = |row: &Vec<u32>| -> Result<Vec<i8>, PalwStepRefuteError> {
+        row.iter()
+            .map(|v| i8::try_from(*v as i32).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("base0 int8 lane out of range")))
+            .collect()
+    };
+    let shape = |e: ops::PalwBase0OpError| -> PalwStepRefuteError {
+        let _ = e;
+        PalwStepRefuteError::InputSetNotCanonical("base0 op refused its operand shape")
+    };
+
+    match op {
+        Base0Op::RmsNorm => {
+            need(1)?;
+            Ok(out(ops::rms_norm(&as_i8(&inputs[0])?, 1).map_err(shape)?))
+        }
+        Base0Op::Softmax => {
+            need(1)?;
+            Ok(out(ops::softmax(&as_i32(&inputs[0])).map_err(shape)?))
+        }
+        Base0Op::Silu => {
+            need(1)?;
+            Ok(out(ops::silu(&as_i32(&inputs[0]))))
+        }
+        Base0Op::MulElem => {
+            need(2)?;
+            Ok(out(ops::mul_elem(&as_i8(&inputs[0])?, &as_i8(&inputs[1])?).map_err(shape)?))
+        }
+        Base0Op::AddElem => {
+            need(2)?;
+            Ok(out(ops::add_elem(&as_i8(&inputs[0])?, &as_i8(&inputs[1])?).map_err(shape)?))
+        }
+        // Embedding is a gather the leg has already opened: the challenged row IS the input, so
+        // recomputation is the identity. Naming it in the catalog rather than leaving it
+        // uncatalogued is the point — an uncatalogued op is an `Unadjudicable` hole (A4).
+        Base0Op::Embed => {
+            need(1)?;
+            Ok(inputs[0].clone())
+        }
+        // The three ops whose operands are registration artifacts rather than opened leaves —
+        // weight rows, quantization multipliers and the pinned rotary table. They resolve through
+        // the weight oracle; a class that has not registered them cannot adjudicate them, which
+        // is a coverage question answered at activation, not a silent pass here.
+        Base0Op::MatMul | Base0Op::Requantize | Base0Op::Rope => {
+            need(1)?;
+            let name = node.weight_name.as_str();
+            let row = weights
+                .weight_row(name, layer, 0, inputs[0].len() as u32)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            match op {
+                Base0Op::MatMul => {
+                    let w: Vec<i8> = row.iter().map(|b| *b as i8).collect();
+                    let x = as_i8(&inputs[0])?;
+                    if w.len() % x.len() != 0 || x.is_empty() {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul weight row is not a multiple of the input"));
+                    }
+                    Ok(out(ops::matmul_quant(&w, &x, w.len() / x.len()).map_err(shape)?))
+                }
+                Base0Op::Requantize => {
+                    // The oracle row carries (multiplier LE, shift) per channel: 5 bytes each.
+                    if row.len() != 5 * inputs[0].len() {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize params are not 5 bytes per channel"));
+                    }
+                    let params: Vec<ops::QuantParams> = row
+                        .chunks_exact(5)
+                        .map(|c| ops::QuantParams {
+                            multiplier: i32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                            shift: c[4],
+                        })
+                        .collect();
+                    let q = ops::requantize_row(&as_i32(&inputs[0]), &params).map_err(shape)?;
+                    Ok(q.into_iter().map(|v| v as i32 as u32).collect())
+                }
+                Base0Op::Rope => {
+                    // The pinned table: cos row then sin row, 4 bytes each, one pair per two lanes.
+                    let pairs = inputs[0].len() / 2;
+                    if row.len() != 8 * pairs {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rope table is not 8 bytes per pair"));
+                    }
+                    let read = |o: usize| -> Vec<i32> {
+                        row[o..o + 4 * pairs].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                    };
+                    let (cos_q, sin_q) = (read(0), read(4 * pairs));
+                    Ok(out(ops::rope_table(&as_i32(&inputs[0]), &cos_q, &sin_q).map_err(shape)?))
+                }
+                _ => unreachable!("outer match restricts these three"),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -373,6 +573,7 @@ fn run_program(
     weights: &dyn PalwWeightOracleV1,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     match program {
+        KernelProgram::Base0(op) => base0_row(op, node, layer, inputs, weights),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
             Ok(l2_norm_row(x, profile.l2_eps_bits))

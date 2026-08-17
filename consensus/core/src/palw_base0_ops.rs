@@ -22,7 +22,7 @@
 //! caller never sees these errors; they exist so a non-conforming one is refused rather than
 //! crashing the node that refuses it.
 
-use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize, rounding_shift_right, srdhm};
+use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -259,10 +259,6 @@ pub fn add_elem(a: &[i8], b: &[i8]) -> Result<Vec<i32>, PalwBase0OpError> {
     }
     Ok(a.iter().zip(b).map(|(x, y)| (*x as i32) + (*y as i32)).collect())
 }
-
-/// Re-exported so a caller building a graph never reaches past this module for the two primitives
-/// an op layer legitimately needs.
-pub use crate::palw_base0::{rounding_shift_right as op_rounding_shift_right, srdhm as op_srdhm};
 
 #[cfg(test)]
 mod tests {

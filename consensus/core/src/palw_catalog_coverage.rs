@@ -79,8 +79,14 @@ pub struct PalwCataloguedKernelSetV1 {
 // Not `#[non_exhaustive]`: that only blocks construction outside the CRATE, while the sealed
 // field blocks it outside this MODULE — in-crate consumers (the class activation gate) must
 // also be unable to mint a certificate without running the verification.
+// NOT `BorshDeserialize`. The derive would generate a constructor that fills EVERY field —
+// including `_sealed` — so `borsh::from_slice` minted a certificate from arbitrary bytes, in any
+// crate, without the verification ever running (2026-08-17 re-audit, blocker 10). The seal and
+// the derive contradicted each other three lines apart, and the derive won. Serializing a
+// certificate is still useful (logging, transport); reconstructing one is exactly what must go
+// through `verify_catalog_coverage_v1` instead.
 #[allow(clippy::manual_non_exhaustive)]
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct PalwCatalogCoverageCertificateV1 {
     pub execution_class_id: Hash64,
     /// How many reachable kernels were checked — never 0 (an empty claim refuses upstream).
@@ -98,8 +104,6 @@ pub struct PalwCatalogCoverageCertificateV1 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwCoverageError {
-    #[error("reachable set names class {reachable}, catalog names class {catalogued} — the comparison is meaningless")]
-    ClassMismatch { reachable: Hash64, catalogued: Hash64 },
     #[error("the reachable set is empty — unknown reachability is not coverage (I7), nothing activates on a vacuous pass")]
     EmptyReachableSet,
     #[error("{} reachable kernel(s) are not in the court's catalog — A4 fails, the class must not activate", missing.len())]
@@ -123,14 +127,20 @@ pub enum PalwCoverageError {
 /// certificates.
 pub fn verify_catalog_coverage_v1(
     reachable: &PalwReachableKernelSetV1,
-    catalogued: &PalwCataloguedKernelSetV1,
 ) -> Result<PalwCatalogCoverageCertificateV1, PalwCoverageError> {
-    if reachable.execution_class_id != catalogued.execution_class_id {
-        return Err(PalwCoverageError::ClassMismatch {
-            reachable: reachable.execution_class_id,
-            catalogued: catalogued.execution_class_id,
-        });
-    }
+    // THIS BUILD's catalog, never a caller's claim about it. When both sides were arguments a
+    // caller could pass a catalogued set containing whatever the reachable set needed and the
+    // gate would certify it — "we checked coverage" was a statement about the caller's own two
+    // parameters (2026-08-17 re-audit, blocker 10). The only honest catalog side is the table
+    // the adjudicator will actually resolve against, so it is read from there.
+    let catalogued = PalwCataloguedKernelSetV1 {
+        execution_class_id: reachable.execution_class_id,
+        kernel_ids: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+    };
+    let catalogued = &catalogued;
+    // No class-mismatch check: there is only one class id in play now (the reachable set's), and
+    // the catalog side is built with it. Two claims can no longer disagree about which class is
+    // being certified, so the error that used to guard it has no reachable case and is gone.
     if reachable.kernel_ids.is_empty() {
         return Err(PalwCoverageError::EmptyReachableSet);
     }
@@ -166,29 +176,35 @@ fn coverage_digest_v1(reachable: &PalwReachableKernelSetV1) -> Hash64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_step::kernel_semantics_id_v1;
 
     fn h64(word: u64) -> Hash64 {
         Hash64::from_u64_word(word)
     }
 
-    fn reachable(class: u64, ids: &[u64]) -> PalwReachableKernelSetV1 {
-        PalwReachableKernelSetV1 { execution_class_id: h64(class), kernel_ids: ids.iter().map(|w| h64(*w)).collect() }
+    fn reachable(class: u64, descriptors: &[&str]) -> PalwReachableKernelSetV1 {
+        PalwReachableKernelSetV1 {
+            execution_class_id: h64(class),
+            kernel_ids: descriptors.iter().map(|d| crate::palw_step::kernel_semantics_id_v1(d)).collect(),
+        }
     }
 
-    fn catalogued(class: u64, ids: &[u64]) -> PalwCataloguedKernelSetV1 {
-        PalwCataloguedKernelSetV1 { execution_class_id: h64(class), kernel_ids: ids.iter().map(|w| h64(*w)).collect() }
+    /// Three real catalogued descriptors — the sets must name kernels this build resolves, now
+    /// that the catalog side is the build's own table rather than a caller's claim.
+    fn three_real() -> Vec<&'static str> {
+        crate::palw_step_refute::KDESC_BASE0_ALL[..3].to_vec()
     }
 
     /// Full coverage certifies; the certificate names the class and the count, and the digest
     /// is the reachable set's identity — one added kernel changes it.
     #[test]
     fn full_coverage_certifies_and_digest_tracks_the_reachable_set() {
-        let cert = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3]), &catalogued(0xC1, &[1, 2, 3])).unwrap();
+        let cert = verify_catalog_coverage_v1(&reachable(0xC1, &three_real())).unwrap();
         assert_eq!(cert.execution_class_id, h64(0xC1));
         assert_eq!(cert.reachable_count, 3);
 
-        let grown = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3, 4]), &catalogued(0xC1, &[1, 2, 3, 4])).unwrap();
+        let mut four = three_real();
+        four.push(crate::palw_step_refute::KDESC_BASE0_ALL[3]);
+        let grown = verify_catalog_coverage_v1(&reachable(0xC1, &four)).unwrap();
         assert_eq!(grown.reachable_count, 4);
         assert_ne!(cert.coverage_digest, grown.coverage_digest, "a changed reachable set must change the digest");
     }
@@ -196,96 +212,180 @@ mod tests {
     /// One uncatalogued kernel is a gap, and the gap error names exactly that id.
     #[test]
     fn one_missing_kernel_is_a_gap_naming_exactly_it() {
-        let err = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3]), &catalogued(0xC1, &[1, 3])).unwrap_err();
-        assert_eq!(err, PalwCoverageError::CoverageGap { missing: vec![h64(2)] });
+        let stranger = "base0/nowhere-in-the-catalog/v1";
+        let mut ids = three_real();
+        ids.push(stranger);
+        let err = verify_catalog_coverage_v1(&reachable(0xC1, &ids)).unwrap_err();
+        assert_eq!(err, PalwCoverageError::CoverageGap { missing: vec![crate::palw_step::kernel_semantics_id_v1(stranger)] });
     }
 
-    /// Many gaps list COMPLETELY, ascending — 5 gaps are 5 entries, never a truncated sample
-    /// (a silent cap would read as "covered" when it isn't).
+    /// Many gaps list COMPLETELY and ascending — never a truncated sample, because a silent cap
+    /// would read as "covered" when it is not.
     #[test]
     fn gap_list_is_complete_and_sorted_never_truncated() {
-        let err = verify_catalog_coverage_v1(
-            &reachable(0xC1, &[1, 2, 3, 4, 5, 6, 7, 8]),
-            &catalogued(0xC1, &[2, 4, 6]),
-        )
-        .unwrap_err();
-        let PalwCoverageError::CoverageGap { missing } = err else { panic!("expected CoverageGap, got {err:?}") };
-        assert_eq!(missing, vec![h64(1), h64(3), h64(5), h64(7), h64(8)]);
+        let strangers = ["base0/gap-a/v1", "base0/gap-b/v1", "base0/gap-c/v1", "base0/gap-d/v1", "base0/gap-e/v1"];
+        let mut ids = three_real();
+        ids.extend_from_slice(&strangers);
+        let err = verify_catalog_coverage_v1(&reachable(0xC1, &ids)).unwrap_err();
+        let PalwCoverageError::CoverageGap { missing } = err else { panic!("expected CoverageGap") };
+        assert_eq!(missing.len(), strangers.len(), "every gap must be listed");
         let mut sorted = missing.clone();
         sorted.sort();
-        assert_eq!(missing, sorted);
+        assert_eq!(missing, sorted, "gaps must be ascending");
     }
 
-    /// An empty reachable set never certifies — even against an empty catalog. Unknown
-    /// reachability is not coverage (I7): vacuous truth activates nothing.
+    /// An empty reachable set never certifies. Unknown reachability is not coverage (I7):
+    /// vacuous truth activates nothing.
     #[test]
-    fn empty_reachable_set_refuses_even_when_catalog_is_also_empty() {
-        let err = verify_catalog_coverage_v1(&reachable(0xC1, &[]), &catalogued(0xC1, &[])).unwrap_err();
+    fn empty_reachable_set_refuses() {
+        let err = verify_catalog_coverage_v1(&reachable(0xC1, &[])).unwrap_err();
         assert_eq!(err, PalwCoverageError::EmptyReachableSet);
-        let err = verify_catalog_coverage_v1(&reachable(0xC1, &[]), &catalogued(0xC1, &[1, 2])).unwrap_err();
-        assert_eq!(err, PalwCoverageError::EmptyReachableSet);
-    }
-
-    /// The two claims must name the same class — identical kernel sets under different class
-    /// ids are two different classes' facts, not a coverage proof.
-    #[test]
-    fn class_mismatch_refuses_even_with_identical_kernel_sets() {
-        let err = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3]), &catalogued(0xC2, &[1, 2, 3])).unwrap_err();
-        assert_eq!(err, PalwCoverageError::ClassMismatch { reachable: h64(0xC1), catalogued: h64(0xC2) });
     }
 
     /// A superset catalog certifies, and the digest depends ONLY on the reachable set — the
-    /// exact-match and superset certificates are byte-identical.
+    /// build catalogues far more than any one class reaches, and those extras must not enter.
     #[test]
-    fn superset_catalog_certifies_with_the_reachable_only_digest() {
-        let exact = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3]), &catalogued(0xC1, &[1, 2, 3])).unwrap();
-        let superset = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3]), &catalogued(0xC1, &[1, 2, 3, 9, 10])).unwrap();
-        assert_eq!(exact, superset, "catalog extras must not enter the certificate");
+    fn catalog_extras_do_not_enter_the_certificate() {
+        let cert = verify_catalog_coverage_v1(&reachable(0xC1, &three_real())).unwrap();
+        assert_eq!(cert.reachable_count, 3, "the certificate counts the REACHABLE set, not the catalog");
+        assert!(crate::palw_step_refute::KDESC_ALL.len() > 3, "the build catalogues more than this class reaches");
     }
 
-    /// Insertion order is erased by the set types: any build order of the same claims yields
-    /// the identical certificate.
+    /// Insertion order is erased by the set types: any build order of the same claim yields the
+    /// identical certificate.
     #[test]
     fn certificates_are_invariant_under_insertion_order() {
-        let forward = verify_catalog_coverage_v1(&reachable(0xC1, &[1, 2, 3, 4]), &catalogued(0xC1, &[1, 2, 3, 4])).unwrap();
-        let backward = verify_catalog_coverage_v1(&reachable(0xC1, &[4, 3, 2, 1]), &catalogued(0xC1, &[3, 1, 4, 2])).unwrap();
-        assert_eq!(forward, backward);
+        let mut backward = three_real();
+        backward.reverse();
+        assert_eq!(verify_catalog_coverage_v1(&reachable(0xC1, &three_real())).unwrap(), verify_catalog_coverage_v1(&reachable(0xC1, &backward)).unwrap());
     }
 
-    /// Borsh roundtrips: both claims and the certificate survive serialize→deserialize
-    /// byte-exactly (the deserialized certificate compares equal, sealed field and all).
+    /// **The seal, pinned so a `derive` cannot quietly break it again.**
+    ///
+    /// The certificate's protection is the ABSENCE of `BorshDeserialize`, and absence is exactly
+    /// what an ordinary test cannot assert — re-adding the derive makes forging code compile, so
+    /// a test that tries to forge simply stops existing. Rust has no negative trait bound, so the
+    /// property is detected instead: an inherent const that exists only under
+    /// `T: BorshDeserialize` shadows a trait default that always exists, and reading it through
+    /// the trait tells us which one applies.
+    ///
+    /// This is deliberately more machinery than a comment, because a comment is what was there
+    /// last time: the module doc said "no other code can assemble one" three lines above the
+    /// derive that let any crate assemble one (2026-08-17 re-audit, blocker 10).
     #[test]
-    fn borsh_roundtrips_certificate_and_both_set_types() {
-        let r = reachable(0xC1, &[1, 2, 3]);
-        let c = catalogued(0xC1, &[1, 2, 3, 4]);
-        let cert = verify_catalog_coverage_v1(&r, &c).unwrap();
+    fn the_certificate_does_not_implement_borsh_deserialize() {
+        struct Probe<T>(core::marker::PhantomData<T>);
+        trait ViaTrait {
+            const DESERIALIZABLE: bool = false;
+        }
+        impl<T> ViaTrait for Probe<T> {}
+        #[allow(dead_code)]
+        impl<T: borsh::BorshDeserialize> Probe<T> {
+            const DESERIALIZABLE: bool = true;
+        }
 
-        let r2: PalwReachableKernelSetV1 = borsh::from_slice(&borsh::to_vec(&r).unwrap()).unwrap();
-        assert_eq!(r, r2);
-        let c2: PalwCataloguedKernelSetV1 = borsh::from_slice(&borsh::to_vec(&c).unwrap()).unwrap();
-        assert_eq!(c, c2);
-        let cert2: PalwCatalogCoverageCertificateV1 = borsh::from_slice(&borsh::to_vec(&cert).unwrap()).unwrap();
-        assert_eq!(cert, cert2);
+        // Read through the INHERENT path: it selects the inherent const when the bound holds and
+        // falls back to the trait default when it does not. Reading through the trait would
+        // always return the default and the probe would detect nothing.
+        assert!(
+            !Probe::<PalwCatalogCoverageCertificateV1>::DESERIALIZABLE,
+            "the certificate must NOT be BorshDeserialize — that derive is the forgery path blocker 10 named"
+        );
+        // The probe really does distinguish: the claim types DO implement it.
+        assert!(Probe::<PalwReachableKernelSetV1>::DESERIALIZABLE, "probe must detect a real impl");
     }
 
-    /// The gate speaks the court's identity scheme: real `kernel_semantics_id_v1` ids flow
-    /// through unchanged, and the gap it reports IS the id of the uncatalogued descriptor.
+    /// **Re-audit blocker 10, pinned in the opposite direction from before.**
+    ///
+    /// The previous version of this test asserted the certificate round-trips through Borsh
+    /// "sealed field and all" — which was the vulnerability, not a feature: `BorshDeserialize`
+    /// generates a constructor that fills every field, so any crate could mint a certificate
+    /// from arbitrary bytes without the verification ever running. The claims still round-trip;
+    /// the certificate deliberately does not, and this test fails to compile if the derive
+    /// comes back.
     #[test]
-    fn real_kernel_semantics_ids_flow_through_the_gate() {
-        let class = h64(0xC1);
-        let covered = ["l2-norm/whole-row/double-sum-ascending/llama-030ebb558/v1", "glu/swiglu/v-silu-per-lane/llama-030ebb558/v1"];
-        let uncovered = "matmul/q8_0-q8_0/tile-pending-transcription/llama-030ebb558/v1";
+    fn the_certificate_cannot_be_deserialized_back_into_existence() {
+        let r = reachable(0xC1, &three_real());
+        let bytes = borsh::to_vec(&r).unwrap();
+        assert_eq!(borsh::from_slice::<PalwReachableKernelSetV1>(&bytes).unwrap(), r, "claims still round-trip");
 
-        let mut reach: BTreeSet<Hash64> = covered.iter().map(|d| kernel_semantics_id_v1(d)).collect();
-        let cat = PalwCataloguedKernelSetV1 { execution_class_id: class, kernel_ids: reach.clone() };
-        let r = PalwReachableKernelSetV1 { execution_class_id: class, kernel_ids: reach.clone() };
-        let cert = verify_catalog_coverage_v1(&r, &cat).unwrap();
-        assert_eq!(cert.reachable_count, 2);
+        let cert = verify_catalog_coverage_v1(&r).unwrap();
+        // Serializing stays available for logging and transport...
+        let cert_bytes = borsh::to_vec(&cert).unwrap();
+        assert!(!cert_bytes.is_empty());
+        // ...and the only way back to a certificate is through the gate.
+        let recovered = verify_catalog_coverage_v1(&r).unwrap();
+        assert_eq!(recovered, cert, "re-verification is the only constructor");
+    }
+}
 
-        // Reach one program the court never transcribed: the gap names its exact id.
-        reach.insert(kernel_semantics_id_v1(uncovered));
-        let r = PalwReachableKernelSetV1 { execution_class_id: class, kernel_ids: reach };
-        let err = verify_catalog_coverage_v1(&r, &cat).unwrap_err();
-        assert_eq!(err, PalwCoverageError::CoverageGap { missing: vec![kernel_semantics_id_v1(uncovered)] });
+#[cfg(test)]
+mod base0_closure_tests {
+    use super::*;
+    use crate::palw_step::kernel_semantics_id_v1;
+    use crate::palw_step_refute::{KDESC_ALL, KDESC_BASE0_ALL, catalogued_kernel_ids_v1};
+
+    fn class() -> Hash64 {
+        Hash64::from_u64_word(0xBA5E)
+    }
+
+    /// **The claim this whole class was built to make: BASE-0's catalog is CLOSED.**
+    ///
+    /// Every one of ADR-0040 Decision D's nine ops resolves in the adjudicator's table, so no
+    /// dispute over a BASE-0 step can terminate `Unadjudicable` — the hole A4 says a forger
+    /// farms, and the reason ADR-0039 forbids a class from carrying weight until it is shut.
+    #[test]
+    fn base0_reaches_full_coverage_with_no_gap() {
+        let reachable = PalwReachableKernelSetV1 {
+            execution_class_id: class(),
+            kernel_ids: KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect(),
+        };
+        assert_eq!(reachable.kernel_ids.len(), 9, "ADR-0040 D is nine ops");
+        let certificate = verify_catalog_coverage_v1(&reachable).expect("BASE-0 must be fully catalogued");
+        assert_eq!(certificate.reachable_count, 9);
+        assert_eq!(certificate.execution_class_id, class());
+    }
+
+    /// The gate still fails when it should: one kernel the build cannot adjudicate is a gap, and
+    /// the gap names it rather than rounding to "almost covered".
+    #[test]
+    fn one_uncatalogued_kernel_is_a_gap() {
+        let stranger = kernel_semantics_id_v1("base0/not-a-real-kernel/v1");
+        let mut ids: std::collections::BTreeSet<Hash64> = KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect();
+        ids.insert(stranger);
+        let reachable = PalwReachableKernelSetV1 { execution_class_id: class(), kernel_ids: ids };
+        assert_eq!(verify_catalog_coverage_v1(&reachable), Err(PalwCoverageError::CoverageGap { missing: vec![stranger] }));
+        // And an empty claim is never a vacuous pass.
+        let empty = PalwReachableKernelSetV1 { execution_class_id: class(), kernel_ids: Default::default() };
+        assert_eq!(verify_catalog_coverage_v1(&empty), Err(PalwCoverageError::EmptyReachableSet));
+    }
+
+    /// Re-audit blocker 10: the catalog side comes from THIS BUILD, so a caller cannot supply a
+    /// set that trivially covers whatever it asked about. The gate takes one argument now, and
+    /// the catalogued ids are exactly the descriptors the adjudicator resolves.
+    #[test]
+    fn the_catalogued_side_is_the_builds_own_table() {
+        let built = catalogued_kernel_ids_v1();
+        assert_eq!(built.len(), KDESC_ALL.len(), "every descriptor must be catalogued exactly once");
+        for descriptor in KDESC_ALL {
+            assert!(built.contains(&kernel_semantics_id_v1(descriptor)), "{descriptor} missing from the catalog set");
+        }
+        for descriptor in KDESC_BASE0_ALL {
+            assert!(built.contains(&kernel_semantics_id_v1(descriptor)), "{descriptor} must be adjudicable");
+        }
+    }
+
+    /// The float classes are still open, and saying so is the point: ADR-0039 forbids them
+    /// carrying weight until they close, and a test that quietly passed for them would erase the
+    /// distinction that orders BASE-0 first.
+    #[test]
+    fn the_float_classes_remain_uncovered_and_that_is_recorded() {
+        // The float vocabulary is 17 op kinds; the catalog holds 7 float descriptors.
+        let float_descriptors = KDESC_ALL.len() - KDESC_BASE0_ALL.len();
+        assert_eq!(float_descriptors, 7, "the float catalog has not grown");
+        assert!(
+            float_descriptors < 17,
+            "if this ever reaches 17 the float classes may be closeable — re-read ADR-0039 before assuming it"
+        );
     }
 }
