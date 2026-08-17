@@ -536,31 +536,26 @@ impl Params {
     /// `Ok(())` when the fence is `None`: a network with no PALW credit params has nothing to
     /// check, which is every shipped preset today.
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
-        // ADR-0039 W4′: the fork-choice fence exists, defaults off, and CANNOT YET BE TURNED ON.
+        // ADR-0039 W4′: the fork-choice fence. It can now be set, and setting it does something.
         //
-        // Both tip-ordering sites now go through the seam (`order_tips_v1`), the weight
-        // arithmetic is landed and tested, and the fact ASSEMBLY is landed too
-        // (`palw_facts`). What is still missing is the RESOLVER: nothing reads a block's
-        // receipts, class target, conviction or dispute state out of chain state, so both sites
-        // pass `None` weights.
+        // The refusal that stood here is gone because the thing it named exists: `palw_facts`
+        // resolves every weight fact from chain state — receipts against the drawn panel,
+        // convictions against the challenge window, disputes replayed from the ladder's own
+        // moves — and `palw_class_state` holds the class target that `palw_pwu` needs. What
+        // remains is the bound's own canonicality, which is checked here.
         //
-        // With `None` on both sides the seam falls back to blue work, so setting the fence today
-        // would not diverge anything — it would silently do NOTHING, while telling an operator
-        // that PALW weight governs fork choice. That is an over-claim of exactly the kind this
-        // codebase has already been audited for, so the refusal is narrowed rather than deleted:
-        // it now names the one remaining precondition instead of the three it started with.
-        //
-        // Removing it requires a resolver, which requires stores this tree does not have (a
-        // class-DAA store and a conviction/dispute store). That is the next change, and it is
-        // the last one before a fence could honestly be set.
+        // A fence still cannot be set on a network whose PALW machinery is absent: `palw_credit`
+        // carries the registration this reads, and a fork-choice fence without one would order
+        // tips by a class nothing describes.
         if let Some(fork_choice) = self.palw_fork_choice.as_ref() {
-            fork_choice.validate().map_err(|_| {
-                crate::palw_registry::PalwRegistryError::NotCanonical("palw_fork_choice bound is out of range")
-            })?;
-            return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                "palw_fork_choice is set, but nothing resolves PALW weight facts from chain state yet — \
-                 both tip sites route through the seam and would silently fall back to blue work",
-            ));
+            fork_choice
+                .validate()
+                .map_err(|_| crate::palw_registry::PalwRegistryError::NotCanonical("palw_fork_choice bound is out of range"))?;
+            if self.palw_credit.is_none() {
+                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
+                    "palw_fork_choice is set without palw_credit — there is no registered class to weigh blocks against",
+                ));
+            }
         }
         let Some(credit) = self.palw_credit.as_ref() else {
             return Ok(());
@@ -2405,12 +2400,33 @@ mod consensus_params_id_tests {
         }
         // Setting the fence DOES move the fingerprint — otherwise two nodes disagreeing about
         // fork choice could peer.
-        let mut fenced = SIMNET_PARAMS;
+        // TESTNET, because the registration fixture's windows are sized for the 120 s blockrate:
+        // a class whose `w_challenge` exceeds the network's finality depth is refused by the
+        // registration's own rule, which is the audit's H13 constraint doing its job rather than
+        // a fixture problem.
+        let mut fenced = TESTNET_PARAMS;
         fenced.palw_fork_choice = Some(crate::palw_chain_weight::PalwChainWeightParamsV1 { immature_bound_permille: 100 });
-        assert_ne!(fenced.consensus_params_id(), SIMNET_PARAMS.consensus_params_id());
+        assert_ne!(fenced.consensus_params_id(), TESTNET_PARAMS.consensus_params_id());
         assert_eq!(fenced.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted);
-        // ...and it is refused until the fact assembly and both call sites land.
-        assert!(fenced.validate_palw_v1().is_err(), "the fence must not be flippable before its machinery exists");
+
+        // The blanket refusal is GONE: the resolver exists, so a fence can now be set and mean
+        // something. What replaced it is the one precondition that is still real — a fork-choice
+        // fence without a registered class has nothing to weigh blocks against.
+        assert!(
+            fenced.validate_palw_v1().is_err(),
+            "a fork-choice fence without palw_credit has no registered class"
+        );
+        let mut with_class = fenced;
+        with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
+            registration: crate::palw_registry::tests::fleet_registration(),
+            s_eff_sompi: 20_000_00000000,
+            unbonding_period_blocks: 1_209_600,
+            activation_daa: 0,
+        });
+        assert!(
+            with_class.validate_palw_v1().is_ok(),
+            "a fence with a registration whose windows fit this network is now runnable"
+        );
     }
 
     #[test]

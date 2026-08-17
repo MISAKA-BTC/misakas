@@ -349,6 +349,14 @@ pub enum DatabaseStorePrefixes {
     /// the iterator, so without this a layout change reads as an empty store, which is a wrong
     /// answer that looks like a valid one.
     PalwCarriagesSchema = 253,
+    /// ADR-0038 Decision D: per-`ExecutionClass` difficulty state — the DAA target the class's
+    /// lottery runs against, which is one of the two factors `palw_pwu` needs and the only one
+    /// that is not frozen at registration.
+    PalwClassState = 215,
+    /// Singleton `u32`: the layout [`Self::PalwClassState`] rows were written under. Same reason
+    /// as [`Self::PalwCarriagesSchema`] — a class whose target reads as absent is a class whose
+    /// blocks weigh nothing, which is a wrong answer that looks like a valid one.
+    PalwClassStateSchema = 214,
 
     // ---- Separator ----
     /// Reserved as a separator

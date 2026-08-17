@@ -287,3 +287,406 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The resolver: carriage records + chain-scoped views -> resolved facts
+// ---------------------------------------------------------------------------------------------
+
+/// Everything the resolver reads, gathered by the caller from the chain it is evaluating.
+///
+/// The caller owns the walk; this owns the interpretation. That split is what keeps the
+/// interpretation testable without a database and keeps the walk's chain-scoping explicit at its
+/// own call site rather than hidden behind a store handle.
+pub struct PalwResolverInputV1<'a> {
+    /// Carriage records accepted on the chain being evaluated, within the challenge horizon.
+    /// Each is `(kind, accepted_daa, body)` exactly as the store holds it.
+    pub carriage: &'a [(u8, u64, Vec<u8>)],
+    /// The panel drawn for this block's commitment.
+    pub panel: &'a [crate::palw_job_panel::PalwPanelSeatV3],
+    /// This block's own facts.
+    pub block_hash: Hash64,
+    pub commitment_root: Hash64,
+    pub execution_class_id: Hash64,
+    /// DAA at which this block's commitment was accepted, and the evaluating chain's own DAA.
+    pub accepted_daa: u64,
+    pub pov_daa: u64,
+    /// The class's target at this chain point — `None` when the view does not hold the class.
+    pub class_target: Option<u128>,
+    /// The class's registered per-inference cost.
+    pub pwu_per_inference: Option<u64>,
+    /// The class's registered challenge window.
+    pub w_challenge: u64,
+    /// The class's registered rung window — what a bisection deadline is derived from.
+    pub w_round: u64,
+}
+
+/// Decode the carriage records this block's facts depend on and assemble them.
+///
+/// Undecodable bodies are SKIPPED rather than failing the resolve: a body that does not decode as
+/// its kind never passed admission on this chain, so it is not a fact about this chain — and
+/// making one poison the whole resolve would hand any peer a way to make a block unweighable.
+/// What is refused is a fact this node genuinely cannot determine, which is
+/// [`weight_facts_v1`]'s job.
+pub fn resolve_block_facts_v1(input: &PalwResolverInputV1<'_>) -> PalwResolvedBlockFactsV1 {
+    use crate::palw_carriage::{
+        PALW_CARRIAGE_KIND_EQUIVOCATION, PALW_CARRIAGE_KIND_RECEIPT, PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1,
+        decode_palw_stage1_body,
+    };
+
+    let mut receipts = Vec::new();
+    let mut convicted_before_close = false;
+    let window_close = input.accepted_daa.saturating_add(input.w_challenge);
+
+    for (kind, accepted_daa, body) in input.carriage {
+        match *kind {
+            PALW_CARRIAGE_KIND_RECEIPT => {
+                if let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body) {
+                    receipts.push(r.receipt);
+                }
+            }
+            // A conviction counts only if it was accepted BEFORE the window closed. A later one is
+            // a protocol-failure telemetry event, never a weight fact (ADR-0038 W5), and the
+            // comparison is against chain DAA rather than a clock so every node agrees.
+            PALW_CARRIAGE_KIND_STEP_CONVICTION => {
+                if *accepted_daa <= window_close
+                    && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
+                    && c.refutation.binding.full_logits_trace_root == input.commitment_root
+                {
+                    convicted_before_close = true;
+                }
+            }
+            PALW_CARRIAGE_KIND_EQUIVOCATION => {
+                if *accepted_daa <= window_close
+                    && let Ok(PalwCarriageV1::Equivocation(e)) = decode_palw_stage1_body(*kind, body)
+                    && (e.certificate.attestation_a.full_logits_trace_root == input.commitment_root
+                        || e.certificate.attestation_b.full_logits_trace_root == input.commitment_root)
+                {
+                    convicted_before_close = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    PalwResolvedBlockFactsV1 {
+        accepted_daa: Some(input.accepted_daa),
+        pov_daa: Some(input.pov_daa),
+        assigned_receipts: Some(assigned_receipt_count_v1(&receipts, input.panel, &input.block_hash, &input.commitment_root)),
+        convicted_before_close: Some(convicted_before_close),
+        dispute_open_or_unadjudicable: Some(dispute_is_open_v1(input)),
+    }
+}
+
+/// Whether a bisection ladder over this commitment is still running.
+///
+/// Derived from the ladder's own moves rather than from a session store: the moves ARE carriage
+/// records on the chain being evaluated, so replaying them is chain-scoped by construction and
+/// needs no second source that could disagree with the first.
+///
+/// A session that reached `Terminal` or `Abandoned` is decided and no longer blocks maturity. A
+/// session still awaiting a move is an open dispute, and an open dispute is not an absence of
+/// refutation — it is a refutation still being answered
+/// ([`crate::palw_weight::ramp_stage_v1`]).
+///
+/// A move that does not decode, or that the ladder refuses as illegal, is skipped: it never
+/// advanced the game on this chain, so it is not a fact about the game's state. Skipping is safe
+/// in the direction that matters — an unparseable move cannot END a dispute, only fail to
+/// advance one.
+fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
+    use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectTurnV1};
+    use crate::palw_carriage::{PALW_CARRIAGE_KIND_BISECT_MOVE, PalwBisectMoveBodyV1, PalwCarriageV1, decode_palw_stage1_body};
+
+    let moves: Vec<(u64, PalwBisectMoveBodyV1)> = input
+        .carriage
+        .iter()
+        .filter(|(kind, _, _)| *kind == PALW_CARRIAGE_KIND_BISECT_MOVE)
+        .filter_map(|(kind, daa, body)| match decode_palw_stage1_body(*kind, body) {
+            Ok(PalwCarriageV1::BisectMove(m)) => Some((*daa, m.body)),
+            _ => None,
+        })
+        .collect();
+
+    for (open_daa, body) in &moves {
+        let PalwBisectMoveBodyV1::Open { job_context_hash, committed_root, challenger_id, responder_id, space, space_size } = body
+        else {
+            continue;
+        };
+        if *committed_root != input.commitment_root {
+            continue;
+        }
+        let Ok(mut ladder) = PalwBisectLadderV1::open(
+            job_context_hash,
+            committed_root,
+            challenger_id,
+            responder_id,
+            *space,
+            *space_size,
+            *open_daa,
+            open_daa.saturating_add(input.w_round.max(1)),
+        ) else {
+            continue;
+        };
+        // Replay this session's later moves in accepted order. `carriage` is already in the
+        // caller's walk order; ties are impossible within one session because a ladder refuses a
+        // move that is not its turn.
+        for (daa, later) in &moves {
+            match later {
+                PalwBisectMoveBodyV1::Disclosure(d) if d.session_id == ladder.session_id() => {
+                    let _ = ladder.apply_disclosure(d, *daa, input.w_round);
+                }
+                PalwBisectMoveBodyV1::Verdict(v) if v.session_id == ladder.session_id() => {
+                    let _ = ladder.apply_verdict(v, *daa, input.w_round);
+                }
+                _ => {}
+            }
+        }
+        match ladder.turn() {
+            // Decided: the dispute no longer blocks maturity.
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => {}
+            // Still someone's move: the dispute is open.
+            PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => return true,
+        }
+    }
+    false
+}
+
+/// The block's weight contribution, resolved end to end, or the fact that stopped it.
+pub fn resolve_block_weight_v1(
+    input: &PalwResolverInputV1<'_>,
+    ramp: &crate::palw_weight::PalwWeightParamsV1,
+) -> Result<crate::palw_chain_weight::PalwBlockWeightV1, PalwFactsError> {
+    let resolved = resolve_block_facts_v1(input);
+    let facts = weight_facts_v1(&resolved, input.w_challenge)?;
+    let pwu = block_pwu_v1(input.class_target, input.pwu_per_inference)?;
+    Ok(crate::palw_chain_weight::PalwBlockWeightV1 { pwu, stage: crate::palw_weight::ramp_stage_v1(&facts, ramp) })
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::*;
+    use crate::palw_bisect::{PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectVerdictV1, bisect_session_id_v1};
+    use crate::palw_carriage::{
+        PALW_CARRIAGE_KIND_BISECT_MOVE, PALW_CARRIAGE_KIND_RECEIPT, PALW_CARRIAGE_VERSION_V1, PalwBisectMoveBodyV1,
+        PalwBisectMoveCarriageV1, PalwCarriageV1, PalwReceiptCarriageV1, encode_palw_carriage_v1,
+    };
+    use crate::palw_job_panel::PalwPanelSeatV3;
+    use crate::palw_weight::{PalwWeightParamsV1, PalwWorkRampStageV1};
+    use crate::tx::{TransactionId, TransactionOutpoint};
+
+    const W_CHALLENGE: u64 = 500;
+    const W_ROUND: u64 = 30;
+    const RAMP: PalwWeightParamsV1 = PalwWeightParamsV1 { receipt_quorum: 2, rho_r_permille: 900 };
+
+    fn h(seed: u64) -> Hash64 {
+        Hash64::from_u64_word(seed)
+    }
+    fn op(seed: u8) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
+    }
+    fn seat(seed: u8) -> PalwPanelSeatV3 {
+        PalwPanelSeatV3 { validator_id: h(seed as u64), bond_outpoint: op(seed) }
+    }
+
+    /// Stage-1 body bytes, exactly as the store holds them.
+    fn body(obj: &PalwCarriageV1) -> Vec<u8> {
+        encode_palw_carriage_v1(obj)[7..].to_vec()
+    }
+
+    fn receipt_row(bond: u8, daa: u64) -> (u8, u64, Vec<u8>) {
+        let r = PalwReceiptCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            receipt: crate::palw_receipt::PalwVerificationReceiptV1 {
+                version: crate::palw_receipt::PALW_RECEIPT_VERSION_V1,
+                target_block_hash: h(0xB0),
+                target_commitment_root: h(0xC0),
+                execution_class_id: h(0xC1),
+                sample_coordinates: vec![crate::palw_receipt::PalwSampleCoordinateV1 {
+                    token_index: 0,
+                    layer_index: 0,
+                    node_slot: 0,
+                    unit_index: 0,
+                }],
+                observed_roots: vec![h(0x74)],
+                verdict: crate::palw_receipt::PalwReceiptVerdictV1::Match,
+                verifier_bond_outpoint: op(bond),
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+        };
+        (PALW_CARRIAGE_KIND_RECEIPT, daa, body(&PalwCarriageV1::Receipt(r)))
+    }
+
+    fn bisect_row(b: PalwBisectMoveBodyV1, daa: u64) -> (u8, u64, Vec<u8>) {
+        let m = PalwBisectMoveCarriageV1 { version: PALW_CARRIAGE_VERSION_V1, challenger_bond_outpoint: op(0xC9), body: b };
+        (PALW_CARRIAGE_KIND_BISECT_MOVE, daa, body(&PalwCarriageV1::BisectMove(m)))
+    }
+
+    fn input<'a>(carriage: &'a [(u8, u64, Vec<u8>)], panel: &'a [PalwPanelSeatV3], pov: u64) -> PalwResolverInputV1<'a> {
+        PalwResolverInputV1 {
+            carriage,
+            panel,
+            block_hash: h(0xB0),
+            commitment_root: h(0xC0),
+            execution_class_id: h(0xC1),
+            accepted_daa: 1_000,
+            pov_daa: pov,
+            class_target: Some(u128::MAX >> 10), // 1_024 expected attempts
+            pwu_per_inference: Some(100),
+            w_challenge: W_CHALLENGE,
+            w_round: W_ROUND,
+        }
+    }
+
+    /// **Every fact resolves.** This is what lets the fork-choice fence stop refusing: the
+    /// resolver produces a complete `PalwResolvedBlockFactsV1`, so `weight_facts_v1` has nothing
+    /// left to be unable to answer.
+    #[test]
+    fn the_resolver_answers_every_fact() {
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let resolved = resolve_block_facts_v1(&input(&carriage, &panel, 1_100));
+        assert_eq!(resolved.accepted_daa, Some(1_000));
+        assert_eq!(resolved.pov_daa, Some(1_100));
+        assert_eq!(resolved.assigned_receipts, Some(2));
+        assert_eq!(resolved.convicted_before_close, Some(false));
+        assert_eq!(resolved.dispute_open_or_unadjudicable, Some(false));
+        // ...and therefore a weight, end to end.
+        let weight = resolve_block_weight_v1(&input(&carriage, &panel, 1_100), &RAMP).unwrap();
+        assert_eq!(weight.pwu, 102_400);
+        assert_eq!(weight.stage, PalwWorkRampStageV1::ReceiptLicensed);
+    }
+
+    /// An open ladder blocks maturity; a terminated one does not. Derived from the moves
+    /// themselves, so no session store can disagree with the chain.
+    #[test]
+    fn an_open_ladder_is_an_open_dispute() {
+        let open = PalwBisectMoveBodyV1::Open {
+            job_context_hash: h(0x11),
+            committed_root: h(0xC0),
+            challenger_id: h(0x33),
+            responder_id: h(0x44),
+            space: PalwBisectSpaceV1::StepLeaves,
+            space_size: 4,
+        };
+        let session = bisect_session_id_v1(&h(0x11), &h(0xC0), &h(0x33), &h(0x44), PalwBisectSpaceV1::StepLeaves, 4);
+        let panel = vec![seat(1), seat(2)];
+
+        // Opened and awaiting the first disclosure: open.
+        let just_opened = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), bisect_row(open.clone(), 1_070)];
+        assert_eq!(resolve_block_facts_v1(&input(&just_opened, &panel, 1_100)).dispute_open_or_unadjudicable, Some(true));
+        // An open dispute cannot mature, whatever the receipts say.
+        let weight = resolve_block_weight_v1(&input(&just_opened, &panel, 9_000), &RAMP).unwrap();
+        assert_eq!(weight.stage, PalwWorkRampStageV1::Provisional, "an open dispute is not an absence of refutation");
+
+        // Played to the terminal index: decided, no longer blocking.
+        let mut rows = just_opened.clone();
+        let mut daa = 1_080;
+        for round in 0..2u32 {
+            let mid = if round == 0 { 2 } else { 1 };
+            rows.push(bisect_row(
+                PalwBisectMoveBodyV1::Disclosure(PalwBisectDisclosureV1 {
+                    version: 1,
+                    session_id: session,
+                    round,
+                    midpoint: mid,
+                    mid_state: h(mid),
+                }),
+                daa,
+            ));
+            daa += 5;
+            rows.push(bisect_row(
+                PalwBisectMoveBodyV1::Verdict(PalwBisectVerdictV1 { version: 1, session_id: session, round, agree: false }),
+                daa,
+            ));
+            daa += 5;
+        }
+        assert_eq!(
+            resolve_block_facts_v1(&input(&rows, &panel, 1_200)).dispute_open_or_unadjudicable,
+            Some(false),
+            "a ladder played to its terminal index is decided"
+        );
+
+        // A ladder over a DIFFERENT commitment is not this block's dispute.
+        let elsewhere = PalwBisectMoveBodyV1::Open {
+            job_context_hash: h(0x11),
+            committed_root: h(0xDEAD),
+            challenger_id: h(0x33),
+            responder_id: h(0x44),
+            space: PalwBisectSpaceV1::StepLeaves,
+            space_size: 4,
+        };
+        let other = vec![receipt_row(1, 1_050), bisect_row(elsewhere, 1_070)];
+        assert_eq!(resolve_block_facts_v1(&input(&other, &panel, 1_100)).dispute_open_or_unadjudicable, Some(false));
+    }
+
+    /// A conviction accepted before the window closes voids the block; one after it does not.
+    /// The comparison is against chain DAA, so every node agrees about which side it fell.
+    #[test]
+    fn a_conviction_counts_only_before_the_window_closes() {
+        use crate::palw_carriage::{PALW_CARRIAGE_KIND_EQUIVOCATION, PalwEquivocationCarriageV1};
+        let equivocation = |daa: u64| {
+            let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
+            let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                executor_id: h(0xE1),
+                job_context_hash: ctx.context_hash(),
+                full_logits_trace_root: root,
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            };
+            let e = PalwEquivocationCarriageV1 {
+                version: PALW_CARRIAGE_VERSION_V1,
+                accused_bond_outpoint: op(0xB1),
+                certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
+                    version: crate::palw_slash::PALW_S_OBJECT_VERSION_V1,
+                    attestation_a: att(h(0xC0)), // this block's commitment root
+                    attestation_b: att(h(0x02)),
+                    job_context: ctx,
+                },
+            };
+            (PALW_CARRIAGE_KIND_EQUIVOCATION, daa, body(&PalwCarriageV1::Equivocation(e)))
+        };
+        let panel = vec![seat(1), seat(2)];
+
+        // Window closes at 1_000 + 500 = 1_500.
+        let before = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), equivocation(1_400)];
+        assert_eq!(resolve_block_facts_v1(&input(&before, &panel, 9_000)).convicted_before_close, Some(true));
+        assert_eq!(resolve_block_weight_v1(&input(&before, &panel, 9_000), &RAMP).unwrap().stage, PalwWorkRampStageV1::Voided);
+
+        let after = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), equivocation(1_600)];
+        assert_eq!(resolve_block_facts_v1(&input(&after, &panel, 9_000)).convicted_before_close, Some(false));
+        assert_eq!(
+            resolve_block_weight_v1(&input(&after, &panel, 9_000), &RAMP).unwrap().stage,
+            PalwWorkRampStageV1::Final,
+            "a late conviction cannot unmake finality (W5)"
+        );
+    }
+
+    /// An undecodable body is skipped, not fatal: it never passed admission on this chain, so it
+    /// is not a fact about it — and making one poison the resolve would hand any peer a way to
+    /// make a block unweighable.
+    #[test]
+    fn junk_carriage_is_skipped_rather_than_fatal() {
+        let carriage = vec![
+            (PALW_CARRIAGE_KIND_RECEIPT, 1_050, vec![0xFF; 8]),
+            receipt_row(1, 1_050),
+            (PALW_CARRIAGE_KIND_BISECT_MOVE, 1_060, vec![0x00; 3]),
+            receipt_row(2, 1_060),
+        ];
+        let panel = vec![seat(1), seat(2)];
+        let resolved = resolve_block_facts_v1(&input(&carriage, &panel, 1_100));
+        assert_eq!(resolved.assigned_receipts, Some(2), "the good receipts still count");
+        assert_eq!(resolved.dispute_open_or_unadjudicable, Some(false), "junk cannot open a dispute");
+    }
+
+    /// The resolve is order-free: the same records in any walk order give the same facts.
+    #[test]
+    fn resolution_does_not_depend_on_walk_order() {
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), receipt_row(3, 1_070)];
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let expected = resolve_block_facts_v1(&input(&carriage, &panel, 1_100));
+        let mut reversed = carriage.clone();
+        reversed.reverse();
+        assert_eq!(resolve_block_facts_v1(&input(&reversed, &panel, 1_100)), expected);
+        let rotated = [carriage[2].clone(), carriage[0].clone(), carriage[1].clone()];
+        assert_eq!(resolve_block_facts_v1(&input(&rotated, &panel, 1_100)), expected);
+    }
+}
