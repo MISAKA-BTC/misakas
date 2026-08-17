@@ -2717,7 +2717,7 @@ impl VirtualStateProcessor {
     /// reaches the pruning point). Returning empty is semantically correct — a block with no
     /// accountable acceptance data contributes no txs; a genuine inconsistency on a non-pruned block
     /// surfaces in the trace log instead of crashing the virtual processor.
-    fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
+    pub(super) fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
         match self.acceptance_data_store.get(chain_block) {
             Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
             Err(StoreError::KeyNotFound(_)) => {

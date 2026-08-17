@@ -694,7 +694,7 @@ impl VirtualStateProcessor {
         }
         // ADR-0032 Phase E2: the audit-call bond spend gate. Inert while the PALW credit
         // fence is `None` (every shipped network).
-        self.check_palw_audit_bond_spend_gate(&txs, header.daa_score)?;
+        self.check_palw_audit_bond_spend_gate(&txs, ctx.selected_parent(), header.daa_score)?;
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
@@ -1554,41 +1554,42 @@ impl VirtualStateProcessor {
     /// (no answer inside `W_answer`, settlement passed) admits a spend; an answered call's
     /// bond stays locked until the Stage-2 slash-flow transaction shape exists
     /// (fail-closed). Inert while the PALW credit fence is `None`.
-    fn check_palw_audit_bond_spend_gate(&self, txs: &[Transaction], daa_score: u64) -> BlockProcessResult<()> {
-        use kaspa_consensus_core::palw_carriage::{
-            PALW_CARRIAGE_KIND_OPENING_ANSWER, PALW_CARRIAGE_KIND_OPENING_CALL, PalwCarriageV1, decode_palw_stage1_body,
-            palw_audit_bond_spend_gate,
-        };
+    fn check_palw_audit_bond_spend_gate(
+        &self,
+        txs: &[Transaction],
+        selected_parent: BlockHash,
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        use kaspa_consensus_core::palw_carriage::palw_audit_bond_spend_gate;
         let Some(credit) = self.palw_credit_params.as_ref() else {
             return Ok(());
         };
         let windows = &credit.registration.windows;
-        let store = self.palw_carriage_store.read();
+        // Resolved from the BLOCK'S OWN CHAIN, never from a store.
+        //
+        // This used to read `self.palw_carriage_store`, a flat tx-id-keyed index maintained from the
+        // virtual SINK. That made a block-validity rule — this gate rejects blocks — a function of
+        // where THIS node's virtual tip happens to sit rather than of the block's selected-parent
+        // past. Two nodes whose sinks are on different branches then disagree about the same block:
+        // the one whose sink chain accepted the OPENING_ANSWER sees `SlashFlowOnly` and rejects,
+        // the other has no answer row, sees `CallerReturn` and accepts. That is a permanent
+        // partition, and it also makes a single node's verdicts self-inconsistent across a reorg
+        // (audit B6(b) — the same shape blocker 6(b) named for the credit walk).
+        //
+        // Three fail-open holes rode on the same read and go with it: the gate was fenced on
+        // `palw_credit_params.is_some()` while the store writer is fenced on
+        // `vlt_shadow_active_at`, so a network with credit on and the VLT shadow off resolved
+        // `None` for every outpoint and unlocked every audit bond; before the backfill sweep
+        // finished the store was empty, with the same effect; and the answer lookup was a
+        // whole-store scan with a Borsh decode per row, run once per spending input.
+        let dispositions = self.palw_audit_call_dispositions_v1(selected_parent, daa_score, windows);
         palw_audit_bond_spend_gate(
             txs,
             |outpoint| {
                 if outpoint.index != 0 {
                     return None;
                 }
-                let record = store.get(outpoint.transaction_id).ok()?;
-                if record.kind != PALW_CARRIAGE_KIND_OPENING_CALL {
-                    return None;
-                }
-                let call_daa = record.accepted_daa_score;
-                // The earliest accepted answer naming this call. A full-store scan, entered
-                // only when a transaction actually spends a known call's output 0.
-                let answer_daa = store
-                    .all()
-                    .into_iter()
-                    .filter(|(_, r)| r.kind == PALW_CARRIAGE_KIND_OPENING_ANSWER)
-                    .filter_map(|(_, r)| match decode_palw_stage1_body(r.kind, &r.body) {
-                        Ok(PalwCarriageV1::OpeningAnswer(a)) if a.call_tx_id == outpoint.transaction_id => {
-                            Some(r.accepted_daa_score)
-                        }
-                        _ => None,
-                    })
-                    .min();
-                Some((call_daa, answer_daa))
+                dispositions.get(&outpoint.transaction_id).copied()
             },
             daa_score,
             windows.w_answer,
@@ -1596,6 +1597,64 @@ impl VirtualStateProcessor {
             true,
         )
         .map_err(|(spending_tx, bond_outpoint)| AuditBondSpendAgainstDisposition(spending_tx, bond_outpoint).into())
+    }
+
+    /// Every OPENING_CALL on this block's own chain within the gate's horizon, mapped to
+    /// `(call_accepted_daa, earliest_answer_accepted_daa)`.
+    ///
+    /// One backward walk over the selected-parent chain, the same shape
+    /// `compute_palw_credit_outputs` uses, so the answer is a pure function of the block's past and
+    /// identical on every node. Built once per block rather than per spending input, which also
+    /// removes the per-input full-store scan the store-based version performed.
+    ///
+    /// The horizon is `w_answer + prosecution_slack` — exactly the window the gate's own
+    /// disposition arithmetic reads. A call older than that has passed settlement on any chain that
+    /// contains it, so its absence from the map is not a missing fact: `palw_audit_bond_spend_gate`
+    /// treats an unresolved outpoint as "not an audit-call output", which is correct for one whose
+    /// lock has expired.
+    fn palw_audit_call_dispositions_v1(
+        &self,
+        selected_parent: BlockHash,
+        daa_score: u64,
+        windows: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
+    ) -> std::collections::HashMap<TransactionId, (u64, Option<u64>)> {
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        use kaspa_consensus_core::blockhash::BlockHashExtensions;
+        use kaspa_consensus_core::palw_carriage::{
+            PalwCarriageV1, decode_palw_stage1_body, palw_carriage_records_from_accepted_txs,
+        };
+        let mut calls: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
+        let mut earliest_answer: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
+        let depth = windows.w_answer.saturating_add(windows.prosecution_slack);
+        let mut current = selected_parent;
+        loop {
+            let Ok(cur_daa) = self.headers_store.get_daa_score(current) else { break };
+            if daa_score.saturating_sub(cur_daa) > depth {
+                break;
+            }
+            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa) {
+                match decode_palw_stage1_body(record.kind, &record.body) {
+                    Ok(PalwCarriageV1::OpeningCall(_)) => {
+                        calls.insert(tx_id, cur_daa);
+                    }
+                    Ok(PalwCarriageV1::OpeningAnswer(a)) => {
+                        // EARLIEST answer per call: the walk runs newest-first, so a later
+                        // (shallower) block's answer must not displace an earlier one.
+                        earliest_answer
+                            .entry(a.call_tx_id)
+                            .and_modify(|d| *d = (*d).min(cur_daa))
+                            .or_insert(cur_daa);
+                    }
+                    _ => {}
+                }
+            }
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else { break };
+            if parent == current || parent.is_origin() {
+                break;
+            }
+            current = parent;
+        }
+        calls.into_iter().map(|(tx_id, call_daa)| (tx_id, (call_daa, earliest_answer.get(&tx_id).copied()))).collect()
     }
 
     /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
