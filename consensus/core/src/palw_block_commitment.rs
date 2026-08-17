@@ -20,11 +20,46 @@
 //! finalizer(network, algo, pre_pow_hash, timestamp, bits, nonce, claimed_tag) < class_target
 //! ```
 //!
-//! — a hash check. Whether the claimed tag honestly derives from `inference(seed(nonce))`
+//! — a hash check. Whether the claimed tag honestly derives from `inference(challenge)`
 //! is what assigned sampling ([`crate::palw_receipt`]) and the court decide, under the
 //! weight ramp ([`crate::palw_weight`]): a fabricated tag passes admission and matures
-//! never. Honest miners still pay one full inference per ticket (the lottery shape is
-//! unchanged); fabricators pay bond slash (ADR-0038 New-risk 1).
+//! never; fabricators pay bond slash (ADR-0038 New-risk 1).
+//!
+//! ## The challenge binding — why the tag is not a free grind
+//!
+//! The first draft of this module derived the tag from a root over `(class, bond, trace_root,
+//! output_root, pwu_claim)` **only**, and claimed "honest miners still pay one full inference
+//! per ticket (the lottery shape is unchanged)". That claim was false, and the gap is the
+//! whole reason this section exists (mainnet-readiness re-audit 2026-08-17, blocker 3).
+//!
+//! None of those five fields depends on the `nonce`, while the Layer-0 finalizer mixes the
+//! nonce separately. So a miner ran **one** inference, built **one** commitment, and then
+//! ground `nonce` through the finalizer for free: one inference amortized across the whole
+//! nonce space — a classic hash puzzle with a one-time setup cost, which is precisely the
+//! property ADR-0038 exists to avoid. Worse, that grind is *invisible to sampling*: the
+//! committed `trace_root` is a genuine inference, so a re-running verifier has nothing to
+//! contradict — the commitment never said which attempt it belonged to.
+//!
+//! The fix is [`palw_block_challenge_v1`]: every tag derives from a challenge that binds the
+//! exact attempt — network, `pre_pow_hash`, timestamp, **nonce**, class and executor bond.
+//! Change any of them and the challenge changes, the root changes, the tag changes, and the
+//! honest miner owes a new inference. Two properties follow, and they are *different in kind*:
+//!
+//! * **Cryptographic, and checkable by a node that never runs the model:** a commitment cannot
+//!   be replayed onto another nonce, header, class or executor. The verifier recomputes the
+//!   challenge from the header and the commitment's own fields; nothing else can produce that
+//!   tag. This is what kills the amortization above, and it holds unconditionally.
+//! * **Economic, and *not* checkable at admission:** that `trace_root` is the true
+//!   `F(challenge, class)` rather than 32 random bytes. A grinder can still pick roots freely
+//!   and win tickets at hash cost. What stops that is not this module — it is that the
+//!   challenge is now *declared*, so an assigned verifier knows exactly which inference to
+//!   re-run, finds the mismatch, and convicts. Optimistic verification cannot make this half
+//!   cryptographic; it can only make it accountable, and the accountability requires the bond,
+//!   the sampling and the court to actually exist.
+//!
+//! So: "one ticket costs one inference" is true for an honest miner and enforced *economically*
+//! for everyone else. Stating it as an unconditional property of the construction — as the
+//! first draft did — overstates it, and the overstatement is what hid the nonce grind.
 //!
 //! Consensus-inert until the ADR-0038 change set wires and activates together.
 
@@ -45,9 +80,50 @@ pub const PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/block-com
 /// Keyed-BLAKE2b domain of the L1 tag expansion (commitment → 200 tag bytes).
 pub const PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG: &[u8] = b"misaka-palw/block-commitment-l1-tag/v1";
 
+/// Keyed-BLAKE2b domain of the per-attempt execution challenge — the model's input identity.
+pub const PALW_BLOCK_COMMITMENT_DOMAIN_CHALLENGE: &[u8] = b"misaka-palw/block-challenge/v1";
+
 /// Every domain this module introduces (uniqueness-tested against every other PALW family).
 pub const PALW_BLOCK_COMMITMENT_ALL_DOMAINS: &[&[u8]] =
-    &[PALW_BLOCK_COMMITMENT_DOMAIN_MESSAGE, PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG];
+    &[PALW_BLOCK_COMMITMENT_DOMAIN_MESSAGE, PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG, PALW_BLOCK_COMMITMENT_DOMAIN_CHALLENGE];
+
+/// The canonical execution challenge for one ticket attempt: **the thing the model is run on,
+/// and the thing a verifier recomputes to know which inference to re-run.**
+///
+/// Binds, in this frozen order and each length-prefixed or fixed-width so no two distinct
+/// inputs can share a preimage:
+///
+/// * `network_id` — no cross-network replay;
+/// * `pre_pow_hash` — the parents, merkle root and bits this attempt is against;
+/// * `timestamp`, `nonce` — **the attempt itself**; this is the binding whose absence made the
+///   tag a free hash grind (see the module docs);
+/// * `execution_class_id` — the difficulty domain, so a trace cannot be moved between classes;
+/// * `executor_bond_outpoint` — the accountable identity, so a trace cannot be re-mined by
+///   another executor (and so the slash target is inside what the work commits to).
+///
+/// `bits` is deliberately absent: it already sits inside `pre_pow_hash`, and re-mixing a value
+/// twice buys nothing while adding a second place to get the ordering wrong.
+pub fn palw_block_challenge_v1(
+    network_id: &[u8],
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    execution_class_id: Hash64,
+    executor_bond_outpoint: &TransactionOutpoint,
+) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BLOCK_COMMITMENT_DOMAIN_CHALLENGE).to_state();
+    state.update(&(network_id.len() as u32).to_le_bytes());
+    state.update(network_id);
+    state.update(pre_pow_hash.as_byte_slice());
+    state.update(&timestamp.to_le_bytes());
+    state.update(&nonce.to_le_bytes());
+    state.update(execution_class_id.as_byte_slice());
+    state.update(executor_bond_outpoint.transaction_id.as_byte_slice());
+    state.update(&executor_bond_outpoint.index.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
 
 /// Serialization magic of the carried payload (refuses foreign bytes before borsh runs).
 pub const PALW_BLOCK_COMMITMENT_MAGIC: [u8; 4] = *b"PBC1";
@@ -128,13 +204,34 @@ impl PalwBlockCommitmentV1 {
         Ok(())
     }
 
-    /// The commitment root: one digest over the class, bond, both Merkle roots and the pwu
-    /// claim — what receipts cover ([`crate::palw_receipt`]'s `target_commitment_root`) and
-    /// what the ticket's tag expands from. The signature is NOT inside (a root must be
-    /// recomputable by a verifier who has not resolved the key yet).
-    pub fn commitment_root(&self) -> Hash64 {
+    /// This commitment's challenge for a given attempt — [`palw_block_challenge_v1`] with the
+    /// class and bond taken from `self`, so a caller cannot accidentally bind a trace to a
+    /// class or executor other than the one it claims.
+    pub fn challenge_for(&self, network_id: &[u8], pre_pow_hash: Hash64, timestamp: u64, nonce: u64) -> Hash64 {
+        palw_block_challenge_v1(
+            network_id,
+            pre_pow_hash,
+            timestamp,
+            nonce,
+            self.execution_class_id,
+            &self.executor_bond_outpoint,
+        )
+    }
+
+    /// The commitment root: one digest over **the challenge**, the class, the bond, both Merkle
+    /// roots and the pwu claim — what receipts cover ([`crate::palw_receipt`]'s
+    /// `target_commitment_root`) and what the ticket's tag expands from. The signature is NOT
+    /// inside (a root must be recomputable by a verifier who has not resolved the key yet).
+    ///
+    /// The `challenge` parameter is the ADR-0038 blocker-3 fix and the reason this is not a
+    /// no-argument method: a root — and therefore a ticket — is meaningless except relative to
+    /// one attempt. Taking it by argument rather than storing it keeps a single source of truth
+    /// (the header supplies the attempt; the commitment cannot disagree with itself) and makes
+    /// "which inference does this claim?" unanswerable-by-omission at the type level.
+    pub fn commitment_root(&self, challenge: Hash64) -> Hash64 {
         let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG).to_state();
         state.update(&[0u8]); // leaf discriminator: root preimage, not tag expansion
+        state.update(challenge.as_byte_slice());
         state.update(self.execution_class_id.as_byte_slice());
         state.update(self.executor_bond_outpoint.transaction_id.as_byte_slice());
         state.update(&self.executor_bond_outpoint.index.to_le_bytes());
@@ -147,11 +244,16 @@ impl PalwBlockCommitmentV1 {
     }
 
     /// The 200 tag bytes the Layer-0 finalizer consumes in place of the re-run inference:
-    /// a domain-keyed expansion of the commitment root (deterministic, admission-checkable
-    /// by any CPU). Honest miners derive the root from a real trace; the expansion width
-    /// keeps the finalizer call-shape identical to today's algo-4.
-    pub fn l1_tag_bytes(&self) -> [u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES] {
-        let root = self.commitment_root();
+    /// a domain-keyed expansion of the commitment root for **this attempt's challenge**
+    /// (deterministic, admission-checkable by any CPU). The expansion width keeps the
+    /// finalizer call-shape identical to today's algo-4.
+    ///
+    /// Because the challenge carries the nonce, a new ticket attempt is a new tag: the miner
+    /// cannot reuse one inference across the nonce space. What this does NOT establish is that
+    /// `trace_root` is the honest `F(challenge, class)` — see the module docs on the
+    /// cryptographic/economic split.
+    pub fn l1_tag_bytes(&self, challenge: Hash64) -> [u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES] {
+        let root = self.commitment_root(challenge);
         let mut out = [0u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES];
         for (chunk_index, chunk) in out.chunks_mut(64).enumerate() {
             let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG).to_state();
@@ -167,14 +269,21 @@ impl PalwBlockCommitmentV1 {
     /// ticket attempt — so a signed commitment can never be replayed onto a different
     /// header, timestamp or nonce (the ADR-0038 non-transferability of W2, carried into
     /// the signature layer).
+    ///
+    /// The attempt now reaches this digest twice over: once directly, and once through the
+    /// challenge inside `commitment_root`. That redundancy is deliberate — it was the *only*
+    /// binding before blocker 3 was fixed, and it bound the half nobody checks (signatures are
+    /// not verified at admission today) while the ticket, which everybody checks, bound
+    /// nothing. Keeping both means the two layers cannot drift apart again.
     pub fn message(&self, network_id: &[u8], pre_pow_hash: Hash64, timestamp: u64, nonce: u64) -> Hash {
+        let challenge = self.challenge_for(network_id, pre_pow_hash, timestamp, nonce);
         let mut state = blake2b_simd::Params::new().hash_length(32).key(PALW_BLOCK_COMMITMENT_DOMAIN_MESSAGE).to_state();
         state.update(&(network_id.len() as u32).to_le_bytes());
         state.update(network_id);
         state.update(pre_pow_hash.as_byte_slice());
         state.update(&timestamp.to_le_bytes());
         state.update(&nonce.to_le_bytes());
-        state.update(self.commitment_root().as_byte_slice());
+        state.update(self.commitment_root(challenge).as_byte_slice());
         let mut out = [0u8; 32];
         out.copy_from_slice(state.finalize().as_bytes());
         Hash::from_bytes(out)
@@ -209,6 +318,11 @@ mod tests {
     use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
+
+    /// A fixed challenge for tests whose subject is the payload binding, not the attempt.
+    fn ch() -> Hash64 {
+        Hash64::from_u64_word(0xC0FFEE)
+    }
 
     fn commitment() -> PalwBlockCommitmentV1 {
         PalwBlockCommitmentV1 {
@@ -261,25 +375,26 @@ mod tests {
     /// the signature (a verifier recomputes the root before resolving any key).
     #[test]
     fn commitment_root_binds_payload_not_signature() {
-        let base = commitment().commitment_root();
+        let ch = ch();
+        let base = commitment().commitment_root(ch);
         let mut c = commitment();
         c.execution_class_id = Hash64::from_u64_word(99);
-        assert_ne!(base, c.commitment_root());
+        assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
         c.executor_bond_outpoint = TransactionOutpoint::new(Hash64::from_u64_word(99), 0);
-        assert_ne!(base, c.commitment_root());
+        assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
         c.trace_root = Hash64::from_u64_word(99);
-        assert_ne!(base, c.commitment_root());
+        assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
         c.output_root = Hash64::from_u64_word(99);
-        assert_ne!(base, c.commitment_root());
+        assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
         c.pwu_claim = 101;
-        assert_ne!(base, c.commitment_root());
+        assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
         c.signature = vec![0x77; STAKE_ATTESTATION_SIG_LEN];
-        assert_eq!(base, c.commitment_root());
+        assert_eq!(base, c.commitment_root(ch));
     }
 
     /// The L1 tag expansion: full width, deterministic, moves with the root, and its 64-byte
@@ -287,14 +402,51 @@ mod tests {
     /// entropy).
     #[test]
     fn l1_tag_expansion_is_deterministic_and_root_bound() {
-        let tag = commitment().l1_tag_bytes();
+        let tag = commitment().l1_tag_bytes(ch());
         assert_eq!(tag.len(), PALW_BLOCK_COMMITMENT_L1_TAG_BYTES);
-        assert_eq!(tag, commitment().l1_tag_bytes());
+        assert_eq!(tag, commitment().l1_tag_bytes(ch()));
         let mut c = commitment();
         c.trace_root = Hash64::from_u64_word(99);
-        assert_ne!(tag, c.l1_tag_bytes());
+        assert_ne!(tag, c.l1_tag_bytes(ch()));
         assert_ne!(tag[0..64], tag[64..128]);
         assert_ne!(tag[64..128], tag[128..192]);
+    }
+
+    /// ADR-0038 blocker 3, pinned: **the ticket costs one inference per attempt.**
+    ///
+    /// The defect this replaces: the tag derived from payload fields only, none of which
+    /// depends on the nonce, while the Layer-0 finalizer mixes the nonce separately. One
+    /// inference therefore bought the entire nonce space — a hash puzzle with a setup cost —
+    /// and sampling could not see it, because a genuine `trace_root` with no declared attempt
+    /// has nothing to contradict.
+    ///
+    /// Each assertion below is one way the old construction leaked. If any of them regresses,
+    /// the grind is back.
+    #[test]
+    fn ticket_binds_the_exact_attempt() {
+        let c = commitment();
+        let pph = Hash64::from_u64_word(10);
+        let at = |ts, nonce| c.challenge_for(NET, pph, ts, nonce);
+        let base = at(1_000, 42);
+
+        // The nonce — the binding whose absence WAS the grind.
+        assert_ne!(base, at(1_000, 43), "a new nonce must be a new challenge");
+        assert_ne!(c.l1_tag_bytes(base), c.l1_tag_bytes(at(1_000, 43)), "...and therefore a new tag");
+        // Timestamp, header, network: no replay across attempts or chains.
+        assert_ne!(base, at(1_001, 42));
+        assert_ne!(base, c.challenge_for(NET, Hash64::from_u64_word(11), 1_000, 42));
+        assert_ne!(base, c.challenge_for(b"other-net", pph, 1_000, 42));
+        // Class and executor ride the challenge via `challenge_for`, so one trace cannot be
+        // re-mined in another difficulty domain or under another bond.
+        let mut other_class = c.clone();
+        other_class.execution_class_id = Hash64::from_u64_word(99);
+        assert_ne!(base, other_class.challenge_for(NET, pph, 1_000, 42), "class must ride the challenge");
+        let mut other_bond = c.clone();
+        other_bond.executor_bond_outpoint = TransactionOutpoint::new(Hash64::from_u64_word(99), 0);
+        assert_ne!(base, other_bond.challenge_for(NET, pph, 1_000, 42), "executor must ride the challenge");
+
+        // Determinism: one attempt, one tag — a verifier recomputing it lands byte-identically.
+        assert_eq!(c.l1_tag_bytes(base), c.l1_tag_bytes(at(1_000, 42)));
     }
 
     /// The signing digest binds the exact ticket attempt: pre_pow_hash, timestamp and nonce
