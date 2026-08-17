@@ -1,52 +1,54 @@
 //! ADR-0038 Decision D: per-`ExecutionClass` difficulty state.
 //!
-//! `palw_pwu` needs two factors: the class's normative per-inference cost, frozen at registration,
-//! and the class's DAA **target**, which is not frozen — it is what the per-class retarget moves.
-//! This store is where the second one lives.
+//! This store holds a class's **remembered** facts: when it last had a commitment credited, and its
+//! status in the ADR-0028 ladder.
 //!
-//! # Reads must be chain-scoped, and this store is not
+//! # The DAA target is NOT here, and that is the design
 //!
-//! A store keyed by class id holds ONE value: whatever the virtual chain last wrote. Reading it
-//! from a context that is evaluating a different chain is the shape of the 2026-08-17 audit's
-//! blocker 6(b) — a validity answer that depends on where this node's virtual tip happens to
-//! point. So the store is deliberately NOT read directly by anything that weighs blocks: callers
-//! build a [`PalwClassStateView`] for the chain point they are evaluating, exactly as bond
-//! consumers build an `ActiveBondView`, and the view is what the resolver reads.
+//! Schema 2 carried `target`, `retargeted_at_daa` and `observed_blocks`. Nothing ever wrote them —
+//! the store's only insert site rewrites `last_credited_daa` on an already-existing row — and
+//! nothing outside this file's own tests ever read `target`. Keeping them would have handed the
+//! ADR-0039 W4′ weight wiring a ready-to-use, SINK-RELATIVE answer to a question that must be
+//! chain-scoped, and a plausible wrong answer is worse than a missing one.
+//!
+//! A store keyed by class id holds ONE value: whatever the virtual chain last wrote. A block's
+//! weight derived from it depends on where THIS node's virtual tip happens to point — the 2026-08-17
+//! audit's blocker 6(b), and the same defect that had to be removed from the audit-bond spend gate
+//! and from the class credit mark. The target's one legal source is a fold over the BLOCK'S OWN
+//! selected-parent chain (`palw_class_daa::fold_class_target_v1`). Removing the fields makes that
+//! structural instead of a comment asking for it: there is no target here to read by mistake.
+//!
+//! # Reads must still be chain-scoped
+//!
+//! The same argument applies to what remains. `last_credited_daa` gates a mint and `status` is the
+//! emergency stop, so callers build a [`PalwClassStateView`] for the chain point they are
+//! evaluating, exactly as bond consumers build an `ActiveBondView`.
 //!
 //! # Absent is not zero
 //!
 //! [`PALW_CLASS_STATE_SCHEMA_VERSION`] exists for the reason the carriage store's does: a row the
 //! iterator cannot decode is dropped silently, so a layout change would make every class read as
-//! *absent* rather than as broken. A class whose target reads as absent is a class whose blocks
-//! weigh nothing — a wrong answer that looks like a valid one. Bump this on any layout change so
-//! the rows are discarded and re-derived instead of read as missing.
+//! *absent* rather than as broken. Absent must therefore fail closed at every consumer — which is
+//! why [`PalwClassStateView::is_frozen`] answers `true` for a class it does not hold. Bump this on
+//! any layout change so the rows are discarded and re-derived instead of read as missing.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DirectDbWriter, StoreError, StoreResult, DB};
+use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
-use kaspa_utils::mem_size::MemSizeEstimator;
 use kaspa_hashes::Hash64;
+use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 
 /// Bump on ANY change to [`PalwClassStateRecord`]'s layout. See the module docs: without it a
 /// layout change reads as an empty store, which is indistinguishable from "no class has a target".
-pub const PALW_CLASS_STATE_SCHEMA_VERSION: u32 = 2;
+pub const PALW_CLASS_STATE_SCHEMA_VERSION: u32 = 3;
 
 /// One class's difficulty state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PalwClassStateRecord {
-    /// The class's lottery target (bigger = easier), the first factor of
-    /// `palw_pwu::palw_pwu_v1`.
-    pub target: u128,
-    /// DAA of the retarget that produced `target` — carried so a view can tell a stale row from a
-    /// current one rather than assuming.
-    pub retargeted_at_daa: u64,
-    /// Blocks this class produced in the window ending at `retargeted_at_daa`, kept so the next
-    /// retarget is a function of recorded facts rather than of a re-walk.
-    pub observed_blocks: u64,
     /// DAA at which this class last had a commitment CREDITED, or `None` if never.
     ///
     /// ADR-0033 §4e bounds an attacker's pre-unbonding gain as
@@ -135,8 +137,7 @@ impl DbPalwClassStateStore {
     }
 
     /// Every stored `(class_id, record)`, for building a [`PalwClassStateView`].
-    pub fn iterator(&self) -> impl Iterator<Item = Result<(Hash64, Arc<PalwClassStateRecord>), Box<dyn std::error::Error>>> + '_
-    {
+    pub fn iterator(&self) -> impl Iterator<Item = Result<(Hash64, Arc<PalwClassStateRecord>), Box<dyn std::error::Error>>> + '_ {
         self.access.iterator().map(|res| {
             res.map(|(key, record)| {
                 let mut bytes = [0u8; 64];
@@ -172,15 +173,6 @@ pub struct PalwClassStateView {
 impl PalwClassStateView {
     pub fn from_records(records: impl IntoIterator<Item = (Hash64, PalwClassStateRecord)>) -> Self {
         Self { classes: records.into_iter().collect() }
-    }
-
-    /// The class's target at this chain point, or `None` when this view does not hold the class.
-    ///
-    /// `None` means "this view cannot answer", never "the target is zero" — the resolver turns it
-    /// into a refusal (`palw_facts::PalwFactsError::Unresolved`) rather than a weightless block,
-    /// which is what keeps a pruned node's disagreement visible instead of plausible.
-    pub fn target(&self, class_id: &Hash64) -> Option<u128> {
-        self.classes.get(class_id).map(|r| r.target)
     }
 
     /// The class's ladder status at this chain point, or `None` when this view cannot answer —
@@ -251,36 +243,42 @@ mod tests {
     fn h(seed: u64) -> Hash64 {
         Hash64::from_u64_word(seed)
     }
-    fn rec(target: u128) -> PalwClassStateRecord {
-        PalwClassStateRecord {
-            target,
-            retargeted_at_daa: 1_000,
-            observed_blocks: 42,
-            last_credited_daa: None,
-            status_discriminant: 2, // Active
-        }
+    fn rec() -> PalwClassStateRecord {
+        PalwClassStateRecord { last_credited_daa: None, status_discriminant: 2 } // Active
+    }
+    fn credited(daa: u64) -> PalwClassStateRecord {
+        PalwClassStateRecord { last_credited_daa: Some(daa), status_discriminant: 2 }
     }
 
-    /// A view answers only for the classes it holds, and says so rather than inventing a target.
-    /// A zero would be a valid-looking wrong answer: `palw_pwu` reads a small target as HARD, so
-    /// an invented zero would make an unknown class the heaviest on the network.
+    /// A view answers only for the classes it holds, and every unanswered question fails CLOSED.
+    ///
+    /// This test used to be about `target`, which this store no longer carries — the target is a fold
+    /// over the block's own chain, not a row (see the module header). What remains has the same
+    /// hazard shape and the opposite safe direction: an absent class must read as FROZEN and as
+    /// not-yet-creditable, never as Active with no credit history.
     #[test]
-    fn an_unheld_class_is_unanswerable_not_zero() {
-        let view = PalwClassStateView::from_records([(h(1), rec(500))]);
-        assert_eq!(view.target(&h(1)), Some(500));
-        assert_eq!(view.target(&h(2)), None, "an absent class must be unanswerable");
+    fn an_unheld_class_is_unanswerable_and_fails_closed() {
+        let view = PalwClassStateView::from_records([(h(1), credited(900))]);
+        assert_eq!(view.last_credited_daa(&h(1)), Some(900));
+        assert_eq!(view.status(&h(1)), Some(kaspa_consensus_core::palw_dispute::PalwClassStatusV3::Active));
+        assert!(!view.is_frozen(&h(1)));
+
+        assert_eq!(view.last_credited_daa(&h(2)), None, "an absent class must be unanswerable");
+        assert_eq!(view.status(&h(2)), None);
+        assert!(view.is_frozen(&h(2)), "an absent class is frozen — the fail-closed direction");
         assert!(!view.is_empty());
         assert_eq!(view.len(), 1);
-        // The empty view answers nothing at all, rather than answering zero for everything.
-        assert_eq!(PalwClassStateView::default().target(&h(1)), None);
+        // The empty view freezes everything rather than admitting everything.
+        assert!(PalwClassStateView::default().is_frozen(&h(1)));
+        assert_eq!(PalwClassStateView::default().status(&h(1)), None);
     }
 
     /// The view is order-free: two builders that saw the same records in different orders produce
     /// the same view, so two nodes cannot disagree about a class's target because of sweep order.
     #[test]
     fn the_view_is_insertion_order_free() {
-        let forward = PalwClassStateView::from_records([(h(1), rec(500)), (h(2), rec(900)), (h(3), rec(7))]);
-        let backward = PalwClassStateView::from_records([(h(3), rec(7)), (h(2), rec(900)), (h(1), rec(500))]);
+        let forward = PalwClassStateView::from_records([(h(1), credited(500)), (h(2), credited(900)), (h(3), rec())]);
+        let backward = PalwClassStateView::from_records([(h(3), rec()), (h(2), credited(900)), (h(1), credited(500))]);
         assert_eq!(forward, backward);
     }
 
@@ -288,7 +286,7 @@ mod tests {
     /// bump it is a failing test rather than a silently empty class set.
     #[test]
     fn the_schema_version_is_pinned() {
-        assert_eq!(PALW_CLASS_STATE_SCHEMA_VERSION, 2);
+        assert_eq!(PALW_CLASS_STATE_SCHEMA_VERSION, 3);
     }
 
     /// The emergency stop fails CLOSED, in both directions a node can be ignorant.
@@ -300,7 +298,7 @@ mod tests {
     #[test]
     fn an_unanswerable_class_reads_as_frozen() {
         use kaspa_consensus_core::palw_dispute::PalwClassStatusV3 as S;
-        let active = PalwClassStateView::from_records([(h(1), rec(500))]);
+        let active = PalwClassStateView::from_records([(h(1), rec())]);
         assert_eq!(active.status(&h(1)), Some(S::Active));
         assert!(!active.is_frozen(&h(1)), "an Active class is not frozen");
 
@@ -311,7 +309,7 @@ mod tests {
         // Every non-Active status is frozen for panel/mint purposes, including the ones that are
         // not literally `Frozen`: Probation is not a partial pass (ADR-0028's six-path gate).
         for (discriminant, status) in [(0u8, S::Inactive), (1, S::Probation), (3, S::Frozen), (4, S::Deprecated)] {
-            let mut r = rec(500);
+            let mut r = rec();
             r.status_discriminant = discriminant;
             let view = PalwClassStateView::from_records([(h(1), r)]);
             assert_eq!(view.status(&h(1)), Some(status));
@@ -320,7 +318,7 @@ mod tests {
 
         // An unknown discriminant is unanswerable, NOT defaulted to Active — defaulting would let a
         // forward-incompatible row re-open a frozen class.
-        let mut unknown = rec(500);
+        let mut unknown = rec();
         unknown.status_discriminant = 200;
         let view = PalwClassStateView::from_records([(h(1), unknown)]);
         assert_eq!(view.status(&h(1)), None);
@@ -332,11 +330,11 @@ mod tests {
     #[test]
     fn the_credit_interval_is_measured_against_remembered_state() {
         // Never credited: the first credit has no predecessor to be too close to.
-        let fresh = PalwClassStateView::from_records([(h(1), rec(500))]);
+        let fresh = PalwClassStateView::from_records([(h(1), rec())]);
         assert!(fresh.credit_interval_elapsed(&h(1), 0, 100));
         assert_eq!(fresh.last_credited_daa(&h(1)), None);
 
-        let mut credited = rec(500);
+        let mut credited = rec();
         credited.last_credited_daa = Some(1_000);
         let view = PalwClassStateView::from_records([(h(1), credited)]);
         assert!(!view.credit_interval_elapsed(&h(1), 1_099, 100), "one short of the interval is too soon");

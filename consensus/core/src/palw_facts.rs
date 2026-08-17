@@ -126,7 +126,13 @@ pub fn weight_facts_v1(resolved: &PalwResolvedBlockFactsV1, w_challenge: u64) ->
 ///
 /// **Caller obligation (ADR-0039 1a).** `pwu_per_inference` may only be resolved from a
 /// registration whose catalog coverage is complete — one for which
-/// `PalwClassRegistrationV1::catalog_coverage_certificate_v1` succeeds. This signature takes a
+/// `PalwClassRegistrationV1::catalog_coverage_certificate_v1` succeeds.
+///
+/// **And `class_target` has exactly one legal source: a fold over the BLOCK'S OWN selected-parent
+/// chain** ([`crate::palw_class_daa::fold_class_target_v1`]). Never a store row: a store keyed by
+/// class id holds whatever the virtual chain last wrote, so a weight derived from it depends on where
+/// the reading node's tip points. `DbPalwClassStateStore` no longer carries a target at all, which is
+/// what makes that structural rather than a rule to remember — see its module header. This signature takes a
 /// bare `Option<u64>` on purpose (threading a registration through a seam whose only live callers
 /// pass `None` would add a parameter with no consumer, which is the very defect the coverage rule
 /// was fixing), so the obligation is stated rather than typed. Today it holds upstream: a node
