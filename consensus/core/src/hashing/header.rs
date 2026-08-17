@@ -100,11 +100,31 @@ fn write_header_preimage<H: HasherBase>(
     //     is a function of the winning nonce (ADR-0038: it cannot sit under the
     //     merkle root, and it cannot precede the grind), so every PoW-path
     //     digest passes `Exclude`.
-    // Length-prefixed so empty-vs-absent and boundary shifts are distinct.
-    // PALW soak networks adopt this via re-genesis (their genesis carries
-    // `pow_algo_id = 4`, so their old genesis hashes do not survive — recorded
-    // in ADR-0038; hash-algo networks are untouched).
-    if palw_rule == PalwCommitmentDigestRule::Include && crate::pow_layer0::is_palw_algo_id(header.pow_algo_id) {
+    //   * by EMPTINESS — an empty commitment contributes NOTHING, so a PALW
+    //     header that carries none has a preimage byte-identical to the
+    //     pre-ADR-0038 protocol. Emptiness is a function of committed bytes, so
+    //     the gate stays deterministic for every node.
+    // Length-prefixed so boundary shifts between adjacent fields are distinct.
+    //
+    // The emptiness gate is not cosmetic — it is half of the malleability fix
+    // (re-audit 2026-08-17, blocker 4). The other half is in
+    // `pow_layer0::check_palw_commitment_shape`, which currently refuses a
+    // non-empty commitment on ANY header: while no PoW-path digest consumes the
+    // field, identity-visible + PoW-invisible + content-unchecked compose into
+    // "one PoW solution, unlimited distinct valid block identities". The two
+    // halves must be relaxed together, behind one fence, when the ticket is
+    // rebound to the committed root.
+    //
+    // Keeping empty out of the digest also means this field did NOT silently
+    // hard-fork the running PALW networks. The claim it originally shipped with
+    // — that PALW soak nets re-genesis anyway because "their genesis carries
+    // `pow_algo_id = 4`" — is false: `GenesisBlock` has no `pow_algo_id` field
+    // at all, so genesis hashes never moved while every post-genesis PALW header
+    // identity did. That is a mid-chain fork, not a re-genesis.
+    if palw_rule == PalwCommitmentDigestRule::Include
+        && crate::pow_layer0::is_palw_algo_id(header.pow_algo_id)
+        && !header.palw_commitment.is_empty()
+    {
         hasher.write_len(header.palw_commitment.len());
         hasher.update(&header.palw_commitment);
     }
@@ -262,12 +282,19 @@ mod tests {
 
     /// MISAKA ADR-0038: the palw_commitment digest rules — the load-bearing properties of
     /// the layer inversion's header change, pinned:
-    ///   1. on a PALW header the commitment moves the block identity;
-    ///   2. on a PALW header it NEVER moves any PoW-path digest (post-PoW field);
+    ///   1. on a PALW header a NON-EMPTY commitment moves the block identity, and it NEVER
+    ///      moves any PoW-path digest (it is a post-PoW field) — which is exactly why
+    ///      validation must refuse the non-empty case until a PoW digest binds it;
+    ///   2. an EMPTY commitment contributes nothing to any digest, so a PALW header without
+    ///      one hashes byte-identically to the pre-ADR-0038 protocol (no mid-chain fork);
     ///   3. on a non-PALW header it is hash-invisible (every existing hash-algo network's
     ///      block identity and genesis hash are unchanged — validation separately refuses
-    ///      the non-empty case as malleability);
-    ///   4. the length prefix separates empty-carried from distinct commitments.
+    ///      the non-empty case as malleability).
+    ///
+    /// Properties 1 and 3 are the SAME hazard from two directions, and the earlier version of
+    /// this test asserted 1 as a feature while `check_palw_commitment_shape` permitted
+    /// non-empty PALW commitments — which is the malleability itself. See
+    /// [`palw_commitment_malleability_is_closed`] for the composed property.
     #[test]
     fn palw_commitment_digest_rules() {
         let mk = |algo: u8| {
@@ -316,32 +343,88 @@ mod tests {
         assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100]).is_err());
         assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[]).is_ok());
 
-        // (4) Ollama-PALW (algo 5) hashes it too, and empty-carried is length-prefixed so a
-        // PALW header WITH an empty commitment still differs from... itself only via bytes —
-        // i.e. empty is a committed state, not an absent one.
+        // (4) Ollama-PALW (algo 5) hashes it too.
         let ollama = mk(crate::pow_layer0::POW_ALGO_ID_PALW_OLLAMA);
         assert_ne!(ollama.clone().with_palw_commitment(vec![0x01]).hash, ollama.hash);
 
-        // Shape rule: PALW side accepts empty and the cap, refuses above it.
+        // (2) An EMPTY commitment is hash-invisible on a PALW header too, so a PALW header
+        // that carries none is byte-identical to the pre-ADR-0038 protocol. This is what keeps
+        // the field from having silently hard-forked the running PALW soak networks.
+        assert_eq!(palw.clone().with_palw_commitment(Vec::new()).hash, palw.hash, "empty must not move PALW identity");
+        assert_eq!(ollama.clone().with_palw_commitment(Vec::new()).hash, ollama.hash, "empty must not move algo-5 identity");
+
+        // Shape rule: PALW side accepts ONLY empty while no PoW digest binds the field.
         assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[]).is_ok());
         assert!(
-            crate::pow_layer0::check_palw_commitment_shape(
-                crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
-                &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES]
-            )
-            .is_ok()
+            crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[0xAA; 100]).is_err(),
+            "a PALW commitment nothing in the PoW path binds is malleability — refuse it"
         );
-        assert!(
+        // Oversize still reports the cap it broke, not the binding rule: different operator fix.
+        assert!(matches!(
             crate::pow_layer0::check_palw_commitment_shape(
                 crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
                 &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1]
-            )
-            .is_err()
+            ),
+            Err(crate::pow_layer0::PowLayer0Error::PalwCommitmentTooLong { .. })
+        ));
+    }
+
+    /// MISAKA ADR-0038 / re-audit 2026-08-17 blocker 4 — the composed property, pinned so it
+    /// cannot regress: **one PoW solution may not mint two valid block identities.**
+    ///
+    /// The defect was never in one function. `hashing::header` (correctly) puts the commitment
+    /// in the identity digest and (correctly) keeps it out of every PoW digest; `pow_layer0`
+    /// (incorrectly) permitted any content there. Composed, an attacker takes any valid PALW
+    /// block off the wire, swaps `palw_commitment` for arbitrary bytes, and holds a second
+    /// valid block — same PoW, new identity — repeatable without bound.
+    ///
+    /// This test asserts the composition directly: the two mutated headers really do have
+    /// different identities and the SAME PoW digests (so the hazard is real and would return
+    /// the moment the shape rule relaxes), and the shape rule refuses both, which is what makes
+    /// them unreachable. Relaxing `check_palw_commitment_shape` without first binding the
+    /// commitment into a PoW-path digest breaks this test — by design.
+    #[test]
+    fn palw_commitment_malleability_is_closed() {
+        let palw = Header::new_finalized(
+            crate::constants::BLOCK_VERSION,
+            vec![vec![1.into()]].try_into().unwrap(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            234,
+            23,
+            567,
+            crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
+            0,
+            0.into(),
+            0,
+            Default::default(),
         );
+        let a = palw.clone().with_palw_commitment(vec![0xAA; 100]);
+        let b = palw.clone().with_palw_commitment(vec![0xBB; 100]);
+
+        // The hazard, stated: distinct identities, identical PoW.
+        assert_ne!(a.hash, b.hash, "distinct commitments => distinct identities");
+        assert_eq!(pre_pow_hash_64(&a), pre_pow_hash_64(&b), "...over one and the same PoW solution");
+
+        // The closure: neither header can exist, because the shape rule refuses both.
+        for h in [&a, &b] {
+            assert!(
+                crate::pow_layer0::check_palw_commitment_shape(h.pow_algo_id, &h.palw_commitment).is_err(),
+                "an unbound PALW commitment must be refused at the door"
+            );
+        }
+        // And the honest header — the only reachable shape — is unaffected.
+        assert!(crate::pow_layer0::check_palw_commitment_shape(palw.pow_algo_id, &palw.palw_commitment).is_ok());
     }
 
     /// MISAKA ADR-0038: a real PBC1 payload rides the header end-to-end — encode, carry,
     /// decode, and the header identity binds the exact bytes.
+    ///
+    /// The wire/型 layer is complete and stays complete; what is gated is *admission*. This
+    /// test therefore keeps asserting the round-trip and the size fit, and asserts that the
+    /// shape rule still refuses the payload today — so the day the ticket is rebound to the
+    /// committed root, only that one assertion flips.
     #[test]
     fn palw_commitment_carries_pbc1_roundtrip() {
         use crate::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
@@ -356,7 +439,14 @@ mod tests {
         };
         let bytes = commitment.encode();
         assert!(bytes.len() <= crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES, "PBC1 must fit the header cap");
-        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &bytes).is_ok());
+        // Admission is gated until a PoW-path digest binds the commitment; the carriage is not.
+        assert!(
+            matches!(
+                crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &bytes),
+                Err(crate::pow_layer0::PowLayer0Error::PalwCommitmentNotYetBound { .. })
+            ),
+            "a well-formed PBC1 is still inadmissible while nothing in the PoW path binds it"
+        );
         let header = Header::new_finalized(
             crate::constants::BLOCK_VERSION,
             vec![vec![1.into()]].try_into().unwrap(),

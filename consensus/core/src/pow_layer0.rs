@@ -344,6 +344,18 @@ pub enum PowLayer0Error {
     /// MISAKA ADR-0038: a PALW header's `palw_commitment` exceeds the wire cap.
     #[error("palw_commitment is {got} bytes, above the cap {cap}")]
     PalwCommitmentTooLong { got: usize, cap: usize },
+    /// MISAKA ADR-0038: a PALW header carries a `palw_commitment` while **nothing in the PoW
+    /// path binds it** — the same malleability as
+    /// [`Self::NonPalwHeaderCarriesPalwCommitment`], reached from the other side.
+    ///
+    /// On a PALW header the commitment is *identity*-visible and *PoW*-invisible (it is a
+    /// function of the winning nonce, so it cannot sit in the pre-PoW preimage without
+    /// circularity). Until some PoW-path digest consumes it, those two facts compose into:
+    /// one PoW solution mints unlimited distinct valid block identities. The field is
+    /// therefore refused non-empty until the binding exists — see
+    /// [`check_palw_commitment_shape`] for the exact precondition to relax this.
+    #[error("PALW header (algo_id = {algo_id}) carries {got} palw_commitment bytes, but no PoW-path digest binds them yet; must be empty")]
+    PalwCommitmentNotYetBound { algo_id: u8, got: usize },
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
@@ -365,9 +377,39 @@ pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 /// * non-PALW `algo_id` → the field MUST be empty. It is hash-invisible there, and a
 ///   hash-invisible non-empty field is block-hash malleability (two serialized blocks, one
 ///   identity) — a relay/dedup poison, refused at the door.
-/// * PALW `algo_id` → any length up to [`PALW_COMMITMENT_MAX_BYTES`], **including empty**:
-///   land-stage PALW soak headers carry no commitment yet, and requiring one is the
-///   ADR-0038 activation decision (`Params`-gated, Stage-1 wiring), not a shape rule.
+/// * PALW `algo_id` → the field MUST **also** be empty, for now. See below.
+///
+/// # Why the PALW side is empty-only until the PoW binds it
+///
+/// The first draft of this rule allowed any length up to [`PALW_COMMITMENT_MAX_BYTES`] on a
+/// PALW header, reasoning that requiring a commitment is an activation decision rather than a
+/// shape rule. That is true of *requiring* one. It is not true of *permitting* one, and the
+/// permission was the bug (mainnet-readiness re-audit, 2026-08-17, blocker 4):
+///
+/// * `hashing::header` writes the commitment into the **block-identity** digest only, and
+///   passes `Exclude` on every PoW-path digest — correctly, because the commitment is a
+///   function of the winning nonce and cannot enter the pre-PoW preimage without circularity
+///   (the algo-4 seed already consumes `pre_pow_hash`).
+/// * Nothing in `consensus/pow` reads `palw_commitment` — the PoW path still derives its
+///   Layer-1 tag from the inference, not from this field.
+///
+/// Compose those and the field is identity-visible, PoW-invisible and content-unchecked:
+/// **one PoW solution mints unlimited distinct valid block identities**, each a separate DAG
+/// entry. That is the same defect the non-PALW arm above refuses, arrived at from the other
+/// direction, and it was live and unfenced on every PALW network.
+///
+/// Empty-only is a stronger containment than an activation fence would be, and deliberately so:
+/// a fence is a switch somebody can flip before the binding exists, whereas an unrepresentable
+/// state cannot be flipped at all. Honest nodes lose nothing — no mining path populates this
+/// field (its only non-test writers are the p2p and RPC *deserializers*, i.e. untrusted peer
+/// input), so this rule rejects exactly the attack and nothing else.
+///
+/// **Precondition to relax this**: some PoW-path digest must consume the commitment, so that
+/// altering it invalidates the solution. Under ADR-0038 Decision A that is the ticket rebinding
+/// — the Layer-1 tag must be derived from the committed root rather than re-run inference — at
+/// which point this arm becomes "must decode as PBC1", the digest gate in `hashing::header`
+/// opens with it, and the two land together behind one activation fence. Relaxing it before
+/// then re-opens the malleability.
 #[inline]
 pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8]) -> Result<(), PowLayer0Error> {
     if !is_palw_algo_id(algo_id) {
@@ -376,8 +418,13 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8]) -> Resul
         }
         return Ok(());
     }
+    // The cap is checked first so an oversized payload reports the cap it broke rather than the
+    // (currently stricter) binding rule — the two errors mean different things to an operator.
     if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
         return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
+    }
+    if !palw_commitment.is_empty() {
+        return Err(PowLayer0Error::PalwCommitmentNotYetBound { algo_id, got: palw_commitment.len() });
     }
     Ok(())
 }
