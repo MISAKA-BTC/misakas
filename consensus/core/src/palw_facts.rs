@@ -338,7 +338,26 @@ pub struct PalwResolverInputV1<'a> {
     pub panel: &'a [crate::palw_job_panel::PalwPanelSeatV3],
     /// This block's own facts.
     pub block_hash: Hash64,
+    /// The root the block ANNOUNCED — `PalwCommitmentCarriageV1::committed_root`. For a composite
+    /// class that is the composite execution root; for a bare-v2 class it IS the logits trace root.
+    ///
+    /// Distinct from [`Self::logits_trace_root`], and the two used to be one field. That conflation
+    /// was wrong for every composite class, in one direction or the other and unavoidably: the
+    /// conviction and equivocation arms compare it against `full_logits_trace_root` while the
+    /// bisection arm compares it against a ladder `Open`'s `committed_root`, and for form 1 those are
+    /// different values under different domains (`execution_commitment_root_v1` over four inputs
+    /// versus the logits leg alone). So one of the two consumers never matched, and which one
+    /// depended on what the caller chose to put in the field: either no conviction could ever count
+    /// against a composite block, or no dispute could ever open on one. Nothing failed because both
+    /// values coincide for bare-v2 — the case every fixture used.
+    ///
+    /// The crediting walk has always kept the two apart (`compute_palw_credit_outputs` reads
+    /// `binding.full_logits_trace_root` when a binding is present and `committed_root` when it is
+    /// not); this input now does the same.
     pub commitment_root: Hash64,
+    /// The block's execution's LOGITS leg — the value an attestation signs and a step refutation's
+    /// binding carries. Equal to [`Self::commitment_root`] for a bare-v2 class.
+    pub logits_trace_root: Hash64,
     pub execution_class_id: Hash64,
     /// DAA at which this block's commitment was accepted, and the evaluating chain's own DAA.
     pub accepted_daa: u64,
@@ -395,7 +414,7 @@ where
             PALW_CARRIAGE_KIND_STEP_CONVICTION => {
                 if *accepted_daa <= window_close
                     && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
-                    && c.refutation.binding.full_logits_trace_root == input.commitment_root
+                    && c.refutation.binding.full_logits_trace_root == input.logits_trace_root
                     && let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa)
                     && adjudicate_step_conviction_carriage_v1(
                         &c,
@@ -413,8 +432,8 @@ where
             PALW_CARRIAGE_KIND_EQUIVOCATION => {
                 if *accepted_daa <= window_close
                     && let Ok(PalwCarriageV1::Equivocation(e)) = decode_palw_stage1_body(*kind, body)
-                    && (e.certificate.attestation_a.full_logits_trace_root == input.commitment_root
-                        || e.certificate.attestation_b.full_logits_trace_root == input.commitment_root)
+                    && (e.certificate.attestation_a.full_logits_trace_root == input.logits_trace_root
+                        || e.certificate.attestation_b.full_logits_trace_root == input.logits_trace_root)
                     && let Some(accused) = input.bonds.active_bond_at(&e.accused_bond_outpoint, input.pov_daa)
                     && adjudicate_equivocation_carriage_v1(&e, accused, input.pov_daa, input.network_id, &verify_signature).is_ok()
                 {
@@ -751,7 +770,12 @@ mod resolver_tests {
             step_weights: weights,
             panel,
             block_hash: h(0xB0),
+            // DELIBERATELY DIFFERENT values. Every fixture used to give the announced root and the
+            // logits leg the same value — the bare-v2 coincidence — which is exactly why the
+            // conflated field looked correct for both consumers. A composite class has two roots and
+            // the tests must too.
             commitment_root: h(0xC0),
+            logits_trace_root: h(0x1A),
             execution_class_id: h(0xC1),
             accepted_daa: 1_000,
             pov_daa: pov,
@@ -962,7 +986,9 @@ mod resolver_tests {
             accused_bond_outpoint: op(0xB1),
             certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
                 version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
-                attestation_a: att(h(0xC0)),
+                // The LOGITS leg of this block's execution, which is what an attestation signs — not the
+                // announced composite root. The two are distinct in the fixture on purpose.
+                attestation_a: att(h(0x1A)),
                 attestation_b: att(h(0x02)),
                 job_context: ctx,
             },
@@ -1035,6 +1061,102 @@ mod resolver_tests {
     }
 
     /// A conviction accepted before the window closes voids the block; one after it does not.
+    /// **The announced root and the logits leg are two different facts, and each consumer must read
+    /// its own.**
+    ///
+    /// They were ONE field. The conviction and equivocation arms compare it against an attestation's
+    /// `full_logits_trace_root`; the bisection arm compares it against a ladder `Open`'s
+    /// `committed_root`, which for a composite class is `execution_commitment_root_v1` — four inputs
+    /// under a different domain than the logits leg. So one of the two consumers could never match,
+    /// and which one depended on what the caller put in the field: either no conviction could ever
+    /// count against a composite block, or no dispute could ever open on one.
+    ///
+    /// Nothing failed because the two coincide for bare-v2, which is what every fixture used. This
+    /// test gives them distinct values and pins that each arm follows the right one.
+    #[test]
+    fn a_conviction_reads_the_logits_leg_while_a_ladder_reads_the_announced_root() {
+        let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
+        let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
+            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+            executor_id: h(0xE1),
+            job_context_hash: ctx.context_hash(),
+            full_logits_trace_root: root,
+            committed_root: root,
+            bond_outpoint: op(0xB1),
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let equivocation = |root: Hash64| {
+            let e = crate::palw_carriage::PalwEquivocationCarriageV1 {
+                version: PALW_CARRIAGE_VERSION_V1,
+                accused_bond_outpoint: op(0xB1),
+                certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
+                    version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+                    attestation_a: att(root),
+                    attestation_b: att(h(0x02)),
+                    job_context: ctx.clone(),
+                },
+            };
+            (crate::palw_carriage::PALW_CARRIAGE_KIND_EQUIVOCATION, 1_400u64, body(&PalwCarriageV1::Equivocation(e)))
+        };
+        let panel = vec![seat(1), seat(2)];
+        let base = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
+
+        // Against the LOGITS leg it convicts…
+        let mut with_logits = base.clone();
+        with_logits.push(equivocation(h(0x1A)));
+        assert_eq!(
+            resolve_block_facts_v1(&input(&with_logits, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .convicted_before_close,
+            Some(true)
+        );
+        // …and against the ANNOUNCED root it does not. Reading the wrong field here is a conviction
+        // that silently never counts, which is the fail-open direction.
+        let mut with_announced = base.clone();
+        with_announced.push(equivocation(h(0xC0)));
+        assert_eq!(
+            resolve_block_facts_v1(&input(&with_announced, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .convicted_before_close,
+            Some(false),
+            "an attestation over another execution's root must not convict this block"
+        );
+
+        // Symmetrically for the ladder: an `Open` naming the announced root opens the dispute, and
+        // one naming the logits leg does not.
+        let open = |root: Hash64| {
+            let m = crate::palw_carriage::PalwBisectMoveCarriageV1 {
+                version: PALW_CARRIAGE_VERSION_V1,
+                // A BONDED challenger: an Open from an unbonded record opens nothing, which is a
+                // different rule and must not be what this test is measuring.
+                challenger_bond_outpoint: op(0xC9),
+                body: PalwBisectMoveBodyV1::Open {
+                    job_context_hash: ctx.context_hash(),
+                    committed_root: root,
+                    challenger_id: h(0xC2),
+                    responder_id: h(0xE1),
+                    space: crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                    space_size: 16,
+                },
+            };
+            (crate::palw_carriage::PALW_CARRIAGE_KIND_BISECT_MOVE, 1_100u64, body(&PalwCarriageV1::BisectMove(m)))
+        };
+        let mut ladder_on_announced = base.clone();
+        ladder_on_announced.push(open(h(0xC0)));
+        assert!(
+            resolve_block_facts_v1(&input(&ladder_on_announced, &panel, 1_200, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .dispute_open_or_unadjudicable
+                .unwrap_or(false),
+            "an Open naming the announced root opens this block's dispute"
+        );
+        let mut ladder_on_logits = base;
+        ladder_on_logits.push(open(h(0x1A)));
+        assert!(
+            !resolve_block_facts_v1(&input(&ladder_on_logits, &panel, 1_200, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .dispute_open_or_unadjudicable
+                .unwrap_or(true),
+            "an Open naming another root must not pin this block at Provisional"
+        );
+    }
+
     /// The comparison is against chain DAA, so every node agrees about which side it fell.
     #[test]
     fn a_conviction_counts_only_before_the_window_closes() {
@@ -1055,7 +1177,9 @@ mod resolver_tests {
                 accused_bond_outpoint: op(0xB1),
                 certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
                     version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
-                    attestation_a: att(h(0xC0)), // this block's commitment root
+                    // The LOGITS leg of this block's execution, which is what an attestation signs — not the
+                    // announced composite root. The two are distinct in the fixture on purpose.
+                    attestation_a: att(h(0x1A)), // this block's commitment root
                     attestation_b: att(h(0x02)),
                     job_context: ctx,
                 },
