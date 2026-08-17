@@ -875,6 +875,45 @@ mod resolver_tests {
         // deadline that charges the challenger once the opening has landed). Maturing the block
         // instead — which is what the old code did — trades a liveness cost for a soundness hole,
         // and that is the wrong direction.
+        //
+        // A terminal-opening move was designed and REJECTED (2026-08-17) on four independent
+        // grounds. Two of them were defects in shipped code and are now fixed; two are prerequisites
+        // that remain, and adding the move before they are settled converts this fail-CLOSED liveness
+        // cost into a fail-OPEN soundness hole. Do not add it first.
+        //
+        // FIXED: the ladder's window budget charged one window per rung when a rung costs two, so a
+        // conviction would have landed past `w_challenge` and been discarded (see
+        // `palw_schedule::affordable_ladder_rounds_v1`); and this input's `commitment_root` was read
+        // as both the announced root and the logits leg, so the terminal could not have been tied to
+        // either (see the field's own doc).
+        //
+        // REMAINING, and each voids the move on its own:
+        //
+        // 1. `mid_state` IS NEVER CHECKED, so the rungs bind nothing. `apply_disclosure` pushes it
+        //    into `PalwBisectLadderV1::disclosures` and NOTHING in the tree reads it — verified by
+        //    grep. The field's own doc says "the terminal check's anchor pair comes from here", and
+        //    that check does not exist. Consequence, with a terminal move added: a guilty responder
+        //    discloses junk at every rung, the honest challenger's agree-iff-divergence-past-midpoint
+        //    strategy disagrees every time, the interval collapses on an index the RESPONDER steered,
+        //    and it then opens an honest early leaf. The challenger has nothing to convict on, goes
+        //    quiet, and a challenger no-show settles `NoFaultFound` — the fraud is credited and the
+        //    honest challenger's bond is forfeited. Closing it needs a definition of "state
+        //    commitment at index i" for each `PalwBisectSpaceV1`, verified at every disclosure.
+        //
+        // 2. THE LADDER'S OUTCOME CANNOT BE A MATURITY TRIGGER while the conviction it defers to is
+        //    unfileable. The ladder exists for a miner that WITHHELD, so no execution attestation is
+        //    on chain — and `adjudicate_step_conviction_carriage_v1` accepts only that object as its
+        //    authorship half. A terminal that charges the challenger for not filing what it
+        //    structurally cannot file is fail-open by construction. Either give the adjudicator an
+        //    authorship arm that accepts a commitment carriage (whose signature already covers the
+        //    composite root and the bond outpoint), or route the ladder into the same one-step check
+        //    the direct route uses. Until then the correct terminal is `Unadjudicable` — nobody
+        //    slashed, nothing credited — never `Final`.
+        //
+        // Also unresolved and cheaper: `Open` carries `responder_id` only, and a validator key hash
+        // is not unique to a bond, so no ladder outcome can name an executor bond to slash. Adding
+        // `responder_bond_outpoint` to the existing `Open` variant is a wire edit that is cheap only
+        // while every preset carries `palw_credit: None`.
 
         // A ladder over a DIFFERENT commitment is not this block's dispute.
         let elsewhere = PalwBisectMoveBodyV1::Open {

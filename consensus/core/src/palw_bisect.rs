@@ -198,8 +198,20 @@ pub struct PalwBisectLadderV1 {
     round: u32,
     turn: PalwBisectTurnV1,
     last_deadline_daa: u64,
-    /// Disclosed midpoint states, rung-ordered — the terminal check's anchor pair comes from
-    /// here (the states bracketing the final index).
+    /// Disclosed midpoint states, rung-ordered.
+    ///
+    /// **Recorded and never verified, and nothing reads them.** The intent is that a terminal check's
+    /// anchor pair comes from here — the states bracketing the final index — but that check does not
+    /// exist, and `apply_disclosure` accepts any `mid_state` whatsoever: only the MIDPOINT is checked
+    /// against `bisect_midpoint_v1`. So the rungs of this ladder currently bind nothing about the
+    /// execution, and the located index is a function of what the responder chose to disclose.
+    ///
+    /// That is harmless only because no move can convert `Terminal` into a verdict yet. The moment a
+    /// terminal-opening move exists, a guilty responder can disclose junk at every rung to steer the
+    /// interval onto an index it can open honestly, and a challenger no-show then settles in its
+    /// favour. Closing it needs a definition of "state commitment at index i" per
+    /// [`PalwBisectSpaceV1`], checked in `apply_disclosure` — see the prerequisite note in
+    /// `palw_facts`'s `an_open_ladder_is_an_open_dispute`.
     pub disclosures: Vec<(u64, Hash64)>,
 }
 
@@ -441,23 +453,31 @@ mod tests {
                     let mid = ladder.expected_midpoint().unwrap();
                     daa += 10;
                     ladder
-                        .apply_disclosure(&PalwBisectDisclosureV1 {
-                            version: 1,
-                            session_id: ladder.session_id(),
-                            round: ladder.round(),
-                            midpoint: mid,
-                            mid_state: h64((mid % 251) as u8),
-                        }, daa, W_ROUND)
+                        .apply_disclosure(
+                            &PalwBisectDisclosureV1 {
+                                version: 1,
+                                session_id: ladder.session_id(),
+                                round: ladder.round(),
+                                midpoint: mid,
+                                mid_state: h64((mid % 251) as u8),
+                            },
+                            daa,
+                            W_ROUND,
+                        )
                         .unwrap();
                     daa += 10;
                     // Honest challenger: prefix [0, mid) matches iff divergence >= mid.
                     ladder
-                        .apply_verdict(&PalwBisectVerdictV1 {
-                            version: 1,
-                            session_id: ladder.session_id(),
-                            round: ladder.round(),
-                            agree: divergence >= mid,
-                        }, daa, W_ROUND)
+                        .apply_verdict(
+                            &PalwBisectVerdictV1 {
+                                version: 1,
+                                session_id: ladder.session_id(),
+                                round: ladder.round(),
+                                agree: divergence >= mid,
+                            },
+                            daa,
+                            W_ROUND,
+                        )
                         .unwrap();
                     rungs += 1;
                     assert!(rungs <= PALW_BISECT_MAX_ROUNDS, "space {space} divergence {divergence}");
@@ -476,22 +496,10 @@ mod tests {
         let verdict = PalwBisectVerdictV1 { version: 1, session_id: sid, round: 0, agree: true };
         assert!(matches!(ladder.apply_verdict(&verdict, 300, W_ROUND), Err(PalwBisectError::TurnMismatch { .. })));
         // Wrong session.
-        let alien = PalwBisectDisclosureV1 {
-            version: 1,
-            session_id: h64(0xEE),
-            round: 0,
-            midpoint: 8,
-            mid_state: h64(9),
-        };
+        let alien = PalwBisectDisclosureV1 { version: 1, session_id: h64(0xEE), round: 0, midpoint: 8, mid_state: h64(9) };
         assert_eq!(ladder.apply_disclosure(&alien, 300, W_ROUND), Err(PalwBisectError::SessionMismatch));
         // Wrong midpoint.
-        let off_mid = PalwBisectDisclosureV1 {
-            version: 1,
-            session_id: sid,
-            round: 0,
-            midpoint: 7,
-            mid_state: h64(9),
-        };
+        let off_mid = PalwBisectDisclosureV1 { version: 1, session_id: sid, round: 0, midpoint: 7, mid_state: h64(9) };
         assert!(matches!(ladder.apply_disclosure(&off_mid, 300, W_ROUND), Err(PalwBisectError::TurnMismatch { .. })));
         // A zero rung window would make every move instantly overdue — refused rather than
         // trusted from a registration that got it wrong. (The case that used to sit here,
@@ -500,13 +508,7 @@ mod tests {
         let ok_shape = PalwBisectDisclosureV1 { version: 1, session_id: sid, round: 0, midpoint: 8, mid_state: h64(9) };
         assert_eq!(ladder.apply_disclosure(&ok_shape, 300, 0), Err(PalwBisectError::ZeroRungWindow));
         // Wrong round.
-        let wrong_round = PalwBisectDisclosureV1 {
-            version: 1,
-            session_id: sid,
-            round: 3,
-            midpoint: 8,
-            mid_state: h64(9),
-        };
+        let wrong_round = PalwBisectDisclosureV1 { version: 1, session_id: sid, round: 3, midpoint: 8, mid_state: h64(9) };
         assert!(matches!(ladder.apply_disclosure(&wrong_round, 300, W_ROUND), Err(PalwBisectError::RoundMismatch { .. })));
         // Tiny/huge spaces refuse to open.
         assert!(matches!(
@@ -618,13 +620,13 @@ mod tests {
     #[test]
     fn a_refused_verdict_changes_nothing() {
         let mut ladder = open_ladder(16);
-        ladder.apply_disclosure(&PalwBisectDisclosureV1 {
-            version: 1,
-            session_id: ladder.session_id(),
-            round: 0,
-            midpoint: 8,
-            mid_state: h64(9),
-        }, 500, W_ROUND).unwrap();
+        ladder
+            .apply_disclosure(
+                &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 0, midpoint: 8, mid_state: h64(9) },
+                500,
+                W_ROUND,
+            )
+            .unwrap();
         let before = ladder.clone();
         // A zero window is refused, and nothing moved.
         let verdict = PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true };
