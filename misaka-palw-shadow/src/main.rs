@@ -488,6 +488,14 @@ enum CarriageEvent {
         root_a: String,
         root_b: String,
     },
+    /// An arithmetic conviction — reported, never adjudicated: deciding it needs the kernel
+    /// catalog and the accused bond's key, and a second opinion about who loses a bond is what
+    /// the carriage kind exists to prevent.
+    StepConviction {
+        accused_bond: String,
+        signer: String,
+        trace_root: String,
+    },
     Commitment {
         root: String,
         class: String,
@@ -600,6 +608,11 @@ fn carriage_event_of(carriage: &PalwCarriageV1) -> CarriageEvent {
             index: c.chunk_index,
             count: c.chunk_count,
             bytes: c.bytes.len(),
+        },
+        PalwCarriageV1::StepConviction(c) => CarriageEvent::StepConviction {
+            accused_bond: format!("{}:{}", c.accused_bond_outpoint.transaction_id, c.accused_bond_outpoint.index),
+            signer: hex64(&c.attestation.executor_id),
+            trace_root: hex64(&c.attestation.full_logits_trace_root),
         },
         PalwCarriageV1::Equivocation(e) => CarriageEvent::Equivocation {
             accused_bond: format!("{}:{}", e.accused_bond_outpoint.transaction_id, e.accused_bond_outpoint.index),
@@ -735,6 +748,7 @@ fn kind_name(carriage: &PalwCarriageV1) -> &'static str {
         PalwCarriageV1::Refutation(_) => "refutation",
         PalwCarriageV1::EvidenceChunk(_) => "evidence-chunk",
         PalwCarriageV1::Equivocation(_) => "equivocation",
+        PalwCarriageV1::StepConviction(_) => "step-conviction",
     }
 }
 
@@ -937,6 +951,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
     // reassemble (that is the adjudicating node's job).
     let mut evidence_chunks = 0usize;
     let mut equivocations = 0usize;
+    let mut step_convictions = 0usize;
     let mut chunk_groups: std::collections::HashMap<String, std::collections::HashSet<u8>> = std::collections::HashMap::new();
     let mut chunk_group_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for event in &events {
@@ -976,6 +991,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
                 // shadow watcher that decided who loses a bond would be a second opinion, and
                 // the whole point of the carriage kind is that consensus is the only one.
                 CarriageEvent::Equivocation { .. } => equivocations += 1,
+                CarriageEvent::StepConviction { .. } => step_convictions += 1,
             },
         }
     }
@@ -1059,6 +1075,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
         // Seen, never adjudicated — a non-zero count is an alarm for an operator to look at, not
         // a verdict this binary is entitled to reach.
         "equivocation_certificates_seen": equivocations,
+        "step_convictions_seen": step_convictions,
         "evidence_groups_complete": chunk_groups
             .iter()
             .filter(|(g, seen)| chunk_group_counts.get(*g).is_some_and(|c| seen.len() == *c as usize))

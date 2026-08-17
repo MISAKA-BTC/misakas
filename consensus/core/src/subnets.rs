@@ -280,6 +280,13 @@ pub const SUBNETWORK_ID_PALW_EVIDENCE_CHUNK: SubnetworkId = SubnetworkId::from_b
 /// key that cannot both be true. Nothing is re-executed and nothing is looked up
 /// beyond the accused bond's own public key.
 pub const SUBNETWORK_ID_PALW_EQUIVOCATION: SubnetworkId = SubnetworkId::from_byte(0x46);
+/// An arithmetic conviction (kind 0x08) —
+/// [`crate::palw_carriage::PalwStepConvictionCarriageV1`]. The second band member
+/// that can cost a bond, and the one ADR-0028 §6 makes Stage 2's prerequisite:
+/// a signed trace root plus a proof that one step under it is not what the class
+/// computes. Adjudicated by recomputing that single step from opened tiles — a
+/// bounded CPU primitive, never a model run.
+pub const SUBNETWORK_ID_PALW_STEP_CONVICTION: SubnetworkId = SubnetworkId::from_byte(0x47);
 
 #[cfg(test)]
 mod tests {

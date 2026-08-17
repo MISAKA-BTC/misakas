@@ -324,7 +324,7 @@ impl From<crate::palw_step_leg::PalwStepLegError> for PalwStepRefuteError {
 
 /// One opened input tile (v1: node-output tiles only; KV-chunk and checkpoint-state arms
 /// join when their decoders are registration facts).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwStepInputOpeningV1 {
     pub opening: PalwStepOpeningV1,
     pub preimage: PalwStepTileLeafV1,
@@ -332,7 +332,7 @@ pub struct PalwStepInputOpeningV1 {
 
 /// ADR-0027 §1's object, with ADR-0030 coordinates: the committed root binding, the
 /// challenged output tile, and the canonical inputs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecutionStepRefutationV1 {
     pub binding: PalwStepBindingV2,
     pub output_opening: PalwStepOpeningV1,
@@ -808,7 +808,7 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 // =============================================================================================
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
     use crate::palw_step::{
@@ -928,6 +928,24 @@ mod tests {
 
     /// Executes the profile's graph HONESTLY with the catalog programs, committing every
     /// node-output tile; returns the binding plus retained material.
+    /// A structurally real refutation with NO openings — enough for callers that exercise the
+    /// authorship half and the gating around adjudication, and deliberately not adjudicable, so a
+    /// test using it cannot accidentally assert a conviction it did not prove.
+    pub(crate) fn skeleton_refutation() -> PalwExecutionStepRefutationV1 {
+        let (binding, _material, _rows) = honest_execution();
+        PalwExecutionStepRefutationV1 {
+            binding,
+            output_opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h64(0x01), siblings: Vec::new() },
+            output_preimage: PalwStepTileLeafV1 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                coord: PalwStepCoordinateV1 { node_slot: 0, call_index: 0, position: 0, tile_index: 0 },
+                value_count: 0,
+                values_le: Vec::new(),
+            },
+            inputs: Vec::new(),
+        }
+    }
+
     fn honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
         let p = profile();
         let ctx = context();

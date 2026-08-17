@@ -2571,9 +2571,18 @@ impl VirtualStateProcessor {
         accepted_daa_score: u64,
     ) -> Vec<BondMutation> {
         use kaspa_consensus_core::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT;
-        palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, self.palw_credit_params.is_some(), |key, digest, signature| {
+        let verify = |key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]| {
             matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, PALW_S_MLDSA87_ATTESTATION_CONTEXT), Ok(true))
-        })
+        };
+        let fence = self.palw_credit_params.is_some();
+        let mut out = palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, fence, verify);
+        // Arithmetic convictions need the model's weight rows to recompute a step. Serving them
+        // is a node-local capability, not a consensus input, and a node that cannot serve them
+        // adjudicates `Unadjudicable` — which convicts nobody, so the derivation stays a pure
+        // function of the chain for every node that CAN. Wiring a real oracle is the Track-D
+        // step that turns this arm on; until then it is structurally present and derives nothing.
+        out.extend(palw_step_conviction_slashes_v1(txs, bond_view, accepted_daa_score, fence, &NoStepWeights, verify));
+        out
     }
 
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
@@ -7865,6 +7874,67 @@ where
             continue;
         };
         if let Ok(slashed) = adjudicate_equivocation_carriage_v1(&carriage, bond, accepted_daa_score, &verify) {
+            out.push(BondMutation::Slash(slashed, accepted_daa_score));
+        }
+    }
+    out
+}
+
+/// The weight oracle a node without the model artifact can offer: none.
+///
+/// Every step conviction then adjudicates `Unadjudicable`, which convicts nobody — the safe
+/// direction, and the honest one: a node that cannot recompute the step has not established that
+/// the step is wrong. Replacing this with a real oracle is the Track-D step that turns arithmetic
+/// conviction on; leaving it here keeps the path structurally present and derives nothing.
+struct NoStepWeights;
+impl kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1 for NoStepWeights {
+    fn weight_row(&self, _tensor: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// Slashes proved by PALW arithmetic convictions — ADR-0028 §6's Stage-2 prerequisite, and the
+/// second offence that can reach a bond.
+///
+/// Adjudicating one costs a single kernel step recomputed from opened tiles: a bounded CPU
+/// primitive, never a model run, which is what lets a full node convict without the LLM the whole
+/// design exists to keep off the validation path.
+///
+/// `Unadjudicable` — this build's catalog cannot decide the step — is not a conviction and
+/// derives nothing. It is a fact about the accused CLASS's coverage rather than about the
+/// accused, which is why ADR-0039 gates weight on coverage instead of treating gaps as noise.
+pub(super) fn palw_step_conviction_slashes_v1<F>(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    accepted_daa_score: u64,
+    fence_active: bool,
+    weights: &dyn kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1,
+    verify: F,
+) -> Vec<BondMutation>
+where
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+{
+    use kaspa_consensus_core::palw_carriage::{
+        PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
+        palw_carriage_tx_kind,
+    };
+    if !fence_active {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for tx in txs {
+        if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_STEP_CONVICTION) {
+            continue;
+        }
+        let Ok(PalwCarriageV1::StepConviction(carriage)) =
+            decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &tx.payload)
+        else {
+            continue;
+        };
+        let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
+            continue;
+        };
+        if let Ok(slashed) = adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, weights, &verify) {
             out.push(BondMutation::Slash(slashed, accepted_daa_score));
         }
     }

@@ -59,7 +59,7 @@ use crate::palw_slash::{
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
 use crate::subnets::{
     SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EQUIVOCATION,
-    SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+    SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, SUBNETWORK_ID_PALW_STEP_CONVICTION,
     SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
 };
 use crate::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
@@ -104,6 +104,17 @@ pub const PALW_CARRIAGE_KIND_EVIDENCE_CHUNK: u8 = 0x06;
 /// it may only freeze, never slash; and verifying it needs both signers' keys, where this kind
 /// needs exactly one. It gets its own kind when the freeze machinery exists.
 pub const PALW_CARRIAGE_KIND_EQUIVOCATION: u8 = 0x07;
+
+/// An arithmetic conviction: the executor signed a trace root, and one step under that root is
+/// provably not what the class's kernel computes.
+///
+/// The SECOND objectively-provable PALW offence, and the one ADR-0028 §6 names as Stage 2's
+/// prerequisite. It became provable at acceptance only when the kernel catalog closed for a
+/// class (ADR-0039 / ADR-0040): the adjudicator recomputes ONE step from opened tiles — a
+/// bounded CPU primitive, no model, no GPU — so a full node can convict without ever running an
+/// inference. On a class whose catalog is open the same evidence terminates `Unadjudicable`,
+/// which is why coverage is an activation gate rather than a quality metric.
+pub const PALW_CARRIAGE_KIND_STEP_CONVICTION: u8 = 0x08;
 
 /// Most openings one carried call may request across both legs (and one carried answer may
 /// hold). A CARRIAGE cap, deliberately below the wire cap — see the module doc.
@@ -179,6 +190,12 @@ pub enum PalwCarriageError {
     EquivocationBondInactive,
     #[error("the certificate does not prove an equivocation: {0}")]
     EquivocationNotProven(String),
+    #[error("the attestation and the refutation name different job contexts — the certificate accuses one execution and refutes another")]
+    StepConvictionContextMismatch,
+    #[error("the attestation signs a different trace root than the refutation binds")]
+    StepConvictionRootMismatch,
+    #[error("the step conviction does not prove a fault: {0}")]
+    StepConvictionNotProven(String),
     #[error("carried call requests {got} openings; the carriage cap is {max} (wire cap unchanged — split the call)")]
     TooManyOpenings { got: usize, max: usize },
     #[error("carried object requests or holds zero openings")]
@@ -256,6 +273,33 @@ pub struct PalwEquivocationCarriageV1 {
     pub accused_bond_outpoint: TransactionOutpoint,
     /// The two contradictory attestations plus the job context they both bind.
     pub certificate: PalwClassContradictionCertificateV1,
+}
+
+/// An arithmetic conviction, carried: authorship plus falsity, each proved separately.
+///
+/// The two halves are what make this slashable, and neither is sufficient alone:
+///
+/// * **Authorship** — the accused's ML-DSA-87 attestation over `(job_context_hash,
+///   full_logits_trace_root)`. Without it a refutation proves that *some* execution was wrong,
+///   not that *this bond* claimed it, and slashing on that is the "any bonded party can burn any
+///   other party's stake" failure the VLT layer already refuses.
+/// * **Falsity** — the step refutation, whose binding must carry the SAME job context and trace
+///   root the attestation signed. Without that equality the certificate proves a lie about a
+///   different execution than the one it accuses.
+///
+/// The accused bond outpoint rides at carriage level, as the unique slash key, for the same
+/// reason as [`PalwEquivocationCarriageV1`]: `executor_id` is a validator-key hash and nothing
+/// binds it to a single bond.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepConvictionCarriageV1 {
+    /// = [`PALW_CARRIAGE_VERSION_V1`].
+    pub version: u16,
+    /// The bond this conviction accuses — the slash target.
+    pub accused_bond_outpoint: TransactionOutpoint,
+    /// The accused's signed claim: this is the execution it stands behind.
+    pub attestation: PalwExecutionAttestationV1,
+    /// The proof that one step of that execution is arithmetically wrong.
+    pub refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1,
 }
 
 /// An opening challenge, carried. `PalwLegsOpeningCallV1` is already the complete message
@@ -420,6 +464,7 @@ pub enum PalwCarriageV1 {
     Refutation(PalwRefutationCarriageV1),
     EvidenceChunk(PalwEvidenceChunkCarriageV1),
     Equivocation(PalwEquivocationCarriageV1),
+    StepConviction(PalwStepConvictionCarriageV1),
 }
 
 impl PalwCarriageV1 {
@@ -431,6 +476,7 @@ impl PalwCarriageV1 {
             PalwCarriageV1::OpeningAnswer(_) => PALW_CARRIAGE_KIND_OPENING_ANSWER,
             PalwCarriageV1::Refutation(_) => PALW_CARRIAGE_KIND_REFUTATION,
             PalwCarriageV1::Equivocation(_) => PALW_CARRIAGE_KIND_EQUIVOCATION,
+            PalwCarriageV1::StepConviction(_) => PALW_CARRIAGE_KIND_STEP_CONVICTION,
             PalwCarriageV1::EvidenceChunk(_) => PALW_CARRIAGE_KIND_EVIDENCE_CHUNK,
         }
     }
@@ -615,6 +661,7 @@ pub fn encode_palw_carriage_v1(carriage: &PalwCarriageV1) -> Vec<u8> {
         PalwCarriageV1::Refutation(r) => borsh::to_vec(r),
         PalwCarriageV1::EvidenceChunk(c) => borsh::to_vec(c),
         PalwCarriageV1::Equivocation(e) => borsh::to_vec(e),
+        PalwCarriageV1::StepConviction(c) => borsh::to_vec(c),
     }
     .expect("borsh of an in-memory carriage body cannot fail");
     let mut out = Vec::with_capacity(PALW_CARRIAGE_MAGIC.len() + 1 + body.len());
@@ -643,6 +690,7 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
         PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     };
     Ok(Some(carriage))
@@ -710,11 +758,82 @@ where
     }
 }
 
+/// The acceptance-stage adjudication of an arithmetic conviction — the SECOND path that may cost
+/// a bond, and the one ADR-0028 §6 makes Stage 2's prerequisite.
+///
+/// The check order is the security argument again, and it is the same shape as
+/// [`adjudicate_equivocation_carriage_v1`]'s because the same two things must be established:
+///
+/// 1. **The record is the accused record**, so an upstream lookup bug cannot slash the wrong party.
+/// 2. **The accused bond's own validator key is the attester**, so a genuine refutation cannot be
+///    pointed at somebody else's bond.
+/// 3. **The bond is active** at the point of view.
+/// 4. **The attestation verifies** under that key — this is the authorship half.
+/// 5. **The step refutation convicts** — the falsity half, delegated to
+///    [`crate::palw_step_refute::check_execution_step_refutation_v1`], which recomputes ONE step
+///    from opened tiles and compares exact bytes.
+///
+/// Shape admission has already established that both halves are about the same execution (same
+/// job context, same trace root), so nothing here can convict a bond of a lie told about a
+/// different job.
+///
+/// `Unadjudicable` is NOT a conviction and never slashes: it means this build's catalog cannot
+/// decide the question, which is a fact about the class's coverage rather than about the accused
+/// (ADR-0038 A4). That is the whole reason the catalog had to close for BASE-0 before this path
+/// was worth having.
+pub fn adjudicate_step_conviction_carriage_v1<F>(
+    carriage: &PalwStepConvictionCarriageV1,
+    accused_bond: &StakeBondRecord,
+    pov_daa_score: u64,
+    weights: &dyn crate::palw_step_refute::PalwWeightOracleV1,
+    verify_signature: F,
+) -> Result<TransactionOutpoint, PalwCarriageError>
+where
+    F: Fn(&[u8], &Hash, &[u8]) -> bool,
+{
+    require_version(carriage.version)?;
+    if accused_bond.bond_outpoint != carriage.accused_bond_outpoint {
+        return Err(PalwCarriageError::EquivocationWrongBondRecord {
+            resolved: accused_bond.bond_outpoint,
+            accused: carriage.accused_bond_outpoint,
+        });
+    }
+    if carriage.attestation.executor_id != accused_bond.validator_pubkey_hash {
+        return Err(PalwCarriageError::EquivocationBondNotTheSigner);
+    }
+    if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+        return Err(PalwCarriageError::EquivocationBondInactive);
+    }
+    let network_id = carriage.refutation.binding.job_context.network_id.as_slice();
+    let message = carriage.attestation.message(network_id);
+    if !verify_signature(&accused_bond.validator_pubkey, &message, &carriage.attestation.signature) {
+        return Err(PalwCarriageError::EquivocationNotProven("attestation signature does not verify".into()));
+    }
+    crate::palw_step_refute::check_execution_step_refutation_v1(&carriage.refutation, weights)
+        .map_err(|e| PalwCarriageError::StepConvictionNotProven(e.to_string()))?;
+    Ok(carriage.accused_bond_outpoint)
+}
+
 /// Everything decidable from the bytes alone, per kind. See the module doc for what stateless
 /// does NOT mean: a valid object can still be a lie; it cannot be *incoherent*.
 pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCarriageError> {
     match carriage {
         PalwCarriageV1::Commitment(c) => validate_commitment_carriage(c),
+        PalwCarriageV1::StepConviction(c) => {
+            require_version(c.version)?;
+            // Shape only. Whether the step is actually wrong needs the kernel catalog and the
+            // accused bond's key, both chain state; admission's job is to refuse the incoherent
+            // so adjudication never sees a certificate whose two halves are about different
+            // executions.
+            c.attestation.validate_shape().map_err(|x| PalwCarriageError::Inner(x.to_string()))?;
+            if c.attestation.job_context_hash != c.refutation.binding.job_context.context_hash() {
+                return Err(PalwCarriageError::StepConvictionContextMismatch);
+            }
+            if c.attestation.full_logits_trace_root != c.refutation.binding.full_logits_trace_root {
+                return Err(PalwCarriageError::StepConvictionRootMismatch);
+            }
+            Ok(())
+        }
         PalwCarriageV1::Equivocation(e) => {
             require_version(e.version)?;
             // Shape only, and deliberately NOT the contradiction itself: proving it needs the
@@ -916,6 +1035,8 @@ pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
         Some(PALW_CARRIAGE_KIND_EVIDENCE_CHUNK)
     } else if *subnetwork_id == SUBNETWORK_ID_PALW_EQUIVOCATION {
         Some(PALW_CARRIAGE_KIND_EQUIVOCATION)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_STEP_CONVICTION {
+        Some(PALW_CARRIAGE_KIND_STEP_CONVICTION)
     } else {
         None
     }
@@ -935,6 +1056,7 @@ pub fn decode_palw_stage1_body(kind: u8, body: &[u8]) -> Result<PalwCarriageV1, 
         PALW_CARRIAGE_KIND_REFUTATION => PalwCarriageV1::Refutation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     })
 }
@@ -1551,6 +1673,24 @@ mod tests {
         }
     }
 
+    /// A shape-valid step conviction for the band round-trip; its adjudication is covered in
+    /// `step_conviction_tests`.
+    fn step_conviction_for_band() -> PalwStepConvictionCarriageV1 {
+        let refutation = crate::palw_step_refute::tests::skeleton_refutation();
+        PalwStepConvictionCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: outpoint(0xB1, 0),
+            attestation: PalwExecutionAttestationV1 {
+                version: PALW_S_OBJECT_VERSION_V1,
+                executor_id: h64(0xE1),
+                job_context_hash: refutation.binding.job_context.context_hash(),
+                full_logits_trace_root: refutation.binding.full_logits_trace_root,
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+            refutation,
+        }
+    }
+
     fn all_band_members() -> Vec<(SubnetworkId, PalwCarriageV1)> {
         let mut out: Vec<(SubnetworkId, PalwCarriageV1)> = vec![
             (SUBNETWORK_ID_PALW_COMMITMENT, PalwCarriageV1::Commitment(commitment_composite())),
@@ -1560,8 +1700,9 @@ mod tests {
             (SUBNETWORK_ID_PALW_REFUTATION, PalwCarriageV1::Refutation(refutation())),
             (SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, PalwCarriageV1::EvidenceChunk(evidence_chunk())),
             (SUBNETWORK_ID_PALW_EQUIVOCATION, PalwCarriageV1::Equivocation(equivocation_for_band())),
+            (SUBNETWORK_ID_PALW_STEP_CONVICTION, PalwCarriageV1::StepConviction(step_conviction_for_band())),
         ];
-        debug_assert_eq!(out.len(), 7);
+        debug_assert_eq!(out.len(), 8);
         out.sort_by_key(|(_, c)| c.kind_byte());
         out
     }
@@ -1586,7 +1727,7 @@ mod tests {
             SUBNETWORK_ID_COINBASE,
             crate::subnets::SUBNETWORK_ID_TOKEN_BURN,
             SubnetworkId::from_byte(0x3F),
-            SubnetworkId::from_byte(0x47),
+            SubnetworkId::from_byte(0x48),
         ] {
             assert_eq!(palw_carriage_tx_kind(&id), None);
         }
@@ -1939,5 +2080,167 @@ mod equivocation_tests {
         let body = &encoded[7..];
         assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_EQUIVOCATION, body).unwrap(), obj);
         assert_eq!(PALW_S_MLDSA87_ATTESTATION_CONTEXT.is_empty(), false);
+    }
+}
+
+#[cfg(test)]
+mod step_conviction_tests {
+    use super::*;
+    use crate::dns_finality::{BondStatus, StakeBondRecord};
+    use crate::palw_slash::PALW_S_OBJECT_VERSION_V1;
+    use crate::palw_step_refute::PalwWeightOracleV1;
+    use crate::tx::TransactionId;
+
+    fn h(seed: u64) -> Hash64 {
+        Hash64::from_u64_word(seed)
+    }
+    fn op(seed: u8) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
+    }
+    fn mock_key(signer: Hash64) -> Vec<u8> {
+        signer.as_byte_slice().to_vec()
+    }
+    fn mock_sign(key: &[u8], digest: &Hash) -> Vec<u8> {
+        let mut s = key.to_vec();
+        s.extend_from_slice(digest.as_bytes().as_slice());
+        s
+    }
+    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8]) -> bool {
+        signature == mock_sign(key, digest).as_slice()
+    }
+
+    struct NoWeights;
+    impl PalwWeightOracleV1 for NoWeights {
+        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
+    fn bond(signer: Hash64, outpoint: TransactionOutpoint) -> StakeBondRecord {
+        StakeBondRecord {
+            version: 1,
+            bond_outpoint: outpoint,
+            owner_pubkey_hash: h(0x0A0A),
+            validator_pubkey_hash: signer,
+            validator_pubkey: mock_key(signer),
+            amount: 20_000_00000000,
+            activation_daa_score: 0,
+            created_daa_score: 0,
+            unbonding_period_blocks: 1_000,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    /// A conviction carriage whose two halves agree about the execution, with a real signature.
+    /// The refutation itself is a minimal skeleton: these tests exercise the AUTHORSHIP half and
+    /// the gating, which is what this module owns — the falsity half is `palw_step_refute`'s and
+    /// is tested there against honest and tampered executions.
+    fn conviction(signer: Hash64, accused: TransactionOutpoint) -> PalwStepConvictionCarriageV1 {
+        let refutation = crate::palw_step_refute::tests::skeleton_refutation();
+        let mut attestation = PalwExecutionAttestationV1 {
+            version: PALW_S_OBJECT_VERSION_V1,
+            executor_id: signer,
+            job_context_hash: refutation.binding.job_context.context_hash(),
+            full_logits_trace_root: refutation.binding.full_logits_trace_root,
+            signature: vec![],
+        };
+        let network_id = refutation.binding.job_context.network_id.clone();
+        attestation.signature = mock_sign(&mock_key(signer), &attestation.message(&network_id));
+        PalwStepConvictionCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: accused,
+            attestation,
+            refutation,
+        }
+    }
+
+    /// Shape admission binds the two halves to ONE execution. A certificate that signs one job
+    /// and refutes another proves nothing about the bond it accuses, and is refused at the door
+    /// so adjudication never has to consider it.
+    #[test]
+    fn the_two_halves_must_be_about_the_same_execution() {
+        let c = conviction(h(0xE1), op(0xB1));
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(c.clone())).is_ok());
+
+        let mut wrong_context = c.clone();
+        wrong_context.attestation.job_context_hash = h(0xDEAD);
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(wrong_context)),
+            Err(PalwCarriageError::StepConvictionContextMismatch)
+        );
+
+        let mut wrong_root = c;
+        wrong_root.attestation.full_logits_trace_root = h(0xDEAD);
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::StepConviction(wrong_root)),
+            Err(PalwCarriageError::StepConvictionRootMismatch)
+        );
+    }
+
+    /// The authorship half, and the innocent-bond defence it exists for: a conviction pointed at
+    /// a bond whose validator key is not the attester derives nothing, however genuine the
+    /// refutation.
+    #[test]
+    fn a_conviction_cannot_be_pointed_at_an_innocent_bond() {
+        let (signer, victim_outpoint) = (h(0xE1), op(0xB9));
+        let c = conviction(signer, victim_outpoint);
+        let victim = bond(h(0x00CE), victim_outpoint);
+        assert_eq!(
+            adjudicate_step_conviction_carriage_v1(&c, &victim, 100, &NoWeights, mock_verify),
+            Err(PalwCarriageError::EquivocationBondNotTheSigner)
+        );
+    }
+
+    /// A forged attestation is refused BEFORE the step is ever recomputed: authorship is checked
+    /// first, so an unsigned accusation costs nobody a step evaluation.
+    #[test]
+    fn a_forged_attestation_is_refused_before_the_step_is_evaluated() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let mut forged = conviction(signer, accused);
+        forged.attestation.signature = vec![0xFF; 64];
+        assert!(matches!(
+            adjudicate_step_conviction_carriage_v1(&forged, &bond(signer, accused), 100, &NoWeights, mock_verify),
+            Err(PalwCarriageError::EquivocationNotProven(_))
+        ));
+    }
+
+    /// **`Unadjudicable` is not a conviction.** With no weight oracle the step cannot be
+    /// recomputed, and the honest answer is that nothing was established — not that the accused
+    /// is guilty. This is the hole ADR-0038 A4 closes by requiring catalog coverage, and the
+    /// direction it must fail in.
+    #[test]
+    fn an_unadjudicable_step_convicts_nobody() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let c = conviction(signer, accused);
+        let verdict = adjudicate_step_conviction_carriage_v1(&c, &bond(signer, accused), 100, &NoWeights, mock_verify);
+        assert!(matches!(verdict, Err(PalwCarriageError::StepConvictionNotProven(_))), "got {verdict:?}");
+    }
+
+    /// An inactive bond is not at risk, whatever the evidence says.
+    #[test]
+    fn an_inactive_bond_cannot_be_convicted() {
+        let (signer, accused) = (h(0xE1), op(0xB1));
+        let c = conviction(signer, accused);
+        let mut slashed = bond(signer, accused);
+        slashed.slashed_at_daa_score = Some(50);
+        slashed.status = BondStatus::Slashed;
+        assert_eq!(
+            adjudicate_step_conviction_carriage_v1(&c, &slashed, 100, &NoWeights, mock_verify),
+            Err(PalwCarriageError::EquivocationBondInactive)
+        );
+    }
+
+    /// The kind routes on its own subnetwork id and round-trips through both decode paths.
+    #[test]
+    fn the_kind_routes_and_roundtrips() {
+        let obj = PalwCarriageV1::StepConviction(conviction(h(0xE1), op(0xB1)));
+        assert_eq!(obj.kind_byte(), PALW_CARRIAGE_KIND_STEP_CONVICTION);
+        assert_eq!(palw_carriage_tx_kind(&SUBNETWORK_ID_PALW_STEP_CONVICTION), Some(PALW_CARRIAGE_KIND_STEP_CONVICTION));
+        let stage0 = encode_palw_carriage_v1(&obj);
+        assert_eq!(decode_palw_carriage_v1(&stage0).unwrap(), Some(obj.clone()), "stage-0 path");
+        assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &stage0[7..]).unwrap(), obj, "stage-1 path");
     }
 }

@@ -658,10 +658,16 @@ mod tests {
         tx.subnetwork_id = SubnetworkId::from_byte(0x46);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
 
-        // The hard edge moved with it: 0x47 (one past the band) is NOT routed and still rejects
-        // with the blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        // 0x47 is the step-conviction kind, so it routes too — the band grew again when
+        // arithmetic conviction landed.
         let mut tx = base.clone();
         tx.subnetwork_id = SubnetworkId::from_byte(0x47);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // The hard edge moved with it: 0x48 (one past the band) is NOT routed and still rejects
+        // with the blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x48);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
 
         // Stage-0 carriage is untouched: the SAME object with its magic envelope on the NATIVE
