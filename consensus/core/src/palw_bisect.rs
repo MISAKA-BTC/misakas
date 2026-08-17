@@ -87,6 +87,8 @@ pub fn bisect_session_id_v1(
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwBisectError {
+    #[error("w_round is zero — every move would be instantly overdue, so no ladder can be played")]
+    ZeroRungWindow,
     #[error("unsupported bisect object version {got} (expected {expected})")]
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("index space size {got} is zero, one, or over the {max} cap")]
@@ -122,8 +124,6 @@ pub struct PalwBisectDisclosureV1 {
     pub round: u32,
     pub midpoint: u64,
     pub mid_state: Hash64,
-    /// DAA deadline for the CHALLENGER's verdict on this rung.
-    pub verdict_deadline_daa: u64,
 }
 
 /// The challenger's rung verdict: `agree = true` ⇒ the prefix up to the midpoint matches
@@ -134,8 +134,6 @@ pub struct PalwBisectVerdictV1 {
     pub session_id: Hash64,
     pub round: u32,
     pub agree: bool,
-    /// DAA deadline for the RESPONDER's next disclosure (or terminal opening).
-    pub next_deadline_daa: u64,
 }
 
 /// Who failed to move within their rung window. An offense record is only mintable from the
@@ -184,6 +182,9 @@ pub enum PalwBisectTurnV1 {
     /// The interval is one index wide: the responder must open that index's input state for
     /// the terminal one-step / one-call check. The ladder's job is done.
     Terminal,
+    /// A party went silent past its rung deadline and the dispute is decided against them. An
+    /// absorbing state: no later move is legal, and no second no-show is chargeable.
+    Abandoned,
 }
 
 /// The full ladder state. Every observer feeding it the same message stream derives the same
@@ -233,6 +234,18 @@ impl PalwBisectLadderV1 {
         })
     }
 
+    /// One rung window past the block that accepted the move.
+    ///
+    /// A zero `w_round` would make every move instantly overdue, so it is refused here rather
+    /// than trusted from a registration that got it wrong — the same shape as every other window
+    /// rule in ADR-0028 §3.
+    fn rung_deadline(accepted_daa: u64, w_round: u64) -> Result<u64, PalwBisectError> {
+        if w_round == 0 {
+            return Err(PalwBisectError::ZeroRungWindow);
+        }
+        Ok(accepted_daa.saturating_add(w_round))
+    }
+
     pub fn session_id(&self) -> Hash64 {
         self.session_id
     }
@@ -261,7 +274,16 @@ impl PalwBisectLadderV1 {
     }
 
     /// Applies the responder's disclosure.
-    pub fn apply_disclosure(&mut self, msg: &PalwBisectDisclosureV1) -> Result<(), PalwBisectError> {
+    /// Applies the responder's disclosure. `accepted_daa` is the DAA of the block that accepted
+    /// the move and `w_round` is the class's pinned rung window — the new deadline is their sum.
+    ///
+    /// **Neither party supplies a deadline.** They used to: the disclosure carried the
+    /// challenger's verdict deadline and the verdict carried the responder's next one, with only
+    /// a monotonicity check between them. That let the party moving set its opponent's clock to
+    /// one DAA and win by expiry (2026-08-17 re-audit). A deadline is now a fact about the chain
+    /// and the registered window, which is also what finally connects
+    /// [`crate::palw_schedule::PalwScheduleParamsV1::w_round`] to the ladder it was sized for.
+    pub fn apply_disclosure(&mut self, msg: &PalwBisectDisclosureV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwBisectError> {
         if msg.version != PALW_BISECT_OBJECT_VERSION_V1 {
             return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_BISECT_OBJECT_VERSION_V1 });
         }
@@ -271,7 +293,7 @@ impl PalwBisectLadderV1 {
         match self.turn {
             PalwBisectTurnV1::AwaitDisclosure => {}
             PalwBisectTurnV1::AwaitVerdict => return Err(PalwBisectError::TurnMismatch { expected: "verdict", got: "disclosure" }),
-            PalwBisectTurnV1::Terminal => return Err(PalwBisectError::AlreadyTerminal),
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
         }
         if msg.round != self.round {
             return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
@@ -281,20 +303,17 @@ impl PalwBisectLadderV1 {
             // A wrong-midpoint "disclosure" is not a protocol move at all.
             return Err(PalwBisectError::TurnMismatch { expected: "the pinned midpoint", got: "another index" });
         }
-        if msg.verdict_deadline_daa <= self.last_deadline_daa {
-            return Err(PalwBisectError::DeadlineNotMonotonic {
-                deadline: msg.verdict_deadline_daa,
-                previous: self.last_deadline_daa,
-            });
-        }
+        let deadline = Self::rung_deadline(accepted_daa, w_round)?;
         self.disclosures.push((mid, msg.mid_state));
-        self.last_deadline_daa = msg.verdict_deadline_daa;
+        self.last_deadline_daa = deadline;
         self.turn = PalwBisectTurnV1::AwaitVerdict;
         Ok(())
     }
 
     /// Applies the challenger's verdict, narrowing the interval.
-    pub fn apply_verdict(&mut self, msg: &PalwBisectVerdictV1) -> Result<(), PalwBisectError> {
+    /// Applies the challenger's verdict, narrowing the interval. Deadlines are chain-derived,
+    /// exactly as in [`Self::apply_disclosure`].
+    pub fn apply_verdict(&mut self, msg: &PalwBisectVerdictV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwBisectError> {
         if msg.version != PALW_BISECT_OBJECT_VERSION_V1 {
             return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_BISECT_OBJECT_VERSION_V1 });
         }
@@ -304,13 +323,19 @@ impl PalwBisectLadderV1 {
         match self.turn {
             PalwBisectTurnV1::AwaitVerdict => {}
             PalwBisectTurnV1::AwaitDisclosure => return Err(PalwBisectError::TurnMismatch { expected: "disclosure", got: "verdict" }),
-            PalwBisectTurnV1::Terminal => return Err(PalwBisectError::AlreadyTerminal),
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
         }
         if msg.round != self.round {
             return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
         }
-        if msg.next_deadline_daa <= self.last_deadline_daa {
-            return Err(PalwBisectError::DeadlineNotMonotonic { deadline: msg.next_deadline_daa, previous: self.last_deadline_daa });
+        // Everything that can refuse is decided BEFORE any field moves. The previous version
+        // narrowed the interval and incremented the round, then returned `RoundBudgetExceeded` —
+        // leaving a half-applied ladder in a machine whose whole point is that every observer
+        // derives the identical state (2026-08-17 re-audit).
+        let deadline = Self::rung_deadline(accepted_daa, w_round)?;
+        let next_round = self.round + 1;
+        if next_round > PALW_BISECT_MAX_ROUNDS {
+            return Err(PalwBisectError::RoundBudgetExceeded);
         }
         let mid = bisect_midpoint_v1(self.lo, self.hi);
         if msg.agree {
@@ -318,18 +343,20 @@ impl PalwBisectLadderV1 {
         } else {
             self.hi = mid;
         }
-        self.round += 1;
-        if self.round > PALW_BISECT_MAX_ROUNDS {
-            return Err(PalwBisectError::RoundBudgetExceeded);
-        }
-        self.last_deadline_daa = msg.next_deadline_daa;
+        self.round = next_round;
+        self.last_deadline_daa = deadline;
         self.turn = if self.hi - self.lo <= 1 { PalwBisectTurnV1::Terminal } else { PalwBisectTurnV1::AwaitDisclosure };
         Ok(())
     }
 
-    /// Mints the no-show offense for the party whose move is overdue. Only the machine's own
-    /// deadline and turn can say so — `observed_daa` merely has to be past it.
-    pub fn declare_no_show(&self, observed_daa: u64) -> Result<PalwBisectNoShowV1, PalwBisectError> {
+    /// Mints the no-show offense for the party whose move is overdue **and ends the ladder**.
+    ///
+    /// It used to take `&self` and leave the machine exactly where it was, so a session could be
+    /// declared no-show repeatedly and still accept moves afterwards — a game with no terminal
+    /// state (2026-08-17 re-audit). Silence past a rung deadline is the objective offense that
+    /// DECIDES the dispute (`M-O3`), so the ladder transitions to
+    /// [`PalwBisectTurnV1::Abandoned`] and refuses every later move.
+    pub fn declare_no_show(&mut self, observed_daa: u64) -> Result<PalwBisectNoShowV1, PalwBisectError> {
         if observed_daa <= self.last_deadline_daa {
             return Err(PalwBisectError::DeadlineNotReached { deadline: self.last_deadline_daa, observed: observed_daa });
         }
@@ -338,7 +365,10 @@ impl PalwBisectLadderV1 {
             PalwBisectTurnV1::AwaitVerdict => PalwBisectPartyV1::Challenger,
             // Terminal: the responder owes the terminal opening — same window discipline.
             PalwBisectTurnV1::Terminal => PalwBisectPartyV1::Responder,
+            // An abandoned ladder has already been decided; there is no second silence to charge.
+            PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
         };
+        self.turn = PalwBisectTurnV1::Abandoned;
         Ok(PalwBisectNoShowV1 {
             version: PALW_BISECT_OBJECT_VERSION_V1,
             session_id: self.session_id,
@@ -356,6 +386,8 @@ impl PalwBisectLadderV1 {
 
 #[cfg(test)]
 mod tests {
+    /// A pinned rung window for the tests — the real one comes from the class registration.
+    const W_ROUND: u64 = 30;
     use super::*;
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
     use crate::palw_legs::PALW_LEGS_ALL_DOMAINS;
@@ -415,8 +447,7 @@ mod tests {
                             round: ladder.round(),
                             midpoint: mid,
                             mid_state: h64((mid % 251) as u8),
-                            verdict_deadline_daa: daa,
-                        })
+                        }, daa, W_ROUND)
                         .unwrap();
                     daa += 10;
                     // Honest challenger: prefix [0, mid) matches iff divergence >= mid.
@@ -426,8 +457,7 @@ mod tests {
                             session_id: ladder.session_id(),
                             round: ladder.round(),
                             agree: divergence >= mid,
-                            next_deadline_daa: daa,
-                        })
+                        }, daa, W_ROUND)
                         .unwrap();
                     rungs += 1;
                     assert!(rungs <= PALW_BISECT_MAX_ROUNDS, "space {space} divergence {divergence}");
@@ -443,8 +473,8 @@ mod tests {
         let mut ladder = open_ladder(16);
         let sid = ladder.session_id();
         // Verdict before any disclosure.
-        let verdict = PalwBisectVerdictV1 { version: 1, session_id: sid, round: 0, agree: true, next_deadline_daa: 300 };
-        assert!(matches!(ladder.apply_verdict(&verdict), Err(PalwBisectError::TurnMismatch { .. })));
+        let verdict = PalwBisectVerdictV1 { version: 1, session_id: sid, round: 0, agree: true };
+        assert!(matches!(ladder.apply_verdict(&verdict, 300, W_ROUND), Err(PalwBisectError::TurnMismatch { .. })));
         // Wrong session.
         let alien = PalwBisectDisclosureV1 {
             version: 1,
@@ -452,9 +482,8 @@ mod tests {
             round: 0,
             midpoint: 8,
             mid_state: h64(9),
-            verdict_deadline_daa: 300,
         };
-        assert_eq!(ladder.apply_disclosure(&alien), Err(PalwBisectError::SessionMismatch));
+        assert_eq!(ladder.apply_disclosure(&alien, 300, W_ROUND), Err(PalwBisectError::SessionMismatch));
         // Wrong midpoint.
         let off_mid = PalwBisectDisclosureV1 {
             version: 1,
@@ -462,19 +491,14 @@ mod tests {
             round: 0,
             midpoint: 7,
             mid_state: h64(9),
-            verdict_deadline_daa: 300,
         };
-        assert!(matches!(ladder.apply_disclosure(&off_mid), Err(PalwBisectError::TurnMismatch { .. })));
-        // Non-monotonic deadline.
-        let stale = PalwBisectDisclosureV1 {
-            version: 1,
-            session_id: sid,
-            round: 0,
-            midpoint: 8,
-            mid_state: h64(9),
-            verdict_deadline_daa: 200,
-        };
-        assert!(matches!(ladder.apply_disclosure(&stale), Err(PalwBisectError::DeadlineNotMonotonic { .. })));
+        assert!(matches!(ladder.apply_disclosure(&off_mid, 300, W_ROUND), Err(PalwBisectError::TurnMismatch { .. })));
+        // A zero rung window would make every move instantly overdue — refused rather than
+        // trusted from a registration that got it wrong. (The case that used to sit here,
+        // "non-monotonic deadline", is gone with the carried deadlines themselves: a party can no
+        // longer propose one at all.)
+        let ok_shape = PalwBisectDisclosureV1 { version: 1, session_id: sid, round: 0, midpoint: 8, mid_state: h64(9) };
+        assert_eq!(ladder.apply_disclosure(&ok_shape, 300, 0), Err(PalwBisectError::ZeroRungWindow));
         // Wrong round.
         let wrong_round = PalwBisectDisclosureV1 {
             version: 1,
@@ -482,9 +506,8 @@ mod tests {
             round: 3,
             midpoint: 8,
             mid_state: h64(9),
-            verdict_deadline_daa: 300,
         };
-        assert!(matches!(ladder.apply_disclosure(&wrong_round), Err(PalwBisectError::RoundMismatch { .. })));
+        assert!(matches!(ladder.apply_disclosure(&wrong_round, 300, W_ROUND), Err(PalwBisectError::RoundMismatch { .. })));
         // Tiny/huge spaces refuse to open.
         assert!(matches!(
             PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::TraceEvents, 1, 100, 200),
@@ -510,29 +533,103 @@ mod tests {
         let mut ladder = open_ladder(16);
         // Before the deadline: not declarable.
         assert!(matches!(ladder.declare_no_show(150), Err(PalwBisectError::DeadlineNotReached { .. })));
-        // Past it: the responder (whose disclosure is due) is the silent party.
+        // Past it: the responder (whose disclosure is due) is the silent party, and the ladder
+        // ENDS. It used to stay open and keep accepting moves — a game with no terminal state,
+        // declarable no-show after no-show (2026-08-17 re-audit).
         let offense = ladder.declare_no_show(250).unwrap();
         assert_eq!(offense.silent_party, PalwBisectPartyV1::Responder);
         assert_eq!(offense.round, 0);
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::Abandoned, "silence decides the dispute");
         let id1 = bisect_offense_id_v1(&offense);
-        // After a disclosure, silence is the challenger's.
-        ladder
-            .apply_disclosure(&PalwBisectDisclosureV1 {
-                version: 1,
-                session_id: ladder.session_id(),
-                round: 0,
-                midpoint: 8,
-                mid_state: h64(9),
-                verdict_deadline_daa: 300,
-            })
+        // Nothing is legal afterwards: not a move, not a second charge for the same silence.
+        assert_eq!(
+            ladder.apply_disclosure(
+                &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 0, midpoint: 8, mid_state: h64(9) },
+                260,
+                W_ROUND
+            ),
+            Err(PalwBisectError::AlreadyTerminal)
+        );
+        assert_eq!(ladder.declare_no_show(400), Err(PalwBisectError::AlreadyTerminal));
+
+        // On a fresh ladder, silence AFTER a disclosure is the challenger's, and the two offense
+        // ids separate rung and party.
+        let mut second = open_ladder(16);
+        second
+            .apply_disclosure(
+                &PalwBisectDisclosureV1 { version: 1, session_id: second.session_id(), round: 0, midpoint: 8, mid_state: h64(9) },
+                210,
+                W_ROUND,
+            )
             .unwrap();
-        let offense2 = ladder.declare_no_show(301).unwrap();
+        let offense2 = second.declare_no_show(210 + W_ROUND + 1).unwrap();
         assert_eq!(offense2.silent_party, PalwBisectPartyV1::Challenger);
+        assert_eq!(second.turn(), PalwBisectTurnV1::Abandoned);
         assert_ne!(bisect_offense_id_v1(&offense2), id1, "offense ids must separate rungs/parties");
         // Session ids separate disputes: same parties, different root.
         let other =
             PalwBisectLadderV1::open(&h64(1), &h64(0xAB), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, 16, 100, 200).unwrap();
         assert_ne!(other.session_id(), ladder.session_id());
+    }
+
+    /// **The security property this hardening exists for: a party cannot set its opponent's
+    /// clock.**
+    ///
+    /// Deadlines used to ride the messages — the disclosure carried the challenger's verdict
+    /// deadline, the verdict carried the responder's next one — checked only for monotonicity.
+    /// A responder could therefore write "one DAA from now" and win by expiry before the
+    /// challenger could physically reply (2026-08-17 re-audit). The deadline is now
+    /// `accepted_daa + w_round`, both facts the mover does not choose.
+    #[test]
+    fn a_party_cannot_set_its_opponents_deadline() {
+        let mut ladder = open_ladder(16);
+        let disclose = |l: &PalwBisectLadderV1| PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: l.session_id(),
+            round: l.round(),
+            midpoint: l.expected_midpoint().unwrap(),
+            mid_state: h64(9),
+        };
+
+        // The SAME message applied at the same block yields the same deadline whatever the mover
+        // would have preferred — there is no field left to prefer with.
+        let msg = disclose(&ladder);
+        ladder.apply_disclosure(&msg, 500, W_ROUND).unwrap();
+        // The challenger now has a full window: silence is not chargeable before it elapses...
+        assert!(matches!(ladder.declare_no_show(500 + W_ROUND), Err(PalwBisectError::DeadlineNotReached { .. })));
+        // ...and is chargeable exactly one DAA past it.
+        let mut same = open_ladder(16);
+        same.apply_disclosure(&disclose(&same), 500, W_ROUND).unwrap();
+        assert!(same.declare_no_show(500 + W_ROUND + 1).is_ok());
+
+        // A longer registered window moves the deadline, and only the window can.
+        let mut wide = open_ladder(16);
+        wide.apply_disclosure(&disclose(&wide), 500, W_ROUND * 10).unwrap();
+        assert!(
+            matches!(wide.declare_no_show(500 + W_ROUND + 1), Err(PalwBisectError::DeadlineNotReached { .. })),
+            "the class's w_round is what sizes the window, not the mover"
+        );
+    }
+
+    /// `apply_verdict` is transactional: a move that exhausts the round budget leaves the ladder
+    /// exactly as it was. It used to narrow the interval and bump the round first and return the
+    /// error afterwards, leaving a half-applied ladder in a machine whose entire purpose is that
+    /// every observer derives the identical state.
+    #[test]
+    fn a_refused_verdict_changes_nothing() {
+        let mut ladder = open_ladder(16);
+        ladder.apply_disclosure(&PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: ladder.session_id(),
+            round: 0,
+            midpoint: 8,
+            mid_state: h64(9),
+        }, 500, W_ROUND).unwrap();
+        let before = ladder.clone();
+        // A zero window is refused, and nothing moved.
+        let verdict = PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true };
+        assert_eq!(ladder.apply_verdict(&verdict, 510, 0), Err(PalwBisectError::ZeroRungWindow));
+        assert_eq!(ladder, before, "a refused verdict must leave the ladder untouched");
     }
 
     #[test]
