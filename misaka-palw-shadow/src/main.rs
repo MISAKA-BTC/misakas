@@ -496,6 +496,13 @@ enum CarriageEvent {
         signer: String,
         trace_root: String,
     },
+    /// A move in a bisection ladder. Counted per turn — the watcher reports that a game is being
+    /// played, not who is winning it: replaying the ladder needs the session state, and a second
+    /// opinion about a dispute's outcome is exactly what the chain is for.
+    BisectMove {
+        challenger_bond: String,
+        turn: String,
+    },
     Commitment {
         root: String,
         class: String,
@@ -608,6 +615,15 @@ fn carriage_event_of(carriage: &PalwCarriageV1) -> CarriageEvent {
             index: c.chunk_index,
             count: c.chunk_count,
             bytes: c.bytes.len(),
+        },
+        PalwCarriageV1::BisectMove(m) => CarriageEvent::BisectMove {
+            challenger_bond: format!("{}:{}", m.challenger_bond_outpoint.transaction_id, m.challenger_bond_outpoint.index),
+            turn: match m.body {
+                kaspa_consensus_core::palw_carriage::PalwBisectMoveBodyV1::Open { .. } => "open",
+                kaspa_consensus_core::palw_carriage::PalwBisectMoveBodyV1::Disclosure(_) => "disclosure",
+                kaspa_consensus_core::palw_carriage::PalwBisectMoveBodyV1::Verdict(_) => "verdict",
+            }
+            .to_string(),
         },
         PalwCarriageV1::StepConviction(c) => CarriageEvent::StepConviction {
             accused_bond: format!("{}:{}", c.accused_bond_outpoint.transaction_id, c.accused_bond_outpoint.index),
@@ -749,6 +765,7 @@ fn kind_name(carriage: &PalwCarriageV1) -> &'static str {
         PalwCarriageV1::EvidenceChunk(_) => "evidence-chunk",
         PalwCarriageV1::Equivocation(_) => "equivocation",
         PalwCarriageV1::StepConviction(_) => "step-conviction",
+        PalwCarriageV1::BisectMove(_) => "bisect-move",
     }
 }
 
@@ -952,6 +969,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
     let mut evidence_chunks = 0usize;
     let mut equivocations = 0usize;
     let mut step_convictions = 0usize;
+    let mut bisect_moves = 0usize;
     let mut chunk_groups: std::collections::HashMap<String, std::collections::HashSet<u8>> = std::collections::HashMap::new();
     let mut chunk_group_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for event in &events {
@@ -992,6 +1010,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
                 // the whole point of the carriage kind is that consensus is the only one.
                 CarriageEvent::Equivocation { .. } => equivocations += 1,
                 CarriageEvent::StepConviction { .. } => step_convictions += 1,
+                CarriageEvent::BisectMove { .. } => bisect_moves += 1,
             },
         }
     }
@@ -1076,6 +1095,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
         // a verdict this binary is entitled to reach.
         "equivocation_certificates_seen": equivocations,
         "step_convictions_seen": step_convictions,
+        "bisect_moves_seen": bisect_moves,
         "evidence_groups_complete": chunk_groups
             .iter()
             .filter(|(g, seen)| chunk_group_counts.get(*g).is_some_and(|c| seen.len() == *c as usize))

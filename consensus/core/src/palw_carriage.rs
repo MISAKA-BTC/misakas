@@ -59,7 +59,8 @@ use crate::palw_slash::{
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
 use crate::subnets::{
     SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EQUIVOCATION,
-    SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, SUBNETWORK_ID_PALW_STEP_CONVICTION,
+    SUBNETWORK_ID_PALW_BISECT_MOVE, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+    SUBNETWORK_ID_PALW_STEP_CONVICTION,
     SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
 };
 use crate::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
@@ -115,6 +116,15 @@ pub const PALW_CARRIAGE_KIND_EQUIVOCATION: u8 = 0x07;
 /// inference. On a class whose catalog is open the same evidence terminates `Unadjudicable`,
 /// which is why coverage is an activation gate rather than a quality metric.
 pub const PALW_CARRIAGE_KIND_STEP_CONVICTION: u8 = 0x08;
+
+/// A move in a bisection ladder — the degraded path, when the miner withheld the intermediate
+/// state the direct route needs to open.
+///
+/// Unlike the two conviction kinds, a ladder move decides nothing by itself: it is one turn in a
+/// game whose OUTCOME is a no-show offence or a terminal one-step check. So this kind slashes
+/// nobody at acceptance; it advances a session, and the session's own terminal handoff is what
+/// reaches a bond.
+pub const PALW_CARRIAGE_KIND_BISECT_MOVE: u8 = 0x09;
 
 /// Most openings one carried call may request across both legs (and one carried answer may
 /// hold). A CARRIAGE cap, deliberately below the wire cap — see the module doc.
@@ -196,6 +206,8 @@ pub enum PalwCarriageError {
     StepConvictionRootMismatch,
     #[error("the step conviction does not prove a fault: {0}")]
     StepConvictionNotProven(String),
+    #[error("bisection space {got} is outside the openable range — no ladder could be played over it")]
+    BisectSpaceOutOfRange { got: u64 },
     #[error("carried call requests {got} openings; the carriage cap is {max} (wire cap unchanged — split the call)")]
     TooManyOpenings { got: usize, max: usize },
     #[error("carried object requests or holds zero openings")]
@@ -300,6 +312,46 @@ pub struct PalwStepConvictionCarriageV1 {
     pub attestation: PalwExecutionAttestationV1,
     /// The proof that one step of that execution is arithmetically wrong.
     pub refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1,
+}
+
+/// One move in a bisection ladder, carried.
+///
+/// **No deadline field, deliberately.** The rung clock is `accepted_daa + w_round` — the DAA of
+/// the block that accepted this move plus the class's registered window. Carrying a deadline is
+/// what let the moving party set its opponent's clock to one DAA and win by expiry, which the
+/// state machine no longer accepts and which this wire form therefore cannot express.
+///
+/// The challenger's bond outpoint rides every move: opening a ladder obliges a bonded party, so a
+/// baseless dispute costs its filer rather than merely wasting the responder's windows. Both
+/// parties' identities are already inside the session id, so a move cannot be replayed into
+/// another session.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwBisectMoveCarriageV1 {
+    /// = [`PALW_CARRIAGE_VERSION_V1`].
+    pub version: u16,
+    /// The bonded challenger who opened this ladder — the party a baseless dispute charges.
+    pub challenger_bond_outpoint: TransactionOutpoint,
+    pub body: PalwBisectMoveBodyV1,
+}
+
+/// The three turns of the game, in one type so a relay cannot admit half of it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwBisectMoveBodyV1 {
+    /// Opens a dispute over an index space. The session id is derived, never carried: it is a
+    /// function of the job, the committed root, both parties and the space, so two openings of
+    /// the same dispute cannot disagree about which session they are.
+    Open {
+        job_context_hash: Hash64,
+        committed_root: Hash64,
+        challenger_id: Hash64,
+        responder_id: Hash64,
+        space: crate::palw_bisect::PalwBisectSpaceV1,
+        space_size: u64,
+    },
+    /// The responder discloses the pinned midpoint's state commitment.
+    Disclosure(crate::palw_bisect::PalwBisectDisclosureV1),
+    /// The challenger agrees or disagrees, narrowing the interval.
+    Verdict(crate::palw_bisect::PalwBisectVerdictV1),
 }
 
 /// An opening challenge, carried. `PalwLegsOpeningCallV1` is already the complete message
@@ -465,6 +517,7 @@ pub enum PalwCarriageV1 {
     EvidenceChunk(PalwEvidenceChunkCarriageV1),
     Equivocation(PalwEquivocationCarriageV1),
     StepConviction(PalwStepConvictionCarriageV1),
+    BisectMove(PalwBisectMoveCarriageV1),
 }
 
 impl PalwCarriageV1 {
@@ -477,6 +530,7 @@ impl PalwCarriageV1 {
             PalwCarriageV1::Refutation(_) => PALW_CARRIAGE_KIND_REFUTATION,
             PalwCarriageV1::Equivocation(_) => PALW_CARRIAGE_KIND_EQUIVOCATION,
             PalwCarriageV1::StepConviction(_) => PALW_CARRIAGE_KIND_STEP_CONVICTION,
+            PalwCarriageV1::BisectMove(_) => PALW_CARRIAGE_KIND_BISECT_MOVE,
             PalwCarriageV1::EvidenceChunk(_) => PALW_CARRIAGE_KIND_EVIDENCE_CHUNK,
         }
     }
@@ -662,6 +716,7 @@ pub fn encode_palw_carriage_v1(carriage: &PalwCarriageV1) -> Vec<u8> {
         PalwCarriageV1::EvidenceChunk(c) => borsh::to_vec(c),
         PalwCarriageV1::Equivocation(e) => borsh::to_vec(e),
         PalwCarriageV1::StepConviction(c) => borsh::to_vec(c),
+        PalwCarriageV1::BisectMove(m) => borsh::to_vec(m),
     }
     .expect("borsh of an in-memory carriage body cannot fail");
     let mut out = Vec::with_capacity(PALW_CARRIAGE_MAGIC.len() + 1 + body.len());
@@ -691,6 +746,7 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_BISECT_MOVE => PalwCarriageV1::BisectMove(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     };
     Ok(Some(carriage))
@@ -819,6 +875,19 @@ where
 pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCarriageError> {
     match carriage {
         PalwCarriageV1::Commitment(c) => validate_commitment_carriage(c),
+        PalwCarriageV1::BisectMove(m) => {
+            require_version(m.version)?;
+            // Shape only. Whether the move is LEGAL — right turn, right round, right midpoint,
+            // within the round budget — is the ladder's own question and needs the session state,
+            // which is chain state. Admission refuses only what is incoherent on its face: a
+            // space no ladder could ever open.
+            if let PalwBisectMoveBodyV1::Open { space_size, .. } = &m.body
+                && !(2..=crate::palw_bisect::PALW_BISECT_MAX_SPACE).contains(space_size)
+            {
+                return Err(PalwCarriageError::BisectSpaceOutOfRange { got: *space_size });
+            }
+            Ok(())
+        }
         PalwCarriageV1::StepConviction(c) => {
             require_version(c.version)?;
             // Shape only. Whether the step is actually wrong needs the kernel catalog and the
@@ -1037,6 +1106,8 @@ pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
         Some(PALW_CARRIAGE_KIND_EQUIVOCATION)
     } else if *subnetwork_id == SUBNETWORK_ID_PALW_STEP_CONVICTION {
         Some(PALW_CARRIAGE_KIND_STEP_CONVICTION)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_BISECT_MOVE {
+        Some(PALW_CARRIAGE_KIND_BISECT_MOVE)
     } else {
         None
     }
@@ -1057,6 +1128,7 @@ pub fn decode_palw_stage1_body(kind: u8, body: &[u8]) -> Result<PalwCarriageV1, 
         PALW_CARRIAGE_KIND_EVIDENCE_CHUNK => PalwCarriageV1::EvidenceChunk(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_BISECT_MOVE => PalwCarriageV1::BisectMove(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     })
 }
@@ -1381,7 +1453,8 @@ mod tests {
         assert_eq!(decode_palw_carriage_v1(b"\x00rand-bytes").unwrap(), None);
         assert_eq!(decode_palw_carriage_v1(b"MPALW1\x01junk").unwrap(), None, "wrong magic is foreign");
         assert_eq!(decode_palw_carriage_v1(b"MPALW2"), Err(PalwCarriageError::TruncatedEnvelope));
-        assert_eq!(decode_palw_carriage_v1(b"MPALW2\x09"), Err(PalwCarriageError::UnknownKind(0x09)));
+        // 0x09 is the bisection-move kind now; 0x0A is the first byte past the family.
+        assert_eq!(decode_palw_carriage_v1(b"MPALW2\x0A"), Err(PalwCarriageError::UnknownKind(0x0A)));
         assert!(matches!(decode_palw_carriage_v1(b"MPALW2\x01truncated"), Err(PalwCarriageError::BodyDecode(_))));
         // A valid payload truncated mid-body is a decode error, not a smaller object.
         let payload = encode_palw_carriage_v1(&PalwCarriageV1::Attestation(attestation()));
@@ -1691,6 +1764,22 @@ mod tests {
         }
     }
 
+    /// A shape-valid ladder opening for the band round-trip.
+    fn bisect_move_for_band() -> PalwBisectMoveCarriageV1 {
+        PalwBisectMoveCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            challenger_bond_outpoint: outpoint(0xC1, 0),
+            body: PalwBisectMoveBodyV1::Open {
+                job_context_hash: h64(0x11),
+                committed_root: h64(0x22),
+                challenger_id: h64(0x33),
+                responder_id: h64(0x44),
+                space: crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                space_size: 16,
+            },
+        }
+    }
+
     fn all_band_members() -> Vec<(SubnetworkId, PalwCarriageV1)> {
         let mut out: Vec<(SubnetworkId, PalwCarriageV1)> = vec![
             (SUBNETWORK_ID_PALW_COMMITMENT, PalwCarriageV1::Commitment(commitment_composite())),
@@ -1701,8 +1790,9 @@ mod tests {
             (SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, PalwCarriageV1::EvidenceChunk(evidence_chunk())),
             (SUBNETWORK_ID_PALW_EQUIVOCATION, PalwCarriageV1::Equivocation(equivocation_for_band())),
             (SUBNETWORK_ID_PALW_STEP_CONVICTION, PalwCarriageV1::StepConviction(step_conviction_for_band())),
+            (SUBNETWORK_ID_PALW_BISECT_MOVE, PalwCarriageV1::BisectMove(bisect_move_for_band())),
         ];
-        debug_assert_eq!(out.len(), 8);
+        debug_assert_eq!(out.len(), 9);
         out.sort_by_key(|(_, c)| c.kind_byte());
         out
     }
@@ -1727,12 +1817,12 @@ mod tests {
             SUBNETWORK_ID_COINBASE,
             crate::subnets::SUBNETWORK_ID_TOKEN_BURN,
             SubnetworkId::from_byte(0x3F),
-            SubnetworkId::from_byte(0x48),
+            SubnetworkId::from_byte(0x49),
         ] {
             assert_eq!(palw_carriage_tx_kind(&id), None);
         }
         // An unknown kind byte is an error, not a fallthrough.
-        assert_eq!(decode_palw_stage1_body(0x09, b"anything"), Err(PalwCarriageError::UnknownKind(0x09)));
+        assert_eq!(decode_palw_stage1_body(0x0A, b"anything"), Err(PalwCarriageError::UnknownKind(0x0A)));
     }
 
     /// ADR-0029 §2: refutations and their chunks are pure evidence carriers — no outputs, so the
@@ -2242,5 +2332,122 @@ mod step_conviction_tests {
         let stage0 = encode_palw_carriage_v1(&obj);
         assert_eq!(decode_palw_carriage_v1(&stage0).unwrap(), Some(obj.clone()), "stage-0 path");
         assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &stage0[7..]).unwrap(), obj, "stage-1 path");
+    }
+}
+
+#[cfg(test)]
+mod bisect_move_tests {
+    use super::*;
+    use crate::palw_bisect::{
+        PALW_BISECT_MAX_SPACE, PalwBisectDisclosureV1, PalwBisectLadderV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
+    };
+    use crate::tx::TransactionId;
+
+    fn h(seed: u64) -> Hash64 {
+        Hash64::from_u64_word(seed)
+    }
+    fn op(seed: u8) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
+    }
+    fn carriage(body: PalwBisectMoveBodyV1) -> PalwBisectMoveCarriageV1 {
+        PalwBisectMoveCarriageV1 { version: PALW_CARRIAGE_VERSION_V1, challenger_bond_outpoint: op(0xC1), body }
+    }
+    fn open_body(space_size: u64) -> PalwBisectMoveBodyV1 {
+        PalwBisectMoveBodyV1::Open {
+            job_context_hash: h(0x11),
+            committed_root: h(0x22),
+            challenger_id: h(0x33),
+            responder_id: h(0x44),
+            space: PalwBisectSpaceV1::StepLeaves,
+            space_size,
+        }
+    }
+
+    /// **The wire form cannot express a deadline, which is the point.**
+    ///
+    /// A carried deadline is what let the moving party set its opponent's clock to one DAA and
+    /// win by expiry. The state machine now derives it from `accepted_daa + w_round`; this pins
+    /// that the transport agrees, so the attack cannot come back through the wire while the
+    /// machine stays honest.
+    #[test]
+    fn a_move_cannot_carry_a_deadline() {
+        let disclosure = PalwBisectDisclosureV1 { version: 1, session_id: h(0x99), round: 0, midpoint: 8, mid_state: h(0x9) };
+        let verdict = PalwBisectVerdictV1 { version: 1, session_id: h(0x99), round: 0, agree: true };
+        // Borsh encodes every field, so a deadline would show up as extra bytes. These sizes are
+        // the whole message: version + session + round + payload, and nothing else.
+        assert_eq!(borsh::to_vec(&disclosure).unwrap().len(), 2 + 64 + 4 + 8 + 64, "disclosure carries no extra field");
+        assert_eq!(borsh::to_vec(&verdict).unwrap().len(), 2 + 64 + 4 + 1, "verdict carries no extra field");
+    }
+
+    /// Admission refuses only what no ladder could ever open; legality is the session's question,
+    /// because it needs state a stateless check does not have.
+    #[test]
+    fn admission_refuses_an_unopenable_space_and_nothing_else() {
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(open_body(16)))).is_ok());
+        for bad in [0u64, 1, PALW_BISECT_MAX_SPACE + 1] {
+            assert_eq!(
+                validate_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(open_body(bad)))),
+                Err(PalwCarriageError::BisectSpaceOutOfRange { got: bad })
+            );
+        }
+        // A disclosure for a session this node has never seen is SHAPE-valid: whether it is the
+        // right turn at the right round is what the ladder decides, statefully.
+        let stray = PalwBisectMoveBodyV1::Disclosure(PalwBisectDisclosureV1 {
+            version: 1,
+            session_id: h(0xDEAD),
+            round: 7,
+            midpoint: 3,
+            mid_state: h(0x9),
+        });
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(stray))).is_ok());
+    }
+
+    /// A full game played through the carriage types: the moves that ride the chain drive the
+    /// same machine, and the ladder converges on the divergent index.
+    #[test]
+    fn a_game_played_through_carriage_converges() {
+        const W_ROUND: u64 = 30;
+        let divergence = 5u64;
+        let mut ladder = PalwBisectLadderV1::open(&h(0x11), &h(0x22), &h(0x33), &h(0x44), PalwBisectSpaceV1::StepLeaves, 16, 100, 200)
+            .expect("a 16-wide space opens");
+        let mut daa = 200u64;
+        let mut moves = 0;
+        while ladder.turn() != PalwBisectTurnV1::Terminal {
+            let mid = ladder.expected_midpoint().expect("not terminal");
+            let disclosure =
+                PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: ladder.round(), midpoint: mid, mid_state: h(mid) };
+            // Round-trip the move through the wire before applying it — a game whose transport
+            // loses a field is a game two nodes play differently.
+            let encoded = encode_palw_carriage_v1(&PalwCarriageV1::BisectMove(carriage(PalwBisectMoveBodyV1::Disclosure(
+                disclosure.clone(),
+            ))));
+            let PalwCarriageV1::BisectMove(back) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_BISECT_MOVE, &encoded[7..]).unwrap()
+            else {
+                panic!("kind must round-trip")
+            };
+            let PalwBisectMoveBodyV1::Disclosure(d) = back.body else { panic!("body must round-trip") };
+            assert_eq!(d, disclosure);
+            daa += 5;
+            ladder.apply_disclosure(&d, daa, W_ROUND).unwrap();
+
+            let verdict =
+                PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: ladder.round(), agree: divergence >= mid };
+            daa += 5;
+            ladder.apply_verdict(&verdict, daa, W_ROUND).unwrap();
+            moves += 1;
+            assert!(moves < 64, "a 16-wide space cannot need this many rungs");
+        }
+        assert_eq!(ladder.terminal_index(), Some(divergence));
+    }
+
+    /// The kind routes on its own subnetwork id and survives both decode paths.
+    #[test]
+    fn the_kind_routes_and_roundtrips() {
+        let obj = PalwCarriageV1::BisectMove(carriage(open_body(16)));
+        assert_eq!(obj.kind_byte(), PALW_CARRIAGE_KIND_BISECT_MOVE);
+        assert_eq!(palw_carriage_tx_kind(&SUBNETWORK_ID_PALW_BISECT_MOVE), Some(PALW_CARRIAGE_KIND_BISECT_MOVE));
+        let stage0 = encode_palw_carriage_v1(&obj);
+        assert_eq!(decode_palw_carriage_v1(&stage0).unwrap(), Some(obj.clone()));
+        assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_BISECT_MOVE, &stage0[7..]).unwrap(), obj);
     }
 }

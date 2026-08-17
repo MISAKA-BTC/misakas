@@ -287,6 +287,12 @@ pub const SUBNETWORK_ID_PALW_EQUIVOCATION: SubnetworkId = SubnetworkId::from_byt
 /// computes. Adjudicated by recomputing that single step from opened tiles — a
 /// bounded CPU primitive, never a model run.
 pub const SUBNETWORK_ID_PALW_STEP_CONVICTION: SubnetworkId = SubnetworkId::from_byte(0x47);
+/// A move in a bisection ladder (kind 0x09) —
+/// [`crate::palw_carriage::PalwBisectMoveCarriageV1`]. ONE id for the whole
+/// family, because open/disclose/verdict are turns in one game rather than three
+/// independent objects: they share a session, an ordering and a clock, and
+/// splitting them across ids would let a relay admit half a game.
+pub const SUBNETWORK_ID_PALW_BISECT_MOVE: SubnetworkId = SubnetworkId::from_byte(0x48);
 
 #[cfg(test)]
 mod tests {
