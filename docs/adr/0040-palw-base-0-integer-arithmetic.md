@@ -360,12 +360,27 @@ already-pinned narrowing, which is a different and worse change than adding an o
   them**: sharing them made a mutation of `RSQRT_ITERS` invisible to the differential, because
   both sides moved together. Constants are specification (F2), so they are compared, not shared.
 
-* **Structural independence is not authorship independence.** One author wrote both sides here, so
-  a misreading of the *specification* would be reproduced rather than caught — unlike
-  `misaka-palw-reference2`, whose independence comes from vendoring Berkeley SoftFloat. Closing
-  that gap means an implementation this project did not write. For `SRDHM` and
-  `RoundingShiftRight` upstream gemmlowp is directly vendorable and is the obvious next step,
-  since those two are exactly where a third party proved most likely to differ.
+* **Authorship independence is now held for C1 and C2, and only for those.** Upstream gemmlowp is
+  vendored byte-identically at commit `16e8662c34917be0065110bfcd9cc27d30f52fdf` and called through
+  an `extern "C"` shim that contains no arithmetic. The specification now agrees with it exactly
+  over ~1.8M inputs for `SRDHM` and `RoundingDivideByPOT`, so C2's justification — *that this
+  primitive is already implemented identically elsewhere* — is a measured fact rather than an
+  assumption. It was not one before: the reference would have been convicting third parties for
+  being correct.
+
+  gemmlowp's fixed-point layer is header-only, so nothing of upstream's is compiled and there is no
+  build configuration to reproduce — a stronger position than the vendored SoftFloat, where one
+  must be. "Byte-identical, no edits ever" is enforced by pinned SHA-256 digests checked at test
+  time rather than asserted in a README, because an oracle this project has edited is not an
+  oracle.
+
+* **Five primitives still have no third party, and that is now the whole of the gap.** `IntExp`
+  (F1), `IntRsqrt` and `IntRecip` (F2), `Rescale` (H) and `RoundingShiftRight64` are this ADR's own
+  definitions — the `Poly2` triple and the `IntRsqrt` seed table have no upstream at all. For those
+  five, one author wrote both sides, so a misreading of *this document* would be reproduced rather
+  than caught. The nearest candidates are the I-BERT reference for `IntExp` and a published
+  integer-Newton `rsqrt`. Both are one-way: they can refute, and their agreement would be evidence,
+  but neither is normative for a class this ADR defines.
 * **ADR-0031 does not apply to this class.** Its canonical-transcendental machinery exists to pin
   libm; there is no libm here. The class identity records "no libm" as a fact rather than
   recording a version — and the `libm_transcribed` registry flag is trivially satisfiable for

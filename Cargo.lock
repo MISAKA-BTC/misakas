@@ -5851,6 +5851,7 @@ dependencies = [
 name = "misaka-palw-base0-ref2"
 version = "1.1.0"
 dependencies = [
+ "cc",
  "kaspa-consensus-core",
 ]
 

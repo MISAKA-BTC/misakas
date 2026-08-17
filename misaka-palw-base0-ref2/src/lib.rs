@@ -1,4 +1,5 @@
-//! The `PALW-BASE-0` **second implementation** of ADR-0040's primitives.
+//! Verification for `PALW-BASE-0`'s arithmetic: a second implementation of ADR-0040's primitives,
+//! **and** vendored upstream gemmlowp as a third-party oracle.
 //!
 //! # What a second implementation is for
 //!
@@ -8,15 +9,27 @@
 //! convictable. So the claim has to be tested against something, and it cannot be tested against
 //! the implementation it is a claim about.
 //!
-//! It found two, immediately. Both are recorded below because the shape of them is the argument
+//! It found three, immediately. All are recorded below because the shape of them is the argument
 //! for this crate existing.
 //!
-//! # The independence discipline: **no shift operator**
+//! # Two kinds of independence, because they catch different things
 //!
-//! `misaka-palw-reference2` gets its independence from authorship — it vendors Berkeley SoftFloat,
-//! written years earlier by someone else. There is no equivalent to vendor for these seven
-//! integer primitives, so this crate's independence is *structural* and is enforced by one
-//! mechanical rule:
+//! * [`primitives`] re-derives all seven primitives. Its independence is **structural** — same
+//!   author, different formulation — so it catches a coding mistake and cannot catch a misreading
+//!   of the specification.
+//! * [`gemmlowp`] is Google's gemmlowp, vendored byte-identically. Its independence is
+//!   **authorship**, so for the two primitives it defines it is evidence that ADR-0040 C1 and C2 are
+//!   *right*, not merely that this repository is self-consistent.
+//!
+//! gemmlowp is the authority for `SRDHM` and `RoundingShiftRight` and defines nothing else. The
+//! other five — `IntExp`, `IntRsqrt`, `IntRecip`, `Rescale`, the 64-bit shift — exist only in
+//! ADR-0040, so structural independence is all that is available for them.
+//!
+//! # The structural discipline: **no shift operator**
+//!
+//! `misaka-palw-reference2` gets its independence from authorship alone, vendoring Berkeley
+//! SoftFloat. Five of these primitives have no upstream to vendor, so their second implementation
+//! is held to one mechanical rule instead:
 //!
 //! > No `>>`, no `<<`, and no `leading_zeros` appears anywhere in this crate's implementations.
 //!
@@ -63,8 +76,10 @@
 
 #![deny(clippy::arithmetic_side_effects)]
 
+pub mod gemmlowp;
 pub mod primitives;
 
+pub use gemmlowp::{OracleError, gemmlowp_rounding_divide_by_pot, gemmlowp_srdhm};
 pub use primitives::{
     ref2_int_exp, ref2_int_recip, ref2_int_rsqrt, ref2_requantize, ref2_rescale_q, ref2_rounding_shift_right,
     ref2_rounding_shift_right_64, ref2_srdhm,

@@ -1,14 +1,22 @@
 [package]
 name = "misaka-palw-base0-ref2"
-description = "PALW-BASE-0 second implementation: the ADR-0040 primitives re-derived with exact i128 division and no shift operator, plus the bit-exact differential. Test/verification-only — never a consensus dependency"
+description = "PALW-BASE-0 verification: the ADR-0040 primitives re-derived with exact i128 division and no shift operator (structural independence), plus vendored upstream gemmlowp as an authorship-independent oracle, plus the bit-exact differential. Test/verification-only — never a consensus dependency"
 publish = false
 rust-version.workspace = true
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 include.workspace = true
-license.workspace = true
+# Crate code is ISC like the workspace; vendor/gemmlowp/ is Google gemmlowp under
+# Apache-2.0 (vendor/gemmlowp/LICENSE).
+license = "ISC AND Apache-2.0"
 repository.workspace = true
 
 [dependencies]
 kaspa-consensus-core.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

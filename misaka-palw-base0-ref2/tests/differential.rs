@@ -330,3 +330,150 @@ fn the_differential_can_distinguish_the_defects_it_found() {
     }
     assert!(differed > 4000, "the defective SRDHM should differ on about half of all inputs, got {differed}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Three-way: the specification, the structural re-derivation, and vendored upstream gemmlowp.
+//
+// These are different in kind from everything above. The tests above compare two derivations by
+// one author, so they establish self-consistency. These compare against code written years earlier
+// by someone with no knowledge of this project, so they establish that ADR-0040 C1 and C2 describe
+// what they claim to describe.
+//
+// The two primitives covered are exactly the two the earlier differential named as the outstanding
+// authorship gap, and exactly the two that were wrong.
+// ---------------------------------------------------------------------------------------------
+
+/// `SRDHM` against upstream, over the whole `i32 × i32` boundary set, an exhaustive signed window,
+/// the exact-half family, and half a million random pairs.
+///
+/// ADR-0040 C2's justification for choosing this primitive is that other codebases implement it
+/// identically. This is the test that makes the justification true rather than assumed.
+#[test]
+fn srdhm_agrees_with_vendored_gemmlowp() {
+    let boundary = boundary_i32();
+    for &a in boundary.iter() {
+        for &b in boundary.iter() {
+            let upstream = ref2::gemmlowp_srdhm(a, b);
+            assert_eq!(spec::srdhm(a, b), upstream, "spec vs upstream SRDHM({a}, {b})");
+            assert_eq!(ref2::ref2_srdhm(a, b), upstream, "ref2 vs upstream SRDHM({a}, {b})");
+        }
+    }
+    for a in -300..=300i32 {
+        for b in -300..=300i32 {
+            assert_eq!(spec::srdhm(a, b), ref2::gemmlowp_srdhm(a, b), "SRDHM({a}, {b})");
+        }
+    }
+    // The exact-half family, where truncation and floor part company — the defect's home.
+    for n in -64..=64i32 {
+        for shift in 0..=15u32 {
+            let (a, b) = (n.saturating_mul(1 << shift), 1 << (30 - shift.min(30)));
+            assert_eq!(spec::srdhm(a, b), ref2::gemmlowp_srdhm(a, b), "SRDHM({a}, {b})");
+        }
+    }
+    let mut rng = Lcg::new(0x6EED_0001);
+    for _ in 0..500_000 {
+        let (a, b) = (rng.i32(), rng.i32());
+        assert_eq!(spec::srdhm(a, b), ref2::gemmlowp_srdhm(a, b), "SRDHM({a}, {b})");
+    }
+}
+
+/// `RoundingShiftRight` against upstream `RoundingDivideByPOT`, which is the function ADR-0040 C1's
+/// rule was always meant to describe.
+#[test]
+fn rounding_shift_right_agrees_with_vendored_gemmlowp() {
+    for s in 0..=31i32 {
+        for x in -4096..=4096i32 {
+            let upstream = ref2::gemmlowp_rounding_divide_by_pot(x, s).expect("s is in range");
+            assert_eq!(spec::rounding_shift_right(x, s as u8), upstream, "spec vs upstream RSR({x}, {s})");
+            assert_eq!(ref2::ref2_rounding_shift_right(x, s as u8), upstream, "ref2 vs upstream RSR({x}, {s})");
+        }
+    }
+    for x in boundary_i32() {
+        for s in 0..=31i32 {
+            let upstream = ref2::gemmlowp_rounding_divide_by_pot(x, s).expect("s is in range");
+            assert_eq!(spec::rounding_shift_right(x, s as u8), upstream, "RSR({x}, {s}) at the boundary");
+        }
+    }
+    let mut rng = Lcg::new(0x6EED_0002);
+    for _ in 0..500_000 {
+        let (x, s) = (rng.i32(), rng.below(32) as i32);
+        let upstream = ref2::gemmlowp_rounding_divide_by_pot(x, s).expect("s is in range");
+        assert_eq!(spec::rounding_shift_right(x, s as u8), upstream, "RSR({x}, {s})");
+    }
+}
+
+/// `Requantize` composes both primitives, so upstream can adjudicate it end to end: gemmlowp's own
+/// requantisation is `RoundingDivideByPOT(SaturatingRoundingDoublingHighMul(acc, mult), shift))`
+/// followed by a saturating narrowing, which is exactly ADR-0040 D op 2.
+///
+/// Worth its own test rather than trusting composition: agreement on two functions separately does
+/// not establish that they are composed in the same order, and a swapped order is a real mistake
+/// with a plausible-looking result.
+#[test]
+fn requantize_agrees_with_vendored_gemmlowp() {
+    let composed = |acc: i32, mult: i32, shift: i32| -> i8 {
+        let high = ref2::gemmlowp_srdhm(acc, mult);
+        ref2::gemmlowp_rounding_divide_by_pot(high, shift).expect("shift is in range").clamp(-128, 127) as i8
+    };
+    for &acc in boundary_i32().iter() {
+        for &mult in [i32::MAX, i32::MIN, 1 << 30, -(1 << 30), 1, -1, 0].iter() {
+            for shift in 0..=31i32 {
+                assert_eq!(
+                    spec::requantize(acc, mult, shift as u8),
+                    composed(acc, mult, shift),
+                    "Requantize({acc}, {mult}, {shift})"
+                );
+            }
+        }
+    }
+    let mut rng = Lcg::new(0x6EED_0003);
+    for _ in 0..300_000 {
+        let (acc, mult, shift) = (rng.i32(), rng.i32(), rng.below(32) as i32);
+        assert_eq!(
+            spec::requantize(acc, mult, shift as u8),
+            composed(acc, mult, shift),
+            "Requantize({acc}, {mult}, {shift})"
+        );
+    }
+}
+
+/// The upstream oracle must be able to convict. Both repaired defects are replayed here as the
+/// *wrong* answers and checked against upstream, so the three-way comparison is demonstrably
+/// sensitive to exactly the errors it was added to rule out — rather than passing because a link
+/// failure quietly turned the oracle into a copy of the specification.
+#[test]
+fn vendored_gemmlowp_would_have_caught_both_defects() {
+    // Defect 1: gemmlowp's nudge paired with a floor rather than a truncation.
+    let floor_srdhm = |a: i32, b: i32| -> i32 {
+        if a == i32::MIN && b == i32::MIN {
+            return i32::MAX;
+        }
+        let product = (a as i64) * (b as i64);
+        let nudge: i64 = if product >= 0 { 1 << 30 } else { 1 - (1 << 30) };
+        ((product + nudge) >> 31) as i32
+    };
+    // Defect 2: the shift form of the rounding rule.
+    let shift_form = |x: i32, s: u8| -> i32 {
+        if s == 0 {
+            return x;
+        }
+        let round = 1i32 << (s - 1);
+        (x.wrapping_add(if x >= 0 { round } else { -round })) >> s
+    };
+
+    let mut rng = Lcg::new(0x6EED_0004);
+    let (mut srdhm_caught, mut rsr_caught) = (0u32, 0u32);
+    for _ in 0..20_000 {
+        let (a, b) = (rng.i32(), rng.i32());
+        if floor_srdhm(a, b) != ref2::gemmlowp_srdhm(a, b) {
+            srdhm_caught += 1;
+        }
+        let (x, s) = (rng.i32(), rng.below(31) as u8 + 1);
+        if shift_form(x, s) != ref2::gemmlowp_rounding_divide_by_pot(x, s as i32).expect("s in range") {
+            rsr_caught += 1;
+        }
+    }
+    // Both defects are negative-input-only, so upstream should convict on about half the sample.
+    assert!(srdhm_caught > 8_000, "upstream should reject the floor-division SRDHM broadly, got {srdhm_caught}/20000");
+    assert!(rsr_caught > 8_000, "upstream should reject the shift-form rounding rule broadly, got {rsr_caught}/20000");
+}
