@@ -21,6 +21,7 @@ use crate::{
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
         palw_carriage::DbPalwCarriageStore,
+        palw_class_state::DbPalwClassStateStore,
         past_pruning_points::DbPastPruningPointsStore,
         pruning::DbPruningStore,
         pruning_meta::PruningMetaStores,
@@ -79,6 +80,10 @@ pub struct ConsensusStorage {
     /// MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
     /// carrying tx. An index with no consensus reader yet — Stage 2 is the reader.
     pub palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
+    /// Per-class difficulty, ladder status and last-credit DAA (ADR-0028/0033). Read through a
+    /// chain-scoped `PalwClassStateView`, never directly — a class fact that depends on where this
+    /// node's virtual tip points is the shape of blocker 6(b).
+    pub palw_class_state_store: Arc<RwLock<DbPalwClassStateStore>>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
     // are inert (never read or written) until `evm_activation_daa_score` is
@@ -337,6 +342,13 @@ impl ConsensusStorage {
             }
             Arc::new(RwLock::new(store))
         };
+        let palw_class_state_store = {
+            let mut store = DbPalwClassStateStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build());
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!("[palw-class-state] could not check the record layout version: {err}; leaving existing rows");
+            }
+            Arc::new(RwLock::new(store))
+        };
         // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
         // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
         // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
@@ -498,6 +510,7 @@ impl ConsensusStorage {
             vlt_activation_store,
             pruning_overlay_snapshot_store,
             stake_bonds_store,
+            palw_class_state_store,
             compute_capability_store,
             palw_carriage_store,
             evm_header_store,

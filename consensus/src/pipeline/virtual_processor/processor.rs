@@ -336,6 +336,7 @@ pub struct VirtualStateProcessor {
     /// carrying tx. Written/reverted by `stage_palw_carriages` beside the capability walk;
     /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
     pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
+    pub(super) palw_class_state_store: Arc<RwLock<crate::model::stores::palw_class_state::DbPalwClassStateStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
     /// `update_dns_state` and written in the same batch as the `DnsState`.
@@ -585,6 +586,7 @@ impl VirtualStateProcessor {
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
             palw_carriage_store: storage.palw_carriage_store.clone(),
+            palw_class_state_store: storage.palw_class_state_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
             vlt_activation_store: storage.vlt_activation_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
@@ -1963,6 +1965,10 @@ impl VirtualStateProcessor {
             // same batch. An index only — nothing in consensus reads it yet.
             self.stage_palw_carriages(&mut batch, chain_path, dns_params, sink_daa);
         }
+        // The class's last-credit DAA, in the SAME batch as everything else this chain move
+        // commits, so a class's memory of when it last minted cannot end up one block out of step
+        // with the chain that minted it.
+        self.stage_palw_class_credit_marks(&mut batch, chain_path);
 
         // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
         // the bounded recent epoch window and stage the updated DnsState into
@@ -2113,6 +2119,17 @@ impl VirtualStateProcessor {
     /// same anchor `accumulated_diff` starts from). Returns an empty view on
     /// networks without the overlay (`dns_params` is `None`), so the bond-view
     /// walk is a no-op there.
+    /// The per-class state as this node's store holds it.
+    ///
+    /// Same shape as [`Self::initial_active_bond_view`] and the same reason: consumers read a VIEW,
+    /// so a class fact is scoped to the chain being evaluated rather than to wherever the virtual
+    /// tip happens to point (blocker 6(b)).
+    pub(crate) fn initial_palw_class_state_view(&self) -> crate::model::stores::palw_class_state::PalwClassStateView {
+        crate::model::stores::palw_class_state::PalwClassStateView::from_records(
+            self.palw_class_state_store.read().iterator().filter_map(|r| r.ok()).map(|(id, rec)| (id, (*rec).clone())),
+        )
+    }
+
     pub(crate) fn initial_active_bond_view(&self) -> ActiveBondView {
         if self.dns_params.is_none() {
             return ActiveBondView::new();
@@ -2287,6 +2304,58 @@ impl VirtualStateProcessor {
     /// first-accepted-wins per `committed_root`, `(commitment_root, attester_id)`, `call_tx_id` —
     /// is the Stage-2 reader's business, exactly where ADR-0029 §2 assigns it: an index that
     /// dropped "duplicate" rows would erase the very carriers a reorg could promote to first.
+    /// Remember, per class, the DAA at which it last had a commitment credited.
+    ///
+    /// ADR-0033 §4e bounds an attacker's pre-unbonding gain as
+    /// `base(C) × (unbonding / min_credit_interval + 1)`, which ASSUMES one credited job per
+    /// interval. Nothing enforced it because nothing remembered the previous credit: the credit
+    /// walk spans `w_challenge` backward and a commitment crosses `w_challenge` AFTER acceptance,
+    /// so past credits are outside the walk by construction (audit B4). This is the memory.
+    ///
+    /// The mark is derived from the SAME function that mints — `compute_palw_credit_outputs` is
+    /// re-run for each added block — rather than from a second predicate that could drift from it.
+    /// Reverting a removed block clears the mark it set, so a reorg cannot leave a class believing
+    /// it minted on a chain that no longer exists; a class whose mark is cleared is *permissive*
+    /// again, which is the correct direction (the credits it was counting no longer exist either).
+    fn stage_palw_class_credit_marks(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
+        let Some(credit) = self.palw_credit_params.as_ref() else { return };
+        let class_id = credit.registration.runtime_class_id;
+        let mut store = self.palw_class_state_store.write();
+        let Some(existing) = store.get(class_id) else { return };
+
+        // Walk the removed side first, then the added side, so a block that appears in both nets
+        // out — the same order `stage_dns_bond_mutations` uses for the same reason.
+        let mut mark = existing.last_credited_daa;
+        for removed in chain_path.removed.iter() {
+            if let Ok(header) = self.headers_store.get_header(*removed)
+                && mark == Some(header.daa_score)
+            {
+                mark = None;
+            }
+        }
+        for added in chain_path.added.iter() {
+            let Ok(header) = self.headers_store.get_header(*added) else { continue };
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(*added) else { continue };
+            let bonds = self.initial_active_bond_view().records();
+            let view = crate::model::stores::palw_class_state::PalwClassStateView::from_records([(
+                class_id,
+                crate::model::stores::palw_class_state::PalwClassStateRecord { last_credited_daa: mark, ..(*existing).clone() },
+            )]);
+            if !self.compute_palw_credit_outputs(credit, header.daa_score, parent, &bonds, &view).is_empty() {
+                mark = Some(header.daa_score);
+            }
+        }
+        if mark != existing.last_credited_daa {
+            let updated = crate::model::stores::palw_class_state::PalwClassStateRecord {
+                last_credited_daa: mark,
+                ..(*existing).clone()
+            };
+            if let Err(err) = store.insert_batch(batch, class_id, std::sync::Arc::new(updated)) {
+                kaspa_core::warn!("[palw-class-state] could not stage the last-credit mark: {err}");
+            }
+        }
+    }
+
     fn stage_palw_carriages(&self, batch: &mut WriteBatch, chain_path: &ChainPath, dns_params: &DnsParams, sink_daa: u64) {
         if !dns_params.vlt_shadow_active_at(sink_daa) {
             // Same dormancy fence as the capability walk it mirrors: the carriage objects bind to
@@ -4867,6 +4936,7 @@ impl VirtualStateProcessor {
         daa_score: u64,
         selected_parent: BlockHash,
         bonds: &[StakeBondRecord],
+        class_state: &crate::model::stores::palw_class_state::PalwClassStateView,
     ) -> Vec<TransactionOutput> {
         use kaspa_consensus_core::blockhash::BlockHashExtensions;
         use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body};
@@ -4956,6 +5026,14 @@ impl VirtualStateProcessor {
         // for the whole block. Draining is PREFIX-MANDATORY, matching `palw_credit_batch`'s rule
         // (ADR-0037 D7): stop at the first record that does not fit rather than skipping it, so the
         // set credited is a prefix of the pinned order and cannot be cherry-picked.
+        // The emergency stop, finally reachable. `class_frozen` was hardcoded `false` at the panel
+        // site, so the ladder's Frozen state existed as a type and could never halt anything. It is
+        // now read from chain state through a view, and it fails CLOSED: a class this chain point
+        // cannot establish as Active mints nothing (audit §3.4).
+        let class_id = credit.registration.runtime_class_id;
+        if class_state.is_frozen(&class_id) {
+            return Vec::new();
+        }
         let one_job_ceiling = credit.one_job_ceiling_sompi(subsidy);
         let mut spent: u64 = 0;
         let mut outputs = Vec::new();
@@ -4996,6 +5074,19 @@ impl VirtualStateProcessor {
                 })
                 .map(|(_, daa)| *daa)
                 .collect();
+            // ADR-0033 §4e assumes ONE credited job per `min_credit_interval_daa`, and until now
+            // nothing remembered the last one — the walk spans `w_challenge` backward while a
+            // commitment crosses `w_challenge` AFTER acceptance, so previous credits are outside it
+            // by construction (audit B4). The view remembers; this is where the assumption becomes
+            // a rule. `continue`, not `break`: a commitment too close to the last credit is not a
+            // budget exhaustion, and a later one in the pinned order may still be far enough.
+            if !class_state.credit_interval_elapsed(
+                &class_id,
+                *accepted,
+                credit.registration.leverage_remedy.min_credit_interval_daa,
+            ) {
+                continue;
+            }
             let decision = decide_credit_v1(credit, &observed, anchor_hash, &candidates, &observed_atts, &refutation_daas, subsidy);
             if !decision.creditable {
                 continue;
@@ -7218,6 +7309,7 @@ impl VirtualStateProcessor {
                 virtual_state.daa_score,
                 virtual_state.ghostdag_data.selected_parent,
                 &template_bond_view.records(),
+                &self.initial_palw_class_state_view(),
             );
             validator_reward_outputs.extend(credit_outputs);
         }

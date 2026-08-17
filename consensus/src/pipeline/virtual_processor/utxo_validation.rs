@@ -788,6 +788,10 @@ impl VirtualStateProcessor {
                 header.daa_score,
                 ctx.selected_parent(),
                 &selected_parent_bond_view.records(),
+                // The SAME class-state view the template path uses. Construction and validation
+                // must compute byte-identical credit or a validating node rejects an honest
+                // coinbase; the freeze and interval predicates are now part of that answer.
+                &self.initial_palw_class_state_view(),
             );
             validator_reward_outputs.extend(credit_outputs);
         }
