@@ -70,13 +70,20 @@ loses information — which is what makes an exact-bits second implementation tr
 ```
 SRDHM(a: i32, b: i32) -> i32
     if a == i32::MIN && b == i32::MIN { return i32::MAX }   // the single saturating case
-    let p: i64 = 2 * (a as i64) * (b as i64)
+    let p: i64 = (a as i64) * (b as i64)                    // a·b — NOT 2·a·b
     let nudge: i64 = if p >= 0 { 1 << 30 } else { 1 - (1 << 30) }
     ((p + nudge) >> 31) as i32
 ```
 
 This is gemmlowp's primitive verbatim, deliberately: it is already implemented identically in
 several independent codebases, which is exactly the property a second implementation needs.
+
+**The product is `a·b`, not `2·a·b`.** The "doubling" in the name describes the relationship to
+the hardware `VQRDMULH` — `(a·b) >> 31` *is* `(2·a·b) >> 32` — it is not a factor to apply on top
+of a 31-bit shift. A first draft of this ADR wrote the 2 explicitly and still shifted by 31,
+which doubles every product: in Q31, `0.5 × 0.5` returns `0.5` instead of `0.25`, and
+`~1.0 × ~1.0` overflows `i32` outright. Recorded because the error was made and because a second
+implementation reading only the formula would reproduce it.
 
 **C3. Overflow is impossible at accumulation and saturating at narrowing.**
 
