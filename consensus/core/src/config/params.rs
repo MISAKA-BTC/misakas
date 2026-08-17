@@ -568,7 +568,20 @@ impl Params {
         };
         // The registration's own coherence, checked against THIS network's real constants
         // rather than a guess — that is what `validate` takes them for.
-        credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)
+        credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)?;
+        // ADR-0039 1a, the LOUD half of the coverage rule: no class carries weight or credit
+        // before its catalog coverage is complete. `palw_fork_choice` cannot be set without
+        // `palw_credit` (just above) and `palw_credit` carries the one registration, so refusing
+        // a structural-only class here makes it impossible to install a fork-choice fence for a
+        // class the court cannot convict. The quiet half is
+        // `PalwCreditParamsV1::active_for`, which declines to credit per commitment; this one
+        // stops the node at startup instead of running a fence that mints nothing.
+        if credit.registration.adjudication_depth != crate::palw_registry::PalwAdjudicationDepthV1::ArithmeticCatalogued {
+            return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
+                "palw_credit names a structural-only class — ADR-0039 1a: no class carries weight or credit before its catalog coverage is complete",
+            ));
+        }
+        Ok(())
     }
 
     /// The tip-ordering rule this network runs — the single seam
@@ -2216,11 +2229,8 @@ mod consensus_params_id_tests {
         assert_eq!(b.coinbase_maturity as f64, lambda * COINBASE_MATURITY_SECONDS as f64);
         // Pruning: the prunality lower bound at these constants sits below the duration term,
         // so the duration term wins — recompute both sides to keep that claim honest.
-        let lower_bound = b.finality_depth
-            + b.merge_depth * 2
-            + 4 * b.mergeset_size_limit * b.ghostdag_k as u64
-            + 2 * b.ghostdag_k as u64
-            + 2;
+        let lower_bound =
+            b.finality_depth + b.merge_depth * 2 + 4 * b.mergeset_size_limit * b.ghostdag_k as u64 + 2 * b.ghostdag_k as u64 + 2;
         assert!(lower_bound <= b.pruning_depth, "prunality lower bound {lower_bound} must not exceed pruning depth");
         assert_eq!(b.pruning_depth as f64, lambda * PRUNING_DURATION as f64);
         // The devnet preset actually runs these params with PALW active from genesis.
@@ -2419,11 +2429,11 @@ mod consensus_params_id_tests {
         // The blanket refusal is GONE: the resolver exists, so a fence can now be set and mean
         // something. What replaced it is the one precondition that is still real — a fork-choice
         // fence without a registered class has nothing to weigh blocks against.
-        assert!(
-            fenced.validate_palw_v1().is_err(),
-            "a fork-choice fence without palw_credit has no registered class"
-        );
+        assert!(fenced.validate_palw_v1().is_err(), "a fork-choice fence without palw_credit has no registered class");
         let mut with_class = fenced;
+        // ADR-0039 1a: a structural-only class is refused HERE, at startup. The float CPU class
+        // is structural-only (its catalog closes on 7 of 17 kernels), so installing it as the
+        // weighed class must fail loudly rather than run a fence that can never convict.
         with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
             registration: crate::palw_registry::tests::fleet_registration(),
             s_eff_sompi: 20_000_00000000,
@@ -2431,9 +2441,17 @@ mod consensus_params_id_tests {
             activation_daa: 0,
         });
         assert!(
-            with_class.validate_palw_v1().is_ok(),
-            "a fence with a registration whose windows fit this network is now runnable"
+            with_class.validate_palw_v1().is_err(),
+            "a fork-choice fence over a class the court cannot convict must not be installable"
         );
+        // The covered integer class is runnable.
+        with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
+            registration: crate::palw_registry::tests::base0_registration(),
+            s_eff_sompi: 20_000_00000000,
+            unbonding_period_blocks: 1_209_600,
+            activation_daa: 0,
+        });
+        assert!(with_class.validate_palw_v1().is_ok(), "a fence with a registration whose windows fit this network is now runnable");
     }
 
     #[test]
@@ -2483,8 +2501,7 @@ mod fingerprint_probe {
     fn the_pinned_testnet_fingerprint_is_the_one_a_node_announces() {
         let from_const = TESTNET_PARAMS.consensus_params_id().to_string();
         let via_preset_net = Params::from(TESTNET_PARAMS.net).consensus_params_id().to_string();
-        let as_the_daemon_builds_it =
-            Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10)).consensus_params_id().to_string();
+        let as_the_daemon_builds_it = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10)).consensus_params_id().to_string();
         println!("const                 : {from_const}");
         println!("Params::from(net)     : {via_preset_net}");
         println!("Params::from(id{{10}})  : {as_the_daemon_builds_it}");

@@ -820,7 +820,14 @@ pub mod fixtures {
             peak_memory_bytes: 5_000_000_000,
             max_proof_material_bytes: 8 << 20,
             commitment_form: PalwCommitmentFormV1::CompositeV2,
-            adjudication_depth: PalwAdjudicationDepthV1::ArithmeticCatalogued,
+            // The FLOAT CPU class, so structural-only — mirroring the consensus-core fixture.
+            // Its profile nodes carry an uncatalogued `h64(0x11)`, and under the ADR-0039 1a
+            // coverage gate a row that claimed arithmetic depth would stop VALIDATING, which
+            // would silently drop it from this tool's binding-row filter and stop capability
+            // issuance. OPERATIONAL NOTE: any binding-row `.bin` already generated on the fleet
+            // with `ArithmeticCatalogued` over a float profile is now invalid and must be
+            // regenerated as structural-only before deploying this build.
+            adjudication_depth: PalwAdjudicationDepthV1::StructuralOnly,
             libm_transcribed: true,
             replay_cost,
             credited_ceiling_tokens: ceiling,

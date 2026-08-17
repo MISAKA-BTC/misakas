@@ -509,6 +509,25 @@ impl PalwShapeProfileV3 {
         self.post_nodes.get(cursor as usize).map(|n| (n, None))
     }
 
+    /// Every `kernel_semantics_id` a step of this profile can be adjudicated under — the
+    /// reachable set ADR-0038 A4's coverage rule is about.
+    ///
+    /// Walked through the SAME `global_node_count`/`resolve_node_slot` pair the court walks
+    /// (`palw_step_refute`'s `resolve_kernel(&node.kernel_semantics_id)`), deliberately not a
+    /// second opinion about reachability: if these two ever disagreed, coverage would certify
+    /// a set that is not the set the court looks up, which is the failure mode the rule exists
+    /// to prevent.
+    ///
+    /// A declared-but-unreachable node table is therefore excluded on purpose — an
+    /// `attn_nodes` table in a graph with no attention layers contributes nothing, because the
+    /// court can never resolve a slot in it either.
+    pub fn reachable_kernel_ids_v1(&self) -> std::collections::BTreeSet<Hash64> {
+        (0..self.global_node_count())
+            .filter_map(|slot| self.resolve_node_slot(slot))
+            .map(|(node, _)| node.kernel_semantics_id)
+            .collect()
+    }
+
     /// `shape_profile_id` (v3): the canonical Borsh bytes under the v3 domain. Borsh is the
     /// wire encoding of every field above (enums carry their frozen discriminants), so the
     /// preimage and the wire object cannot drift apart.

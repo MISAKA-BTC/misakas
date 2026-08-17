@@ -64,7 +64,16 @@ impl PalwCreditParamsV1 {
     /// the aggregate mint at this block's subsidy refuses activation through the same door
     /// (a `credited_ceiling` of zero and a failed inequality both make `credit(C) = 0` with
     /// no special case).
+    ///
+    /// ADR-0039 1a joins the same door: a class whose kernel catalog is open cannot be
+    /// convicted — the adjudicator answers `Unadjudicable` for an uncatalogued kernel and
+    /// `settle_dispute_v3` then slashes nobody — so slash-bearing credit against it would mint
+    /// against nothing. `adjudication_depth` is checked FIRST, ahead of even the activation
+    /// edge, because it is the one condition no later fact can compensate for.
     pub fn active_for(&self, commit_accepted_daa: u64, block_subsidy_sompi: u64) -> bool {
+        if self.registration.adjudication_depth != crate::palw_registry::PalwAdjudicationDepthV1::ArithmeticCatalogued {
+            return false;
+        }
         if commit_accepted_daa < self.activation_daa || self.registration.credited_ceiling_tokens == 0 {
             return false;
         }
@@ -248,11 +257,16 @@ mod tests {
         Hash64::from_bytes([byte; 64])
     }
 
-    /// The registry's B15 fleet registration (fractional remedy, two-minute windows), wired
-    /// into a fence with the live bond and unbonding facts.
+    /// The registry's BASE-0 registration (fractional remedy, two-minute windows), wired into a
+    /// fence with the live bond and unbonding facts.
+    ///
+    /// BASE-0 and not the float fleet class: ADR-0039 1a makes `active_for` decline any class
+    /// whose catalog is open, and the float class is honestly structural-only, so a fence over it
+    /// credits nothing. Every measured number is the same — the registration is the fleet row
+    /// with BASE-0 kernel ids and tag.
     fn fence() -> PalwCreditParamsV1 {
         PalwCreditParamsV1 {
-            registration: crate::palw_registry::tests::fleet_registration(),
+            registration: crate::palw_registry::tests::base0_registration(),
             s_eff_sompi: 20_000 * 100_000_000,
             unbonding_period_blocks: 10_083,
             activation_daa: 0,
@@ -451,6 +465,19 @@ mod tests {
         unbounded.registration.leverage_remedy = PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1_000 };
         let d = decide_credit_v1(&unbounded, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
         assert_eq!(d, PalwCreditDecisionV1::nothing(), "an unbounded remedy refuses activation through the same door");
+
+        // ADR-0039 1a through the same door: a class whose catalog is open credits nothing.
+        // The gate is on the DEPTH, so this is the float fleet class's actual behaviour — the
+        // only change needed to reach it is the honest one.
+        let mut open_catalog = params.clone();
+        open_catalog.registration.adjudication_depth = crate::palw_registry::PalwAdjudicationDepthV1::StructuralOnly;
+        assert!(!open_catalog.active_for(commitment.accepted_daa, SUBSIDY));
+        let d = decide_credit_v1(&open_catalog, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        assert_eq!(d, PalwCreditDecisionV1::nothing(), "a class the court cannot convict earns no slash-bearing credit");
+        // And it is not a fixture artifact: the shipped float class IS that class.
+        let mut float_class = params.clone();
+        float_class.registration = crate::palw_registry::tests::fleet_registration();
+        assert!(!float_class.active_for(commitment.accepted_daa, SUBSIDY));
 
         let mut before_activation = params.clone();
         before_activation.activation_daa = 5_000;

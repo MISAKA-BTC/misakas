@@ -101,6 +101,8 @@ pub enum PalwRegistryError {
     ReplayDoesNotFit,
     #[error("transcendental site {site:?} is bound by the profile but has no registered algorithm")]
     TranscendentalUnbound { site: PalwTranscendentalSiteV1 },
+    #[error("the class claims arithmetic depth but its catalog coverage is incomplete: {0}")]
+    Coverage(crate::palw_catalog_coverage::PalwCoverageError),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,6 +345,12 @@ impl PalwClassRegistrationV1 {
                     "arithmetic depth claimed while binding an untranscribed libm — register structural-only",
                 ));
             }
+            // ADR-0039 1a / ADR-0038 A4: the claim must be TRUE of this build's catalog, not
+            // merely self-consistent. Every kernel a step of this profile can reach must be one
+            // the court can resolve — otherwise the adjudicator answers `Unadjudicable` for the
+            // uncovered kernel, `settle_dispute_v3` slashes nobody, and the class earns
+            // slash-bearing credit against a conviction path that cannot convict.
+            self.catalog_coverage_certificate_v1().map_err(PalwRegistryError::Coverage)?;
         }
 
         // Every site the profile binds must have a registered algorithm id.
@@ -352,6 +360,28 @@ impl PalwClassRegistrationV1 {
             }
         }
         Ok(())
+    }
+
+    /// The ADR-0038 A4 coverage certificate for this registration, or the gap that denies it.
+    ///
+    /// The reachable side is derived from the registered profile through the same walk the court
+    /// uses; the catalogued side is THIS BUILD's table and never a caller's claim about it. So
+    /// the certificate is a fact about a registration, not an assertion a registrant may make.
+    ///
+    /// One consequence to keep in view: `validate` therefore depends on the build's kernel
+    /// table, and two builds can disagree about whether a registration validates. That is
+    /// acceptable while `validate` is only ever applied to locally configured params and local
+    /// binding-row files. If an on-chain registration flow ever validates a row that arrived
+    /// over P2P, the catalog becomes consensus-critical and needs its own activation fence —
+    /// taking the catalog as an argument instead is NOT the fix (that was the blocker this
+    /// module's own note records).
+    pub fn catalog_coverage_certificate_v1(
+        &self,
+    ) -> Result<crate::palw_catalog_coverage::PalwCatalogCoverageCertificateV1, crate::palw_catalog_coverage::PalwCoverageError> {
+        crate::palw_catalog_coverage::verify_catalog_coverage_v1(&crate::palw_catalog_coverage::PalwReachableKernelSetV1 {
+            execution_class_id: self.runtime_class_id,
+            kernel_ids: self.shape_profile.reachable_kernel_ids_v1(),
+        })
     }
 
     /// ONE credited job's full mint, in sompi, at a given block subsidy: `base(C)` plus its
@@ -372,6 +402,17 @@ impl PalwClassRegistrationV1 {
 
     /// Whether this class may operate at ADR-0027 §6 Stage 2 (slash-bearing credit), given the
     /// external facts a registration cannot know by itself.
+    ///
+    /// Deliberately does NOT check `adjudication_depth`, and that asymmetry with
+    /// [`crate::palw_credit::PalwCreditParamsV1::active_for`] is the point rather than an
+    /// oversight. Two reasons: this function still has no non-test caller, so it could not be an
+    /// enforcement point even if it wanted to be; and `BareV2` is already forced to
+    /// `StructuralOnly` by the coherence check in `validate`, so a depth conjunct here would make
+    /// `chunked_carriage_drilled` — ADR-0029 §6's drill gate, the only reason this parameter
+    /// exists — unreachable for the sole commitment form it applies to. The ADR-0039 1a depth gate
+    /// lives at the two live seams instead: `active_for` (per commitment) and
+    /// `Params::validate_palw_v1` (at startup). Do not "complete" the symmetry here by deleting
+    /// `chunked_carriage_drilled`.
     ///
     /// `chunked_carriage_drilled` is ADR-0029 §6's gate for bare-v2 classes: the carriage
     /// landed, but the DRILL is a fleet fact. `economics` carries the chain facts (bond,
@@ -434,6 +475,16 @@ pub(crate) mod tests {
     }
 
     fn profile_with_libm(binds_libm: bool) -> PalwShapeProfileV3 {
+        // `h64(0x11)` is deliberately NOT a catalogued kernel id: this is the float class's
+        // profile, and the float catalog is incomplete by design (ADR-0031 Fact 4). A class
+        // built on it can only register structural-only.
+        profile_with_kernels(binds_libm, |_| h64(0x11))
+    }
+
+    /// The profile above with each node's `kernel_semantics_id` chosen by `kernel_for`, so a
+    /// fixture can build either the uncatalogued float profile or a genuinely covered one
+    /// without two copies of thirty measured fields drifting apart.
+    fn profile_with_kernels(binds_libm: bool, kernel_for: impl Fn(PalwStepOpKindV1) -> Hash64) -> PalwShapeProfileV3 {
         let node = |kind| PalwStepNodeV1 {
             op_kind: kind,
             role: PalwStepNodeRoleV1::Plain,
@@ -441,7 +492,7 @@ pub(crate) mod tests {
             weight_dtype: 0,
             out_len: PalwStepOutLenV1::Fixed { elements: 16 },
             tile_len: 16,
-            kernel_semantics_id: h64(0x11),
+            kernel_semantics_id: kernel_for(kind),
             input_refs: vec![PALW_STEP_INPUT_LAYER_IN],
         };
         let bindings = if binds_libm {
@@ -528,7 +579,14 @@ pub(crate) mod tests {
             peak_memory_bytes: 5_000_000_000,
             max_proof_material_bytes: 8 << 20,
             commitment_form: PalwCommitmentFormV1::CompositeV2,
-            adjudication_depth: PalwAdjudicationDepthV1::ArithmeticCatalogued,
+            // STRUCTURAL-ONLY, and that is the ADR-0031 Fact 4 boundary rather than a fixture
+            // convenience: this is the FLOAT CPU class, whose catalog closes on 7 of 17 kernels.
+            // Its profile nodes carry an uncatalogued id, so under the ADR-0039 1a coverage gate
+            // it cannot claim arithmetic depth — which means it cannot carry weight or credit.
+            // `base0_registration` below is the covered class. Faking coverage here by pointing
+            // these nodes at catalogued float descriptors would erase exactly the distinction the
+            // ordering rule draws.
+            adjudication_depth: PalwAdjudicationDepthV1::StructuralOnly,
             libm_transcribed: true,
             replay_cost,
             credited_ceiling_tokens: ceiling,
@@ -542,6 +600,54 @@ pub(crate) mod tests {
             windows,
             transcendental_algorithms: vec![(PalwTranscendentalSiteV1::VectorExpPolynomial, h64(0x34))],
         }
+    }
+
+    /// The PALW-BASE-0 class: the integer class whose kernel catalog actually closes, and
+    /// therefore the only fixture that may claim `ArithmeticCatalogued` under the ADR-0039 1a
+    /// coverage gate.
+    ///
+    /// Every measured number (`replay_cost`, `windows`, band inputs, `leverage_remedy`,
+    /// `pwu_per_inference`) is borrowed BYTE-IDENTICALLY from `fleet_registration` so downstream
+    /// assertions about ceiling 4 095 / band B0 / the 3 600 s deadline stay valid — the envelope
+    /// is a loan, NOT a BASE-0 measurement, and no reader should treat it as one.
+    ///
+    /// What is genuinely BASE-0 here is the part the gate reads: each node carries a real
+    /// descriptor id from `palw_step_refute`'s catalog, including `KDESC_BASE0_RESCALE` (ADR-0040
+    /// Decision H's op 9). That last one is deliberate — a regression that dropped op 9 from
+    /// `KDESC_ALL` would now fail REGISTRATION, not merely a coverage unit test.
+    pub(crate) fn base0_registration() -> PalwClassRegistrationV1 {
+        use crate::palw_step::kernel_semantics_id_v1;
+        use crate::palw_step_refute::{
+            KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_SOFTMAX,
+        };
+        let class_tag = "misaka-palw-base0-cpu/x86_64/v1";
+        let mut reg = fleet_registration();
+        let node = |kind, descriptor: &str| PalwStepNodeV1 {
+            op_kind: kind,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: String::new(),
+            weight_dtype: 0,
+            out_len: PalwStepOutLenV1::Fixed { elements: 16 },
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(descriptor),
+            input_refs: vec![PALW_STEP_INPUT_LAYER_IN],
+        };
+        // No transcendental site at all: BASE-0's exp/reciprocal/rsqrt are integer programs in
+        // the catalog, so there is nothing to bind and nothing to transcribe. That absence is
+        // the reason this class's coverage can reach 100 %.
+        reg.shape_profile.transcendental_bindings = vec![];
+        reg.transcendental_algorithms = vec![];
+        reg.libm_transcribed = false;
+        reg.shape_profile.pre_nodes = vec![node(PalwStepOpKindV1::EmbedLookup, KDESC_BASE0_EMBED)];
+        reg.shape_profile.gdn_nodes = vec![node(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM)];
+        reg.shape_profile.attn_nodes = vec![node(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX)];
+        reg.shape_profile.post_nodes =
+            vec![node(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL), node(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE)];
+        reg.label = class_tag.into();
+        reg.class_tag = class_tag.into();
+        reg.runtime_class_id = crate::vlt::derive_runtime_class_id(class_tag);
+        reg.adjudication_depth = PalwAdjudicationDepthV1::ArithmeticCatalogued;
+        reg
     }
 
     /// The B15 live facts (`docs/palw-economic-parameters-2026-08-16.md`): the 120 s subsidy
@@ -598,6 +704,9 @@ pub(crate) mod tests {
     fn an_untranscribed_libm_cannot_claim_arithmetic_depth() {
         // The ADR-0031 Fact 4 admission boundary: an Apple-libm class registers honestly.
         let mut reg = fleet_registration();
+        // The float class registers structural-only now, so the depth claim has to be made
+        // explicitly for the depth defence to be the thing under test.
+        reg.adjudication_depth = PalwAdjudicationDepthV1::ArithmeticCatalogued;
         reg.shape_profile = profile_with_libm(true);
         reg.transcendental_algorithms = vec![(PalwTranscendentalSiteV1::LibmExpf, h64(0x33))];
         reg.libm_transcribed = false;
@@ -617,6 +726,7 @@ pub(crate) mod tests {
     #[test]
     fn arithmetic_depth_requires_the_step_leg_form() {
         let mut reg = fleet_registration();
+        reg.adjudication_depth = PalwAdjudicationDepthV1::ArithmeticCatalogued;
         reg.commitment_form = PalwCommitmentFormV1::CompositeV1;
         assert!(matches!(
             reg.validate(&two_minute_blockrate(), 120_000),
@@ -624,6 +734,51 @@ pub(crate) mod tests {
         ));
         reg.adjudication_depth = PalwAdjudicationDepthV1::StructuralOnly;
         reg.validate(&two_minute_blockrate(), 120_000).unwrap();
+    }
+
+    #[test]
+    fn arithmetic_depth_requires_the_catalog_to_actually_cover_the_profile() {
+        // The BASE-0 class is the covered one, and it validates AT arithmetic depth.
+        let base0 = base0_registration();
+        assert_eq!(base0.adjudication_depth, PalwAdjudicationDepthV1::ArithmeticCatalogued);
+        base0.validate(&two_minute_blockrate(), 120_000).unwrap();
+        let cert = base0.catalog_coverage_certificate_v1().expect("the integer class closes");
+        assert_eq!(cert.execution_class_id, base0.runtime_class_id, "a certificate names the class it covers");
+
+        // ONE node repointed at an id no build resolves is enough to deny the claim. This is the
+        // hole the gate exists for: the court answers `Unadjudicable` for that kernel, the
+        // settlement slashes nobody, and a class in that state would earn slash-bearing credit
+        // against a conviction path that cannot convict.
+        let mut uncovered = base0_registration();
+        uncovered.shape_profile.attn_nodes[0].kernel_semantics_id = h64(0xEE);
+        let err = uncovered.validate(&two_minute_blockrate(), 120_000).unwrap_err();
+        match err {
+            PalwRegistryError::Coverage(crate::palw_catalog_coverage::PalwCoverageError::CoverageGap { missing }) => {
+                assert_eq!(missing, vec![h64(0xEE)], "the gap must name every missing id, not a count");
+            }
+            other => panic!("expected a coverage gap, got {other:?}"),
+        }
+        // The same registration is perfectly legal once it stops claiming what it cannot do.
+        uncovered.adjudication_depth = PalwAdjudicationDepthV1::StructuralOnly;
+        uncovered.validate(&two_minute_blockrate(), 120_000).unwrap();
+
+        // ADR-0040 Decision H's op 9 is IN the fixture's reachable set on purpose: dropping it
+        // from the catalog is a registration failure, not just a coverage unit-test failure.
+        let rescale = crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_BASE0_RESCALE);
+        assert!(base0.shape_profile.reachable_kernel_ids_v1().contains(&rescale));
+
+        // And the reachable set is what the COURT can reach, not what the tables declare: an
+        // attention node table in a graph with no attention layers contributes nothing, because
+        // no slot ever resolves into it.
+        let mut no_attn = base0_registration();
+        no_attn.shape_profile.full_attention_interval = 0;
+        let reachable = no_attn.shape_profile.reachable_kernel_ids_v1();
+        let softmax = crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_BASE0_SOFTMAX);
+        assert_eq!(
+            reachable.contains(&softmax),
+            no_attn.shape_profile.attention_layer_exists(),
+            "reachability must follow the same walk the adjudicator uses"
+        );
     }
 
     #[test]

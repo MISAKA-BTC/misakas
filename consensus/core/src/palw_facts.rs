@@ -23,16 +23,18 @@
 //! verifier nobody assigned is telemetry rather than a licence.
 
 use crate::palw_job_panel::PalwPanelSeatV3;
-use crate::tx::TransactionOutpoint;
 use crate::palw_receipt::{PalwReceiptVerdictV1, PalwVerificationReceiptV1};
 use crate::palw_weight::PalwWeightFactsV1;
+use crate::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 use std::collections::BTreeSet;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwFactsError {
-    #[error("this node cannot resolve {what} for the block under evaluation — an unresolved fact is an error, never a permissive zero")]
+    #[error(
+        "this node cannot resolve {what} for the block under evaluation — an unresolved fact is an error, never a permissive zero"
+    )]
     Unresolved { what: &'static str },
     #[error("the challenge window is zero — every block would finalize at admission")]
     ZeroChallengeWindow,
@@ -104,8 +106,7 @@ pub fn weight_facts_v1(resolved: &PalwResolvedBlockFactsV1, w_challenge: u64) ->
     let pov = resolved.pov_daa.ok_or(PalwFactsError::Unresolved { what: "the evaluating chain's DAA" })?;
     let receipts = resolved.assigned_receipts.ok_or(PalwFactsError::Unresolved { what: "the assigned receipt count" })?;
     let convicted = resolved.convicted_before_close.ok_or(PalwFactsError::Unresolved { what: "the conviction state" })?;
-    let disputed =
-        resolved.dispute_open_or_unadjudicable.ok_or(PalwFactsError::Unresolved { what: "the dispute state" })?;
+    let disputed = resolved.dispute_open_or_unadjudicable.ok_or(PalwFactsError::Unresolved { what: "the dispute state" })?;
     Ok(PalwWeightFactsV1 {
         distinct_receipts: receipts,
         // Saturating: a point of view BEHIND the acceptance is not a closed window, and it is the
@@ -122,6 +123,17 @@ pub fn weight_facts_v1(resolved: &PalwResolvedBlockFactsV1, w_challenge: u64) ->
 /// Both come from chain state and neither is a miner input, which is what
 /// [`crate::palw_pwu::check_pwu_claim_v1`] enforces against the commitment's claim. This is the
 /// same derivation, for the consumer that needs the value rather than a verdict on a claim.
+///
+/// **Caller obligation (ADR-0039 1a).** `pwu_per_inference` may only be resolved from a
+/// registration whose catalog coverage is complete — one for which
+/// `PalwClassRegistrationV1::catalog_coverage_certificate_v1` succeeds. This signature takes a
+/// bare `Option<u64>` on purpose (threading a registration through a seam whose only live callers
+/// pass `None` would add a parameter with no consumer, which is the very defect the coverage rule
+/// was fixing), so the obligation is stated rather than typed. Today it holds upstream: a node
+/// cannot install `palw_fork_choice` without a `palw_credit` registration that
+/// `Params::validate_palw_v1` has confirmed is `ArithmeticCatalogued`. When the W4′ weight wiring
+/// lands it must read this number from `params.palw_credit.registration` for that reason — never
+/// from a free-floating store field.
 pub fn block_pwu_v1(class_target: Option<u128>, pwu_per_inference: Option<u64>) -> Result<u64, PalwFactsError> {
     let target = class_target.ok_or(PalwFactsError::Unresolved { what: "the class's DAA target" })?;
     let cost = pwu_per_inference.ok_or(PalwFactsError::Unresolved { what: "the class's per-inference cost" })?;
@@ -282,10 +294,7 @@ mod tests {
         let target = u128::MAX >> 10; // 1_024 expected attempts
         assert_eq!(block_pwu_v1(Some(target), Some(100)), Ok(102_400));
         assert_eq!(block_pwu_v1(None, Some(100)), Err(PalwFactsError::Unresolved { what: "the class's DAA target" }));
-        assert_eq!(
-            block_pwu_v1(Some(target), None),
-            Err(PalwFactsError::Unresolved { what: "the class's per-inference cost" })
-        );
+        assert_eq!(block_pwu_v1(Some(target), None), Err(PalwFactsError::Unresolved { what: "the class's per-inference cost" }));
     }
 }
 
@@ -388,8 +397,15 @@ where
                     && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
                     && c.refutation.binding.full_logits_trace_root == input.commitment_root
                     && let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa)
-                    && adjudicate_step_conviction_carriage_v1(&c, accused, input.pov_daa, input.network_id, input.step_weights, &verify_signature)
-                        .is_ok()
+                    && adjudicate_step_conviction_carriage_v1(
+                        &c,
+                        accused,
+                        input.pov_daa,
+                        input.network_id,
+                        input.step_weights,
+                        &verify_signature,
+                    )
+                    .is_ok()
                 {
                     convicted_before_close = true;
                 }
@@ -760,7 +776,9 @@ mod resolver_tests {
         assert_eq!(resolved.convicted_before_close, Some(false));
         assert_eq!(resolved.dispute_open_or_unadjudicable, Some(false));
         // ...and therefore a weight, end to end.
-        let weight = resolve_block_weight_v1(&input(&carriage, &panel, 1_100, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature).unwrap();
+        let weight =
+            resolve_block_weight_v1(&input(&carriage, &panel, 1_100, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
+                .unwrap();
         assert_eq!(weight.pwu, 102_400);
         assert_eq!(weight.stage, PalwWorkRampStageV1::ReceiptLicensed);
     }
@@ -782,9 +800,15 @@ mod resolver_tests {
 
         // Opened and awaiting the first disclosure: open.
         let just_opened = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), bisect_row(open.clone(), 1_070)];
-        assert_eq!(resolve_block_facts_v1(&input(&just_opened, &panel, 1_100, &bonds(), &NoStepWeights), accept_fixture_signature).dispute_open_or_unadjudicable, Some(true));
+        assert_eq!(
+            resolve_block_facts_v1(&input(&just_opened, &panel, 1_100, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .dispute_open_or_unadjudicable,
+            Some(true)
+        );
         // An open dispute cannot mature, whatever the receipts say.
-        let weight = resolve_block_weight_v1(&input(&just_opened, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature).unwrap();
+        let weight =
+            resolve_block_weight_v1(&input(&just_opened, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
+                .unwrap();
         assert_eq!(weight.stage, PalwWorkRampStageV1::Provisional, "an open dispute is not an absence of refutation");
 
         // Played to the terminal index: decided, no longer blocking.
@@ -815,7 +839,8 @@ mod resolver_tests {
         // the same statement. Reporting it as decided matured a block whose disputed step had never
         // been checked by anyone (re-audit).
         assert_eq!(
-            resolve_block_facts_v1(&input(&rows, &panel, 1_200, &bonds(), &NoStepWeights), accept_fixture_signature).dispute_open_or_unadjudicable,
+            resolve_block_facts_v1(&input(&rows, &panel, 1_200, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .dispute_open_or_unadjudicable,
             Some(true),
             "a located-but-unadjudicated step is an open dispute, not a decided one"
         );
@@ -837,7 +862,11 @@ mod resolver_tests {
             space_size: 4,
         };
         let other = vec![receipt_row(1, 1_050), bisect_row(elsewhere, 1_070)];
-        assert_eq!(resolve_block_facts_v1(&input(&other, &panel, 1_100, &bonds(), &NoStepWeights), accept_fixture_signature).dispute_open_or_unadjudicable, Some(false));
+        assert_eq!(
+            resolve_block_facts_v1(&input(&other, &panel, 1_100, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .dispute_open_or_unadjudicable,
+            Some(false)
+        );
     }
 
     /// **§3.1: a receipt only counts if the bonded verifier actually signed it.**
@@ -867,8 +896,7 @@ mod resolver_tests {
 
         // (3) bond — a verifier whose bond this chain point does not hold is not accountable.
         let no_bonds = crate::dns_finality::ActiveBondView::default();
-        let unbonded =
-            resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &no_bonds, &NoStepWeights), accept_fixture_signature);
+        let unbonded = resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &no_bonds, &NoStepWeights), accept_fixture_signature);
         assert_eq!(unbonded.assigned_receipts, Some(0), "an unbonded filer is not a licence");
 
         // (3b) bond ACTIVITY — a slashed bond resolves but is not active, so it cannot license.
@@ -878,8 +906,7 @@ mod resolver_tests {
             b.status = crate::dns_finality::BondStatus::Slashed;
             (op(s), b)
         }));
-        let after_slash =
-            resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &slashed, &NoStepWeights), accept_fixture_signature);
+        let after_slash = resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &slashed, &NoStepWeights), accept_fixture_signature);
         assert_eq!(after_slash.assigned_receipts, Some(0), "a slashed verifier's receipt is not a licence");
 
         // (2) class — a replay under another class is a different computation (ADR-0037 I11).
@@ -996,8 +1023,7 @@ mod resolver_tests {
         );
 
         // The same record with that bond absent from this chain point: nothing is opened.
-        let without_challenger =
-            crate::dns_finality::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| (op(s), bond(s))));
+        let without_challenger = crate::dns_finality::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| (op(s), bond(s))));
         assert_eq!(
             resolve_block_facts_v1(&input(&rows, &panel, 1_100, &without_challenger, &NoStepWeights), accept_fixture_signature)
                 .dispute_open_or_unadjudicable,
@@ -1036,13 +1062,28 @@ mod resolver_tests {
 
         // Window closes at 1_000 + 500 = 1_500.
         let before = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), equivocation(1_400)];
-        assert_eq!(resolve_block_facts_v1(&input(&before, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature).convicted_before_close, Some(true));
-        assert_eq!(resolve_block_weight_v1(&input(&before, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature).unwrap().stage, PalwWorkRampStageV1::Voided);
+        assert_eq!(
+            resolve_block_facts_v1(&input(&before, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .convicted_before_close,
+            Some(true)
+        );
+        assert_eq!(
+            resolve_block_weight_v1(&input(&before, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
+                .unwrap()
+                .stage,
+            PalwWorkRampStageV1::Voided
+        );
 
         let after = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), equivocation(1_600)];
-        assert_eq!(resolve_block_facts_v1(&input(&after, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature).convicted_before_close, Some(false));
         assert_eq!(
-            resolve_block_weight_v1(&input(&after, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature).unwrap().stage,
+            resolve_block_facts_v1(&input(&after, &panel, 9_000, &bonds(), &NoStepWeights), accept_fixture_signature)
+                .convicted_before_close,
+            Some(false)
+        );
+        assert_eq!(
+            resolve_block_weight_v1(&input(&after, &panel, 9_000, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
+                .unwrap()
+                .stage,
             PalwWorkRampStageV1::Final,
             "a late conviction cannot unmake finality (W5)"
         );
