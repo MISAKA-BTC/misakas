@@ -519,6 +519,27 @@ pub struct Params {
 }
 
 impl Params {
+    /// Everything about this network's PALW fence that must be true before a node runs it.
+    ///
+    /// **This function exists because nothing called the checks.** `PalwClassRegistrationV1::
+    /// validate`, `PalwScheduleParamsV1::validate` and `stage2_eligible` were all implemented and
+    /// well tested, and all three had zero non-test callers (re-audit 2026-08-17): installing
+    /// `palw_credit = Some(..)` ran none of them. A fence could therefore ship windows exceeding
+    /// the pruning horizon, a ceiling its own measurement does not derive, or a registration
+    /// whose routing keys do not match its class tag — every one of which the code already knew
+    /// how to refuse, and none of which anything asked it about.
+    ///
+    /// `Ok(())` when the fence is `None`: a network with no PALW credit params has nothing to
+    /// check, which is every shipped preset today.
+    pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
+        let Some(credit) = self.palw_credit.as_ref() else {
+            return Ok(());
+        };
+        // The registration's own coherence, checked against THIS network's real constants
+        // rather than a guess — that is what `validate` takes them for.
+        credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)
+    }
+
     /// A fingerprint of the consensus rules this node runs, for the P2P handshake.
     ///
     /// Two nodes that answer the same network name but disagree here cannot reach consensus — this
@@ -2272,6 +2293,41 @@ mod consensus_params_id_tests {
         let mut moved = TESTNET_PARAMS;
         moved.evm_activation_daa_score += 1;
         assert_ne!(base.consensus_params_id(), moved.consensus_params_id(), "a different activation schedule is a different rule set");
+    }
+
+    /// Re-audit high 2, pinned: **the registration checks now have a caller.**
+    ///
+    /// `PalwClassRegistrationV1::validate` was implemented, well tested, and reachable from
+    /// nothing outside its own test module — installing `palw_credit = Some(..)` ran none of it.
+    /// This asserts both halves of the fix: every shipped preset passes (the fence is `None`, so
+    /// there is nothing to check and nothing to break), and a fence carrying a registration that
+    /// fails its own rules is refused rather than run.
+    #[test]
+    fn a_palw_fence_is_validated_before_a_node_runs_it() {
+        for (name, params) in [
+            ("mainnet", &MAINNET_PARAMS),
+            ("testnet", &TESTNET_PARAMS),
+            ("testnet11", &TESTNET11_PARAMS),
+            ("devnet", &DEVNET_PARAMS),
+            ("simnet", &SIMNET_PARAMS),
+        ] {
+            assert!(params.validate_palw_v1().is_ok(), "{name}: a fence-less preset has nothing to fail");
+            assert!(params.palw_credit.is_none(), "{name}: no shipped preset installs a fence yet");
+        }
+
+        // A fence whose registration breaks its own canonicality rule must not be runnable.
+        // Built from the registry's own fixture so the failure is the injected one, not a
+        // half-built struct.
+        let mut broken = SIMNET_PARAMS;
+        let mut registration = crate::palw_registry::tests::fleet_registration();
+        registration.pwu_per_inference = 0;
+        broken.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
+            registration,
+            s_eff_sompi: 20_000_00000000,
+            unbonding_period_blocks: 1_209_600,
+            activation_daa: 0,
+        });
+        assert!(broken.validate_palw_v1().is_err(), "an invalid registration must be refused, not run");
     }
 
     #[test]

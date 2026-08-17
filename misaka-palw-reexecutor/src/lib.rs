@@ -794,6 +794,9 @@ pub mod fixtures {
         let class_tag = "misaka-palw-lite-cpu/x86_64/v1";
         PalwClassRegistrationV1 {
             version: PALW_REGISTRY_OBJECT_VERSION_V1,
+            // ADR-0038 D: the normative per-inference op count. Same indicative value as the
+            // consensus-core fixture so the two agree on what this class is.
+            pwu_per_inference: 512_000_000,
             label: class_tag.into(),
             class_tag: class_tag.into(),
             runtime_class_id: kaspa_consensus_core::vlt::derive_runtime_class_id(class_tag),

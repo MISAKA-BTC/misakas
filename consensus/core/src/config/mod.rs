@@ -261,7 +261,26 @@ impl ConfigBuilder {
         self
     }
 
+    /// Finalize the config.
+    ///
+    /// Panics if this network's PALW fence does not validate. That is the intended severity:
+    /// `palw_credit` is a coordinated-release parameter, so a fence that fails its own checks is
+    /// a build/deploy error, not a runtime input — and the failure modes it screens for (windows
+    /// past the pruning horizon, a ceiling its measurement does not derive, routing keys that
+    /// disagree with the class tag) are exactly the ones that would otherwise be discovered as a
+    /// consensus divergence in production. A node that cannot run its own rules must refuse to
+    /// start, loudly, the way the VLT devnet fence already does.
+    ///
+    /// No shipped preset can reach the panic: `palw_credit` is `None` on all of them, and
+    /// [`Params::validate_palw_v1`] returns `Ok` for `None`.
     pub fn build(self) -> Config {
+        if let Err(e) = self.config.params.validate_palw_v1() {
+            panic!(
+                "network {} installs a PALW fence that does not validate: {e}. \
+                 Refusing to start rather than run rules this node cannot satisfy.",
+                self.config.params.net
+            );
+        }
         self.config
     }
 }

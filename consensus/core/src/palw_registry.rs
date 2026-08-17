@@ -192,6 +192,25 @@ pub struct PalwClassRegistrationV1 {
     /// class registers honestly as structural-only rather than claiming arithmetic depth.
     pub libm_transcribed: bool,
 
+    // --- consensus work: the NORMATIVE per-inference cost (ADR-0038 D / ADR-0039 §5) ---
+    /// The normative operation count of one canonical inference under this class's frozen
+    /// kernel graph — the second factor of
+    /// [`crate::palw_pwu::palw_pwu_v1`]`(class_target, pwu_per_inference)`.
+    ///
+    /// Deliberately adjacent to `replay_cost` below and deliberately **not** derived from it.
+    /// `replay_cost` is measured wall-clock: host-dependent, hardware-dependent, self-reported,
+    /// and correct for sizing dispute windows. This is a counted consequence of the registered
+    /// model shape, the pinned kernel graph and the frozen decode budget
+    /// ([`crate::pow_layer0::POW_L1_PALW_N_PREDICT_V1`]), which is why one number per class is
+    /// enough: every ticket in a class has the same job shape. Using a millisecond figure here
+    /// would put a host's clock into fork-choice weight — ADR-0038 Decision D's "static
+    /// intra-class, never wall-clock" is exactly this line.
+    ///
+    /// It is also **not** a cross-class price. See [`crate::palw_pwu`] — pricing classes against
+    /// each other by this number reintroduces the hand-tuned coefficient table ADR-0038
+    /// Decision D rejects; that job belongs to the epoch share cap (ADR-0039 Decision 5).
+    pub pwu_per_inference: u64,
+
     // --- measured cost and the values derived from it ---
     pub replay_cost: PalwReplayCostMeasurementV1,
     /// MUST equal `credited_ceiling_tokens_v1(replay_cost, windows, block_time)` (B13).
@@ -241,6 +260,13 @@ impl PalwClassRegistrationV1 {
         }
         self.shape_profile.validate_shape().map_err(PalwRegistryError::Profile)?;
         self.windows.validate(blockrate).map_err(PalwRegistryError::Windows)?;
+
+        // A class whose canonical inference costs nothing would contribute zero pwu at every
+        // target, i.e. a class that mines blocks weighing nothing — indistinguishable from an
+        // inert class, but able to occupy a difficulty domain and a share.
+        if self.pwu_per_inference == 0 {
+            return Err(PalwRegistryError::NotCanonical("pwu_per_inference is zero — a canonical inference costs something"));
+        }
 
         // The B13 rule: a declared ceiling must be the one its own measurement derives.
         let derived = credited_ceiling_tokens_v1(&self.replay_cost, &self.windows, target_time_per_block_ms);
@@ -458,6 +484,10 @@ pub(crate) mod tests {
         let class_tag = "misaka-palw-lite-cpu/x86_64/v1"; // the live CPU tag (vlt::CPU_RUNTIME_CLASS on x86_64)
         PalwClassRegistrationV1 {
             version: PALW_REGISTRY_OBJECT_VERSION_V1,
+            // Indicative normative op count for one canonical 128-token inference of the pinned
+            // 2B class. A fixture value, not a measurement — the real one is counted from the
+            // frozen kernel graph at registration.
+            pwu_per_inference: 512_000_000,
             label: class_tag.into(),
             class_tag: class_tag.into(),
             runtime_class_id: crate::vlt::derive_runtime_class_id(class_tag),
@@ -657,6 +687,9 @@ pub(crate) mod tests {
         assert_ne!(mutate(&|r| r.commitment_form = PalwCommitmentFormV1::BareV2), base);
         assert_ne!(mutate(&|r| r.libm_transcribed = false), base);
         assert_ne!(mutate(&|r| r.replay_cost.ms_per_decode_token = 1), base);
+        // The consensus work factor: two classes that differ only in what one inference costs
+        // are different classes, and their blocks must weigh differently.
+        assert_ne!(mutate(&|r| r.pwu_per_inference = 1), base);
         assert_ne!(mutate(&|r| r.windows.q = 3), base);
         assert_ne!(mutate(&|r| r.leverage_remedy.min_credit_interval_daa = 5_042), base);
         assert_ne!(mutate(&|r| r.leverage_remedy.base_subsidy_permille = 1), base);
@@ -716,6 +749,21 @@ pub(crate) mod tests {
         );
         oversized.model_band = PalwModelBandV1::B1;
         oversized.validate(&two_minute_blockrate(), 120_000).unwrap();
+    }
+
+    /// A class whose canonical inference costs nothing would mine blocks weighing nothing at
+    /// every target — inert in fork choice, yet occupying a difficulty domain and a share.
+    #[test]
+    fn a_zero_cost_inference_cannot_register() {
+        let mut free = fleet_registration();
+        free.pwu_per_inference = 0;
+        assert_eq!(
+            free.validate(&two_minute_blockrate(), 120_000),
+            Err(PalwRegistryError::NotCanonical("pwu_per_inference is zero — a canonical inference costs something"))
+        );
+        // And the honest fixture still passes, so the new conjunct did not close the door on
+        // everything else.
+        assert!(fleet_registration().validate(&two_minute_blockrate(), 120_000).is_ok());
     }
 
     #[test]
