@@ -80,9 +80,11 @@ pub const RSQRT_SEED: [i64; 16] = [
 /// must accumulate in `i64` and say so.
 pub const MAX_DOT_LEN: usize = 133_144;
 
-/// Round-half-away-from-zero shift — ONE of the two sites in the class where a value loses
-/// information (ADR-0040 C1); the other is [`srdhm`], which rounds half UP, not half-away. Every
-/// operation other than these two is exact.
+/// Round-half-away-from-zero shift — one of the class's named lossy sites (ADR-0040 C1).
+///
+/// It is NOT the only one, and the others do NOT share its rule: [`srdhm`] rounds half UP, and the
+/// internal `>> K` steps inside the ops and the transcendentals floor. C1 tabulates all three.
+/// Products, accumulations and adds are exact.
 ///
 /// # It is written on the magnitude, and that is the whole correctness argument
 ///
@@ -166,9 +168,9 @@ pub fn requantize(acc: i32, multiplier: i32, shift: u8) -> i8 {
     rounding_shift_right(srdhm(acc, multiplier), shift).clamp(-128, 127) as i8
 }
 
-/// [`rounding_shift_right`] at 64 bits — the same round-half-away-from-zero rule, so ADR-0040 C1's
-/// "rounding happens in exactly one place" still holds with two widths of one rule rather than two
-/// rules.
+/// [`rounding_shift_right`] at 64 bits — the same round-half-away-from-zero rule, one rule at two
+/// widths. (It is NOT the only rounding rule in the class: [`srdhm`] rounds half UP, and the
+/// internal `>> K` steps floor. ADR-0040 C1 enumerates them.)
 #[inline]
 pub fn rounding_shift_right_64(x: i64, s: u8) -> i64 {
     debug_assert!(s <= 62);
@@ -459,6 +461,12 @@ mod tests {
         assert!(srdhm(one_q31, one_q31) >= one_q31 - 2, "~1.0 x ~1.0 stays in range");
         assert_eq!(srdhm(i32::MIN, i32::MIN), i32::MAX);
         assert_eq!(srdhm(0, 12345), 0);
+        // The declared domain 0..=31 keeps its exact values — the §2.3 clamp must not disturb it.
+        assert_eq!(rounding_shift_right(1 << 20, 31), 0);
+        assert_eq!(rounding_shift_right(1 << 20, 10), 1024);
+        assert_eq!(rounding_shift_right(-(1 << 20), 10), -1024);
+        // Out-of-domain shifts are covered by `the_shift_clamp_makes_release_total` below, which is
+        // release-only because in debug the `debug_assert` is deliberately the louder contract.
         // Requantize saturates rather than wrapping.
         assert_eq!(requantize(i32::MAX, i32::MAX, 0), 127);
         assert_eq!(requantize(i32::MIN, i32::MAX, 0), -128);
@@ -493,6 +501,32 @@ mod tests {
         let worst = 127i64 * 127;
         assert!(MAX_DOT_LEN as i64 * worst <= i32::MAX as i64, "the bound must fit");
         assert!((MAX_DOT_LEN as i64 + 1) * worst > i32::MAX as i64, "and must be the largest that does");
+    }
+
+    /// ADR-0040 C1 / audit §2.3: `rounding_shift_right` is TOTAL in release for every `u8` shift.
+    ///
+    /// Two contracts by build mode, and this pins the release one. In debug the `debug_assert!(s <=
+    /// 31)` is the contract — a caller passing an out-of-domain shift is a bug and must be loud. In
+    /// release the clamp is the contract, because the refutation path decodes `shift` from an
+    /// unvalidated oracle byte (`palw_step_refute`, 0..=255) and a `pub` arithmetic function on
+    /// peer-influenced input must not panic: without `s.min(31)`, `1i64 << s` overflows for s >= 64
+    /// under `overflow-checks = true`, which the release profile sets.
+    ///
+    /// Release-only for that reason, and it matters that it exists at all: an adversarial verifier
+    /// deleted the clamp and found every suite green, i.e. the fix was correct and entirely
+    /// uncovered. Run with `cargo test --release -p kaspa-consensus-core`.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn the_shift_clamp_makes_release_total() {
+        for s in [32u8, 63, 64, 127, 200, 255] {
+            // Past the Qk resolution an in-range accumulator shifts away to nothing; the requirement
+            // is that it RETURNS that rather than panicking.
+            assert_eq!(rounding_shift_right(1 << 20, s), 0, "shift {s} must be total, not a panic");
+            assert_eq!(rounding_shift_right(-(1 << 20), s), 0, "shift {s} must be total for negatives too");
+            // Every out-of-domain shift collapses onto s = 31, the domain's edge.
+            assert_eq!(rounding_shift_right(i32::MAX, s), rounding_shift_right(i32::MAX, 31));
+            assert_eq!(rounding_shift_right(i32::MIN, s), rounding_shift_right(i32::MIN, 31));
+        }
     }
 
     /// The 64-bit shift obeys the same round-half-away-from-zero rule as the 32-bit one. If it did

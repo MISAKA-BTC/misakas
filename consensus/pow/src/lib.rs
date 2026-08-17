@@ -248,8 +248,11 @@ impl StateLayer0 {
     /// Compute the Layer-1 tag for `nonce` into `buf`, returning its length. The tag width varies
     /// by `pow_algo_id` (kHeavyHash/Argon2id = 32 bytes, BLAKE2b-SHA3 = 128, PALW = 200), so the
     /// caller passes a max-width stack buffer and reads back `&buf[..len]` — this keeps the miner
-    /// grind hot loop allocation-free (no per-nonce heap `Vec`). Only the PALW arm can fail (it
-    /// reaches an external runtime); every hash arm is infallible.
+    /// grind hot loop allocation-free (no per-nonce heap `Vec`).
+    ///
+    /// Two arms can fail: the PALW arms (they reach an external runtime) and the unknown-id arm,
+    /// which returns `UnknownAlgoId` rather than `expect`ing the kHeavyHash state that
+    /// `StateLayer0::new` never populated for it. Every *hash* arm is infallible.
     #[inline]
     fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_TAG_MAX_BYTES]) -> Result<usize, PowLayer0Error> {
         match self.pow_algo_id {

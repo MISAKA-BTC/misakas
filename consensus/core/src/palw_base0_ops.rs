@@ -193,10 +193,15 @@ pub fn rms_norm(x: &[i8], eps_q: i64) -> Result<Vec<i32>, PalwBase0OpError> {
     // which is precisely what an earlier draft did and what a too-loose test let through.
     //
     // SATURATE the narrowing, do not `as i32`. For a sparse row (one large code, the rest zero) the
-    // mean of squares shrinks with the row width, so `r = 1/rms` grows: at width ≥ 16385 a 127 code
-    // times `r` exceeds `i32::MAX`, and a plain `as i32` wraps its SIGN — the largest activation
-    // becomes the most negative. ADR-0040 C3 is explicit that nothing wraps anywhere; every
-    // narrowing saturates. Widen to `i64` (already the product's type) and clamp.
+    // mean of squares shrinks with the row width, so `r = 1/rms` grows: at the widest legal row a
+    // 127 code times `r` reaches ~4.3e9, past `i32::MAX`.
+    //
+    // The product itself is safe — `r` is bounded by ~2^36 and the code by 127, so `i64` holds it
+    // with ~20 bits to spare and there is no overflow to trap. The defect was purely the `as i32`,
+    // which reduces mod 2^32 and so reports a WRONG VALUE: 4_328_781_792 came back as 33_814_496,
+    // a 128× understatement of the largest activation in the row (and, for a product landing in
+    // [2^31, 2^32), a sign flip instead). Silent and unbounded either way. ADR-0040 C3 is explicit
+    // that nothing wraps anywhere; every narrowing saturates.
     Ok(x.iter().map(|v| ((*v as i64) * r).clamp(i32::MIN as i64, i32::MAX as i64) as i32).collect())
 }
 
@@ -403,16 +408,19 @@ mod tests {
     #[test]
     fn rms_norm_saturates_a_sparse_wide_row_instead_of_wrapping() {
         // At the widest legal row a single large code makes the mean of squares tiny, so
-        // `r = 1/rms` is large enough that `code · r` exceeds `i32::MAX` (~6e9 here). A plain
-        // `as i32` there wraps the sign; the saturating narrowing must pin at the i32 ends instead.
+        // `r = 1/rms` grows until `code · r` passes `i32::MAX`. MEASURED for this row: r = 34_084_896
+        // and 127·r = 4_328_781_792, which the old `as i32` reduced mod 2^32 to 33_814_496 — the
+        // largest activation understated 128-fold, silently. (The i64 product never overflowed, so
+        // nothing trapped; the narrowing was the whole bug.) A saturating narrowing must pin at the
+        // i32 ends instead.
         let mut row = vec![0i8; MAX_DOT_LEN];
         row[0] = 127;
         row[1] = -127;
         let out = rms_norm(&row, 1).expect("a MAX_DOT_LEN row is exactly at the length bound");
-        // Reaching here without a panic is half the test (overflow-checks would have fired on the
-        // wrapping multiply); the sign surviving is the other half.
-        assert_eq!(out[0], i32::MAX, "the overflowing positive entry saturates high, not wraps negative");
-        assert_eq!(out[1], i32::MIN, "and the negative entry saturates low");
+        assert_eq!(out[0], i32::MAX, "an out-of-range positive entry saturates high, not wraps to 33_814_496");
+        assert_eq!(out[1], i32::MIN, "and symmetrically at the low end");
+        // Pin the defect itself: the wrapping value must NOT be what comes back.
+        assert_ne!(out[0], 33_814_496, "this is the value the old `as i32` produced; saturation must not reproduce it");
         // A row whose product stays in range is untouched: same value the old `as i32` produced.
         let narrow = rms_norm(&[127, -127, 0, 0, 0, 0, 0, 0], 1).unwrap();
         assert!(narrow[0] > 0 && narrow[1] < 0, "an in-range row keeps both signs and is not clamped");
@@ -468,10 +476,12 @@ mod tests {
         // The four corners that maximise |a·s + b·c| and |a·c − b·s|.
         let x = vec![i32::MIN, i32::MIN];
         let out = rope_table(&x, &[i32::MIN], &[i32::MIN]).expect("shape is valid; only the magnitudes are extreme");
-        // Reaching here without a panic is the point; both outputs are finite i32.
-        assert_eq!(out.len(), 2);
-        // `a·s + b·c = 2·(i32::MIN)^2 = 2^63` before `>> K`; saturates high after narrowing.
-        assert!(out.iter().all(|v| *v == i32::MAX || *v == i32::MIN || (*v).abs() < i32::MAX));
+        // The exact expected values, not a range check. With a = b = c = s = i32::MIN:
+        //   a·c − b·s = 2^62 − 2^62 = 0                  → 0 after `>> K`
+        //   a·s + b·c = 2^62 + 2^62 = 2^63               → 2^39 after `>> K`, saturating to i32::MAX
+        // The second one is `i64::MAX + 1`, so the pre-fix i64 form overflowed here — that IS a
+        // release panic under overflow-checks, which is what this input exercises.
+        assert_eq!(out, vec![0, i32::MAX], "extreme inputs must saturate to exactly [0, i32::MAX]");
 
         // And a real Qk table is bit-identical to the old i64 path (this is the no-regression half).
         let c = 11_863_283i32;

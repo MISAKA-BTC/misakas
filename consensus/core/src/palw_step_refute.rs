@@ -840,6 +840,71 @@ pub(crate) mod tests {
         }
     }
 
+    /// Serves one fixed byte row, so a test can hand `base0_row` exactly the bytes an on-chain
+    /// weight oracle would have committed.
+    struct FixedRow(Vec<u8>);
+    impl PalwWeightOracleV1 for FixedRow {
+        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// A node for the BASE-0 requantize path. `base0_row` dispatches on its `op` ARGUMENT and reads
+    /// only `weight_name` off the node for this op, so the remaining fields are shape formality.
+    fn requantize_node() -> PalwStepNodeV1 {
+        PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::Scale,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: "blk.{layer}.requant".to_string(),
+            weight_dtype: 0,
+            out_len: PalwStepOutLenV1::Fixed { elements: 4 },
+            tile_len: 4,
+            kernel_semantics_id: h64(0),
+            input_refs: vec![0],
+        }
+    }
+
+    /// Audit §2.3: the court REFUSES a step whose committed requantize shift is outside ADR-0040
+    /// C1's `0..=31` domain, instead of recomputing with it.
+    ///
+    /// `rounding_shift_right` clamps such a shift so it can never panic, but clamping is a release
+    /// safety net, not an adjudication rule: a step that committed an out-of-domain shift is
+    /// malformed by construction (no honest producer emits one), and comparing a clamped recompute
+    /// against it would let a malformed step be *adjudicated* — convicting or acquitting on
+    /// arithmetic the specification does not define. An adversarial verifier replaced this reject
+    /// with `if false` and found every suite still green, so this is the coverage.
+    #[test]
+    fn a_requantize_shift_outside_the_domain_is_refused_not_recomputed() {
+        let node = requantize_node();
+        let input: Vec<Vec<u32>> = vec![vec![1_000i32 as u32, 2_000, 3_000, 4_000]];
+
+        // 5 bytes per channel: multiplier LE, then shift. In-domain shift (=10) must adjudicate.
+        let mut ok_row = Vec::new();
+        for _ in 0..4 {
+            ok_row.extend_from_slice(&i32::MAX.to_le_bytes());
+            ok_row.push(10);
+        }
+        let got = base0_row(Base0Op::Requantize, &node, Some(0), &input, &FixedRow(ok_row));
+        assert!(got.is_ok(), "an in-domain shift must still be recomputed: {got:?}");
+
+        // Out-of-domain shifts are refused as non-canonical — including 32, the first one past the
+        // domain edge, and 255, the largest a byte can carry.
+        for bad in [32u8, 63, 64, 200, 255] {
+            let mut row = Vec::new();
+            for channel in 0..4 {
+                row.extend_from_slice(&i32::MAX.to_le_bytes());
+                // Only ONE channel is out of domain: the check must scan every chunk, not just the
+                // first, or a malformed shift hides behind three well-formed neighbours.
+                row.push(if channel == 3 { bad } else { 10 });
+            }
+            let refused = base0_row(Base0Op::Requantize, &node, Some(0), &input, &FixedRow(row));
+            assert!(
+                matches!(refused, Err(PalwStepRefuteError::InputSetNotCanonical(_))),
+                "shift {bad} in the last channel must be refused as non-canonical, got {refused:?}"
+            );
+        }
+    }
+
     /// A pure-GDN profile: pre = embed(one row feeding everything), one GDN layer whose
     /// nodes are the five wiring inputs then the core. Geometry: 2 heads × k16 × v16.
     fn profile() -> PalwShapeProfileV3 {

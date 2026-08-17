@@ -53,8 +53,23 @@ by one ulp about a range would diverge on everything downstream.
 
 ## Decision C — The three arithmetic rules, stated once and used everywhere
 
-**C1. Information is lost in exactly TWO places — `RoundingShiftRight` and `SRDHM` (C2) — and
-they round by two DIFFERENT rules, deliberately.**
+**C1. Every site that loses information is named, and each names its own rule. There is more than
+one rule, and that is deliberate.**
+
+| site | rule |
+| --- | --- |
+| `RoundingShiftRight` (below) | round half **away from zero** |
+| `SRDHM` (C2) | round half **up** (toward +∞) — gemmlowp's |
+| the internal `>> k` inside `RmsNorm`, `RopeTable`, `IntExp`, `IntRsqrt`, `Rescale` | **floor** (arithmetic shift, toward −∞) |
+
+Everything else — the `int8 × int8` products, the accumulations, the adds — is exact.
+
+An earlier version of this heading claimed a single round-half-away rule happening "only in
+`RoundingShiftRight`", with "every other integer operation is exact". Both clauses were false, in
+opposite directions, and each was load-bearing for someone: a third party implementing `SRDHM` from
+the first clause rounds half-away and is convicted (see C2), and one reading the second clause looks
+for exactness in the `>> k` steps that in fact floor. The table is the contract; the prose below
+gives each rule's reason.
 
 ```
 RoundingShiftRight(x, s) -> i32                   // s in 0..=31
@@ -65,17 +80,17 @@ RoundingShiftRight(x, s) -> i32                   // s in 0..=31
 ```
 
 `RoundingShiftRight` rounds half **away from zero**: `RSR(3,1) = 2`, `RSR(-3,1) = -2`, symmetric
-about zero. Every integer operation *other than these two* is exact, so these are the only places a
-value loses information — which is what makes an exact-bits second implementation tractable.
+about zero. What makes an exact-bits second implementation tractable is not that there is one rule,
+but that the set of lossy sites is closed and each one's rule is pinned — a `>> k` that floors is
+just as reproducible as a rounding one, provided the specification says which it is.
 
 **`SRDHM` (C2) rounds half UP (toward +∞), not half-away — and this is intentional.** Its asymmetric
 nudge `1 − 2^30` composed with truncation gives `SRDHM(-1, 2^30) = 0` where half-away would give
 `-1`. The two rules diverge on exactly the negative exact-half products (`|a·b| ≡ 2^30 mod 2^31`),
 which are freely constructible (take any `b = 2^30`), not statistically rare. `SRDHM` must round
 this way because C2's entire purpose is bit-identity with gemmlowp, which rounds half-up; changing
-it to half-away to match this heading would break the property C2 exists for. An earlier version of
-this heading claimed a single round-half-away rule "and it happens only in `RoundingShiftRight`" —
-a third party implementing `SRDHM` from that sentence would have produced half-away and disagreed
+it to half-away to match the other rule would break the property C2 exists for. A third party
+implementing `SRDHM` from the old single-rule heading would have produced half-away and disagreed
 with gemmlowp (and with the reference) on every negative exact-half, which under ADR-0027's court is
 a conviction, not a rounding difference. `misaka-palw-base0-ref2`'s differential cannot surface
 this: both sides derive from the same gemmlowp, so both are half-up; only the normative text was
@@ -89,8 +104,9 @@ way instead of opposing. `RSR(−64, 1)` returns `−33` where the exact quotien
 rounding at all. Measured against gemmlowp's `RoundingDivideByPOT`, the two disagreed on **50 % of
 random `(x, s)` pairs** — every negative one — and the same form overflowed `i32` on a further
 3.2 %, wrapping the sign of the largest accumulators. Found by the second implementation
-(`misaka-palw-base0-ref2`) on its first run; the rule as *stated* was always correct, only the
-pseudocode under it was not.
+(`misaka-palw-base0-ref2`) on its first run. Note the two failures are distinct: *this* one was the
+pseudocode contradicting a correctly-stated rule (half-away for `RoundingShiftRight`), whereas the
+heading's "one rule, one site" universal was the statement itself being wrong.
 
 **C2. `SaturatingRoundingDoublingHighMul` is the one fixed-point multiply.**
 

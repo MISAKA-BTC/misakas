@@ -322,7 +322,14 @@ impl HeaderProcessor {
         // MUST come after `validate_parent_relations` — a header with fabricated/absent parents is
         // rejected before it can buy an inference and stall every other header (audit P0-3). The
         // PoW and the parent checks are mutually independent (the PoW reads only the header, the
-        // parent checks read only the status store), so this reordering preserves every verdict.
+        // parent checks read only the status store), so accept/reject is unchanged for every header.
+        //
+        // One deliberate change, for the class that fails BOTH: a header with missing parents and a
+        // bad PoW used to report `InvalidPoW` and now reports `MissingParents`. That is not cosmetic
+        // — the two errors route differently upstream (a bad PoW is peer misbehaviour; missing
+        // parents enter bounded orphan handling) — and this ordering is the correct one: we have not
+        // yet spent the work needed to know the PoW is bad, so claiming it is would be asserting
+        // something unverified. Any header that fails only the PoW still reports `InvalidPoW`.
         self.validate_header_in_isolation_sans_pow(header)?;
         self.validate_parent_relations(header)?;
         let block_level = self.check_pow_and_calc_block_level(header)?;
