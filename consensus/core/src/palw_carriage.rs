@@ -213,6 +213,8 @@ pub enum PalwCarriageError {
     StepConvictionRootMismatch,
     #[error("the attestation does not stand behind the composite execution root the refutation refutes")]
     StepConvictionCommittedRootMismatch,
+    #[error("the carriage names a different filing bond than the attestation it carries signs for")]
+    AttestationBondMismatch,
     #[error("the step conviction does not prove a fault: {0}")]
     StepConvictionNotProven(String),
     #[error("bisection space {got} is outside the openable range — no ladder could be played over it")]
@@ -911,6 +913,13 @@ where
     if carriage.attestation.executor_id != accused_bond.validator_pubkey_hash {
         return Err(PalwCarriageError::EquivocationBondNotTheSigner);
     }
+    // And the EXACT bond, not merely one of the signer's. `validator_pubkey_hash` is not unique, so
+    // matching on it alone let a conviction name either of two bonds sharing a key — including the
+    // one that had signed nothing about this execution. Since generation 3 the attestation names
+    // the bond it is made by, so the accused is checkable rather than inferred.
+    if carriage.attestation.bond_outpoint != accused_bond.bond_outpoint {
+        return Err(PalwCarriageError::EquivocationBondNotTheSigner);
+    }
     if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
@@ -1011,6 +1020,15 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
             if a.attester_id != a.attestation.executor_id {
                 return Err(PalwCarriageError::AttesterMismatch);
             }
+            // The carriage names the filing bond and, since generation 3, so does the SIGNED
+            // attestation. Two copies of one fact is the dual-source surface this family's own doc
+            // warns about — checkable against nothing — unless they are required to agree. Here they
+            // are, so the consumer may index on the carriage's copy while the signature covers the
+            // same value. Without this, the signed outpoint would be decorative: a filer could sign
+            // for bond A and carry bond B, and the payee is read from the carriage.
+            if a.bond_outpoint != a.attestation.bond_outpoint {
+                return Err(PalwCarriageError::AttestationBondMismatch);
+            }
             Ok(())
         }
         PalwCarriageV1::OpeningCall(c) => {
@@ -1044,7 +1062,7 @@ pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCa
                     }
                 }
                 PalwCarriedEvidenceV1::Summary(summary) => {
-                    if summary.version != crate::palw_slash::PALW_S_OBJECT_VERSION_V2 {
+                    if summary.version != crate::palw_slash::PALW_S_OBJECT_VERSION_V3 {
                         return Err(PalwCarriageError::Inner(format!("summary refutation version {} is not v1", summary.version)));
                     }
                 }
@@ -1297,7 +1315,7 @@ mod tests {
     };
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
-    use crate::palw_slash::{PALW_S_ALL_DOMAINS, PALW_S_OBJECT_VERSION_V2};
+    use crate::palw_slash::{PALW_S_ALL_DOMAINS, PALW_S_OBJECT_VERSION_V3};
     use crate::palw_v2::{
         PALW_JOB_WIRE_VERSION_V2, PALW_V2_ALL_DOMAINS, PalwLogitsDtypeV2, PalwStopReasonV2, PalwTracePhaseV2, PalwTraceSummaryV2,
     };
@@ -1393,11 +1411,13 @@ mod tests {
             version: PALW_CARRIAGE_VERSION_V1,
             commitment_root: test_binding().committed_execution_root,
             attestation: PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 executor_id: h64(0xA2),
                 job_context_hash: PalwJobContextV2::from_envelope(&test_envelope(), h64(0x37)).context_hash(),
                 full_logits_trace_root: h64(0x71),
                 committed_root: test_binding().committed_execution_root,
+                // The SAME value the carriage names below: since generation 3 admission requires it.
+                bond_outpoint: outpoint(0xB2, 1),
                 signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
             },
             attester_id: h64(0xA2),
@@ -1450,7 +1470,7 @@ mod tests {
         PalwRefutationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             evidence: PalwCarriedEvidenceV1::Summary(PalwTraceSummaryRefutationV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 job_context: PalwJobContextV2::from_envelope(&test_envelope(), h64(0x37)),
                 summary: PalwTraceSummaryV2 {
                     vocab_size: 8,
@@ -1554,19 +1574,43 @@ mod tests {
     /// here first. Regenerating them is a conscious wire change, never a side effect.
     #[test]
     fn encoded_payloads_are_golden() {
-        // Re-frozen 2026-08-17: PALW-S generation 2 (the attestation gained `committed_root`),
-        // so the attestation payload and every payload carrying a PALW-S object version moved.
+        // Re-frozen 2026-08-17: PALW-S generation 3 (the attestation gained `committed_root`, then
+        // `bond_outpoint`), so the attestation payload and every payload carrying a PALW-S object
+        // version moved with it.
         let golden: [(&str, &str); 5] = [
             ("commitment", "2ef18007f17d928e80c6ecf94e6e9b71eabd24ba9b879f7045a18b72665fef14"),
-            ("attestation", "3bd9d6fa59419c3d306d57a00d6b98170fc3935319e64af50ca288966e2c86d1"),
+            ("attestation", "50a5feacbf6b5ccd608e8e40977c14b2f3c863795edfba0669799a4d817d0f07"),
             ("opening-call", "aa0328847eae54b9fab887704631f020fed2e468d2906c564c32f2577001eea1"),
             ("opening-answer", "bb106d592e6d7ce811f40471497198d230cd6611106689b70bba180f6113bea7"),
-            ("refutation", "d908699accd4545f3b1b61818d05b832f41bae2db7c7c78dd13af281a1266576"),
+            ("refutation", "284fb2fb9fcc2c95c49b8f575a6afb8b73b5bb2762ffd0fc47bded18452cd02d"),
         ];
         for (carriage, (name, expected)) in all_five().iter().zip(golden) {
             let got = payload_hash_hex(&encode_palw_carriage_v1(carriage));
             assert_eq!(got, expected, "{name} payload moved");
         }
+    }
+
+    /// The carriage's copy of the filing bond and the SIGNED one must agree.
+    ///
+    /// Two copies of one fact is the dual-source surface this family's own doc warns about. The
+    /// consumer indexes on the carriage's copy — that is the payee — so a filer that could sign for
+    /// bond A and carry bond B would make the signed outpoint decorative and the generation-3 fix
+    /// cosmetic.
+    #[test]
+    fn a_carried_bond_that_the_signature_does_not_name_is_inadmissible() {
+        let a = attestation();
+        assert!(validate_palw_carriage_v1(&PalwCarriageV1::Attestation(a.clone())).is_ok());
+
+        let mut swapped = a.clone();
+        swapped.bond_outpoint = outpoint(0xEE, 9);
+        assert_eq!(validate_palw_carriage_v1(&PalwCarriageV1::Attestation(swapped)), Err(PalwCarriageError::AttestationBondMismatch));
+        // Symmetrically: editing the SIGNED side is refused too, so neither copy is the trusted one.
+        let mut signed_elsewhere = a;
+        signed_elsewhere.attestation.bond_outpoint = outpoint(0xEE, 9);
+        assert_eq!(
+            validate_palw_carriage_v1(&PalwCarriageV1::Attestation(signed_elsewhere)),
+            Err(PalwCarriageError::AttestationBondMismatch)
+        );
     }
 
     #[test]
@@ -1863,18 +1907,19 @@ mod tests {
         };
         // A bare-v2 shape: the committed object IS the logits root, so the two move together.
         let att = |root: Hash64| PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             executor_id: h64(0xE1),
             job_context_hash: ctx.context_hash(),
             full_logits_trace_root: root,
             committed_root: root,
+            bond_outpoint: outpoint(0xB1, 0),
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
         PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: outpoint(0xB1, 0),
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 attestation_a: att(h64(0x01)),
                 attestation_b: att(h64(0x02)),
                 job_context: ctx,
@@ -1890,11 +1935,12 @@ mod tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: outpoint(0xB1, 0),
             attestation: PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 executor_id: h64(0xE1),
                 job_context_hash: refutation.binding.job_context.context_hash(),
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
                 committed_root: refutation.binding.committed_execution_root,
+                bond_outpoint: outpoint(0xB1, 0),
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
             },
             refutation,
@@ -2120,7 +2166,7 @@ mod tests {
 mod equivocation_tests {
     use super::*;
     use crate::dns_finality::{BondStatus, StakeBondRecord};
-    use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V2};
+    use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V3};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use crate::tx::TransactionId;
 
@@ -2173,11 +2219,15 @@ mod equivocation_tests {
 
     fn attested(signer: Hash64, ctx: &PalwJobContextV2, root: Hash64) -> PalwExecutionAttestationV1 {
         let mut a = PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             executor_id: signer,
             job_context_hash: ctx.context_hash(),
             full_logits_trace_root: root,
             committed_root: root,
+            bond_outpoint: crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_bytes(signer.as_bytes()),
+                index: 0,
+            },
             signature: vec![],
         };
         let digest = a.message(&ctx.network_id);
@@ -2209,7 +2259,7 @@ mod equivocation_tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: accused,
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 attestation_a: attested(signer, &ctx, root_a),
                 attestation_b: attested(signer, &ctx, root_b),
                 job_context: ctx,
@@ -2309,7 +2359,7 @@ mod equivocation_tests {
             version: PALW_CARRIAGE_VERSION_V1,
             accused_bond_outpoint: op(0xB1),
             certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 attestation_a: attested(h(0xE1), &ctx, h(0x01)),
                 attestation_b: attested(h(0xE2), &ctx, h(0x02)),
                 job_context: ctx,
@@ -2347,7 +2397,7 @@ mod step_conviction_tests {
 
     use super::*;
     use crate::dns_finality::{BondStatus, StakeBondRecord};
-    use crate::palw_slash::PALW_S_OBJECT_VERSION_V2;
+    use crate::palw_slash::PALW_S_OBJECT_VERSION_V3;
     use crate::palw_step_refute::PalwWeightOracleV1;
     use crate::tx::TransactionId;
 
@@ -2401,11 +2451,12 @@ mod step_conviction_tests {
     fn conviction(signer: Hash64, accused: TransactionOutpoint) -> PalwStepConvictionCarriageV1 {
         let refutation = crate::palw_step_refute::tests::skeleton_refutation();
         let mut attestation = PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             executor_id: signer,
             job_context_hash: refutation.binding.job_context.context_hash(),
             full_logits_trace_root: refutation.binding.full_logits_trace_root,
             committed_root: refutation.binding.committed_execution_root,
+            bond_outpoint: accused,
             signature: vec![],
         };
         let network_id = refutation.binding.job_context.network_id.clone();
@@ -2532,6 +2583,29 @@ mod step_conviction_tests {
             adjudicate_step_conviction_carriage_v1(&c, &victim, 100, NET, &NoWeights, mock_verify),
             Err(PalwCarriageError::EquivocationBondNotTheSigner)
         );
+
+        // And not even one of the SIGNER'S OWN other bonds. `validator_pubkey_hash` is not unique,
+        // so matching authorship on the key alone let a conviction name a sibling bond that had
+        // signed nothing about this execution — the accused would be slashed for its neighbour's
+        // fault. Since generation 3 the attestation names the bond it is made by, so the accused is
+        // checkable. Both bonds here carry the signer's key; only the named one is accusable.
+        let sibling_outpoint = op(0xB7);
+        let sibling = bond(signer, sibling_outpoint);
+        assert_ne!(sibling_outpoint, c.attestation.bond_outpoint);
+        assert_eq!(sibling.validator_pubkey_hash, c.attestation.executor_id, "the sibling really does share the key");
+        let mut pointed_at_sibling = c.clone();
+        pointed_at_sibling.accused_bond_outpoint = sibling_outpoint;
+        assert_eq!(
+            adjudicate_step_conviction_carriage_v1(&pointed_at_sibling, &sibling, 100, NET, &NoWeights, mock_verify),
+            Err(PalwCarriageError::EquivocationBondNotTheSigner),
+            "a conviction may only name the bond its attestation was made by"
+        );
+        // The named bond is still accusable, so the tightening costs an honest prosecution nothing:
+        // it reaches the falsity half and stops only at the missing oracle.
+        assert!(matches!(
+            adjudicate_step_conviction_carriage_v1(&c, &bond(signer, c.attestation.bond_outpoint), 100, NET, &NoWeights, mock_verify),
+            Err(PalwCarriageError::StepConvictionNotProven(_))
+        ));
     }
 
     /// A forged attestation is refused BEFORE the step is ever recomputed: authorship is checked

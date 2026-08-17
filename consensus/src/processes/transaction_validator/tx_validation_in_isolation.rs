@@ -594,11 +594,12 @@ mod tests {
             version: PALW_CARRIAGE_VERSION_V1,
             commitment_root: Hash64::from_bytes([0x71u8; 64]),
             attestation: kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
-                version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V2,
+                version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
                 executor_id: Hash64::from_bytes([0xA2u8; 64]),
                 job_context_hash: Hash64::from_bytes([0xC7u8; 64]),
                 full_logits_trace_root: Hash64::from_bytes([0x71u8; 64]),
                 committed_root: Hash64::from_bytes([0x71u8; 64]),
+                bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
                 signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
             },
             attester_id: Hash64::from_bytes([0xA2u8; 64]),

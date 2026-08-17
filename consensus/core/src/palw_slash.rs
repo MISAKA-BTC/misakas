@@ -76,19 +76,20 @@ use thiserror::Error;
 // Versions, domains, caps
 // ---------------------------------------------------------------------------------------------
 
-/// Wire version of every PALW-S object in this module. **Generation 2** (2026-08-17): the
-/// execution attestation gained `committed_root`, so every object in the family that embeds or
-/// accompanies an attestation changed layout at once. Generation 1 bytes are refused rather than
-/// misdecoded — and refusing them is the point, not a side effect: a generation-1 signature
-/// covered only the logits leg, which is precisely the forgeable form this generation exists to
-/// retire (see [`PalwExecutionAttestationV1::committed_root`]).
-pub const PALW_S_OBJECT_VERSION_V2: u16 = 2;
+/// Wire version of every PALW-S object in this module. **Generation 3** (2026-08-17): the execution
+/// attestation gained `committed_root` (generation 2) and then `bond_outpoint` (generation 3), so
+/// every object in the family that embeds or accompanies an attestation changed layout with it.
+/// Older bytes are refused rather than misdecoded, and refusing them is the point rather than a
+/// side effect: each retired generation signed strictly less than a claim needs to bind, and both
+/// of the gaps were exploitable (see [`PalwExecutionAttestationV1::committed_root`] and
+/// [`PalwExecutionAttestationV1::bond_outpoint`]).
+pub const PALW_S_OBJECT_VERSION_V3: u16 = 3;
 
-/// Keyed-BLAKE2b-256 domain of [`palw_execution_attestation_message_v2`]. The retired
-/// `…/execution-attestation-message/v1` string must never be reused: a v1 signature is a claim
-/// about the logits leg alone, and reviving the string would let one be replayed as a claim about
-/// a whole composite execution.
-pub const PALW_S_DOMAIN_ATTESTATION_MESSAGE_V2: &[u8] = b"misaka-palw/execution-attestation-message/v2";
+/// Keyed-BLAKE2b-256 domain of [`palw_execution_attestation_message_v3`]. The retired
+/// `…/execution-attestation-message/v1` and `…/v2` strings must never be reused: a v1 signature is
+/// a claim about the logits leg alone and a v2 signature says nothing about which bond stands
+/// behind it, so reviving either string would let a narrower claim be replayed as a wider one.
+pub const PALW_S_DOMAIN_ATTESTATION_MESSAGE_V3: &[u8] = b"misaka-palw/execution-attestation-message/v3";
 /// ML-DSA-87 signing context for execution attestations (the registry resolves `executor_id` to
 /// the public key; this module never resolves keys itself).
 pub const PALW_S_MLDSA87_ATTESTATION_CONTEXT: &[u8] = b"misaka-palw/execution-attestation/mldsa87/v1";
@@ -102,7 +103,7 @@ pub const PALW_S_DOMAIN_REFUTATION_EVIDENCE_ID: &[u8] = b"misaka-palw/structural
 /// [`crate::palw_v2::PALW_V2_ALL_DOMAINS`] — one string reused across families is a preimage
 /// bridge, exactly the class of bug the v2 domain-key incident was.
 pub const PALW_S_ALL_DOMAINS: &[&[u8]] = &[
-    PALW_S_DOMAIN_ATTESTATION_MESSAGE_V2,
+    PALW_S_DOMAIN_ATTESTATION_MESSAGE_V3,
     PALW_S_MLDSA87_ATTESTATION_CONTEXT,
     PALW_S_DOMAIN_CONTRADICTION_EVIDENCE_ID,
     PALW_S_DOMAIN_REFUTATION_EVIDENCE_ID,
@@ -216,7 +217,7 @@ pub(crate) fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), Palw
 /// like the capability signature.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwExecutionAttestationV1 {
-    /// = [`PALW_S_OBJECT_VERSION_V2`].
+    /// = [`PALW_S_OBJECT_VERSION_V3`].
     pub version: u16,
     /// The operator identity the bond registry resolves to an ML-DSA-87 public key. Matching it
     /// to a live bond is acceptance-stage work, not this module's.
@@ -245,15 +246,33 @@ pub struct PalwExecutionAttestationV1 {
     /// With this field the tie exists in the object itself: any change to any part of the
     /// composite moves the root, and the root is now inside what the accused signed.
     pub committed_root: Hash64,
-    /// ML-DSA-87 signature over [`palw_execution_attestation_message_v2`] under
+    /// The BOND this claim is made by — the payee when the claim earns a share, the accused when it
+    /// convicts.
+    ///
+    /// Added in generation 3 to close a mint that the seat-based panel draw opened. A bond outpoint
+    /// is the only unique validator identity (`validator_pubkey_hash` is not, and `dns_finality`
+    /// says so), so once the draw seats two bonds of one key separately, a signer holding both can
+    /// file the SAME generation-2 signature under each and collect two attester shares for one
+    /// replay: the signed message named the key and the execution but never the bond, so nothing
+    /// tied a signature to the seat that spent it. `q` is meant to buy `q` independent checks.
+    ///
+    /// It also tightens conviction. `adjudicate_step_conviction_carriage_v1` matched the accused
+    /// bond by `validator_pubkey_hash`, so with two bonds under one key a conviction could name
+    /// EITHER — including the one that had signed nothing. The accused must now be the exact bond
+    /// the attestation names.
+    ///
+    /// The executor's own commitment carriage has bound its bond outpoint into its signed digest
+    /// all along; the attestation not doing so was the asymmetry.
+    pub bond_outpoint: crate::tx::TransactionOutpoint,
+    /// ML-DSA-87 signature over [`palw_execution_attestation_message_v3`] under
     /// [`PALW_S_MLDSA87_ATTESTATION_CONTEXT`].
     pub signature: Vec<u8>,
 }
 
 impl PalwExecutionAttestationV1 {
     pub fn validate_shape(&self) -> Result<(), PalwSlashError> {
-        if self.version != PALW_S_OBJECT_VERSION_V2 {
-            return Err(PalwSlashError::UnsupportedVersion { got: self.version, expected: PALW_S_OBJECT_VERSION_V2 });
+        if self.version != PALW_S_OBJECT_VERSION_V3 {
+            return Err(PalwSlashError::UnsupportedVersion { got: self.version, expected: PALW_S_OBJECT_VERSION_V3 });
         }
         if self.signature.is_empty() || self.signature.len() > PALW_S_MAX_SIGNATURE_BYTES {
             return Err(PalwSlashError::SignatureSizeOutOfRange { got: self.signature.len(), max: PALW_S_MAX_SIGNATURE_BYTES });
@@ -263,12 +282,13 @@ impl PalwExecutionAttestationV1 {
 
     /// The message this attestation's signature must cover, network-bound.
     pub fn message(&self, network_id: &[u8]) -> Hash {
-        palw_execution_attestation_message_v2(
+        palw_execution_attestation_message_v3(
             network_id,
             self.executor_id,
             self.job_context_hash,
             self.full_logits_trace_root,
             self.committed_root,
+            &self.bond_outpoint,
         )
     }
 }
@@ -277,22 +297,26 @@ impl PalwExecutionAttestationV1 {
 /// `palw_capability_message_v2`: length-prefixed network id, then fixed-width fields in struct
 /// order. Golden-frozen in the tests.
 ///
-/// v2 appends `committed_root`. There is no v1 function left to call: the v1 layout is the one a
-/// step conviction could forge around, so keeping it callable would keep the hole reachable.
-pub fn palw_execution_attestation_message_v2(
+/// v2 appended `committed_root`; v3 appends `bond_outpoint`. No earlier function survives: each
+/// retired layout is one a claim could be replayed out of, so keeping it callable would keep the
+/// hole reachable.
+pub fn palw_execution_attestation_message_v3(
     network_id: &[u8],
     executor_id: Hash64,
     job_context_hash: Hash64,
     full_logits_trace_root: Hash64,
     committed_root: Hash64,
+    bond_outpoint: &crate::tx::TransactionOutpoint,
 ) -> Hash {
-    let mut hasher = blake2b_simd::Params::new().hash_length(32).key(PALW_S_DOMAIN_ATTESTATION_MESSAGE_V2).to_state();
+    let mut hasher = blake2b_simd::Params::new().hash_length(32).key(PALW_S_DOMAIN_ATTESTATION_MESSAGE_V3).to_state();
     hasher.update(&(network_id.len() as u32).to_le_bytes());
     hasher.update(network_id);
     hasher.update(executor_id.as_byte_slice());
     hasher.update(job_context_hash.as_byte_slice());
     hasher.update(full_logits_trace_root.as_byte_slice());
     hasher.update(committed_root.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
     let mut out = [0u8; 32];
     out.copy_from_slice(hasher.finalize().as_bytes());
     Hash::from_bytes(out)
@@ -303,7 +327,7 @@ pub fn palw_execution_attestation_message_v2(
 /// refuted class/manifest instead of trusting a side-channel copy of them.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClassContradictionCertificateV1 {
-    /// = [`PALW_S_OBJECT_VERSION_V2`].
+    /// = [`PALW_S_OBJECT_VERSION_V3`].
     pub version: u16,
     /// The full job context whose `context_hash()` both attestations must bind.
     pub job_context: PalwJobContextV2,
@@ -350,8 +374,8 @@ pub fn adjudicate_class_contradiction_v1<F>(
 where
     F: Fn(&Hash, &PalwExecutionAttestationV1) -> bool,
 {
-    if certificate.version != PALW_S_OBJECT_VERSION_V2 {
-        return Err(PalwSlashError::UnsupportedVersion { got: certificate.version, expected: PALW_S_OBJECT_VERSION_V2 });
+    if certificate.version != PALW_S_OBJECT_VERSION_V3 {
+        return Err(PalwSlashError::UnsupportedVersion { got: certificate.version, expected: PALW_S_OBJECT_VERSION_V3 });
     }
     certificate.attestation_a.validate_shape()?;
     certificate.attestation_b.validate_shape()?;
@@ -583,7 +607,7 @@ pub struct PalwStructuralRefutationVerdictV1 {
 /// the outer preimage IS the evidence.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTraceSummaryRefutationV1 {
-    /// = [`PALW_S_OBJECT_VERSION_V2`].
+    /// = [`PALW_S_OBJECT_VERSION_V3`].
     pub version: u16,
     pub job_context: PalwJobContextV2,
     pub summary: PalwTraceSummaryV2,
@@ -596,8 +620,8 @@ pub struct PalwTraceSummaryRefutationV1 {
 pub fn check_trace_summary_refutation_v1(
     refutation: &PalwTraceSummaryRefutationV1,
 ) -> Result<PalwStructuralRefutationVerdictV1, PalwSlashError> {
-    if refutation.version != PALW_S_OBJECT_VERSION_V2 {
-        return Err(PalwSlashError::UnsupportedVersion { got: refutation.version, expected: PALW_S_OBJECT_VERSION_V2 });
+    if refutation.version != PALW_S_OBJECT_VERSION_V3 {
+        return Err(PalwSlashError::UnsupportedVersion { got: refutation.version, expected: PALW_S_OBJECT_VERSION_V3 });
     }
     verify_outer_binding(
         &refutation.job_context,
@@ -647,7 +671,7 @@ pub fn refutation_event_hash_v1(job_context_hash: &Hash64, preimage: &PalwTraceE
 /// a pinned per-event rule.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTraceEventRefutationV1 {
-    /// = [`PALW_S_OBJECT_VERSION_V2`].
+    /// = [`PALW_S_OBJECT_VERSION_V3`].
     pub version: u16,
     pub job_context: PalwJobContextV2,
     pub summary: PalwTraceSummaryV2,
@@ -660,8 +684,8 @@ pub struct PalwTraceEventRefutationV1 {
 pub fn check_trace_event_refutation_v1(
     refutation: &PalwTraceEventRefutationV1,
 ) -> Result<PalwStructuralRefutationVerdictV1, PalwSlashError> {
-    if refutation.version != PALW_S_OBJECT_VERSION_V2 {
-        return Err(PalwSlashError::UnsupportedVersion { got: refutation.version, expected: PALW_S_OBJECT_VERSION_V2 });
+    if refutation.version != PALW_S_OBJECT_VERSION_V3 {
+        return Err(PalwSlashError::UnsupportedVersion { got: refutation.version, expected: PALW_S_OBJECT_VERSION_V3 });
     }
     if refutation.event_preimage.logits_le_bytes.len() > PALW_S_MAX_LOGITS_BYTES {
         return Err(PalwSlashError::LogitsBytesTooLarge {
@@ -772,25 +796,35 @@ mod tests {
     // Attestation message — golden-frozen
     // -----------------------------------------------------------------------------------------
 
+    fn op(seed: u8, index: u32) -> crate::tx::TransactionOutpoint {
+        crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([seed; 64]), index }
+    }
+
     #[test]
     fn attestation_message_golden_vector() {
-        let msg = palw_execution_attestation_message_v2(b"misaka-devnet", h64(0xA1), h64(0xB2), h64(0xC3), h64(0xD4));
-        // Re-frozen 2026-08-17 for generation 2 (`committed_root` appended, new domain string). A
-        // change here is a signing-message layout change: new object version, never an in-place
-        // edit. The v1 vector 9fb7e41e… is retired along with its domain — see
-        // `PALW_S_DOMAIN_ATTESTATION_MESSAGE_V2` for why that string must not come back.
-        assert_eq!(msg.to_string(), "13fea3ce71d496632ac78575ea42d284cd288c622b53de6707d46df1d817f8e0");
+        let msg = palw_execution_attestation_message_v3(b"misaka-devnet", h64(0xA1), h64(0xB2), h64(0xC3), h64(0xD4), &op(0xE5, 3));
+        // Re-frozen 2026-08-17 for generation 3 (`committed_root` then `bond_outpoint` appended,
+        // new domain string each time). A change here is a signing-message layout change: new
+        // object version, never an in-place edit. The retired vectors 9fb7e41e… (v1) and
+        // 13fea3ce… (v2) go with their domains — see `PALW_S_DOMAIN_ATTESTATION_MESSAGE_V3` for
+        // why those strings must not come back.
+        assert_eq!(msg.to_string(), "47404fc927b21439a702b563541a1e68909bf99d2797365c796d5d949fa86a34");
     }
 
     #[test]
     fn attestation_message_binds_every_field() {
-        let base = palw_execution_attestation_message_v2(b"net", h64(1), h64(2), h64(3), h64(4));
-        assert_ne!(base, palw_execution_attestation_message_v2(b"neu", h64(1), h64(2), h64(3), h64(4)));
-        assert_ne!(base, palw_execution_attestation_message_v2(b"net", h64(9), h64(2), h64(3), h64(4)));
-        assert_ne!(base, palw_execution_attestation_message_v2(b"net", h64(1), h64(9), h64(3), h64(4)));
-        assert_ne!(base, palw_execution_attestation_message_v2(b"net", h64(1), h64(2), h64(9), h64(4)));
+        let base = palw_execution_attestation_message_v3(b"net", h64(1), h64(2), h64(3), h64(4), &op(5, 0));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"neu", h64(1), h64(2), h64(3), h64(4), &op(5, 0)));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(9), h64(2), h64(3), h64(4), &op(5, 0)));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(1), h64(9), h64(3), h64(4), &op(5, 0)));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(1), h64(2), h64(9), h64(4), &op(5, 0)));
         // The generation-2 field, bound like every other: without this the whole fix is cosmetic.
-        assert_ne!(base, palw_execution_attestation_message_v2(b"net", h64(1), h64(2), h64(3), h64(9)));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(1), h64(2), h64(3), h64(9), &op(5, 0)));
+        // The generation-3 field, and its INDEX as well as its transaction id — two outputs of one
+        // funding transaction are two different bonds, so a signature for one must not verify for
+        // the other.
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(1), h64(2), h64(3), h64(4), &op(9, 0)));
+        assert_ne!(base, palw_execution_attestation_message_v3(b"net", h64(1), h64(2), h64(3), h64(4), &op(5, 1)));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -812,12 +846,15 @@ mod tests {
 
     fn attested(executor_id: Hash64, context: &PalwJobContextV2, root: Hash64) -> PalwExecutionAttestationV1 {
         let mut attestation = PalwExecutionAttestationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             executor_id,
             job_context_hash: context.context_hash(),
             full_logits_trace_root: root,
             // Bare-v2 shape: the committed object IS the logits root.
             committed_root: root,
+            // One bond per signer in these vectors; the equivocation rule is about the SIGNER, and a
+            // signer with two bonds telling two stories is still one signer.
+            bond_outpoint: op(executor_id.as_bytes()[0], 0),
             signature: vec![],
         };
         let message = attestation.message(&context.network_id);
@@ -827,7 +864,7 @@ mod tests {
 
     fn contradiction(a: PalwExecutionAttestationV1, b: PalwExecutionAttestationV1) -> PalwClassContradictionCertificateV1 {
         PalwClassContradictionCertificateV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             job_context: test_context(),
             attestation_a: a,
             attestation_b: b,
@@ -1112,7 +1149,7 @@ mod tests {
     ) -> PalwTraceSummaryRefutationV1 {
         let committed = full_logits_trace_root_v2(&context.context_hash(), &summary, &merkle_root);
         PalwTraceSummaryRefutationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             job_context: context.clone(),
             summary,
             ordered_event_commitment: merkle_root,
@@ -1182,7 +1219,7 @@ mod tests {
     ) -> PalwTraceEventRefutationV1 {
         let levels = build_levels(&commitment.ordered_event_hashes);
         PalwTraceEventRefutationV1 {
-            version: PALW_S_OBJECT_VERSION_V2,
+            version: PALW_S_OBJECT_VERSION_V3,
             job_context: context.clone(),
             summary: commitment.summary.clone(),
             ordered_event_commitment: trace_event_merkle_root_v2(&commitment.ordered_event_hashes).unwrap(),

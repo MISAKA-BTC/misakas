@@ -35,7 +35,7 @@ use kaspa_consensus_core::palw_schedule::{
     PalwDutyObservationV1, PalwPanelCandidateV1, PalwScheduleParamsV1, PalwShadowJobObservationV1, PalwShadowLedgerV1,
     job_schedule_v1, select_replay_panel_v1,
 };
-use kaspa_consensus_core::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V2, PalwExecutionAttestationV1};
+use kaspa_consensus_core::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V3, PalwExecutionAttestationV1};
 use kaspa_consensus_core::palw_v2::{PalwJobEnvelopeV2, decode_framed_borsh, read_framed, write_framed};
 use kaspa_consensus_core::tx::{Transaction, TransactionOutpoint};
 use kaspa_hashes::Hash64;
@@ -911,8 +911,15 @@ fn attest(
             let context_hash =
                 kaspa_consensus_core::palw_v2::PalwJobContextV2::from_envelope(&envelope, result.binding.job_context.tokenizer_id)
                     .context_hash();
+            // The Stage-0 drill does not resolve its own bond outpoint from the chain — it never
+            // has, and the carriage below has always carried this same zero placeholder. Generation
+            // 3 puts the outpoint inside the SIGNED message, so the two must be the same value or
+            // the carriage is inadmissible; hoisting it makes that structural rather than a
+            // coincidence. Resolving the real bond is the change to make before the drill's
+            // attestations are ever meant to earn a share.
+            let attest_bond = TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([0u8; 64]), 0);
             let mut attestation = PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V2,
+                version: PALW_S_OBJECT_VERSION_V3,
                 executor_id: key.validator_id,
                 job_context_hash: context_hash,
                 full_logits_trace_root: our_logits_root,
@@ -922,6 +929,9 @@ fn attest(
                 // what it reproduced, so the signature cannot be pointed at a binding it never
                 // saw.
                 committed_root: our_composite,
+                // The bond this claim is made BY, so the signature cannot be re-filed under another
+                // of our bonds to collect a second share for one replay (generation 3).
+                bond_outpoint: attest_bond,
                 signature: Vec::new(),
             };
             let message = attestation.message(&envelope.network_id);
@@ -931,7 +941,7 @@ fn attest(
                 commitment_root: root_h,
                 attestation,
                 attester_id: key.validator_id,
-                bond_outpoint: TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([0u8; 64]), 0),
+                bond_outpoint: attest_bond,
             });
             validate_palw_carriage_v1(&carriage).map_err(|e| format!("self-validation failed (bug): {e}"))?;
             let payload = encode_palw_carriage_v1(&carriage);

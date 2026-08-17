@@ -50,12 +50,8 @@ pub const PALW_JOB_MLDSA87_ATTEST_CONTEXT: &[u8] = b"misaka-palw/job-attestation
 pub const PALW_JOB_DOMAIN_PANEL_SEED: &[u8] = b"misaka-palw/job-panel-seed/v3";
 
 /// Every domain this module introduces (uniqueness-tested against every other PALW family).
-pub const PALW_JOB_ALL_DOMAINS: &[&[u8]] = &[
-    PALW_JOB_DOMAIN_JOB_ID,
-    PALW_JOB_DOMAIN_COMMIT_MESSAGE,
-    PALW_JOB_DOMAIN_ATTEST_MESSAGE,
-    PALW_JOB_DOMAIN_PANEL_SEED,
-];
+pub const PALW_JOB_ALL_DOMAINS: &[&[u8]] =
+    &[PALW_JOB_DOMAIN_JOB_ID, PALW_JOB_DOMAIN_COMMIT_MESSAGE, PALW_JOB_DOMAIN_ATTEST_MESSAGE, PALW_JOB_DOMAIN_PANEL_SEED];
 
 /// An attestation may carry at most this many sampled positions: enough for any plausible
 /// panel duty, small enough that a claim can never smuggle unbounded data past admission.
@@ -134,7 +130,7 @@ pub fn palw_job_id_v3(
 }
 
 /// The V3 commitment signing digest: network, job, context, class, bond, and all three roots.
-/// Layout mirrors [`crate::palw_slash::palw_execution_attestation_message_v2`]: length-prefixed
+/// Layout mirrors [`crate::palw_slash::palw_execution_attestation_message_v3`]: length-prefixed
 /// network id, then fixed-width fields in struct order.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_commit_message_v3(
@@ -528,15 +524,32 @@ mod tests {
     /// eligibility, because the seed will not reproduce without the real anchor and snapshot.
     #[test]
     fn panel_seed_binds_anchor_and_snapshot() {
-        let base =
-            palw_panel_seed_v3(NET, Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3), Hash64::from_u64_word(4));
-        assert_ne!(
-            base,
-            palw_panel_seed_v3(NET, Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(9), Hash64::from_u64_word(4))
+        let base = palw_panel_seed_v3(
+            NET,
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(2),
+            Hash64::from_u64_word(3),
+            Hash64::from_u64_word(4),
         );
         assert_ne!(
             base,
-            palw_panel_seed_v3(NET, Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3), Hash64::from_u64_word(9))
+            palw_panel_seed_v3(
+                NET,
+                Hash64::from_u64_word(1),
+                Hash64::from_u64_word(2),
+                Hash64::from_u64_word(9),
+                Hash64::from_u64_word(4)
+            )
+        );
+        assert_ne!(
+            base,
+            palw_panel_seed_v3(
+                NET,
+                Hash64::from_u64_word(1),
+                Hash64::from_u64_word(2),
+                Hash64::from_u64_word(3),
+                Hash64::from_u64_word(9)
+            )
         );
     }
 
@@ -599,7 +612,10 @@ mod tests {
         ));
         let mut unsorted = attestation_claim();
         unsorted.sample_indices = vec![4, 4, 51];
-        assert_eq!(verify_attestation_entry_v3(unsorted, NET, |_, _| unreachable!()), Err(PalwJobIdentityError::SampleIndicesNotSorted));
+        assert_eq!(
+            verify_attestation_entry_v3(unsorted, NET, |_, _| unreachable!()),
+            Err(PalwJobIdentityError::SampleIndicesNotSorted)
+        );
         assert!(verify_attestation_entry_v3(attestation_claim(), NET, |_, _| true).is_ok());
         assert_eq!(
             verify_attestation_entry_v3(attestation_claim(), NET, |_, _| false),
