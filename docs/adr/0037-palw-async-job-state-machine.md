@@ -1,10 +1,15 @@
 # ADR-0037: PALW off the block-critical path — an asynchronous, budgeted job state machine over a permanent hash floor
 
-Status: **Accepted (architecture decision).** Activates nothing today; binds every future
+Status: **Superseded in part by ADR-0038 (same day).** Decision 1 (hash-PoW as the primary
+consensus work; PALW never block-critical) is **reversed** by ADR-0038 — it secured the chain by
+making the chain's thesis optional. Decisions 2–9 (state machine, binding, panels, court seating,
+classes, mint hygiene, P_check exclusion, registry/freeze) are **carried forward** into ADR-0038
+Decision G and remain normative through it. Read ADR-0038 first.
+
+Original status: Accepted (architecture decision). Activates nothing today; binds every future
 value-bearing PALW deployment. Adopted from the 2026-08-17 design review that cross-examined the
 2026-08-16/17 mainnet-readiness audit (9 blockers, 15 high; the consumer layer, not the arithmetic,
-is what fails) against Ambient's published auction/escrow structure. This ADR records its
-conclusions as the governing MISAKA architecture.
+is what fails) against Ambient's published auction/escrow structure.
 
 Date: 2026-08-17
 Supersedes: **ADR-0028's mainnet mechanism** (the block-coupled challenge-window walk as the
