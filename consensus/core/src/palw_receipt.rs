@@ -13,8 +13,13 @@
 //!   roots — never a bare "OK" — so a rubber-stamping attester is convictable later on its
 //!   own signed roots by the court. Shape admission REFUSES a receipt that cannot name its
 //!   samples.
-//! * **Ramp counting is by distinct verifier bond** ([`count_distinct_receipt_verifiers_v1`]):
-//!   one bonded identity filing the same receipt through ten carrier blocks is one voice.
+//! * **Dedup is by verifier bond** ([`count_distinct_receipt_verifiers_v1`]): one bonded identity
+//!   filing the same receipt through ten carrier blocks is one voice. That function is NOT the
+//!   ramp's quorum — it does not intersect with the drawn panel, so `k` bonds under one owner
+//!   count as `k` voices and a fabricator licenses its own work with bonds it already holds. The
+//!   ramp counts through [`crate::palw_facts::assigned_receipt_count_v1`], which adds panel
+//!   membership and per-receipt authentication; this one is telemetry and a necessary-not-
+//!   sufficient component.
 //! * **Stateless admission only.** Like [`crate::palw_carriage`], this module checks shape
 //!   (sizes, arity, ordering, signature length) and builds the signing digest; membership in
 //!   the assigned panel, bond status and signature validity are stateful questions answered

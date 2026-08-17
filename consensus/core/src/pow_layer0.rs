@@ -497,10 +497,25 @@ pub fn pow_short_circuits_as_parentless_root(header: &crate::header::Header) -> 
 }
 
 /// Accept any algo_id this binary knows how to verify ({kHeavyHash, Argon2id, BLAKE2b-SHA3,
-/// PALW LLM, PALW Ollama}). Used where the PoW itself is independently verified and only an
-/// unknown/garbage id must be rejected (e.g. the pruning-proof path); the exact per-network/
-/// per-DAA rule is enforced by [`check_algo_id`] in the main header pipeline. Argon2id (2) stays
-/// accepted so historical proofs spanning the Phase-2 era still validate.
+/// PALW LLM, PALW Ollama}).
+///
+/// **NOT USED BY ANY PATH, deliberately.** The doc here used to say "e.g. the pruning-proof path",
+/// and that path does NOT use it: `pruning_proof::check_proof_header_shape` applies the strict
+/// per-DAA [`check_algo_id`], because proof-only headers below the pruning point are never
+/// re-processed by the main pipeline and the looser rule would admit an algo the network did not
+/// mandate at that DAA (audit POW-01). Reading this function's doc as a description of live
+/// behaviour was therefore wrong in the one direction that matters: it described a defence that
+/// was not wired.
+///
+/// It is kept because the strict rule has a real cost it names correctly: `required_algo_id` never
+/// returns Argon2id (2), so a chain that had actually run the Phase-2 algorithm could not have its
+/// historical proof headers validated under [`check_algo_id`]. No shipped preset activates
+/// Argon2id, so nothing is broken today — but a network that ever does must switch its proof path
+/// to a rule that admits the algo its own history used, and this is that rule.
+///
+/// A caller MUST NOT substitute this for [`check_algo_id`] on a network whose history is
+/// single-algo: accepting "any known id" there lets a proof header claim an algorithm the network
+/// never mandated, which is a cheaper PoW than the one its difficulty was set for.
 #[inline]
 pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH

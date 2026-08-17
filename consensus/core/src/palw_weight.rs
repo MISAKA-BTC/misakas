@@ -76,8 +76,15 @@ pub enum PalwWorkRampStageV1 {
 /// chain view at its own virtual point. Every field is recomputable from DAG data alone (W3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwWeightFactsV1 {
-    /// Distinct assigned `Match` receipts covering this block's commitment
-    /// ([`crate::palw_receipt::count_distinct_receipt_verifiers_v1`]).
+    /// Distinct assigned `Match` receipts covering this block's commitment.
+    ///
+    /// The ONLY legal source is [`crate::palw_facts::assigned_receipt_count_v1`], which intersects
+    /// the filers with the DRAWN PANEL and authenticates each one. This doc used to point at
+    /// [`crate::palw_receipt::count_distinct_receipt_verifiers_v1`], which counts distinct bond
+    /// outpoints WITHOUT panel membership — necessary but not sufficient, because `k` bonds under
+    /// one owner are `k` distinct outpoints, so a fabricator licenses its own work at the cost of
+    /// bonds it already holds. This field is what promotes pwu into fork-choice weight, so pointing
+    /// it at the Sybil-able counter was pointing the quorum at the wrong function.
     pub distinct_receipts: u32,
     /// The challenge window's dual deadline has passed (DAA ∧ MTP).
     pub challenge_window_closed: bool,
