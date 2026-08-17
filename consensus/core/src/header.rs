@@ -204,6 +204,22 @@ pub struct Header {
     /// see `hashing::header::write_header_preimage`. Added to the preimage is a
     /// hard fork — every genesis hash is recomputed (ADR-0022 §8).
     pub overlay_commitment_root: Hash64,
+
+    /// MISAKA ADR-0038 Decision A: the block-carried PALW commitment (the
+    /// PBC1-encoded [`crate::palw_block_commitment::PalwBlockCommitmentV1`]),
+    /// opaque bytes at the header layer. This is a **post-PoW** field like
+    /// `nonce` itself — the commitment root is a function of the winning
+    /// inference, which is a function of the winning nonce, so it cannot sit
+    /// under `hash_merkle_root` (the coinbase route is circular) and cannot
+    /// enter the pre-PoW digest. Hashing rule (see
+    /// `hashing::header::write_header_preimage`): it enters the **block
+    /// identity** preimage iff `pow_algo_id` is a PALW id, length-prefixed, and
+    /// never enters any PoW-path digest. On non-PALW headers it MUST be empty —
+    /// enforced by `pow_layer0::check_palw_commitment_shape` at header
+    /// validation, because a hash-invisible non-empty field would be block-hash
+    /// malleability. Empty on every non-PALW network forever; PALW soak
+    /// networks adopt it via re-genesis (ADR-0038 "does not decide").
+    pub palw_commitment: Vec<u8>,
 }
 
 impl Header {
@@ -250,9 +266,26 @@ impl Header {
             // commitments it is hashed unconditionally, so this default participates
             // in the header hash (genesis recompute, ADR-0022 §8).
             overlay_commitment_root: Hash64::default(),
+            // ADR-0038: empty by default (the only legal value on non-PALW
+            // headers); the PALW mining path sets it via `with_palw_commitment`
+            // after the winning nonce is known.
+            palw_commitment: Vec::new(),
         };
         header.finalize();
         header
+    }
+
+    /// MISAKA ADR-0038 Decision A: set the block-carried PALW commitment (the
+    /// PBC1 bytes) and re-finalize the header hash. Consuming builder used by
+    /// the PALW mining path AFTER the winning nonce is known — the commitment
+    /// is a function of the winning inference, so it is the last field to land
+    /// before the block ships. Hash-visible iff `pow_algo_id` is a PALW id
+    /// (see `hashing::header::write_header_preimage`); callers on non-PALW
+    /// headers must not use this (validation rejects the result).
+    pub fn with_palw_commitment(mut self, palw_commitment: Vec<u8>) -> Self {
+        self.palw_commitment = palw_commitment;
+        self.finalize();
+        self
     }
 
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1): set the
@@ -322,6 +355,8 @@ impl Header {
             evm_commitment_root: Default::default(),
             // ADR-0022: hashed unconditionally; default to zero for this test ctor.
             overlay_commitment_root: Default::default(),
+            // ADR-0038: kHeavyHash ctor — empty is the only legal value.
+            palw_commitment: Vec::new(),
         }
     }
 }

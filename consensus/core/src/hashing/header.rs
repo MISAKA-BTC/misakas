@@ -23,8 +23,24 @@ use kaspa_hashes::{Hash, Hash64, HasherBase};
 /// `evm_commitment_root` (the mergeset-acceptance execution result) — are
 /// appended after `pruning_point`. The gate keeps every v0/v1 preimage
 /// byte-identical to the pre-EVM protocol.
+/// MISAKA ADR-0038: whether `header.palw_commitment` participates in this digest. The
+/// commitment is a function of the winning nonce, so it is a **post-PoW** field: it enters
+/// the block-identity digest only, and never any PoW-path digest (all three
+/// `*_override_nonce_time*` functions and the pre-PoW hash pass `Exclude`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PalwCommitmentDigestRule {
+    Include,
+    Exclude,
+}
+
 #[inline]
-fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: u64, timestamp: u64) {
+fn write_header_preimage<H: HasherBase>(
+    hasher: &mut H,
+    header: &Header,
+    nonce: u64,
+    timestamp: u64,
+    palw_rule: PalwCommitmentDigestRule,
+) {
     hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
 
     // Write parents at each level
@@ -70,6 +86,28 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
     // to gate against. Adding it is a hard fork: every genesis hash and block
     // identity is recomputed (ADR-0022 §8). Frozen byte position (last).
     hasher.update(header.overlay_commitment_root);
+
+    // MISAKA ADR-0038 Decision A: the PALW block commitment. Double-gated:
+    //   * by ALGO — only PALW headers (`pow_algo_id` 4/5) hash it, so every
+    //     hash-algo network's preimage (and genesis hash) is byte-identical to
+    //     the pre-ADR-0038 protocol. The gate is itself a function of
+    //     `pow_algo_id`, which is already in the preimage above, so inclusion is
+    //     deterministic from committed bytes. On non-PALW headers the field is
+    //     hash-invisible AND `pow_layer0::check_palw_commitment_shape` requires
+    //     it empty at validation — hash-invisible non-empty bytes would be
+    //     block-hash malleability.
+    //   * by DIGEST — `Include` only on the block-identity path. The commitment
+    //     is a function of the winning nonce (ADR-0038: it cannot sit under the
+    //     merkle root, and it cannot precede the grind), so every PoW-path
+    //     digest passes `Exclude`.
+    // Length-prefixed so empty-vs-absent and boundary shifts are distinct.
+    // PALW soak networks adopt this via re-genesis (their genesis carries
+    // `pow_algo_id = 4`, so their old genesis hashes do not survive — recorded
+    // in ADR-0038; hash-algo networks are untouched).
+    if palw_rule == PalwCommitmentDigestRule::Include && crate::pow_layer0::is_palw_algo_id(header.pow_algo_id) {
+        hasher.write_len(header.palw_commitment.len());
+        hasher.update(&header.palw_commitment);
+    }
 }
 
 /// Returns the **legacy 32-byte** header hash using the provided
@@ -79,7 +117,8 @@ fn write_header_preimage<H: HasherBase>(hasher: &mut H, header: &Header, nonce: 
 #[inline]
 pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> Hash {
     let mut hasher = kaspa_hashes::BlockHash::new();
-    write_header_preimage(&mut hasher, header, nonce, timestamp);
+    // PoW path: the PALW commitment never enters (ADR-0038 post-PoW field).
+    write_header_preimage(&mut hasher, header, nonce, timestamp, PalwCommitmentDigestRule::Exclude);
     hasher.finalize()
 }
 
@@ -89,7 +128,8 @@ pub fn hash_override_nonce_time(header: &Header, nonce: u64, timestamp: u64) -> 
 /// what keys every block store / GHOSTDAG / reachability structure.
 pub fn hash(header: &Header) -> Hash64 {
     let mut hasher = kaspa_hashes::BlockHash64::new();
-    write_header_preimage(&mut hasher, header, header.nonce, header.timestamp);
+    // Block identity: the ONLY digest the PALW commitment enters (ADR-0038).
+    write_header_preimage(&mut hasher, header, header.nonce, header.timestamp, PalwCommitmentDigestRule::Include);
     hasher.finalize()
 }
 
@@ -119,7 +159,8 @@ pub fn hash(header: &Header) -> Hash64 {
 #[inline]
 pub fn hash_override_nonce_time_64(header: &Header, nonce: u64, timestamp: u64) -> kaspa_hashes::Hash64 {
     let mut hasher = kaspa_hashes::BlockPrePowHash64::new();
-    write_header_preimage(&mut hasher, header, nonce, timestamp);
+    // PoW path: the PALW commitment never enters (ADR-0038 post-PoW field).
+    write_header_preimage(&mut hasher, header, nonce, timestamp, PalwCommitmentDigestRule::Exclude);
     hasher.finalize()
 }
 
@@ -217,5 +258,122 @@ mod tests {
         assert_ne!(in_payload.hash, in_commitment.hash, "payload_hash and commitment_root are position-distinct in the preimage");
         // Version itself participates in the preimage, so v1 != v2 even at zero EVM commitments.
         assert_ne!(v1.hash, v2.hash);
+    }
+
+    /// MISAKA ADR-0038: the palw_commitment digest rules — the load-bearing properties of
+    /// the layer inversion's header change, pinned:
+    ///   1. on a PALW header the commitment moves the block identity;
+    ///   2. on a PALW header it NEVER moves any PoW-path digest (post-PoW field);
+    ///   3. on a non-PALW header it is hash-invisible (every existing hash-algo network's
+    ///      block identity and genesis hash are unchanged — validation separately refuses
+    ///      the non-empty case as malleability);
+    ///   4. the length prefix separates empty-carried from distinct commitments.
+    #[test]
+    fn palw_commitment_digest_rules() {
+        let mk = |algo: u8| {
+            Header::new_finalized(
+                crate::constants::BLOCK_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                234,
+                23,
+                567,
+                algo,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+
+        // (1) PALW header: identity moves with the commitment, and with its content.
+        let palw = mk(crate::pow_layer0::POW_ALGO_ID_PALW_LLM);
+        let with_a = palw.clone().with_palw_commitment(vec![0xAA; 100]);
+        let with_b = palw.clone().with_palw_commitment(vec![0xBB; 100]);
+        assert_ne!(with_a.hash, palw.hash, "PALW identity MUST move with the commitment");
+        assert_ne!(with_a.hash, with_b.hash, "PALW identity MUST move with the commitment bytes");
+
+        // (2) PoW-path digests ignore it entirely (the commitment is a function of the
+        // winning nonce — it cannot precede the grind).
+        assert_eq!(pre_pow_hash_64(&with_a), pre_pow_hash_64(&palw), "pre-PoW hash must NOT see the commitment");
+        assert_eq!(
+            hash_override_nonce_time(&with_a, 567, 234),
+            hash_override_nonce_time(&palw, 567, 234),
+            "legacy PoW digest must NOT see the commitment"
+        );
+        assert_eq!(
+            hash_override_nonce_time_64(&with_a, 567, 234),
+            hash_override_nonce_time_64(&palw, 567, 234),
+            "64-byte PoW digest must NOT see the commitment"
+        );
+
+        // (3) Non-PALW header: hash-invisible (identity unchanged) — paired with
+        // `check_palw_commitment_shape`, which refuses the non-empty case at validation.
+        let khh = mk(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH);
+        assert_eq!(khh.clone().with_palw_commitment(vec![0xAA; 100]).hash, khh.hash, "non-PALW identity must NOT move");
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100]).is_err());
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[]).is_ok());
+
+        // (4) Ollama-PALW (algo 5) hashes it too, and empty-carried is length-prefixed so a
+        // PALW header WITH an empty commitment still differs from... itself only via bytes —
+        // i.e. empty is a committed state, not an absent one.
+        let ollama = mk(crate::pow_layer0::POW_ALGO_ID_PALW_OLLAMA);
+        assert_ne!(ollama.clone().with_palw_commitment(vec![0x01]).hash, ollama.hash);
+
+        // Shape rule: PALW side accepts empty and the cap, refuses above it.
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[]).is_ok());
+        assert!(
+            crate::pow_layer0::check_palw_commitment_shape(
+                crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
+                &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES]
+            )
+            .is_ok()
+        );
+        assert!(
+            crate::pow_layer0::check_palw_commitment_shape(
+                crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
+                &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1]
+            )
+            .is_err()
+        );
+    }
+
+    /// MISAKA ADR-0038: a real PBC1 payload rides the header end-to-end — encode, carry,
+    /// decode, and the header identity binds the exact bytes.
+    #[test]
+    fn palw_commitment_carries_pbc1_roundtrip() {
+        use crate::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
+        let commitment = PalwBlockCommitmentV1 {
+            version: PALW_BLOCK_COMMITMENT_VERSION_V1,
+            execution_class_id: Hash64::from_u64_word(1),
+            executor_bond_outpoint: crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(2), 3),
+            trace_root: Hash64::from_u64_word(4),
+            output_root: Hash64::from_u64_word(5),
+            pwu_claim: 100,
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let bytes = commitment.encode();
+        assert!(bytes.len() <= crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES, "PBC1 must fit the header cap");
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &bytes).is_ok());
+        let header = Header::new_finalized(
+            crate::constants::BLOCK_VERSION,
+            vec![vec![1.into()]].try_into().unwrap(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            234,
+            23,
+            567,
+            crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
+            0,
+            0.into(),
+            0,
+            Default::default(),
+        )
+        .with_palw_commitment(bytes);
+        let decoded = PalwBlockCommitmentV1::decode(&header.palw_commitment).unwrap();
+        assert_eq!(decoded, commitment);
     }
 }

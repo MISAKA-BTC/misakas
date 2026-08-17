@@ -36,6 +36,12 @@ pub enum RuleError {
     #[error("unknown pow_algo_id {0}: Phase 1 admits only kHeavyHash (POW_ALGO_ID_KHEAVYHASH = 1)")]
     UnknownPowAlgoId(u8),
 
+    // MISAKA ADR-0038: `Header::palw_commitment` shape rule (pow_layer0::check_palw_commitment_shape).
+    // On non-PALW algo ids the field is hash-invisible, so non-empty bytes there are block-hash
+    // malleability; on PALW ids it is capped. Structural — not behind any activation fence.
+    #[error("bad palw_commitment shape: {0}")]
+    BadPalwCommitmentShape(String),
+
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020). The EVM state-root / receipts
     // / commitment mismatch variants are added in the executor phase (P2) when
     // they are actually produced.

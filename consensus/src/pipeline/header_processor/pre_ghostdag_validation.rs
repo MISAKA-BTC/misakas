@@ -75,7 +75,12 @@ impl HeaderProcessor {
         let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
         kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
-            .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))
+            .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))?;
+        // MISAKA ADR-0038: structural shape rule for the post-PoW palw_commitment field.
+        // Not behind any activation fence — a hash-invisible non-empty field on a non-PALW
+        // header is block-hash malleability and is refused at the door, on every network.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment)
+            .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))
     }
 
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {

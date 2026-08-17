@@ -178,6 +178,8 @@ mod mockery {
                 evm_payload_hash: mock(),
                 evm_commitment_root: mock(),
                 overlay_commitment_root: mock(),
+                // MISAKA ADR-0038 (wire v5): the post-PoW PALW commitment.
+                palw_commitment: vec![0xAB; 32],
             }
         }
     }
@@ -202,6 +204,8 @@ mod mockery {
                 evm_payload_hash: mock(),
                 evm_commitment_root: mock(),
                 overlay_commitment_root: mock(),
+                // MISAKA ADR-0038 (wire v5): the post-PoW PALW commitment.
+                palw_commitment: vec![0xAB; 32],
             }
         }
     }

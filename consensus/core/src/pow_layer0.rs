@@ -335,6 +335,51 @@ pub enum PowLayer0Error {
     /// simply yields a tag that fails the target; this variant is for runs that yielded no tag.
     #[error("PALW worker failed: {0}")]
     PalwWorkerFailed(String),
+    /// MISAKA ADR-0038: a non-PALW header carries `palw_commitment` bytes. The field is
+    /// hash-invisible on non-PALW algo ids (see `hashing::header::write_header_preimage`), so
+    /// non-empty bytes there would be block-hash malleability — two distinct serialized blocks
+    /// with one identity. Structural refusal, independent of any activation fence.
+    #[error("non-PALW header (algo_id = {algo_id}) carries {got} palw_commitment bytes; must be empty")]
+    NonPalwHeaderCarriesPalwCommitment { algo_id: u8, got: usize },
+    /// MISAKA ADR-0038: a PALW header's `palw_commitment` exceeds the wire cap.
+    #[error("palw_commitment is {got} bytes, above the cap {cap}")]
+    PalwCommitmentTooLong { got: usize, cap: usize },
+}
+
+/// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
+/// hash) a `palw_commitment`, and the gate `hashing::header::write_header_preimage` reads.
+#[inline]
+pub fn is_palw_algo_id(algo_id: u8) -> bool {
+    algo_id == POW_ALGO_ID_PALW_LLM || algo_id == POW_ALGO_ID_PALW_OLLAMA
+}
+
+/// MISAKA ADR-0038: wire cap for `Header::palw_commitment` — the PBC1 envelope (4 magic +
+/// borsh body incl. one ML-DSA-87 signature ≈ 4.9 KB) with headroom, far below anything that
+/// could stress header relay, and small enough that a spam candidate cannot smuggle bulk data.
+pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
+
+/// MISAKA ADR-0038: structural shape rule for `Header::palw_commitment`, enforced wherever
+/// header shape is validated (alongside [`check_algo_id`]) and NOT behind any activation
+/// fence:
+///
+/// * non-PALW `algo_id` → the field MUST be empty. It is hash-invisible there, and a
+///   hash-invisible non-empty field is block-hash malleability (two serialized blocks, one
+///   identity) — a relay/dedup poison, refused at the door.
+/// * PALW `algo_id` → any length up to [`PALW_COMMITMENT_MAX_BYTES`], **including empty**:
+///   land-stage PALW soak headers carry no commitment yet, and requiring one is the
+///   ADR-0038 activation decision (`Params`-gated, Stage-1 wiring), not a shape rule.
+#[inline]
+pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8]) -> Result<(), PowLayer0Error> {
+    if !is_palw_algo_id(algo_id) {
+        if !palw_commitment.is_empty() {
+            return Err(PowLayer0Error::NonPalwHeaderCarriesPalwCommitment { algo_id, got: palw_commitment.len() });
+        }
+        return Ok(());
+    }
+    if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
+        return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
+    }
+    Ok(())
 }
 
 /// Validate that an `algo_id` is recognised by this binary at

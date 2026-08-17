@@ -29,6 +29,8 @@ from!(item: &kaspa_rpc_core::RpcHeader, protowire::RpcBlockHeader, {
         evm_commitment_root: item.evm_commitment_root.to_string(),
         // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
         overlay_commitment_root: item.overlay_commitment_root.to_string(),
+        // MISAKA ADR-0038: the post-PoW PALW commitment (hex bytes; empty = none).
+        palw_commitment: item.palw_commitment.to_rpc_hex(),
     }
 });
 
@@ -53,6 +55,8 @@ from!(item: &kaspa_rpc_core::RpcRawHeader, protowire::RpcBlockHeader, {
         evm_commitment_root: item.evm_commitment_root.to_string(),
         // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
         overlay_commitment_root: item.overlay_commitment_root.to_string(),
+        // MISAKA ADR-0038: the post-PoW PALW commitment (hex bytes; empty = none).
+        palw_commitment: item.palw_commitment.to_rpc_hex(),
     }
 });
 
@@ -60,6 +64,13 @@ from!(item: &kaspa_rpc_core::RpcRawHeader, protowire::RpcBlockHeader, {
 /// matching every v0/v1 header where the EVM commitments are hash-invisible.
 fn hash64_or_zero(s: &str) -> Result<kaspa_consensus_core::Hash64, faster_hex::Error> {
     if s.is_empty() { Ok(Default::default()) } else { kaspa_consensus_core::Hash64::from_str(s) }
+}
+
+/// Parse hex bytes, treating absent/empty (an old peer or a non-PALW header) as
+/// the empty commitment — matching the ADR-0038 rule that empty is the only
+/// legal value on non-PALW headers.
+fn bytes_or_empty(s: &str) -> Result<Vec<u8>, faster_hex::Error> {
+    if s.is_empty() { Ok(Vec::new()) } else { FromRpcHex::from_rpc_hex(s) }
 }
 
 from!(item: &[RpcHash], protowire::RpcBlockLevelParents, { Self { parent_hashes: item.iter().map(|x| x.to_string()).collect() } });
@@ -93,7 +104,10 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcHeader, {
     .with_evm_payload_hash(hash64_or_zero(&item.evm_payload_hash)?)
     .with_evm_commitment(hash64_or_zero(&item.evm_commitment_root)?)
     // kaspa-pq ADR-0022: include the overlay commitment in the trustless re-hash.
-    .with_overlay_commitment(hash64_or_zero(&item.overlay_commitment_root)?);
+    .with_overlay_commitment(hash64_or_zero(&item.overlay_commitment_root)?)
+    // MISAKA ADR-0038: include the PALW commitment in the trustless re-hash —
+    // on a PALW header it is part of the block-identity preimage.
+    .with_palw_commitment(bytes_or_empty(&item.palw_commitment)?);
 
     header.into()
 });
@@ -118,6 +132,8 @@ try_from!(item: &protowire::RpcBlockHeader, kaspa_rpc_core::RpcRawHeader, {
         evm_commitment_root: hash64_or_zero(&item.evm_commitment_root)?,
         // kaspa-pq ADR-0022: the overlay-state commitment (every-version preimage).
         overlay_commitment_root: hash64_or_zero(&item.overlay_commitment_root)?,
+        // MISAKA ADR-0038: the post-PoW PALW commitment (submit_block path).
+        palw_commitment: bytes_or_empty(&item.palw_commitment)?,
     }
 });
 

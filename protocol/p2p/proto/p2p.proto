@@ -104,6 +104,10 @@ message BlockHeader{
   // nets), so it MUST survive P2P relay/IBD or peers compute mismatching block
   // hashes (the powAlgoId / EVM-commitment split-brain precedent).
   Hash overlayCommitmentRoot = 18;
+  // MISAKA ADR-0038: the post-PoW PALW block commitment (PBC1 bytes). Part of
+  // the block-identity preimage on PALW algo ids, so it MUST survive P2P
+  // relay/IBD (the powAlgoId split-brain precedent). Empty on non-PALW headers.
+  bytes palwCommitment = 19;
 }
 
 message BlockLevelParents {

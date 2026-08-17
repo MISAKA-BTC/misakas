@@ -70,6 +70,11 @@ message RpcBlockHeader {
   // Part of the header-hash preimage on every version — MUST survive the mining
   // round-trip (the powAlgoId / EVM-commitment precedent).
   string overlayCommitmentRoot = 19;
+  // MISAKA ADR-0038: the post-PoW PALW block commitment (PBC1 bytes, hex). Set
+  // by the miner AFTER the winning nonce, part of the block-identity preimage
+  // on PALW algo ids — MUST survive the submit_block round-trip or a mined
+  // PALW block loses its commitment. Empty on non-PALW headers.
+  string palwCommitment = 20;
 }
 
 message RpcBlockLevelParents {
