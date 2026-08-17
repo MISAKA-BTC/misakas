@@ -487,7 +487,7 @@ fn attack_finalized_without_replay_is_untypable() {
     let subsidy = 370_468_345 * 1_200;
     // No eligible verifier existed; the window closed with zero attestations. The §1
     // predicate credits nothing — the lottery having "missed" the job is never a pass.
-    let decision = decide_credit_v1(&params, &commitment, &h64(0x04), &[], &[], &[], subsidy);
+    let decision = decide_credit_v1(&params, &commitment, b"misaka-adversarial", h64(0x05), &h64(0x04), 1_010, &[], &[], &[], subsidy);
     assert!(!decision.creditable && decision.paid_attesters.is_empty(), "an unchecked job was credited");
     assert_eq!(decision.base_sompi, 0, "an uncreditable job carries no mint");
 }

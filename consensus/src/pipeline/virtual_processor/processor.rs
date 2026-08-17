@@ -5134,7 +5134,7 @@ impl VirtualStateProcessor {
             // `frozen` stays `false` here on purpose: freezing is decided CLASS-wide, once, and
             // fail-closed at the top of this function (`class_state.is_frozen`), so a per-candidate
             // copy could only ever disagree with it.
-            let candidates = kaspa_consensus_core::palw_credit::panel_candidates_at_anchor_v1(
+            let candidates = kaspa_consensus_core::palw_credit::panel_seats_at_anchor_v3(
                 bonds,
                 credit.registration.runtime_class_id,
                 *anchor_block_daa,
@@ -5193,7 +5193,31 @@ impl VirtualStateProcessor {
             {
                 continue;
             }
-            let decision = decide_credit_v1(credit, &observed, anchor_hash, &candidates, &observed_atts, &refutation_daas, subsidy);
+            // `job_id` comes from the envelope the commitment's verified signature covers (the
+            // digest includes `palw_carriage_envelope_hash_v1`), so it is authenticated even though
+            // the miner chose it. The network identity is the GENESIS HASH — ADR-0009 Addendum A.3
+            // makes that the network discriminator — so a panel drawn on one network is not the
+            // panel on another.
+            //
+            // It being miner-chosen is safe, but NOT for the reason it is tempting to write down:
+            // the seed also binds a block finalized after the commitment, and a miner-executor CAN
+            // create that block — `PalwScheduleParamsV1::validate` only requires `delta_bind != 0`,
+            // so with a small Δ_bind it mines the anchor itself and grinds the hash. The real
+            // argument is ADR-0028 §2's: nothing here relies on the panel being unpredictable,
+            // because replays are full and refutation is permissionless. A Δ_bind floor is the
+            // change to make if that ever stops being true.
+            let decision = decide_credit_v1(
+                credit,
+                &observed,
+                self.genesis.hash.as_bytes().as_slice(),
+                commitment.envelope.job_id,
+                anchor_hash,
+                *anchor_block_daa,
+                &candidates,
+                &observed_atts,
+                &refutation_daas,
+                subsidy,
+            );
             if !decision.creditable {
                 continue;
             }

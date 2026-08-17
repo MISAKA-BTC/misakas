@@ -30,11 +30,11 @@
 //! Consensus-inert until a network carries `Params::palw_credit = Some(..)`; every shipped
 //! network carries `None`.
 
+use crate::palw_job_panel::{PalwPanelCandidateV3, select_job_panel_at_anchor_v3};
 use crate::palw_registry::PalwClassRegistrationV1;
-use crate::palw_schedule::{
-    PalwEconomicFactsV1, PalwPanelCandidateV1, job_schedule_v1, max_leverage_holds_v1, select_replay_panel_v1,
-};
+use crate::palw_schedule::{PalwEconomicFactsV1, PalwPanelCandidateV1, job_schedule_v1, max_leverage_holds_v1};
 use kaspa_hashes::Hash64;
+use std::collections::BTreeSet;
 
 /// The ADR-0033 fence: the one registered class this network credits, and the chain facts
 /// the §4e inequality reads. Carried on `Params` as an `Option` — `None` (every shipped
@@ -160,6 +160,48 @@ pub fn panel_candidates_at_anchor_v1(
         .collect()
 }
 
+/// The same set as SEATS, for the V3 draw: one candidate per bond, keyed on the bond outpoint.
+///
+/// Everything the v1 form decides is decided here identically — `bond_status` from
+/// `effective_bond_status` at the anchor, the executor's own operator excluded — with two
+/// differences that only the seat form can express:
+///
+/// * the bond outpoint travels, so two bonds under ONE validator key are two distinct seats
+///   instead of one ambiguous id the v1 lottery has to drop entirely;
+/// * `operator_root` carries the owner, so the draw's own per-operator dedup applies. That dedup is
+///   about ONE voice per operator on a panel; the `executor_owner` exclusion below is a different
+///   rule (no voice at all for the executor's own operator) and both are needed.
+///
+/// `class_frozen` is `false` for every seat for the same reason `frozen` is in the v1 form:
+/// freezing is decided class-wide, once, and fail-closed before this set is built.
+///
+/// A bond the executor owns is marked `Slashed` rather than dropped from the vector. That is
+/// deliberate: the V3 draw's eligibility rule is a status check, so encoding "not eligible" as the
+/// status it already refuses keeps ONE rejection path instead of two, and a caller cannot
+/// accidentally reinstate the seat by re-filtering. It never becomes a slash — nothing reads this
+/// status as a bond record.
+pub fn panel_seats_at_anchor_v3(
+    bonds: &[crate::dns_finality::StakeBondRecord],
+    runtime_class_id: Hash64,
+    anchor_daa: u64,
+    executor_owner: Hash64,
+) -> Vec<PalwPanelCandidateV3> {
+    bonds
+        .iter()
+        .map(|b| {
+            let eligible = crate::dns_finality::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner;
+            PalwPanelCandidateV3 {
+                validator_id: b.validator_pubkey_hash,
+                bond_outpoint: b.bond_outpoint,
+                runtime_class_id,
+                bond_status: if eligible { crate::dns_finality::BondStatus::Active } else { crate::dns_finality::BondStatus::Slashed },
+                class_frozen: false,
+                operator_root: Some(b.owner_pubkey_hash),
+            }
+        })
+        .collect()
+}
+
 /// One commitment as the crediting walk observed it (kind 0x01, accepted-DAA-stamped).
 #[derive(Clone, Debug)]
 pub struct PalwObservedCommitmentV1 {
@@ -223,16 +265,28 @@ impl PalwCreditDecisionV1 {
 ///
 /// The caller assembled every input from its own chain view; this function only decides.
 /// `anchor` is the first chain block at or past `accepted_daa + Δ_bind` on the caller's
-/// chain (ADR-0028 §2 keeps it settled), `candidates` the bonded set the caller derived at
-/// that anchor, `refutation_accepted_daas` the accepted-DAA stamps of every accepted
-/// refutation against this root — a refutation accepted AFTER the window still convicts,
-/// but does not revoke credit (the deliberate §3 asymmetry; the ledger counts that tail
-/// separately).
+/// chain (ADR-0028 §2 keeps it settled) and `anchor_daa` is that block's own DAA score,
+/// `candidates` the bonded set the caller derived at that anchor, `refutation_accepted_daas`
+/// the accepted-DAA stamps of every accepted refutation against this root — a refutation
+/// accepted AFTER the window still convicts, but does not revoke credit (the deliberate §3
+/// asymmetry; the ledger counts that tail separately).
+///
+/// `job_id` must come from an AUTHENTICATED envelope: the commitment digest covers the envelope
+/// hash, and the caller verifies that signature before calling. It is miner-chosen, and the honest
+/// reason that is safe is NOT that the anchor is unpredictable — `PalwScheduleParamsV1::validate`
+/// only requires `delta_bind != 0`, so with a small Δ_bind a miner-executor can mine the anchor
+/// itself and grind its hash. It is safe because nothing here relies on the panel being
+/// unpredictable: replays are full and refutation is permissionless (ADR-0028 §2). A Δ_bind floor
+/// is the change to make if unpredictability ever becomes load-bearing.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_credit_v1(
     params: &PalwCreditParamsV1,
     commitment: &PalwObservedCommitmentV1,
+    network_id: &[u8],
+    job_id: Hash64,
     anchor: &Hash64,
-    candidates: &[PalwPanelCandidateV1],
+    anchor_daa: u64,
+    candidates: &[PalwPanelCandidateV3],
     attestations: &[PalwObservedAttestationV1],
     refutation_accepted_daas: &[u64],
     block_subsidy_sompi: u64,
@@ -251,33 +305,52 @@ pub fn decide_credit_v1(
     if refutation_accepted_daas.iter().any(|&daa| daa <= schedule.challenge_close_daa) {
         return PalwCreditDecisionV1::nothing();
     }
-    // The panel is derived, never stored — the rule cannot drift from its output (§2).
-    let panel = select_replay_panel_v1(
-        &commitment.committed_root,
+    // The panel is derived, never stored — the rule cannot drift from its output (§2) — and it is
+    // drawn as SEATS, keyed on the bond outpoint.
+    //
+    // The id-keyed draw could not express two bonds under one validator key: their tickets and
+    // their tie-break were the same value, so it had to drop the id entirely (fail-closed, but both
+    // bonds then undrawable forever). A seat is `(validator_id, bond_outpoint)` and the outpoint is
+    // unique, so each bond enters under its own identity.
+    let panel = select_job_panel_at_anchor_v3(
+        network_id,
+        job_id,
+        commitment.committed_root,
+        *anchor,
+        anchor_daa,
         &commitment.executor_id,
-        anchor,
         &commitment.runtime_class_id,
         candidates,
         params.registration.windows.q as usize,
     );
     // ≥1 assigned attestation, on time, with the independently recomputed root equal to
-    // C's. Panel order (not arrival order) fixes the payout order; one share per assignee.
-    let mut paid = Vec::new();
-    for member in &panel {
-        // The EARNING attestation, not merely the fact that one exists: its bond outpoint is the
-        // payee. Ties inside one panel member (two bonds under one validator key both filing) are
-        // broken by the outpoint so the choice is a function of the records, never of walk order.
-        let mut earning: Vec<&PalwObservedAttestationV1> = attestations
-            .iter()
-            .filter(|a| {
-                a.attester_id == *member
-                    && a.attested_logits_root == commitment.logits_root
-                    && a.accepted_daa <= schedule.replay_deadline_daa
-            })
-            .collect();
-        earning.sort_by_key(|a| (a.bond_outpoint.transaction_id, a.bond_outpoint.index));
-        if let Some(a) = earning.first() {
-            paid.push(PalwPaidAttesterV1 { validator_id: *member, bond_outpoint: a.bond_outpoint });
+    // C's. Panel order (not arrival order) fixes the payout order; one share per SEAT.
+    //
+    // A seat is matched by an attestation FILED BY THAT SEAT'S BOND — no tie-break is needed any
+    // more, because the assignee and the payee are one value. The old loop matched on the
+    // non-unique validator id and then chose among the filings by outpoint, so which bond got paid
+    // was a property of the filings rather than of the draw.
+    let mut paid: Vec<PalwPaidAttesterV1> = Vec::new();
+    // ONE SIGNATURE FUNDS AT MOST ONE SHARE. The signed attestation message does not cover the bond
+    // outpoint, so a validator holding two bonds can file the SAME signature under each of them and
+    // collect two shares for one replay — and with a seat-keyed draw both of its bonds are now
+    // genuinely drawable, which is exactly what makes the replay reachable. `q` is meant to buy `q`
+    // independent checks; paying one party twice buys one check and pays for two. Keyed on the
+    // signed content — `(attester_id, attested_logits_root)` — because that is what one signature
+    // is, and the first seat in panel order keeps the share so the choice is the draw's, not the
+    // filer's. The structural fix is for the message to name the bond; this floor holds regardless.
+    let mut signature_used: BTreeSet<(Hash64, Hash64)> = BTreeSet::new();
+    for seat in &panel {
+        let earning = attestations.iter().find(|a| {
+            a.bond_outpoint == seat.bond_outpoint
+                && a.attester_id == seat.validator_id
+                && a.attested_logits_root == commitment.logits_root
+                && a.accepted_daa <= schedule.replay_deadline_daa
+        });
+        if let Some(a) = earning
+            && signature_used.insert((a.attester_id, a.attested_logits_root))
+        {
+            paid.push(PalwPaidAttesterV1 { validator_id: seat.validator_id, bond_outpoint: seat.bond_outpoint });
         }
     }
     if paid.is_empty() {
@@ -295,7 +368,9 @@ pub fn decide_credit_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_schedule::PalwLeverageRemedyV1;
+    // The id-keyed lottery, kept in the tests only: the v1 candidate form and its draw are still
+    // the contrast these assertions are about (what the seat form can express and it cannot).
+    use crate::palw_schedule::{PalwLeverageRemedyV1, select_replay_panel_v1};
 
     fn h64(byte: u8) -> Hash64 {
         Hash64::from_bytes([byte; 64])
@@ -319,12 +394,31 @@ mod tests {
 
     const SUBSIDY: u64 = 370_468_345 * 1_200; // the 120 s net's rate-preserved subsidy
 
-    fn candidate(id: Hash64, class: Hash64) -> PalwPanelCandidateV1 {
-        PalwPanelCandidateV1 { validator_id: id, runtime_class_id: class, bonded: true, frozen: false }
+    /// The chain identity the V3 seed binds. A fixture value; the live caller passes the genesis
+    /// hash, so a panel drawn on one network is not the panel on another.
+    const NET: &[u8] = b"misaka-credit-test";
+    /// The authenticated envelope's job id — miner-chosen but signature-covered.
+    fn job_id() -> Hash64 {
+        Hash64::from_u64_word(0x5A)
+    }
+    /// The anchor BLOCK's own DAA score, which the snapshot root binds.
+    const ANCHOR_DAA: u64 = 1_010;
+
+    fn candidate(id: Hash64, class: Hash64) -> PalwPanelCandidateV3 {
+        PalwPanelCandidateV3 {
+            validator_id: id,
+            bond_outpoint: bond_of(id),
+            runtime_class_id: class,
+            bond_status: crate::dns_finality::BondStatus::Active,
+            class_frozen: false,
+            operator_root: None,
+        }
     }
 
-    /// Executor 0xE0 plus four bonded same-class candidates; q = 2 draws two of them.
-    fn scene() -> (PalwCreditParamsV1, PalwObservedCommitmentV1, Hash64, Vec<PalwPanelCandidateV1>, Vec<Hash64>) {
+    /// Executor 0xE0 plus four bonded same-class candidates; q = 2 draws two SEATS of them.
+    fn scene()
+    -> (PalwCreditParamsV1, PalwObservedCommitmentV1, Hash64, Vec<PalwPanelCandidateV3>, Vec<crate::palw_job_panel::PalwPanelSeatV3>)
+    {
         let params = fence();
         let class = params.registration.runtime_class_id;
         let commitment = PalwObservedCommitmentV1 {
@@ -337,10 +431,13 @@ mod tests {
         let anchor = h64(0xAA);
         let candidates: Vec<_> =
             [h64(0xE0), h64(0x01), h64(0x02), h64(0x03), h64(0x04)].iter().map(|id| candidate(*id, class)).collect();
-        let panel = select_replay_panel_v1(
-            &commitment.committed_root,
+        let panel = select_job_panel_at_anchor_v3(
+            NET,
+            job_id(),
+            commitment.committed_root,
+            anchor,
+            ANCHOR_DAA,
             &commitment.executor_id,
-            &anchor,
             &class,
             &candidates,
             params.registration.windows.q as usize,
@@ -349,19 +446,37 @@ mod tests {
         (params, commitment, anchor, candidates, panel)
     }
 
+    /// The decision, with every argument the tests hold constant filled in.
+    fn decide(
+        params: &PalwCreditParamsV1,
+        commitment: &PalwObservedCommitmentV1,
+        anchor: &Hash64,
+        candidates: &[PalwPanelCandidateV3],
+        attestations: &[PalwObservedAttestationV1],
+        refutations: &[u64],
+    ) -> PalwCreditDecisionV1 {
+        decide_credit_v1(params, commitment, NET, job_id(), anchor, ANCHOR_DAA, candidates, attestations, refutations, SUBSIDY)
+    }
+
     /// A bond outpoint for a validator id — one per attester, so a payee is identifiable.
     fn bond_of(attester: Hash64) -> crate::tx::TransactionOutpoint {
         crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes(attester.as_bytes()), index: 0 }
     }
 
-    fn on_time(attester: Hash64, logits: Hash64) -> PalwObservedAttestationV1 {
+    /// An on-time attestation filed BY THAT SEAT'S BOND — the only filing a seat can be matched by.
+    fn on_time(seat: &crate::palw_job_panel::PalwPanelSeatV3, logits: Hash64) -> PalwObservedAttestationV1 {
         // anchor = 1 000 + Δ_bind(10); replay deadline = anchor + w_replay(30) = 1 040.
         PalwObservedAttestationV1 {
-            attester_id: attester,
-            bond_outpoint: bond_of(attester),
+            attester_id: seat.validator_id,
+            bond_outpoint: seat.bond_outpoint,
             attested_logits_root: logits,
             accepted_daa: 1_035,
         }
+    }
+
+    /// What the decision must pay for a given set of seats, in the given order.
+    fn expect_paid(seats: &[&crate::palw_job_panel::PalwPanelSeatV3]) -> Vec<PalwPaidAttesterV1> {
+        seats.iter().map(|s| PalwPaidAttesterV1 { validator_id: s.validator_id, bond_outpoint: s.bond_outpoint }).collect()
     }
 
     /// The candidate set is derived from bond STATUS at the anchor, not asserted by the caller.
@@ -451,18 +566,13 @@ mod tests {
         assert!(other_job[1].bonded, "an operator stays useful for every other executor's jobs");
     }
 
-    /// The paid ids, for assertions that are about panel ORDER rather than about the payee.
-    fn paid_ids(d: &PalwCreditDecisionV1) -> Vec<Hash64> {
-        d.paid_attesters.iter().map(|a| a.validator_id).collect()
-    }
-
     #[test]
     fn the_predicate_credits_and_pays_panel_members_in_panel_order() {
         let (params, commitment, anchor, candidates, panel) = scene();
-        let attestations = vec![on_time(panel[1], commitment.logits_root), on_time(panel[0], commitment.logits_root)];
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let attestations = vec![on_time(&panel[1], commitment.logits_root), on_time(&panel[0], commitment.logits_root)];
+        let d = decide(&params, &commitment, &anchor, &candidates, &attestations, &[]);
         assert!(d.creditable);
-        assert_eq!(paid_ids(&d), panel, "payout order is panel order, not arrival order");
+        assert_eq!(d.paid_attesters, expect_paid(&[&panel[0], &panel[1]]), "payout order is panel order, not arrival order");
         // base = subsidy · 1‰ (floored); share = ρ_v(1.0) · base.
         assert_eq!(d.base_sompi, SUBSIDY / 1000);
         assert_eq!(d.attester_share_sompi, d.base_sompi);
@@ -475,16 +585,16 @@ mod tests {
     #[test]
     fn one_on_time_match_is_enough_and_only_that_member_is_paid() {
         let (params, commitment, anchor, candidates, panel) = scene();
-        let attestations = vec![on_time(panel[0], commitment.logits_root)];
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let attestations = vec![on_time(&panel[0], commitment.logits_root)];
+        let d = decide(&params, &commitment, &anchor, &candidates, &attestations, &[]);
         assert!(d.creditable);
-        assert_eq!(paid_ids(&d), vec![panel[0]]);
+        assert_eq!(d.paid_attesters, expect_paid(&[&panel[0]]));
     }
 
     #[test]
     fn zero_attestations_mean_zero_credit_never_a_shrunk_panel() {
         let (params, commitment, anchor, candidates, _) = scene();
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[], &[], SUBSIDY);
+        let d = decide(&params, &commitment, &anchor, &candidates, &[], &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing());
     }
 
@@ -520,81 +630,148 @@ mod tests {
     /// consumer's `bonds.iter().find(|b| b.validator_pubkey_hash == id)` paid whichever bond the
     /// walk reached first.
     #[test]
-    fn the_paid_attester_names_the_bond_that_filed() {
+    fn the_paid_attester_names_the_seat_that_filed() {
         let (params, commitment, anchor, candidates, panel) = scene();
 
-        // One attester, one bond: the payee is that bond.
-        let single = vec![on_time(panel[0], commitment.logits_root)];
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &single, &[], SUBSIDY);
-        assert_eq!(d.paid_attesters.len(), 1);
-        assert_eq!(d.paid_attesters[0].validator_id, panel[0]);
-        assert_eq!(d.paid_attesters[0].bond_outpoint, bond_of(panel[0]), "the payee is the filing bond");
+        // The payee is the SEAT'S bond, and it is the draw's choice rather than the filings'.
+        let single = vec![on_time(&panel[0], commitment.logits_root)];
+        let d = decide(&params, &commitment, &anchor, &candidates, &single, &[]);
+        assert_eq!(d.paid_attesters, expect_paid(&[&panel[0]]), "the payee is the seat's own bond");
 
-        // TWO bonds under ONE validator key both file. The panel member earns ONE share, and the
-        // payee is chosen by outpoint order — a function of the records, not of arrival order.
-        let low = crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0x01; 64]), index: 0 };
-        let high = crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0xFE; 64]), index: 0 };
-        let mut first = on_time(panel[0], commitment.logits_root);
-        first.bond_outpoint = high;
-        let mut second = on_time(panel[0], commitment.logits_root);
-        second.bond_outpoint = low;
+        // A filing that names the seat's validator id but a DIFFERENT bond earns nothing. Under the
+        // id-keyed matching this was the ambiguity that had to be broken by sorting the filings;
+        // now the seat names its bond, so there is nothing to break.
+        let mut foreign_bond = on_time(&panel[0], commitment.logits_root);
+        foreign_bond.bond_outpoint =
+            crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0xFE; 64]), index: 0 };
+        let d = decide(&params, &commitment, &anchor, &candidates, &[foreign_bond], &[]);
+        assert_eq!(d, PalwCreditDecisionV1::nothing(), "a filing from an unseated bond is not an assigned attestation");
 
-        let forward = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[first.clone(), second.clone()], &[], SUBSIDY);
-        let backward = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[second, first], &[], SUBSIDY);
-        assert_eq!(forward.paid_attesters.len(), 1, "one panel member earns one share");
-        assert_eq!(forward.paid_attesters[0].bond_outpoint, low, "the lower outpoint wins, deterministically");
-        assert_eq!(forward, backward, "the payee must not depend on the order the walk collected them");
+        // Order-invariance, still pinned: the answer is a function of the records.
+        let both = vec![on_time(&panel[1], commitment.logits_root), on_time(&panel[0], commitment.logits_root)];
+        let mut reversed = both.clone();
+        reversed.reverse();
+        assert_eq!(
+            decide(&params, &commitment, &anchor, &candidates, &both, &[]),
+            decide(&params, &commitment, &anchor, &candidates, &reversed, &[])
+        );
+    }
+
+    /// ONE SIGNATURE FUNDS ONE SHARE, even when its signer holds two seated bonds.
+    ///
+    /// The signed attestation message covers `(network, executor, job_context, logits_root,
+    /// committed_root)` — NOT the bond outpoint. So a validator with two bonds can file the same
+    /// signature under each, and the seat-keyed draw now genuinely seats both, which is what makes
+    /// the replay reachable. `q` is meant to buy `q` independent checks; paying one party twice buys
+    /// one check and pays for two.
+    #[test]
+    fn one_signature_cannot_fund_two_seats() {
+        let params = fence();
+        let class = params.registration.runtime_class_id;
+        let commitment = PalwObservedCommitmentV1 {
+            committed_root: h64(0xC0),
+            logits_root: h64(0x1A),
+            executor_id: h64(0xE0),
+            runtime_class_id: class,
+            accepted_daa: 1_000,
+        };
+        let anchor = h64(0xAA);
+        // Two bonds under ONE validator key, plus one unrelated validator.
+        let twin_key = h64(0x01);
+        let mut twin_a = candidate(twin_key, class);
+        twin_a.bond_outpoint =
+            crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0x11; 64]), index: 0 };
+        let mut twin_b = candidate(twin_key, class);
+        twin_b.bond_outpoint =
+            crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0x22; 64]), index: 0 };
+        let draw = |cands: &[PalwPanelCandidateV3]| {
+            select_job_panel_at_anchor_v3(
+                NET,
+                job_id(),
+                commitment.committed_root,
+                anchor,
+                ANCHOR_DAA,
+                &commitment.executor_id,
+                &class,
+                cands,
+                params.registration.windows.q as usize,
+            )
+        };
+
+        // Both of one key's bonds seated: exactly the situation the seat rewrite created, and the
+        // one the id-keyed draw could not reach.
+        let twins = vec![twin_a.clone(), twin_b.clone()];
+        let panel = draw(&twins);
+        assert_eq!(panel.len(), 2, "q=2 seats both twin bonds: {panel:?}");
+        assert!(panel.iter().all(|s| s.validator_id == twin_key));
+
+        // The same signature — same attester id, same attested root — filed under each bond.
+        let filings: Vec<PalwObservedAttestationV1> = panel.iter().map(|s| on_time(s, commitment.logits_root)).collect();
+        let d = decide(&params, &commitment, &anchor, &twins, &filings, &[]);
+        assert!(d.creditable, "the work was done once and is creditable once");
+        assert_eq!(d.paid_attesters.len(), 1, "one signature, one share: {:?}", d.paid_attesters);
+        assert_eq!(d.paid_attesters[0].bond_outpoint, panel[0].bond_outpoint, "the first seat in PANEL order keeps it");
+
+        // Two DISTINCT signers each earn their own share — the dedup is per signature, not a cap on
+        // shares, so it must cost an honest second verifier nothing.
+        let mixed_cands = vec![twin_a, candidate(h64(0x02), class)];
+        let mixed_panel = draw(&mixed_cands);
+        assert_eq!(mixed_panel.len(), 2);
+        let mixed: Vec<PalwObservedAttestationV1> = mixed_panel.iter().map(|s| on_time(s, commitment.logits_root)).collect();
+        let d = decide(&params, &commitment, &anchor, &mixed_cands, &mixed, &[]);
+        assert_eq!(d.paid_attesters.len(), 2, "two independent verifiers earn two shares");
     }
 
     #[test]
     fn late_wrong_root_off_panel_and_duplicate_attestations_do_not_pay() {
         let (params, commitment, anchor, candidates, panel) = scene();
-        let late = PalwObservedAttestationV1 {
-            attester_id: panel[0],
-            bond_outpoint: bond_of(panel[0]),
+        let late = PalwObservedAttestationV1 { accepted_daa: 1_041, ..on_time(&panel[0], commitment.logits_root) };
+        let wrong_root = on_time(&panel[1], h64(0xBB));
+        // The executor is never on its own panel, so its filing names no seat.
+        let off_panel = PalwObservedAttestationV1 {
+            attester_id: h64(0xE0),
+            bond_outpoint: bond_of(h64(0xE0)),
             attested_logits_root: commitment.logits_root,
-            accepted_daa: 1_041, // one past the replay deadline
+            accepted_daa: 1_035,
         };
-        let wrong_root = on_time(panel[1], h64(0xBB));
-        let off_panel = on_time(h64(0xE0), commitment.logits_root); // the executor is never on its own panel
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[late, wrong_root, off_panel], &[], SUBSIDY);
+        let d = decide(&params, &commitment, &anchor, &candidates, &[late, wrong_root, off_panel], &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing(), "late, non-matching and unassigned attestations earn nothing");
 
-        // A duplicate on-time match pays its assignee once.
-        let dup = vec![on_time(panel[0], commitment.logits_root), on_time(panel[0], commitment.logits_root)];
-        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &dup, &[], SUBSIDY);
-        assert_eq!(paid_ids(&d), vec![panel[0]]);
+        // A duplicate on-time match pays its seat once.
+        let dup = vec![on_time(&panel[0], commitment.logits_root), on_time(&panel[0], commitment.logits_root)];
+        let d = decide(&params, &commitment, &anchor, &candidates, &dup, &[]);
+        assert_eq!(d.paid_attesters, expect_paid(&[&panel[0]]));
     }
 
     #[test]
     fn a_refutation_inside_the_window_voids_credit_and_one_after_does_not() {
         let (params, commitment, anchor, candidates, panel) = scene();
-        let attestations = vec![on_time(panel[0], commitment.logits_root)];
+        let attestations = vec![on_time(&panel[0], commitment.logits_root)];
         // challenge_close = 1 000 + 720 = 1 720.
-        let inside = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[1_720], SUBSIDY);
+        let inside = decide(&params, &commitment, &anchor, &candidates, &attestations, &[1_720]);
         assert_eq!(inside, PalwCreditDecisionV1::nothing(), "an accepted refutation inside the window voids credit");
-        let after = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[1_721], SUBSIDY);
+        let after = decide(&params, &commitment, &anchor, &candidates, &attestations, &[1_721]);
         assert!(after.creditable, "conviction after the window is slash material, never a credit revocation (§3 asymmetry)");
     }
 
     #[test]
     fn a_foreign_class_a_zero_ceiling_and_a_failed_inequality_all_credit_nothing() {
         let (params, commitment, anchor, candidates, panel) = scene();
-        let attestations = vec![on_time(panel[0], commitment.logits_root)];
+        let attestations = vec![on_time(&panel[0], commitment.logits_root)];
 
         let mut foreign = commitment.clone();
         foreign.runtime_class_id = h64(0x77);
-        let d = decide_credit_v1(&params, &foreign, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let d = decide(&params, &foreign, &anchor, &candidates, &attestations, &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing());
 
         let mut frozen = params.clone();
         frozen.registration = frozen.registration.to_zero_credit();
-        let d = decide_credit_v1(&frozen, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let d = decide(&frozen, &commitment, &anchor, &candidates, &attestations, &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing(), "the rollback is inside the gate, not beside it");
 
         let mut unbounded = params.clone();
         unbounded.registration.leverage_remedy = PalwLeverageRemedyV1 { min_credit_interval_daa: 1, base_subsidy_permille: 1_000 };
-        let d = decide_credit_v1(&unbounded, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let d = decide(&unbounded, &commitment, &anchor, &candidates, &attestations, &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing(), "an unbounded remedy refuses activation through the same door");
 
         // ADR-0039 1a through the same door: a class whose catalog is open credits nothing.
@@ -603,7 +780,7 @@ mod tests {
         let mut open_catalog = params.clone();
         open_catalog.registration.adjudication_depth = crate::palw_registry::PalwAdjudicationDepthV1::StructuralOnly;
         assert!(!open_catalog.active_for(commitment.accepted_daa, SUBSIDY));
-        let d = decide_credit_v1(&open_catalog, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let d = decide(&open_catalog, &commitment, &anchor, &candidates, &attestations, &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing(), "a class the court cannot convict earns no slash-bearing credit");
         // And it is not a fixture artifact: the shipped float class IS that class.
         let mut float_class = params.clone();
@@ -612,7 +789,7 @@ mod tests {
 
         let mut before_activation = params.clone();
         before_activation.activation_daa = 5_000;
-        let d = decide_credit_v1(&before_activation, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
+        let d = decide(&before_activation, &commitment, &anchor, &candidates, &attestations, &[]);
         assert_eq!(d, PalwCreditDecisionV1::nothing());
     }
 }
