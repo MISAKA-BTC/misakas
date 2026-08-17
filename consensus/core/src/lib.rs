@@ -180,6 +180,21 @@ pub mod palw_bisect;
 /// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
 /// consumer).
 pub mod palw_credit;
+/// MISAKA PALW ADR-0038 land-stage modules: block-work identity/signature binding, DAG-native
+/// verification receipts, the receipt-licensed weight ramp, per-class difficulty domains,
+/// the coinbase-carried block commitment, the budgeted credit batch, and the Track-D catalog
+/// coverage gate. All consensus-inert — nothing in validation, fork choice or the header
+/// pipeline consumes any of it until the ADR-0038 change set wires and activates together.
+pub mod palw_block_commitment;
+pub mod palw_catalog_coverage;
+pub mod palw_class_daa;
+pub mod palw_credit_batch;
+pub mod palw_dispute;
+pub mod palw_job_identity;
+pub mod palw_job_ledger;
+pub mod palw_job_panel;
+pub mod palw_receipt;
+pub mod palw_weight;
 /// MISAKA PALW asynchronous job state machine (ADR-0037 Decision 2): the closed, monotone
 /// per-job status algebra and the `PalwJobStateV3` object that replaces the per-block
 /// challenge-horizon walk on value networks. Encodes I8 (refutation locks, never destroys),
