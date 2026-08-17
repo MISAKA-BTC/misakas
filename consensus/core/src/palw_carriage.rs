@@ -827,6 +827,7 @@ pub fn adjudicate_equivocation_carriage_v1<F>(
     carriage: &PalwEquivocationCarriageV1,
     accused_bond: &StakeBondRecord,
     pov_daa_score: u64,
+    chain_network_id: &[u8],
     verify_signature: F,
 ) -> Result<TransactionOutpoint, PalwCarriageError>
 where
@@ -846,7 +847,7 @@ where
     if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
-    let verdict = adjudicate_class_contradiction_v1(&carriage.certificate, |digest, attestation| {
+    let verdict = adjudicate_class_contradiction_v1(&carriage.certificate, chain_network_id, |digest, attestation: &crate::palw_slash::PalwExecutionAttestationV1| {
         verify_signature(&accused_bond.validator_pubkey, digest, &attestation.signature)
     })
     .map_err(|e| PalwCarriageError::EquivocationNotProven(e.to_string()))?;
@@ -883,6 +884,7 @@ pub fn adjudicate_step_conviction_carriage_v1<F>(
     carriage: &PalwStepConvictionCarriageV1,
     accused_bond: &StakeBondRecord,
     pov_daa_score: u64,
+    chain_network_id: &[u8],
     weights: &dyn crate::palw_step_refute::PalwWeightOracleV1,
     verify_signature: F,
 ) -> Result<TransactionOutpoint, PalwCarriageError>
@@ -902,8 +904,13 @@ where
     if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
-    let network_id = carriage.refutation.binding.job_context.network_id.as_slice();
-    let message = carriage.attestation.message(network_id);
+    // Same rule as the equivocation adjudicator: the network identity comes from the CHAIN. Taking
+    // it from the evidence's own job context let a filer choose it, so an attestation honestly
+    // signed for devnet verified here and slashed a MAINNET bond (audit).
+    if carriage.refutation.binding.job_context.network_id.as_slice() != chain_network_id {
+        return Err(PalwCarriageError::EquivocationNotProven("the evidence names a different network than this chain".into()));
+    }
+    let message = carriage.attestation.message(chain_network_id);
     if !verify_signature(&accused_bond.validator_pubkey, &message, &carriage.attestation.signature) {
         return Err(PalwCarriageError::EquivocationNotProven("attestation signature does not verify".into()));
     }
@@ -2082,6 +2089,9 @@ mod equivocation_tests {
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use crate::tx::TransactionId;
 
+    /// The chain identity every adjudication in these tests runs under.
+    const NET: &[u8] = b"misaka-devnet";
+
     fn h(seed: u64) -> Hash64 {
         Hash64::from_u64_word(seed)
     }
@@ -2107,7 +2117,7 @@ mod equivocation_tests {
     fn context() -> PalwJobContextV2 {
         PalwJobContextV2 {
             version: PALW_TRACE_COMMITMENT_VERSION_V2,
-            network_id: b"misaka-devnet".to_vec(),
+            network_id: NET.to_vec(),
             job_id: h(0x11),
             job_nullifier: h(0x12),
             assignment_id: h(0x13),
@@ -2177,7 +2187,7 @@ mod equivocation_tests {
         let (signer, accused) = (h(0xE1), op(0xB1));
         let c = carriage(signer, accused, h(0x01), h(0x02));
         assert!(validate_palw_carriage_v1(&PalwCarriageV1::Equivocation(c.clone())).is_ok());
-        assert_eq!(adjudicate_equivocation_carriage_v1(&c, &bond(signer, accused), 100, mock_verify), Ok(accused));
+        assert_eq!(adjudicate_equivocation_carriage_v1(&c, &bond(signer, accused), 100, NET, mock_verify), Ok(accused));
     }
 
     /// **The attack this design exists to refuse: accusing somebody else's bond.**
@@ -2192,7 +2202,7 @@ mod equivocation_tests {
         let victim = bond(h(0x00CE), victim_outpoint);
         let c = carriage(signer, victim_outpoint, h(0x01), h(0x02));
         assert_eq!(
-            adjudicate_equivocation_carriage_v1(&c, &victim, 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&c, &victim, 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationBondNotTheSigner)
         );
     }
@@ -2205,7 +2215,7 @@ mod equivocation_tests {
         let c = carriage(signer, accused, h(0x01), h(0x02));
         let wrong = bond(signer, op(0xB2));
         assert_eq!(
-            adjudicate_equivocation_carriage_v1(&c, &wrong, 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&c, &wrong, 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationWrongBondRecord { resolved: op(0xB2), accused })
         );
     }
@@ -2219,14 +2229,14 @@ mod equivocation_tests {
         let mut forged = carriage(signer, accused, h(0x01), h(0x02));
         forged.certificate.attestation_b.signature = vec![0xFF; 64];
         assert!(matches!(
-            adjudicate_equivocation_carriage_v1(&forged, &bond(signer, accused), 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&forged, &bond(signer, accused), 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationNotProven(_))
         ));
 
         // Same root twice: the signer said one thing twice, which is not equivocation.
         let agreeing = carriage(signer, accused, h(0x01), h(0x01));
         assert!(matches!(
-            adjudicate_equivocation_carriage_v1(&agreeing, &bond(signer, accused), 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&agreeing, &bond(signer, accused), 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationNotProven(_))
         ));
     }
@@ -2241,7 +2251,7 @@ mod equivocation_tests {
         already_slashed.slashed_at_daa_score = Some(50);
         already_slashed.status = BondStatus::Slashed;
         assert_eq!(
-            adjudicate_equivocation_carriage_v1(&c, &already_slashed, 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&c, &already_slashed, 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationBondInactive)
         );
 
@@ -2249,7 +2259,7 @@ mod equivocation_tests {
         not_yet.activation_daa_score = 10_000;
         not_yet.status = BondStatus::Pending;
         assert_eq!(
-            adjudicate_equivocation_carriage_v1(&c, &not_yet, 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&c, &not_yet, 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationBondInactive)
         );
     }
@@ -2274,7 +2284,7 @@ mod equivocation_tests {
             Err(PalwCarriageError::EquivocationNotOneSigner)
         );
         assert_eq!(
-            adjudicate_equivocation_carriage_v1(&divergent, &bond(h(0xE1), op(0xB1)), 100, mock_verify),
+            adjudicate_equivocation_carriage_v1(&divergent, &bond(h(0xE1), op(0xB1)), 100, NET, mock_verify),
             Err(PalwCarriageError::EquivocationBondNotTheSigner)
         );
     }
@@ -2295,6 +2305,10 @@ mod equivocation_tests {
 
 #[cfg(test)]
 mod step_conviction_tests {
+    /// The chain identity every adjudication in this module runs under — it must equal the network
+    /// the fixtures' own job context names, because a certificate from another network is refused.
+    const NET: &[u8] = b"step-refute-test";
+
     use super::*;
     use crate::dns_finality::{BondStatus, StakeBondRecord};
     use crate::palw_slash::PALW_S_OBJECT_VERSION_V1;
@@ -2399,7 +2413,7 @@ mod step_conviction_tests {
         let c = conviction(signer, victim_outpoint);
         let victim = bond(h(0x00CE), victim_outpoint);
         assert_eq!(
-            adjudicate_step_conviction_carriage_v1(&c, &victim, 100, &NoWeights, mock_verify),
+            adjudicate_step_conviction_carriage_v1(&c, &victim, 100, NET, &NoWeights, mock_verify),
             Err(PalwCarriageError::EquivocationBondNotTheSigner)
         );
     }
@@ -2412,7 +2426,7 @@ mod step_conviction_tests {
         let mut forged = conviction(signer, accused);
         forged.attestation.signature = vec![0xFF; 64];
         assert!(matches!(
-            adjudicate_step_conviction_carriage_v1(&forged, &bond(signer, accused), 100, &NoWeights, mock_verify),
+            adjudicate_step_conviction_carriage_v1(&forged, &bond(signer, accused), 100, NET, &NoWeights, mock_verify),
             Err(PalwCarriageError::EquivocationNotProven(_))
         ));
     }
@@ -2425,7 +2439,7 @@ mod step_conviction_tests {
     fn an_unadjudicable_step_convicts_nobody() {
         let (signer, accused) = (h(0xE1), op(0xB1));
         let c = conviction(signer, accused);
-        let verdict = adjudicate_step_conviction_carriage_v1(&c, &bond(signer, accused), 100, &NoWeights, mock_verify);
+        let verdict = adjudicate_step_conviction_carriage_v1(&c, &bond(signer, accused), 100, NET, &NoWeights, mock_verify);
         assert!(matches!(verdict, Err(PalwCarriageError::StepConvictionNotProven(_))), "got {verdict:?}");
     }
 
@@ -2438,7 +2452,7 @@ mod step_conviction_tests {
         slashed.slashed_at_daa_score = Some(50);
         slashed.status = BondStatus::Slashed;
         assert_eq!(
-            adjudicate_step_conviction_carriage_v1(&c, &slashed, 100, &NoWeights, mock_verify),
+            adjudicate_step_conviction_carriage_v1(&c, &slashed, 100, NET, &NoWeights, mock_verify),
             Err(PalwCarriageError::EquivocationBondInactive)
         );
     }

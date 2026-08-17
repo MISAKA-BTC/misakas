@@ -388,7 +388,7 @@ where
                     && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
                     && c.refutation.binding.full_logits_trace_root == input.commitment_root
                     && let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa)
-                    && adjudicate_step_conviction_carriage_v1(&c, accused, input.pov_daa, input.step_weights, &verify_signature)
+                    && adjudicate_step_conviction_carriage_v1(&c, accused, input.pov_daa, input.network_id, input.step_weights, &verify_signature)
                         .is_ok()
                 {
                     convicted_before_close = true;
@@ -400,7 +400,7 @@ where
                     && (e.certificate.attestation_a.full_logits_trace_root == input.commitment_root
                         || e.certificate.attestation_b.full_logits_trace_root == input.commitment_root)
                     && let Some(accused) = input.bonds.active_bond_at(&e.accused_bond_outpoint, input.pov_daa)
-                    && adjudicate_equivocation_carriage_v1(&e, accused, input.pov_daa, &verify_signature).is_ok()
+                    && adjudicate_equivocation_carriage_v1(&e, accused, input.pov_daa, input.network_id, &verify_signature).is_ok()
                 {
                     convicted_before_close = true;
                 }
@@ -656,7 +656,10 @@ mod resolver_tests {
         (PALW_CARRIAGE_KIND_BISECT_MOVE, daa, body(&PalwCarriageV1::BisectMove(m)))
     }
 
-    const NETWORK: &[u8] = b"testnet-11";
+    /// The chain identity the resolver runs under. It must equal the network the equivocation
+    /// fixtures' job context names, because a foreign-network certificate is now refused before any
+    /// signature is checked — which is the point of that rule.
+    const NETWORK: &[u8] = b"step-refute-test";
 
     /// A node with no step weights: every step conviction lands `Unadjudicable`, which is what a
     /// real node without the oracle does.

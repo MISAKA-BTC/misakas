@@ -129,6 +129,8 @@ pub enum PalwSlashError {
     ContextShape(&'static str),
     #[error("job context pins a different trace scheme than misaka-palw/full-logits-trace/v2")]
     SchemeMismatch,
+    #[error("the evidence names a different network than the chain adjudicating it — a foreign-network certificate may not slash a bond here")]
+    ForeignNetwork,
     #[error("attestation {which} does not bind the carried job context")]
     AttestationContextMismatch { which: &'static str },
     #[error("attestation {which} carries an invalid signature")]
@@ -301,6 +303,7 @@ pub struct PalwClassContradictionVerdictV1 {
 /// nothing, and nothing may act on it.
 pub fn adjudicate_class_contradiction_v1<F>(
     certificate: &PalwClassContradictionCertificateV1,
+    chain_network_id: &[u8],
     verify_signature: F,
 ) -> Result<PalwClassContradictionVerdictV1, PalwSlashError>
 where
@@ -324,9 +327,18 @@ where
         return Err(PalwSlashError::NoContradiction);
     }
 
-    let network_id = certificate.job_context.network_id.as_slice();
-    let message_a = certificate.attestation_a.message(network_id);
-    let message_b = certificate.attestation_b.message(network_id);
+    // The network identity comes from the CHAIN, not from the certificate. Taking it from
+    // `certificate.job_context.network_id` let the filer choose it: a devnet or testnet attestation,
+    // honestly signed for that network, verified here and slashed a MAINNET bond, because the same
+    // validator key is used across networks and the signing digest was being computed under
+    // whichever network the evidence named (audit). Refusing a certificate whose own context
+    // disagrees with the chain also means the message this adjudicates is the message the signer
+    // actually produced on THIS network.
+    if certificate.job_context.network_id.as_slice() != chain_network_id {
+        return Err(PalwSlashError::ForeignNetwork);
+    }
+    let message_a = certificate.attestation_a.message(chain_network_id);
+    let message_b = certificate.attestation_b.message(chain_network_id);
     if !verify_signature(&message_a, &certificate.attestation_a) {
         return Err(PalwSlashError::InvalidSignature { which: "a" });
     }
@@ -648,6 +660,9 @@ pub fn check_trace_event_refutation_v1(
 
 #[cfg(test)]
 mod tests {
+    /// The chain identity every adjudication in this module runs under — the same one the
+    /// fixtures' job context names, because a certificate from another network is refused now.
+    const NET: &[u8] = b"misaka-devnet";
     use super::*;
     use crate::palw_v2::{logits_event_hash_v2, trace_event_merkle_root_v2, PalwStopReasonV2, PalwTraceCommitmentV2, PALW_V2_ALL_DOMAINS};
     use std::collections::HashMap;
@@ -753,7 +768,7 @@ mod tests {
     fn same_signer_two_roots_is_equivocation() {
         let ctx = test_context();
         let cert = contradiction(attested(h64(0xE1), &ctx, h64(0x01)), attested(h64(0xE1), &ctx, h64(0x02)));
-        let verdict = adjudicate_class_contradiction_v1(&cert, mock_verify).unwrap();
+        let verdict = adjudicate_class_contradiction_v1(&cert, NET, mock_verify).unwrap();
         assert_eq!(verdict.kind, PalwClassContradictionKindV1::ExecutorEquivocation { executor_id: h64(0xE1) });
     }
 
@@ -761,7 +776,7 @@ mod tests {
     fn different_signers_two_roots_is_class_divergence_reading_identities_from_the_context() {
         let ctx = test_context();
         let cert = contradiction(attested(h64(0xE1), &ctx, h64(0x01)), attested(h64(0xE2), &ctx, h64(0x02)));
-        let verdict = adjudicate_class_contradiction_v1(&cert, mock_verify).unwrap();
+        let verdict = adjudicate_class_contradiction_v1(&cert, NET, mock_verify).unwrap();
         assert_eq!(
             verdict.kind,
             PalwClassContradictionKindV1::ClassDivergence {
@@ -776,7 +791,7 @@ mod tests {
     fn equal_roots_contradict_nothing() {
         let ctx = test_context();
         let cert = contradiction(attested(h64(0xE1), &ctx, h64(0x01)), attested(h64(0xE2), &ctx, h64(0x01)));
-        assert_eq!(adjudicate_class_contradiction_v1(&cert, mock_verify), Err(PalwSlashError::NoContradiction));
+        assert_eq!(adjudicate_class_contradiction_v1(&cert, NET, mock_verify), Err(PalwSlashError::NoContradiction));
     }
 
     #[test]
@@ -784,8 +799,8 @@ mod tests {
         let ctx = test_context();
         let a = attested(h64(0xE1), &ctx, h64(0x01));
         let b = attested(h64(0xE2), &ctx, h64(0x02));
-        let v1 = adjudicate_class_contradiction_v1(&contradiction(a.clone(), b.clone()), mock_verify).unwrap();
-        let v2 = adjudicate_class_contradiction_v1(&contradiction(b, a), mock_verify).unwrap();
+        let v1 = adjudicate_class_contradiction_v1(&contradiction(a.clone(), b.clone()), NET, mock_verify).unwrap();
+        let v2 = adjudicate_class_contradiction_v1(&contradiction(b, a), NET, mock_verify).unwrap();
         assert_eq!(v1.evidence_id, v2.evidence_id);
     }
 
@@ -800,7 +815,7 @@ mod tests {
         other_ctx.job_id = h64(0x77);
         let foreign = attested(h64(0xE1), &other_ctx, h64(0x01));
         assert_eq!(
-            adjudicate_class_contradiction_v1(&contradiction(foreign, b.clone()), mock_verify),
+            adjudicate_class_contradiction_v1(&contradiction(foreign, b.clone()), NET, mock_verify),
             Err(PalwSlashError::AttestationContextMismatch { which: "a" })
         );
 
@@ -809,33 +824,33 @@ mod tests {
         tampered.full_logits_trace_root = h64(0x55);
         tampered.job_context_hash = ctx.context_hash();
         assert_eq!(
-            adjudicate_class_contradiction_v1(&contradiction(tampered, b.clone()), mock_verify),
+            adjudicate_class_contradiction_v1(&contradiction(tampered, b.clone()), NET, mock_verify),
             Err(PalwSlashError::InvalidSignature { which: "a" })
         );
 
         // Wrong object version.
         let mut cert = contradiction(a.clone(), b.clone());
         cert.version = 2;
-        assert!(matches!(adjudicate_class_contradiction_v1(&cert, mock_verify), Err(PalwSlashError::UnsupportedVersion { .. })));
+        assert!(matches!(adjudicate_class_contradiction_v1(&cert, NET, mock_verify), Err(PalwSlashError::UnsupportedVersion { .. })));
 
         // Oversized and empty signatures die at shape level.
         let mut oversized = a.clone();
         oversized.signature = vec![0u8; PALW_S_MAX_SIGNATURE_BYTES + 1];
         assert!(matches!(
-            adjudicate_class_contradiction_v1(&contradiction(oversized, b.clone()), mock_verify),
+            adjudicate_class_contradiction_v1(&contradiction(oversized, b.clone()), NET, mock_verify),
             Err(PalwSlashError::SignatureSizeOutOfRange { .. })
         ));
         let mut empty = a.clone();
         empty.signature = vec![];
         assert!(matches!(
-            adjudicate_class_contradiction_v1(&contradiction(empty, b.clone()), mock_verify),
+            adjudicate_class_contradiction_v1(&contradiction(empty, b.clone()), NET, mock_verify),
             Err(PalwSlashError::SignatureSizeOutOfRange { .. })
         ));
 
         // Wrong-scheme context.
         let mut cert = contradiction(a, b);
         cert.job_context.trace_scheme_id = h64(0x99);
-        assert_eq!(adjudicate_class_contradiction_v1(&cert, mock_verify), Err(PalwSlashError::SchemeMismatch));
+        assert_eq!(adjudicate_class_contradiction_v1(&cert, NET, mock_verify), Err(PalwSlashError::SchemeMismatch));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1280,7 +1295,7 @@ mod tests {
         let mut registry: HashMap<Hash64, ()> = HashMap::new();
         registry.insert(h64(0xE1), ());
         registry.insert(h64(0xE2), ());
-        let verdict = adjudicate_class_contradiction_v1(&contradiction(a, b), |message, attestation| {
+        let verdict = adjudicate_class_contradiction_v1(&contradiction(a, b), NET, |message, attestation| {
             registry.contains_key(&attestation.executor_id) && mock_verify(message, attestation)
         })
         .unwrap();
