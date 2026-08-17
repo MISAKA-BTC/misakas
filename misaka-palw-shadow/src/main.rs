@@ -503,6 +503,13 @@ enum CarriageEvent {
         challenger_bond: String,
         turn: String,
     },
+    /// A verification receipt. Counted, not weighed: whether it LICENSES anything depends on
+    /// panel membership, which is chain state this binary does not hold.
+    Receipt {
+        verifier_bond: String,
+        target_block: String,
+        verdict: String,
+    },
     Commitment {
         root: String,
         class: String,
@@ -615,6 +622,11 @@ fn carriage_event_of(carriage: &PalwCarriageV1) -> CarriageEvent {
             index: c.chunk_index,
             count: c.chunk_count,
             bytes: c.bytes.len(),
+        },
+        PalwCarriageV1::Receipt(r) => CarriageEvent::Receipt {
+            verifier_bond: format!("{}:{}", r.receipt.verifier_bond_outpoint.transaction_id, r.receipt.verifier_bond_outpoint.index),
+            target_block: hex64(&r.receipt.target_block_hash),
+            verdict: format!("{:?}", r.receipt.verdict),
         },
         PalwCarriageV1::BisectMove(m) => CarriageEvent::BisectMove {
             challenger_bond: format!("{}:{}", m.challenger_bond_outpoint.transaction_id, m.challenger_bond_outpoint.index),
@@ -766,6 +778,7 @@ fn kind_name(carriage: &PalwCarriageV1) -> &'static str {
         PalwCarriageV1::Equivocation(_) => "equivocation",
         PalwCarriageV1::StepConviction(_) => "step-conviction",
         PalwCarriageV1::BisectMove(_) => "bisect-move",
+        PalwCarriageV1::Receipt(_) => "receipt",
     }
 }
 
@@ -970,6 +983,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
     let mut equivocations = 0usize;
     let mut step_convictions = 0usize;
     let mut bisect_moves = 0usize;
+    let mut receipts_seen = 0usize;
     let mut chunk_groups: std::collections::HashMap<String, std::collections::HashSet<u8>> = std::collections::HashMap::new();
     let mut chunk_group_counts: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for event in &events {
@@ -1011,6 +1025,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
                 CarriageEvent::Equivocation { .. } => equivocations += 1,
                 CarriageEvent::StepConviction { .. } => step_convictions += 1,
                 CarriageEvent::BisectMove { .. } => bisect_moves += 1,
+                CarriageEvent::Receipt { .. } => receipts_seen += 1,
             },
         }
     }
@@ -1096,6 +1111,7 @@ fn report(state_dir: &Path, roster_path: &Path, params_name: &str) -> Result<(),
         "equivocation_certificates_seen": equivocations,
         "step_convictions_seen": step_convictions,
         "bisect_moves_seen": bisect_moves,
+        "receipts_seen": receipts_seen,
         "evidence_groups_complete": chunk_groups
             .iter()
             .filter(|(g, seen)| chunk_group_counts.get(*g).is_some_and(|c| seen.len() == *c as usize))

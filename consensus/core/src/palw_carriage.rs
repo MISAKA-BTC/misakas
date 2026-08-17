@@ -59,7 +59,7 @@ use crate::palw_slash::{
 use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2};
 use crate::subnets::{
     SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_EQUIVOCATION,
-    SUBNETWORK_ID_PALW_BISECT_MOVE, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK,
+    SUBNETWORK_ID_PALW_BISECT_MOVE, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK, SUBNETWORK_ID_PALW_RECEIPT,
     SUBNETWORK_ID_PALW_STEP_CONVICTION,
     SUBNETWORK_ID_PALW_OPENING_ANSWER, SUBNETWORK_ID_PALW_OPENING_CALL, SUBNETWORK_ID_PALW_REFUTATION, SubnetworkId,
 };
@@ -125,6 +125,9 @@ pub const PALW_CARRIAGE_KIND_STEP_CONVICTION: u8 = 0x08;
 /// nobody at acceptance; it advances a session, and the session's own terminal handoff is what
 /// reaches a bond.
 pub const PALW_CARRIAGE_KIND_BISECT_MOVE: u8 = 0x09;
+
+/// A verification receipt — the bonded bet that licenses a block's work to ramp (ADR-0038 B).
+pub const PALW_CARRIAGE_KIND_RECEIPT: u8 = 0x0A;
 
 /// Most openings one carried call may request across both legs (and one carried answer may
 /// hold). A CARRIAGE cap, deliberately below the wire cap — see the module doc.
@@ -354,6 +357,18 @@ pub enum PalwBisectMoveBodyV1 {
     Verdict(crate::palw_bisect::PalwBisectVerdictV1),
 }
 
+/// A verification receipt, carried.
+///
+/// The receipt already names its verifier's bond outpoint, so unlike the conviction kinds the
+/// carriage adds no accused party — a receipt accuses nobody. It is a claim about what the filer
+/// saw, staked on the filer's own bond, and its whole effect is to let a block's pwu ramp.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwReceiptCarriageV1 {
+    /// = [`PALW_CARRIAGE_VERSION_V1`].
+    pub version: u16,
+    pub receipt: crate::palw_receipt::PalwVerificationReceiptV1,
+}
+
 /// An opening challenge, carried. `PalwLegsOpeningCallV1` is already the complete message
 /// (envelope + request) by the frame-contract argument; carriage adds nothing but the cap.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -518,6 +533,7 @@ pub enum PalwCarriageV1 {
     Equivocation(PalwEquivocationCarriageV1),
     StepConviction(PalwStepConvictionCarriageV1),
     BisectMove(PalwBisectMoveCarriageV1),
+    Receipt(PalwReceiptCarriageV1),
 }
 
 impl PalwCarriageV1 {
@@ -531,6 +547,7 @@ impl PalwCarriageV1 {
             PalwCarriageV1::Equivocation(_) => PALW_CARRIAGE_KIND_EQUIVOCATION,
             PalwCarriageV1::StepConviction(_) => PALW_CARRIAGE_KIND_STEP_CONVICTION,
             PalwCarriageV1::BisectMove(_) => PALW_CARRIAGE_KIND_BISECT_MOVE,
+            PalwCarriageV1::Receipt(_) => PALW_CARRIAGE_KIND_RECEIPT,
             PalwCarriageV1::EvidenceChunk(_) => PALW_CARRIAGE_KIND_EVIDENCE_CHUNK,
         }
     }
@@ -717,6 +734,7 @@ pub fn encode_palw_carriage_v1(carriage: &PalwCarriageV1) -> Vec<u8> {
         PalwCarriageV1::Equivocation(e) => borsh::to_vec(e),
         PalwCarriageV1::StepConviction(c) => borsh::to_vec(c),
         PalwCarriageV1::BisectMove(m) => borsh::to_vec(m),
+        PalwCarriageV1::Receipt(r) => borsh::to_vec(r),
     }
     .expect("borsh of an in-memory carriage body cannot fail");
     let mut out = Vec::with_capacity(PALW_CARRIAGE_MAGIC.len() + 1 + body.len());
@@ -747,6 +765,7 @@ pub fn decode_palw_carriage_v1(payload: &[u8]) -> Result<Option<PalwCarriageV1>,
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_BISECT_MOVE => PalwCarriageV1::BisectMove(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_RECEIPT => PalwCarriageV1::Receipt(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     };
     Ok(Some(carriage))
@@ -875,6 +894,11 @@ where
 pub fn validate_palw_carriage_v1(carriage: &PalwCarriageV1) -> Result<(), PalwCarriageError> {
     match carriage {
         PalwCarriageV1::Commitment(c) => validate_commitment_carriage(c),
+        PalwCarriageV1::Receipt(r) => {
+            require_version(r.version)?;
+            r.receipt.validate_shape().map_err(|e| PalwCarriageError::Inner(e.to_string()))?;
+            Ok(())
+        }
         PalwCarriageV1::BisectMove(m) => {
             require_version(m.version)?;
             // Shape only. Whether the move is LEGAL — right turn, right round, right midpoint,
@@ -1108,6 +1132,8 @@ pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
         Some(PALW_CARRIAGE_KIND_STEP_CONVICTION)
     } else if *subnetwork_id == SUBNETWORK_ID_PALW_BISECT_MOVE {
         Some(PALW_CARRIAGE_KIND_BISECT_MOVE)
+    } else if *subnetwork_id == SUBNETWORK_ID_PALW_RECEIPT {
+        Some(PALW_CARRIAGE_KIND_RECEIPT)
     } else {
         None
     }
@@ -1129,6 +1155,7 @@ pub fn decode_palw_stage1_body(kind: u8, body: &[u8]) -> Result<PalwCarriageV1, 
         PALW_CARRIAGE_KIND_EQUIVOCATION => PalwCarriageV1::Equivocation(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_STEP_CONVICTION => PalwCarriageV1::StepConviction(borsh::from_slice(body).map_err(decode_err)?),
         PALW_CARRIAGE_KIND_BISECT_MOVE => PalwCarriageV1::BisectMove(borsh::from_slice(body).map_err(decode_err)?),
+        PALW_CARRIAGE_KIND_RECEIPT => PalwCarriageV1::Receipt(borsh::from_slice(body).map_err(decode_err)?),
         other => return Err(PalwCarriageError::UnknownKind(other)),
     })
 }
@@ -1454,7 +1481,7 @@ mod tests {
         assert_eq!(decode_palw_carriage_v1(b"MPALW1\x01junk").unwrap(), None, "wrong magic is foreign");
         assert_eq!(decode_palw_carriage_v1(b"MPALW2"), Err(PalwCarriageError::TruncatedEnvelope));
         // 0x09 is the bisection-move kind now; 0x0A is the first byte past the family.
-        assert_eq!(decode_palw_carriage_v1(b"MPALW2\x0A"), Err(PalwCarriageError::UnknownKind(0x0A)));
+        assert_eq!(decode_palw_carriage_v1(b"MPALW2\x0B"), Err(PalwCarriageError::UnknownKind(0x0B)));
         assert!(matches!(decode_palw_carriage_v1(b"MPALW2\x01truncated"), Err(PalwCarriageError::BodyDecode(_))));
         // A valid payload truncated mid-body is a decode error, not a smaller object.
         let payload = encode_palw_carriage_v1(&PalwCarriageV1::Attestation(attestation()));
@@ -1780,6 +1807,31 @@ mod tests {
         }
     }
 
+    /// A shape-valid receipt for the band round-trip.
+    fn receipt_for_band() -> PalwReceiptCarriageV1 {
+        PalwReceiptCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            receipt: crate::palw_receipt::PalwVerificationReceiptV1 {
+                version: crate::palw_receipt::PALW_RECEIPT_VERSION_V1,
+                target_block_hash: h64(0x71),
+                target_commitment_root: h64(0x72),
+                execution_class_id: h64(0x73),
+                // A receipt with no samples is not a receipt: shape admission requires at least
+                // one, because a verifier that opened nothing verified nothing.
+                sample_coordinates: vec![crate::palw_receipt::PalwSampleCoordinateV1 {
+                    token_index: 0,
+                    layer_index: 0,
+                    node_slot: 0,
+                    unit_index: 0,
+                }],
+                observed_roots: vec![h64(0x74)],
+                verdict: crate::palw_receipt::PalwReceiptVerdictV1::Match,
+                verifier_bond_outpoint: outpoint(0xC2, 0),
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+        }
+    }
+
     fn all_band_members() -> Vec<(SubnetworkId, PalwCarriageV1)> {
         let mut out: Vec<(SubnetworkId, PalwCarriageV1)> = vec![
             (SUBNETWORK_ID_PALW_COMMITMENT, PalwCarriageV1::Commitment(commitment_composite())),
@@ -1791,8 +1843,9 @@ mod tests {
             (SUBNETWORK_ID_PALW_EQUIVOCATION, PalwCarriageV1::Equivocation(equivocation_for_band())),
             (SUBNETWORK_ID_PALW_STEP_CONVICTION, PalwCarriageV1::StepConviction(step_conviction_for_band())),
             (SUBNETWORK_ID_PALW_BISECT_MOVE, PalwCarriageV1::BisectMove(bisect_move_for_band())),
+            (SUBNETWORK_ID_PALW_RECEIPT, PalwCarriageV1::Receipt(receipt_for_band())),
         ];
-        debug_assert_eq!(out.len(), 9);
+        debug_assert_eq!(out.len(), 10);
         out.sort_by_key(|(_, c)| c.kind_byte());
         out
     }
@@ -1817,12 +1870,12 @@ mod tests {
             SUBNETWORK_ID_COINBASE,
             crate::subnets::SUBNETWORK_ID_TOKEN_BURN,
             SubnetworkId::from_byte(0x3F),
-            SubnetworkId::from_byte(0x49),
+            SubnetworkId::from_byte(0x4A),
         ] {
             assert_eq!(palw_carriage_tx_kind(&id), None);
         }
         // An unknown kind byte is an error, not a fallthrough.
-        assert_eq!(decode_palw_stage1_body(0x0A, b"anything"), Err(PalwCarriageError::UnknownKind(0x0A)));
+        assert_eq!(decode_palw_stage1_body(0x0B, b"anything"), Err(PalwCarriageError::UnknownKind(0x0B)));
     }
 
     /// ADR-0029 §2: refutations and their chunks are pure evidence carriers — no outputs, so the

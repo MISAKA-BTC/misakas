@@ -293,6 +293,11 @@ pub const SUBNETWORK_ID_PALW_STEP_CONVICTION: SubnetworkId = SubnetworkId::from_
 /// independent objects: they share a session, an ordering and a clock, and
 /// splitting them across ids would let a relay admit half a game.
 pub const SUBNETWORK_ID_PALW_BISECT_MOVE: SubnetworkId = SubnetworkId::from_byte(0x48);
+/// A verification receipt (kind 0x0A) —
+/// [`crate::palw_carriage::PalwReceiptCarriageV1`]. The bonded bet that licenses
+/// a block's work to ramp: an assigned verifier replayed the sampled positions
+/// and stakes its bond on what it saw.
+pub const SUBNETWORK_ID_PALW_RECEIPT: SubnetworkId = SubnetworkId::from_byte(0x49);
 
 #[cfg(test)]
 mod tests {
