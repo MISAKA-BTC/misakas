@@ -98,10 +98,26 @@ pub struct PalwObservedCommitmentV1 {
     pub accepted_daa: u64,
 }
 
+/// An attester that earned a share, and the bond that gets paid for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPaidAttesterV1 {
+    /// The panel member (a `validator_pubkey_hash`; NOT unique on its own).
+    pub validator_id: Hash64,
+    /// The bond that filed the earning attestation — the payee.
+    pub bond_outpoint: crate::tx::TransactionOutpoint,
+}
+
 /// One attestation filed against that commitment's root, as observed.
 #[derive(Clone, Debug)]
 pub struct PalwObservedAttestationV1 {
     pub attester_id: Hash64,
+    /// The bond that FILED this attestation — the payee, and the only unique identity here.
+    ///
+    /// `attester_id` is a `validator_pubkey_hash`, which `dns_finality` states is not unique, so it
+    /// cannot resolve a payout: with two bonds under one key the reward went to whichever the
+    /// walk reached first (audit B5). The carriage has carried this outpoint all along; the
+    /// consumer dropped it.
+    pub bond_outpoint: crate::tx::TransactionOutpoint,
     pub attested_logits_root: Hash64,
     pub accepted_daa: u64,
 }
@@ -117,7 +133,10 @@ pub struct PalwCreditDecisionV1 {
     pub attester_share_sompi: u64,
     /// The on-time, root-matched panel members, deduplicated, in panel order — the §4a
     /// `q · ρ_v · base(C)` recipients.
-    pub paid_attesters: Vec<Hash64>,
+    ///
+    /// Each carries the bond that filed the earning attestation: the consumer pays
+    /// `bond_outpoint`, never a lookup by `validator_id` (audit B5).
+    pub paid_attesters: Vec<PalwPaidAttesterV1>,
 }
 
 impl PalwCreditDecisionV1 {
@@ -171,13 +190,20 @@ pub fn decide_credit_v1(
     // C's. Panel order (not arrival order) fixes the payout order; one share per assignee.
     let mut paid = Vec::new();
     for member in &panel {
-        let earned = attestations.iter().any(|a| {
-            a.attester_id == *member
-                && a.attested_logits_root == commitment.logits_root
-                && a.accepted_daa <= schedule.replay_deadline_daa
-        });
-        if earned {
-            paid.push(*member);
+        // The EARNING attestation, not merely the fact that one exists: its bond outpoint is the
+        // payee. Ties inside one panel member (two bonds under one validator key both filing) are
+        // broken by the outpoint so the choice is a function of the records, never of walk order.
+        let mut earning: Vec<&PalwObservedAttestationV1> = attestations
+            .iter()
+            .filter(|a| {
+                a.attester_id == *member
+                    && a.attested_logits_root == commitment.logits_root
+                    && a.accepted_daa <= schedule.replay_deadline_daa
+            })
+            .collect();
+        earning.sort_by_key(|a| (a.bond_outpoint.transaction_id, a.bond_outpoint.index));
+        if let Some(a) = earning.first() {
+            paid.push(PalwPaidAttesterV1 { validator_id: *member, bond_outpoint: a.bond_outpoint });
         }
     }
     if paid.is_empty() {
@@ -244,9 +270,24 @@ mod tests {
         (params, commitment, anchor, candidates, panel)
     }
 
+    /// A bond outpoint for a validator id — one per attester, so a payee is identifiable.
+    fn bond_of(attester: Hash64) -> crate::tx::TransactionOutpoint {
+        crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes(attester.as_bytes()), index: 0 }
+    }
+
     fn on_time(attester: Hash64, logits: Hash64) -> PalwObservedAttestationV1 {
         // anchor = 1 000 + Δ_bind(10); replay deadline = anchor + w_replay(30) = 1 040.
-        PalwObservedAttestationV1 { attester_id: attester, attested_logits_root: logits, accepted_daa: 1_035 }
+        PalwObservedAttestationV1 {
+            attester_id: attester,
+            bond_outpoint: bond_of(attester),
+            attested_logits_root: logits,
+            accepted_daa: 1_035,
+        }
+    }
+
+    /// The paid ids, for assertions that are about panel ORDER rather than about the payee.
+    fn paid_ids(d: &PalwCreditDecisionV1) -> Vec<Hash64> {
+        d.paid_attesters.iter().map(|a| a.validator_id).collect()
     }
 
     #[test]
@@ -255,7 +296,7 @@ mod tests {
         let attestations = vec![on_time(panel[1], commitment.logits_root), on_time(panel[0], commitment.logits_root)];
         let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
         assert!(d.creditable);
-        assert_eq!(d.paid_attesters, panel, "payout order is panel order, not arrival order");
+        assert_eq!(paid_ids(&d), panel, "payout order is panel order, not arrival order");
         // base = subsidy · 2‰ (floored); share = ρ_v(1.0) · base.
         assert_eq!(d.base_sompi, SUBSIDY / 500);
         assert_eq!(d.attester_share_sompi, d.base_sompi);
@@ -267,7 +308,7 @@ mod tests {
         let attestations = vec![on_time(panel[0], commitment.logits_root)];
         let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &attestations, &[], SUBSIDY);
         assert!(d.creditable);
-        assert_eq!(d.paid_attesters, vec![panel[0]]);
+        assert_eq!(paid_ids(&d), vec![panel[0]]);
     }
 
     #[test]
@@ -277,11 +318,46 @@ mod tests {
         assert_eq!(d, PalwCreditDecisionV1::nothing());
     }
 
+    /// **Audit B5: the payee is the bond that FILED, not a lookup by validator key.**
+    ///
+    /// `attester_id` is a `validator_pubkey_hash` and is not unique, so two bonds under one key
+    /// both look like the same panel member. The decision must name the outpoint that earned the
+    /// share, and it must pick it from the records rather than from arrival order — otherwise the
+    /// consumer's `bonds.iter().find(|b| b.validator_pubkey_hash == id)` paid whichever bond the
+    /// walk reached first.
+    #[test]
+    fn the_paid_attester_names_the_bond_that_filed() {
+        let (params, commitment, anchor, candidates, panel) = scene();
+
+        // One attester, one bond: the payee is that bond.
+        let single = vec![on_time(panel[0], commitment.logits_root)];
+        let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &single, &[], SUBSIDY);
+        assert_eq!(d.paid_attesters.len(), 1);
+        assert_eq!(d.paid_attesters[0].validator_id, panel[0]);
+        assert_eq!(d.paid_attesters[0].bond_outpoint, bond_of(panel[0]), "the payee is the filing bond");
+
+        // TWO bonds under ONE validator key both file. The panel member earns ONE share, and the
+        // payee is chosen by outpoint order — a function of the records, not of arrival order.
+        let low = crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0x01; 64]), index: 0 };
+        let high = crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0xFE; 64]), index: 0 };
+        let mut first = on_time(panel[0], commitment.logits_root);
+        first.bond_outpoint = high;
+        let mut second = on_time(panel[0], commitment.logits_root);
+        second.bond_outpoint = low;
+
+        let forward = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[first.clone(), second.clone()], &[], SUBSIDY);
+        let backward = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[second, first], &[], SUBSIDY);
+        assert_eq!(forward.paid_attesters.len(), 1, "one panel member earns one share");
+        assert_eq!(forward.paid_attesters[0].bond_outpoint, low, "the lower outpoint wins, deterministically");
+        assert_eq!(forward, backward, "the payee must not depend on the order the walk collected them");
+    }
+
     #[test]
     fn late_wrong_root_off_panel_and_duplicate_attestations_do_not_pay() {
         let (params, commitment, anchor, candidates, panel) = scene();
         let late = PalwObservedAttestationV1 {
             attester_id: panel[0],
+            bond_outpoint: bond_of(panel[0]),
             attested_logits_root: commitment.logits_root,
             accepted_daa: 1_041, // one past the replay deadline
         };
@@ -293,7 +369,7 @@ mod tests {
         // A duplicate on-time match pays its assignee once.
         let dup = vec![on_time(panel[0], commitment.logits_root), on_time(panel[0], commitment.logits_root)];
         let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &dup, &[], SUBSIDY);
-        assert_eq!(d.paid_attesters, vec![panel[0]]);
+        assert_eq!(paid_ids(&d), vec![panel[0]]);
     }
 
     #[test]

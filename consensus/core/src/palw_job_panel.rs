@@ -23,7 +23,7 @@ use crate::palw_job_identity::palw_panel_seed_v3;
 use crate::palw_schedule::{PalwPanelCandidateV1, select_replay_panel_v1};
 use crate::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One candidate as the caller's chain view knows it at the anchor. The flags are chain
 /// facts at the snapshot, not self-declarations (ADR-0037 Decision 8: self-declared
@@ -98,25 +98,52 @@ pub fn select_job_panel_v3(
 
     // The audited lottery, with the V3 seed as its anchor. The v1 eligibility flags are
     // vacuously true here — eligibility was decided above from chain facts.
+    //
+    // **The ticket key is the SEAT, not the validator key.** `select_replay_panel_v1` treats the id
+    // it is handed as opaque: it hashes it into the ticket and uses it as the collision tie-break.
+    // A validator key hash is not unique (`dns_finality` says so), so two bonds sharing one key
+    // produced the SAME ticket and the SAME tie-break — they sorted adjacently, both could be
+    // truncated into the panel, and the resolution below then bound both to whichever bond came
+    // first. The result was a panel with fewer distinct verifiers than `q` and a bonded validator
+    // that could never be drawn or paid (re-audit §3.4). Everything downstream — receipt counting,
+    // payee resolution, dedup here — is keyed on the bond outpoint, so the lottery is too.
+    let mut by_ticket_id: BTreeMap<Hash64, &PalwPanelCandidateV3> = BTreeMap::new();
     let v1_candidates: Vec<PalwPanelCandidateV1> = eligible
         .iter()
-        .map(|c| PalwPanelCandidateV1 {
-            validator_id: c.validator_id,
-            runtime_class_id: c.runtime_class_id,
-            bonded: true,
-            frozen: false,
+        .map(|c| {
+            let ticket_id = panel_seat_ticket_id_v3(&c.validator_id, &c.bond_outpoint);
+            by_ticket_id.insert(ticket_id, c);
+            PalwPanelCandidateV1 { validator_id: ticket_id, runtime_class_id: c.runtime_class_id, bonded: true, frozen: false }
         })
         .collect();
     let drawn = select_replay_panel_v1(&commitment_root, executor_id, &seed, execution_class_id, &v1_candidates, q);
 
-    // Bind each drawn id back to ITS bond outpoint from the same eligible view.
+    // Bind each drawn seat id back to the candidate it was minted from.
     drawn
         .into_iter()
-        .map(|validator_id| {
-            let candidate = eligible.iter().find(|c| c.validator_id == validator_id).expect("drawn ids come from the eligible set");
-            PalwPanelSeatV3 { validator_id, bond_outpoint: candidate.bond_outpoint }
+        .map(|ticket_id| {
+            let candidate = by_ticket_id.get(&ticket_id).expect("drawn ids are the ones minted above");
+            PalwPanelSeatV3 { validator_id: candidate.validator_id, bond_outpoint: candidate.bond_outpoint }
         })
         .collect()
+}
+
+/// Domain separator for the per-seat lottery id.
+pub const PALW_PANEL_DOMAIN_SEAT_TICKET_ID_V3: &[u8] = b"misaka-palw/panel/seat-ticket-id/v3\0\0\0\0\0";
+
+/// The unique identity a V3 seat enters the lottery under: `H(validator_id || bond_outpoint)`.
+///
+/// Unique because the bond outpoint is, which the validator key hash is not. Binding the validator
+/// id in as well means a seat's ticket still moves if the bond is re-delegated to another key, so
+/// the draw is a function of the whole seat rather than of the outpoint alone.
+pub fn panel_seat_ticket_id_v3(validator_id: &Hash64, bond_outpoint: &TransactionOutpoint) -> Hash64 {
+    let mut hasher = blake2b_simd::Params::new().hash_length(64).key(PALW_PANEL_DOMAIN_SEAT_TICKET_ID_V3).to_state();
+    hasher.update(validator_id.as_byte_slice());
+    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
+    hasher.update(&bond_outpoint.index.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(hasher.finalize().as_bytes());
+    Hash64::from_bytes(out)
 }
 
 #[cfg(test)]
@@ -240,6 +267,59 @@ mod tests {
         );
         assert_ne!(base, other_anchor);
         assert_ne!(base, other_snapshot);
+    }
+
+    /// Two bonds sharing one validator key are two DISTINCT seats, and both must be drawable.
+    ///
+    /// `validator_pubkey_hash` is not unique, and the lottery used to key on it: the two seats then
+    /// minted the same ticket and the same tie-break, so they sorted adjacently, both could be
+    /// truncated into the panel, and seat resolution bound both to whichever bond came first. The
+    /// panel ended up with fewer distinct verifiers than `q` and one bonded validator that could
+    /// never be drawn or paid (re-audit §3.4).
+    #[test]
+    fn two_bonds_under_one_validator_key_are_two_seats() {
+        let a = candidate(10);
+        let mut b = candidate(20);
+        // Same key, different bonds — the case `dns_finality` says is representable.
+        b.validator_id = a.validator_id;
+        assert_ne!(a.bond_outpoint, b.bond_outpoint);
+
+        // Both are eligible (dedup is by bond, and these are two bonds).
+        let panel = draw(&[a.clone(), b.clone()], 5);
+        assert_eq!(panel.len(), 2, "two bonds are two seats");
+        // Each seat carries its OWN bond, so both are payable and neither is a duplicate.
+        let bonds: BTreeSet<_> = panel.iter().map(|s| (s.bond_outpoint.transaction_id, s.bond_outpoint.index)).collect();
+        assert_eq!(bonds.len(), 2, "the two seats must not collapse onto one bond");
+        assert!(bonds.contains(&(a.bond_outpoint.transaction_id, a.bond_outpoint.index)));
+        assert!(bonds.contains(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index)));
+
+        // With q = 1 exactly one is drawn, deterministically, and it is a real seat.
+        let one = draw(&[a.clone(), b.clone()], 1);
+        assert_eq!(one.len(), 1);
+        assert!(one[0].bond_outpoint == a.bond_outpoint || one[0].bond_outpoint == b.bond_outpoint);
+        // Order-invariant: reversing the pool draws the same single seat.
+        let reversed = draw(&[b, a], 1);
+        assert_eq!(one, reversed, "the draw must not depend on input order");
+    }
+
+    /// The seat ticket id is unique per (validator, bond) and binds both halves — so re-delegating a
+    /// bond to another key moves its ticket, and two bonds never share one.
+    #[test]
+    fn the_seat_ticket_id_is_unique_and_binds_both_halves() {
+        let a = candidate(10);
+        let b = candidate(20);
+        let id = |c: &PalwPanelCandidateV3| panel_seat_ticket_id_v3(&c.validator_id, &c.bond_outpoint);
+        assert_ne!(id(&a), id(&b));
+        // Same bond, different validator key -> different ticket.
+        let mut redelegated = a.clone();
+        redelegated.validator_id = b.validator_id;
+        assert_ne!(id(&a), id(&redelegated), "the ticket must move when the bond changes hands");
+        // Same validator key, different bond -> different ticket (the defect above).
+        let mut second_bond = a.clone();
+        second_bond.bond_outpoint = b.bond_outpoint;
+        assert_ne!(id(&a), id(&second_bond), "two bonds under one key must not share a ticket");
+        // Deterministic.
+        assert_eq!(id(&a), id(&a.clone()));
     }
 
     /// A short pool draws a short panel (whether it licenses anything is the ramp's call).

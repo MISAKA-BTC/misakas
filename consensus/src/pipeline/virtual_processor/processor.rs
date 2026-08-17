@@ -4961,6 +4961,8 @@ impl VirtualStateProcessor {
                 })
                 .map(|(a, daa)| PalwObservedAttestationV1 {
                     attester_id: a.attester_id,
+                    // Carried through, not dropped: this is the payee (audit B5).
+                    bond_outpoint: a.bond_outpoint,
                     attested_logits_root: a.attestation.full_logits_trace_root,
                     accepted_daa: *daa,
                 })
@@ -4979,12 +4981,20 @@ impl VirtualStateProcessor {
             // base(C) to the executor's bond owner — an unbonded executor has no payout
             // target and no stake at risk, so it earns nothing; attester shares still pay,
             // because their liability (signature ∧ refutation) is their own.
-            let executor_bond = bonds.iter().find(|b| b.validator_pubkey_hash == commitment.validator_id);
+            //
+            // Resolved by BOND OUTPOINT, which the carriage carries, not by
+            // `validator_pubkey_hash`. That hash is explicitly NOT unique (`dns_finality` says so),
+            // and this used to `.find()` the first bond matching it — so with two bonds under one
+            // validator key the reward went to whichever the walk happened to reach first, i.e. a
+            // payee decided by iteration order rather than by the claim (audit B5). The outpoint is
+            // unique by construction and is the same key the panel, the receipts and the slash
+            // paths use.
+            let executor_bond = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint);
             if let (Some(executor_bond), true) = (executor_bond, decision.base_sompi > 0) {
                 outputs.push(TransactionOutput::new(decision.base_sompi, p2pkh_mldsa87_spk(&executor_bond.owner_reward_spk_payload)));
             }
-            for attester in &decision.paid_attesters {
-                let Some(bond) = bonds.iter().find(|b| b.validator_pubkey_hash == *attester) else { continue };
+            for paid in &decision.paid_attesters {
+                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == paid.bond_outpoint) else { continue };
                 if decision.attester_share_sompi > 0 {
                     outputs.push(TransactionOutput::new(
                         decision.attester_share_sompi,
