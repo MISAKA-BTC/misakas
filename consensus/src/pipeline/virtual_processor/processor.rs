@@ -4920,6 +4920,14 @@ impl VirtualStateProcessor {
                 })
                 .collect();
         crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
+        // B2: one credit per COMMITTED ROOT. The same root carried by two transactions crossed
+        // twice and was paid twice — the carriage is relayable, so duplicating it costs a fee and
+        // mints a second base(C). Dedup happens after the pinned sort, so which copy survives is a
+        // function of `(accepted_daa, tx_id)` and not of walk order.
+        {
+            let mut seen: std::collections::BTreeSet<kaspa_consensus_core::Hash64> = std::collections::BTreeSet::new();
+            crossing.retain(|(_, c, _)| seen.insert(c.committed_root));
+        }
         if crossing.is_empty() {
             return Vec::new();
         }
@@ -4936,6 +4944,20 @@ impl VirtualStateProcessor {
                 frozen: false,
             })
             .collect();
+        // B3/B4: the per-block mint ceiling that makes ADR-0033 §4e non-vacuous.
+        //
+        // `max_leverage_holds_v1` bounds an attacker's pre-unbonding gain as
+        // `g_max = base(C) × (unbonding / min_credit_interval + 1)` — i.e. the inequality ASSUMES
+        // one credited job per `min_credit_interval_daa`. Nothing enforced that, and a block credited
+        // every commitment that crossed in it, so the real ceiling was `base(C) × commitments` and
+        // the safety margin the registration was validated against was fiction.
+        //
+        // One job's full payout — `base(C)` plus its `q` attester shares — is therefore the budget
+        // for the whole block. Draining is PREFIX-MANDATORY, matching `palw_credit_batch`'s rule
+        // (ADR-0037 D7): stop at the first record that does not fit rather than skipping it, so the
+        // set credited is a prefix of the pinned order and cannot be cherry-picked.
+        let one_job_ceiling = credit.one_job_ceiling_sompi(subsidy);
+        let mut spent: u64 = 0;
         let mut outputs = Vec::new();
         for (_, commitment, accepted) in crossing {
             let logits_root = match commitment.binding.as_ref() {
@@ -4978,6 +5000,16 @@ impl VirtualStateProcessor {
             if !decision.creditable {
                 continue;
             }
+            // What this record would mint, counted BEFORE any output is pushed so a record either
+            // pays in full or not at all.
+            let this_job = decision
+                .base_sompi
+                .saturating_add(decision.attester_share_sompi.saturating_mul(decision.paid_attesters.len() as u64));
+            let Some(remaining) = one_job_ceiling.checked_sub(spent) else { break };
+            if this_job > remaining {
+                break; // prefix-mandatory: stop, never skip past it to a smaller one
+            }
+            spent = spent.saturating_add(this_job);
             // base(C) to the executor's bond owner — an unbonded executor has no payout
             // target and no stake at risk, so it earns nothing; attester shares still pay,
             // because their liability (signature ∧ refutation) is their own.

@@ -84,6 +84,18 @@ impl PalwCreditParamsV1 {
     pub fn attester_share_sompi(&self, block_subsidy_sompi: u64) -> u64 {
         ((self.base_sompi(block_subsidy_sompi) as u128) * (self.registration.rho_v_permille as u128) / 1000) as u64
     }
+
+    /// ONE job's full payout: `base(C)` plus its `q` attester shares.
+    ///
+    /// This is the unit ADR-0033 §4e reasons in. `max_leverage_holds_v1` bounds an attacker's
+    /// pre-unbonding gain as `base(C) × (unbonding / min_credit_interval + 1)`, which ASSUMES one
+    /// credited job per interval — so a consumer that mints more than one job's worth in a block
+    /// makes the inequality it was validated against vacuous. Consumers use this as the per-block
+    /// ceiling; the value lives here because the arithmetic it must agree with does.
+    pub fn one_job_ceiling_sompi(&self, block_subsidy_sompi: u64) -> u64 {
+        let q = self.registration.windows.q as u64;
+        self.base_sompi(block_subsidy_sompi).saturating_add(self.attester_share_sompi(block_subsidy_sompi).saturating_mul(q))
+    }
 }
 
 /// One commitment as the crediting walk observed it (kind 0x01, accepted-DAA-stamped).
@@ -316,6 +328,30 @@ mod tests {
         let (params, commitment, anchor, candidates, _) = scene();
         let d = decide_credit_v1(&params, &commitment, &anchor, &candidates, &[], &[], SUBSIDY);
         assert_eq!(d, PalwCreditDecisionV1::nothing());
+    }
+
+    /// **Audit B3/B4: one job's payout is the per-block ceiling ADR-0033 §4e reasons in.**
+    ///
+    /// `max_leverage_holds_v1` bounds the pre-unbonding gain as `base(C) × jobs` where
+    /// `jobs = unbonding / min_credit_interval + 1` — one credited job per interval. A consumer
+    /// minting more than one job's worth per block makes that inequality vacuous, so the ceiling
+    /// has to be exactly one job: base plus its `q` shares.
+    #[test]
+    fn the_one_job_ceiling_is_base_plus_q_shares() {
+        let (params, ..) = scene();
+        let base = params.base_sompi(SUBSIDY);
+        let share = params.attester_share_sompi(SUBSIDY);
+        let q = params.registration.windows.q as u64;
+        assert!(base > 0 && share > 0 && q > 0, "the fixture must exercise real values");
+        assert_eq!(params.one_job_ceiling_sompi(SUBSIDY), base + share * q);
+
+        // It is strictly more than one payout and strictly less than two jobs' worth, so it bounds
+        // a block to a single job without ever truncating that job's own attesters.
+        assert!(params.one_job_ceiling_sompi(SUBSIDY) > base, "a job's attesters must fit under it");
+        assert!(params.one_job_ceiling_sompi(SUBSIDY) < 2 * (base + share * q), "two jobs must not fit");
+
+        // Saturating, not wrapping: an absurd subsidy cannot produce a small ceiling.
+        assert!(params.one_job_ceiling_sompi(u64::MAX) >= params.one_job_ceiling_sompi(SUBSIDY));
     }
 
     /// **Audit B5: the payee is the bond that FILED, not a lookup by validator key.**
