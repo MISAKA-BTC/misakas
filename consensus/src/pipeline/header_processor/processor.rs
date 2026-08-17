@@ -317,8 +317,15 @@ impl HeaderProcessor {
 
     /// Runs full ordinary header validation
     fn validate_header(&self, header: &Arc<Header>) -> BlockProcessResult<HeaderProcessingContext> {
-        let block_level = self.validate_header_in_isolation(header)?;
+        // Cheap, parent-independent isolation checks first; then parent relations; then the PoW.
+        // The Layer-0 PoW on a PALW network is one LLM inference under a global spawn gate, so it
+        // MUST come after `validate_parent_relations` — a header with fabricated/absent parents is
+        // rejected before it can buy an inference and stall every other header (audit P0-3). The
+        // PoW and the parent checks are mutually independent (the PoW reads only the header, the
+        // parent checks read only the status store), so this reordering preserves every verdict.
+        self.validate_header_in_isolation_sans_pow(header)?;
         self.validate_parent_relations(header)?;
+        let block_level = self.check_pow_and_calc_block_level(header)?;
         let mut ctx = self.build_processing_context(header, block_level);
         self.ghostdag(&mut ctx);
         self.pre_pow_validation(&mut ctx, header)?;
