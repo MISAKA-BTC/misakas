@@ -62,6 +62,10 @@ impl PruningProofManager {
         // and creates a hash to ghostdag data map of the trusted set
         for tb in trusted_set.iter() {
             trusted_gd_map.insert(tb.block.hash(), tb.ghostdag.clone().into());
+            // Gate the peer-supplied trusted-set header BEFORE its PoW is computed (audit P0-1 /
+            // P0-2): the trusted set arrives with the proof and reaches the finalizer here, whose
+            // PALW arm turns a missing worker into a panic on a non-PALW network.
+            self.check_proof_header_shape(&tb.block.header, 0)?;
             let tb_block_level = calc_block_level_layer0(&tb.block.header, &self.network_id, self.max_block_level);
 
             (0..=tb_block_level).for_each(|current_proof_level| {
@@ -78,7 +82,7 @@ impl PruningProofManager {
             level_proof.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
         });
 
-        self.populate_reachability_and_headers(&expanded_proof);
+        self.populate_reachability_and_headers(&expanded_proof)?;
 
         // sanity check
         {
@@ -161,13 +165,18 @@ impl PruningProofManager {
         Ok(())
     }
 
-    pub fn populate_reachability_and_headers(&self, proof: &PruningPointProof) {
+    pub fn populate_reachability_and_headers(&self, proof: &PruningPointProof) -> PruningImportResult<()> {
         let capacity_estimate = self.estimate_proof_unique_size(proof);
         let mut dag = BlockHashMap::with_capacity(capacity_estimate);
         let mut up_heap = BinaryHeap::with_capacity(capacity_estimate);
         for header in proof.iter().flatten().cloned() {
             if let Vacant(e) = dag.entry(header.hash) {
-                // pow passing has already been checked during validation
+                // pow passing has already been checked during validation, and the trusted set was
+                // gated in `apply_proof` before it was folded into `proof` here — but re-gate before
+                // this PoW recompute anyway (audit P0-1 / P0-2): this method is `pub`, and a future
+                // caller reaching it without prior validation must not hand a peer-chosen algo id to
+                // the finalizer's panicking PALW arm.
+                self.check_proof_header_shape(&header, 0)?;
                 let block_level = calc_block_level_layer0(&header, &self.network_id, self.max_block_level);
                 self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
 
@@ -251,5 +260,6 @@ impl PruningProofManager {
             drop(reachability_write);
             drop(reachability_relations_write);
         }
+        Ok(())
     }
 }

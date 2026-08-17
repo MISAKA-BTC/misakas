@@ -275,17 +275,25 @@ impl StateLayer0 {
                 buf[..32].copy_from_slice(&argon2id_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
                 Ok(32)
             }
-            // Phase 1 (algo_id = 1, kHeavyHash) and the default. Any other id is rejected up-stack
-            // by header validation (`check_algo_id`) before PoW is ever computed.
-            _ => {
-                // kHeavyHash (algo_id = 1). new() populates hasher+matrix exactly for this id;
-                // any other id is rejected up-stack by header validation before PoW runs.
+            // Phase 1 (algo_id = 1, kHeavyHash). `new()` populates hasher+matrix exactly for this
+            // id, so these `expect`s are a constructor invariant — NOT peer-reachable, because the
+            // arm is now selected by an explicit id match rather than by falling through.
+            POW_ALGO_ID_KHEAVYHASH => {
                 let hasher = self.hasher.as_ref().expect("kHeavyHash StateLayer0 carries a PowHash");
                 let matrix = self.matrix.as_ref().expect("kHeavyHash StateLayer0 carries a Matrix");
                 let hash = hasher.clone().finalize_with_nonce(nonce);
                 buf[..32].copy_from_slice(&matrix.heavy_hash(hash).as_bytes());
                 Ok(32)
             }
+            // Any other id is unverifiable by this finalizer, and it is peer-controlled input.
+            //
+            // This MUST be a returned error, not an `expect()` on the (absent, `None`) kHeavyHash
+            // state. The pruning-proof path computes PoW on peer-supplied proof headers BEFORE the
+            // up-stack `check_algo_id` runs (`pruning_proof/validate.rs`), so an `expect` here is a
+            // one-message remote panic on any network including hash-only mainnet — no PALW
+            // required (mainnet-readiness audit P0-1). Total function: the caller maps this to a
+            // failed PoW / rejected proof (`calc_block_level_check_pow_layer0`'s `Err(_)` arm).
+            other => Err(PowLayer0Error::UnknownAlgoId(other)),
         }
     }
 
@@ -545,6 +553,45 @@ mod tests_pq {
                 assert!(msg.contains("PALW_WORKER"), "the error must tell the operator which knob to set: {msg}")
             }
             other => panic!("expected PalwUnavailable, got {other:?}"),
+        }
+    }
+
+    /// Mainnet-readiness audit **P0-1**: a header with an unrecognised `pow_algo_id` must never
+    /// panic the finalizer.
+    ///
+    /// Before the fix, `calculate_l1_tag`'s catch-all arm served double duty (kHeavyHash *and*
+    /// default) and `expect()`ed the `hasher`/`matrix` that `StateLayer0::new` leaves `None` for any
+    /// non-kHeavyHash id — so a single peer-supplied pruning-proof header carrying e.g.
+    /// `pow_algo_id = 7` crashed the node, on every network, PALW entirely uninvolved. The
+    /// pruning-proof path computes PoW on peer headers before the up-stack `check_algo_id`, so the
+    /// only safe shape is a returned error the consensus wrapper maps to a failed PoW.
+    #[test]
+    fn layer0_unknown_algo_id_is_error_not_panic() {
+        // 0 and everything outside {1,2,3,4,5} is unknown; include the type extremes.
+        for bad in [0u8, 6, 7, 42, 128, 200, 255] {
+            let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
+            // Build the verifier on a hash-only network to prove no PALW machinery is needed to
+            // trigger (or to survive) the crash.
+            let s = StateLayer0::new(&h, b"mainnet");
+
+            let mut buf = [0u8; POW_L1_TAG_MAX_BYTES];
+            assert!(
+                matches!(s.calculate_l1_tag(0, &mut buf), Err(PowLayer0Error::UnknownAlgoId(id)) if id == bad),
+                "calculate_l1_tag must reject pow_algo_id={bad} with UnknownAlgoId, not panic",
+            );
+            assert!(
+                matches!(s.calculate_pow_layer0(0), Err(PowLayer0Error::UnknownAlgoId(id)) if id == bad),
+                "calculate_pow_layer0 must propagate UnknownAlgoId for pow_algo_id={bad}",
+            );
+            assert!(
+                matches!(s.check_pow_layer0(0), Err(PowLayer0Error::UnknownAlgoId(id)) if id == bad),
+                "check_pow_layer0 must propagate UnknownAlgoId for pow_algo_id={bad}",
+            );
+
+            // The consensus entry the pruning-proof path actually calls MUST NOT panic: it reports a
+            // failed PoW at level 0 so the proof is rejected rather than the node crashing.
+            let (level, passes) = calc_block_level_check_pow_layer0(&h, b"mainnet", 100);
+            assert_eq!((level, passes), (0, false), "unknown algo id {bad} must be a failed PoW at level 0, never a panic");
         }
     }
 }

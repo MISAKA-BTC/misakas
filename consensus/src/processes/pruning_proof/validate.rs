@@ -165,6 +165,12 @@ impl ProofContext {
         }
 
         let proof_pp_header = proof[0].last().expect("checked if empty").clone();
+        // Gate this peer-supplied header BEFORE its PoW is computed (audit P0-1 / P0-2): this is the
+        // first Layer-0 PoW the proof path runs, and it is on a fully peer-controlled header
+        // (`proof[0].last()`, a level-0 block). It is re-checked inside the per-level loop below; the
+        // redundant call is cheap and keeps this earliest site from being an ungated path to the
+        // finalizer.
+        ppm.check_proof_header_shape(&proof_pp_header, 0)?;
         let proof_pp_level = calc_block_level_layer0(&proof_pp_header, &ppm.network_id, ppm.max_block_level);
         let proof_pp = proof_pp_header.hash;
 
@@ -186,28 +192,17 @@ impl ProofContext {
             let mut selected_tip =
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
             for (i, header) in proof[level as usize].iter().enumerate() {
+                // Gate the peer-supplied proof header BEFORE its PoW is computed (audit P0-1 / P0-2).
+                // The order matters: `calc_block_level_check_pow_layer0` runs the Layer-1 finalizer,
+                // whose PALW arm escalates a missing worker into a node-wide panic and whose unknown-id
+                // path was a remote panic before it was made total — so a peer-chosen `pow_algo_id`
+                // must be rejected here, not after. `check_algo_id` enforces the SAME per-DAA
+                // required-algo rule the main pipeline applies (not the looser `check_algo_id_known`),
+                // because proof-only headers below the pruning point are never re-processed by the
+                // main pipeline; parentless roots are exempt from that rule exactly as the pipeline
+                // exempts genesis. It also refuses a malformed `palw_commitment` before persistence.
+                ppm.check_proof_header_shape(header, level)?;
                 let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
-                // audit POW-01 / ADR-0007 Phase 3: enforce the SAME per-DAA required-algo rule the
-                // main header pipeline applies (`check_pow_algo_id`), not merely "any known algo".
-                // Proof-only headers below the pruning point are NOT re-processed by the main
-                // pipeline, so the looser `check_algo_id_known` would let an algo the network does
-                // not mandate at that DAA into the proof. Genesis is exempt (parentless trusted
-                // root; its PoW is never validated and it may carry any id) — mirrors the pipeline.
-                if !header.direct_parents().is_empty() {
-                    let palw_ollama_active = ppm.pow_palw_ollama_activation.is_active(header.daa_score);
-                    let palw_active = ppm.pow_palw_activation.is_active(header.daa_score);
-                    let blake2b_sha3_active = ppm.pow_blake2b_sha3_activation.is_active(header.daa_score);
-                    if kaspa_consensus_core::pow_layer0::check_algo_id(
-                        header.pow_algo_id,
-                        palw_ollama_active,
-                        palw_active,
-                        blake2b_sha3_active,
-                    )
-                    .is_err()
-                    {
-                        return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
-                    }
-                }
                 if header_level < level {
                     return Err(PruningImportError::PruningProofWrongBlockLevel(header.hash, header_level, level));
                 }

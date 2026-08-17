@@ -72,6 +72,9 @@ pub enum PruningImportError {
     #[error("pruning proof header {0} at level {1} has unknown pow_algo_id {2}; Phase 1 admits only POW_ALGO_ID_KHEAVYHASH = 1")]
     PruningProofUnknownPowAlgoId(BlockHash, BlockLevel, u8),
 
+    #[error("pruning proof header {0} at level {1} has a malformed palw_commitment: {2}")]
+    PruningProofBadPalwCommitment(BlockHash, BlockLevel, String),
+
     #[error("past pruning points at indices {0}, {1} have non monotonic blue score {2}, {3}")]
     InconsistentPastPruningPoints(usize, usize, u64, u64),
 

@@ -195,6 +195,37 @@ impl PruningProofManager {
         }
     }
 
+    /// Reject a proof / pruning-point header BEFORE any Layer-0 PoW is computed for it, mirroring
+    /// the main header pipeline's `check_pow_algo_id`.
+    ///
+    /// Two structural rules, neither behind an activation fence:
+    ///
+    /// * **algo id** — a header WITH parents must declare the `pow_algo_id` this network mandates at
+    ///   its DAA score ([`check_algo_id`]). Parentless roots (genesis, trusted set) are exempt,
+    ///   exactly as the main pipeline exempts them — their PoW is never validated and they may carry
+    ///   any id. This is the gate that stops a peer-chosen id from reaching the PoW finalizer: its
+    ///   PALW arm turns a missing worker into a node-wide panic, and any unknown id would have
+    ///   panicked there before `kaspa_pow` made `calculate_l1_tag` a total function (audit P0-1).
+    /// * **palw_commitment shape** — applies to EVERY header, parentless included, because the field
+    ///   is hash-invisible on non-PALW headers ([`check_palw_commitment_shape`]): unbounded junk
+    ///   there survives the block-hash check and would be persisted to the header store this path
+    ///   writes, then re-served to peers (audit P0-2).
+    ///
+    /// [`check_algo_id`]: kaspa_consensus_core::pow_layer0::check_algo_id
+    /// [`check_palw_commitment_shape`]: kaspa_consensus_core::pow_layer0::check_palw_commitment_shape
+    pub(super) fn check_proof_header_shape(&self, header: &Header, level: BlockLevel) -> PruningImportResult<()> {
+        if !header.direct_parents().is_empty() {
+            let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
+            let palw_active = self.pow_palw_activation.is_active(header.daa_score);
+            let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
+            kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
+                .map_err(|_| PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id))?;
+        }
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment)
+            .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
+        Ok(())
+    }
+
     pub fn import_pruning_points(&self, pruning_points: &[Arc<Header>]) -> PruningImportResult<()> {
         let unique_count = pruning_points.iter().map(|h| h.hash).unique().count();
         if unique_count < pruning_points.len() {
@@ -220,6 +251,10 @@ impl PruningProofManager {
                 continue;
             }
 
+            // Gate the peer-supplied pruning-point header BEFORE its PoW is computed (audit P0-1 /
+            // P0-2). `import_pruning_points` is a distinct entry from proof validation, so these
+            // headers are not otherwise pre-checked. Pruning points are level-0 blocks.
+            self.check_proof_header_shape(header, 0)?;
             let block_level = calc_block_level_layer0(header, &self.network_id, self.max_block_level);
             self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
         }
