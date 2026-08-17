@@ -499,13 +499,36 @@ impl PalwCarriedEvidenceV1 {
     /// Whether this evidence stands against the given commitment — the ADR-0033 credit
     /// gate's "refutation against C" join. A legs refutation names the composite execution
     /// root it opens against; a trace-summary refutation names the v2 logits root (which IS
-    /// the committed root for a bare-v2 class). Standing against is not conviction — an
-    /// ACCEPTED refutation carriage inside the window voids credit, and adjudicating it is
-    /// the slash path's business, not the gate's.
+    /// the committed root for a bare-v2 class).
+    ///
+    /// # Naming a root is not refuting it
+    ///
+    /// This used to be that comparison alone, so ANY well-formed carriage quoting a target's root
+    /// voided that block's credit — no bond, no signature, no proof, and the carriage is relayable,
+    /// so denying an honest producer its mint cost one transaction fee (audit B9). "Adjudicating it
+    /// is the slash path's business" was the reasoning, and it does not hold for a gate whose
+    /// output is money: the gate is the only thing standing between a fabricated denial and a lost
+    /// reward.
+    ///
+    /// Evidence must now PROVE a fault against this exact commitment. Both checkers are
+    /// self-contained — no oracle, no chain state — and both begin by recomputing the announced
+    /// root from the carried transparent preimage, so a filer that does not hold the target's real
+    /// execution decomposition cannot produce evidence that passes. `NoFaultFound` is the answer
+    /// for a record that names the right root and proves nothing, and that is exactly the
+    /// fabricated-denial case.
+    ///
+    /// The conservative direction is preserved where it matters: this returns `true` only on a
+    /// proven fault, and a proven fault is the one case where refusing to mint is certainly right.
     pub fn refutes(&self, committed_root: &Hash64, logits_root: &Hash64) -> bool {
         match self {
-            PalwCarriedEvidenceV1::Legs(legs) => legs.binding.committed_execution_root == *committed_root,
-            PalwCarriedEvidenceV1::Summary(summary) => summary.committed_trace_root == *logits_root,
+            PalwCarriedEvidenceV1::Legs(legs) => {
+                legs.binding.committed_execution_root == *committed_root
+                    && crate::palw_legs::check_legs_refutation_v1(legs).is_ok()
+            }
+            PalwCarriedEvidenceV1::Summary(summary) => {
+                summary.committed_trace_root == *logits_root
+                    && crate::palw_slash::check_trace_summary_refutation_v1(summary).is_ok()
+            }
         }
     }
 }
@@ -1403,6 +1426,50 @@ mod tests {
                 committed_trace_root: h64(0xE3),
             }),
         }
+    }
+
+    /// **Audit B9: naming a commitment's root is not refuting it.**
+    ///
+    /// `refutes` was that comparison alone, so any well-formed carriage quoting a target's root
+    /// voided that block's credit — no bond, no signature, no proof — and the carriage is relayable,
+    /// so denying an honest producer its mint cost one transaction fee. Evidence must prove a fault
+    /// against this exact commitment.
+    ///
+    /// The fixture below is precisely the fabricated case: it names `h64(0xE3)` as the committed
+    /// trace root while carrying a summary that recomputes to something else. Before the fix it
+    /// refuted; now it does not.
+    #[test]
+    fn evidence_that_proves_nothing_does_not_refute() {
+        let PalwCarriedEvidenceV1::Summary(summary) = refutation().evidence else { panic!("fixture is a summary") };
+        let named = summary.committed_trace_root;
+
+        // It still NAMES the root — the join is unchanged.
+        assert_eq!(named, h64(0xE3));
+        // ...and the adjudicator refuses it, because the carried preimage does not recompute that
+        // root. A filer without the target's real execution decomposition cannot get past this.
+        assert!(
+            crate::palw_slash::check_trace_summary_refutation_v1(&summary).is_err(),
+            "the fixture must be the fabricated case for this test to mean anything"
+        );
+
+        let evidence = PalwCarriedEvidenceV1::Summary(summary);
+        assert!(!evidence.refutes(&h64(0xE3), &h64(0xE3)), "unproven evidence must not void a block's credit");
+        // And it certainly does not stand against a commitment it does not even name.
+        assert!(!evidence.refutes(&h64(0xAA), &h64(0xAA)));
+
+        // The SAME rule on the legs arm: a binding that names a root it cannot recompute, carrying
+        // a `Shape` claim with no shape fault to find, proves nothing.
+        let binding = test_binding();
+        let named = binding.committed_execution_root;
+        let legs = PalwLegsRefutationV1 { binding, evidence: crate::palw_legs::PalwLegsEvidenceV1::Shape };
+        assert!(
+            crate::palw_legs::check_legs_refutation_v1(&legs).is_err(),
+            "the legs fixture must also be the fabricated case"
+        );
+        assert!(
+            !PalwCarriedEvidenceV1::Legs(legs).refutes(&named, &h64(0xAA)),
+            "a legs record that names the right root but proves no fault must not void credit"
+        );
     }
 
     fn all_five() -> Vec<PalwCarriageV1> {
