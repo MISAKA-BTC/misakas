@@ -118,6 +118,8 @@ pub struct HeaderProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation. Supersedes the
     /// BLAKE2b-SHA3 rule where active; drives the same per-header `pow_algo_id` check.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0038 Decision A: the network's commitment fence, `None` on every shipped preset.
+    pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
     /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
     /// than re-deriving it per header.
@@ -219,6 +221,7 @@ impl HeaderProcessor {
             network_id: params.net.to_string().into_bytes(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
+            palw_block_commitment: params.palw_block_commitment,
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
@@ -437,11 +440,9 @@ impl HeaderProcessor {
         // the `>` it replaces, hash tie-break included. The PALW weights are `None` because
         // nothing resolves them yet; when they are resolved this line does not change.
         let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
-        let heavier = kaspa_consensus_core::palw_chain_weight::order_tips_v1(
-            self.palw_tip_order,
-            (None, &candidate_tip),
-            (None, &prev_hst),
-        ) == std::cmp::Ordering::Greater;
+        let heavier =
+            kaspa_consensus_core::palw_chain_weight::order_tips_v1(self.palw_tip_order, (None, &candidate_tip), (None, &prev_hst))
+                == std::cmp::Ordering::Greater;
         if heavier && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap() {
             // Hint reachability about the new tip.
             reachability::hint_virtual_selected_parent(&mut staging, ctx.hash).unwrap();

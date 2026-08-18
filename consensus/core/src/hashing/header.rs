@@ -340,8 +340,8 @@ mod tests {
         // `check_palw_commitment_shape`, which refuses the non-empty case at validation.
         let khh = mk(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH);
         assert_eq!(khh.clone().with_palw_commitment(vec![0xAA; 100]).hash, khh.hash, "non-PALW identity must NOT move");
-        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100]).is_err());
-        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[]).is_ok());
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100], false).is_err());
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[], false).is_ok());
 
         // (4) Ollama-PALW (algo 5) hashes it too.
         let ollama = mk(crate::pow_layer0::POW_ALGO_ID_PALW_OLLAMA);
@@ -354,9 +354,9 @@ mod tests {
         assert_eq!(ollama.clone().with_palw_commitment(Vec::new()).hash, ollama.hash, "empty must not move algo-5 identity");
 
         // Shape rule: PALW side accepts ONLY empty while no PoW digest binds the field.
-        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[]).is_ok());
+        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[], false).is_ok());
         assert!(
-            crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[0xAA; 100]).is_err(),
+            crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &[0xAA; 100], false).is_err(),
             "a PALW commitment nothing in the PoW path binds is malleability — refuse it"
         );
         // Oversize still reports the cap it broke, not the binding rule: different operator fix.
@@ -364,7 +364,7 @@ mod tests {
             crate::pow_layer0::check_palw_commitment_shape(
                 crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
                 &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1]
-            ),
+            , false),
             Err(crate::pow_layer0::PowLayer0Error::PalwCommitmentTooLong { .. })
         ));
     }
@@ -410,12 +410,12 @@ mod tests {
         // The closure: neither header can exist, because the shape rule refuses both.
         for h in [&a, &b] {
             assert!(
-                crate::pow_layer0::check_palw_commitment_shape(h.pow_algo_id, &h.palw_commitment).is_err(),
+                crate::pow_layer0::check_palw_commitment_shape(h.pow_algo_id, &h.palw_commitment, false).is_err(),
                 "an unbound PALW commitment must be refused at the door"
             );
         }
         // And the honest header — the only reachable shape — is unaffected.
-        assert!(crate::pow_layer0::check_palw_commitment_shape(palw.pow_algo_id, &palw.palw_commitment).is_ok());
+        assert!(crate::pow_layer0::check_palw_commitment_shape(palw.pow_algo_id, &palw.palw_commitment, false).is_ok());
     }
 
     /// MISAKA ADR-0038: a real PBC1 payload rides the header end-to-end — encode, carry,
@@ -442,7 +442,7 @@ mod tests {
         // Admission is gated until a PoW-path digest binds the commitment; the carriage is not.
         assert!(
             matches!(
-                crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &bytes),
+                crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_PALW_LLM, &bytes, false),
                 Err(crate::pow_layer0::PowLayer0Error::PalwCommitmentNotYetBound { .. })
             ),
             "a well-formed PBC1 is still inadmissible while nothing in the PoW path binds it"

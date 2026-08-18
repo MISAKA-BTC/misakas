@@ -354,8 +354,13 @@ pub enum PowLayer0Error {
     /// one PoW solution mints unlimited distinct valid block identities. The field is
     /// therefore refused non-empty until the binding exists — see
     /// [`check_palw_commitment_shape`] for the exact precondition to relax this.
-    #[error("PALW header (algo_id = {algo_id}) carries {got} palw_commitment bytes, but no PoW-path digest binds them yet; must be empty")]
+    #[error(
+        "PALW header (algo_id = {algo_id}) carries {got} palw_commitment bytes, but no PoW-path digest binds them yet; must be empty"
+    )]
     PalwCommitmentNotYetBound { algo_id: u8, got: usize },
+    /// ADR-0038 Decision A is installed and the header's commitment is not a commitment.
+    #[error("PALW header (algo_id = {algo_id}) carries a palw_commitment that is not a well-formed PBC1 commitment: {reason}")]
+    PalwCommitmentMalformed { algo_id: u8, reason: String },
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
@@ -411,22 +416,40 @@ pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 /// opens with it, and the two land together behind one activation fence. Relaxing it before
 /// then re-opens the malleability.
 #[inline]
-pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8]) -> Result<(), PowLayer0Error> {
+pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: bool) -> Result<(), PowLayer0Error> {
     if !is_palw_algo_id(algo_id) {
+        // Unconditional, fence or no fence: a non-PALW header's commitment is hash-INVISIBLE
+        // (`write_header_preimage` length-prefixes it only for PALW ids), so a non-empty one is
+        // block-hash malleability. This arm never relaxes.
         if !palw_commitment.is_empty() {
             return Err(PowLayer0Error::NonPalwHeaderCarriesPalwCommitment { algo_id, got: palw_commitment.len() });
         }
         return Ok(());
     }
     // The cap is checked first so an oversized payload reports the cap it broke rather than the
-    // (currently stricter) binding rule — the two errors mean different things to an operator.
+    // binding rule — the two errors mean different things to an operator.
     if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
         return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
     }
-    if !palw_commitment.is_empty() {
-        return Err(PowLayer0Error::PalwCommitmentNotYetBound { algo_id, got: palw_commitment.len() });
+    if !bound {
+        // ADR-0038 Decision A is not installed on this network at this DAA, so the field stays
+        // shut. That refusal was never a placeholder: the field IS hash-visible on a PALW header,
+        // so bytes nothing validates would let one inference mint distinct blocks.
+        if !palw_commitment.is_empty() {
+            return Err(PowLayer0Error::PalwCommitmentNotYetBound { algo_id, got: palw_commitment.len() });
+        }
+        return Ok(());
     }
-    Ok(())
+    // Bound: the commitment is required, and must be a commitment rather than arbitrary bytes.
+    // Emptiness falls out of the decoder (no PBC1 magic), which is the right error to report —
+    // "this is not a commitment", not "this is the wrong length".
+    let commitment = crate::palw_block_commitment::PalwBlockCommitmentV1::decode(palw_commitment)
+        .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
+    // Shape only. Whether `pwu_claim` equals its derivation from the class's DAA target, and
+    // whether `executor_bond_outpoint` names an Active bond, are stateful questions this pure
+    // function cannot ask — they belong to `validate_against_class_v1` and to the bond check, at
+    // the consumer entry that holds that state. Decision A's other clauses are still unwired.
+    commitment.validate_shape().map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })
 }
 
 /// Validate that an `algo_id` is recognised by this binary at
@@ -761,7 +784,14 @@ pub fn palw_pow_prompt_v1(seed: &[u8; 32]) -> String {
 /// sets and must not share a mesh), exactly like fixture VLT tables.
 pub fn palw_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OUT_BYTES] {
     let part = |label: &[u8]| -> [u8; 64] {
-        let digest = Params::new().hash_length(64).key(POW_L1_PALW_V1_DOMAIN).to_state().update(b"fixture").update(label).update(seed).finalize();
+        let digest = Params::new()
+            .hash_length(64)
+            .key(POW_L1_PALW_V1_DOMAIN)
+            .to_state()
+            .update(b"fixture")
+            .update(label)
+            .update(seed)
+            .finalize();
         let mut out = [0u8; 64];
         out.copy_from_slice(digest.as_bytes());
         out
@@ -810,8 +840,7 @@ pub fn palw_ollama_l1_tag_from_response(
 /// seed alone, selected by the same `MISAKA_PALW_POW_FIXTURE=1` env as the worker fixture (and
 /// confined to devnet by the same kaspad rail).
 pub fn palw_ollama_fixture_l1_tag_v1(seed: &[u8; 32]) -> [u8; POW_L1_PALW_OLLAMA_OUT_BYTES] {
-    let digest =
-        Params::new().hash_length(64).key(POW_L1_PALW_OLLAMA_V1_DOMAIN).to_state().update(b"fixture").update(seed).finalize();
+    let digest = Params::new().hash_length(64).key(POW_L1_PALW_OLLAMA_V1_DOMAIN).to_state().update(b"fixture").update(seed).finalize();
     let mut tag = [0u8; POW_L1_PALW_OLLAMA_OUT_BYTES];
     tag[..64].copy_from_slice(digest.as_bytes());
     // Stable, obviously synthetic counts in the real field layout.

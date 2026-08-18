@@ -126,6 +126,7 @@ pub struct PruningProofManager {
     pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// MISAKA Phase 4: PALW LLM (`algo_id = 4`) activation — same POW-01 rationale as above.
     pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// MISAKA Phase 4b: PALW-Ollama (`algo_id = 5`) activation — same POW-01 rationale.
     pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
 
@@ -151,6 +152,7 @@ impl PruningProofManager {
         skip_proof_of_work: bool,
         pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
         pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+        palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
         pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
@@ -189,6 +191,7 @@ impl PruningProofManager {
             skip_proof_of_work,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
+            palw_block_commitment,
             pow_palw_ollama_activation,
 
             is_consensus_exiting,
@@ -225,7 +228,8 @@ impl PruningProofManager {
             kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
                 .map_err(|_| PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id))?;
         }
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment)
+        let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
             .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
         Ok(())
     }

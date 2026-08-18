@@ -441,6 +441,13 @@ pub struct Params {
     /// altering fork choice. `params_do_not_set_the_palw_fork_choice_fence` asserts the preset
     /// fact; nothing asserts more, because nothing more is true.
     pub palw_fork_choice: Option<crate::palw_chain_weight::PalwChainWeightParamsV1>,
+    /// ADR-0038 Decision A, first clause: the fence that lets a PALW header carry its commitment.
+    ///
+    /// `None` on every shipped preset, and `None` is today's rule exactly — a PALW header's
+    /// `palw_commitment` must be EMPTY. Installing it makes the field required and validated from
+    /// `activation_daa_score`, which is why it is part of the fingerprint (Some-only, so a network
+    /// that installs none fingerprints byte-identically to before this field existed).
+    pub palw_block_commitment: Option<crate::palw_block_commitment::PalwBlockCommitmentParamsV1>,
 
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
     /// Layer-1 (`POW_ALGO_ID_BLAKE2B_SHA3 = 3`), which supersedes the Phase-2 Argon2id to make header
@@ -670,6 +677,7 @@ impl Params {
             dns_params,
             palw_credit,
             palw_fork_choice,
+            palw_block_commitment,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
             pow_palw_ollama_activation,
@@ -762,8 +770,27 @@ impl Params {
             h.write((bytes.len() as u64).to_le_bytes());
             h.write(&bytes);
         }
+        // ADR-0038 Decision A, Some-only for the same reason: installing it changes which headers
+        // are valid, so it belongs in the fingerprint — and a network that installs none must
+        // fingerprint byte-identically to before the field existed, or the wiring is a flag day.
+        if let Some(commitment) = palw_block_commitment {
+            let bytes = borsh::to_vec(commitment).expect("PalwBlockCommitmentParamsV1 is borsh-serializable");
+            h.write((bytes.len() as u64).to_le_bytes());
+            h.write(&bytes);
+        }
 
         h.finalize()
+    }
+
+    /// ADR-0038 Decision A: whether a PALW header at `daa_score` must carry its commitment.
+    ///
+    /// `false` on every shipped network, which is the pre-ADR rule: the field must be empty. The
+    /// answer is a property of the NETWORK and the header's own DAA, never of the node, so every
+    /// consumer of `check_palw_commitment_shape` routes through here rather than deciding.
+    #[inline]
+    #[must_use]
+    pub fn is_palw_commitment_bound(&self, daa_score: u64) -> bool {
+        self.palw_block_commitment.is_some_and(|fence| fence.is_bound(daa_score))
     }
 
     /// kaspa-pq: `true` when PQ-only enforcement is active at `daa_score`.
@@ -978,6 +1005,7 @@ impl Params {
             dns_params: self.dns_params,
             palw_credit: self.palw_credit,
             palw_fork_choice: self.palw_fork_choice,
+            palw_block_commitment: self.palw_block_commitment,
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
@@ -1766,6 +1794,7 @@ pub const MAINNET_PARAMS: Params = Params {
     dns_params: Some(PRODUCTION_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
@@ -1887,6 +1916,7 @@ pub const TESTNET_PARAMS: Params = Params {
     dns_params: Some(TESTNET_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
     // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
@@ -1990,6 +2020,7 @@ pub const SIMNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
@@ -2131,6 +2162,7 @@ pub const DEVNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
@@ -2410,6 +2442,48 @@ mod consensus_params_id_tests {
     ///
     /// The fingerprint separates nodes at handshake, so a `None` fence that still wrote bytes
     /// would split every shipped network from every prior build for a rule none of them run.
+    /// ADR-0038 Decision A: adding the commitment fence must be invisible to every network that
+    /// does not install it — otherwise the wiring is itself a flag day, and testnet-11 (live, and
+    /// the only PALW network) would fork on a binary upgrade.
+    ///
+    /// The constant is the fingerprint testnet-11 is running under right now, read off the node.
+    /// If this test fails, the running network cannot upgrade without a re-genesis.
+    #[test]
+    fn adding_the_commitment_fence_does_not_move_any_shipped_fingerprint() {
+        // Pinned to what the LIVE testnet-11 node announces, read off its startup log on
+        // 2026-08-18. Note the object: a node fingerprints `Params::from(NetworkId)`, which is
+        // `with_registered_models(TESTNET11_PARAMS)` — NOT the bare preset, whose id is a
+        // different value entirely. Asserting on the preset would pass while the network forked.
+        const TESTNET11_LIVE_FINGERPRINT: &str = "62781823f1dd5e5c530e080a72773c6d54f462209e12638ac9d7824e2bc57450";
+        let live: Params = crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11).into();
+        assert_eq!(
+            live.consensus_params_id().to_string(),
+            TESTNET11_LIVE_FINGERPRINT,
+            "testnet-11 cannot upgrade without a re-genesis"
+        );
+        assert!(live.palw_block_commitment.is_none());
+
+        for (name, params) in [
+            ("mainnet", &MAINNET_PARAMS),
+            ("testnet", &TESTNET_PARAMS),
+            ("testnet11", &TESTNET11_PARAMS),
+            ("devnet", &DEVNET_PARAMS),
+            ("simnet", &SIMNET_PARAMS),
+        ] {
+            assert!(params.palw_block_commitment.is_none(), "{name}: no shipped preset installs the fence");
+            assert!(!params.is_palw_commitment_bound(0), "{name}: unfenced means the pre-ADR rule at every DAA");
+            assert!(!params.is_palw_commitment_bound(u64::MAX), "{name}: and at every DAA, not just low ones");
+        }
+
+        // Installing it DOES move the fingerprint — a node that requires the commitment and one
+        // that forbids it must not peer.
+        let mut fenced = TESTNET11_PARAMS;
+        fenced.palw_block_commitment = Some(crate::palw_block_commitment::PalwBlockCommitmentParamsV1 { activation_daa_score: 1_000 });
+        assert_ne!(fenced.consensus_params_id(), TESTNET11_PARAMS.consensus_params_id());
+        assert!(!fenced.is_palw_commitment_bound(999));
+        assert!(fenced.is_palw_commitment_bound(1_000), "the fence binds AT its own daa score");
+    }
+
     #[test]
     fn an_absent_fork_choice_fence_does_not_move_the_fingerprint() {
         for (name, params) in [

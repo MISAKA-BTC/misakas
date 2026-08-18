@@ -103,9 +103,12 @@ impl HeaderProcessor {
         kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
             .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))?;
         // MISAKA ADR-0038: structural shape rule for the post-PoW palw_commitment field.
-        // Not behind any activation fence — a hash-invisible non-empty field on a non-PALW
-        // header is block-hash malleability and is refused at the door, on every network.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment)
+        // The NON-PALW arm is not behind any fence — a hash-invisible non-empty field there is
+        // block-hash malleability and is refused at the door on every network. The PALW arm is
+        // fenced (Decision A): unset, the field must be empty exactly as before; set, it must be a
+        // well-formed PBC1 commitment from the fence's DAA.
+        let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
             .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))
     }
 

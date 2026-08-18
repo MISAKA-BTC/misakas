@@ -64,6 +64,7 @@
 //! Consensus-inert until the ADR-0038 change set wires and activates together.
 
 use crate::tx::TransactionOutpoint;
+use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 use thiserror::Error;
 
@@ -127,6 +128,40 @@ pub fn palw_block_challenge_v1(
 
 /// Serialization magic of the carried payload (refuses foreign bytes before borsh runs).
 pub const PALW_BLOCK_COMMITMENT_MAGIC: [u8; 4] = *b"PBC1";
+
+/// ADR-0038 Decision A: the fence that lets a PALW header carry its commitment at all.
+///
+/// Until this is installed, `pow_layer0::check_palw_commitment_shape` requires the field to be
+/// EMPTY on a PALW header — the `PalwCommitmentNotYetBound` refusal. That refusal is not a bug: a
+/// hash-visible field nobody validates is worse than an absent one, so the field stayed closed
+/// until something could check it. This opens it, and only from `activation_daa_score`.
+///
+/// **`None` on every shipped preset.** Installing it changes block validity — a header that was
+/// valid with an empty commitment is not valid with a malformed one, and vice versa — so it is
+/// part of the consensus fingerprint, written Some-only so a network that does not install one
+/// fingerprints byte-identically to before this field existed.
+///
+/// This is Decision A's *first* clause only. The block still names no bond that anything checks
+/// (`executor references an Active bond of an Active ExecutionClass`), the ticket is still not
+/// compared against a class target, and the PWU is still not derived — all of which need chain
+/// state this pure shape gate does not have. What it buys is the precondition those need: a block
+/// that can say who mined it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwBlockCommitmentParamsV1 {
+    /// From this DAA score a PALW header MUST carry a well-formed PBC1 commitment; below it the
+    /// field must still be empty, so the transition is a clean fork point rather than a window in
+    /// which both shapes are legal.
+    pub activation_daa_score: u64,
+}
+
+impl PalwBlockCommitmentParamsV1 {
+    /// Whether a PALW header at `daa_score` must carry its commitment.
+    #[inline]
+    #[must_use]
+    pub fn is_bound(&self, daa_score: u64) -> bool {
+        daa_score >= self.activation_daa_score
+    }
+}
 
 pub const PALW_BLOCK_COMMITMENT_VERSION_V1: u16 = 1;
 
@@ -220,11 +255,7 @@ impl PalwBlockCommitmentV1 {
     /// that state is resolved. Keeping them apart is what stops the stateful check being
     /// quietly skipped by a caller that only had bytes — the shape function's own doc says its
     /// stateful questions are consumer-entry checks, and this is one of them, now callable.
-    pub fn validate_against_class_v1(
-        &self,
-        class_target: u128,
-        pwu_per_inference: u64,
-    ) -> Result<(), crate::palw_pwu::PalwPwuError> {
+    pub fn validate_against_class_v1(&self, class_target: u128, pwu_per_inference: u64) -> Result<(), crate::palw_pwu::PalwPwuError> {
         crate::palw_pwu::check_pwu_claim_v1(self.pwu_claim, class_target, pwu_per_inference)
     }
 
@@ -232,14 +263,7 @@ impl PalwBlockCommitmentV1 {
     /// class and bond taken from `self`, so a caller cannot accidentally bind a trace to a
     /// class or executor other than the one it claims.
     pub fn challenge_for(&self, network_id: &[u8], pre_pow_hash: Hash64, timestamp: u64, nonce: u64) -> Hash64 {
-        palw_block_challenge_v1(
-            network_id,
-            pre_pow_hash,
-            timestamp,
-            nonce,
-            self.execution_class_id,
-            &self.executor_bond_outpoint,
-        )
+        palw_block_challenge_v1(network_id, pre_pow_hash, timestamp, nonce, self.execution_class_id, &self.executor_bond_outpoint)
     }
 
     /// The commitment root: one digest over **the challenge**, the class, the bond, both Merkle
@@ -393,7 +417,10 @@ mod tests {
         assert_eq!(c.validate_shape(), Err(PalwBlockCommitmentError::ZeroPwuClaim));
         let mut c = commitment();
         c.signature = vec![0x5A; 64];
-        assert_eq!(c.validate_shape(), Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN }));
+        assert_eq!(
+            c.validate_shape(),
+            Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN })
+        );
     }
 
     /// The commitment root binds class, bond, both Merkle roots and the pwu claim — and NOT
@@ -496,10 +523,7 @@ mod tests {
         let mut greedy = commitment();
         greedy.pwu_claim = u64::MAX;
         assert!(greedy.validate_shape().is_ok(), "shape cannot catch this — it has no class state");
-        assert_eq!(
-            greedy.validate_against_class_v1(target, cost),
-            Err(PalwPwuError::ClaimMismatch { claimed: u64::MAX, derived })
-        );
+        assert_eq!(greedy.validate_against_class_v1(target, cost), Err(PalwPwuError::ClaimMismatch { claimed: u64::MAX, derived }));
     }
 
     /// The signing digest binds the exact ticket attempt: pre_pow_hash, timestamp and nonce
@@ -526,12 +550,98 @@ mod tests {
         let bytes = c.encode();
         assert_eq!(PalwBlockCommitmentV1::decode(&bytes).unwrap(), c);
         assert_eq!(PalwBlockCommitmentV1::decode(b"XYZ1junk"), Err(PalwBlockCommitmentError::BadMagic));
-        assert!(matches!(
-            PalwBlockCommitmentV1::decode(&bytes[..bytes.len() - 1]),
-            Err(PalwBlockCommitmentError::Undecodable { .. })
-        ));
+        assert!(matches!(PalwBlockCommitmentV1::decode(&bytes[..bytes.len() - 1]), Err(PalwBlockCommitmentError::Undecodable { .. })));
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert_eq!(PalwBlockCommitmentV1::decode(&trailing), Err(PalwBlockCommitmentError::TrailingBytes { got: 1 }));
+    }
+}
+
+#[cfg(test)]
+mod decision_a_gate_tests {
+    use super::*;
+    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, PowLayer0Error, check_palw_commitment_shape};
+
+    fn a_commitment() -> PalwBlockCommitmentV1 {
+        PalwBlockCommitmentV1 {
+            version: PALW_BLOCK_COMMITMENT_VERSION_V1,
+            execution_class_id: Hash64::from_u64_word(1),
+            executor_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(2), 3),
+            trace_root: Hash64::from_u64_word(4),
+            output_root: Hash64::from_u64_word(5),
+            pwu_claim: 100,
+            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    /// Unfenced is the pre-ADR rule, unchanged: a PALW header's commitment must be empty.
+    #[test]
+    fn without_the_fence_a_palw_header_must_still_carry_nothing() {
+        assert!(check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &[], false).is_ok());
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &a_commitment().encode(), false),
+            Err(PowLayer0Error::PalwCommitmentNotYetBound { .. })
+        ));
+    }
+
+    /// Fenced: the commitment is required, and must be a commitment.
+    #[test]
+    fn with_the_fence_a_palw_header_must_carry_a_well_formed_commitment() {
+        assert!(check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &a_commitment().encode(), true).is_ok());
+        // Empty is now a refusal, reported as "not a commitment" rather than a length complaint.
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &[], true),
+            Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+        ));
+        // Right length, wrong content: the magic is what the decoder checks first.
+        let mut junk = a_commitment().encode();
+        junk[0] ^= 0xff;
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &junk, true),
+            Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+        ));
+        // Decodes but is not a valid commitment: shape is checked too, not just the encoding.
+        let mut zero_pwu = a_commitment();
+        zero_pwu.pwu_claim = 0;
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &zero_pwu.encode(), true),
+            Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+        ));
+    }
+
+    /// The non-PALW arm never relaxes: there the field is hash-INVISIBLE, so a non-empty one is
+    /// block-hash malleability whatever any fence says.
+    #[test]
+    fn the_non_palw_arm_is_not_fenced() {
+        for bound in [false, true] {
+            assert!(check_palw_commitment_shape(POW_ALGO_ID_KHEAVYHASH, &[], bound).is_ok());
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_KHEAVYHASH, &a_commitment().encode(), bound),
+                Err(PowLayer0Error::NonPalwHeaderCarriesPalwCommitment { .. })
+            ));
+        }
+    }
+
+    /// The cap is reported before the binding rule, in both directions — an operator whose payload
+    /// is oversized should be told that, not that it failed to decode.
+    #[test]
+    fn the_size_cap_outranks_the_binding_rule() {
+        let oversized = vec![0xAA; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1];
+        for bound in [false, true] {
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_LLM, &oversized, bound),
+                Err(PowLayer0Error::PalwCommitmentTooLong { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn the_fence_binds_at_its_own_daa_score_and_not_before() {
+        let fence = PalwBlockCommitmentParamsV1 { activation_daa_score: 500 };
+        assert!(!fence.is_bound(0));
+        assert!(!fence.is_bound(499));
+        assert!(fence.is_bound(500));
+        assert!(fence.is_bound(u64::MAX));
     }
 }
