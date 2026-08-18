@@ -357,6 +357,55 @@ knowing: the batch scan applies the same gate and **stops at the first header th
 header the walk will reject is never pulled into a batch, and neither is anything behind it. A batch
 that ignored the gate would have re-introduced exactly the amplification this decision removes.
 
+### Live corroboration, and a bound this ADR does not actually enforce
+
+While measuring the above, the same host turned out to be running the scenario for real: two
+testnet-11 nodes (`palw-soak-node`, `palw-ibd-join`), both on the PALW preset, one syncing from
+scratch since 00:31. Its own `[ibd-perf]` counter reports per-header validation time, which on this
+network is the inference. **n = 1,242 headers**, one sync:
+
+| | ibd-join (syncing) | soak (steady state) |
+|---|---|---|
+| p25 | 14.3 s | — |
+| **median** | **19.8 s** | **35.0 s** |
+| p75 | 32.5 s | — |
+| mean | 29.1 s | 50.3 s |
+| max | **303.5 s** | — |
+
+The mode is 10–15 s (375 of 1,242 samples) with a long right tail. That floor is the same number the
+controlled measurement produced with everything else stopped (13.9 s), and that agreement is the
+corroboration: **an uncontended header costs ~12–14 s on this host; everything above it is
+contention.**
+
+**The contention is self-inflicted, and `MISAKA_PALW_CONCURRENCY` does not prevent it.** The
+semaphore is per PROCESS. Two PALW node processes on one host are two concurrent inferences no
+matter what the knob says — precisely the configuration measured at 0.38× throughput. The effect is
+in the table: the syncing node's median is 40 % above its own uncontended floor, and the soak node,
+competing with a node that never pauses, sits at a 35 s median and a 50 s mean.
+
+Decision 2's bound is therefore real but **incomplete**: it bounds a process, and the resource it
+protects is the host. Bounding the host needs a host-level lease (a lock file, a cgroup, a systemd
+slice), not a `static` in one process. Not built here, recorded because a fleet that co-locates
+nodes has already opted into the harmful configuration without ever touching the knob.
+
+### The number that decides whether a network is syncable at all
+
+Neither this ADR nor its 30-hour headline ever stated the ratio that actually matters: **how fast a
+node syncs versus how fast the chain grows.**
+
+Measured on testnet-11, same host, same window: the syncing node processed **1,235 headers in
+7 h 34 m ≈ 163 headers/hour**, while the chain produced blocks at ~90 s intervals over the sampled
+window ≈ **40 blocks/hour**.
+
+**The margin is ~4×**, and would be ~6.5× if the node did not share its host (259 headers/hour at the
+uncontended 13.9 s). A node a day behind needs about six hours to catch up.
+
+That margin, not the absolute hours, is the property to defend. It is roughly
+`block_interval / per_header_cost`, and below 1 **no node can ever sync and the network is closed to
+new participants**. It falls if the block interval shortens, if the model gets slower, if the host
+gets busier, or if a second PALW node is co-located. Two of those four are configuration choices
+being made on this host today.
+
 ## Where this leaves the numbers, honestly
 
 Exhaustive verification stays. The honest one-year testnet-11 proof is ~9,000 headers, and the three

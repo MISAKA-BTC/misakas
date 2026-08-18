@@ -239,6 +239,24 @@ behaves like `misaka-ibm` until shown otherwise. `CPU_THREADS = 4` is pinned by 
 class, so trading worker count against threads per worker is not available either. Reproducer:
 `cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
 
+**And the knob is per PROCESS, so do not co-locate two PALW nodes on one host.** Two node processes
+are two concurrent inferences whatever the setting says — the harmful configuration, entered without
+touching the knob. Measured live on `misaka-ibm`, which runs two testnet-11 nodes: the syncing
+node's per-header time has its mode at 10–15 s (its uncontended cost) but a median of 19.8 s, a mean
+of 29.1 s and a **maximum of 303 s**; the node it competes with sits at a 35 s median. Separating
+them is worth roughly **+60 % sync rate** (163 → ~259 headers/hour) and costs nothing but a second
+host.
+
+### The margin to watch: sync rate vs chain growth
+
+The number that decides whether a PALW network can admit new nodes at all is
+`headers synced per hour ÷ blocks produced per hour`. On `misaka-ibm` / testnet-11, measured over one
+7 h 34 m sync: **163 headers/hour against ~40 blocks/hour ≈ 4×** (≈ 6.5× uncontended).
+
+Below 1× a node can never finish syncing and the network is closed to newcomers. The margin shrinks
+if the block interval shortens, the model gets slower, the host gets busier, or a second PALW node is
+co-located. Track it per host; it is a better alarm than any absolute hour count.
+
 ## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11) — ⚠️ SUPERSEDED
 
 > Kept for the record only. `algo_id = 5` is disabled (STATUS banner), so **none of this is a
