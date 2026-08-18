@@ -148,27 +148,43 @@ the one-shot document, in every field** — including all five the PoW tag is de
 (`output_commitment`, `gemm_trace_root`, `operation_schedule_commitment`, `prefill_tokens`,
 `decode_tokens`). A resident model computes the same tag.
 
-**The attempt is nevertheless blocked, by a bug that is not the agent's.** Running a SECOND job in
-the same process crashes. Instrumenting the shim shows why: the `shim_ctx` struct is corrupted during
-the first job. The struct pointer is stable while its `lctx` field changes from a valid pointer to
-garbage (`0x8078`) or to `0x0` between job 1 and job 2. Three different context-reset strategies were
-tried — rebuild via `llama_init_from_model` (create-then-free and free-then-create),
-`llama_memory_clear(mem, true)`, and `llama_synchronize` + `llama_memory_clear(mem, false)` — and all
-three see an already-corrupt struct. The decisive test skipped the reset entirely for the first job:
-the very first `shim_reset_context` call still found `lctx = 0x0`. **`execute` corrupts the heap; the
-reset is innocent.**
+**The attempt is nevertheless blocked — on the Metal backend's context lifecycle, not on a heap bug.**
+Running a SECOND job in the same process crashes, and instrumenting the shim showed the `shim_ctx`
+struct's `lctx` field reading as garbage (`0x8078`) or `0x0` at the second job while the struct
+pointer itself was stable. Three context-reset strategies were tried — rebuild via
+`llama_init_from_model` (both orderings), `llama_memory_clear(mem, true)`, and `llama_synchronize` +
+`llama_memory_clear(mem, false)` — and all three failed.
 
-That is a latent memory-safety defect in the PoW worker's decode path, and it is worth fixing on its
-own merits rather than as agent scaffolding: today it is invisible only because a one-shot process
-exits before the corrupted heap is reused, and job 1's output is computed and printed correctly
-before the damage matters. Any future long-lived worker — the agent, a batch replayer, a mining
-harness — steps straight into it.
+**An earlier revision of this ADR concluded from that evidence that `execute` corrupts the heap. That
+conclusion was wrong**, and the correction matters more than the original claim:
 
-So the ordering is: **find and fix the corruption in `execute` first, then land the agent.** The
-agent implementation is not shipped in the meantime; a mode that crashes on its second job is worse
-than no mode. What this attempt establishes and hands to the next one is the premise (97 % overhead),
-the equivalence (byte-identical first job), and the bug's exact signature (`shim_ctx.lctx` clobbered
-during `execute`, reproducible with two jobs on one process).
+* Two independent `execute()` calls in one process, each opening its own context, complete cleanly.
+  So `execute` is not corrupting anything in general.
+* Probing `shim_n_vocab` — a plain read of the struct — around every shim call of one job
+  (open → tokenize → decode → logits_last → three decode steps) shows the struct **intact at every
+  point**, `n_vocab = 248320` throughout. `execute` does not corrupt its own `shim_ctx`.
+* What that probe DID surface is the real shape of the problem. It aborted at process exit with
+  `ggml-metal-device.m:657: GGML_ASSERT([rsets->data count] == 0) failed`, in
+  `ggml_metal_device_free` reached from `__cxa_finalize_ranges` → `exit` — the Metal backend
+  asserting that its residency sets are empty at teardown.
+
+So the failure is in the **Metal backend's resource lifecycle**, which this pinned build enforces
+with assertions, not in the worker's memory handling. Reusing or resetting a llama context on the
+Metal build violates invariants the backend maintains; the pointer that "looked corrupt" is Metal
+storage unmapped underneath a struct field, not a stray write from the worker.
+
+That reframes the next step. The agent needs a context lifecycle the Metal backend accepts — or it
+needs the backend that does not have this problem at all. The fleet's PALW class is the CPU profile
+(`MISAKA_PALW_CPU=1`, `n_gpu_layers = 0`, no Metal device), which is also where pruning-proof IBD
+actually hurts. **Testing the agent against the CPU build is the cheapest next move**, and if it
+holds there, the agent ships for the profile that needs it while the Metal path keeps the one-shot
+worker.
+
+The agent implementation is not shipped in the meantime; a mode that crashes on its second job is
+worse than no mode. What this attempt hands the next one is the premise (97 % overhead), the
+equivalence (a byte-identical first job), the elimination of the worker's own memory handling as a
+suspect, and the actual failure signature — a Metal residency-set assertion in
+`ggml_metal_device_free`, reproducible with two jobs on one process on the Metal build.
 
 ### Decision 2 — Parallelise verification during IBD
 
