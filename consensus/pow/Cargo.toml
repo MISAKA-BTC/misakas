@@ -31,6 +31,11 @@ faster-hex.workspace = true
 log.workspace = true
 serde_json.workspace = true
 
+# Host-wide inference slots (ADR-0041 Decision 2): `flock`, because the kernel releases it when the
+# holder dies. A PID file or a named semaphore both leak a slot when a node crashes.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 

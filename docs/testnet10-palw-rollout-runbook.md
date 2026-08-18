@@ -239,13 +239,53 @@ behaves like `misaka-ibm` until shown otherwise. `CPU_THREADS = 4` is pinned by 
 class, so trading worker count against threads per worker is not available either. Reproducer:
 `cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
 
-**And the knob is per PROCESS, so do not co-locate two PALW nodes on one host.** Two node processes
-are two concurrent inferences whatever the setting says — the harmful configuration, entered without
+**The knob is per PROCESS, so co-locating two PALW nodes bypasses it.** Two node processes are two
+concurrent inferences whatever the setting says — the harmful configuration, entered without anyone
 touching the knob. Measured live on `misaka-ibm`, which runs two testnet-11 nodes: the syncing
 node's per-header time has its mode at 10–15 s (its uncontended cost) but a median of 19.8 s, a mean
 of 29.1 s and a **maximum of 303 s**; the node it competes with sits at a 35 s median. Separating
-them is worth roughly **+60 % sync rate** (163 → ~259 headers/hour) and costs nothing but a second
-host.
+them is worth roughly **+60 % sync rate** (163 → ~259 headers/hour).
+
+### `MISAKA_PALW_LEASE_DIR=<dir>` — make the bound cover the host
+
+Set it to **one directory shared by every PALW process on the machine** and the concurrency bound
+stops being per-process: a permit then also requires an exclusive `flock` on one of
+`MISAKA_PALW_CONCURRENCY` slot files there.
+
+```bash
+MISAKA_PALW_AGENT=1 MISAKA_PALW_CONCURRENCY=1 MISAKA_PALW_LEASE_DIR=/var/lock/misaka-palw ./kaspad …
+```
+
+* Use it whenever a host runs more than one PALW node, or a node alongside any other PALW consumer.
+  With `CONCURRENCY=1` and a shared lease dir, two co-located nodes take turns instead of halving
+  each other's throughput.
+* `flock`, not a PID file or a named semaphore, because **the kernel releases it when the holder
+  dies** — a crashed node must not permanently consume a slot.
+* Waiting for a slot is unbounded, exactly as waiting on the in-process semaphore already is. A wait
+  past a minute logs which directory is full.
+* The directory must be writable by every PALW process (they may run as different users). A
+  directory that cannot be used logs a warning **once** and leaves only the per-process bound — a
+  performance control failing open, deliberately, because refusing to validate over a lock directory
+  would wedge the node.
+* Unix only. Elsewhere the variable is reported as unsupported and ignored.
+
+### Watching the margin: `scripts/misaka-palw-headroom.sh`
+
+```bash
+bash scripts/misaka-palw-headroom.sh /root/.palw-soak      # read-only, ~2 s
+# hdr_p50=27.6s spb=92s headroom=3.3x workers=3 CO-LOCATED
+```
+
+`headroom` is `block interval ÷ per-header verification cost` — the margin described above.
+`hdr_p50` is the median of the node's own `validate(A,parallelizable)`, which on a PALW network *is*
+the inference. `HEADROOM-LOW` fires under 2× **and when the margin could not be measured at all**,
+because a missing number is not reassurance. `CO-LOCATED` fires when more than one PALW worker is
+seen on the host during a short sample — its firing means co-location, but its silence does not
+prove isolation (workers are short-lived on the one-shot path).
+
+`misaka-palw-soak-status.sh` calls this script, so the two cannot drift apart. Measured on
+`misaka-ibm` 2026-08-18: the soak node reads `3.3×` and the syncing node `5.4×`, the gap between
+them being exactly the contention the lease directory is there to remove.
 
 ### The margin to watch: sync rate vs chain growth
 

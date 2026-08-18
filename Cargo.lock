@@ -4305,6 +4305,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-math",
  "kaspa-utils",
+ "libc",
  "log",
  "num",
  "serde_json",

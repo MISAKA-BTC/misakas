@@ -383,10 +383,23 @@ matter what the knob says — precisely the configuration measured at 0.38× thr
 in the table: the syncing node's median is 40 % above its own uncontended floor, and the soak node,
 competing with a node that never pauses, sits at a 35 s median and a 50 s mean.
 
-Decision 2's bound is therefore real but **incomplete**: it bounds a process, and the resource it
-protects is the host. Bounding the host needs a host-level lease (a lock file, a cgroup, a systemd
-slice), not a `static` in one process. Not built here, recorded because a fleet that co-locates
-nodes has already opted into the harmful configuration without ever touching the knob.
+Decision 2's bound was therefore real but **incomplete**: it bounded a process, and the resource it
+protects is the host. **Now closed.** `MISAKA_PALW_LEASE_DIR` points every PALW process on a machine
+at one directory of slot files, and a permit additionally requires an exclusive `flock` on one of
+`MISAKA_PALW_CONCURRENCY` of them — so the bound covers the host.
+
+`flock` rather than a PID file or a named POSIX semaphore for one reason: **the kernel releases it
+when the holder dies.** A crashed node must not permanently consume a slot, and both alternatives
+leak one. A lease directory that cannot be used warns once and leaves the per-process bound in
+place — a performance control failing open, deliberately, because refusing to validate over a lock
+directory would wedge the node. Opt-in, like everything else here; the default is unchanged.
+
+The mechanism is unit-tested in CI without a model: `flock(2)` associates a lock with the open file
+DESCRIPTION rather than the process ("An attempt to lock the file using one of these file descriptors
+may be denied by a lock that the calling process has already placed via another file descriptor"), so
+threads holding independent descriptions contend exactly as separate processes do. The test asserts
+both directions — never more than N holders, and that N is actually reached, so a lease that
+degraded into a global mutex would fail it.
 
 ### The number that decides whether a network is syncable at all
 

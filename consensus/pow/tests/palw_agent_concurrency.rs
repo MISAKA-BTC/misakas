@@ -82,7 +82,7 @@ fn concurrent_seeds_are_faster_and_are_the_same_tags() {
     unsafe {
         std::env::remove_var("MISAKA_PALW_POW_FIXTURE");
         std::env::set_var("MISAKA_PALW_AGENT", "1");
-        std::env::set_var("MISAKA_PALW_CONCURRENCY", &PERMITS.to_string());
+        std::env::set_var("MISAKA_PALW_CONCURRENCY", PERMITS.to_string());
     }
     assert_eq!(inference_concurrency(), PERMITS, "the gate did not take the configured permit count");
 

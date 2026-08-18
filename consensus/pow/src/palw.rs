@@ -51,6 +51,23 @@ pub const PALW_AGENT_ENV: &str = "MISAKA_PALW_AGENT";
 /// workers may run at once, and it costs memory linearly: each concurrent inference holds a
 /// resident 1.2 GB model, so `N` here means roughly `N × 1.4 GiB`.
 pub const PALW_CONCURRENCY_ENV: &str = "MISAKA_PALW_CONCURRENCY";
+/// Directory of host-wide inference slots. Set it to one directory shared by EVERY PALW process on
+/// a machine and the concurrency bound covers the machine instead of one process.
+///
+/// [`PALW_CONCURRENCY_ENV`] alone bounds a process, and the resource it protects is the host: two
+/// PALW nodes on one box are two concurrent inferences whatever either process's semaphore says,
+/// and that configuration measured **0.38× the serial throughput** (ADR-0041 Decision 2) — entered
+/// by co-locating nodes, without anyone touching the knob. With this set, a permit additionally
+/// requires an exclusive `flock` on one of `MISAKA_PALW_CONCURRENCY` slot files in the directory.
+///
+/// `flock` rather than a PID file or a named semaphore for one reason: **the kernel releases it when
+/// the holder dies.** A crashed node must not permanently consume a slot, and both alternatives leak
+/// one. Unix only; elsewhere the variable is reported as unsupported and ignored.
+///
+/// Waiting for a slot is unbounded, exactly as waiting on the in-process semaphore already is — a
+/// held slot means a live process is inferring, which is when queueing is the correct answer. A
+/// wait past a minute logs which directory is full.
+pub const PALW_LEASE_DIR_ENV: &str = "MISAKA_PALW_LEASE_DIR";
 /// One — the serialized behaviour this path had before Decision 2. It stays the default because
 /// raising it is a memory decision only an operator can make.
 pub const DEFAULT_CONCURRENCY: usize = 1;
@@ -236,7 +253,12 @@ mod native {
     /// Held for one inference; returns its permit on drop, INCLUDING during a panic unwind. That
     /// matters here: this path panics on an unusable runtime, and a permit leaked on that route
     /// would wedge every other validating thread behind a node that is already failing loudly.
-    struct Permit;
+    struct Permit {
+        /// The host-wide slot, when [`PALW_LEASE_DIR_ENV`] is configured. Dropping the file releases
+        /// the `flock`; so does the process dying, which is the property that makes this safe to
+        /// hold across a panic, a kill, or an OOM.
+        _slot: Option<std::fs::File>,
+    }
 
     impl Drop for Permit {
         fn drop(&mut self) {
@@ -249,13 +271,91 @@ mod native {
     }
 
     fn acquire_permit() -> Permit {
-        let gate = gate();
-        let mut permits = gate.permits.lock().unwrap_or_else(|e| e.into_inner());
-        while *permits == 0 {
-            permits = gate.released.wait(permits).unwrap_or_else(|e| e.into_inner());
+        {
+            let gate = gate();
+            let mut permits = gate.permits.lock().unwrap_or_else(|e| e.into_inner());
+            while *permits == 0 {
+                permits = gate.released.wait(permits).unwrap_or_else(|e| e.into_inner());
+            }
+            *permits -= 1;
+            // The guard is dropped HERE, before the host slot is waited on. Blocking on a
+            // cross-process lock while holding the semaphore's own mutex would stop every other
+            // thread in this process from so much as checking the count.
         }
-        *permits -= 1;
-        Permit
+        // The in-process count is spoken for from here on, so build the guard that returns it
+        // BEFORE doing anything that can block or unwind.
+        let mut permit = Permit { _slot: None };
+        permit._slot = acquire_host_slot();
+        permit
+    }
+
+    /// An exclusive `flock` on one of `slots` files in `dir`, waiting until one is free.
+    ///
+    /// Takes `slots` explicitly rather than reading [`inference_concurrency`] so the mechanism can
+    /// be tested without touching process-global state.
+    #[cfg(unix)]
+    fn host_slot(dir: &std::path::Path, slots: usize) -> Option<std::fs::File> {
+        use std::os::unix::io::AsRawFd;
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            warn_lease_unusable(format!("cannot create the PALW lease directory {}: {e}", dir.display()));
+            return None;
+        }
+        let started = Instant::now();
+        let mut warned = false;
+        loop {
+            for i in 0..slots.max(1) {
+                let path = dir.join(format!("slot-{i}.lock"));
+                // `truncate(false)`: the slot file is a lock handle, never a data file. Truncating
+                // it would be harmless today (it is empty) and wrong the moment anyone writes
+                // anything into it, so say what is meant.
+                let file = match std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(&path) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        warn_lease_unusable(format!("cannot open the PALW lease slot {}: {e}", path.display()));
+                        return None;
+                    }
+                };
+                // SAFETY: `file` owns the descriptor and outlives the call; `flock` on a valid fd
+                // has no other precondition.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                    return Some(file);
+                }
+            }
+            if !warned && started.elapsed() > Duration::from_secs(60) {
+                log::warn!(
+                    "palw-pow: waiting over a minute for a host inference slot — all {slots} in {} are held by other \
+                     PALW processes on this machine (this is the bound working, but check whether the co-location is \
+                     intended: it measured 0.38x serial throughput)",
+                    dir.display()
+                );
+                warned = true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A misconfigured lease directory disables the HOST bound and leaves the per-process one — a
+    /// performance control failing open, which is right (refusing to validate over a lock directory
+    /// would wedge the node) but must be loud, once.
+    fn warn_lease_unusable(message: String) {
+        static WARNED: OnceLock<()> = OnceLock::new();
+        WARNED.get_or_init(|| {
+            log::warn!("palw-pow: {message}; the host-wide inference bound is NOT in effect on this process");
+        });
+    }
+
+    #[cfg(unix)]
+    fn acquire_host_slot() -> Option<std::fs::File> {
+        let dir = std::env::var(PALW_LEASE_DIR_ENV).ok()?;
+        host_slot(std::path::Path::new(&dir), inference_concurrency())
+    }
+
+    #[cfg(not(unix))]
+    fn acquire_host_slot() -> Option<std::fs::File> {
+        if std::env::var(PALW_LEASE_DIR_ENV).is_ok() {
+            warn_lease_unusable(format!("{PALW_LEASE_DIR_ENV} needs flock and this is not a unix host"));
+        }
+        None
     }
 
     fn cache() -> &'static Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OUT_BYTES]>> {
@@ -656,6 +756,68 @@ mod native {
                 log::debug!("palw-pow: resident agent served a seed in {:?}", started.elapsed());
                 Ok(projection)
             }
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    mod host_lease_tests {
+        use super::host_slot;
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+        /// `flock` bounds holders of independent open file descriptions, which is exactly what
+        /// separate PALW node processes are.
+        ///
+        /// Threads test the real mechanism here, not a stand-in: `flock(2)` associates a lock with
+        /// the open file DESCRIPTION, not the process, so two `open` calls in one process contend
+        /// with each other precisely as two processes do ("An attempt to lock the file using one of
+        /// these file descriptors may be denied by a lock that the calling process has already
+        /// placed via another file descriptor" — flock(2)). Using threads keeps the test in CI,
+        /// with no model, no worker and no spawned binary.
+        #[test]
+        fn the_host_lease_bounds_holders_of_independent_descriptions() {
+            const SLOTS: usize = 2;
+            const CONTENDERS: usize = 6;
+            let dir = std::env::temp_dir().join(format!("misaka-palw-lease-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+
+            let live = AtomicUsize::new(0);
+            let peak = AtomicUsize::new(0);
+            let granted = AtomicUsize::new(0);
+            std::thread::scope(|scope| {
+                for _ in 0..CONTENDERS {
+                    scope.spawn(|| {
+                        let slot = host_slot(&dir, SLOTS).expect("a temp directory is usable");
+                        let now = live.fetch_add(1, SeqCst) + 1;
+                        peak.fetch_max(now, SeqCst);
+                        // Long enough that every contender is inside the window at some point, so
+                        // the peak is a real observation and not a scheduling accident.
+                        std::thread::sleep(std::time::Duration::from_millis(60));
+                        live.fetch_sub(1, SeqCst);
+                        granted.fetch_add(1, SeqCst);
+                        drop(slot);
+                    });
+                }
+            });
+
+            assert_eq!(granted.load(SeqCst), CONTENDERS, "every contender must eventually get a slot");
+            assert!(peak.load(SeqCst) <= SLOTS, "{} held the lease at once, bound was {SLOTS}", peak.load(SeqCst));
+            // Without this the test would also pass if the lease handed out nothing concurrently —
+            // i.e. if it had silently degraded to a global mutex.
+            assert_eq!(peak.load(SeqCst), SLOTS, "the lease never reached its own bound; it is over-serialising");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A slot is released by dropping the file, so the next caller gets it — the property that
+        /// makes an inference-scoped permit correct rather than a one-shot allocation.
+        #[test]
+        fn a_dropped_slot_is_reusable() {
+            let dir = std::env::temp_dir().join(format!("misaka-palw-lease-reuse-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let first = host_slot(&dir, 1).expect("a temp directory is usable");
+            drop(first);
+            let second = host_slot(&dir, 1).expect("the only slot must be free again");
+            drop(second);
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 
