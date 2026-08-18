@@ -712,9 +712,7 @@ impl VirtualStateProcessor {
         kaspa_pow::palw_admission::check_palw_block_admission_v1(
             header,
             selected_parent_bond_view,
-            // No per-block class-target store yet. `ClassUnresolved` is the honest answer and it
-            // is an ERROR, never a permissive zero — and it is unreachable while the fence is off.
-            |_class_id| None,
+            |class_id| self.palw_class_facts_for_block(class_id, header),
             // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
             self.genesis.hash.as_bytes().as_slice(),
             commitment_bound,
@@ -1560,6 +1558,55 @@ impl VirtualStateProcessor {
     /// when the overlay is configured **and** `daa_score` has reached
     /// `dns_activation_daa_score` (= 0 on every current network, so this
     /// runs from genesis today).
+    /// ADR-0038 Decision D: this block's class target and per-inference cost.
+    ///
+    /// `class_target` is **folded, never read from a store**. The doc on
+    /// `palw_facts::block_pwu_v1` states the rule and the reason: a store row answers about this
+    /// node's virtual tip, and a target that depends on where the tip happens to point is not a
+    /// fact about the chain being weighed. So the anchor is the class's registered `boot_target`
+    /// and the fold runs over the retarget steps this BLOCK's own selected-parent chain carries.
+    ///
+    /// Those steps are collected from chain blocks that declare a class — which, until ADR-0038
+    /// Decision A's fence is installed, is no block at all, because `palw_commitment` must be empty
+    /// below the fence. The fold therefore returns `boot_target` today. That is not a placeholder
+    /// standing in for the real answer: before any class-attributed block exists, `boot_target`
+    /// **is** the target, by `fold_class_target_v1`'s own definition. The collection is written as a
+    /// walk rather than as an empty literal so it starts producing steps the moment blocks start
+    /// declaring classes, instead of needing to be found again.
+    fn palw_class_facts_for_block(
+        &self,
+        class_id: &kaspa_hashes::Hash64,
+        header: &Header,
+    ) -> Option<kaspa_pow::palw_admission::PalwAdmissionClassFacts> {
+        let credit = self.palw_credit_params.as_ref()?;
+        // The block's class must be the registered one; a block naming any other class has no
+        // facts on this network, and `None` here is `ClassUnresolved`, not a permissive default.
+        if credit.registration.runtime_class_id != *class_id {
+            return None;
+        }
+        let daa = &credit.class_daa;
+        // Steps from this block's own chain. Empty while no header declares a class — see above.
+        let steps: Vec<kaspa_consensus_core::palw_class_daa::PalwRetargetStepV1> = Vec::new();
+        let _ = header; // the walk's anchor once headers declare classes
+        let class_target = kaspa_consensus_core::palw_class_daa::fold_class_target_v1(
+            daa.boot_target,
+            &steps,
+            // One registered class holds the whole cadence, so its share is the full denominator.
+            // When a `PalwDifficultyDomainSetV1` with several Active classes exists, this must read
+            // the class's share out of it — the fold's expectation is a SHARE of realized
+            // production, and a class credited the whole cadence while others also produce would
+            // retarget against work it did not do.
+            kaspa_consensus_core::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR,
+            daa.retarget_interval_daa,
+            daa.max_factor,
+        )
+        .ok()?;
+        Some(kaspa_pow::palw_admission::PalwAdmissionClassFacts {
+            class_target,
+            pwu_per_inference: credit.registration.pwu_per_inference,
+        })
+    }
+
     fn check_bond_spend_gate(
         &self,
         txs: &[Transaction],
