@@ -574,9 +574,11 @@ pub enum PalwPanelDutyV1 {
 ///   because only agreement licenses. A verifier who replayed and filed `Mismatch` did the work and
 ///   disagreed — the strongest possible discharge, and the one the network most needs filed. Reusing
 ///   the quorum filter here would punish exactly the honest dissent Decision C is built to collect.
-/// * **the deadline is the DUTY window, not the challenge window.** `delta_bind + w_replay` — the
-///   schedule's own "attest or refute within this many DAA of the anchor" — which it validates to be
-///   strictly shorter than `w_challenge`. The quorum count beside this uses the longer window on
+/// * **the deadline is the DUTY window, not the challenge window.**
+///   [`crate::palw_schedule::job_schedule_v1`]'s `replay_deadline_daa` — `commit + delta_bind +
+///   w_replay`, the schedule's own "attest or refute within this many DAA of the anchor", which it
+///   validates to be strictly shorter than `w_challenge`, and the same deadline the credit path
+///   bounds attestations by. The quorum count beside this uses the longer window on
 ///   purpose: a late receipt is still evidence someone replayed and agreed, so discarding it would
 ///   cost liveness, while an ASSIGNED seat that files after its deadline has already had the chance
 ///   to see what the others filed. Same carriage, two deadlines, each the one its own consumer's
@@ -597,18 +599,24 @@ where
 {
     use crate::palw_carriage::{PALW_CARRIAGE_KIND_RECEIPT, PalwCarriageV1, decode_palw_stage1_body};
 
+    // The deadline comes from `job_schedule_v1`, which is where `commit + delta_bind + w_replay`
+    // is already defined and is what the CREDIT path bounds attestations by
+    // (`a.accepted_daa <= schedule.replay_deadline_daa`). Recomputing the sum here would be a
+    // second derivation of one deadline, and the two paths would then be free to drift — the
+    // through-line defect this tree has closed twice already. An overflowing schedule is
+    // `Pending` rather than an answer.
+    let Ok(schedule) = crate::palw_schedule::job_schedule_v1(&input.schedule, input.accepted_daa) else {
+        return PalwPanelDutyV1::Pending;
+    };
+    let window_close = schedule.replay_deadline_daa;
+
     // A zero duty window accuses the whole panel one DAA after acceptance, so it is refused the
     // same way `weight_facts_v1` refuses a zero challenge window. `PalwScheduleParamsV1::validate`
     // already rejects zeroes; this input takes the params unvalidated, and the safe answer to a
     // misconfiguration is "not a fact yet" rather than a mass accusation.
-    let Some(duty_window) = input.schedule.delta_bind.checked_add(input.schedule.w_replay).filter(|w| *w > 0) else {
-        return PalwPanelDutyV1::Pending;
-    };
-    if input.pov_daa.saturating_sub(input.accepted_daa) <= duty_window {
+    if window_close <= input.accepted_daa || input.pov_daa <= window_close {
         return PalwPanelDutyV1::Pending;
     }
-
-    let window_close = input.accepted_daa.saturating_add(duty_window);
     let mut filed: BTreeSet<(Hash64, u32)> = BTreeSet::new();
     for (kind, accepted_daa, body) in input.carriage {
         if *kind == PALW_CARRIAGE_KIND_RECEIPT
