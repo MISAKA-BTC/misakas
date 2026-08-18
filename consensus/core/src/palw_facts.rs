@@ -38,6 +38,9 @@ pub enum PalwFactsError {
     Unresolved { what: &'static str },
     #[error("the challenge window is zero — every block would finalize at admission")]
     ZeroChallengeWindow,
+    /// A class-facts view answered about a class other than the one it was asked about.
+    #[error("class facts were asked for {asked} and answered for {answered} — a block must be priced by its OWN class")]
+    ClassFactsMismatch { asked: Hash64, answered: Hash64 },
 }
 
 /// Distinct ASSIGNED verifiers who filed a `Match` receipt for this block's commitment.
@@ -313,6 +316,42 @@ mod tests {
 /// The caller owns the walk; this owns the interpretation. That split is what keeps the
 /// interpretation testable without a database and keeps the walk's chain-scoping explicit at its
 /// own call site rather than hidden behind a store handle.
+/// The two class facts a block's pwu is made of, answered together and stamped with the class
+/// they are FOR.
+///
+/// Stamped because the resolver cross-checks it: a view that answers for a different class than
+/// the one asked about is a bug that would otherwise price one class's block with another class's
+/// numbers, silently and in the term that carries 90–99 % of fork-choice weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClassFactsV1 {
+    /// The class these facts describe. Must equal the block's own `execution_class_id`.
+    pub execution_class_id: Hash64,
+    /// The class's DAA target **for this block**, not the class's target now.
+    pub class_target: u128,
+    /// The class's registered normative operation count per canonical inference.
+    pub pwu_per_inference: u64,
+}
+
+/// Where a block's class facts come from.
+///
+/// A view rather than two bare `Option`s beside the class id, for the reason
+/// [`PalwResolverInputV1::bonds`] is one: facts handed in alongside an identity are not bound to
+/// it, so nothing stopped a caller pairing class A's id with class B's target and per-inference
+/// cost. Making the id the LOOKUP KEY is what binds them (re-audit §3.2).
+///
+/// The method takes the block's own `accepted_daa`, not the evaluating node's point of view,
+/// because the target that prices a block is the one that stood **when that block was accepted** —
+/// a fold over the block's own selected-parent chain
+/// ([`crate::palw_class_daa::fold_class_target_v1`]). A signature that only offered "now" could be
+/// satisfied by reading the class's current target, which is the defect this replaces: every
+/// retarget silently rewrote the weight of history that had already matured.
+pub trait PalwClassFactsViewV1 {
+    /// The facts for `execution_class_id` as they stood at `block_accepted_daa`, or `None` when
+    /// this view does not hold that class — which the resolver turns into `Unresolved`, never a
+    /// permissive zero.
+    fn class_facts_for_block(&self, execution_class_id: &Hash64, block_accepted_daa: u64) -> Option<PalwClassFactsV1>;
+}
+
 pub struct PalwResolverInputV1<'a> {
     /// Carriage records accepted on the chain being evaluated, within the challenge horizon.
     /// Each is `(kind, accepted_daa, body)` exactly as the store holds it.
@@ -368,10 +407,12 @@ pub struct PalwResolverInputV1<'a> {
     /// DAA at which this block's commitment was accepted, and the evaluating chain's own DAA.
     pub accepted_daa: u64,
     pub pov_daa: u64,
-    /// The class's target at this chain point — `None` when the view does not hold the class.
-    pub class_target: Option<u128>,
-    /// The class's registered per-inference cost.
-    pub pwu_per_inference: Option<u64>,
+    /// Where this block's class facts are looked up, BY its own `execution_class_id`.
+    ///
+    /// Replaces the pair of bare `Option`s this input used to carry beside the class id. Those
+    /// were unbound to it — the resolver never compared them against the block's own class — so
+    /// the dominant term of block weight was whatever the caller passed (re-audit §3.2).
+    pub classes: &'a dyn PalwClassFactsViewV1,
     /// The class's registered challenge window.
     pub w_challenge: u64,
     /// The class's registered rung window — what a bisection deadline is derived from.
@@ -634,7 +675,17 @@ where
 {
     let resolved = resolve_block_facts_v1(input, verify_signature);
     let facts = weight_facts_v1(&resolved, input.w_challenge)?;
-    let pwu = block_pwu_v1(input.class_target, input.pwu_per_inference)?;
+    // Looked up by the block's own class id and its own acceptance point — not read off the
+    // input beside them. The stamp is then checked: a view that answers for another class would
+    // otherwise price this block with that class's numbers.
+    let class_facts = input
+        .classes
+        .class_facts_for_block(&input.execution_class_id, input.accepted_daa)
+        .ok_or(PalwFactsError::Unresolved { what: "the block's execution class" })?;
+    if class_facts.execution_class_id != input.execution_class_id {
+        return Err(PalwFactsError::ClassFactsMismatch { asked: input.execution_class_id, answered: class_facts.execution_class_id });
+    }
+    let pwu = block_pwu_v1(Some(class_facts.class_target), Some(class_facts.pwu_per_inference))?;
     Ok(crate::palw_chain_weight::PalwBlockWeightV1 { pwu, stage: crate::palw_weight::ramp_stage_v1(&facts, ramp) })
 }
 
@@ -785,11 +836,91 @@ mod resolver_tests {
             execution_class_id: h(0xC1),
             accepted_daa: 1_000,
             pov_daa: pov,
-            class_target: Some(u128::MAX >> 10), // 1_024 expected attempts
-            pwu_per_inference: Some(100),
+            classes: &FIXTURE_CLASSES,
             w_challenge: W_CHALLENGE,
             w_round: W_ROUND,
         }
+    }
+
+    /// A view that holds exactly the fixture class, at the fixture's numbers.
+    struct FixtureClasses;
+    impl PalwClassFactsViewV1 for FixtureClasses {
+        fn class_facts_for_block(&self, execution_class_id: &Hash64, _block_accepted_daa: u64) -> Option<PalwClassFactsV1> {
+            (*execution_class_id == h(0xC1)).then(|| PalwClassFactsV1 {
+                execution_class_id: h(0xC1),
+                class_target: u128::MAX >> 10, // 1_024 expected attempts
+                pwu_per_inference: 100,
+            })
+        }
+    }
+    static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
+
+    /// The dominant term of block weight is looked up BY the block's class, not handed in beside
+    /// it — so a view that does not hold the block's class cannot be papered over with someone
+    /// else's numbers.
+    #[test]
+    fn a_block_whose_class_the_view_does_not_hold_is_unresolved_not_zero() {
+        struct EmptyView;
+        impl PalwClassFactsViewV1 for EmptyView {
+            fn class_facts_for_block(&self, _: &Hash64, _: u64) -> Option<PalwClassFactsV1> {
+                None
+            }
+        }
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let bonds = bonds();
+        let mut input = input(&carriage, &panel, 1_100, &bonds, &NoStepWeights);
+        input.classes = &EmptyView;
+        assert!(matches!(
+            resolve_block_weight_v1(&input, &RAMP, accept_fixture_signature),
+            Err(PalwFactsError::Unresolved { what: "the block's execution class" })
+        ));
+    }
+
+    /// A view that answers about a DIFFERENT class is refused rather than believed. Without the
+    /// stamp this would price the block with another class's target and per-inference cost — in
+    /// the term that carries most of fork-choice weight, and silently.
+    #[test]
+    fn class_facts_for_the_wrong_class_are_refused() {
+        struct WrongClassView;
+        impl PalwClassFactsViewV1 for WrongClassView {
+            fn class_facts_for_block(&self, _: &Hash64, _: u64) -> Option<PalwClassFactsV1> {
+                Some(PalwClassFactsV1 { execution_class_id: h(0xDEAD), class_target: u128::MAX >> 10, pwu_per_inference: 100 })
+            }
+        }
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let bonds = bonds();
+        let mut input = input(&carriage, &panel, 1_100, &bonds, &NoStepWeights);
+        input.classes = &WrongClassView;
+        assert!(matches!(
+            resolve_block_weight_v1(&input, &RAMP, accept_fixture_signature),
+            Err(PalwFactsError::ClassFactsMismatch { .. })
+        ));
+    }
+
+    /// The view is asked about the BLOCK's acceptance point, not the evaluating node's. A target
+    /// that moved after the block was accepted must not re-price it — the defect was that every
+    /// retarget rewrote the weight of history that had already matured.
+    #[test]
+    fn the_class_target_asked_for_is_the_blocks_own_acceptance_point() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static ASKED_AT: AtomicU64 = AtomicU64::new(u64::MAX);
+        struct RecordingView;
+        impl PalwClassFactsViewV1 for RecordingView {
+            fn class_facts_for_block(&self, id: &Hash64, block_accepted_daa: u64) -> Option<PalwClassFactsV1> {
+                ASKED_AT.store(block_accepted_daa, Ordering::SeqCst);
+                Some(PalwClassFactsV1 { execution_class_id: *id, class_target: u128::MAX >> 10, pwu_per_inference: 100 })
+            }
+        }
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let bonds = bonds();
+        let mut input = input(&carriage, &panel, 1_100, &bonds, &NoStepWeights);
+        input.classes = &RecordingView;
+        let _ = resolve_block_weight_v1(&input, &RAMP, accept_fixture_signature);
+        assert_eq!(ASKED_AT.load(Ordering::SeqCst), input.accepted_daa, "priced at the block's own point, not the observer's");
+        assert_ne!(input.accepted_daa, input.pov_daa, "the fixture must keep the two apart or this proves nothing");
     }
 
     /// **Every fact resolves.** This is what lets the fork-choice fence stop refusing: the
