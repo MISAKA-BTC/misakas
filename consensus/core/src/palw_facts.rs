@@ -441,8 +441,17 @@ where
 
     for (kind, accepted_daa, body) in input.carriage {
         match *kind {
+            // Bounded by the window for the same reason the conviction arms are, and the
+            // asymmetry between them was the defect: a receipt accepted AFTER the window closed
+            // used to count toward quorum while a conviction accepted after it did not (W5). Late
+            // evidence therefore counted FOR a block and never against it, so a block that missed
+            // quorum inside its window could still be topped up to `Final` afterwards — an
+            // attacker withholding receipts could raise an old branch's weight at a time of its
+            // choosing, which is precisely the retroactive reorg a challenge window exists to
+            // bound. One boundary, `<= window_close`, shared with the convictions below.
             PALW_CARRIAGE_KIND_RECEIPT => {
-                if let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body)
+                if *accepted_daa <= window_close
+                    && let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body)
                     && receipt_is_authentic_v1(&r.receipt, input, &verify_signature)
                 {
                     receipts.push(r.receipt);
@@ -934,6 +943,32 @@ mod resolver_tests {
         }
     }
     static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
+
+    /// The window bounds the receipts too, and this is the case that used to go the other way.
+    ///
+    /// Two receipts land inside the window and a third lands after it. Quorum is 2, so the block is
+    /// licensed either way — the point under test is the COUNT, because the count is what a fourth
+    /// seat's late arrival used to raise. A block that missed quorum in its window could be topped
+    /// up afterwards, at a moment the topper-up chose.
+    #[test]
+    fn a_receipt_accepted_after_the_window_closed_is_not_counted() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2), seat(3)];
+        let weights = NoStepWeights;
+
+        let in_window = vec![receipt_row(1, 1_100), receipt_row(2, 1_200)];
+        let plus_late = vec![receipt_row(1, 1_100), receipt_row(2, 1_200), receipt_row(3, 1_501)];
+
+        let a = resolve_block_facts_v1(&input(&in_window, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
+        let b = resolve_block_facts_v1(&input(&plus_late, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(a.assigned_receipts, Some(2));
+        assert_eq!(b.assigned_receipts, Some(2), "a receipt accepted at window_close+1 must not raise the count");
+
+        // And the boundary itself is the convictions' boundary: `window_close` exactly still counts.
+        let at_close = vec![receipt_row(1, 1_100), receipt_row(2, 1_200), receipt_row(3, 1_500)];
+        let c = resolve_block_facts_v1(&input(&at_close, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(c.assigned_receipts, Some(3), "the last DAA INSIDE the window must still count");
+    }
 
     /// ADR-0038 I10, exhaustively: exactly one adjudication outcome freezes the class.
     ///
