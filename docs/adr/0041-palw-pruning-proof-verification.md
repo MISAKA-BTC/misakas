@@ -1,4 +1,4 @@
-# ADR-0041: PALW pruning-proof verification — sampled, not exhaustive
+# ADR-0041: PALW pruning-proof verification — exhaustive and amortised, not sampled
 
 Status: **Proposed.** Activates nothing on a shipped preset. Governs how a node validates a
 pruning-point proof and a trusted set on a network whose PoW is a PALW inference
@@ -60,44 +60,72 @@ public, so "the padding must be valid PoW" is not a barrier: the network's real 
 
 ## The decision
 
-**Pruning-proof PoW verification is SAMPLED, not exhaustive**, backed by a hard header cap and by
-parallelism. Three layers, in order of how much each changes the numbers.
+**Pruning-proof PoW verification stays EXHAUSTIVE.** The cost is removed by amortising the
+per-header overhead and by parallelism, not by checking fewer headers — sampling was drafted here and
+withdrawn as unsound (below). Four decisions, in order of how much each changes the numbers.
 
-### Decision 1 — Sample the PoW checks (this is the exponent-changer)
+### Decision 1 — WITHDRAWN: sampling the PoW checks is UNSOUND in this proof structure
 
-The validator does **not** run an inference on every proof header. It selects a random subset and
-verifies only those. If any sampled header's PoW fails, the proof is rejected.
+The first draft of this ADR proposed sampling the per-header PoW check, on the argument that a
+prover must corrupt a large fraction `f` of headers to move the decision, so a sample of 64 detects
+it with probability `1 − (1 − f)^64`. **Settling the scheme's constants disproved the argument.**
+Recorded here rather than deleted, because the reasoning is the kind a reader would re-derive.
 
-Two facts make this sound where it would be unsound for block validity:
+A proof's weight is not a header count. `compare_proofs_inner` compares `blue_work_diff`, read from
+the RECOMPUTED ghostdag (`validate.rs:84-89`), and ghostdag accumulates
 
-* **Proof acceptance is a LOCAL sync decision, not a consensus rule.** Two nodes that accept the
-  same pruning point having sampled *different* headers do not fork — `validate_pruning_proof_
-  standalone` (`consensus/mod.rs:2005`) gates whether THIS node adopts the point, and a rejected
-  proof means "ask another peer," not "this block is invalid." So each node may use its **own
-  local randomness**, which a malicious prover cannot predict or grind. This is the property a
-  hash chain never needed and PALW can use.
-* **A prover must corrupt a LARGE fraction to move the decision.** The proof's weight comes from
-  the claimed work of its headers; to make the validator adopt a false pruning point, a prover
-  must fabricate enough headers to outweigh the honest chain, which is a large fraction `f` of the
-  sampled population, not one header. Detection probability over a sample of size `s` is
-  `1 − (1 − f)^s`:
+```
+blue_work = Σ over mergeset blues of  max( calc_work(header.bits), level_work(level) )
+```
 
-  | sample `s` | `f = 5 %` | `f = 10 %` | `f = 25 %` | cost @12 s |
-  |---|---|---|---|---|
-  | 64 | 96.25 % | 99.88 % | ~100 % | 12.8 min |
-  | 128 | 99.86 % | 99.9999 % | ~100 % | 25.6 min |
+(`ghostdag/protocol.rs:155-161`). Both terms are prover-chosen and both are validated by the PoW and
+by nothing else:
 
-  64 samples turns 30 hours into ~13 minutes and detects any fabrication large enough to matter
-  with probability > 96 %; 128 pushes the miss probability below `10⁻³` at 5 %.
+* `header.bits` is peer-supplied. Its only validator is `pow_passes` at `validate.rs:250` — the PoW
+  value must meet the declared target. Skip that check and a header may declare an arbitrarily hard
+  `bits`, hence arbitrary `calc_work`.
+* the LEVEL a header sits at is the prover's choice of which array it appears in.
+  `level_work(level, max_block_level) = 1 << (level + 256 − max_block_level)`
+  (`difficulty.rs:273-281`) is a function of that position, not of the header. Its only validator is
+  `header_level < level → reject` at `validate.rs:247`, and `header_level` comes from the PoW.
 
-**Not uniform: top levels in full, base levels sampled.** A header at level `L` claims `2^L` times
-the work of a base header, so a fabricated high-level header is worth far more and the high levels
-have far fewer headers (the proof is a pyramid — the top levels hold `O(m)` headers total). So the
-scheme verifies **every header at the top levels in full** (cheap: few headers, and they carry the
-most weight) and **samples the base levels** (many headers, each low-weight). The exact split — how
-many top levels are exhaustive, the base sample size, and how the sample is drawn from the node's
-CSPRNG seeded independently per sync attempt — is fixed in the implementation and pinned by test;
-it must never read a prover-supplied value.
+So **one** unverified header can claim unbounded work. The detection probability is not
+`1 − (1 − f)^s` with a large `f`; it is `s/N` for a single planted header — 64/9,000 ≈ **0.7 %**. The
+draft's table was answering a question the attacker does not have to ask.
+
+The two obvious repairs both fail:
+
+* *Credit an unsampled header only `level_work`* — no: the level is exactly what is unvalidated, so
+  the prover places the garbage header at level 250 and collects `level_work(250)`.
+* *Credit an unsampled header zero* — no: the DEFENDER's proof is the node's own and is trusted in
+  full (`ProofContext::from_proof(self, &defender_proof, false).expect("local")`), so measuring only
+  the challenger at `s/N` of its work means an honest heavier chain can never win. That is not a
+  weakened security bound, it is a broken IBD.
+
+Sampling would become available only if the proof carried a commitment binding each header's claimed
+work to its level independently of the PoW — a change to the proof format and to the MLS argument,
+which is not this ADR's scope. **Verification stays exhaustive.**
+
+### Decision 1′ — Amortise the per-header cost (this is the real lever)
+
+The 12 s is not 12 s of inference. Each tag spawns a fresh `palw-worker` process which re-reads and
+SHA-256s the whole 1,280,835,840-byte pinned GGUF and reloads the model, then runs an inference the
+module itself quotes at ~1–3 s. The worker's own source already names the fix and the reason it was
+deferred rather than dismissed: *"Costs a full read of the 1.2 GB file per job process; the
+persistent agent (P1) amortizes it, correctness does not wait for it"* (`misaka-palw-worker/src/
+main.rs:419`).
+
+A persistent verification agent — one process, model resident, pin checked once at startup, seeds
+fed over a framed protocol — removes the SHA-256, the model load and the spawn from the per-header
+cost, leaving the inference. That is a constant-factor win of roughly 4–6× at the fleet's measured
+numbers, and it costs NO security argument: the tag is a pure function of the seed, every header is
+still verified in full, and the artifact pin is still the full read (once, not per header).
+
+The pin's integrity is what makes this safe to amortise and must not be weakened in the process: the
+audit trail records a v1 `(path, size, mtime)` cache that let any same-sized model pass the pin, on
+the consensus PoW path (`main.rs:422-431`). The persistent agent re-reads and re-digests at startup
+and holds the model immutably for its lifetime; it must not reopen the path, and a model file that
+changes underneath it must be a hard failure, not a re-read.
 
 ### Decision 2 — Parallelise verification during IBD
 
@@ -130,29 +158,33 @@ ordering fix (already applied to the ordinary header path at `header_processor/p
 to the two proof paths — `validate.rs`'s loop and `apply.rs`'s trusted-set loop — which the P0-3
 comment did not cover, and which a reader of that comment should not assume are covered.
 
-## What this ADR does NOT decide, and why the interim cap is not the whole fix
+## Where this leaves the numbers, honestly
 
-The interim cap (Decision 3) bounds the attacker to the honest envelope; it does **not** make
-honest IBD fast, because the honest cost (30 h exhaustive) *is* the problem. Only Decision 1
-(sampling) changes that, and Decision 1 is the larger change — it touches the validation flow, the
-CSPRNG wiring, and the top-vs-base split — so it lands after the cap and the ordering, each with
-its own regression test. Until sampling lands, a PALW network's pruning-proof IBD remains
-exhaustive and slow but is no longer unboundedly amplifiable and no longer stalls a worker-less
-node into banning its peers (the latter fixed separately for the header path in the same audit
-cycle).
+Exhaustive verification stays. The honest one-year testnet-11 proof is ~9,000 headers, and the three
+landing decisions compose multiplicatively rather than changing the exponent:
 
-The sampling scheme's constants (top-level count, base sample size, concurrency bound) are
-implementation decisions pinned by test, not consensus constants — because proof acceptance is
-local, two nodes may hold different values without forking. A node that sets its sample too small
-weakens only its OWN resistance to a false pruning point; it cannot make another node accept one.
+| | per header | 9,000 headers |
+|---|---|---|
+| today | ~12 s | 30.0 h |
+| + persistent agent (Decision 1′, ~5×) | ~2.4 s | 6.0 h |
+| + 8-way concurrency (Decision 2) | — | **~45 min** |
+
+45 minutes for a one-time sync of a year of history is a different proposition from 30 hours, and it
+is reached without weakening any security argument. It is still `O(m·log(history))` inferences, so it
+grows with history logarithmically and with the model's cost linearly — if the model gets slower,
+this gets worse, and the mitigation is the agent's throughput, not the protocol.
+
+The interim cap (Decision 3) is orthogonal to all of this: it bounds the ATTACKER's amplification,
+not the honest cost. It landed first because it has zero liveness risk.
 
 ## Consequences
 
-* IBD on a PALW network becomes minutes, not tens of hours, once Decision 1 lands, with a stated
-  and tunable false-accept probability.
+* IBD on a PALW network goes from ~30 h to ~45 min once Decisions 1′ and 2 land, with NO change to
+  what is accepted — every header is still verified in full.
 * No consensus rule changes; no preset changes; the fingerprint does not move. Every change here is
   a local sync policy.
-* The security argument rests on proof acceptance being local. If a future change ever made proof
-  acceptance a consensus verdict (two nodes must agree on which headers were checked), sampling
-  with per-node randomness would become unsound and this ADR would need revisiting — so that
-  property is load-bearing and is stated here to be guarded.
+* Nothing here rests on proof acceptance being a local decision, because nothing here samples. That
+  property was load-bearing for the withdrawn Decision 1 and is now merely true.
+* The remaining exposure is throughput, not soundness: a node whose verification agent is slow syncs
+  slowly. That is a operational property with a visible symptom, unlike a false-accept probability,
+  which is why exhaustive-and-amortised is preferred over sampled-and-fast.
