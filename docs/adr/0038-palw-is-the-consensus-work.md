@@ -135,6 +135,29 @@ than a placeholder.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
+### Decision C's freeze clause, and what blocks it
+
+I10 — "`Unadjudicable` slashes NOBODY and freezes the class" — is **half-wired, in the direction
+that reads safe and is not**. The READ side works: `compute_palw_credit_outputs` consults
+`is_frozen` and mints nothing for a frozen class, fail-closed. The WRITE side does not exist:
+`PalwJobStatusV3::demands_class_freeze` is a pure predicate with no non-test caller, and the live
+adjudication path returns `Result<TransactionOutpoint, PalwCarriageError>`, so an `Unadjudicable`
+outcome is indistinguishable from a malformed carriage — both are an `Err` that is skipped.
+
+So no verdict can arm the stop, and the class-state store cannot be written to arm it by hand
+either. The store's own module records why, and it is a correctness constraint rather than an
+omission: **no code creates a first row**, the only insert site rewrites `last_credited_daa` on an
+existing one, so the store is provably empty on every network and `is_frozen` answers `true` for
+every class. The credit gate is shut by a missing row rather than by a rule. As the store puts it:
+*"the exposure activates the moment a row exists, so a seed writer must arrive together with
+per-chain-point scoping, never before it"* — two nodes with different sink histories would
+otherwise disagree about a coinbase, which is a partition and not a slow node.
+
+That makes the ordering explicit: **the freeze clause is blocked on chain-point-scoped class
+state, not on plumbing.** A seed writer added alone would open the exposure the scoping exists to
+close, and the `Unadjudicable` distinction is worth surfacing only once there is somewhere safe for
+it to be recorded.
+
 Decisions B, C and D remain unimplemented beyond the pure arithmetic already in
 `palw_weight`, `palw_facts` and `palw_class_daa`. Decision C in particular is the panel assignment,
 receipt collection and challenge-window machinery, which is the bulk of the remaining work.
