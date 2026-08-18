@@ -114,10 +114,24 @@ than a placeholder.
 1. **A producer that builds the commitment.** `Header::with_palw_commitment` exists and nothing
    calls it. It cannot be the node's template builder: the commitment covers the trace and output
    roots of the WINNING inference, which only the miner has after it wins. `misaminer` already
-   drives the PALW lottery (`mine_palw_sequential`), so this belongs there, and needs two links
-   that do not exist — `kaspa_pow::palw` discards the worker's projection after extracting the
-   200-byte tag, so the roots are not surfaced; and the commitment carries a signature, so the
-   producer needs bond key material the mining path is not given today.
+   drives the PALW lottery (`mine_palw_sequential`), so this belongs there. Two links do not exist,
+   and the first is not the one it looks like:
+
+   * **The roots must be OPENABLE, and the v1 projection's are not.**
+     `PalwBlockCommitmentV1::trace_root` is documented as "Merkle root of the execution trace
+     checkpoints (what samplers open)". The v1 worker's `gemm_trace_root` is
+     `keyed64("misaka-palw-lite/trace-root/v1", all trace events)` — one flat digest over
+     concatenated events, with nothing to open. A producer that put it in the commitment would
+     mint blocks whose traces no sampler can challenge, which makes every dispute over them
+     `Unadjudicable` — rejected but unslashed, the A4 hole in a new place. The openable structure
+     is the legs/checkpoint path (`palw_legs`: `checkpoint_state_root_v1`, checkpoint ancestry).
+     **So Decision A's producer depends on Decision C's proof material, not merely on plumbing.**
+     Surfacing the v1 roots would be worse than leaving them unsurfaced.
+   * **The signature needs bond key material the mining path is not given.** The commitment carries
+     an ML-DSA-87 signature over the bond; that key is the validator seed held by
+     `kaspa-pq-validator`, while `misaminer` holds only a BIP39-derived payout keypair. Closing
+     this is a security-boundary choice — put the validator key on the mining rig, or have the
+     sidecar sign on the miner's behalf behind an authorization rule — not a wiring task.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
