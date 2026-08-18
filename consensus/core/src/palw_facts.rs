@@ -681,6 +681,19 @@ pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::pal
 /// Only records inside the challenge horizon count, in canonical order, and a record that fails to
 /// decode or to adjudicate is skipped — an unparseable accusation cannot freeze a class, which is
 /// the safe direction: freezing on junk would be a denial-of-service against an honest class.
+/// **Two functions answer "is this class frozen", and they are not rivals.** `PalwClassStateView::is_frozen`
+/// reads the class-state store and governs the PANEL and MINT paths, where it is fail-closed: a
+/// class it cannot answer for reads as frozen, so a node that cannot establish a class is running
+/// draws no panel and mints nothing. This one derives the freeze from the chain and governs WEIGHT,
+/// where the store would be wrong for the reason that module states about itself — a row answers
+/// about the reading node's virtual tip, and a weight that depends on where a tip happens to point
+/// is not a fact about the chain being weighed.
+///
+/// The split is deliberate, and the reason it is safe is that the two fail in the same direction:
+/// the store refuses to mint when it cannot answer, and this returns `false` when it cannot
+/// establish a freeze — which withholds nothing and lets the ordinary refutation paths run. Neither
+/// should be swapped for the other without re-deriving that.
+///
 pub fn class_is_frozen_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
 where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
