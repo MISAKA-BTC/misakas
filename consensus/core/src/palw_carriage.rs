@@ -219,6 +219,15 @@ pub enum PalwCarriageError {
     AttestationCommitmentMismatch,
     #[error("the step conviction does not prove a fault: {0}")]
     StepConvictionNotProven(String),
+    /// ADR-0038 I10: this build's catalog cannot decide the refuted step.
+    ///
+    /// NOT a conviction and NOT a challenger fault — it is a fact about the accused class's
+    /// catalog coverage, which is why it is its own variant rather than a
+    /// [`Self::StepConvictionNotProven`] string. A caller that cannot tell the two apart cannot
+    /// arm the class freeze I10 requires, and a class whose disputes are all undecidable is
+    /// exactly the one that must stop minting.
+    #[error("this build's catalog cannot decide the refuted step — Unadjudicable: nobody is slashed and the class must freeze")]
+    StepUnadjudicable,
     #[error("bisection space {got} is outside the openable range — no ladder could be played over it")]
     BisectSpaceOutOfRange { got: u64 },
     #[error("carried call requests {got} openings; the carriage cap is {max} (wire cap unchanged — split the call)")]
@@ -950,8 +959,19 @@ where
     if !verify_signature(&accused_bond.validator_pubkey, &message, &carriage.attestation.signature) {
         return Err(PalwCarriageError::EquivocationNotProven("attestation signature does not verify".into()));
     }
-    crate::palw_step_refute::check_execution_step_refutation_v1(&carriage.refutation, weights)
-        .map_err(|e| PalwCarriageError::StepConvictionNotProven(e.to_string()))?;
+    // `Unadjudicable` is kept apart from every other failure here, and the distinction is the
+    // whole of ADR-0038 I10. "This build's catalog cannot decide the step" is a fact about the
+    // accused CLASS's coverage; "this evidence is junk" is a fact about the challenger. Flattening
+    // both into one string — which this line used to do — discarded the first, so no verdict could
+    // ever arm the class freeze the invariant requires.
+    //
+    // Neither convicts. The difference is what a caller may conclude afterwards, not who is
+    // slashed: `Unadjudicable` slashes nobody AND freezes the class (I10), while an unproven
+    // conviction slashes nobody and freezes nothing.
+    crate::palw_step_refute::check_execution_step_refutation_v1(&carriage.refutation, weights).map_err(|e| match e {
+        crate::palw_step_refute::PalwStepRefuteError::Unadjudicable => PalwCarriageError::StepUnadjudicable,
+        other => PalwCarriageError::StepConvictionNotProven(other.to_string()),
+    })?;
     Ok(carriage.accused_bond_outpoint)
 }
 

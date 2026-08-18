@@ -552,6 +552,62 @@ pub fn canonical_carriage_order_v1(carriage: &[(u8, u64, Vec<u8>)]) -> Vec<&(u8,
     ordered
 }
 
+/// Which adjudication outcome freezes the class — ADR-0038 I10, as a decision rather than a walk.
+///
+/// Exactly one does. A conviction that LANDS slashes the executor and leaves the class running; a
+/// conviction that fails for any other reason is a fact about the challenger's evidence, and
+/// freezing on it would be a denial of service against an honest class. Only "this build's catalog
+/// cannot decide the step" is a fact about the class's own coverage.
+///
+/// Split out of the walk so the rule can be tested exhaustively over outcomes, which building a
+/// complete refutation for each case cannot do cheaply.
+pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::palw_carriage::PalwCarriageError>) -> bool {
+    matches!(outcome, Err(crate::palw_carriage::PalwCarriageError::StepUnadjudicable))
+}
+
+/// ADR-0038 I10: whether this class is FROZEN on the chain being evaluated.
+///
+/// A class freezes when a step conviction against it adjudicates `Unadjudicable` — this build's
+/// catalog cannot decide the refuted step. That is a fact about the class's coverage rather than
+/// about the accused, so it slashes nobody (I10) and stops the class instead: a class whose
+/// disputes cannot be decided is one whose blocks nothing can be held to.
+///
+/// **Derived from the chain, never from a store**, and that is the safe choice rather than the
+/// convenient one. The class-state store's own module records why a row is dangerous: it answers
+/// about the reading node's virtual tip, so two nodes with different sink histories would disagree
+/// about a coinbase — a partition, not a slow node. Its note that "a seed writer must arrive
+/// together with per-chain-point scoping, never before it" is satisfied here by having no row at
+/// all: the moves ARE carriage on the chain being evaluated, so replaying them is chain-scoped by
+/// construction and two nodes with the same DAG cannot disagree.
+///
+/// Only records inside the challenge horizon count, in canonical order, and a record that fails to
+/// decode or to adjudicate is skipped — an unparseable accusation cannot freeze a class, which is
+/// the safe direction: freezing on junk would be a denial-of-service against an honest class.
+pub fn class_is_frozen_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
+where
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+{
+    use crate::palw_carriage::{
+        PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
+    };
+    canonical_carriage_order_v1(input.carriage).into_iter().any(|(kind, accepted_daa, body)| {
+        *kind == PALW_CARRIAGE_KIND_STEP_CONVICTION && *accepted_daa <= input.pov_daa && {
+            let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body) else { return false };
+            let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa) else { return false };
+            // The ONLY outcome that freezes. A conviction that lands, and one that fails for
+            // any other reason, both leave the class running.
+            outcome_freezes_class_v1(&adjudicate_step_conviction_carriage_v1(
+                &c,
+                accused,
+                input.pov_daa,
+                input.network_id,
+                input.step_weights,
+                &verify_signature,
+            ))
+        }
+    })
+}
+
 /// Whether a bisection ladder over this commitment is still running.
 ///
 /// Derived from the ladder's own moves rather than from a session store: the moves ARE carriage
@@ -748,6 +804,30 @@ mod resolver_tests {
         (PALW_CARRIAGE_KIND_BISECT_MOVE, daa, body(&PalwCarriageV1::BisectMove(m)))
     }
 
+    /// A step-conviction carriage against the fixture's accused bond, with the skeleton refutation
+    /// the step-refute tests use. Against `NoStepWeights` it adjudicates `Unadjudicable`, which is
+    /// the case I10 is about.
+    fn conviction_row(daa: u64) -> (u8, u64, Vec<u8>) {
+        let refutation = crate::palw_step_refute::tests::skeleton_refutation();
+        let logits_root = refutation.binding.full_logits_trace_root;
+        let composite_root = refutation.binding.committed_execution_root;
+        let c = crate::palw_carriage::PalwStepConvictionCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: op(0xB1),
+            attestation: crate::palw_slash::PalwExecutionAttestationV1 {
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+                executor_id: h(0xE1),
+                job_context_hash: refutation.binding.job_context.context_hash(),
+                full_logits_trace_root: logits_root,
+                committed_root: composite_root,
+                bond_outpoint: op(0xB1),
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+            refutation,
+        };
+        (crate::palw_carriage::PALW_CARRIAGE_KIND_STEP_CONVICTION, daa, body(&PalwCarriageV1::StepConviction(c)))
+    }
+
     /// The chain identity the resolver runs under. It must equal the network the equivocation
     /// fixtures' job context names, because a foreign-network certificate is now refused before any
     /// signature is checked — which is the point of that rule.
@@ -854,6 +934,63 @@ mod resolver_tests {
         }
     }
     static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
+
+    /// ADR-0038 I10, exhaustively: exactly one adjudication outcome freezes the class.
+    ///
+    /// A conviction that LANDS slashes the executor and leaves the class running. A conviction that
+    /// fails for any other reason is a fact about the challenger's evidence, and freezing on it
+    /// would be a denial of service against an honest class. Only "this build's catalog cannot
+    /// decide the step" is a fact about the class's own coverage.
+    #[test]
+    fn only_the_unadjudicable_outcome_freezes_the_class() {
+        use crate::palw_carriage::PalwCarriageError as E;
+        assert!(outcome_freezes_class_v1(&Err(E::StepUnadjudicable)));
+
+        assert!(!outcome_freezes_class_v1(&Ok(op(0xB1))), "a landed conviction slashes; it does not freeze");
+        for other in [
+            E::StepConvictionNotProven("opening path ended short of the root".into()),
+            E::EquivocationNotProven("attestation signature does not verify".into()),
+            E::EquivocationBondInactive,
+            E::EquivocationBondNotTheSigner,
+            E::BindingRootMismatch,
+            E::CommittedRootMismatch,
+            E::TruncatedEnvelope,
+            E::UnknownKind(0xFF),
+        ] {
+            assert!(!outcome_freezes_class_v1(&Err(other)), "only a coverage gap freezes");
+        }
+    }
+
+    /// The walk's filters: a record of the wrong kind, or one the evaluating point has not reached,
+    /// cannot freeze — and neither can an unproven conviction, which is the case a real chain will
+    /// see most often.
+    ///
+    /// The positive case is covered by `only_the_unadjudicable_outcome_freezes_the_class` rather
+    /// than here: reaching `Unadjudicable` end-to-end needs a refutation that passes every
+    /// structural check and then meets an uncatalogued kernel, which no fixture in this crate
+    /// builds. Splitting the rule out is what keeps that gap from being an untested rule.
+    #[test]
+    fn the_freeze_walk_ignores_the_wrong_kind_the_future_and_the_unproven() {
+        let panel = vec![seat(1), seat(2), seat(3)];
+        let bonds = bonds();
+
+        let quiet = input(&[], &panel, 9_100, &bonds, &NoStepWeights);
+        assert!(!class_is_frozen_v1(&quiet, accept_fixture_signature), "an empty chain freezes nothing");
+
+        // Receipts are not convictions.
+        let receipts = vec![receipt_row(1, 9_000)];
+        let only_receipts = input(&receipts, &panel, 9_100, &bonds, &NoStepWeights);
+        assert!(!class_is_frozen_v1(&only_receipts, accept_fixture_signature), "the wrong kind freezes nothing");
+
+        // A conviction whose signature does not verify is the challenger's problem.
+        let carriage = vec![conviction_row(9_000)];
+        let unproven = input(&carriage, &panel, 9_100, &bonds, &NoStepWeights);
+        assert!(!class_is_frozen_v1(&unproven, reject_every_signature), "an unproven conviction is not a coverage gap");
+
+        // And nothing the evaluating point has not reached counts.
+        let before = input(&carriage, &panel, 8_999, &bonds, &NoStepWeights);
+        assert!(!class_is_frozen_v1(&before, accept_fixture_signature), "not yet on this chain");
+    }
 
     /// The dominant term of block weight is looked up BY the block's class, not handed in beside
     /// it — so a view that does not hold the block's class cannot be papered over with someone
