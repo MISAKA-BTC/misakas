@@ -553,6 +553,15 @@ impl IbdCandidateRegistry {
         self.switches = self.switches.max(switches);
     }
 
+    /// Start the budget over, because the node has participated on one chain long enough that the
+    /// burst this cap guards against is demonstrably not happening.
+    ///
+    /// Note this must be paired with clearing the gate's persisted count: [`Self::resume_switches`]
+    /// takes the MAXIMUM of the two, so a registry reset alone is undone by the next resume.
+    pub fn reset_switches(&mut self) {
+        self.switches = 0;
+    }
+
     /// A verified candidate strictly better than `current`, if one exists.
     ///
     /// Strictly: equal work is not a reason to switch, and an unverified candidate is never a
