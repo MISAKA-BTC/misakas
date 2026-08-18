@@ -127,6 +127,49 @@ the consensus PoW path (`main.rs:422-431`). The persistent agent re-reads and re
 and holds the model immutably for its lifetime; it must not reopen the path, and a model file that
 changes underneath it must be a hard failure, not a re-read.
 
+#### Implementation attempt 2026-08-18: premise CONFIRMED, blocked on a latent worker bug
+
+Measured on this machine with the real pinned model
+(`Qwen3.5-2B-Q4_K_M.gguf`, `--n-predict 16`), and the numbers settle the design question:
+
+| | measured |
+|---|---|
+| one-shot `--mode verify`: model load | **7.44 s** |
+| one-shot: the inference itself | **0.18 s** |
+| resident agent: model load (warm page cache) | 0.28 s |
+| resident agent: the inference itself | 0.16 s |
+
+**Overhead is ~97 % of a one-shot verification.** Decision 1′ is not a marginal optimisation; the
+inference is a rounding error next to the artifact read and the model load.
+
+The equivalence the whole design rests on was also **proved empirically, not argued**: a resident
+agent holding the model produced a projection document for its first job that is **byte-identical to
+the one-shot document, in every field** — including all five the PoW tag is derived from
+(`output_commitment`, `gemm_trace_root`, `operation_schedule_commitment`, `prefill_tokens`,
+`decode_tokens`). A resident model computes the same tag.
+
+**The attempt is nevertheless blocked, by a bug that is not the agent's.** Running a SECOND job in
+the same process crashes. Instrumenting the shim shows why: the `shim_ctx` struct is corrupted during
+the first job. The struct pointer is stable while its `lctx` field changes from a valid pointer to
+garbage (`0x8078`) or to `0x0` between job 1 and job 2. Three different context-reset strategies were
+tried — rebuild via `llama_init_from_model` (create-then-free and free-then-create),
+`llama_memory_clear(mem, true)`, and `llama_synchronize` + `llama_memory_clear(mem, false)` — and all
+three see an already-corrupt struct. The decisive test skipped the reset entirely for the first job:
+the very first `shim_reset_context` call still found `lctx = 0x0`. **`execute` corrupts the heap; the
+reset is innocent.**
+
+That is a latent memory-safety defect in the PoW worker's decode path, and it is worth fixing on its
+own merits rather than as agent scaffolding: today it is invisible only because a one-shot process
+exits before the corrupted heap is reused, and job 1's output is computed and printed correctly
+before the damage matters. Any future long-lived worker — the agent, a batch replayer, a mining
+harness — steps straight into it.
+
+So the ordering is: **find and fix the corruption in `execute` first, then land the agent.** The
+agent implementation is not shipped in the meantime; a mode that crashes on its second job is worse
+than no mode. What this attempt establishes and hands to the next one is the premise (97 % overhead),
+the equivalence (byte-identical first job), and the bug's exact signature (`shim_ctx.lctx` clobbered
+during `execute`, reproducible with two jobs on one process).
+
 ### Decision 2 — Parallelise verification during IBD
 
 The `SPAWN_GATE` mutex (`palw.rs:186`) serialises every inference in the process, which is correct
