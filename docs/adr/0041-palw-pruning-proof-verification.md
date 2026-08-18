@@ -148,34 +148,34 @@ the one-shot document, in every field** — including all five the PoW tag is de
 (`output_commitment`, `gemm_trace_root`, `operation_schedule_commitment`, `prefill_tokens`,
 `decode_tokens`). A resident model computes the same tag.
 
-**The attempt is nevertheless blocked, and the cause is still open.** Running a SECOND job on one
-context fails: the `shim_ctx` struct reads as damaged afterwards (`lctx` becomes `0x8078` or `0x0`,
-`n_vocab` becomes 0) while the struct pointer itself is stable. Three context-reset strategies were
-tried — rebuild via `llama_init_from_model` (both orderings), `llama_memory_clear(mem, true)`, and
-`llama_synchronize` + `llama_memory_clear(mem, false)` — and all three find an already-damaged struct.
+**The blocker was self-inflicted and is now resolved.** Running a second job on one context failed —
+`shim_ctx` read damaged afterwards (`lctx` = `0x8078` or `0x0`, `n_vocab` = 0). The cause was one
+line: production `execute` closes the context it opens, and the extraction that produced a
+context-taking `execute_on_context` took the close with it. Every job freed its CALLER'S context and
+the next job read freed memory. Fixed by giving the close to the owner: `execute` opens, delegates
+and closes; `execute_on_context` never closes.
 
-Two hypotheses were raised and BOTH were disproved by measurement. They are recorded because each
-looked convincing and would have sent an implementer the wrong way:
+Two hypotheses were raised before that and both were disproved by measurement. They are recorded
+because each looked convincing and each would have sent an implementer somewhere useless:
 
-* *"`execute` corrupts the heap."* No. Two independent `execute()` calls in one process, each opening
-  its own context, complete cleanly. Probing `shim_n_vocab` — a plain read of the struct — around
-  every shim call of one job (open → tokenize → decode → logits_last → three decode steps) shows the
-  struct intact at every point, `n_vocab = 248320` throughout. Guard Malloc
-  (`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib`, every allocation on its own guarded page) over
-  the unmodified one-shot found no overflow either.
-* *"It is the Metal backend's resource lifecycle."* Also no, though the evidence was suggestive: the
-  probe aborted at process exit with `ggml-metal-device.m:657: GGML_ASSERT([rsets->data count] == 0)`
-  in `ggml_metal_device_free`. A CPU-only llama tree was then configured and built out of tree
-  (`-DGGML_METAL=OFF -DGGML_BLAS=OFF -DBUILD_SHARED_LIBS=OFF`, linked via `MISAKA_PALW_CPU=1` per
-  `build.rs`'s own instructions, leaving the pinned Metal build untouched) and the worker rebuilt
-  against it. **The same failure occurs with no Metal device in the process at all.** The exit-time
-  assertion was a consequence of leaking the context in the probe, not the cause of the reuse failure.
+* *"`execute` corrupts the heap."* No. Two independent `execute()` calls in one process are clean; a
+  probe reading `shim_n_vocab` around every shim call of one job showed the struct intact throughout
+  (`n_vocab = 248320`); Guard Malloc over the unmodified one-shot found no overflow.
+* *"It is the Metal backend's resource lifecycle"* — suggested by an exit-time
+  `ggml-metal-device.m:657: GGML_ASSERT([rsets->data count] == 0)`. No: a CPU-only llama tree was
+  configured and built out of tree (`-DGGML_METAL=OFF -DGGML_BLAS=OFF -DBUILD_SHARED_LIBS=OFF`,
+  linked via `MISAKA_PALW_CPU=1`, leaving the pinned Metal build untouched) and the same failure
+  occurred with no Metal device in the process. That assertion was the probe leaking a context — a
+  second symptom of the same self-inflicted bug.
 
-What remains untested is the one difference between the partial probe (which left the struct intact)
-and a full job (which does not): the greedy loop's `argmax` / `shim_token_to_piece` / `shim_is_eog`
-sequence and the trace accumulation — and, importantly, whether the fault is in production `execute`
-at all or in the extracted context-taking copy the probe used. That copy is the next thing to rule
-out, because a bug in the extraction would explain every observation without implicating shipped code.
+**The equivalence is now reproduced, not claimed.** Three jobs on ONE context with
+`shim_reset_context` between them (backend synchronize, then `llama_memory_clear`) produce
+projections byte-identical to each other AND to a fresh one-shot process, across all five fields the
+PoW tag derives from. The one-shot's own output is unchanged by the refactor, byte for byte.
+
+So Decision 1′ is unblocked: the split and the reset primitive are landed and tested, and what
+remains is the agent process itself — the stdin/stdout protocol, the readiness handshake, and the
+consensus-side resident child, none of which touch the computation.
 
 The agent implementation is not shipped in the meantime; a mode that crashes on its second job is
 worse than no mode. What this attempt hands the next one is the premise (97 % overhead), the
