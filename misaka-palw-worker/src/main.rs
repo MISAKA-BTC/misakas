@@ -4,6 +4,12 @@
 //! * `--mode manifest` → `{ runtime_manifest_hash, runtime_class_id }`
 //! * `--mode self-job --prompt-stdin --n-predict N` → execute the job over the stdin bytes
 //! * `--mode verify   --prompt-stdin --n-predict N` → independently re-execute the same job
+//! * `--mode pow-agent` → the SAME v1 job, many times over one resident model: the pin is checked
+//!   and the model loaded once at startup, then each newline-delimited JSON request on stdin
+//!   yields one marked JSON frame on stdout (ADR-0041 Decision 1′). The document per job is the
+//!   one `verify` prints, which is the point — a resident model computes the same tag, and this
+//!   mode exists only to remove the ~97 % of a one-shot verification that is artifact read,
+//!   SHA-256 and model load.
 //!
 //! and the **v2 full-logits-trace interface** (`kaspa_consensus_core::palw_v2`,
 //! docs/palw-full-logits-trace-v2-design.md — Land stage, devnet/shadow/zero-credit only):
@@ -103,12 +109,10 @@ unsafe extern "C" {
     fn shim_is_eog(s: *const ShimCtx, token: i32) -> i32;
     fn shim_token_to_piece(s: *const ShimCtx, token: i32, buf: *mut u8, buf_len: i32) -> i32;
     fn shim_close(s: *mut ShimCtx);
-    /// Returns the context to a pristine decode state without reloading the model — the primitive the
-    /// resident verification agent needs (ADR-0041 Decision 1′). Verified against the one-shot path:
-    /// three jobs on one context produce byte-identical projections to each other and to a fresh
-    /// process. `allow(dead_code)` until the agent lands, deliberately rather than by deleting it:
-    /// the C side and this declaration are the tested pair.
-    #[allow(dead_code)]
+    /// Returns the context to a pristine decode state without reloading the model — the primitive
+    /// `--mode pow-agent` runs between jobs (ADR-0041 Decision 1′). Verified against the one-shot
+    /// path: three jobs on one context produce byte-identical projections to each other and to a
+    /// fresh process.
     fn shim_reset_context(s: *mut ShimCtx) -> i32;
 
     // Activation capture (execution-commitment legs v1). `shim_open_capture` with `n_taps = 0`
@@ -1949,6 +1953,175 @@ fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: 
     }
 }
 
+/// The replay-stable projection document, from an execution and the request that produced it.
+///
+/// Shared by the one-shot modes and `--mode agent` so there is exactly ONE construction of this
+/// document in the worker. Job identity mixes the input, the ceiling and the pinned identities —
+/// never the mode, never the transport, and never anything drawn at run time — so an executor,
+/// its verifiers, and a resident agent land on identical documents byte for byte.
+fn projection_doc(input: &[u8], n_predict: u32, exec: &Execution) -> serde_json::Value {
+    let prompt_digest = keyed64(b"misaka-palw-lite/input/v1", &[&(input.len() as u64).to_le_bytes(), input]);
+    let job_nullifier = keyed64(
+        b"misaka-palw-lite/nullifier/v1",
+        &[
+            prompt_digest.as_byte_slice(),
+            &n_predict.to_le_bytes(),
+            model_profile_id().as_byte_slice(),
+            runtime_manifest_hash().as_byte_slice(),
+        ],
+    );
+    let request_commitment =
+        keyed64(b"misaka-palw-lite/request/v1", &[prompt_digest.as_byte_slice(), &n_predict.to_le_bytes(), SHAPE_STRING.as_bytes()]);
+    serde_json::json!({
+        "schema": SCHEMA,
+        "job_nullifier": hex(job_nullifier),
+        "request_commitment": hex(request_commitment),
+        "model_profile_id": hex(model_profile_id()),
+        "runtime_class_id": hex(runtime_class_id()),
+        "runtime_manifest_hash": hex(runtime_manifest_hash()),
+        "shape_profile_id": hex(keyed64(b"misaka-palw-lite/shape/v1", &[SHAPE_STRING.as_bytes()])),
+        "cu_ruleset_id": hex(keyed64(b"misaka-palw-lite/cu-ruleset/v1", &[CU_RULESET.as_bytes()])),
+        "canonical_compute_units": exec.prefill_tokens as u64 + 8 * exec.decode_tokens as u64,
+        "prefill_tokens": exec.prefill_tokens,
+        "decode_tokens": exec.decode_tokens,
+        "operation_schedule_commitment": hex(exec.operation_schedule_commitment),
+        "schedule_event_count": exec.schedule_event_count,
+        "output_commitment": hex(exec.output_commitment),
+        "trace_scheme_id": hex(keyed64(b"misaka-palw-lite/trace-scheme/v1", &[TRACE_SCHEME.as_bytes()])),
+        "gemm_trace_root": hex(exec.gemm_trace_root),
+        "trace_event_count": exec.trace_event_count,
+    })
+}
+
+/// Marker every agent → driver line carries.
+///
+/// The agent protocol is newline-delimited JSON rather than the v2 length-prefixed frames for one
+/// reason: llama.cpp and ggml are third-party code on this process's stdout, and a single stray
+/// byte desynchronises a length-prefixed stream irrecoverably and SILENTLY. A marker makes noise
+/// skippable instead of fatal, and the driver skips anything without it.
+const AGENT_MARKER: &str = "@palw-pow1 ";
+const AGENT_SCHEMA: &str = "misaka.palw.pow-agent.v1";
+
+fn emit_agent_frame(v: &serde_json::Value) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    // One write, then flush: the driver blocks on a line, so a frame left in the buffer stalls it
+    // until the NEXT job's output pushes it out — a deadlock that only appears under load.
+    writeln!(out, "{AGENT_MARKER}{v}").unwrap_or_else(|e| die(format!("pow-agent: cannot write a frame: {e}")));
+    out.flush().unwrap_or_else(|e| die(format!("pow-agent: cannot flush a frame: {e}")));
+}
+
+/// `--mode pow-agent`: one model load, many Layer-1 PoW jobs (ADR-0041 Decision 1′).
+///
+/// NOT the `palw-agent` crate, despite the word. That one is the VPS supervisor for v2 COMPUTE
+/// jobs — a Unix socket, Borsh frames, admission control, and one worker process per job. This is
+/// the opposite trade on a different path: no supervision, no admission, one resident model, and
+/// the Layer-1 PoW tag path as its only client.
+///
+/// The pin is checked once, at startup, by the same `pinned_model_path_v2()` the one-shot modes
+/// call — a full read and SHA-256 of the artifact. The path is NOT reopened afterwards: the model
+/// this process serves for its whole life is the one it digested, which is what makes amortising
+/// the read safe rather than a hole in the pin.
+///
+/// Protocol, newline-delimited JSON in both directions:
+///
+/// * driver → agent: `{"id":<u64>,"n_predict":<u32>,"prompt_hex":"<hex>"}`
+/// * agent → driver: one `@palw-pow1 {"v":1,"ready":true,…}` after the model loads, then one
+///   `@palw-pow1 {"v":1,"id":<u64>,"ok":true,"projection":{…}}` per request, in request order.
+///
+/// The prompt is hex so the transport is byte-exact and newline-safe: the job is defined over raw
+/// bytes, and a protocol that could not carry a `\n` would quietly change the input.
+///
+/// A job error exits the process, exactly as it does in the one-shot modes. That is deliberate:
+/// making per-job errors recoverable would mean turning `execute_on_context`'s `die` calls into a
+/// `Result`, which is touching the computation to buy something the driver already has for free —
+/// respawn, and fall back to a one-shot process. The agent is an accelerator, never an authority.
+fn run_pow_agent() {
+    use std::io::BufRead;
+
+    let started = std::time::Instant::now();
+    let model_path = pinned_model_path_v2();
+    let ctx = unsafe { shim_open(format!("{}\0", model_path.display()).as_ptr(), N_CTX, N_BATCH, N_THREADS) };
+    if ctx.is_null() {
+        die(format!("llama.cpp failed to load {}", model_path.display()));
+    }
+    let n_vocab = unsafe { shim_n_vocab(ctx) };
+    eprintln!("[palw-worker] pow-agent: model loaded in {:?} (n_vocab={n_vocab})", started.elapsed());
+
+    emit_agent_frame(&serde_json::json!({
+        "v": 1,
+        "schema": AGENT_SCHEMA,
+        "ready": true,
+        "pid": std::process::id(),
+        "n_vocab": n_vocab,
+        "model_profile_id": hex(model_profile_id()),
+        "runtime_class_id": hex(runtime_class_id()),
+        "runtime_manifest_hash": hex(runtime_manifest_hash()),
+    }));
+
+    let mut stdin = std::io::stdin().lock();
+    let mut line = String::new();
+    let mut served: u64 = 0;
+    loop {
+        line.clear();
+        let n = stdin.read_line(&mut line).unwrap_or_else(|e| die(format!("pow-agent: cannot read a request line: {e}")));
+        if n == 0 {
+            // EOF. The driver closed its end, or exited and the kernel closed it for us — the
+            // reason a node that dies without reaping this process still leaves no orphan.
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let req: serde_json::Value =
+            serde_json::from_str(trimmed).unwrap_or_else(|e| die(format!("pow-agent: cannot parse a request line: {e}")));
+        let id = req.get("id").and_then(|v| v.as_u64()).unwrap_or_else(|| die("pow-agent: request lacks a u64 id".into()));
+        let n_predict = req
+            .get("n_predict")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or_else(|| die("pow-agent: request lacks a u32 n_predict".into()));
+        if n_predict == 0 {
+            die("pow-agent: n_predict must be at least 1".into());
+        }
+        let prompt_hex = req
+            .get("prompt_hex")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| die("pow-agent: request lacks a prompt_hex field".into()));
+        if prompt_hex.is_empty() || prompt_hex.len() % 2 != 0 {
+            die("pow-agent: prompt_hex is empty or is not an even number of hex digits".into());
+        }
+        let mut input = vec![0u8; prompt_hex.len() / 2];
+        faster_hex::hex_decode(prompt_hex.as_bytes(), &mut input)
+            .unwrap_or_else(|e| die(format!("pow-agent: prompt_hex is not hex: {e}")));
+
+        let exec = execute_on_context(ctx, &input, n_predict, std::time::Instant::now());
+        emit_agent_frame(&serde_json::json!({
+            "v": 1,
+            "id": id,
+            "ok": true,
+            "projection": projection_doc(&input, n_predict, &exec),
+        }));
+        served += 1;
+
+        // BETWEEN jobs, never inside one: return the context to a pristine decode state. This is
+        // what makes job N+1 see exactly what a fresh process sees, and the order matters — the
+        // equivalence was measured as job-then-reset, so job 1 runs on a virgin context under
+        // literally one-shot conditions.
+        let rc = unsafe { shim_reset_context(ctx) };
+        if rc != 0 {
+            die(format!(
+                "pow-agent: shim_reset_context failed with {rc} after job {id}; refusing to serve another job on a \
+                 context of unknown state"
+            ));
+        }
+    }
+
+    unsafe { shim_close(ctx) };
+    eprintln!("[palw-worker] pow-agent: stdin closed after {served} job(s) in {:?}; exiting", started.elapsed());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut mode: Option<String> = None;
@@ -2004,7 +2177,9 @@ fn main() {
 
     // The v2 interface deliberately has no `--n-predict`: the prefill/decode budgets are
     // separate, explicit envelope fields (VPS design §5.4), and accepting the ambiguous v1
-    // flag here would reintroduce exactly the total-vs-decode confusion v2 removes.
+    // flag here would reintroduce exactly the total-vs-decode confusion v2 removes. `pow-agent`
+    // rejects it for a different reason — its ceiling is per REQUEST, so a process-wide one
+    // would be either ignored or silently overriding, and both are worse than an error.
     if matches!(
         mode.as_deref(),
         Some("v2-job"
@@ -2018,10 +2193,12 @@ fn main() {
             | "v2-legs-open"
             | "v2-legs-open-request"
             | "v2-legs-open-verify"
-            | "v2-replay-bench")
+            | "v2-replay-bench"
+            | "pow-agent")
     ) && n_predict.is_some()
     {
-        die("--n-predict is not a v2 interface; token budgets come from the job envelope".into());
+        die("--n-predict does not apply to this mode; the v2 modes take token budgets from the job envelope and              --mode pow-agent takes one per request"
+            .into());
     }
 
     match mode.as_deref() {
@@ -2052,6 +2229,7 @@ fn main() {
             run_v2_legs_open_verify(&call);
         }
         Some("v2-golden-show") => run_v2_golden_show(),
+        Some("pow-agent") => run_pow_agent(),
         Some("manifest") => {
             let doc = serde_json::json!({
                 "runtime_manifest_hash": hex(runtime_manifest_hash()),
@@ -2078,46 +2256,10 @@ fn main() {
             let model_path = pinned_model_path_v2();
             let exec = execute(&model_path, &input, n_predict);
 
-            // The replay-stable projection. Job identity mixes the input, the ceiling and the
-            // pinned identities — never the mode and never anything drawn at run time, so an
-            // executor and its verifiers land on identical documents byte for byte.
-            let prompt_digest = keyed64(b"misaka-palw-lite/input/v1", &[&(input.len() as u64).to_le_bytes(), &input]);
-            let job_nullifier = keyed64(
-                b"misaka-palw-lite/nullifier/v1",
-                &[
-                    prompt_digest.as_byte_slice(),
-                    &n_predict.to_le_bytes(),
-                    model_profile_id().as_byte_slice(),
-                    runtime_manifest_hash().as_byte_slice(),
-                ],
-            );
-            let request_commitment = keyed64(
-                b"misaka-palw-lite/request/v1",
-                &[prompt_digest.as_byte_slice(), &n_predict.to_le_bytes(), SHAPE_STRING.as_bytes()],
-            );
-            let doc = serde_json::json!({
-                "schema": SCHEMA,
-                "job_nullifier": hex(job_nullifier),
-                "request_commitment": hex(request_commitment),
-                "model_profile_id": hex(model_profile_id()),
-                "runtime_class_id": hex(runtime_class_id()),
-                "runtime_manifest_hash": hex(runtime_manifest_hash()),
-                "shape_profile_id": hex(keyed64(b"misaka-palw-lite/shape/v1", &[SHAPE_STRING.as_bytes()])),
-                "cu_ruleset_id": hex(keyed64(b"misaka-palw-lite/cu-ruleset/v1", &[CU_RULESET.as_bytes()])),
-                "canonical_compute_units": exec.prefill_tokens as u64 + 8 * exec.decode_tokens as u64,
-                "prefill_tokens": exec.prefill_tokens,
-                "decode_tokens": exec.decode_tokens,
-                "operation_schedule_commitment": hex(exec.operation_schedule_commitment),
-                "schedule_event_count": exec.schedule_event_count,
-                "output_commitment": hex(exec.output_commitment),
-                "trace_scheme_id": hex(keyed64(b"misaka-palw-lite/trace-scheme/v1", &[TRACE_SCHEME.as_bytes()])),
-                "gemm_trace_root": hex(exec.gemm_trace_root),
-                "trace_event_count": exec.trace_event_count,
-            });
-            println!("{doc}");
+            println!("{}", projection_doc(&input, n_predict, &exec));
         }
         other => die(format!(
-            "usage: palw-worker --mode manifest | --mode self-job|verify --prompt-stdin --n-predict N | --mode v2-job | --mode v2-manifest (got mode {other:?})"
+            "usage: palw-worker --mode manifest | --mode self-job|verify --prompt-stdin --n-predict N |              --mode pow-agent | --mode v2-job | --mode v2-manifest (got mode {other:?})"
         )),
     }
 }

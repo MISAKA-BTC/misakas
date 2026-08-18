@@ -1,8 +1,11 @@
 # ADR-0041: PALW pruning-proof verification — exhaustive and amortised, not sampled
 
-Status: **Proposed.** Activates nothing on a shipped preset. Governs how a node validates a
-pruning-point proof and a trusted set on a network whose PoW is a PALW inference
-(`pow_palw_activation` / `pow_palw_ollama_activation` active — testnet-11 and devnet today).
+Status: **Partly landed.** Activates nothing on a shipped preset. Decision 1′ (the resident
+verification agent) is landed, measured and opt-in behind `MISAKA_PALW_AGENT=1`; Decision 3 (the
+header cap) is landed; Decisions 2 (concurrency) and 4 (cheap checks before the inference) are open.
+Governs how a node validates a pruning-point proof and a trusted set on a network whose PoW is a
+PALW inference (`pow_palw_activation` / `pow_palw_ollama_activation` active — testnet-11 and devnet
+today).
 
 Date: 2026-08-18
 Relates to: ADR-0007/0008 (the Layer-0 512-bit PoW the proof headers carry), ADR-0038/0039 (PALW
@@ -127,7 +130,7 @@ the consensus PoW path (`main.rs:422-431`). The persistent agent re-reads and re
 and holds the model immutably for its lifetime; it must not reopen the path, and a model file that
 changes underneath it must be a hard failure, not a re-read.
 
-#### Implementation attempt 2026-08-18: premise CONFIRMED, blocked on a latent worker bug
+#### Implementation 2026-08-18: LANDED and measured
 
 Measured on this machine with the real pinned model
 (`Qwen3.5-2B-Q4_K_M.gguf`, `--n-predict 16`), and the numbers settle the design question:
@@ -168,20 +171,60 @@ because each looked convincing and each would have sent an implementer somewhere
   occurred with no Metal device in the process. That assertion was the probe leaking a context — a
   second symptom of the same self-inflicted bug.
 
-**The equivalence is now reproduced, not claimed.** Three jobs on ONE context with
+**The equivalence is reproduced, not claimed.** Three jobs on ONE context with
 `shim_reset_context` between them (backend synchronize, then `llama_memory_clear`) produce
 projections byte-identical to each other AND to a fresh one-shot process, across all five fields the
 PoW tag derives from. The one-shot's own output is unchanged by the refactor, byte for byte.
 
-So Decision 1′ is unblocked: the split and the reset primitive are landed and tested, and what
-remains is the agent process itself — the stdin/stdout protocol, the readiness handshake, and the
-consensus-side resident child, none of which touch the computation.
+**Both halves are now landed.** `palw-worker --mode pow-agent` holds the model and serves jobs over
+newline-delimited JSON; `kaspa-pow`'s `native::resident` is the validator-side child that drives it.
+Measured on this machine, 12 distinct seeds, `--n-predict 128`:
 
-The agent implementation is not shipped in the meantime; a mode that crashes on its second job is
-worse than no mode. What this attempt hands the next one is the premise (97 % overhead), the
-equivalence (a byte-identical first job), the elimination of three suspects (the worker's own heap handling, a
-buffer overflow, and the Metal backend), and a reproducer — two jobs on one context, on either
-backend.
+| | per seed (median) | 12 seeds |
+|---|---|---|
+| one-shot, a process each | 3.28 s | 39.2 s |
+| resident agent | **0.57 s** | 9.6 s (2.70 s of it the one model load) |
+
+**5.7× per seed** — the projected ~5× constant factor, confirmed rather than assumed. Note this
+machine's page cache is warm, so its one-shot baseline (3.28 s) is well under the fleet's 12 s; the
+fleet number is the one that should be re-measured there, and the ratio is what transfers.
+
+Four design points, each of which is a way this could have been got wrong:
+
+* **One reader.** The agent returns the same projection document the one-shot prints, and both are
+  read by one function (`native::tag_from_doc`). A tag that depended on which transport delivered
+  the document would be a consensus bug; the way not to have one is not to have a second parser.
+* **Marked lines, not length-prefixed frames.** llama.cpp and ggml are third-party code sharing the
+  child's stdout. One stray byte desynchronises a length-prefixed stream silently and permanently;
+  with a marker, noise is skipped instead. The v2 compute path can use Borsh frames because its
+  worker exits after one job — a resident one cannot.
+* **The agent is an accelerator, never an authority.** It runs only under `MISAKA_PALW_AGENT=1`, and
+  every failure — spawn, handshake, timeout, a frame out of order, a child that died — falls back to
+  the one-shot path that ships today. So it can change how fast a tag arrives and not which tag, and
+  it cannot wedge a node the old path would have synced. A test pins the sharpest case: with the
+  agent enabled and the worker binary missing, the caller still gets the same `PalwUnavailable`,
+  naming the same path.
+* **A dead child costs a delay, not a tag.** A resident process can be OOM-killed between two seeds,
+  and the validator finds out by writing to a pipe whose far end is gone — one `SIGPIPE` away from
+  killing the node instead of returning an error. Tested by killing the agent mid-run: the next seed
+  still produces the right tag.
+
+Two measured facts worth recording because both are counter-intuitive:
+
+* **The per-seed entropy is `gemm_trace_root`, not the generated text.** Across distinct seeds the
+  greedy OUTPUT is the same generic continuation, so `output_commitment`, `decode_tokens` and the
+  schedule commitment are all constant; the tag varies because the digest of the full logits of
+  every decode call varies. Anyone testing this path who asserts distinctness on the output will
+  write a vacuous test — the first version of ours was exactly that.
+* **The overhead is not the inference.** At 0.57 s served versus 3.28 s spawned, ~83 % of a one-shot
+  verification on a WARM machine is still setup. The 97 % figure above was the cold case.
+
+What remains of the 30 h → 45 min claim is Decision 2 (concurrency), which is deliberately untouched
+here: the agent runs inside the existing `SPAWN_GATE`, so exactly one inference is in flight either
+way and the two paths above were measured under the same policy.
+
+Three suspects were eliminated along the way and are recorded so nobody re-investigates them: the
+worker's own heap handling, a buffer overflow, and the Metal backend.
 
 ### Decision 2 — Parallelise verification during IBD
 
@@ -222,8 +265,12 @@ landing decisions compose multiplicatively rather than changing the exponent:
 | | per header | 9,000 headers |
 |---|---|---|
 | today | ~12 s | 30.0 h |
-| + persistent agent (Decision 1′, ~5×) | ~2.4 s | 6.0 h |
-| + 8-way concurrency (Decision 2) | — | **~45 min** |
+| + persistent agent (Decision 1′ — **landed**, 5.7× measured) | ~2.1 s | 5.3 h |
+| + 8-way concurrency (Decision 2) | — | **~40 min** |
+
+The middle row is now a measured factor applied to the fleet's own per-header cost, not a projection
+of both. The factor was measured on a dev machine (3.28 s → 0.57 s); the 12 s is the fleet's, and
+re-measuring the ratio there is the remaining honest gap in this table.
 
 45 minutes for a one-time sync of a year of history is a different proposition from 30 hours, and it
 is reached without weakening any security argument. It is still `O(m·log(history))` inferences, so it

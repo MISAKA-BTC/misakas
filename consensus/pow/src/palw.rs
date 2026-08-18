@@ -36,6 +36,13 @@ use kaspa_hashes::Hash64;
 pub const PALW_WORKER_ENV: &str = "PALW_WORKER";
 /// `"1"` selects the in-process fixture tag (no model, no subprocess).
 pub const PALW_FIXTURE_ENV: &str = "MISAKA_PALW_POW_FIXTURE";
+/// `"1"` runs verification through a RESIDENT agent — one `palw-worker --mode pow-agent` child
+/// that holds the model for the life of the node — instead of one process per seed (ADR-0041
+/// Decision 1′). Opt-in: it is a local sync policy with no consensus effect, but it is also a new
+/// long-lived subprocess on the block-validation path, so a fleet turns it on deliberately. Any
+/// failure falls back to the one-shot path, so the worst case of enabling it is the cost of the
+/// path that ships today.
+pub const PALW_AGENT_ENV: &str = "MISAKA_PALW_AGENT";
 /// Per-inference wall-clock budget in seconds (default [`DEFAULT_TIMEOUT_SECS`]). Generous vs the
 /// ~1-3 s a pinned Qwen3.5-2B attempt takes — it exists to reap a wedged worker, not to pace one.
 pub const PALW_TIMEOUT_ENV: &str = "MISAKA_PALW_POW_TIMEOUT_SECS";
@@ -205,7 +212,15 @@ mod native {
             if let Some(tag) = cache().lock().unwrap().get(seed) {
                 return Ok(*tag);
             }
-            run_worker_with_retry(&worker, seed)?
+            // The resident agent when the operator enabled it and it can serve; the one-shot path
+            // that ships today otherwise. Inside the gate on purpose: this landing amortises the
+            // per-seed cost (ADR-0041 Decision 1′) and deliberately does not touch the concurrency
+            // policy (Decision 2), so exactly one inference is in flight either way and the two
+            // paths are measured under the same load.
+            match resident::tag(&worker, seed) {
+                Some(tag) => tag,
+                None => run_worker_with_retry(&worker, seed)?,
+            }
         };
         let mut cache = cache().lock().unwrap();
         if cache.len() >= TAG_CACHE_MAX {
@@ -317,6 +332,253 @@ mod native {
         let tag = parse_projection(&stdout)?;
         log::debug!("palw-pow: inference attempt completed in {:?}", started.elapsed());
         Ok(tag)
+    }
+
+    /// The resident verification agent — ADR-0041 Decision 1′.
+    ///
+    /// NOT the `palw-agent` crate. That one supervises v2 COMPUTE jobs over a Unix socket and
+    /// spawns a worker process per job; this is a child of the validator itself, on the Layer-1
+    /// PoW tag path, and its entire purpose is that there is NO process per job.
+    ///
+    /// One `palw-worker --mode agent` child holds the model for the life of the node, so a seed
+    /// costs an inference instead of an inference *plus* a 1.2 GB artifact read, a SHA-256 and a
+    /// model load. Measured on the pinned Qwen3.5-2B: 3.2 s one-shot → 0.56 s resident, with the
+    /// projection byte-identical in every field.
+    ///
+    /// It is an accelerator and nothing else, and this module is written so that stays true:
+    ///
+    /// * it runs only when `MISAKA_PALW_AGENT=1`;
+    /// * EVERY failure — spawn, handshake, timeout, a frame out of order, a child that exited —
+    ///   drops the handle and returns `None`, and the caller then runs the one-shot path that
+    ///   ships today;
+    /// * the document it returns is read by [`super::tag_from_doc`], the same code that reads a
+    ///   one-shot's stdout, so there is no second parser to drift.
+    ///
+    /// The agent can therefore change how fast a tag arrives. It cannot change WHICH tag arrives,
+    /// and it cannot wedge a node that the one-shot path would have synced.
+    mod resident {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Child, ChildStderr, ChildStdin};
+        use std::sync::mpsc::{Receiver, RecvTimeoutError};
+
+        /// The marker every agent → driver line carries. Anything else on that stdout is
+        /// third-party output (llama.cpp and ggml share the pipe) and is skipped rather than
+        /// parsed — the reason the protocol is marked lines and not length-prefixed frames, which
+        /// one stray byte would desynchronise silently and permanently.
+        const MARKER: &str = "@palw-pow1 ";
+
+        /// Whether this process may use a resident agent.
+        fn enabled() -> bool {
+            std::env::var(PALW_AGENT_ENV).as_deref() == Ok("1")
+        }
+
+        static AGENT: Mutex<Option<Agent>> = Mutex::new(None);
+
+        struct Agent {
+            child: Child,
+            stdin: ChildStdin,
+            /// Marker-stripped payloads, in the order the agent wrote them.
+            frames: Receiver<String>,
+            next_id: u64,
+        }
+
+        impl Drop for Agent {
+            fn drop(&mut self) {
+                // Kill rather than close-stdin-and-wait. Everything that drops a handle has
+                // already decided it is unusable, and a wedged child is exactly the case where
+                // waiting for a clean exit hangs the validator instead of the child.
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+
+        /// A tag for `seed` from the resident agent, or `None` if it cannot serve one — in which
+        /// case the caller runs the one-shot path. Never returns `Err`: there is no agent failure
+        /// that the fallback does not answer better than an error would.
+        pub(super) fn tag(worker: &str, seed: &[u8; 32]) -> Option<[u8; POW_L1_PALW_OUT_BYTES]> {
+            if !enabled() {
+                return None;
+            }
+            // A poisoned lock must not panic a node over an accelerator; recover the slot and
+            // carry on. The worst case is a stale handle, which the request path detects.
+            let mut slot = AGENT.lock().unwrap_or_else(|e| e.into_inner());
+            // Two rounds. The first may be holding a handle whose child died since the previous
+            // seed (OOM-killed, or an operator restarted it) — indistinguishable from a healthy
+            // one until we write to it. The second round is the respawn that answers that case.
+            for round in 1..=2u32 {
+                if slot.is_none() {
+                    match Agent::spawn(worker) {
+                        Ok(agent) => *slot = Some(agent),
+                        Err(e) => {
+                            log::warn!("palw-pow: resident agent unavailable ({e}); using one-shot workers");
+                            return None;
+                        }
+                    }
+                }
+                let outcome =
+                    slot.as_mut().expect("populated just above").request(&palw_pow_prompt_v1(seed), POW_L1_PALW_N_PREDICT_V1);
+                match outcome {
+                    Ok(doc) => match super::tag_from_doc(&doc) {
+                        Ok(tag) => return Some(tag),
+                        // The agent answered and the answer is not a projection. That is a build
+                        // mismatch, not a transient, so do not respawn into the same result.
+                        Err(e) => {
+                            log::warn!("palw-pow: resident agent returned an unusable document ({e}); using one-shot workers");
+                            *slot = None;
+                            return None;
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("palw-pow: resident agent failed on round {round} ({e}); restarting it");
+                        *slot = None;
+                    }
+                }
+            }
+            None
+        }
+
+        /// Drains a pipe for the LIFE of the child, on its own thread.
+        ///
+        /// A resident agent makes the pipe-buffer trap worse than it is for a one-shot: llama.cpp
+        /// keeps writing to stderr for as long as the node runs, and a full 64 KiB buffer blocks
+        /// the agent inside `write()` with a job half done — a hang that produces no error
+        /// anywhere. The one-shot path learned this the expensive way; a long-lived child cannot
+        /// afford to relearn it.
+        fn spawn_stderr_drain(pipe: ChildStderr) -> Result<(), PowLayer0Error> {
+            std::thread::Builder::new()
+                .name("palw-agent-stderr".into())
+                .spawn(move || {
+                    let mut reader = BufReader::new(pipe);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => log::trace!("palw-agent: {}", line.trim_end()),
+                        }
+                    }
+                })
+                .map(|_| ())
+                .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot start the PALW agent stderr drain: {e}")))
+        }
+
+        impl Agent {
+            fn spawn(worker: &str) -> Result<Agent, PowLayer0Error> {
+                let started = Instant::now();
+                let mut child = Command::new(worker)
+                    .args(["--mode", "pow-agent"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| PowLayer0Error::PalwUnavailable(format!("cannot spawn the PALW agent at {worker}: {e}")))?;
+                let stdin = child.stdin.take().expect("stdin was piped above");
+                let stdout = child.stdout.take().expect("stdout was piped above");
+                let stderr = child.stderr.take().expect("stderr was piped above");
+
+                // Unbounded on purpose: a bounded channel lets a slow or abandoned consumer block
+                // the reader thread, which stops draining stdout, which is the same deadlock one
+                // pipe over. The volume it has to hold is one frame per request.
+                let (tx, frames) = std::sync::mpsc::channel::<String>();
+
+                // Build the handle BEFORE anything else can fail, so every early return from here
+                // on reaps the child through `Drop` rather than orphaning a process holding 1.2 GB.
+                let mut agent = Agent { child, stdin, frames, next_id: 1 };
+                spawn_stderr_drain(stderr)?;
+                std::thread::Builder::new()
+                    .name("palw-agent-stdout".into())
+                    .spawn(move || {
+                        let mut reader = BufReader::new(stdout);
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            match reader.read_line(&mut line) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => match line.trim_end().strip_prefix(MARKER) {
+                                    Some(payload) => {
+                                        if tx.send(payload.to_owned()).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        if !line.trim().is_empty() {
+                                            log::debug!("palw-agent stdout (not a frame): {}", line.trim_end());
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    })
+                    .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot start the PALW agent stdout reader: {e}")))?;
+
+                // The handshake is the model load, so it gets the same budget as an inference —
+                // a cold artifact read of 1.2 GB is not a fast operation on a busy host.
+                let ready = agent.recv_frame(timeout())?;
+                if ready.get("ready").and_then(|v| v.as_bool()) != Some(true) {
+                    return Err(PowLayer0Error::PalwWorkerFailed(format!(
+                        "the PALW agent's first frame is not a readiness frame: {ready}"
+                    )));
+                }
+                log::info!(
+                    "palw-pow: resident agent ready in {:?} (pid {}, runtime_class_id {})",
+                    started.elapsed(),
+                    ready.get("pid").and_then(|v| v.as_u64()).unwrap_or(0),
+                    ready.get("runtime_class_id").and_then(|v| v.as_str()).unwrap_or("unreported"),
+                );
+                Ok(agent)
+            }
+
+            fn recv_frame(&mut self, budget: Duration) -> Result<serde_json::Value, PowLayer0Error> {
+                match self.frames.recv_timeout(budget) {
+                    Ok(payload) => serde_json::from_str(&payload)
+                        .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse a PALW agent frame: {e}"))),
+                    Err(RecvTimeoutError::Timeout) => Err(PowLayer0Error::PalwWorkerFailed(format!(
+                        "the PALW agent produced no frame within {budget:?} (raise {PALW_TIMEOUT_ENV} if the \
+                         machine is genuinely this slow)"
+                    ))),
+                    Err(RecvTimeoutError::Disconnected) => Err(PowLayer0Error::PalwWorkerFailed("the PALW agent exited".into())),
+                }
+            }
+
+            fn request(&mut self, prompt: &str, n_predict: u32) -> Result<serde_json::Value, PowLayer0Error> {
+                let id = self.next_id;
+                self.next_id += 1;
+                // Hex, so the transport is byte-exact and newline-safe: the job is defined over
+                // raw bytes, and a protocol that could not carry a `\n` would quietly change the
+                // input and therefore the tag.
+                let mut encoded = vec![0u8; prompt.len() * 2];
+                faster_hex::hex_encode(prompt.as_bytes(), &mut encoded)
+                    .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot hex the PALW prompt: {e}")))?;
+                let prompt_hex = String::from_utf8(encoded).expect("hex_encode emits ASCII");
+                let request = serde_json::json!({ "id": id, "n_predict": n_predict, "prompt_hex": prompt_hex });
+                writeln!(self.stdin, "{request}")
+                    .and_then(|()| self.stdin.flush())
+                    .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot write a request to the PALW agent: {e}")))?;
+
+                let started = Instant::now();
+                let frame = self.recv_frame(timeout())?;
+                // The id echo is the desync check. It should be unreachable — a timeout drops the
+                // handle, so no abandoned frame can be waiting in the channel for the next request
+                // to collect — which is precisely why a mismatch means the handle's state is not
+                // what this code believes, and the handle has to go.
+                if frame.get("id").and_then(|v| v.as_u64()) != Some(id) {
+                    return Err(PowLayer0Error::PalwWorkerFailed(format!(
+                        "PALW agent frame out of order: expected id {id}, got {}",
+                        frame.get("id").map(|v| v.to_string()).unwrap_or_else(|| "no id".into())
+                    )));
+                }
+                if frame.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                    return Err(PowLayer0Error::PalwWorkerFailed(format!("the PALW agent refused a job: {frame}")));
+                }
+                let projection = frame
+                    .get("projection")
+                    .cloned()
+                    .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("a PALW agent frame carries no projection".into()))?;
+                log::debug!("palw-pow: resident agent served a seed in {:?}", started.elapsed());
+                Ok(projection)
+            }
+        }
     }
 
     // ── PALW-Ollama (algo_id = 5): host-local HTTP inference ────────────────────────────────────
@@ -595,6 +857,15 @@ mod native {
             .ok_or_else(|| PowLayer0Error::PalwWorkerFailed("worker produced no stdout document".into()))?;
         let doc: serde_json::Value = serde_json::from_str(line)
             .map_err(|e| PowLayer0Error::PalwWorkerFailed(format!("cannot parse the worker document: {e}")))?;
+        tag_from_doc(&doc)
+    }
+
+    /// The Layer-1 tag from a projection document.
+    ///
+    /// Shared by the one-shot path and the resident agent, so the two cannot drift. A tag that
+    /// depended on WHICH transport delivered the document would be a consensus bug; the way not to
+    /// have one is not to have a second reader.
+    fn tag_from_doc(doc: &serde_json::Value) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
         let hash_field = |name: &str| -> Result<Hash64, PowLayer0Error> {
             let hex = doc
                 .get(name)

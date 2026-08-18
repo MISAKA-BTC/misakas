@@ -175,6 +175,32 @@ python3 scripts/misaka-palw-v2-class-compare.py class-*.json    # want: ONE-CLAS
 A `ONE-CLASS` verdict is evidence, not proof — the probe corpus is 4 fixed jobs compiled into the
 worker. Treat a `BUILD-MISMATCH` as "determinism untested", not as "hosts disagree".
 
+### Optional: the resident verification agent (`MISAKA_PALW_AGENT=1`)
+
+By default a node spawns one `palw-worker` process per PoW seed, and each spawn re-reads and
+SHA-256s the whole 1.28 GiB model before doing ~0.2 s of inference. Setting `MISAKA_PALW_AGENT=1`
+makes the node keep ONE `palw-worker --mode pow-agent` child with the model resident and feed it
+seeds instead. Measured (dev machine, 12 seeds, warm page cache): **3.28 s → 0.57 s per seed, 5.7×**.
+The win is largest exactly where it matters, a from-genesis sync (ADR-0041 Decision 1′).
+
+```bash
+PALW_WORKER=/opt/misaka/palw-worker MISAKA_PALW_GGUF=/opt/misaka/Qwen3.5-2B-Q4_K_M.gguf MISAKA_PALW_AGENT=1 ./kaspad --testnet --netsuffix=11 …
+```
+
+What an operator needs to know about it:
+
+* **It cannot change consensus.** The agent computes the same document a one-shot process does —
+  verified byte-identically, in every field the tag derives from — and the node reads both with the
+  same parser. Enabling it on some hosts and not others does not split a network.
+* **Every failure falls back.** If the agent cannot spawn, hangs, dies, or answers something
+  unparseable, the node uses the one-shot path for that seed and logs a `warn`. The worst case of
+  turning it on is the cost of leaving it off.
+* **It is one more long-lived process holding the model.** Budget ~1.4 GiB resident for it, on top
+  of kaspad. It exits by itself when kaspad does (its stdin closes), so it leaves no orphan.
+* **To confirm it is actually in use**, look for `resident agent ready` at `info` on the first
+  verified header. `palw-pow: resident agent unavailable …; using one-shot workers` means it fell
+  back — the node is correct but slow, and the reason is on the same line.
+
 ## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11) — ⚠️ SUPERSEDED
 
 > Kept for the record only. `algo_id = 5` is disabled (STATUS banner), so **none of this is a
