@@ -456,7 +456,7 @@ where
             PALW_CARRIAGE_KIND_RECEIPT => {
                 if *accepted_daa <= window_close
                     && let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body)
-                    && receipt_is_authentic_v1(&r.receipt, input, &verify_signature)
+                    && receipt_is_authentic_v1(&r.receipt, *accepted_daa, input, &verify_signature)
                 {
                     receipts.push(r.receipt);
                 }
@@ -475,7 +475,7 @@ where
                 if *accepted_daa <= window_close
                     && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
                     && c.refutation.binding.full_logits_trace_root == input.logits_trace_root
-                    && let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa)
+                    && let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, *accepted_daa)
                     && adjudicate_step_conviction_carriage_v1(
                         &c,
                         accused,
@@ -494,7 +494,7 @@ where
                     && let Ok(PalwCarriageV1::Equivocation(e)) = decode_palw_stage1_body(*kind, body)
                     && (e.certificate.attestation_a.full_logits_trace_root == input.logits_trace_root
                         || e.certificate.attestation_b.full_logits_trace_root == input.logits_trace_root)
-                    && let Some(accused) = input.bonds.active_bond_at(&e.accused_bond_outpoint, input.pov_daa)
+                    && let Some(accused) = input.bonds.active_bond_at(&e.accused_bond_outpoint, *accepted_daa)
                     && adjudicate_equivocation_carriage_v1(&e, accused, input.pov_daa, input.network_id, &verify_signature).is_ok()
                 {
                     convicted_before_close = true;
@@ -525,14 +525,28 @@ where
 /// 1. **shape** — arity, ordering and signature length ([`PalwVerificationReceiptV1::validate_shape`]);
 /// 2. **class** — the verifier replayed under the class the block claims. A cross-class replay is a
 ///    different computation, so its roots are telemetry and never evidence (ADR-0037 I11);
-/// 3. **bond** — `verifier_bond_outpoint` resolves to a bond ACTIVE at the evaluating point of view.
-///    An unbonded or already-slashed filer has nothing at stake and is not accountable;
+/// 3. **bond** — `verifier_bond_outpoint` resolves to a bond that was ACTIVE **when the receipt was
+///    accepted**. An unbonded or already-slashed filer has nothing at stake and is not accountable;
+///    the moment that is judged at is the moment it acted, NOT the evaluating node's tip.
+///
+///    This read `input.pov_daa`, and `effective_bond_status` is one-way: once `pov` passes a
+///    filer's unbond request it is `Unbonding` forever. So a receipt STOPPED being authentic as its
+///    filer left, a matured block dropped back below quorum, and its pwu left `safe(C)` — finality
+///    eroding by nothing more than time passing, and steerable: file, let the block mature, then
+///    unbond to demote it. The credit path already states the principle this restores — "a
+///    refutation accepted after the window still convicts, but does not revoke credit" — later
+///    facts punish, they do not revoke;
 /// 4. **signature** — ML-DSA-87 over the receipt's own digest, under the resolved bond's key.
 ///
 /// Before this existed the resolver pushed every decodable receipt, so quorum was a count of
 /// whoever chose to speak — fabricate `k` receipts naming `k` drawn seats and a fabricated block
 /// matured to full weight without any of those verifiers doing anything (re-audit §3.1).
-fn receipt_is_authentic_v1<F>(receipt: &PalwVerificationReceiptV1, input: &PalwResolverInputV1<'_>, verify_signature: &F) -> bool
+fn receipt_is_authentic_v1<F>(
+    receipt: &PalwVerificationReceiptV1,
+    filed_daa: u64,
+    input: &PalwResolverInputV1<'_>,
+    verify_signature: &F,
+) -> bool
 where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
 {
@@ -542,7 +556,7 @@ where
     if receipt.execution_class_id != input.execution_class_id {
         return false;
     }
-    let Some(bond) = input.bonds.active_bond_at(&receipt.verifier_bond_outpoint, input.pov_daa) else {
+    let Some(bond) = input.bonds.active_bond_at(&receipt.verifier_bond_outpoint, filed_daa) else {
         return false;
     };
     verify_signature(&bond.validator_pubkey, &receipt.message(input.network_id), &receipt.signature)
@@ -624,7 +638,7 @@ where
             && let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body)
             && r.receipt.target_block_hash == input.block_hash
             && r.receipt.target_commitment_root == input.commitment_root
-            && receipt_is_authentic_v1(&r.receipt, input, &verify_signature)
+            && receipt_is_authentic_v1(&r.receipt, *accepted_daa, input, &verify_signature)
         {
             filed.insert((r.receipt.verifier_bond_outpoint.transaction_id, r.receipt.verifier_bond_outpoint.index));
         }
@@ -783,7 +797,7 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
         // griefing veto over maturity at zero cost and with nobody to charge (re-audit §3.1). The
         // bond is what makes a baseless dispute chargeable; `PalwBisectMoveCarriageV1` carries the
         // outpoint precisely so this check has something to resolve.
-        if input.bonds.active_bond_at(challenger_bond, input.pov_daa).is_none() {
+        if input.bonds.active_bond_at(challenger_bond, *open_daa).is_none() {
             continue;
         }
         let Ok(mut ladder) = PalwBisectLadderV1::open(
@@ -1099,6 +1113,56 @@ mod resolver_tests {
         }
     }
     static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
+
+    /// ADR-0039's reorg-equivalence property, in the one direction that can be tested here:
+    /// **with the carriage fixed, advancing the point of view never un-matures a block.**
+    ///
+    /// This is not a style rule. `safe(C)` governs IBD and the deep-reorg bound, so pwu that leaves
+    /// it is finality being handed back. Authenticity used to be judged at `pov_daa`, and
+    /// `effective_bond_status` is one-way — once `pov` passes a filer's unbond request the bond is
+    /// `Unbonding` forever. A validator could therefore file its receipt, let the block mature, and
+    /// then unbond to drop the block back below quorum. Nothing about the chain changed; only the
+    /// clock did.
+    ///
+    /// Judged at the moment of filing, the same walk is stable at every later point of view.
+    #[test]
+    fn a_matured_block_does_not_un_mature_when_its_verifiers_leave() {
+        let panel = [seat(1), seat(2)];
+        let weights = NoStepWeights;
+        let carriage = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+
+        // Seat 1 requests unbonding at 1 800 — after it filed, after the window closed.
+        let leaving = crate::dns_finality::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
+            let mut b = bond(s);
+            if s == 1 {
+                b.unbond_request_daa_score = Some(1_800);
+            }
+            (op(s), b)
+        }));
+
+        for pov in [1_600, 1_799, 1_800, 5_000] {
+            let resolved = resolve_block_facts_v1(&input(&carriage, &panel, pov, &leaving, &weights), accept_fixture_signature);
+            let facts = weight_facts_v1(&resolved, W_CHALLENGE).expect("resolved");
+            assert_eq!(resolved.assigned_receipts, Some(2), "pov {pov}: a receipt filed while bonded stays filed");
+            assert_eq!(
+                crate::palw_weight::ramp_stage_v1(&facts, &RAMP),
+                PalwWorkRampStageV1::Final,
+                "pov {pov}: matured weight must not be handed back"
+            );
+        }
+
+        // The rule it must NOT become: a filer that was already gone when it filed still counts for
+        // nothing. Seat 1 unbonds at 1 050, before its own receipt at 1 100.
+        let gone_first = crate::dns_finality::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
+            let mut b = bond(s);
+            if s == 1 {
+                b.unbond_request_daa_score = Some(1_050);
+            }
+            (op(s), b)
+        }));
+        let resolved = resolve_block_facts_v1(&input(&carriage, &panel, 2_000, &gone_first, &weights), accept_fixture_signature);
+        assert_eq!(resolved.assigned_receipts, Some(1), "an unbonded filer is still not accountable");
+    }
 
     /// A matured block cannot be demoted by a dispute opened after its window closed.
     ///

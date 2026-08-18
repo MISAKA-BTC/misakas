@@ -135,6 +135,30 @@ than a placeholder.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
+### Finality that eroded with nothing but time, and the property that catches it
+
+The two window fixes below both answer "which carriage counts". This one answers "**as of when is a
+party accountable**", and it needed no carriage at all.
+
+`receipt_is_authentic_v1` resolved the filer's bond at `pov_daa` — the evaluating node's tip.
+`effective_bond_status` is one-way: once `pov` passes a filer's unbond request the bond reads
+`Unbonding` forever. So a receipt **stopped being authentic as its filer left**, a matured block
+dropped back below quorum, and its pwu left `safe(C)`. Nothing about the chain changed; only the
+clock did. And it is steerable — file, let the block mature, then unbond to demote it. The accused
+in both conviction arms and the challenger behind a bisect `Open` were resolved the same way and are
+fixed with it.
+
+The right moment is the one the party ACTED at: the DAA its carriage was accepted. This is the
+asymmetry the credit path already states — *"a refutation accepted after the window still convicts,
+but does not revoke credit"* — later facts punish, they do not revoke. The weight path now agrees
+with it.
+
+**The property this belongs to, which ADR-0039 asks for before any wiring**: with the carriage
+fixed, advancing the point of view must never move a block out of `Final`. `safe(C)` governs IBD and
+the deep-reorg bound, so pwu that leaves it is finality handed back. That test now exists, with the
+control that keeps it from becoming "bonds are never checked": a filer that had already unbonded
+*before* it filed still counts for nothing.
+
 ### The third unbounded carriage arm: a late `Open` un-matured a `Final` block
 
 Found by asking the same question of every arm after the receipt asymmetry above. `dispute_is_open_v1`
