@@ -41,6 +41,11 @@ pub enum PruningImportError {
     #[error("the pruning proof is missing headers")]
     PruningProofNotEnoughHeaders,
 
+    #[error(
+        "the pruning proof carries {total} header slots, over the cap of {cap} for this network — refused before any PoW (ADR-0041 Decision 3)"
+    )]
+    PruningProofOversized { total: usize, cap: usize },
+
     #[error("block {0} already appeared in the proof headers for level {1}")]
     PruningProofDuplicateHeaderAtLevel(BlockHash, BlockLevel),
 

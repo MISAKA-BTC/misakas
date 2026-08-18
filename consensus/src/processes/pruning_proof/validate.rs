@@ -94,6 +94,42 @@ impl ProofLevelContext<'_> {
     }
 }
 
+/// The maximum number of header slots a pruning proof may carry before ANY inference is spawned
+/// (ADR-0041 Decision 3).
+///
+/// On a PALW network each proof header costs one full LLM inference, serialized on a single spawn
+/// gate, so an uncapped proof is a remote stall — a peer can replay the network's own historical
+/// headers, valid PoW and all, and buy the victim tens of hours of work for a few MB (audit H1).
+///
+/// Derived from the validator's OWN params, never from the proof's claimed `daa_score`: the honest
+/// builder's per-level working set is `2 · pruning_proof_m` (`build.rs` VecDeque capacity and cache
+/// policy), and there are `max_block_level + 1` levels. The cap is deliberately GENEROUS — the
+/// honest proof is a pyramid whose high levels hold only `O(m)` headers total, so a real proof sits
+/// far under this ceiling (≈ 9 000 slots at testnet-11 against a ceiling of 502 000), while a
+/// 1 GiB junk message sits far over it. It bounds the pathological case; the tight bound is
+/// sampling (ADR-0041 Decision 1), which this cap precedes rather than replaces.
+///
+/// A free function, not a method, so it is checkable by a unit test with no `PruningProofManager`.
+pub(super) fn proof_header_budget(max_block_level: BlockLevel, pruning_proof_m: u64) -> usize {
+    (max_block_level as usize + 1).saturating_mul(2usize.saturating_mul(pruning_proof_m as usize))
+}
+
+/// Refuses a proof whose total header count exceeds [`proof_header_budget`]. Counts SLOTS
+/// (`sum(level.len())`), because that is what the per-header PoW loop iterates — a header duplicated
+/// across levels is a slot the loop still visits.
+pub(super) fn check_proof_header_budget(
+    proof: &PruningPointProof,
+    max_block_level: BlockLevel,
+    pruning_proof_m: u64,
+) -> PruningImportResult<()> {
+    let total: usize = proof.iter().map(|level| level.len()).sum();
+    let cap = proof_header_budget(max_block_level, pruning_proof_m);
+    if total > cap {
+        return Err(PruningImportError::PruningProofOversized { total, cap });
+    }
+    Ok(())
+}
+
 impl ProofContext {
     /// Build the full context from the proof
     fn from_proof(
@@ -108,6 +144,11 @@ impl ProofContext {
         if proof[0].is_empty() {
             return Err(PruningImportError::PruningProofNotEnoughHeaders);
         }
+
+        // ADR-0041 Decision 3: bound the number of header slots BEFORE the per-header PoW loop below
+        // spawns one inference each. This is the single chokepoint both entry points reach
+        // (`validate_pruning_point_proof` and `..._standalone` both go through `from_proof`).
+        check_proof_header_budget(proof, ppm.max_block_level, ppm.pruning_proof_m)?;
 
         let ghostdag_k = ppm.ghostdag_k;
 
@@ -498,6 +539,79 @@ fn same_span_pruning_period_works(
     challenger_relay_blue_work: BlueWorkType,
 ) -> (BlueWorkType, BlueWorkType) {
     (defender_relay_blue_work.saturating_sub(period_cut), challenger_relay_blue_work.saturating_sub(period_cut))
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use kaspa_consensus_core::header::Header;
+    use std::sync::Arc;
+
+    fn level(n: usize) -> Vec<Arc<Header>> {
+        // The content is irrelevant to the budget check — it counts slots, not headers. Distinct
+        // hashes only so the vector is not obviously degenerate.
+        (0..n).map(|i| Arc::new(Header::from_precomputed_hash((i as u64).into(), vec![]))).collect()
+    }
+
+    /// The cap is derived from the validator's own params and refuses an oversized proof BEFORE any
+    /// PoW — the whole point being that the refusal costs nothing.
+    #[test]
+    fn an_oversized_proof_is_refused_at_the_budget() {
+        let (mbl, m) = (250u8, 1_000u64);
+        let cap = proof_header_budget(mbl, m);
+        assert_eq!(cap, (250 + 1) * 2 * 1_000, "the ceiling is (max_block_level+1) x 2 x m");
+
+        // A realistic proof — a pyramid, ~9 full base levels and tiny tops — sits far under it.
+        let mut realistic: PruningPointProof = vec![level(1); mbl as usize + 1];
+        for lvl in realistic.iter_mut().take(9) {
+            *lvl = level(1_000);
+        }
+        let realistic_total: usize = realistic.iter().map(|l| l.len()).sum();
+        assert!(realistic_total < cap, "an honest proof ({realistic_total}) must never hit the cap ({cap})");
+        assert!(check_proof_header_budget(&realistic, mbl, m).is_ok());
+
+        // Exactly at the cap passes; one slot over is refused, and the error names both numbers.
+        let at_cap: PruningPointProof = vec![level(2 * m as usize); mbl as usize + 1];
+        assert_eq!(at_cap.iter().map(|l| l.len()).sum::<usize>(), cap);
+        assert!(check_proof_header_budget(&at_cap, mbl, m).is_ok());
+
+        let mut over = at_cap;
+        over[0].push(Arc::new(Header::from_precomputed_hash(u64::MAX.into(), vec![])));
+        match check_proof_header_budget(&over, mbl, m) {
+            Err(PruningImportError::PruningProofOversized { total, cap: reported }) => {
+                assert_eq!(total, cap + 1);
+                assert_eq!(reported, cap);
+            }
+            other => panic!("expected PruningProofOversized, got {other:?}"),
+        }
+    }
+
+    /// The count is SLOTS, not distinct headers: a header duplicated across levels is a slot the PoW
+    /// loop still visits, so it must still count against the cap. A test that used distinct headers
+    /// per level would let a duplicate-padding attack slip the cap.
+    #[test]
+    fn the_budget_counts_slots_not_distinct_headers() {
+        let (mbl, m) = (250u8, 1_000u64);
+        let cap = proof_header_budget(mbl, m);
+        let one = Arc::new(Header::from_precomputed_hash(7u64.into(), vec![]));
+        // The SAME header, cap+1 times, spread one-per-level then piled onto level 0.
+        let mut proof: PruningPointProof = vec![vec![]; mbl as usize + 1];
+        for _ in 0..=cap {
+            proof[0].push(one.clone());
+        }
+        assert_eq!(proof.iter().map(|l| l.len()).sum::<usize>(), cap + 1);
+        assert!(
+            matches!(check_proof_header_budget(&proof, mbl, m), Err(PruningImportError::PruningProofOversized { .. })),
+            "duplicate headers are still slots and must still be capped"
+        );
+    }
+
+    /// The ceiling never wraps, even at the widest params a network could carry.
+    #[test]
+    fn the_budget_saturates_rather_than_wraps() {
+        assert_eq!(proof_header_budget(u8::MAX, u64::MAX), usize::MAX);
+        assert_eq!(proof_header_budget(0, 1_000), 2_000, "one level still gets its own working set");
+    }
 }
 
 #[cfg(test)]
