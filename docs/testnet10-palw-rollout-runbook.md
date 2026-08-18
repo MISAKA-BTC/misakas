@@ -210,9 +210,38 @@ Prerequisites, none of which are code decisions:
 # on an x86-64 Linux host, from a checkout of the branch
 source musl-toolchain/build.sh          # verifies the pinned toolchain; fails closed
 cd "$REPO_ROOT"
-cargo build --bin kaspad --release --target x86_64-unknown-linux-musl
+cargo build --bin kaspad --release --features evm --target x86_64-unknown-linux-musl
 sha256sum target/x86_64-unknown-linux-musl/release/kaspad
 ```
+
+**`--features evm` is not optional.** testnet-11 activates the EVM lane at DAA 0, so a kaspad built
+without it starts, passes calibration, prints the right fingerprint, and then panics the moment it
+builds a block template: *"the EVM lane is active at DAA 0 but this kaspad was built without the
+`evm` feature"*. Learned by deploying one; the node looked healthy for about thirty seconds.
+
+**Three things that will bite in exactly this order, all learned the hard way on 2026-08-18:**
+
+1. **The t11 units are TRANSIENT.** `palw-soak-node` and `palw-ibd-join` are created by
+   `systemd-run` (their launcher does it), not by unit files on disk. **`systemctl stop` DESTROYS
+   them** — `systemctl start` afterwards reports `Unit ... not found`. Recreate with
+   `bash /root/palw-soak/misaka-palw-soak-node.sh` (it re-runs `systemd-run` with the right
+   `MemoryMax`, `User`, log appenders and `PALW_WORKER` / `MISAKA_PALW_GGUF`). The ibd-join unit has
+   no launcher script; keep its `systemd-run` line to hand before stopping it.
+2. **`--yes` is required under systemd.** A newer build asks the DB-upgrade question on a TTY the
+   service does not have, auto-rejects, and exits 1 — reported as `Operation was rejected (), exiting..`
+   The soak launcher now carries `--yes`; anything else launched by hand needs it too.
+3. **This is a DB-format migration, not a drop-in swap.** The branch's build is **database version 8**
+   and the previously deployed one wrote version 7, whose on-disk block-header layout differs. The
+   upgrade **DELETES the database** — "instant and safe" in the prompt means the deletion is quick,
+   not that the chain survives. Every upgrading node resyncs from genesis, which at this class's
+   per-header cost is hours. **Do not upgrade every node at once**: keep at least one node on the
+   old binary (or a host that already holds the chain) so the upgraded ones have somewhere to sync
+   from. Rolling back is worse than rolling forward — the old binary rejects the v8 database and
+   would delete it again.
+
+`PEERS=<host:port>` matters for the same reason: the soak node runs `--nodnsseed` with no peer by
+default, which was fine while it *was* the chain. After a DB wipe it has nowhere to sync from, so
+launch it as `PEERS=<peer> bash misaka-palw-soak-node.sh`.
 
 Then, per host:
 
