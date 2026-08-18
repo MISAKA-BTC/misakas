@@ -152,9 +152,15 @@ impl PalwWeightParamsV1 {
 /// and hold an honest block at `Provisional` forever — a censorship veto over *maturity*. That
 /// is the strictly safer failure (delayed finality beats a matured forgery), and it is bounded
 /// only once unlicensed-but-published work carries some live fork-choice weight, so the chain
-/// progresses while maturity waits. That split — live weight for tip selection, safe weight
-/// (this function) for finality and IBD — is the next change on this branch and is a
-/// precondition of activating the ramp. Until it lands, this module is safe and not yet live.
+/// progresses while maturity waits.
+///
+/// That split has since LANDED as [`crate::palw_chain_weight`] (ADR-0039 W4′): `safe` counts
+/// `Final` only and governs IBD and finality, `live` adds bounded immature work and governs tip
+/// selection alone. This paragraph used to end "is the next change on this branch", and left
+/// standing it names a landed module as the blocker — so a reader looking for what still gates
+/// activation would look in the wrong place. What actually remains is that module's own statement:
+/// nothing calls either weight yet, and ADR-0039 requires an adversarial reorg-equivalence suite
+/// before any network carrying value. This function is a decision, not yet a live rule.
 pub fn ramp_stage_v1(facts: &PalwWeightFactsV1, params: &PalwWeightParamsV1) -> PalwWorkRampStageV1 {
     if facts.convicted_before_close {
         return PalwWorkRampStageV1::Voided;
