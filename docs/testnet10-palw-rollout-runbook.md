@@ -177,11 +177,22 @@ worker. Treat a `BUILD-MISMATCH` as "determinism untested", not as "hosts disagr
 
 ### Optional: the resident verification agent (`MISAKA_PALW_AGENT=1`)
 
-By default a node spawns one `palw-worker` process per PoW seed, and each spawn re-reads and
-SHA-256s the whole 1.28 GiB model before doing ~0.2 s of inference. Setting `MISAKA_PALW_AGENT=1`
-makes the node keep ONE `palw-worker --mode pow-agent` child with the model resident and feed it
-seeds instead. Measured (dev machine, 12 seeds, warm page cache): **3.28 s → 0.57 s per seed, 5.7×**.
-The win is largest exactly where it matters, a from-genesis sync (ADR-0041 Decision 1′).
+By default a node spawns one `palw-worker` process per PoW seed, and each spawn SHA-256s the whole
+1.28 GiB model and reloads it before doing any inference. Setting `MISAKA_PALW_AGENT=1` makes the
+node keep ONE `palw-worker --mode pow-agent` child with the model resident and feed it seeds
+instead (ADR-0041 Decision 1′).
+
+**How much it buys depends on the class, and on the CPU class it is modest.** Measured per header:
+
+| | dev box (Metal class) | `misaka-ibm` (CPU class, 8 vCPU EPYC) |
+|---|---|---|
+| pin SHA-256 + model load (what the agent removes) | 2.70 s | **4.64 s** |
+| the inference itself (what it cannot remove) | 0.18–0.57 s | **13.9–16.0 s** |
+| one-shot total | ~3.3 s | ~18.6–20.7 s |
+| **with the agent** | 0.57 s (**5.7×**) | 13.9–16.0 s (**~1.3×**) |
+
+On the CPU class the inference dominates, so expect roughly **1.3×**, not the 5.7× a GPU-class box
+shows. It is still free of any security argument and still worth enabling for a sync.
 
 ```bash
 PALW_WORKER=/opt/misaka/palw-worker MISAKA_PALW_GGUF=/opt/misaka/Qwen3.5-2B-Q4_K_M.gguf MISAKA_PALW_AGENT=1 ./kaspad --testnet --netsuffix=11 …
@@ -208,14 +219,25 @@ the pruning-proof validator verify header PoW in batches of `N` (ADR-0041 Decisi
 nothing about what is accepted; it costs `N × ~1.4 GiB` of resident model, since the agent pool
 grows to `N` and never shrinks.
 
-**Measure it before trusting a number.** On a 12-core M-series host, throughput saturated at
-**1.77×** with 3 concurrent workers, and 4 or 6 bought *nothing* — only longer latency for everyone.
-The limit is memory bandwidth, not cores: at 2 workers, with only 8 of 12 cores busy, per-job
-latency was already 1.44× the solo figure. A server host with more memory channels may do better,
-and `CPU_THREADS = 4` is pinned by the determinism class so it is not a lever. The reproducer is
-`cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
+**On `misaka-ibm` it is actively harmful — leave it at 1.** Measured 2026-08-18 with the node
+stopped: one worker does an inference in 13.9 s; **two concurrent workers take 73.6 s each**, which
+is 0.38× the serial throughput — a sync would be **2.6× slower**, not faster. N = 3 and N = 4 did
+not finish inside a 400 s cap.
 
-Start at `N = 3`, measure, and only raise it if the measurement says so.
+That is not oversubscription. Two workers × 4 pinned threads is exactly the 8 cores available,
+`vmstat` reports `st = 0` (the hypervisor is not stealing CPU), and the guest has one NUMA node.
+The scarce resource is memory bandwidth — batch-1 decode streams the whole 1.28 GiB weight set per
+token — and on a KVM guest that bandwidth is shared with co-tenants, which steal accounting does not
+show.
+
+For contrast, a 12-core M-series dev box saturates at 1.77× with 3 workers and gains nothing past
+that. So the range across two real hosts is **0.38× to 1.77×** — one of them worse than doing
+nothing.
+
+**Rule: do not raise `MISAKA_PALW_CONCURRENCY` on a host you have not measured.** Assume a new host
+behaves like `misaka-ibm` until shown otherwise. `CPU_THREADS = 4` is pinned by the determinism
+class, so trading worker count against threads per worker is not available either. Reproducer:
+`cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
 
 ## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11) — ⚠️ SUPERSEDED
 

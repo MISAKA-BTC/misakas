@@ -186,9 +186,33 @@ Measured on this machine, 12 distinct seeds, `--n-predict 128`:
 | one-shot, a process each | 3.28 s | 39.2 s |
 | resident agent | **0.57 s** | 9.6 s (2.70 s of it the one model load) |
 
-**5.7× per seed** — the projected ~5× constant factor, confirmed rather than assumed. Note this
-machine's page cache is warm, so its one-shot baseline (3.28 s) is well under the fleet's 12 s; the
-fleet number is the one that should be re-measured there, and the ratio is what transfers.
+**5.7× per seed** on that machine. The ratio does **not** transfer to the fleet, and the reason is
+the whole point of the section below.
+
+#### Fleet measurement 2026-08-18 (`misaka-ibm`, 8-vCPU KVM EPYC @ 2.0 GHz, **CPU class**)
+
+The dev machine runs the **Metal** class (`03a3c66c…`); the fleet runs the **CPU** class
+(`0fc67b41…`). Those are different determinism classes, and the cost structure inverts between them.
+Per header, one-shot, measured with the node's own workload stopped:
+
+| | dev (Metal class) | fleet (CPU class) |
+|---|---|---|
+| pin: SHA-256 of the 1.28 GiB artifact | — | **1.56 s** |
+| model load | 2.70 s | 3.08 s |
+| the inference itself | 0.18–0.57 s | **13.9–16.0 s** |
+| one-shot total | ~3.3 s | **~18.6–20.7 s** |
+| resident agent (inference only) | 0.57 s | **13.9–16.0 s** |
+| **speedup from Decision 1′** | **5.7×** | **~1.3×** |
+
+The pin is not free and is not in the "model loaded" figure: `pinned_model_path_v2` SHA-256s the
+whole artifact on **every spawn**, before `execute` starts its clock. The agent still removes it,
+along with the model load — 4.6 s of the fleet's ~19 s.
+
+But on the CPU class the **inference dominates**: 16 s of a ~20 s header. The 97 %-overhead premise
+this ADR opened with was measured on a GPU-class host where the inference is a rounding error; on
+the CPU class the overhead is ~23 %, so amortising it buys ~1.3×, not ~5×. Decision 1′ is still a
+real win and still costs no security argument — it is simply a much smaller one exactly where the
+fleet lives.
 
 Four design points, each of which is a way this could have been got wrong:
 
@@ -245,8 +269,25 @@ behaviour), the resident agent is a pool that grows to that count, and the two p
   also means a proof that fails it now aborts having written nothing to the headers store, where
   before it had written every header up to the bad one.
 
-**The drafted "8-way concurrency ≈ 8×" is not supported by measurement.** Throughput of N resident
-agents, 6 jobs each, on a 12-core M-series host (`CPU_THREADS = 4`, so N workers occupy 4N threads):
+**The drafted "8-way concurrency ≈ 8×" is not supported by measurement, and on the fleet host
+concurrency is worse than useless.** Two hosts, both with `CPU_THREADS = 4` so N workers occupy 4N
+threads.
+
+**Fleet (`misaka-ibm`, 8 vCPU, CPU class), node stopped for the measurement:**
+
+| N | threads | inference per job | throughput | vs serial |
+|---|---|---|---|---|
+| 1 | 4/8 | 13.9 s | 0.072 /s | 1.00× |
+| 2 | 8/8 | **73.6 s** | 0.027 /s | **0.38×** |
+
+Two concurrent inferences make each one **5.3× slower** and cut aggregate throughput to **0.38× —
+2.6× WORSE than running them one after another**. N = 3 and N = 4 did not finish inside a 400 s cap.
+This is not oversubscription: 2 workers × 4 threads is exactly the 8 available cores, `vmstat`
+reports **`st = 0`** (the hypervisor is not taking the CPU), and the guest has one NUMA node. Cores
+are not the scarce resource. Memory bandwidth is — and on a KVM guest that bandwidth is shared with
+co-tenants, which CPU-steal accounting does not show.
+
+**Dev (12-core M-series, Metal class),** N resident agents, 6 jobs each:
 
 | agents | threads | jobs/s | speedup | per-job latency |
 |---|---|---|---|---|
@@ -266,14 +307,25 @@ streams the entire ~1.28 GiB weight set per token, so concurrent models compete 
 rather than for arithmetic. (Consistent with the numbers and with how batch-1 inference is known to
 behave; not separately confirmed with a bandwidth counter.)
 
-Two consequences worth stating plainly:
+Even there it saturates at 1.77×, and past 3 agents every extra one only lengthens everyone's
+latency. The binding constraint is the same on both hosts and it is **not cores**: at 2 agents on the
+dev box only 8 of 12 cores are busy, yet per-job latency is already 1.44× solo. If cores were the
+limit, two agents would not slow each other at all. What is shared and saturated is memory
+bandwidth — batch-1 decode streams the entire ~1.28 GiB weight set per token, so concurrent models
+compete for the memory bus rather than for arithmetic. (Consistent with every number above; not
+separately confirmed with a bandwidth counter, which a KVM guest largely cannot read anyway.)
+
+Three consequences worth stating plainly:
 
 * **`CPU_THREADS = 4` is pinned by the determinism class**, so a host cannot trade worker count
   against threads per worker to dodge this — the shape string is part of the runtime identity.
-* **The fleet number is not this number.** A server host with 8–12 memory channels has far more
-  aggregate bandwidth than a unified-memory laptop, so it may scale further, and it may not. The
-  honest instruction is to measure `MISAKA_PALW_CONCURRENCY` on the host that will sync, with the
-  test that produced the table above, rather than to inherit either 8× or 1.77×.
+* **The guess that a server would scale better was wrong.** It was the honest thing to expect and the
+  measurement refuted it: the 8-vCPU KVM EPYC scales *negatively* where the laptop at least reached
+  1.77×. Nothing about "server hardware" should be assumed here.
+* **Therefore the default stays 1, and raising it requires a measurement, not a policy.** The
+  reproducer is in-tree (`palw_agent_concurrency`, and the fleet sweep this section records). A host
+  that has not been measured must be assumed to be the `misaka-ibm` case, where `N = 2` would make a
+  sync 2.6× slower.
 
 ### Decision 3 — Hard header cap, enforced before any inference
 
@@ -310,22 +362,25 @@ that ignored the gate would have re-introduced exactly the amplification this de
 Exhaustive verification stays. The honest one-year testnet-11 proof is ~9,000 headers, and the three
 landing decisions compose multiplicatively rather than changing the exponent:
 
+Everything below is now measured **on the fleet host itself** (`misaka-ibm`, CPU class, its node
+stopped), not composed from a dev machine's ratios:
+
 | | per header | 9,000 headers |
 |---|---|---|
-| today | ~12 s | 30.0 h |
-| + persistent agent (Decision 1′ — landed, **5.7×** measured) | ~2.1 s | 5.3 h |
-| + concurrency (Decision 2 — landed, **1.77×** measured) | ~1.2 s | **~3.0 h** |
+| one-shot, serial — what ships | ~18.6–20.7 s | **46–52 h** |
+| + resident agent (Decision 1′, **1.3×** measured) | ~13.9–16.0 s | **35–40 h** |
+| + concurrency (Decision 2, **0.38×** measured — refused) | — | worse; stays at N = 1 |
 
-Both factors are now measured rather than projected, and the second one is much smaller than this
-ADR first assumed: the draft claimed 8× from 8-way concurrency and got 1.77×, because the resource
-that saturates is memory bandwidth and not cores (Decision 2 above). **The headline is 30 h → ~3 h,
-not 30 h → 45 min.** That is still a different proposition from 30 hours, and it is reached without
-weakening any security argument — but it is an hours-scale sync, and anyone planning around 45
-minutes should stop.
+**The headline is 46–52 h → 35–40 h.** Not 30 h → 45 min, and not 30 h → 3 h. Both of this ADR's
+earlier numbers were wrong in the same direction, and for the same reason: they were composed from a
+GPU-class dev machine where the inference is a rounding error, applied to a fleet baseline that was
+itself an estimate. On the CPU class the inference *is* the cost — 16 s of a ~20 s header — so
+amortising the fixed 4.6 s buys 1.3×, and running two at once costs 2.6×.
 
-The 12 s is the fleet's per-header cost; the two factors were measured on a dev machine. Applying
-them to the fleet's baseline is the honest composition available today, and re-measuring both on the
-host that will actually sync is the remaining gap.
+Note the baseline moved too: this ADR opened with "~12 s per header" and the measured figure is
+~19 s quiet, ~30 s while the node is also validating. A from-genesis sync of a year of
+testnet-11 history on this host class is a **multi-day** operation, and the honest lever left is not
+in this ADR — it is the cost of one inference, i.e. the model and the class.
 
 45 minutes for a one-time sync of a year of history is a different proposition from 30 hours, and it
 is reached without weakening any security argument. It is still `O(m·log(history))` inferences, so it
@@ -337,9 +392,14 @@ not the honest cost. It landed first because it has zero liveness risk.
 
 ## Consequences
 
-* IBD on a PALW network goes from ~30 h to ~3 h with Decisions 1′ and 2 landed, with NO change to
-  what is accepted — every header is still verified in full. The first draft of this ADR said 45
-  minutes; that rested on an 8× from concurrency which measurement did not support.
+* IBD on a PALW network goes from ~46–52 h to ~35–40 h on the measured fleet host with Decision 1′
+  enabled, with NO change to what is accepted — every header is still verified in full. Decision 2
+  is landed but must stay at its default of 1 there, because 2-way concurrency measured 2.6× WORSE
+  than serial. Both of this ADR's earlier headlines (45 min, then 3 h) were composed from a
+  GPU-class dev machine and did not survive contact with the fleet.
+* The remaining cost is the inference itself, which no scheduling decision can amortise. If a
+  multi-day from-genesis sync is unacceptable, the levers are the model, the class, or shipping a
+  trusted checkpoint — none of which are in this ADR's scope.
 * No consensus rule changes; no preset changes; the fingerprint does not move. Every change here is
   a local sync policy.
 * Nothing here rests on proof acceptance being a local decision, because nothing here samples. That
