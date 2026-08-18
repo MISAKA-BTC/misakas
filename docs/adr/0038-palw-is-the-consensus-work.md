@@ -135,6 +135,57 @@ than a placeholder.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
+### Decision C's assigned duty, and the window asymmetry found while wiring it
+
+**The defect first, because it is the part that mattered.** The resolver bounded convictions by the
+challenge window (W5: a conviction accepted after the close is telemetry, never a weight fact) and
+did not bound receipts at all. Late evidence therefore counted **for** a block and never against it.
+
+The consequence is not a fairness complaint. Quorum is a threshold on the receipt count, so a block
+that missed quorum inside its window could be **topped up to `Final` afterwards**, at a moment of
+the topper-up's choosing — hold receipts back, then raise an old branch's weight when a competing
+branch appears. Bounding retroactive weight changes is the entire purpose of a challenge window.
+Both arms now share one boundary, `accepted_daa <= accepted + w_challenge`, which is also the DAA
+one-off `weight_facts_v1` treats as still-inside. No existing test changed behaviour, which is what
+made the asymmetry survivable for as long as it did.
+
+**The duty accounting** (`panel_duty_v1`) is the fold this was found in. It answers who defaulted,
+and three of its rules go the opposite way from the quorum count beside it:
+
+* **The duty deadline is not the challenge window.** The schedule already defines one —
+  `delta_bind + w_replay`, "attest or refute within this many DAA of the anchor", which
+  `PalwScheduleParamsV1::validate` holds strictly shorter than `w_challenge`. Measuring a no-show
+  against `w_challenge` would let an assigned seat wait and see what everyone else filed before
+  committing. The quorum count deliberately keeps the LONGER window: a late receipt is still
+  evidence someone replayed and agreed, so discarding it costs liveness for nothing. One carriage
+  row can therefore count toward quorum **and** be a no-show, and the test that pins this asserts
+  both on the same row. Carrying `PalwScheduleParamsV1` in the resolver input instead of two loose
+  windows is what makes that inequality enforceable rather than remembered.
+* **The duty deadline is not the challenge window.** The schedule already defines one —
+  `delta_bind + w_replay`, "attest or refute within this many DAA of the anchor", which
+  `PalwScheduleParamsV1::validate` holds strictly shorter than `w_challenge`. Measuring a no-show
+  against `w_challenge` would let an assigned seat wait and see what everyone else filed before
+  committing. The quorum count deliberately keeps the LONGER window: a late receipt is still
+  evidence someone replayed and agreed, so discarding it costs liveness for nothing. One carriage
+  row can therefore count toward quorum **and** be a no-show, and the test that pins this asserts
+  both on the same row. Carrying `PalwScheduleParamsV1` in the resolver input instead of two loose
+  windows is what makes that inequality enforceable rather than remembered.
+* **Any verdict discharges.** Quorum counts `Match` only, because only agreement licenses. A seat
+  that replayed and filed `Mismatch` did its duty and disagreed — reusing the quorum filter would
+  make the honest dissent Decision C exists to collect into the offence it punishes.
+* **`Pending` is a distinct value, not an empty set.** Mid-window nobody has defaulted yet, and the
+  dangerous answer is not a wrong name but a `Closed { no_shows: [] }` a caller reads as "nobody
+  did" — or a full one it reads as "everybody did", which turns a slow network into a mass slash.
+* **An inactive bond is not excused.** A slashed seat collects a no-show on top of its slash. That
+  is a real cost, accepted because the alternative is worse: excusing inactive bonds makes unbonding
+  an exit from assigned duty, so a seat that dislikes what it is about to find can withdraw instead
+  of filing. Double-punishing is unfair; a purchasable exemption is unsound.
+
+The consequence is deliberately not attached. This computes who defaulted; what it costs is a
+slash-path decision, and separating them is what let the accounting be tested against a case no live
+slash path exists to exercise — including the node that cannot verify signatures, which correctly
+reports the *entire panel* in default and must never act on it.
+
 ### Decision C's freeze clause — implemented, and the block was not where it looked
 
 I10 — "`Unadjudicable` slashes NOBODY and freezes the class" — is implemented. It was recorded here

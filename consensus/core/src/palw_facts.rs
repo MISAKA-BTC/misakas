@@ -413,10 +413,14 @@ pub struct PalwResolverInputV1<'a> {
     /// were unbound to it — the resolver never compared them against the block's own class — so
     /// the dominant term of block weight was whatever the caller passed (re-audit §3.2).
     pub classes: &'a dyn PalwClassFactsViewV1,
-    /// The class's registered challenge window.
-    pub w_challenge: u64,
-    /// The class's registered rung window — what a bisection deadline is derived from.
-    pub w_round: u64,
+    /// The class's registered windows, as one object.
+    ///
+    /// This used to be the two bare fields `w_challenge` and `w_round`, and carrying the whole
+    /// schedule instead is what makes [`panel_duty_v1`] possible: the assigned-duty deadline is
+    /// `delta_bind + w_replay`, a THIRD relationship among these windows, and a caller passing it
+    /// as its own parameter could pass anything. `PalwScheduleParamsV1::validate` is what keeps
+    /// `duty_close < w_challenge` true, and it can only enforce that over windows it holds together.
+    pub schedule: crate::palw_schedule::PalwScheduleParamsV1,
 }
 
 /// Decode the carriage records this block's facts depend on and assemble them.
@@ -437,7 +441,7 @@ where
 
     let mut receipts = Vec::new();
     let mut convicted_before_close = false;
-    let window_close = input.accepted_daa.saturating_add(input.w_challenge);
+    let window_close = input.accepted_daa.saturating_add(input.schedule.w_challenge);
 
     for (kind, accepted_daa, body) in input.carriage {
         match *kind {
@@ -542,6 +546,91 @@ where
         return false;
     };
     verify_signature(&bond.validator_pubkey, &receipt.message(input.network_id), &receipt.signature)
+}
+
+/// What a drawn seat owed this block, once its window is over.
+///
+/// ADR-0038 Decision C makes the assigned verifier's duty objective: **attest or no-show**, and a
+/// no-show is an offence rather than an abstention. This is the accounting side of that — the fact
+/// a consumer needs before any consequence can attach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwPanelDutyV1 {
+    /// The window has not closed at this point of view. Who failed to file is NOT yet a fact, and
+    /// saying "nobody has filed so everybody defaulted" mid-window is how a slow network becomes a
+    /// mass slash. A caller must treat this as "ask again later", never as an empty no-show set.
+    Pending,
+    /// The window closed. These drawn seats filed nothing within it, in canonical outpoint order.
+    Closed { no_shows: Vec<TransactionOutpoint> },
+}
+
+/// Which drawn seats defaulted on this block's commitment.
+///
+/// Derived by a fold over the carriage on the chain being evaluated — no store, for the reason
+/// [`class_is_frozen_v1`] states.
+///
+/// Three rules, each of which decides a real case the other way round from the receipt count:
+///
+/// * **any verdict discharges the duty.** [`assigned_receipt_count_v1`] counts `Match` only,
+///   because only agreement licenses. A verifier who replayed and filed `Mismatch` did the work and
+///   disagreed — the strongest possible discharge, and the one the network most needs filed. Reusing
+///   the quorum filter here would punish exactly the honest dissent Decision C is built to collect.
+/// * **the deadline is the DUTY window, not the challenge window.** `delta_bind + w_replay` — the
+///   schedule's own "attest or refute within this many DAA of the anchor" — which it validates to be
+///   strictly shorter than `w_challenge`. The quorum count beside this uses the longer window on
+///   purpose: a late receipt is still evidence someone replayed and agreed, so discarding it would
+///   cost liveness, while an ASSIGNED seat that files after its deadline has already had the chance
+///   to see what the others filed. Same carriage, two deadlines, each the one its own consumer's
+///   rule is written against.
+/// * **a bond that stopped being active is NOT excused.** It is the losing side of a real trade-off:
+///   a slashed seat collects a no-show on top of its slash. The alternative is worse — excusing an
+///   inactive bond makes withdrawal an exit from assigned duty, so any seat that dislikes what it is
+///   about to find can unbond instead of filing, and the panel silently loses whichever members saw
+///   something. Double-counting a punishment is a fairness cost; a purchasable exemption is a
+///   soundness one.
+///
+/// The consequence is deliberately NOT here. This answers "who defaulted"; what that costs is a
+/// slash-path decision, and the two are separated so the accounting can be tested against cases no
+/// live slash path exists to exercise yet.
+pub fn panel_duty_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> PalwPanelDutyV1
+where
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+{
+    use crate::palw_carriage::{PALW_CARRIAGE_KIND_RECEIPT, PalwCarriageV1, decode_palw_stage1_body};
+
+    // A zero duty window accuses the whole panel one DAA after acceptance, so it is refused the
+    // same way `weight_facts_v1` refuses a zero challenge window. `PalwScheduleParamsV1::validate`
+    // already rejects zeroes; this input takes the params unvalidated, and the safe answer to a
+    // misconfiguration is "not a fact yet" rather than a mass accusation.
+    let Some(duty_window) = input.schedule.delta_bind.checked_add(input.schedule.w_replay).filter(|w| *w > 0) else {
+        return PalwPanelDutyV1::Pending;
+    };
+    if input.pov_daa.saturating_sub(input.accepted_daa) <= duty_window {
+        return PalwPanelDutyV1::Pending;
+    }
+
+    let window_close = input.accepted_daa.saturating_add(duty_window);
+    let mut filed: BTreeSet<(Hash64, u32)> = BTreeSet::new();
+    for (kind, accepted_daa, body) in input.carriage {
+        if *kind == PALW_CARRIAGE_KIND_RECEIPT
+            && *accepted_daa <= window_close
+            && let Ok(PalwCarriageV1::Receipt(r)) = decode_palw_stage1_body(*kind, body)
+            && r.receipt.target_block_hash == input.block_hash
+            && r.receipt.target_commitment_root == input.commitment_root
+            && receipt_is_authentic_v1(&r.receipt, input, &verify_signature)
+        {
+            filed.insert((r.receipt.verifier_bond_outpoint.transaction_id, r.receipt.verifier_bond_outpoint.index));
+        }
+    }
+
+    let mut no_shows: Vec<TransactionOutpoint> = input
+        .panel
+        .iter()
+        .filter(|s| !filed.contains(&(s.bond_outpoint.transaction_id, s.bond_outpoint.index)))
+        .map(|s| s.bond_outpoint)
+        .collect();
+    no_shows.sort_by_key(|o| (o.transaction_id, o.index));
+    no_shows.dedup();
+    PalwPanelDutyV1::Closed { no_shows }
 }
 
 /// The order carriage records are interpreted in, as a function of the records themselves.
@@ -671,7 +760,7 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
             *space,
             *space_size,
             *open_daa,
-            open_daa.saturating_add(input.w_round.max(1)),
+            open_daa.saturating_add(input.schedule.w_round.max(1)),
         ) else {
             continue;
         };
@@ -679,10 +768,10 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
         for (daa, _, later) in &moves {
             match later {
                 PalwBisectMoveBodyV1::Disclosure(d) if d.session_id == ladder.session_id() => {
-                    let _ = ladder.apply_disclosure(d, *daa, input.w_round);
+                    let _ = ladder.apply_disclosure(d, *daa, input.schedule.w_round);
                 }
                 PalwBisectMoveBodyV1::Verdict(v) if v.session_id == ladder.session_id() => {
-                    let _ = ladder.apply_verdict(v, *daa, input.w_round);
+                    let _ = ladder.apply_verdict(v, *daa, input.schedule.w_round);
                 }
                 _ => {}
             }
@@ -739,7 +828,7 @@ where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
 {
     let resolved = resolve_block_facts_v1(input, verify_signature);
-    let facts = weight_facts_v1(&resolved, input.w_challenge)?;
+    let facts = weight_facts_v1(&resolved, input.schedule.w_challenge)?;
     // Looked up by the block's own class id and its own acceptance point — not read off the
     // input beside them. The stamp is then checked: a view that answers for another class would
     // otherwise price this block with that class's numbers.
@@ -768,6 +857,19 @@ mod resolver_tests {
 
     const W_CHALLENGE: u64 = 500;
     const W_ROUND: u64 = 30;
+    /// Duty closes at `delta_bind + w_replay` = 120, well inside the 500-DAA challenge window —
+    /// the inequality `PalwScheduleParamsV1::validate` enforces, and the gap the duty tests exploit.
+    const DUTY_WINDOW: u64 = 120;
+    const SCHEDULE: crate::palw_schedule::PalwScheduleParamsV1 = crate::palw_schedule::PalwScheduleParamsV1 {
+        version: crate::palw_schedule::PALW_SCHEDULE_PARAMS_VERSION_V1,
+        delta_bind: 20,
+        w_replay: 100,
+        w_answer: 60,
+        w_round: W_ROUND,
+        w_challenge: W_CHALLENGE,
+        prosecution_slack: 100,
+        q: 2,
+    };
     const RAMP: PalwWeightParamsV1 = PalwWeightParamsV1 { receipt_quorum: 2, rho_r_permille: 900 };
 
     fn h(seed: u64) -> Hash64 {
@@ -786,6 +888,12 @@ mod resolver_tests {
     }
 
     fn receipt_row(bond: u8, daa: u64) -> (u8, u64, Vec<u8>) {
+        receipt_row_verdict(bond, daa, crate::palw_receipt::PalwReceiptVerdictV1::Match)
+    }
+
+    /// The same row with the verdict chosen. `Mismatch` is a discharged duty and never a quorum
+    /// vote, so the two consumers must be able to disagree about one row.
+    fn receipt_row_verdict(bond: u8, daa: u64, verdict: crate::palw_receipt::PalwReceiptVerdictV1) -> (u8, u64, Vec<u8>) {
         let r = PalwReceiptCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
             receipt: crate::palw_receipt::PalwVerificationReceiptV1 {
@@ -800,7 +908,7 @@ mod resolver_tests {
                     unit_index: 0,
                 }],
                 observed_roots: vec![h(0x74)],
-                verdict: crate::palw_receipt::PalwReceiptVerdictV1::Match,
+                verdict,
                 verifier_bond_outpoint: op(bond),
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
             },
@@ -926,8 +1034,7 @@ mod resolver_tests {
             accepted_daa: 1_000,
             pov_daa: pov,
             classes: &FIXTURE_CLASSES,
-            w_challenge: W_CHALLENGE,
-            w_round: W_ROUND,
+            schedule: SCHEDULE,
         }
     }
 
@@ -968,6 +1075,98 @@ mod resolver_tests {
         let at_close = vec![receipt_row(1, 1_100), receipt_row(2, 1_200), receipt_row(3, 1_500)];
         let c = resolve_block_facts_v1(&input(&at_close, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
         assert_eq!(c.assigned_receipts, Some(3), "the last DAA INSIDE the window must still count");
+    }
+
+    /// ADR-0038 Decision C: mid-window, "who defaulted" is not a fact yet.
+    ///
+    /// The dangerous answer is not a wrong name — it is an empty-looking `Closed` set that a caller
+    /// reads as "nobody defaulted", or a full one it reads as "everybody did". A network partition
+    /// that delays every receipt would, under the second reading, slash a whole panel for being
+    /// slow. `Pending` is a different value, so neither reading is available.
+    #[test]
+    fn duty_is_pending_until_the_duty_window_closes() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2), seat(3)];
+        let weights = NoStepWeights;
+        let carriage = vec![receipt_row(1, 1_100)];
+
+        for pov in [1_000, 1_100, 1_000 + DUTY_WINDOW] {
+            assert_eq!(
+                panel_duty_v1(&input(&carriage, &panel, pov, &bonds, &weights), accept_fixture_signature),
+                PalwPanelDutyV1::Pending,
+                "pov {pov} is inside the duty window"
+            );
+        }
+        assert!(matches!(
+            panel_duty_v1(&input(&carriage, &panel, 1_000 + DUTY_WINDOW + 1, &bonds, &weights), accept_fixture_signature),
+            PalwPanelDutyV1::Closed { .. }
+        ));
+    }
+
+    /// A misconfigured zero duty window accuses nobody.
+    ///
+    /// `PalwScheduleParamsV1::validate` rejects zero windows, but this input takes the params
+    /// unvalidated — and the failure mode of getting it wrong is not a missing fact, it is every
+    /// seat in default one DAA after acceptance.
+    #[test]
+    fn a_zero_duty_window_is_pending_rather_than_a_mass_accusation() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let weights = NoStepWeights;
+        let carriage = vec![];
+        let mut inp = input(&carriage, &panel, 9_000, &bonds, &weights);
+        inp.schedule = crate::palw_schedule::PalwScheduleParamsV1 { delta_bind: 0, w_replay: 0, ..SCHEDULE };
+        assert_eq!(panel_duty_v1(&inp, accept_fixture_signature), PalwPanelDutyV1::Pending);
+    }
+
+    /// The two deadlines diverge on one row, and the same carriage answers both consumers.
+    ///
+    /// Seat 1 filed `Match` inside the duty window — discharged, and counts toward quorum.
+    /// Seat 2 filed `Mismatch` inside it — also discharged, and this is what separates duty from
+    /// quorum: counting a `Mismatch` as a no-show would punish the honest dissent Decision C exists
+    /// to collect, and counting it toward quorum would let a disagreement license work.
+    /// Seat 3 filed at 1 200 — past its duty deadline (1 120) but inside the challenge window
+    /// (1 500). It defaulted AND its receipt counts toward quorum. That pair is the whole point of
+    /// two deadlines: one row, two rules, neither borrowed from the other.
+    #[test]
+    fn a_mismatch_discharges_the_duty_and_the_two_deadlines_differ() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2), seat(3)];
+        let weights = NoStepWeights;
+        let carriage = vec![
+            receipt_row(1, 1_100),
+            receipt_row_verdict(2, 1_110, crate::palw_receipt::PalwReceiptVerdictV1::Mismatch),
+            receipt_row(3, 1_200),
+        ];
+        let inp = input(&carriage, &panel, 2_000, &bonds, &weights);
+
+        assert_eq!(panel_duty_v1(&inp, accept_fixture_signature), PalwPanelDutyV1::Closed { no_shows: vec![op(3)] });
+        assert_eq!(
+            resolve_block_facts_v1(&inp, accept_fixture_signature).assigned_receipts,
+            Some(2),
+            "seat 3's late receipt still licenses; seat 2's Mismatch never does"
+        );
+    }
+
+    /// An unverifiable signature is not a filing.
+    ///
+    /// The node that cannot check signatures reports the whole panel in default — which is correct
+    /// as an ACCOUNTING answer and catastrophic as a slash. It is the reason the consequence is not
+    /// in this function: a caller must satisfy itself it can verify before acting on the set.
+    #[test]
+    fn a_receipt_this_node_cannot_verify_discharges_nothing() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let weights = NoStepWeights;
+        let carriage = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+        let inp = input(&carriage, &panel, 2_000, &bonds, &weights);
+
+        assert_eq!(panel_duty_v1(&inp, accept_fixture_signature), PalwPanelDutyV1::Closed { no_shows: vec![] });
+        assert_eq!(
+            panel_duty_v1(&inp, reject_every_signature),
+            PalwPanelDutyV1::Closed { no_shows: vec![op(1), op(2)] },
+            "unverifiable receipts leave every seat looking defaulted — the caller's problem, stated"
+        );
     }
 
     /// ADR-0038 I10, exhaustively: exactly one adjudication outcome freezes the class.
