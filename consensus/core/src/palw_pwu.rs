@@ -73,6 +73,40 @@ use thiserror::Error;
 /// never been written down anywhere. Changing this changes every class's work and is a hard fork.
 pub const PALW_TICKET_SPACE_BITS: u32 = 128;
 
+/// The ticket one attempt drew: the leading [`PALW_TICKET_SPACE_BITS`] bits of the Layer-0
+/// finalized digest, big-endian.
+///
+/// The digest is already the output of `pow_finalizer_blake2b_512` over the attempt, so the ticket
+/// is uniform and no further mixing is needed or wanted — a second hash here would be a second
+/// thing to agree about.
+pub fn palw_ticket_v1(pow_digest: &[u8; crate::pow_layer0::POW_FINALIZER_BYTES]) -> u128 {
+    let mut lead = [0u8; 16];
+    lead.copy_from_slice(&pow_digest[..16]);
+    u128::from_be_bytes(lead)
+}
+
+/// Whether a ticket admits under `class_target` — ADR-0038 Decision A's algo-4 lottery clause.
+///
+/// **`<=`, not `<`, and the choice is forced twice over.**
+///
+/// * [`palw_expected_attempts_v1`] computes `2^128 / (target + 1)`, i.e. it counts `target + 1`
+///   admitting values. Its own comment says so out loud — "`target == u128::MAX` is the easiest
+///   possible target: every ticket admits". Under `<` that sentence is false (`u128::MAX` itself
+///   would fail) and the work formula is wrong by `(target+1)/target` — a factor of 2 at
+///   `target == 1`, i.e. worst exactly where difficulty is highest.
+/// * The Layer-0 PoW this sits beside already admits on `<=`
+///   (`StateLayer0::check_pow_layer0`: `pow_512 <= self.target_512`). Two lotteries on one header
+///   disagreeing about their boundary is a bug waiting for a boundary block.
+///
+/// **ADR-0038 §Decision A writes the clause as `palw_ticket < class_target`.** That is the
+/// discrepancy, recorded rather than silently resolved: the ADR's inequality is the outlier
+/// against both the arithmetic and the house convention, so the ADR text should be amended to
+/// `<=`. Nothing depends on the answer yet — this is the first implementation of the clause, which
+/// is exactly when it is cheap to settle.
+pub fn palw_ticket_admits_v1(ticket: u128, class_target: u128) -> bool {
+    ticket <= class_target
+}
+
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwPwuError {
     #[error("pwu_per_inference is zero — a class whose canonical inference costs nothing is not a PALW class")]
@@ -187,10 +221,7 @@ mod tests {
         assert!(check_pwu_claim_v1(derived, target, cost).is_ok());
 
         // The attack, refused: the maximum claim.
-        assert_eq!(
-            check_pwu_claim_v1(u64::MAX, target, cost),
-            Err(PalwPwuError::ClaimMismatch { claimed: u64::MAX, derived })
-        );
+        assert_eq!(check_pwu_claim_v1(u64::MAX, target, cost), Err(PalwPwuError::ClaimMismatch { claimed: u64::MAX, derived }));
         // And so is one unit off in either direction — there is no tolerance band, because
         // neither factor is something the miner chooses.
         assert!(check_pwu_claim_v1(derived + 1, target, cost).is_err());
@@ -217,5 +248,68 @@ mod tests {
         // unless it actually spends the inferences; that it CAN by spending them is why
         // cross-class fairness is the epoch share cap's job, never pwu magnitude's.
         assert_eq!(palw_pwu_v1(hard, 100), palw_pwu_v1(easy, 800));
+    }
+}
+
+#[cfg(test)]
+mod ticket_tests {
+    use super::*;
+
+    /// The two halves of the lottery must agree about where the boundary is: the value that
+    /// admits is counted by the work formula.
+    ///
+    /// Asserted against hand-computed values rather than a re-implementation of the production
+    /// expression — a copied formula tests the copy. `2^128 / (target + 1)`:
+    ///
+    /// | target | admitting values | attempts |
+    /// |---|---|---|
+    /// | `0` | 1 | `2^128` → saturates |
+    /// | `1` | 2 | `2^127` → saturates |
+    /// | `2^64 - 1` | `2^64` | `2^64` → saturates (one past `u64::MAX`) |
+    /// | `2^127 - 1` | `2^127` | 2 |
+    /// | `u128::MAX` | `2^128` | 1 |
+    #[test]
+    fn admission_and_expected_attempts_agree_about_the_boundary() {
+        for (target, attempts) in
+            [(0u128, u64::MAX), (1u128, u64::MAX), (u128::MAX >> 64, u64::MAX), (u128::MAX >> 1, 2u64), (u128::MAX, 1u64)]
+        {
+            assert_eq!(palw_expected_attempts_v1(target), attempts, "target {target}");
+            // The boundary value itself admits — that is what makes the count `target + 1` rather
+            // than `target`, and what the formula above is built on.
+            assert!(palw_ticket_admits_v1(target, target), "the boundary ticket must admit at target {target}");
+            if let Some(over) = target.checked_add(1) {
+                assert!(!palw_ticket_admits_v1(over, target), "one above the target must not admit");
+            }
+        }
+    }
+
+    /// The easiest possible target admits everything — the sentence `palw_expected_attempts_v1`'s
+    /// own comment relies on, and the one that is false under a strict `<`.
+    #[test]
+    fn the_easiest_target_admits_every_ticket() {
+        assert_eq!(palw_expected_attempts_v1(u128::MAX), 1);
+        for t in [0u128, 1, 42, u128::MAX - 1, u128::MAX] {
+            assert!(palw_ticket_admits_v1(t, u128::MAX), "ticket {t} must admit at the easiest target");
+        }
+    }
+
+    /// The ticket is the digest's leading 128 bits, big-endian — not its tail, and not reversed.
+    #[test]
+    fn the_ticket_is_the_leading_128_bits_big_endian() {
+        let mut digest = [0u8; crate::pow_layer0::POW_FINALIZER_BYTES];
+        digest[0] = 0x01;
+        digest[15] = 0xFF;
+        digest[16] = 0xAA; // beyond the ticket: must not affect it
+        assert_eq!(palw_ticket_v1(&digest), (1u128 << 120) | 0xFF);
+        let mut same_lead = digest;
+        same_lead[16] = 0x55;
+        assert_eq!(palw_ticket_v1(&same_lead), palw_ticket_v1(&digest), "only the leading 16 bytes count");
+    }
+
+    /// The hardest target admits only the single zero ticket — the other end of the range.
+    #[test]
+    fn the_hardest_target_admits_one_ticket() {
+        assert!(palw_ticket_admits_v1(0, 0));
+        assert!(!palw_ticket_admits_v1(1, 0));
     }
 }
