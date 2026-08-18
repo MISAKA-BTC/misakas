@@ -757,6 +757,19 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
         if *committed_root != input.commitment_root {
             continue;
         }
+        // The Open must land inside the refutation window, for the same reason the conviction and
+        // receipt arms must. Unbounded, this was a RETROACTIVE maturity veto: `ramp_stage_v1`
+        // returns `Provisional` on an open dispute before it ever looks at the window, so one
+        // bonded Open filed against an already-`Final` block demoted it — and `safe(C)`, which
+        // governs IBD and the deep-reorg bound, LOST weight it had already accumulated. That is
+        // ADR-0038's own "mutable-weight forkchoice" critical, reachable at the price of a single
+        // carriage record.
+        //
+        // Only the Open is bounded. The session's later moves are meant to run past the window —
+        // that is what `prosecution_slack` exists for — so the replay below is left alone.
+        if *open_daa > input.accepted_daa.saturating_add(input.schedule.w_challenge) {
+            continue;
+        }
         // An Open from a bond that is not ACTIVE here opens nothing. Without this, one unbonded
         // record pinned any block at `Provisional` for as long as it stayed in the horizon — a
         // griefing veto over maturity at zero cost and with nobody to charge (re-audit §3.1). The
@@ -929,6 +942,21 @@ mod resolver_tests {
         (PALW_CARRIAGE_KIND_RECEIPT, daa, body(&PalwCarriageV1::Receipt(r)))
     }
 
+    /// A bonded `Open` against the fixture's commitment, accepted at `daa`.
+    fn open_row(daa: u64) -> (u8, u64, Vec<u8>) {
+        bisect_row(
+            PalwBisectMoveBodyV1::Open {
+                job_context_hash: h(0x11),
+                committed_root: h(0xC0),
+                challenger_id: h(0x33),
+                responder_id: h(0x44),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 4,
+            },
+            daa,
+        )
+    }
+
     fn bisect_row(b: PalwBisectMoveBodyV1, daa: u64) -> (u8, u64, Vec<u8>) {
         let m = PalwBisectMoveCarriageV1 { version: PALW_CARRIAGE_VERSION_V1, challenger_bond_outpoint: op(0xC9), body: b };
         (PALW_CARRIAGE_KIND_BISECT_MOVE, daa, body(&PalwCarriageV1::BisectMove(m)))
@@ -1063,6 +1091,45 @@ mod resolver_tests {
         }
     }
     static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
+
+    /// A matured block cannot be demoted by a dispute opened after its window closed.
+    ///
+    /// `ramp_stage_v1` returns `Provisional` on an open dispute BEFORE it looks at the window —
+    /// correct for a dispute opened inside the window and still running, and catastrophic for one
+    /// opened afterwards. Unbounded, a single bonded `Open` against an already-`Final` block took
+    /// its pwu back out of `safe(C)`, the weight that governs IBD and the deep-reorg bound. An
+    /// accumulated finality weight that can go DOWN is ADR-0038's "mutable-weight forkchoice"
+    /// critical, and it cost one carriage record.
+    #[test]
+    fn a_dispute_opened_after_the_window_cannot_demote_a_matured_block() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let weights = NoStepWeights;
+        let quorum = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+
+        // Matured: quorum inside the window, window closed, nothing against it.
+        let matured = resolve_block_facts_v1(&input(&quorum, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
+        let facts = weight_facts_v1(&matured, W_CHALLENGE).expect("resolved");
+        assert_eq!(crate::palw_weight::ramp_stage_v1(&facts, &RAMP), PalwWorkRampStageV1::Final);
+
+        // The same chain plus one bonded Open, accepted a full window after the close.
+        let mut late = quorum.clone();
+        late.push(open_row(2_400));
+        let after = resolve_block_facts_v1(&input(&late, &panel, 2_500, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(after.dispute_open_or_unadjudicable, Some(false), "a late Open is telemetry, not a dispute");
+        let facts_after = weight_facts_v1(&after, W_CHALLENGE).expect("resolved");
+        assert_eq!(
+            crate::palw_weight::ramp_stage_v1(&facts_after, &RAMP),
+            PalwWorkRampStageV1::Final,
+            "safe weight already accumulated must not be revocable"
+        );
+
+        // And the window still works: the SAME Open accepted at the last DAA inside it does open.
+        let mut in_time = quorum.clone();
+        in_time.push(open_row(1_500));
+        let inside = resolve_block_facts_v1(&input(&in_time, &panel, 2_500, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(inside.dispute_open_or_unadjudicable, Some(true), "an Open inside the window still disputes");
+    }
 
     /// The window bounds the receipts too, and this is the case that used to go the other way.
     ///

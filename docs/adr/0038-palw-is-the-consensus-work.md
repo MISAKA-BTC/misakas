@@ -135,6 +135,27 @@ than a placeholder.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
+### The third unbounded carriage arm: a late `Open` un-matured a `Final` block
+
+Found by asking the same question of every arm after the receipt asymmetry above. `dispute_is_open_v1`
+did not bound the `Open`'s acceptance DAA at all, and `ramp_stage_v1` returns `Provisional` on an open
+dispute **before** it looks at the window — correct for a dispute opened inside the window and still
+running, catastrophic for one opened after it.
+
+So one bonded `Open` filed against an already-`Final` block demoted it, and `safe(C)` — the weight
+that governs IBD and the deep-reorg bound — **lost pwu it had already accumulated**. An accumulated
+finality weight that can go down is this ADR's own "mutable-weight forkchoice" critical, reachable
+for the price of a single carriage record and available to anyone holding any active bond.
+
+Only the `Open` is bounded. The session's later moves are meant to run past the window — that is
+what `prosecution_slack` is for — so the ladder replay is untouched.
+
+**Three arms, one question, three different answers before today.** Convictions were bounded,
+receipts were not, and the `Open` was not. Each was written at a different time and each looked
+locally reasonable. The lesson worth more than the three fixes: when a rule says "within the window",
+every arm that reads carriage needs the bound written into it, and the arms must be checked
+together rather than as they are added.
+
 ### Decision C's assigned duty, and the window asymmetry found while wiring it
 
 **The defect first, because it is the part that mattered.** The resolver bounded convictions by the
