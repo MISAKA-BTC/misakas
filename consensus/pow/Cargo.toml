@@ -30,6 +30,8 @@ num.workspace = true
 faster-hex.workspace = true
 log.workspace = true
 serde_json.workspace = true
+# ADR-0038 Decision A admission errors.
+thiserror.workspace = true
 
 # Host-wide inference slots (ADR-0041 Decision 2): `flock`, because the kernel releases it when the
 # holder dies. A PID file or a named semaphore both leak a slot when a node crashes.

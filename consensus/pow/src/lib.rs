@@ -2,6 +2,7 @@
 #[doc(hidden)]
 pub mod matrix;
 pub mod palw;
+pub mod palw_admission;
 #[cfg(feature = "wasm32-sdk")]
 pub mod wasm;
 #[doc(hidden)]
