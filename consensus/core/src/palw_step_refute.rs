@@ -32,16 +32,16 @@
 use kaspa_hashes::Hash64;
 
 use crate::palw_reference::{
-    ref64_add_v2, ref64_div_v2, ref64_mul_v2, ref_add_v1, ref_div_v2, ref_fma_v2, ref_mul_v1, ref_narrow_f64_to_f32_v2, ref_sqrt_v2,
-    ref_sub_v1, ref_widen_f32_to_f64_v2,
+    ref_add_v1, ref_div_v2, ref_fma_v2, ref_mul_v1, ref_narrow_f64_to_f32_v2, ref_sqrt_v2, ref_sub_v1, ref_widen_f32_to_f64_v2,
+    ref64_add_v2, ref64_div_v2, ref64_mul_v2,
 };
 use crate::palw_step::{
-    canonical_step_leaf_index, kernel_semantics_id_v1, PalwShapeProfileV3, PalwStepCoordinateV1, PALW_STEP_INPUT_LAYER_IN,
-    PALW_STEP_INPUT_SENTINEL_MIN,
+    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3, PalwStepCoordinateV1, canonical_step_leaf_index,
+    kernel_semantics_id_v1,
 };
 use crate::palw_step_leg::{
-    step_opening_root_v1, step_tile_leaf_hash_v1, PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1,
-    PalwStepTileLeafV1,
+    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1, step_opening_root_v1,
+    step_tile_leaf_hash_v1,
 };
 use crate::palw_transcendental::{ggml_v_silu_v1, glibc_expf_v1};
 
@@ -105,7 +105,9 @@ pub const KDESC_ALL: &[&str] = &[
 /// The `kernel_semantics_id`s this build can adjudicate — the catalog side of the ADR-0038 A4
 /// coverage gate, read from the adjudicator rather than claimed by a caller.
 pub fn catalogued_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
-    KDESC_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect()
+    // From the ADJUDICATION table, not from `KDESC_ALL`. The gate's promise is that a certified
+    // kernel can actually be re-executed here, and only this table knows that.
+    KERNEL_CATALOG.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
 }
 
 /// The ten BASE-0 kernels, for a caller assembling that class's reachable set (ADR-0040 D + H).
@@ -130,7 +132,9 @@ enum KernelProgram {
     Swiglu,
     SigmoidGlibcFma,
     SoftplusGlibcFma,
-    GdnCore { dot: DotStructure },
+    GdnCore {
+        dot: DotStructure,
+    },
     /// ADR-0040's nine. One variant per op; no lane structure and no libm flavour, because an
     /// integer kernel has neither.
     Base0(Base0Op),
@@ -162,27 +166,35 @@ enum DotStructure {
     Step32Epr8,
 }
 
+/// The one table that says what this build can adjudicate: descriptor → program.
+///
+/// Single source on purpose. [`resolve_kernel`] and [`catalogued_kernel_ids_v1`] both read it, so
+/// "the coverage gate certified this kernel" and "the adjudicator can execute it" cannot come
+/// apart. They used to be two hand-maintained lists that merely happened to agree; a descriptor
+/// added to one and not the other would have let A4 certify a class whose disputes all land
+/// `Unadjudicable` — rejected but unslashed, the exact hole coverage exists to close.
+const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
+    (KDESC_L2_NORM, KernelProgram::L2Norm),
+    (KDESC_RMS_NORM_FUSED, KernelProgram::RmsNormFused),
+    (KDESC_SWIGLU, KernelProgram::Swiglu),
+    (KDESC_SIGMOID_GLIBC_FMA, KernelProgram::SigmoidGlibcFma),
+    (KDESC_SOFTPLUS_GLIBC_FMA, KernelProgram::SoftplusGlibcFma),
+    (KDESC_GDN_CORE_NEON, KernelProgram::GdnCore { dot: DotStructure::Step16Epr4 }),
+    (KDESC_GDN_CORE_AVX2, KernelProgram::GdnCore { dot: DotStructure::Step32Epr8 }),
+    (KDESC_BASE0_MATMUL, KernelProgram::Base0(Base0Op::MatMul)),
+    (KDESC_BASE0_REQUANTIZE, KernelProgram::Base0(Base0Op::Requantize)),
+    (KDESC_BASE0_RESCALE, KernelProgram::Base0(Base0Op::Rescale)),
+    (KDESC_BASE0_RMS_NORM, KernelProgram::Base0(Base0Op::RmsNorm)),
+    (KDESC_BASE0_ROPE, KernelProgram::Base0(Base0Op::Rope)),
+    (KDESC_BASE0_SOFTMAX, KernelProgram::Base0(Base0Op::Softmax)),
+    (KDESC_BASE0_SILU, KernelProgram::Base0(Base0Op::Silu)),
+    (KDESC_BASE0_MUL_ELEM, KernelProgram::Base0(Base0Op::MulElem)),
+    (KDESC_BASE0_ADD_ELEM, KernelProgram::Base0(Base0Op::AddElem)),
+    (KDESC_BASE0_EMBED, KernelProgram::Base0(Base0Op::Embed)),
+];
+
 fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
-    let table: &[(&str, KernelProgram)] = &[
-        (KDESC_L2_NORM, KernelProgram::L2Norm),
-        (KDESC_RMS_NORM_FUSED, KernelProgram::RmsNormFused),
-        (KDESC_SWIGLU, KernelProgram::Swiglu),
-        (KDESC_SIGMOID_GLIBC_FMA, KernelProgram::SigmoidGlibcFma),
-        (KDESC_SOFTPLUS_GLIBC_FMA, KernelProgram::SoftplusGlibcFma),
-        (KDESC_GDN_CORE_NEON, KernelProgram::GdnCore { dot: DotStructure::Step16Epr4 }),
-        (KDESC_GDN_CORE_AVX2, KernelProgram::GdnCore { dot: DotStructure::Step32Epr8 }),
-        (KDESC_BASE0_MATMUL, KernelProgram::Base0(Base0Op::MatMul)),
-        (KDESC_BASE0_REQUANTIZE, KernelProgram::Base0(Base0Op::Requantize)),
-        (KDESC_BASE0_RESCALE, KernelProgram::Base0(Base0Op::Rescale)),
-        (KDESC_BASE0_RMS_NORM, KernelProgram::Base0(Base0Op::RmsNorm)),
-        (KDESC_BASE0_ROPE, KernelProgram::Base0(Base0Op::Rope)),
-        (KDESC_BASE0_SOFTMAX, KernelProgram::Base0(Base0Op::Softmax)),
-        (KDESC_BASE0_SILU, KernelProgram::Base0(Base0Op::Silu)),
-        (KDESC_BASE0_MUL_ELEM, KernelProgram::Base0(Base0Op::MulElem)),
-        (KDESC_BASE0_ADD_ELEM, KernelProgram::Base0(Base0Op::AddElem)),
-        (KDESC_BASE0_EMBED, KernelProgram::Base0(Base0Op::Embed)),
-    ];
-    table.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
+    KERNEL_CATALOG.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
 }
 
 /// Recompute one BASE-0 node's output row (ADR-0040 Decision D).
@@ -262,9 +274,7 @@ fn base0_row(
         // allowed to amplify. Its params are a registration artifact, like Requantize's.
         Base0Op::Rescale => {
             need(1)?;
-            let row = weights
-                .weight_row(node.weight_name.as_str(), layer, 0, 1)
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let row = weights.weight_row(node.weight_name.as_str(), layer, 0, 1).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if row.len() != 5 {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rescale params are not 5 bytes"));
             }
@@ -298,7 +308,12 @@ fn base0_row(
             };
             let wanted = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
             let row = weights
-                .weight_row(node.weight_name.as_str(), layer, 0, u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?)
+                .weight_row(
+                    node.weight_name.as_str(),
+                    layer,
+                    0,
+                    u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
+                )
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
             // The oracle served a different amount than the declared shape needs: the class's
             // registration and its weights disagree, which this court cannot resolve either.
@@ -311,9 +326,7 @@ fn base0_row(
         Base0Op::Requantize | Base0Op::Rope => {
             need(1)?;
             let name = node.weight_name.as_str();
-            let row = weights
-                .weight_row(name, layer, 0, inputs[0].len() as u32)
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let row = weights.weight_row(name, layer, 0, inputs[0].len() as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
             match op {
                 Base0Op::Requantize => {
                     // The oracle row carries (multiplier LE, shift) per channel: 5 bytes each.
@@ -330,10 +343,7 @@ fn base0_row(
                     }
                     let params: Vec<ops::QuantParams> = row
                         .chunks_exact(5)
-                        .map(|c| ops::QuantParams {
-                            multiplier: i32::from_le_bytes([c[0], c[1], c[2], c[3]]),
-                            shift: c[4],
-                        })
+                        .map(|c| ops::QuantParams { multiplier: i32::from_le_bytes([c[0], c[1], c[2], c[3]]), shift: c[4] })
                         .collect();
                     let q = ops::requantize_row(&as_i32(&inputs[0]), &params).map_err(shape)?;
                     Ok(q.into_iter().map(|v| v as i32 as u32).collect())
@@ -519,11 +529,7 @@ fn intra_table_index(profile: &PalwShapeProfileV3, slot: u32) -> Option<usize> {
         }
         cursor -= n;
     }
-    if cursor < profile.post_nodes.len() {
-        Some(cursor)
-    } else {
-        None
-    }
+    if cursor < profile.post_nodes.len() { Some(cursor) } else { None }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -536,7 +542,7 @@ pub fn check_execution_step_refutation_v1(
     refutation: &PalwExecutionStepRefutationV1,
     weights: &dyn PalwWeightOracleV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    use crate::palw_step_leg::{check_step_refutation_v1, PalwStepEvidenceV1, PalwStepRefutationV1};
+    use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_v1};
 
     let binding = &refutation.binding;
     // 1) Structural pass on the output leaf: a structurally-faulty leaf convicts without
@@ -738,11 +744,7 @@ fn f32_gt_bits(a: u32, b: u32) -> bool {
     // finite sum is non-NaN or the comparison is moot and total order suffices).
     let key = |x: u32| -> i64 {
         let mag = (x & 0x7FFF_FFFF) as i64;
-        if x & 0x8000_0000 != 0 {
-            -mag
-        } else {
-            mag
-        }
+        if x & 0x8000_0000 != 0 { -mag } else { mag }
     };
     key(a) > key(b)
 }
@@ -876,14 +878,14 @@ pub(crate) mod tests {
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
     use crate::palw_step::{
-        canonical_step_coordinates, kv_aux_leaf_count, step_leaf_count, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1,
-        PalwStepOutLenV1, PALW_STEP_OBJECT_VERSION_V1,
+        PALW_STEP_OBJECT_VERSION_V1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
+        canonical_step_coordinates, kv_aux_leaf_count, step_leaf_count,
     };
     use crate::palw_step_leg::{
-        checkpoint_empty_root_v2, checkpoint_leg_root_v2, execution_commitment_root_v2, step_leg_root_v1, step_opening_v1,
-        PalwStepLegBuilderV1, PALW_STEP_LEG_OBJECT_VERSION_V1,
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepLegBuilderV1, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
+        execution_commitment_root_v2, step_leg_root_v1, step_opening_v1,
     };
-    use crate::palw_v2::{PalwJobContextV2, PALW_TRACE_COMMITMENT_VERSION_V2};
+    use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2};
 
     fn h64(fill: u8) -> Hash64 {
         Hash64::from_bytes([fill; 64])
@@ -936,8 +938,7 @@ pub(crate) mod tests {
         let mut big = profile();
         big.base0_rms_eps_q = 1 << 30;
         let got = base0_row(Base0Op::RmsNorm, &node, Some(0), &big, &input, &NoWeights).expect("adjudicable");
-        let want: Vec<u32> =
-            crate::palw_base0_ops::rms_norm(&x, 1 << 30).unwrap().into_iter().map(|v| v as u32).collect();
+        let want: Vec<u32> = crate::palw_base0_ops::rms_norm(&x, 1 << 30).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got, want, "the registered epsilon must be the one used");
 
         // ...and it must NOT equal the hardcoded-1 recompute, or the class's epsilon is decorative
@@ -967,13 +968,11 @@ pub(crate) mod tests {
         let mut row = i32::MAX.to_le_bytes().to_vec();
         row.push(23);
         let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row)).expect("adjudicable");
-        let want: Vec<u32> = crate::palw_base0_ops::rescale_row(
-            &acc,
-            crate::palw_base0_ops::ScaleParams { multiplier: i32::MAX, shift: 23 },
-        )
-        .into_iter()
-        .map(|v| v as u32)
-        .collect();
+        let want: Vec<u32> =
+            crate::palw_base0_ops::rescale_row(&acc, crate::palw_base0_ops::ScaleParams { multiplier: i32::MAX, shift: 23 })
+                .into_iter()
+                .map(|v| v as u32)
+                .collect();
         assert_eq!(got, want, "op 9 must recompute through the catalog op");
 
         // A shift past the op's domain is malformed by construction: refuse the step rather than
@@ -1012,8 +1011,7 @@ pub(crate) mod tests {
         let w: Vec<i8> = (1..=12i8).collect();
         let row: Vec<u8> = w.iter().map(|v| *v as u8).collect();
         let got = base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(row)).expect("adjudicable");
-        let want: Vec<u32> =
-            crate::palw_base0_ops::matmul_quant(&w, &x, 3).unwrap().into_iter().map(|v| v as u32).collect();
+        let want: Vec<u32> = crate::palw_base0_ops::matmul_quant(&w, &x, 3).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got.len(), 3, "the full declared output row is recomputed, not one element");
         assert_eq!(got, want);
 
@@ -1451,5 +1449,49 @@ pub(crate) mod tests {
         ctx.shape_profile_id = p.shape_profile_id();
         assert_eq!(kv_aux_leaf_count(&p, &ctx), 0);
         assert!(step_leaf_count(&p, &ctx).unwrap() > 0);
+    }
+}
+
+#[cfg(test)]
+mod catalog_through_line_tests {
+    use super::{KDESC_ALL, KDESC_BASE0_ALL, KERNEL_CATALOG, resolve_kernel};
+    use crate::palw_step::kernel_semantics_id_v1;
+    use std::collections::BTreeSet;
+
+    /// Every kernel the coverage gate will certify must be one this build can actually execute.
+    ///
+    /// Guaranteed by construction now (both read `KERNEL_CATALOG`), asserted anyway because the
+    /// property is the whole point of A4: a certified-but-unresolvable kernel makes every dispute
+    /// over it `Unadjudicable`, which is rejected-but-unslashed — the hole a forger farms.
+    #[test]
+    fn every_catalogued_kernel_resolves_to_a_program() {
+        for id in super::catalogued_kernel_ids_v1() {
+            assert!(resolve_kernel(&id).is_some(), "catalogued but not adjudicable: {id}");
+        }
+    }
+
+    /// `KDESC_ALL` is the human-facing list and registration reads it; the table is what the
+    /// adjudicator runs. They must be the same set, in both directions — a descriptor in the list
+    /// but not the table certifies the unexecutable, and one in the table but not the list is a
+    /// kernel registration cannot name.
+    #[test]
+    fn the_descriptor_list_and_the_adjudication_table_are_the_same_set() {
+        let listed: BTreeSet<&str> = KDESC_ALL.iter().copied().collect();
+        let tabled: BTreeSet<&str> = KERNEL_CATALOG.iter().map(|(d, _)| *d).collect();
+        assert_eq!(listed, tabled, "KDESC_ALL and KERNEL_CATALOG have drifted apart");
+        assert_eq!(KDESC_ALL.len(), KERNEL_CATALOG.len(), "a duplicate descriptor would hide a gap");
+    }
+
+    /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side
+    /// too. `Rescale` was the one missing when the audit looked, and Decision H records that the
+    /// other nine cannot be computed without it.
+    #[test]
+    fn the_closed_base0_catalog_reaches_the_adjudicator_whole() {
+        assert_eq!(KDESC_BASE0_ALL.len(), 10, "ADR-0040 froze ten BASE-0 kinds");
+        for d in KDESC_BASE0_ALL {
+            let id = kernel_semantics_id_v1(d);
+            assert!(resolve_kernel(&id).is_some(), "BASE-0 op not adjudicable: {d}");
+            assert!(super::catalogued_kernel_ids_v1().contains(&id), "BASE-0 op not catalogued: {d}");
+        }
     }
 }
