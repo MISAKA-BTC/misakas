@@ -76,6 +76,11 @@ pub enum PalwAdmissionError {
     /// invalid", which is the P0-1 lesson from the same audit.
     #[error("this node could not compute the header's Layer-0 digest: {0}")]
     Unresolvable(PowLayer0Error),
+    /// The block names a class this node cannot resolve facts for at this chain point. An
+    /// unresolved fact is an error, never a permissive zero — the same rule
+    /// `palw_facts::PalwFactsError::Unresolved` states for the weight side.
+    #[error("this node cannot resolve class facts for {class_id} at this chain point")]
+    ClassUnresolved { class_id: kaspa_hashes::Hash64 },
 }
 
 /// ADR-0038 Decision A, whole. `bound` comes from the network's fence, never from the caller's
@@ -85,13 +90,26 @@ pub enum PalwAdmissionError {
 /// on a PALW network is a full LLM inference. That is the same ordering discipline the
 /// pruning-proof paths carry (audit P0-3), applied here so a malformed commitment or an
 /// unbonded executor never buys one.
-pub fn check_palw_block_admission_v1<'a>(
+///
+/// `class_facts` is a RESOLVER rather than a value, and keyed by the commitment's own class id.
+/// Two reasons, and the second is why this signature exists at all:
+///
+/// * a value handed in beside the class is not bound to it — the §3.2 defect, closed the same way
+///   `palw_facts::PalwClassFactsViewV1` closes it;
+/// * a value would have to be produced even when the fence is OFF, where it is never read. That
+///   made the call impossible to place in a pipeline that has no class store yet, which is exactly
+///   the position every shipped network is in. Lazy, the unbound path costs nothing and the call
+///   can sit in the pipeline today, inert.
+pub fn check_palw_block_admission_v1<'a, F>(
     header: &Header,
     bonds: &'a ActiveBondView,
-    class_facts: PalwAdmissionClassFacts,
+    class_facts: F,
     network_id: &[u8],
     bound: bool,
-) -> Result<PalwAdmission<'a>, PalwAdmissionError> {
+) -> Result<PalwAdmission<'a>, PalwAdmissionError>
+where
+    F: FnOnce(&kaspa_hashes::Hash64) -> Option<PalwAdmissionClassFacts>,
+{
     // Shape first, and unconditionally: this also enforces the pre-ADR rule when the fence is off,
     // so an unfenced network still refuses a header that carries bytes nothing validates.
     check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, bound)?;
@@ -106,15 +124,19 @@ pub fn check_palw_block_admission_v1<'a>(
     // W8, before the inference: no bond, no block.
     let executor_bond = commitment.validate_executor_bond_v1(bonds, header.daa_score)?;
 
+    // Resolved BY the block's own class id, and only now that the block has earned the lookup.
+    let facts = class_facts(&commitment.execution_class_id)
+        .ok_or(PalwAdmissionError::ClassUnresolved { class_id: commitment.execution_class_id })?;
+
     // The pwu claim is chain state restated, and has exactly one legal value.
-    commitment.validate_against_class_v1(class_facts.class_target, class_facts.pwu_per_inference)?;
+    commitment.validate_against_class_v1(facts.class_target, facts.pwu_per_inference)?;
 
     // Only now the expensive part.
     let state = StateLayer0::new(header, network_id);
     let digest = state.calculate_pow_layer0(header.nonce).map_err(PalwAdmissionError::Unresolvable)?;
     let ticket = palw_ticket_v1(&digest);
-    if !palw_ticket_admits_v1(ticket, class_facts.class_target) {
-        return Err(PalwAdmissionError::TicketDoesNotAdmit { ticket, class_target: class_facts.class_target });
+    if !palw_ticket_admits_v1(ticket, facts.class_target) {
+        return Err(PalwAdmissionError::TicketDoesNotAdmit { ticket, class_target: facts.class_target });
     }
     Ok(PalwAdmission::Admitted { commitment, executor_bond, ticket })
 }
@@ -203,11 +225,14 @@ mod tests {
     #[test]
     fn unfenced_is_the_old_rule_and_stops_there() {
         let empty = ActiveBondView::from_records([]);
-        assert_eq!(check_palw_block_admission_v1(&header(Vec::new()), &empty, EASY, NETWORK, false).unwrap(), PalwAdmission::NotBound);
+        assert_eq!(
+            check_palw_block_admission_v1(&header(Vec::new()), &empty, |_| Some(EASY), NETWORK, false).unwrap(),
+            PalwAdmission::NotBound
+        );
         // And an unfenced header carrying bytes is still refused, by the shape rule.
         let carrying = header(commitment(outpoint(2), EASY).encode());
         assert!(matches!(
-            check_palw_block_admission_v1(&carrying, &empty, EASY, NETWORK, false),
+            check_palw_block_admission_v1(&carrying, &empty, |_| Some(EASY), NETWORK, false),
             Err(PalwAdmissionError::Commitment(_))
         ));
     }
@@ -220,13 +245,13 @@ mod tests {
         let h = header(commitment(op, EASY).encode());
         let nobody = ActiveBondView::from_records([]);
         assert!(matches!(
-            check_palw_block_admission_v1(&h, &nobody, EASY, NETWORK, true),
+            check_palw_block_admission_v1(&h, &nobody, |_| Some(EASY), NETWORK, true),
             Err(PalwAdmissionError::Claim(PalwBlockCommitmentError::ExecutorBondNotActive { .. }))
         ));
         // Someone else's active bond does not stand in.
         let theirs = bonds_with(outpoint(99));
         assert!(matches!(
-            check_palw_block_admission_v1(&h, &theirs, EASY, NETWORK, true),
+            check_palw_block_admission_v1(&h, &theirs, |_| Some(EASY), NETWORK, true),
             Err(PalwAdmissionError::Claim(PalwBlockCommitmentError::ExecutorBondNotActive { .. }))
         ));
     }
@@ -240,7 +265,7 @@ mod tests {
         let mut c = commitment(op, EASY);
         c.pwu_claim = c.pwu_claim.saturating_mul(1_000);
         assert!(matches!(
-            check_palw_block_admission_v1(&header(c.encode()), &bonds, EASY, NETWORK, true),
+            check_palw_block_admission_v1(&header(c.encode()), &bonds, |_| Some(EASY), NETWORK, true),
             Err(PalwAdmissionError::Pwu(_))
         ));
     }
@@ -254,7 +279,10 @@ mod tests {
         let mut h = header(commitment(op, EASY).encode());
         h.pow_algo_id = POW_ALGO_ID_KHEAVYHASH;
         for bound in [false, true] {
-            assert!(matches!(check_palw_block_admission_v1(&h, &bonds, EASY, NETWORK, bound), Err(PalwAdmissionError::Commitment(_))));
+            assert!(matches!(
+                check_palw_block_admission_v1(&h, &bonds, |_| Some(EASY), NETWORK, bound),
+                Err(PalwAdmissionError::Commitment(_))
+            ));
         }
     }
 }

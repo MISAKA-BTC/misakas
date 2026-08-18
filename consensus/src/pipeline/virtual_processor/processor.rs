@@ -344,6 +344,8 @@ pub struct VirtualStateProcessor {
     // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
+    /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
+    pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -617,6 +619,7 @@ impl VirtualStateProcessor {
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
+            palw_block_commitment: params.palw_block_commitment,
             palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),

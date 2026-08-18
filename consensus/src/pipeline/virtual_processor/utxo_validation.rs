@@ -3,11 +3,11 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadUTXOCommitment, IneligibleAttestationInBlock,
-            AuditBondSpendAgainstDisposition, InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock,
-            NonReleasableBondSpendInBlock,
-            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock,
-            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            AuditBondSpendAgainstDisposition, BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment,
+            BadPalwCommitmentShape, BadUTXOCommitment, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
+            MissingMandatoryAttestationInBlock, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
+            UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -695,6 +695,31 @@ impl VirtualStateProcessor {
         // ADR-0032 Phase E2: the audit-call bond spend gate. Inert while the PALW credit
         // fence is `None` (every shipped network).
         self.check_palw_audit_bond_spend_gate(&txs, ctx.selected_parent(), header.daa_score)?;
+
+        // ADR-0038 Decision A: the PALW block admission predicate, whole and in one call
+        // (`check_palw_block_admission_v1`). Placed here because this is the first point that
+        // holds both the header and a bond view scoped to the BLOCK's chain rather than this
+        // node's sink — W8 ("no bond, no block") is meaningless against the wrong chain's bonds.
+        //
+        // Inert on every shipped network: `is_palw_commitment_bound` is false wherever
+        // `palw_block_commitment` is `None`, which is every preset, and the unbound path returns
+        // `NotBound` after enforcing exactly the pre-ADR rule (a PALW header's commitment must be
+        // empty). The class resolver is therefore never called today — which is why it is a
+        // closure and not a value: a value would have to be produced here, and there is no
+        // per-block class-target store to produce it from yet. Wiring the call now means the
+        // remaining work is that store and the fence, not finding this line again.
+        let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
+        kaspa_pow::palw_admission::check_palw_block_admission_v1(
+            header,
+            selected_parent_bond_view,
+            // No per-block class-target store yet. `ClassUnresolved` is the honest answer and it
+            // is an ERROR, never a permissive zero — and it is unreachable while the fence is off.
+            |_class_id| None,
+            // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
+            self.genesis.hash.as_bytes().as_slice(),
+            commitment_bound,
+        )
+        .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
 
         // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): reject a block whose
         // StakeUnbondRequest is not owner-authorized (unknown/ineligible bond, or a
@@ -1620,9 +1645,7 @@ impl VirtualStateProcessor {
     ) -> std::collections::HashMap<TransactionId, (u64, Option<u64>)> {
         use crate::model::stores::ghostdag::GhostdagStoreReader;
         use kaspa_consensus_core::blockhash::BlockHashExtensions;
-        use kaspa_consensus_core::palw_carriage::{
-            PalwCarriageV1, decode_palw_stage1_body, palw_carriage_records_from_accepted_txs,
-        };
+        use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body, palw_carriage_records_from_accepted_txs};
         let mut calls: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
         let mut earliest_answer: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
         let depth = windows.w_answer.saturating_add(windows.prosecution_slack);
@@ -1640,10 +1663,7 @@ impl VirtualStateProcessor {
                     Ok(PalwCarriageV1::OpeningAnswer(a)) => {
                         // EARLIEST answer per call: the walk runs newest-first, so a later
                         // (shallower) block's answer must not displace an earlier one.
-                        earliest_answer
-                            .entry(a.call_tx_id)
-                            .and_modify(|d| *d = (*d).min(cur_daa))
-                            .or_insert(cur_daa);
+                        earliest_answer.entry(a.call_tx_id).and_modify(|d| *d = (*d).min(cur_daa)).or_insert(cur_daa);
                     }
                     _ => {}
                 }
