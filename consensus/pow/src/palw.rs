@@ -43,6 +43,34 @@ pub const PALW_FIXTURE_ENV: &str = "MISAKA_PALW_POW_FIXTURE";
 /// failure falls back to the one-shot path, so the worst case of enabling it is the cost of the
 /// path that ships today.
 pub const PALW_AGENT_ENV: &str = "MISAKA_PALW_AGENT";
+/// Upper bound on PALW inferences in flight in this process (default [`DEFAULT_CONCURRENCY`]).
+///
+/// Header validation is a burst load exactly once — a from-genesis sync, where a pruning proof buys
+/// one inference per header — and a trickle forever after (one per block interval). This knob is
+/// for the burst (ADR-0041 Decision 2). It changes NOTHING about what is accepted, only how many
+/// workers may run at once, and it costs memory linearly: each concurrent inference holds a
+/// resident 1.2 GB model, so `N` here means roughly `N × 1.4 GiB`.
+pub const PALW_CONCURRENCY_ENV: &str = "MISAKA_PALW_CONCURRENCY";
+/// One — the serialized behaviour this path had before Decision 2. It stays the default because
+/// raising it is a memory decision only an operator can make.
+pub const DEFAULT_CONCURRENCY: usize = 1;
+
+/// How many PALW inferences this process may run at once. Read once, on first use.
+///
+/// Also the batch size the pruning-proof validator prefetches header PoW in, so the bound and its
+/// consumer cannot drift apart.
+pub fn inference_concurrency() -> usize {
+    use std::sync::OnceLock;
+    static RESOLVED: OnceLock<usize> = OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        std::env::var(PALW_CONCURRENCY_ENV)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(DEFAULT_CONCURRENCY)
+    })
+}
+
 /// Per-inference wall-clock budget in seconds (default [`DEFAULT_TIMEOUT_SECS`]). Generous vs the
 /// ~1-3 s a pinned Qwen3.5-2B attempt takes — it exists to reap a wedged worker, not to pace one.
 pub const PALW_TIMEOUT_ENV: &str = "MISAKA_PALW_POW_TIMEOUT_SECS";
@@ -176,7 +204,7 @@ mod native {
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Condvar, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     /// Completed tags by seed. Bounded by wholesale clearing: tags are pure functions of the seed
@@ -184,13 +212,51 @@ mod native {
     static TAG_CACHE: OnceLock<Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OUT_BYTES]>>> = OnceLock::new();
     const TAG_CACHE_MAX: usize = 8_192;
 
-    /// Serializes worker spawns. Header validation fans out across thread pools (and the
-    /// pruning-proof path validates headers in parallel); each worker process loads the 1.2 GB
-    /// model, so unbounded concurrency is a memory cliff, not a speedup. Metal-side determinism
-    /// is concurrency-safe (verified 5-way in the VLT work) — this gate is purely resource
-    /// control. Duplicate concurrent computations of the SAME seed are not deduplicated (rare —
-    /// callers are validating distinct headers), merely serialized.
-    static SPAWN_GATE: Mutex<()> = Mutex::new(());
+    /// Bounds inferences in flight. Until ADR-0041 Decision 2 this was a plain mutex — exactly
+    /// one at a time — and it stays that by default; `MISAKA_PALW_CONCURRENCY` raises the permit
+    /// count for a sync burst.
+    ///
+    /// Header validation fans out across thread pools (and the pruning-proof validator prefetches
+    /// header PoW in parallel batches); each concurrent inference holds a 1.2 GB model, so
+    /// unbounded concurrency is a memory cliff, not a speedup. Determinism is NOT what this
+    /// protects — the tag is a pure function of the seed, and Metal-side determinism was verified
+    /// 5-way in the VLT work — it is purely resource control. Duplicate concurrent computations of
+    /// the SAME seed are not deduplicated (rare: callers validate distinct headers), merely bounded.
+    struct Gate {
+        permits: Mutex<usize>,
+        released: Condvar,
+    }
+
+    static GATE: OnceLock<Gate> = OnceLock::new();
+
+    fn gate() -> &'static Gate {
+        GATE.get_or_init(|| Gate { permits: Mutex::new(inference_concurrency()), released: Condvar::new() })
+    }
+
+    /// Held for one inference; returns its permit on drop, INCLUDING during a panic unwind. That
+    /// matters here: this path panics on an unusable runtime, and a permit leaked on that route
+    /// would wedge every other validating thread behind a node that is already failing loudly.
+    struct Permit;
+
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            let gate = gate();
+            // Poison recovery rather than `unwrap`: this can run during unwind, where a second
+            // panic aborts the process instead of letting the first one be the story.
+            *gate.permits.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+            gate.released.notify_one();
+        }
+    }
+
+    fn acquire_permit() -> Permit {
+        let gate = gate();
+        let mut permits = gate.permits.lock().unwrap_or_else(|e| e.into_inner());
+        while *permits == 0 {
+            permits = gate.released.wait(permits).unwrap_or_else(|e| e.into_inner());
+        }
+        *permits -= 1;
+        Permit
+    }
 
     fn cache() -> &'static Mutex<HashMap<[u8; 32], [u8; POW_L1_PALW_OUT_BYTES]>> {
         TAG_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -207,7 +273,7 @@ mod native {
             ))
         })?;
         let tag = {
-            let _gate = SPAWN_GATE.lock().unwrap();
+            let _permit = acquire_permit();
             // Re-check under the gate: the seed may have been computed while we queued.
             if let Some(tag) = cache().lock().unwrap().get(seed) {
                 return Ok(*tag);
@@ -373,7 +439,20 @@ mod native {
             std::env::var(PALW_AGENT_ENV).as_deref() == Ok("1")
         }
 
-        static AGENT: Mutex<Option<Agent>> = Mutex::new(None);
+        /// Idle agents, available for checkout.
+        ///
+        /// The pool never grows past the concurrency bound, and not because it counts: every
+        /// caller holds a [`Permit`] for its whole checkout-to-checkin span, so at most
+        /// `inference_concurrency()` callers can be here at once and at most that many agents can
+        /// exist. It never shrinks either — an operator who sets the bound to 8 for a sync is
+        /// asking for 8 resident models, and gets them for the life of the process.
+        static POOL: Mutex<Vec<Agent>> = Mutex::new(Vec::new());
+
+        fn pool() -> std::sync::MutexGuard<'static, Vec<Agent>> {
+            // Poison recovery: a panic elsewhere must not disable the accelerator permanently, and
+            // the pool holds no invariant a panic could have broken — it is a bag of idle handles.
+            POOL.lock().unwrap_or_else(|e| e.into_inner())
+        }
 
         struct Agent {
             child: Child,
@@ -400,39 +479,38 @@ mod native {
             if !enabled() {
                 return None;
             }
-            // A poisoned lock must not panic a node over an accelerator; recover the slot and
-            // carry on. The worst case is a stale handle, which the request path detects.
-            let mut slot = AGENT.lock().unwrap_or_else(|e| e.into_inner());
-            // Two rounds. The first may be holding a handle whose child died since the previous
-            // seed (OOM-killed, or an operator restarted it) — indistinguishable from a healthy
-            // one until we write to it. The second round is the respawn that answers that case.
+            // Two rounds. The first may check out a handle whose child died since it was last
+            // used (OOM-killed, or an operator restarted it) — indistinguishable from a healthy one
+            // until we write to it. The second round is the respawn that answers that case.
+            //
+            // An agent goes back in the pool only after it answers correctly. Every other exit from
+            // this loop drops it, and dropping kills the child, so a handle whose state this code
+            // is unsure of is never handed to the next caller.
             for round in 1..=2u32 {
-                if slot.is_none() {
-                    match Agent::spawn(worker) {
-                        Ok(agent) => *slot = Some(agent),
+                let mut agent = match pool().pop() {
+                    Some(agent) => agent,
+                    None => match Agent::spawn(worker) {
+                        Ok(agent) => agent,
                         Err(e) => {
                             log::warn!("palw-pow: resident agent unavailable ({e}); using one-shot workers");
                             return None;
                         }
-                    }
-                }
-                let outcome =
-                    slot.as_mut().expect("populated just above").request(&palw_pow_prompt_v1(seed), POW_L1_PALW_N_PREDICT_V1);
-                match outcome {
+                    },
+                };
+                match agent.request(&palw_pow_prompt_v1(seed), POW_L1_PALW_N_PREDICT_V1) {
                     Ok(doc) => match super::tag_from_doc(&doc) {
-                        Ok(tag) => return Some(tag),
+                        Ok(tag) => {
+                            pool().push(agent);
+                            return Some(tag);
+                        }
                         // The agent answered and the answer is not a projection. That is a build
                         // mismatch, not a transient, so do not respawn into the same result.
                         Err(e) => {
                             log::warn!("palw-pow: resident agent returned an unusable document ({e}); using one-shot workers");
-                            *slot = None;
                             return None;
                         }
                     },
-                    Err(e) => {
-                        log::warn!("palw-pow: resident agent failed on round {round} ({e}); restarting it");
-                        *slot = None;
-                    }
+                    Err(e) => log::warn!("palw-pow: resident agent failed on round {round} ({e}); restarting it"),
                 }
             }
             None
@@ -608,7 +686,7 @@ mod native {
         // by construction; a wrong blob must never silently mint tags no peer agrees with.
         verify_model_pin_once(&url, &model)?;
         let tag = {
-            let _gate = SPAWN_GATE.lock().unwrap();
+            let _permit = acquire_permit();
             if let Some(tag) = ollama_cache().lock().unwrap().get(seed) {
                 return Ok(*tag);
             }

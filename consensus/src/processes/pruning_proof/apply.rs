@@ -6,6 +6,7 @@ use std::{
 
 use itertools::Itertools;
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     blockhash::{BlockHashes, ORIGIN},
@@ -17,6 +18,7 @@ use kaspa_consensus_core::{
 use kaspa_core::{debug, trace};
 use kaspa_pow::calc_block_level_layer0;
 use kaspa_utils::{binary_heap::BinaryHeapExtensions, vec::VecExtensions};
+use rayon::prelude::*;
 use rocksdb::WriteBatch;
 
 use crate::{
@@ -60,13 +62,22 @@ impl PruningProofManager {
         let mut trusted_gd_map: BlockHashMap<GhostdagData> = BlockHashMap::new();
         // This loop expands the proof with the headers of the trusted set
         // and creates a hash to ghostdag data map of the trusted set
+        // Gate every peer-supplied trusted-set header BEFORE any PoW is computed (audit P0-1 /
+        // P0-2): the trusted set arrives with the proof and reaches the finalizer here, whose PALW
+        // arm turns a missing worker into a panic on a non-PALW network. Sequential and
+        // first-failure, so the error a given trusted set produces is exactly what it was.
         for tb in trusted_set.iter() {
-            trusted_gd_map.insert(tb.block.hash(), tb.ghostdag.clone().into());
-            // Gate the peer-supplied trusted-set header BEFORE its PoW is computed (audit P0-1 /
-            // P0-2): the trusted set arrives with the proof and reaches the finalizer here, whose
-            // PALW arm turns a missing worker into a panic on a non-PALW network.
             self.check_proof_header_shape(&tb.block.header, 0)?;
-            let tb_block_level = calc_block_level_layer0(&tb.block.header, &self.network_id, self.max_block_level);
+        }
+        // ADR-0041 Decision 2. On a PALW network each of these levels is a full LLM inference. The
+        // loop below has no early exit once the gate above has passed, so every gated header's PoW
+        // is computed either way: batching them is the same work in less wall clock, with no
+        // speculation at all — unlike the validator's own header loop, where a PoW-derived error
+        // can stop the walk and the batch has to be bounded to bound the waste.
+        let trusted_levels = self.batched_block_levels(trusted_set.iter().map(|tb| &tb.block.header));
+
+        for (tb, &tb_block_level) in trusted_set.iter().zip(trusted_levels.iter()) {
+            trusted_gd_map.insert(tb.block.hash(), tb.ghostdag.clone().into());
 
             (0..=tb_block_level).for_each(|current_proof_level| {
                 // If this block was in the original proof, ignore it
@@ -165,19 +176,63 @@ impl PruningProofManager {
         Ok(())
     }
 
+    /// Block levels for `headers`, in order, computed in bounded parallel batches.
+    ///
+    /// Callers must have gated every header first: this runs the Layer-1 finalizer, whose PALW arm
+    /// panics the node on an unusable runtime, and whose unknown-algo path is only total because
+    /// the gate rejects a peer-chosen id before it gets here.
+    fn batched_block_levels<'a>(&self, headers: impl Iterator<Item = &'a Arc<Header>>) -> Vec<BlockLevel> {
+        let headers = headers.collect_vec();
+        let batch = kaspa_pow::palw::inference_concurrency();
+        let mut levels = Vec::with_capacity(headers.len());
+        for chunk in headers.chunks(batch) {
+            // One header is the overwhelmingly common case — every network whose PoW is a hash —
+            // so keep it off the thread pool entirely.
+            if chunk.len() == 1 {
+                levels.push(calc_block_level_layer0(chunk[0], &self.network_id, self.max_block_level));
+            } else {
+                levels.extend(
+                    chunk.par_iter().map(|h| calc_block_level_layer0(h, &self.network_id, self.max_block_level)).collect::<Vec<_>>(),
+                );
+            }
+        }
+        levels
+    }
+
+    /// Gates every DISTINCT header of `proof` in walk order, then computes their block levels in
+    /// batches. First gate failure wins, exactly as it did when the gate lived inside the walk.
+    fn gated_block_levels(&self, proof: &PruningPointProof) -> PruningImportResult<BlockHashMap<BlockLevel>> {
+        let mut seen = BlockHashSet::new();
+        let mut distinct = Vec::new();
+        for header in proof.iter().flatten() {
+            if seen.insert(header.hash) {
+                self.check_proof_header_shape(header, 0)?;
+                distinct.push(header);
+            }
+        }
+        let levels = self.batched_block_levels(distinct.iter().copied());
+        Ok(distinct.iter().map(|h| h.hash).zip(levels).collect())
+    }
+
     pub fn populate_reachability_and_headers(&self, proof: &PruningPointProof) -> PruningImportResult<()> {
         let capacity_estimate = self.estimate_proof_unique_size(proof);
         let mut dag = BlockHashMap::with_capacity(capacity_estimate);
         let mut up_heap = BinaryHeap::with_capacity(capacity_estimate);
+        // pow passing has already been checked during validation, and the trusted set was gated in
+        // `apply_proof` before it was folded into `proof` here — but re-gate before these PoW
+        // recomputes anyway (audit P0-1 / P0-2): this method is `pub`, and a future caller reaching
+        // it without prior validation must not hand a peer-chosen algo id to the finalizer's
+        // panicking PALW arm.
+        //
+        // Gating and computing here rather than inside the walk is ADR-0041 Decision 2: the walk's
+        // only error is this gate, so hoisting it changes no error, and the levels it needs are
+        // pure functions of the headers — so they batch. It also means a proof that fails the gate
+        // now aborts having written NOTHING to the headers store, where before it had written every
+        // header up to the bad one.
+        let levels = self.gated_block_levels(proof)?;
         for header in proof.iter().flatten().cloned() {
             if let Vacant(e) = dag.entry(header.hash) {
-                // pow passing has already been checked during validation, and the trusted set was
-                // gated in `apply_proof` before it was folded into `proof` here — but re-gate before
-                // this PoW recompute anyway (audit P0-1 / P0-2): this method is `pub`, and a future
-                // caller reaching it without prior validation must not hand a peer-chosen algo id to
-                // the finalizer's panicking PALW arm.
-                self.check_proof_header_shape(&header, 0)?;
-                let block_level = calc_block_level_layer0(&header, &self.network_id, self.max_block_level);
+                let block_level = levels[&header.hash];
                 self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
 
                 let mut parents = BlockHashSet::with_capacity(header.direct_parents().len() * 2);

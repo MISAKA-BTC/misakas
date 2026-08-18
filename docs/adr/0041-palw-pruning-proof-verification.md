@@ -1,8 +1,9 @@
 # ADR-0041: PALW pruning-proof verification — exhaustive and amortised, not sampled
 
-Status: **Partly landed.** Activates nothing on a shipped preset. Decision 1′ (the resident
-verification agent) is landed, measured and opt-in behind `MISAKA_PALW_AGENT=1`; Decision 3 (the
-header cap) is landed; Decisions 2 (concurrency) and 4 (cheap checks before the inference) are open.
+Status: **Landed.** Activates nothing on a shipped preset. Decision 1′ (the resident verification
+agent, opt-in behind `MISAKA_PALW_AGENT=1`) and Decision 2 (bounded concurrency, `MISAKA_PALW_CONCURRENCY`,
+default 1) are landed and measured; Decision 3 (the header cap) and Decision 4 (cheap checks before
+the inference) were already landed. Decision 1 (sampling) is withdrawn as unsound.
 Governs how a node validates a pruning-point proof and a trusted set on a network whose PoW is a
 PALW inference (`pow_palw_activation` / `pow_palw_ollama_activation` active — testnet-11 and devnet
 today).
@@ -226,14 +227,53 @@ way and the two paths above were measured under the same policy.
 Three suspects were eliminated along the way and are recorded so nobody re-investigates them: the
 worker's own heap handling, a buffer overflow, and the Metal backend.
 
-### Decision 2 — Parallelise verification during IBD
+### Decision 2 — Parallelise verification during IBD — **landed, and it buys far less than drafted**
 
-The `SPAWN_GATE` mutex (`palw.rs:186`) serialises every inference in the process, which is correct
-for steady-state block validation (one at a time, low load) but is the wrong policy for a sync
-burst. During pruning-proof verification the validator may run up to a bounded number of workers
-concurrently. Measured: 8-way concurrency turns the sampled 64-inference cost from ~13 min to
-~1.6 min. The bound is a config constant, not consensus; it does not change what is accepted, only
-how fast.
+The `SPAWN_GATE` mutex serialised every inference in the process, which is right for steady-state
+block validation (one at a time, low load) and wrong for a sync burst. It is now a counting
+semaphore whose permit count is `MISAKA_PALW_CONCURRENCY` (default **1**, i.e. exactly the old
+behaviour), the resident agent is a pool that grows to that count, and the two proof loops feed it:
+
+* `validate.rs` computes each level's header PoW in **bounded batches**. The walk stays strictly
+  sequential — every line after the PoW checks mutates stores whose order *is* the validation — and
+  errors stay in header order, so nothing about what is accepted changes. The batch is bounded, not
+  whole-level, because a PoW-derived error can stop the walk: up to `batch − 1` inferences may be
+  spent on headers the walk never reaches, and that waste must be a constant rather than a level.
+* `apply.rs` batches both of its sites (the trusted set, and the level recompute for every distinct
+  proof header). Neither loop has an early exit once its shape gate has passed, so there is **no**
+  speculation there at all — the same work, in less wall clock. Hoisting the gate out of the walk
+  also means a proof that fails it now aborts having written nothing to the headers store, where
+  before it had written every header up to the bad one.
+
+**The drafted "8-way concurrency ≈ 8×" is not supported by measurement.** Throughput of N resident
+agents, 6 jobs each, on a 12-core M-series host (`CPU_THREADS = 4`, so N workers occupy 4N threads):
+
+| agents | threads | jobs/s | speedup | per-job latency |
+|---|---|---|---|---|
+| 1 | 4/12 | 1.17 | 1.00× | 0.86 s |
+| 2 | 8/12 | 1.62 | 1.39× | 1.24 s (1.44×) |
+| 3 | 12/12 | 2.06 | **1.77×** | 1.46 s (1.70×) |
+| 4 | 16/12 | 2.07 | 1.77× | 1.93 s (2.26×) |
+| 6 | 24/12 | 2.07 | 1.77× | 2.90 s (3.38×) |
+
+Throughput **saturates at 1.77×** and adding agents past that buys exactly nothing — beyond 3, every
+extra agent only lengthens everyone's latency in proportion.
+
+The binding constraint is **not cores**, and the table says so: at 2 agents only 8 of 12 cores are
+busy, yet per-job latency is already 1.44× the solo figure. If cores were the limit, two agents
+would not slow each other at all. What is shared and saturated is memory bandwidth — batch-1 decode
+streams the entire ~1.28 GiB weight set per token, so concurrent models compete for the memory bus
+rather than for arithmetic. (Consistent with the numbers and with how batch-1 inference is known to
+behave; not separately confirmed with a bandwidth counter.)
+
+Two consequences worth stating plainly:
+
+* **`CPU_THREADS = 4` is pinned by the determinism class**, so a host cannot trade worker count
+  against threads per worker to dodge this — the shape string is part of the runtime identity.
+* **The fleet number is not this number.** A server host with 8–12 memory channels has far more
+  aggregate bandwidth than a unified-memory laptop, so it may scale further, and it may not. The
+  honest instruction is to measure `MISAKA_PALW_CONCURRENCY` on the host that will sync, with the
+  test that produced the table above, rather than to inherit either 8× or 1.77×.
 
 ### Decision 3 — Hard header cap, enforced before any inference
 
@@ -249,13 +289,21 @@ as oversized, not run.
 The same discipline applies to the trusted set (`apply.rs`): its length is capped before the loop
 that runs one inference per block.
 
-### Decision 4 — Cheap checks gate the inference
+### Decision 4 — Cheap checks gate the inference — **already landed**
 
 Every check in the per-header loop that does **not** consume the PoW result runs first, so a header
-that fails a shape, level, or ancestry rule never buys an inference. This extends the P0-3
-ordering fix (already applied to the ordinary header path at `header_processor/processor.rs:318`)
-to the two proof paths — `validate.rs`'s loop and `apply.rs`'s trusted-set loop — which the P0-3
-comment did not cover, and which a reader of that comment should not assume are covered.
+that fails a shape, level, or ancestry rule never buys an inference. This extends the P0-3 ordering
+fix (already applied to the ordinary header path at `header_processor/processor.rs:318`) to the
+proof paths — `validate.rs`'s loop and both of `apply.rs`'s.
+
+Both were already in this shape when this ADR's implementation started, under the P0-1/P0-2 audit
+work: `check_proof_header_shape` runs immediately before every `calc_block_level_*` call on those
+paths. Nothing was needed here.
+
+The batching in Decision 2 had to be built so as not to quietly undo it, which is the part worth
+knowing: the batch scan applies the same gate and **stops at the first header that fails it**, so a
+header the walk will reject is never pulled into a batch, and neither is anything behind it. A batch
+that ignored the gate would have re-introduced exactly the amplification this decision removes.
 
 ## Where this leaves the numbers, honestly
 
@@ -265,12 +313,19 @@ landing decisions compose multiplicatively rather than changing the exponent:
 | | per header | 9,000 headers |
 |---|---|---|
 | today | ~12 s | 30.0 h |
-| + persistent agent (Decision 1′ — **landed**, 5.7× measured) | ~2.1 s | 5.3 h |
-| + 8-way concurrency (Decision 2) | — | **~40 min** |
+| + persistent agent (Decision 1′ — landed, **5.7×** measured) | ~2.1 s | 5.3 h |
+| + concurrency (Decision 2 — landed, **1.77×** measured) | ~1.2 s | **~3.0 h** |
 
-The middle row is now a measured factor applied to the fleet's own per-header cost, not a projection
-of both. The factor was measured on a dev machine (3.28 s → 0.57 s); the 12 s is the fleet's, and
-re-measuring the ratio there is the remaining honest gap in this table.
+Both factors are now measured rather than projected, and the second one is much smaller than this
+ADR first assumed: the draft claimed 8× from 8-way concurrency and got 1.77×, because the resource
+that saturates is memory bandwidth and not cores (Decision 2 above). **The headline is 30 h → ~3 h,
+not 30 h → 45 min.** That is still a different proposition from 30 hours, and it is reached without
+weakening any security argument — but it is an hours-scale sync, and anyone planning around 45
+minutes should stop.
+
+The 12 s is the fleet's per-header cost; the two factors were measured on a dev machine. Applying
+them to the fleet's baseline is the honest composition available today, and re-measuring both on the
+host that will actually sync is the remaining gap.
 
 45 minutes for a one-time sync of a year of history is a different proposition from 30 hours, and it
 is reached without weakening any security argument. It is still `O(m·log(history))` inferences, so it
@@ -282,8 +337,9 @@ not the honest cost. It landed first because it has zero liveness risk.
 
 ## Consequences
 
-* IBD on a PALW network goes from ~30 h to ~45 min once Decisions 1′ and 2 land, with NO change to
-  what is accepted — every header is still verified in full.
+* IBD on a PALW network goes from ~30 h to ~3 h with Decisions 1′ and 2 landed, with NO change to
+  what is accepted — every header is still verified in full. The first draft of this ADR said 45
+  minutes; that rested on an 8× from concurrency which measurement did not support.
 * No consensus rule changes; no preset changes; the fingerprint does not move. Every change here is
   a local sync policy.
 * Nothing here rests on proof acceptance being a local decision, because nothing here samples. That

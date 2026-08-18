@@ -20,6 +20,7 @@ use kaspa_database::{
 use kaspa_pow::{calc_block_level_check_pow_layer0, calc_block_level_layer0};
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use rocksdb::WriteBatch;
 
 use crate::{
@@ -130,6 +131,22 @@ pub(super) fn check_proof_header_budget(
     Ok(())
 }
 
+/// End index of the PoW batch that starts at `start` (ADR-0041 Decision 2).
+///
+/// At most `batch` headers, stopping at the first one that fails the cheap shape gate — so a header
+/// the walk is going to reject never buys an inference, and neither does anything behind it. Always
+/// at least `start + 1`: the caller has already gated `start` itself and needs its result now.
+///
+/// Split out of the walk because this arithmetic is the only part of the batching that can be
+/// wrong, and inside the walk it is unreachable by a test.
+fn pow_batch_end(start: usize, len: usize, batch: usize, gated_ok: impl Fn(usize) -> bool) -> usize {
+    debug_assert!(start < len, "the walk only asks about a header it is standing on");
+    // `batch.max(1)` is belt and braces: `inference_concurrency()` already refuses 0, and a 0 here
+    // would return `start`, hand the walk an empty window and panic it on the pop below.
+    let limit = (start + batch.max(1)).min(len);
+    start + 1 + (start + 1..limit).take_while(|&k| gated_ok(k)).count()
+}
+
 impl ProofContext {
     /// Build the full context from the proof
     fn from_proof(
@@ -232,7 +249,20 @@ impl ProofContext {
             let level_idx = level as usize;
             let mut selected_tip =
                 proof[level as usize].first().map(|header| header.hash).ok_or(PruningImportError::PruningProofNotEnoughHeaders)?;
-            for (i, header) in proof[level as usize].iter().enumerate() {
+            // ADR-0041 Decision 2. On a PALW network `calc_block_level_check_pow_layer0` is a full
+            // LLM inference, and it is a pure function of the header — so a bounded batch of them
+            // runs in parallel and the loop consumes the results in order.
+            //
+            // The loop itself stays strictly sequential: every line after the PoW checks mutates
+            // stores whose order IS the validation. Errors stay in header order too, so nothing
+            // about what is accepted changes — only the wall clock. Up to `batch` inferences may be
+            // spent on headers a later error makes moot; that is the price of the parallelism, and
+            // it is bounded by the same constant rather than by the level's length.
+            let level_headers = &proof[level as usize];
+            let batch = kaspa_pow::palw::inference_concurrency();
+            let mut pow_ahead: std::collections::VecDeque<(BlockLevel, bool)> = std::collections::VecDeque::new();
+
+            for (i, header) in level_headers.iter().enumerate() {
                 // Gate the peer-supplied proof header BEFORE its PoW is computed (audit P0-1 / P0-2).
                 // The order matters: `calc_block_level_check_pow_layer0` runs the Layer-1 finalizer,
                 // whose PALW arm escalates a missing worker into a node-wide panic and whose unknown-id
@@ -243,7 +273,31 @@ impl ProofContext {
                 // main pipeline; parentless roots are exempt from that rule exactly as the pipeline
                 // exempts genesis. It also refuses a malformed `palw_commitment` before persistence.
                 ppm.check_proof_header_shape(header, level)?;
-                let (header_level, pow_passes) = calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level);
+
+                if pow_ahead.is_empty() {
+                    // Refill with this header plus the following ones that also pass the shape gate,
+                    // up to the concurrency bound. Stopping the scan at the first shape failure is
+                    // what keeps the gate above meaningful in the batched case: that header, and
+                    // everything after it, stays unpriced until the loop reaches it and rejects it.
+                    let end = pow_batch_end(i, level_headers.len(), batch, |k| {
+                        ppm.check_proof_header_shape(&level_headers[k], level).is_ok()
+                    });
+                    let window = &level_headers[i..end];
+                    // One header is the overwhelmingly common case — steady state, and every
+                    // network whose PoW is a hash — so keep it off the thread pool entirely.
+                    if window.len() == 1 {
+                        pow_ahead.push_back(calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level));
+                    } else {
+                        pow_ahead.extend(
+                            window
+                                .par_iter()
+                                .map(|h| calc_block_level_check_pow_layer0(h, &ppm.network_id, ppm.max_block_level))
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                let (header_level, pow_passes) = pow_ahead.pop_front().expect("the refill above leaves at least this header");
+
                 if header_level < level {
                     return Err(PruningImportError::PruningProofWrongBlockLevel(header.hash, header_level, level));
                 }
@@ -670,5 +724,87 @@ mod period_window_tests {
         let cut = def_pp.min(chal_pp);
         let (d, c) = same_span_pruning_period_works(cut, bw(1_003_000), bw(1_001_300));
         assert!(d > c, "the heavier defender still wins under the common cut");
+    }
+}
+
+#[cfg(test)]
+mod pow_batch_tests {
+    use super::pow_batch_end;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn a_batch_of_one_is_exactly_the_current_header() {
+        // The default, and every network whose PoW is a hash: no batching, no thread pool.
+        for start in 0..5 {
+            assert_eq!(pow_batch_end(start, 5, 1, |_| true), start + 1);
+        }
+    }
+
+    #[test]
+    fn a_batch_is_clipped_by_the_level_and_by_the_gate() {
+        assert_eq!(pow_batch_end(0, 10, 4, |_| true), 4, "a full batch");
+        assert_eq!(pow_batch_end(8, 10, 4, |_| true), 10, "clipped by the end of the level");
+        assert_eq!(pow_batch_end(9, 10, 4, |_| true), 10, "the last header alone");
+        assert_eq!(pow_batch_end(0, 10, 4, |k| k != 2), 2, "clipped by a gate failure inside the batch");
+        assert_eq!(pow_batch_end(0, 10, 4, |k| k != 1), 1, "a gate failure at the very next header");
+        assert_eq!(pow_batch_end(0, 10, 4, |k| k != 0), 4, "the START header's gate is the caller's business");
+    }
+
+    #[test]
+    fn a_zero_batch_still_yields_a_header() {
+        // `inference_concurrency()` refuses 0, but an empty window would panic the walk's `pop`,
+        // so the helper must not be the place that trusts its caller.
+        assert_eq!(pow_batch_end(3, 10, 0, |_| true), 4);
+    }
+
+    /// The walk must consume exactly one result per header, in header order, must never price a
+    /// header the gate rejects, and must not speculate further than `batch` past where it stops.
+    ///
+    /// Simulates the refill loop over every combination of batch size, level length, and the two
+    /// ways a walk can stop: a gate failure (which the batch scan can see, so it prices nothing
+    /// beyond it) and a PoW-derived failure (which it cannot, so it may have priced up to a batch
+    /// of headers the walk never reaches — the bounded waste Decision 2 pays for its parallelism).
+    #[test]
+    fn the_batched_walk_prices_each_header_once_in_order_and_speculates_no_further_than_a_batch() {
+        for batch in 1..=6usize {
+            for len in 1..=12usize {
+                for gate_bad in 0..=len {
+                    for pow_bad in 0..=len {
+                        let gated = |k: usize| k != gate_bad;
+                        let mut priced: Vec<usize> = Vec::new();
+                        let mut ahead: VecDeque<usize> = VecDeque::new();
+                        let mut consumed: Vec<usize> = Vec::new();
+
+                        for i in 0..len {
+                            if !gated(i) {
+                                break; // the walk returns the gate's error here
+                            }
+                            if ahead.is_empty() {
+                                let end = pow_batch_end(i, len, batch, gated);
+                                assert!(end > i && end <= len, "the window must be non-empty and in range");
+                                for k in i..end {
+                                    priced.push(k);
+                                    ahead.push_back(k);
+                                }
+                            }
+                            consumed.push(ahead.pop_front().expect("the refill leaves at least this header"));
+                            if i == pow_bad {
+                                break; // the walk returns a PoW-derived error here
+                            }
+                        }
+
+                        let stop = gate_bad.min(pow_bad + 1).min(len);
+                        assert_eq!(consumed, (0..stop).collect::<Vec<_>>(), "batch={batch} len={len}");
+                        assert!(priced.iter().all(|&k| gated(k)), "a gate-rejected header was priced");
+                        assert!(priced.windows(2).all(|w| w[1] == w[0] + 1), "headers were priced out of order");
+                        assert!(
+                            priced.len() - consumed.len() < batch,
+                            "speculation ran {} past the walk, further than the batch bound {batch}",
+                            priced.len() - consumed.len()
+                        );
+                    }
+                }
+            }
+        }
     }
 }

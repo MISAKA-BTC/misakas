@@ -201,6 +201,22 @@ What an operator needs to know about it:
   verified header. `palw-pow: resident agent unavailable …; using one-shot workers` means it fell
   back — the node is correct but slow, and the reason is on the same line.
 
+### Optional: verification concurrency (`MISAKA_PALW_CONCURRENCY=N`)
+
+Defaults to **1** — one inference in flight, the behaviour this path has always had. Raising it lets
+the pruning-proof validator verify header PoW in batches of `N` (ADR-0041 Decision 2). It changes
+nothing about what is accepted; it costs `N × ~1.4 GiB` of resident model, since the agent pool
+grows to `N` and never shrinks.
+
+**Measure it before trusting a number.** On a 12-core M-series host, throughput saturated at
+**1.77×** with 3 concurrent workers, and 4 or 6 bought *nothing* — only longer latency for everyone.
+The limit is memory bandwidth, not cores: at 2 workers, with only 8 of 12 cores busy, per-job
+latency was already 1.44× the solo figure. A server host with more memory channels may do better,
+and `CPU_THREADS = 4` is pinned by the determinism class so it is not a lever. The reproducer is
+`cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
+
+Start at `N = 3`, measure, and only raise it if the measurement says so.
+
 ## Per-host prerequisites — the Ollama runtime (user decision 2026-08-11) — ⚠️ SUPERSEDED
 
 > Kept for the record only. `algo_id = 5` is disabled (STATUS banner), so **none of this is a
