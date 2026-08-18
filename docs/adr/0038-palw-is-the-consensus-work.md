@@ -72,6 +72,59 @@ primitive.
 design is unsound without it. A PALW block names its executor's `bond_outpoint`; conviction
 slashes it. Permissionless entry = post a bond, exactly the existing 20k-class bond flow.
 
+## Implementation status — Decision A, 2026-08-18
+
+Decision A's predicate is implemented, tested clause by clause, and **called by the block pipeline
+on every block**. It is inert on every shipped network: `Params::palw_block_commitment` is `None`
+everywhere, and below that fence the rule is the pre-ADR one (a PALW header's `palw_commitment`
+must be empty). testnet-11's consensus fingerprint is unchanged, so a node carrying this peers with
+one that does not.
+
+| conjunct | where | state |
+|---|---|---|
+| `valid_header` | existing pipeline | — |
+| `spam_hash < spam_target` | existing Layer-0 PoW | — |
+| header carries `palw_commitment_root` | `pow_layer0::check_palw_commitment_shape`, fenced | **done** |
+| executor references an Active bond | `PalwBlockCommitmentV1::validate_executor_bond_v1` (W8) | **done** |
+| `palw_ticket < class_target` | `palw_pwu::palw_ticket_admits_v1` | **done** (see the correction below) |
+| well-formed carriage | `validate_shape` + `validate_against_class_v1` | **done** |
+| all six, one call | `kaspa_pow::palw_admission::check_palw_block_admission_v1` | **done** |
+| the call | `verify_expected_utxo_state` | **wired** |
+| the class target | folded from the block's own chain in `palw_class_facts_for_block` | **done** |
+
+**Correction to this ADR's own text.** Decision A writes the lottery clause as
+`palw_ticket < class_target`. The implementation admits on `<=`, and the ADR text is the outlier:
+`palw_pwu::palw_expected_attempts_v1` computes `2^128 / (target + 1)` — it counts `target + 1`
+admitting values, and its comment says so ("`target == u128::MAX` is the easiest possible target:
+every ticket admits", which is false under `<`) — and the Layer-0 PoW beside it already admits on
+`pow_512 <= target_512`. Under `<` the work formula is wrong by `(target+1)/target`, a factor of 2
+at `target == 1`, i.e. worst exactly where difficulty is highest. **The clause above should read
+`palw_ticket <= class_target`.**
+
+**A framing this ADR does not need.** The class target was expected to require a per-block store.
+It does not, and a store would be wrong: `palw_facts::block_pwu_v1`'s doc already recorded that the
+only legal source is a fold over the BLOCK's own selected-parent chain, because a store answers
+about the reading node's virtual tip and a target that depends on where the tip points is not a
+fact about the chain being weighed. The resolver folds from the class's registered `boot_target`;
+with no block yet declaring a class, that fold returns `boot_target`, which is the definition rather
+than a placeholder.
+
+### What Decision A still needs, in dependency order
+
+1. **A producer that builds the commitment.** `Header::with_palw_commitment` exists and nothing
+   calls it. It cannot be the node's template builder: the commitment covers the trace and output
+   roots of the WINNING inference, which only the miner has after it wins. `misaminer` already
+   drives the PALW lottery (`mine_palw_sequential`), so this belongs there, and needs two links
+   that do not exist — `kaspa_pow::palw` discards the worker's projection after extracting the
+   200-byte tag, so the roots are not surfaced; and the commitment carries a signature, so the
+   producer needs bond key material the mining path is not given today.
+2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
+   builds commitments, every block fails admission.
+
+Decisions B, C and D remain unimplemented beyond the pure arithmetic already in
+`palw_weight`, `palw_facts` and `palw_class_daa`. Decision C in particular is the panel assignment,
+receipt collection and challenge-window machinery, which is the bulk of the remaining work.
+
 ## Decision B — Acceptance now, weight later: the ramp
 
 Block acceptance and PALW finality are split. An admitted block enters the DAG immediately;
