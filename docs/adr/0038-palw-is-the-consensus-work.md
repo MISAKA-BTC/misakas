@@ -135,28 +135,36 @@ than a placeholder.
 2. **The fence, on a network.** One field. Gated entirely on (1): installed while no producer
    builds commitments, every block fails admission.
 
-### Decision C's freeze clause, and what blocks it
+### Decision C's freeze clause — implemented, and the block was not where it looked
 
-I10 — "`Unadjudicable` slashes NOBODY and freezes the class" — is **half-wired, in the direction
-that reads safe and is not**. The READ side works: `compute_palw_credit_outputs` consults
-`is_frozen` and mints nothing for a frozen class, fail-closed. The WRITE side does not exist:
-`PalwJobStatusV3::demands_class_freeze` is a pure predicate with no non-test caller, and the live
-adjudication path returns `Result<TransactionOutpoint, PalwCarriageError>`, so an `Unadjudicable`
-outcome is indistinguishable from a malformed carriage — both are an `Err` that is skipped.
+I10 — "`Unadjudicable` slashes NOBODY and freezes the class" — is implemented. It was recorded here
+an hour earlier as blocked on chain-point-scoped class state; that was wrong, and the correction is
+worth keeping because the same mistake is available for every other piece of Decision C.
 
-So no verdict can arm the stop, and the class-state store cannot be written to arm it by hand
-either. The store's own module records why, and it is a correctness constraint rather than an
-omission: **no code creates a first row**, the only insert site rewrites `last_credited_daa` on an
-existing one, so the store is provably empty on every network and `is_frozen` answers `true` for
-every class. The credit gate is shut by a missing row rather than by a rule. As the store puts it:
-*"the exposure activates the moment a row exists, so a seed writer must arrive together with
-per-chain-point scoping, never before it"* — two nodes with different sink histories would
-otherwise disagree about a coinbase, which is a partition and not a slow node.
+Two things were missing. The first made the second look impossible.
 
-That makes the ordering explicit: **the freeze clause is blocked on chain-point-scoped class
-state, not on plumbing.** A seed writer added alone would open the exposure the scoping exists to
-close, and the `Unadjudicable` distinction is worth surfacing only once there is somewhere safe for
-it to be recorded.
+* **The verdict was discarded at the carriage boundary.**
+  `adjudicate_step_conviction_carriage_v1` flattened `PalwStepRefuteError::Unadjudicable` into
+  `StepConvictionNotProven(String)`, so a fact about the accused CLASS's coverage was
+  indistinguishable from a fact about the challenger's evidence — both an `Err` the live path
+  skipped. `PalwCarriageError::StepUnadjudicable` is now its own variant.
+* **The freeze does not need a store, and must not have one.** `class_is_frozen_v1` folds over the
+  carriage on the chain being evaluated. The class-state store's module records why a row is
+  dangerous — it answers about the reading node's virtual tip, so two nodes with different sink
+  histories disagree about a coinbase — and its rule that "a seed writer must arrive together with
+  per-chain-point scoping, never before it" is satisfied by having no row at all. The moves ARE
+  carriage on the chain, so the walk is chain-scoped by construction. Same shape as
+  `dispute_is_open_v1` and as the class target above.
+
+The decision is `outcome_freezes_class_v1`, tested exhaustively over outcomes: a landed conviction
+slashes and does not freeze, every other failure is the challenger's problem, and only a coverage
+gap freezes. What is NOT covered is reaching `Unadjudicable` end-to-end — that needs a refutation
+passing every structural check and then meeting an uncatalogued kernel, which no fixture builds.
+Splitting the rule out is what keeps that an uncovered path rather than an untested rule.
+
+**The lesson for the rest of Decision C**: "this needs chain state" has meant "this needs a store"
+twice in this ADR's implementation, and both times the honest answer was a fold over the block's own
+chain. Reach for the store only when a fold provably cannot answer.
 
 Decisions B, C and D remain unimplemented beyond the pure arithmetic already in
 `palw_weight`, `palw_facts` and `palw_class_daa`. Decision C in particular is the panel assignment,
