@@ -139,6 +139,32 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
    running soak binaries ARE the measured class; the gate exists for new joiners);
    node-operator doc published with the shas and the audit-harness check.
 
+### Status of the gate-6 checklist, measured 2026-08-18
+
+| item | state |
+|---|---|
+| ≥ 48 h clean soak | 44.7 h, 0 panics — met on schedule, nothing to do |
+| a fresh node's from-genesis IBD join | **IBD half PASSED: 7 h 45 m** for a ~1,300-block chain. The *participation* half failed — see below |
+| calibration-gated binary deployed fleet-wide | **NOT met.** The fleet kaspad is from 2026-08-16 13:05 and predates both the remote-panic fix and the switch-counter fix |
+| node-operator doc | **published:** `docs/testnet11-node-operator.md` |
+| discovery (item 1) | **NOT met.** `n11-seed*.misakascan.com` do not resolve |
+
+**The join measured a cost this ADR did not carry, and an announcement must.** 7 h 45 m for 1.5 days
+of history, sustained at ~163 headers/hour against a chain producing ~40/hour. The cost grows with
+chain age until the pruning proof caps it at roughly 35–50 h (ADR-0041's per-header numbers). Budget
+**1.5–2 days for a first sync on a mature chain**.
+
+**And the join found the blocker.** The node completed its IBD and was then permanently
+`quarantined`: it reached the chain-switch cap of 5 without ever having switched, because every
+refused candidate advanced the counter that refused it (`switched chains 384 times`), and
+`--clear-quarantine` could not recover it — the count it preserved was what re-quarantined the node
+seconds later. Fixed in `fix(ibd): a refused chain switch no longer feeds the counter that refused
+it`; it fires by construction on a PALW network, where a node that verifies slower than its chain
+grows is permanently behind and so sees every peer as verified-better forever.
+
+So the remaining launch work is **operational, not consensus**: rebuild and redeploy the fleet
+binary with both fixes, then settle discovery. Nothing on this list now needs a code decision.
+
 ## 7. Consequences
 
 - Track A's remaining work is now exactly gate 6: the operator items above plus
