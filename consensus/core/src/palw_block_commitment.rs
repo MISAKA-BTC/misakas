@@ -184,6 +184,9 @@ pub enum PalwBlockCommitmentError {
     ZeroPwuClaim,
     #[error("payload does not start with the PBC1 magic")]
     BadMagic,
+    /// ADR-0038 W8: the block names a bond that is not Active at the point it is judged.
+    #[error("the executor bond {outpoint:?} is not an active bond at DAA {pov_daa_score} — no bond, no block (ADR-0038 W8)")]
+    ExecutorBondNotActive { outpoint: TransactionOutpoint, pov_daa_score: u64 },
     #[error("payload failed to decode: {reason}")]
     Undecodable { reason: &'static str },
     #[error("payload carries {got} trailing bytes after the commitment")]
@@ -257,6 +260,34 @@ impl PalwBlockCommitmentV1 {
     /// stateful questions are consumer-entry checks, and this is one of them, now callable.
     pub fn validate_against_class_v1(&self, class_target: u128, pwu_per_inference: u64) -> Result<(), crate::palw_pwu::PalwPwuError> {
         crate::palw_pwu::check_pwu_claim_v1(self.pwu_claim, class_target, pwu_per_inference)
+    }
+
+    /// ADR-0038 **W8**: the executor's bond must be an ACTIVE bond at the point the block is
+    /// judged — "no bond, no block".
+    ///
+    /// The third stateful half, kept apart from [`Self::validate_shape`] and
+    /// [`Self::validate_against_class_v1`] for the reason those two are apart: each needs a
+    /// different input, so folding them together would let a caller who only had one of them
+    /// satisfy the signature and skip the rest. A caller with bytes can call the first, a caller
+    /// with class state the second, and a caller with a bond view this.
+    ///
+    /// Why it is load-bearing rather than decoration, in ADR-0038's own words: *"§New-risk 1 shows
+    /// the design is unsound without it"*. The closure argument prices fabricated work at
+    /// `−bond × P(conviction)`; with no bond the deterrent is zero and the sampled-verification
+    /// regime the ADR replaces exhaustive checking with has nothing behind it. It is exactly the
+    /// clause that lets a network stop re-running every inference, which is why it must land
+    /// before, not after, that switch.
+    ///
+    /// Returns the bond so the caller can use it for the payee without a second lookup that could
+    /// resolve differently — the B5 defect, in miniature.
+    pub fn validate_executor_bond_v1<'a>(
+        &self,
+        bonds: &'a crate::dns_finality::ActiveBondView,
+        pov_daa_score: u64,
+    ) -> Result<&'a crate::dns_finality::StakeBondRecord, PalwBlockCommitmentError> {
+        bonds
+            .active_bond_at(&self.executor_bond_outpoint, pov_daa_score)
+            .ok_or(PalwBlockCommitmentError::ExecutorBondNotActive { outpoint: self.executor_bond_outpoint, pov_daa_score })
     }
 
     /// This commitment's challenge for a given attempt — [`palw_block_challenge_v1`] with the
@@ -554,6 +585,99 @@ mod tests {
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert_eq!(PalwBlockCommitmentV1::decode(&trailing), Err(PalwBlockCommitmentError::TrailingBytes { got: 1 }));
+    }
+}
+
+#[cfg(test)]
+mod w8_executor_bond_tests {
+    use super::*;
+    use crate::dns_finality::{ActiveBondView, StakeBondRecord};
+    use crate::tx::TransactionOutpoint;
+
+    fn bond(outpoint: TransactionOutpoint, activation: u64, unbond_request: Option<u64>) -> StakeBondRecord {
+        StakeBondRecord {
+            bond_outpoint: outpoint,
+            validator_pubkey_hash: Hash64::from_u64_word(7),
+            owner_pubkey_hash: Hash64::from_u64_word(8),
+            version: 1,
+            validator_pubkey: vec![7u8; 32],
+            amount: 20_000,
+            activation_daa_score: activation,
+            created_daa_score: 0,
+            unbonding_period_blocks: 100,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: unbond_request,
+            slashed_at_daa_score: None,
+            status: crate::dns_finality::BondStatus::Active,
+        }
+    }
+
+    fn view(records: Vec<StakeBondRecord>) -> ActiveBondView {
+        ActiveBondView::from_records(records.into_iter().map(|r| (r.bond_outpoint, r)))
+    }
+
+    fn commitment_naming(outpoint: TransactionOutpoint) -> PalwBlockCommitmentV1 {
+        PalwBlockCommitmentV1 {
+            version: PALW_BLOCK_COMMITMENT_VERSION_V1,
+            execution_class_id: Hash64::from_u64_word(1),
+            executor_bond_outpoint: outpoint,
+            trace_root: Hash64::from_u64_word(4),
+            output_root: Hash64::from_u64_word(5),
+            pwu_claim: 100,
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        }
+    }
+
+    /// The happy path, and the reason the bond is RETURNED: the caller pays the bond that acted,
+    /// without a second lookup that could resolve to a different record.
+    #[test]
+    fn an_active_bond_admits_and_hands_back_the_record_that_admitted_it() {
+        let outpoint = TransactionOutpoint::new(Hash64::from_u64_word(2), 3);
+        let view = view(vec![bond(outpoint, 100, None)]);
+        let found = commitment_naming(outpoint).validate_executor_bond_v1(&view, 500).expect("active at 500");
+        assert_eq!(found.bond_outpoint, outpoint, "the record returned must be the one named");
+    }
+
+    /// "No bond, no block" — a block naming a bond this chain point does not hold is refused, not
+    /// waved through with a warning. ADR-0038: "the design is unsound without it".
+    #[test]
+    fn a_block_naming_no_bond_at_all_is_refused() {
+        let view = view(vec![]);
+        let outpoint = TransactionOutpoint::new(Hash64::from_u64_word(2), 3);
+        assert!(matches!(
+            commitment_naming(outpoint).validate_executor_bond_v1(&view, 500),
+            Err(PalwBlockCommitmentError::ExecutorBondNotActive { .. })
+        ));
+    }
+
+    /// A bond that exists but is not ACTIVE at this point is not a bond for this block: before its
+    /// activation it has not been posted yet, and once unbonding has started it is on its way out.
+    /// Either way the deterrent the clause prices work against is absent.
+    #[test]
+    fn a_bond_outside_its_active_window_does_not_admit() {
+        let outpoint = TransactionOutpoint::new(Hash64::from_u64_word(2), 3);
+        let commitment = commitment_naming(outpoint);
+
+        let not_yet = view(vec![bond(outpoint, 1_000, None)]);
+        assert!(commitment.validate_executor_bond_v1(&not_yet, 999).is_err(), "before activation");
+        assert!(commitment.validate_executor_bond_v1(&not_yet, 1_000).is_ok(), "at activation");
+
+        let leaving = view(vec![bond(outpoint, 100, Some(400))]);
+        assert!(leaving.active_bond_at(&outpoint, 500).is_none(), "the view's own rule must agree");
+        assert!(commitment.validate_executor_bond_v1(&leaving, 500).is_err(), "unbonding has started");
+    }
+
+    /// The bond a block names is the one checked — naming someone else's active bond does not
+    /// borrow their accountability.
+    #[test]
+    fn a_different_active_bond_does_not_stand_in() {
+        let mine = TransactionOutpoint::new(Hash64::from_u64_word(2), 3);
+        let theirs = TransactionOutpoint::new(Hash64::from_u64_word(9), 0);
+        let view = view(vec![bond(theirs, 100, None)]);
+        assert!(matches!(
+            commitment_naming(mine).validate_executor_bond_v1(&view, 500),
+            Err(PalwBlockCommitmentError::ExecutorBondNotActive { .. })
+        ));
     }
 }
 
