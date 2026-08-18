@@ -82,6 +82,40 @@ const MIN_USEFUL_PROOF_BUDGET: Duration = Duration::from_secs(10);
 /// count it stops and says so.
 const MAX_CHAIN_SWITCHES: u32 = 5;
 
+/// How long a node must participate on a chain before the switch budget starts over.
+///
+/// The cap guards against two chains trading the latch, which is a BURST. A node that adopted a
+/// chain and then mined and attested on it for this long has demonstrably not ping-ponged, so the
+/// burst is over. Without a reset the cap is not a ping-pong guard but an expiry date: a node that
+/// legitimately switches five times across months of operation is quarantined forever, and
+/// `--clear-quarantine` cannot help it because the count is what re-quarantines it.
+const SWITCH_BUDGET_STABLE_RESET_MS: u64 = 30 * 60 * 1000;
+
+/// What to do about a candidate that validated better than the chain this node holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchVerdict {
+    /// Adopt it — reserve the next IBD for it. Carries the number this adoption will be.
+    Adopt { switch_number: u32 },
+    /// The budget is spent. Quarantine and wait for an operator.
+    BudgetSpent { switches: u32 },
+}
+
+/// Decide from how many times this node has ALREADY adopted a different chain.
+///
+/// `switches_so_far` counts ADOPTIONS, not encounters. That distinction is the whole of this
+/// function: the caller used to increment the counter before knowing whether it would adopt, so a
+/// refusal advanced the very count that caused the refusal. A candidate re-offered every second
+/// then drove the count to 384 against a cap of 5, on a node that had switched nothing — and
+/// because the count persists and `--clear-quarantine` deliberately preserves it, the node could
+/// never participate again.
+fn switch_verdict(switches_so_far: u32) -> SwitchVerdict {
+    if switches_so_far >= MAX_CHAIN_SWITCHES {
+        SwitchVerdict::BudgetSpent { switches: switches_so_far }
+    } else {
+        SwitchVerdict::Adopt { switch_number: switches_so_far + 1 }
+    }
+}
+
 /// How often an idle IBD flow re-examines candidates it has already validated.
 ///
 /// Short, because the window it covers is the gap between a proof validating and the latch becoming
@@ -826,27 +860,46 @@ impl IbdFlow {
             );
             return;
         }
+        // A node that has participated on its chain for a stable stretch has not been ping-ponging,
+        // so the budget the cap protects starts over. Done before the verdict so a long-settled node
+        // is judged on its recent behaviour rather than on its whole life.
+        if self.ctx.chain_participation().ready_stable_for_ms().is_some_and(|stable_ms| stable_ms >= SWITCH_BUDGET_STABLE_RESET_MS) {
+            self.ctx.ibd_candidates().write().reset_switches();
+            self.ctx.chain_participation().clear_switches();
+        }
+
         let switches = {
             let mut registry = self.ctx.ibd_candidates().write();
             registry.resume_switches(self.ctx.chain_participation().restored_switches());
-            registry.note_switch();
             registry.switches()
         };
-        self.ctx.chain_participation().record_switch(switches);
-        if switches > MAX_CHAIN_SWITCHES {
-            warn!(
-                "Candidate {} is verified-better, but this node has already switched chains {} times; quarantining instead.",
-                id.virtual_selected_parent, switches
-            );
-            self.ctx.chain_participation().quarantine();
-            return;
-        }
-        if self.ctx.reserve_preferred_ibd_candidate(id, verified_blue_work) {
-            warn!(
-                "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving the next \
-                 IBD for it and handing over. (switch {} of {})",
-                id.virtual_selected_parent, verified_blue_work, ours, switches, MAX_CHAIN_SWITCHES
-            );
+        // READ the count here; do not advance it. Advancing before the decision is what let a
+        // refusal feed the counter that caused it (see `switch_verdict`).
+        match switch_verdict(switches) {
+            SwitchVerdict::BudgetSpent { switches } => {
+                warn!(
+                    "Candidate {} is verified-better, but this node has already switched chains {} times; quarantining instead.",
+                    id.virtual_selected_parent, switches
+                );
+                self.ctx.chain_participation().quarantine();
+            }
+            SwitchVerdict::Adopt { switch_number } => {
+                if self.ctx.reserve_preferred_ibd_candidate(id, verified_blue_work) {
+                    // The adoption happened, so now it is a switch. Counting here rather than above
+                    // is the fix: `reserve_preferred_ibd_candidate` returning false means no chain
+                    // was abandoned, and a count of abandonments must not include it.
+                    {
+                        let mut registry = self.ctx.ibd_candidates().write();
+                        registry.note_switch();
+                    }
+                    self.ctx.chain_participation().record_switch(switch_number);
+                    warn!(
+                        "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving \
+                         the next IBD for it and handing over. (switch {} of {})",
+                        id.virtual_selected_parent, verified_blue_work, ours, switch_number, MAX_CHAIN_SWITCHES
+                    );
+                }
+            }
         }
     }
 
@@ -2419,5 +2472,40 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
         }
         Ok(QueueChunkOutput { jobs, daa_score: current_daa_score, timestamp: current_timestamp })
+    }
+}
+
+#[cfg(test)]
+mod switch_budget_tests {
+    use super::{MAX_CHAIN_SWITCHES, SwitchVerdict, switch_verdict};
+
+    /// The bug this encodes: the counter was advanced before the decision, so refusing a candidate
+    /// advanced the count that caused the refusal. A candidate re-offered every second drove a live
+    /// node to 384 against a cap of 5 without it ever having switched chains.
+    #[test]
+    fn a_refused_candidate_does_not_consume_switch_budget() {
+        let mut switches = 0u32;
+        // The budget is spent by adoptions, and there are exactly MAX_CHAIN_SWITCHES of them.
+        for n in 0..MAX_CHAIN_SWITCHES {
+            assert_eq!(switch_verdict(switches), SwitchVerdict::Adopt { switch_number: n + 1 });
+            switches += 1; // only an adoption advances the count
+        }
+        // Past that every candidate is refused — and refusing the same one a thousand times over,
+        // which is what a peer re-offering its tip actually does, changes nothing.
+        for _ in 0..1_000 {
+            assert_eq!(switch_verdict(switches), SwitchVerdict::BudgetSpent { switches });
+        }
+        assert_eq!(switches, MAX_CHAIN_SWITCHES, "a refusal must not consume budget");
+    }
+
+    /// The cap itself is unchanged by the reordering: five adoptions are allowed, the sixth is not.
+    #[test]
+    fn the_cap_still_allows_exactly_five_adoptions() {
+        assert_eq!(switch_verdict(0), SwitchVerdict::Adopt { switch_number: 1 });
+        assert_eq!(switch_verdict(MAX_CHAIN_SWITCHES - 1), SwitchVerdict::Adopt { switch_number: MAX_CHAIN_SWITCHES });
+        assert_eq!(switch_verdict(MAX_CHAIN_SWITCHES), SwitchVerdict::BudgetSpent { switches: MAX_CHAIN_SWITCHES });
+        // And a count already past the cap (a node upgrading with 384 persisted) stays refused
+        // rather than wrapping into an adoption.
+        assert_eq!(switch_verdict(384), SwitchVerdict::BudgetSpent { switches: 384 });
     }
 }
