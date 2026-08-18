@@ -223,30 +223,46 @@ impl StateLayer0 {
     /// `pow_algo_id` (kHeavyHash/Argon2id = 32 bytes, BLAKE2b-SHA3 = 128), so the caller passes a
     /// max-width stack buffer and reads back `&buf[..len]` — this keeps the miner grind hot loop
     /// allocation-free (no per-nonce heap `Vec`).
+    ///
+    /// Returns `Err(UnknownAlgoId)` for an id this finalizer cannot verify, rather than assuming
+    /// the caller filtered it. `pow_algo_id` is peer-controlled and this is a total function on it.
     #[inline]
-    fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES]) -> usize {
+    fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES]) -> Result<usize, PowLayer0Error> {
         match self.pow_algo_id {
             // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
             POW_ALGO_ID_BLAKE2B_SHA3 => {
                 buf.copy_from_slice(&blake2b_sha3_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
-                POW_L1_BLAKE2B_SHA3_OUT_BYTES
+                Ok(POW_L1_BLAKE2B_SHA3_OUT_BYTES)
             }
             // Phase 2 (algo_id = 2): memory-hard Argon2id over (pre_pow_hash, nonce). 32 bytes.
             POW_ALGO_ID_ARGON2ID => {
                 buf[..32].copy_from_slice(&argon2id_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
-                32
+                Ok(32)
             }
-            // Phase 1 (algo_id = 1, kHeavyHash) and the default. Any other id is rejected up-stack
-            // by header validation (`check_algo_id`) before PoW is ever computed.
-            _ => {
-                // kHeavyHash (algo_id = 1). new() populates hasher+matrix exactly for this id;
-                // any other id is rejected up-stack by header validation before PoW runs.
+            // Phase 1 (algo_id = 1, kHeavyHash). `new()` populates hasher+matrix exactly for this
+            // id, so these `expect`s are a constructor invariant — and they are only reachable now
+            // because the arm is selected by an explicit id match instead of by falling through.
+            POW_ALGO_ID_KHEAVYHASH => {
                 let hasher = self.hasher.as_ref().expect("kHeavyHash StateLayer0 carries a PowHash");
                 let matrix = self.matrix.as_ref().expect("kHeavyHash StateLayer0 carries a Matrix");
                 let hash = hasher.clone().finalize_with_nonce(nonce);
                 buf[..32].copy_from_slice(&matrix.heavy_hash(hash).as_bytes());
-                32
+                Ok(32)
             }
+            // Any other id is unverifiable by this finalizer, and it is peer-controlled input.
+            //
+            // The comment this replaces said any other id is "rejected up-stack by header
+            // validation before PoW is ever computed". That is true of the ordinary header
+            // pipeline and NOT true of the pruning-proof path, which computes the PoW of a
+            // peer-supplied proof header before `check_algo_id` runs
+            // (`pruning_proof/validate.rs`, `apply.rs`). Falling through to the kHeavyHash arm
+            // there `expect`s a `None` that `new()` deliberately left empty for non-kHeavyHash
+            // ids — a one-message remote panic, on hash-only mainnet as much as anywhere.
+            //
+            // Total function instead: the caller maps this to a failed PoW and rejects the proof
+            // (`calc_block_level_check_pow_layer0`'s `Err(_)` arm), which is the same verdict the
+            // up-stack check would have produced, just without the crash.
+            other => Err(PowLayer0Error::UnknownAlgoId(other)),
         }
     }
 
@@ -255,7 +271,7 @@ impl StateLayer0 {
     #[inline]
     pub fn calculate_pow_layer0(&self, nonce: u64) -> Result<[u8; POW_FINALIZER_BYTES], PowLayer0Error> {
         let mut tag_buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
-        let tag_len = self.calculate_l1_tag(nonce, &mut tag_buf);
+        let tag_len = self.calculate_l1_tag(nonce, &mut tag_buf)?;
         pow_finalizer_blake2b_512(
             &self.network_id,
             // PR-9.5d: bind the digest to the header's declared
@@ -309,6 +325,40 @@ mod tests_pq {
             0,
             ZERO_HASH64, // PR-9.5e: pruning_point is a block hash (Hash64)
         )
+    }
+
+    /// A peer-supplied header carrying an algo id this finalizer does not implement must be a
+    /// REJECTED header, not a dead node.
+    ///
+    /// Mainnet-readiness audit P0-1, and it lands on a hash-only network. The ordinary header
+    /// pipeline does run `check_algo_id` before the PoW, but the pruning-proof path does not
+    /// (`pruning_proof/validate.rs` and `apply.rs` compute the PoW of a peer-supplied proof header
+    /// first), so an id nobody implements reaches this finalizer straight off the wire. It used to
+    /// fall through to the kHeavyHash arm and `expect` the `Some(PowHash)`/`Some(Matrix)` that
+    /// `new()` leaves `None` for every non-kHeavyHash id: one message, any peer, node down.
+    ///
+    /// Asserted through `calc_block_level_check_pow_layer0` because that is the exact call the
+    /// proof path makes — testing `calculate_l1_tag` alone would not prove the crash is
+    /// unreachable from where it was actually reached.
+    #[test]
+    fn an_unknown_algo_id_is_a_rejected_header_not_a_panic() {
+        // Every id this build does not implement, including the ones a later phase reserves.
+        for algo_id in [0u8, 4, 5, 9, 42, 200, u8::MAX] {
+            let header = dummy_header_algo(0x207fffff, 1, 1_000_000, algo_id);
+
+            let (level, passes) = calc_block_level_check_pow_layer0(&header, b"mainnet", 255);
+            assert!(!passes, "algo_id {algo_id}: an unverifiable header must not pass PoW");
+            assert_eq!(level, 0, "algo_id {algo_id}: an unverifiable header must not claim a block level");
+
+            // And the finalizer says why, rather than assuming its caller filtered the id.
+            let state = StateLayer0::new(&header, b"mainnet");
+            let mut buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
+            assert_eq!(
+                state.calculate_l1_tag(7, &mut buf),
+                Err(PowLayer0Error::UnknownAlgoId(algo_id)),
+                "algo_id {algo_id}: the tag function must be total on a peer-controlled id"
+            );
+        }
     }
 
     /// The Layer 0 verifier produces a deterministic 64-byte digest
@@ -383,7 +433,7 @@ mod tests_pq {
         // Dispatch: the verifier's internal L1 tag must equal the
         // standalone Argon2id tag for the same (pre_pow_hash, nonce).
         let mut buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
-        let n = s.calculate_l1_tag(7, &mut buf);
+        let n = s.calculate_l1_tag(7, &mut buf).expect("algo_id 2 is a known id");
         let expect = argon2id_l1_tag_v1(s.pre_pow_hash_64, 7, b"testnet-10");
         assert_eq!(&buf[..n], expect.as_slice(), "algo_id=2 must compute the Argon2id L1 tag");
 
@@ -391,7 +441,7 @@ mod tests_pq {
         let kh = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_KHEAVYHASH);
         let s_kh = StateLayer0::new(&kh, b"testnet-10");
         let mut buf_kh = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
-        let n_kh = s_kh.calculate_l1_tag(7, &mut buf_kh);
+        let n_kh = s_kh.calculate_l1_tag(7, &mut buf_kh).expect("algo_id 1 is a known id");
         assert_ne!(&buf_kh[..n_kh], &buf[..n], "kHeavyHash and Argon2id tags must differ");
 
         // Acceptance: the easiest target accepts at least one Argon2id
@@ -414,7 +464,7 @@ mod tests_pq {
 
         // Dispatch: the verifier's internal L1 tag must equal the standalone BLAKE2b-SHA3 tag (128 bytes).
         let mut buf = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
-        let n = s.calculate_l1_tag(11, &mut buf);
+        let n = s.calculate_l1_tag(11, &mut buf).expect("algo_id 3 is a known id");
         assert_eq!(n, POW_L1_BLAKE2B_SHA3_OUT_BYTES, "BLAKE2b-SHA3 tag is 128 bytes");
         let expect = blake2b_sha3_l1_tag_v1(s.pre_pow_hash_64, 11, b"testnet-10");
         assert_eq!(&buf[..n], expect.as_slice(), "algo_id=3 must compute the BLAKE2b-SHA3 L1 tag");
@@ -423,7 +473,7 @@ mod tests_pq {
         let kh = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_KHEAVYHASH);
         let s_kh = StateLayer0::new(&kh, b"testnet-10");
         let mut buf_kh = [0u8; POW_L1_BLAKE2B_SHA3_OUT_BYTES];
-        let n_kh = s_kh.calculate_l1_tag(11, &mut buf_kh);
+        let n_kh = s_kh.calculate_l1_tag(11, &mut buf_kh).expect("algo_id 1 is a known id");
         assert_ne!(&buf_kh[..n_kh], &buf[..n], "kHeavyHash and BLAKE2b-SHA3 tags must differ");
 
         // Acceptance: the easiest target accepts at least one BLAKE2b-SHA3 nonce in a small scan.
