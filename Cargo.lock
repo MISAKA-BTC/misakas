@@ -4309,6 +4309,7 @@ dependencies = [
  "log",
  "num",
  "serde_json",
+ "thiserror 1.0.64",
  "wasm-bindgen",
  "workflow-wasm",
 ]
