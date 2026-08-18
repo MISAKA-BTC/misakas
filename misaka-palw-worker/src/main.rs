@@ -103,6 +103,13 @@ unsafe extern "C" {
     fn shim_is_eog(s: *const ShimCtx, token: i32) -> i32;
     fn shim_token_to_piece(s: *const ShimCtx, token: i32, buf: *mut u8, buf_len: i32) -> i32;
     fn shim_close(s: *mut ShimCtx);
+    /// Returns the context to a pristine decode state without reloading the model — the primitive the
+    /// resident verification agent needs (ADR-0041 Decision 1′). Verified against the one-shot path:
+    /// three jobs on one context produce byte-identical projections to each other and to a fresh
+    /// process. `allow(dead_code)` until the agent lands, deliberately rather than by deleting it:
+    /// the C side and this declaration are the tested pair.
+    #[allow(dead_code)]
+    fn shim_reset_context(s: *mut ShimCtx) -> i32;
 
     // Activation capture (execution-commitment legs v1). `shim_open_capture` with `n_taps = 0`
     // is `shim_open`; with taps it installs an eval callback, which is a different scheduler
@@ -1812,6 +1819,24 @@ fn execute(model_path: &Path, input: &[u8], n_predict: u32) -> Execution {
     }
     let n_vocab = unsafe { shim_n_vocab(ctx) };
     eprintln!("[palw-worker] model loaded in {:?} (n_vocab={n_vocab})", started.elapsed());
+    let exec = execute_on_context(ctx, input, n_predict, started);
+    // This function OWNS the context it opened, so it closes it. `execute_on_context` deliberately
+    // does not: a caller that reuses one context across jobs (the resident agent) must be the one
+    // that decides when it dies. Moving the close out here is not cosmetic — leaving it inside the
+    // shared body made every job free its caller's context, and the next job then read a freed
+    // `shim_ctx`. That use-after-free is what looked like heap corruption for three rounds of
+    // diagnosis.
+    unsafe { shim_close(ctx) };
+    exec
+}
+
+/// The job, on a context the CALLER owns and must close.
+///
+/// Split out of [`execute`] so the resident agent can run many jobs against one loaded model
+/// (ADR-0041 Decision 1'). Nothing about the computation changes, which is the point: a tag from the
+/// agent and a tag from a one-shot process must be the same tag.
+fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: std::time::Instant) -> Execution {
+    let n_vocab = unsafe { shim_n_vocab(ctx) };
 
     // Tokenize the raw input bytes. A prompt that does not fit the job's own ceiling is a hard
     // error, not a truncation: `normalize_vlt` rejects `prefill + decode > max_tokens`, so a
@@ -1896,7 +1921,6 @@ fn execute(model_path: &Path, input: &[u8], n_predict: u32) -> Execution {
             &mut schedule_event_count,
         );
     }
-    unsafe { shim_close(ctx) };
 
     let decode_tokens = outputs.len() as u32;
     let mut output_ids: Vec<u8> = Vec::with_capacity(outputs.len() * 4);

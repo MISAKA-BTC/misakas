@@ -244,6 +244,22 @@ shim_ctx * shim_open(const char * model_path, int32_t n_ctx, int32_t n_batch, in
     return shim_open_capture(model_path, n_ctx, n_batch, n_threads, NULL, 0);
 }
 
+// Return the context to a pristine decode state without reloading the model (ADR-0041 Decision 1').
+// Synchronize the backend first, then clear the memory: the model, vocab and context object all
+// survive, only the decode state goes. Refuses a capture context — this is the tag path.
+// Returns 0 on success, -1 if unusable, -2 on a capture context.
+int32_t shim_reset_context(shim_ctx * s) {
+    if (s == NULL || s->lctx == NULL) {
+        return -1;
+    }
+    if (s->cap.armed) {
+        return -2;
+    }
+    llama_synchronize(s->lctx);
+    llama_memory_clear(llama_get_memory(s->lctx), true);
+    return 0;
+}
+
 int32_t shim_n_embd(const shim_ctx * s) {
     return llama_model_n_embd(s->model);
 }
