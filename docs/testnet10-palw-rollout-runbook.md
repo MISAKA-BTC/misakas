@@ -175,6 +175,67 @@ python3 scripts/misaka-palw-v2-class-compare.py class-*.json    # want: ONE-CLAS
 A `ONE-CLASS` verdict is evidence, not proof — the probe corpus is 4 fixed jobs compiled into the
 worker. Treat a `BUILD-MISMATCH` as "determinism untested", not as "hosts disagree".
 
+### Redeploying the fleet for a public launch (2026-08-18)
+
+The fleet's `kaspad` is from **2026-08-16 13:05** and predates two fixes that a public network
+cannot launch without:
+
+* `afc9d22` / PR #66 — a peer's proof header no longer panics the node before its `algo_id` is
+  checked. One message, any peer, no authentication.
+* `e05a869` / PR #67 — a refused chain switch no longer feeds the counter that refused it. Without
+  it a node that finishes its IBD is permanently quarantined and `--clear-quarantine` cannot
+  recover it.
+
+**The worker does not need rebuilding.** Both fixes are in `kaspad`; the deployed
+`palw-worker` (2026-08-14, `2bd857f8…`) is the measured class and stays exactly as it is. Rebuilding
+it would change the class for no reason.
+
+**Order matters, and it is not the obvious one.** ADR-0035's `≥ 48 h clean soak` must run on the
+binary that will actually launch, so the ~45 h currently accumulated does not count — it is a soak
+of a binary being replaced. Deploy first, then start the 48 h. This also means stopping the soak to
+build or deploy costs nothing that was not already lost.
+
+Prerequisites, none of which are code decisions:
+
+1. **`palw-only-v4` is not pushed.** `origin` has only `main`, `palw-llm-pow-bps01` and
+   `dns-partition-fix-t10`. The build host needs the source, so either push the branch or `rsync`
+   the working tree.
+2. **The build host must be x86-64 Linux.** `musl-toolchain/build.sh` assumes it, and the target is
+   the fleet's own architecture. Cross-building from an arm Mac is not set up (no musl target, no
+   linker) and emulating amd64 under Docker takes hours.
+3. `misaka-ibm` has gcc 13 and 223 G free but **no cargo**, and its `/root/misaka-palw-unified-src`
+   is not a git tree.
+
+```bash
+# on an x86-64 Linux host, from a checkout of the branch
+source musl-toolchain/build.sh          # verifies the pinned toolchain; fails closed
+cd "$REPO_ROOT"
+cargo build --bin kaspad --release --target x86_64-unknown-linux-musl
+sha256sum target/x86_64-unknown-linux-musl/release/kaspad
+```
+
+Then, per host:
+
+```bash
+systemctl stop palw-soak-node palw-ibd-join
+install -m 0755 kaspad /root/palw-soak/kaspad
+systemctl start palw-soak-node
+# a node already stuck from the old bug needs the override ONCE, then remove the flag
+#   (with the new binary the count is cleared by the override; with the old one it was not)
+systemctl start palw-ibd-join      # add --clear-quarantine to the unit for one boot if it was stuck
+```
+
+Verify before starting the 48 h clock:
+
+```bash
+palw-worker --mode manifest | grep runtime_class_id     # must be unchanged — the class did not move
+bash scripts/misaka-palw-headroom.sh /root/.palw-soak   # want headroom well above 1x, workers=1
+journalctl -u palw-soak-node | grep -c panic            # 0
+```
+
+`workers=1` matters: the two t11 nodes on this host are two concurrent inferences, which measured
+0.38x serial throughput. Either separate them or set `MISAKA_PALW_LEASE_DIR` on both (see below).
+
 ### Optional: the resident verification agent (`MISAKA_PALW_AGENT=1`)
 
 By default a node spawns one `palw-worker` process per PoW seed, and each spawn SHA-256s the whole
