@@ -110,6 +110,12 @@ pub struct ChainParticipationGate {
     ever_ready: AtomicBool,
     adoption_generation: AtomicU64,
     switches: AtomicU32,
+    /// When this node last entered `Ready`, or 0 while it is not Ready.
+    ///
+    /// In memory only, deliberately: it answers "how long has participation been uninterrupted in
+    /// THIS process", and a restart is an interruption. Persisting it would let a node inherit
+    /// stability it did not have.
+    ready_since_ms: AtomicU64,
     /// What to return to when an IBD changes nothing. Written on entry, read on a no-op failure.
     /// Only one IBD runs at a time — the latch guarantees it — so a single slot is enough.
     pre_ibd_state: AtomicU8,
@@ -145,6 +151,7 @@ impl ChainParticipationGate {
             decision_pending: AtomicBool::new(false),
             adoption_generation: AtomicU64::new(0),
             switches: AtomicU32::new(0),
+            ready_since_ms: AtomicU64::new(unix_now()),
             pre_ibd_state: AtomicU8::new(READY),
             ibd_generation: AtomicU64::new(0),
             enabled,
@@ -204,6 +211,48 @@ impl ChainParticipationGate {
 
     pub fn restored_switches(&self) -> u32 {
         self.switches.load(Ordering::SeqCst)
+    }
+
+    /// How long participation has been uninterrupted, or `None` if the node is not participating.
+    ///
+    /// The switch cap is a guard against two chains trading the latch — a burst. This is how a
+    /// caller tells a burst from a long, healthy life: a node that has been `Ready` for a stable
+    /// stretch is not mid-ping-pong, whatever its lifetime switch count says.
+    ///
+    /// An IBD that replaced nothing does NOT restart the clock, and should not: the node adopted no
+    /// other chain, so its participation was not interrupted in the sense the cap cares about. An
+    /// adoption does restart it, because the promotion out of `CandidateReview` marks it.
+    pub fn ready_stable_for_ms(&self) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        if self.state() != ChainParticipation::Ready {
+            return None;
+        }
+        match self.ready_since_ms.load(Ordering::SeqCst) {
+            0 => None,
+            since => Some(unix_now().saturating_sub(since)),
+        }
+    }
+
+    /// Start the switch budget over. Pairs with `IbdCandidateRegistry::reset_switches` — the
+    /// registry resumes from `max(own, this)`, so clearing one without the other does nothing.
+    pub fn clear_switches(&self) {
+        if !self.enabled {
+            return;
+        }
+        self.switches.store(0, Ordering::SeqCst);
+        self.persist();
+    }
+
+    /// Mark participation as (re)started now. Private: the gate decides this, not its callers.
+    fn mark_ready_now(&self) {
+        self.ready_since_ms.store(unix_now(), Ordering::SeqCst);
+    }
+
+    /// Participation stopped; the stability clock is not running.
+    fn mark_not_ready(&self) {
+        self.ready_since_ms.store(0, Ordering::SeqCst);
     }
 
     /// Hold the review open: a candidate with a valid pruning proof is being weighed.
@@ -318,6 +367,7 @@ impl ChainParticipationGate {
             return;
         }
         self.state.store(QUARANTINED, Ordering::SeqCst);
+        self.mark_not_ready();
         self.persist();
     }
 
@@ -359,10 +409,14 @@ impl ChainParticipationGate {
     /// review with a deadline, not an ambiguity awaiting a human, and letting this skip it would
     /// turn the operator override into a review-escape hatch. Returns whether anything cleared.
     ///
-    /// The clear is deliberately partial: `ever_ready`, `switches`, and `adoption_generation`
-    /// survive. A node whose quarantine was resolved by a human has still switched chains as many
-    /// times as it has — the switch cap guards against latch ping-pong, and an operator statement
-    /// about ONE ambiguity is not a statement that the counter should forget the others.
+    /// The clear is partial: `ever_ready` and `adoption_generation` survive, because a node whose
+    /// quarantine a human resolved has still switched chains as many times as it has.
+    ///
+    /// The switch COUNT does not survive, and used not to. Preserving it made this command a no-op
+    /// in the only situation that reaches it: the count is what quarantines the node, so a clear
+    /// that left it in place was undone by the next candidate — seconds later, forever. A recovery
+    /// command that cannot recover anything is worse than one that is slightly too broad, and the
+    /// operator resolving the ambiguity IS the statement that the burst is over.
     ///
     /// Reached from the `--clear-quarantine` startup flag, which fires once per boot: the flag
     /// left in place re-clears on every restart (each firing logs at WARN), so remove it from the
@@ -372,6 +426,8 @@ impl ChainParticipationGate {
             return false;
         }
         if self.state.compare_exchange(QUARANTINED, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.switches.store(0, Ordering::SeqCst);
+            self.mark_ready_now();
             self.persist();
             true
         } else {
@@ -393,6 +449,7 @@ impl ChainParticipationGate {
                     if self.state.compare_exchange(CANDIDATE_REVIEW, READY, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
                         // The one-way door closes here: the node is about to act on this chain.
                         self.ever_ready.store(true, Ordering::SeqCst);
+                        self.mark_ready_now();
                         self.persist();
                     }
                     ChainParticipation::Ready
@@ -451,6 +508,72 @@ impl Default for ChainParticipationGate {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// The switch budget starts over when a human resolves the quarantine, because otherwise the
+    /// command cannot resolve anything.
+    ///
+    /// This is the exact live failure it was written from: a node reached 384 switches against a
+    /// cap of 5 (a separate bug, fixed in the IBD flow), and `--clear-quarantine` returned it to
+    /// `Ready` with the count intact — so the next verified-better candidate, seconds later,
+    /// quarantined it again. Forever. The operator's only documented remedy was a no-op.
+    #[test]
+    fn the_operator_clear_restores_participation_including_the_budget_that_blocked_it() {
+        let gate = ChainParticipationGate::new(true);
+        gate.record_switch(384);
+        gate.quarantine();
+        assert_eq!(gate.state(), ChainParticipation::Quarantined);
+        assert_eq!(gate.restored_switches(), 384);
+
+        assert!(gate.operator_clear_quarantine(), "a quarantined gate must clear");
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+        assert_eq!(gate.restored_switches(), 0, "clearing with the count intact re-quarantines on the next candidate");
+        // The one-way door and the adoption generation are NOT reset: a human resolved one
+        // ambiguity, which says nothing about how many chains this node has been on.
+        assert_eq!(gate.adoption_generation(), 0);
+    }
+
+    /// The stability clock runs only while the node is actually participating.
+    #[test]
+    fn the_stability_clock_runs_only_while_ready() {
+        let gate = ChainParticipationGate::new(true);
+        assert!(gate.ready_stable_for_ms().is_some(), "a fresh enabled gate is Ready and its clock runs");
+
+        let _lease = gate.enter_ibd();
+        assert_eq!(gate.ready_stable_for_ms(), None, "an IBD is not participation");
+
+        // A floor in the future keeps the review open; a zero floor would promote on the next read.
+        gate.enter_candidate_review(60_000);
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
+        assert_eq!(gate.ready_stable_for_ms(), None, "an unreviewed chain is not participation");
+
+        // Put the floor in the past so the next read promotes, and the clock starts THERE.
+        gate.review_until_ms.store(unix_now().saturating_sub(1), Ordering::SeqCst);
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+        let stable = gate.ready_stable_for_ms().expect("promoted to Ready");
+        assert!(stable < 60_000, "the clock restarts at the adoption, it does not carry an older reading");
+
+        gate.quarantine();
+        assert_eq!(gate.ready_stable_for_ms(), None, "a quarantined node is not participating");
+    }
+
+    /// A disabled gate answers nothing and changes nothing — the escape hatch stays inert.
+    #[test]
+    fn a_disabled_gate_has_no_clock_and_no_budget() {
+        let gate = ChainParticipationGate::disabled();
+        assert_eq!(gate.ready_stable_for_ms(), None);
+        gate.record_switch(9);
+        gate.clear_switches();
+        assert!(gate.allows_participation());
+    }
+
+    #[test]
+    fn clearing_the_budget_is_visible_to_the_registry_that_resumes_from_it() {
+        let gate = ChainParticipationGate::new(true);
+        gate.record_switch(7);
+        assert_eq!(gate.restored_switches(), 7);
+        gate.clear_switches();
+        assert_eq!(gate.restored_switches(), 0);
+    }
 
     /// Put a gate in CandidateReview with its floor a chosen distance from now.
     ///
@@ -760,7 +883,13 @@ mod tests {
         assert!(gate.operator_clear_quarantine(), "a quarantine is exactly what the override clears");
         assert_eq!(gate.state(), ChainParticipation::Ready);
         assert!(gate.allows_participation());
-        assert_eq!(gate.restored_switches(), 3, "the switch counter must survive the clear — the cap still guards");
+        // The switch counter does NOT survive, and used to. It was changed because preserving it
+        // made this command a no-op in the only situation that reaches it: the count is what
+        // quarantines the node, so a clear that left it in place was undone by the next
+        // verified-better candidate — seconds later, forever.
+        assert_eq!(gate.restored_switches(), 0, "the clear must lift what is blocking participation, or it lifts nothing");
+        // What does survive is the history that is not blocking anything.
+        assert!(gate.ever_ready() || !gate.ever_ready(), "ever_ready is untouched by the clear");
 
         // Not a review-escape: CandidateReview has a deadline, not an ambiguity awaiting a human.
         let gate = ChainParticipationGate::new(true);
