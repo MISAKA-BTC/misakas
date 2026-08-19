@@ -769,6 +769,16 @@ fn freeze_record_is_in_scope_v1(record_accepted_daa: u64, input: &PalwResolverIn
 /// establish a freeze — which withholds nothing and lets the ordinary refutation paths run. Neither
 /// should be swapped for the other without re-deriving that.
 ///
+/// **A cost note for whoever wires this.** Every other arm of the resolver is bound to ONE block —
+/// a receipt names its hash, a conviction and a ladder name its roots — so the work is proportional
+/// to carriage about that block. This one is not: a freeze is a class-level fact, so the walk
+/// adjudicates every same-class step conviction inside the block's window, and adjudication
+/// recomputes a kernel. Resolving `n` blocks of one class therefore re-derives the same answer `n`
+/// times. The class scope and the window bound are both checked BEFORE the adjudicator runs, which
+/// is what keeps it from being unbounded, but the repetition is real and the shape of its fix is a
+/// wiring decision rather than a change here: the answer is per `(class, chain point)`, not per
+/// block, and every block in a window shares it.
+///
 pub fn class_frozen_before_close_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
 where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
