@@ -1379,13 +1379,27 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn unknown_kernel_is_unadjudicable() {
+    /// A refutation that passes every STRUCTURAL check and then meets an uncatalogued kernel — the
+    /// only route to `Unadjudicable`, and therefore the only way anything downstream can test what
+    /// a coverage gap does.
+    ///
+    /// `skeleton_refutation` beside it deliberately cannot get this far (it fails on its opening
+    /// path), which is why the class-freeze rule was recorded twice as an untested path. Exposed so
+    /// `palw_facts` can build the conviction carriage that reaches its freeze end to end, and used
+    /// by the test below so the two cannot drift into disagreeing about what "unadjudicable" is.
+    pub(crate) fn unadjudicable_refutation() -> PalwExecutionStepRefutationV1 {
         let (binding, material, rows) = honest_execution();
         // The post node carries an unimplemented descriptor.
         let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 7, position: 0, tile_index: 0 };
-        let refutation = build_refutation(&binding, &material, &rows, coord);
-        assert_eq!(check_execution_step_refutation_v1(&refutation, &NoWeights), Err(PalwStepRefuteError::Unadjudicable));
+        build_refutation(&binding, &material, &rows, coord)
+    }
+
+    #[test]
+    fn unknown_kernel_is_unadjudicable() {
+        assert_eq!(
+            check_execution_step_refutation_v1(&unadjudicable_refutation(), &NoWeights),
+            Err(PalwStepRefuteError::Unadjudicable)
+        );
     }
 
     // --- helpers ---

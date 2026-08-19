@@ -394,10 +394,16 @@ an identity-neutral rule.
   own hardest correctness target; this makes that a gate rather than an intention.
 
   **Status — two of the four invariances are now under test, and the suite has two axes because
-  the attacks do.** `palw_facts`'s `with_carriage_fixed_a_later_point_of_view_only_matures` holds
-  the carriage fixed and sweeps the point of view across every boundary the fixtures have: `Voided`
-  must be *constant* rather than merely absorbing, and otherwise the rank
-  `Provisional < ReceiptLicensed < Final` must never decrease.
+  the attacks do.** `palw_facts`'s `once_decided_a_block_stays_decided` sweeps the point of view
+  across every boundary the fixtures have, each point seeing only the carriage it has reached: a
+  block's classification, once decided, is **permanent and unique**. `Final` and `Voided` are the
+  decisions; below them the stage may move freely.
+
+  That looser half is §3e itself, not slack. An earlier draft asserted a monotone rank
+  `Provisional < ReceiptLicensed < Final` and forbade exactly what this section permits — it failed
+  the moment a real coverage gap became visible mid-window, which is retroactive void acting on live
+  weight, above the safe frontier, as designed. The correction is worth recording: the invariant a
+  suite asserts can be *stronger* than the ADR and still be wrong.
   `carriage_accepted_after_the_window_changes_nothing` holds the clock and appends one record of
   every kind past the window, in both directions from both a matured base and one short of quorum.
   `resolution_does_not_depend_on_walk_order` covers arrival order.

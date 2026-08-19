@@ -267,9 +267,21 @@ Two things were missing. The first made the second look impossible.
 
 The decision is `outcome_freezes_class_v1`, tested exhaustively over outcomes: a landed conviction
 slashes and does not freeze, every other failure is the challenger's problem, and only a coverage
-gap freezes. What is NOT covered is reaching `Unadjudicable` end-to-end — that needs a refutation
-passing every structural check and then meeting an uncatalogued kernel, which no fixture builds.
-Splitting the rule out is what keeps that an uncovered path rather than an untested rule.
+gap freezes.
+
+**Reaching `Unadjudicable` end to end is now covered, and covering it found the rule stopping one
+call short of doing anything.** `palw_step_refute` already built such a refutation for its own
+`unknown_kernel_is_unadjudicable`; it is exposed as `unadjudicable_refutation` and carried into a
+conviction. With it, `resolve_block_facts_v1` was filling the field named
+`dispute_open_or_unadjudicable` with the dispute half ALONE — so a block with a full receipt quorum
+and a live coverage gap against it matured to `Final` and entered `safe(C)`. A block nothing can be
+held to, counted as finality. I10 had been implemented as far as the function that computes it.
+
+Both terms are bounded by the block's own challenge window, so adding the second cannot demote a
+matured block: `Final` requires `pov` past the window close, and a freeze record must be accepted at
+or before it. The same fixture also un-vacuums the reorg suite's "unadjudicable conviction" arm,
+which until now held a carriage that fails on its opening path — the shape of a conviction, and none
+of the rule.
 
 **The lesson for the rest of Decision C**: "this needs chain state" has meant "this needs a store"
 twice in this ADR's implementation, and both times the honest answer was a fold over the block's own

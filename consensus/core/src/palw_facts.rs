@@ -519,7 +519,17 @@ where
         pov_daa: Some(input.pov_daa),
         assigned_receipts: Some(assigned_receipt_count_v1(&receipts, input.panel, &input.block_hash, &input.commitment_root)),
         convicted_before_close: Some(convicted_before_close),
-        dispute_open_or_unadjudicable: Some(dispute_is_open_v1(input)),
+        // BOTH halves of the field's name. The freeze was derived and then not consumed: a class
+        // whose catalog cannot decide a step is one whose blocks nothing can be held to, and
+        // without this term such a block matured to `Final` anyway — I10 stopping at the function
+        // that computes it. `ramp_stage_v1` reads this before it looks at the window, which is what
+        // makes a coverage gap keep a block out of `safe(C)` rather than merely annotate it.
+        //
+        // Both terms are bounded by this block's own challenge window, so adding the second cannot
+        // demote a matured block: `Final` requires `pov` past the window close, and a freeze record
+        // must be accepted at or before it, so every record that can freeze is already visible at
+        // the first point of view where `Final` is reachable at all.
+        dispute_open_or_unadjudicable: Some(dispute_is_open_v1(input) || class_frozen_before_close_v1(input, &verify_signature)),
     }
 }
 
@@ -1055,6 +1065,32 @@ mod resolver_tests {
         (crate::palw_carriage::PALW_CARRIAGE_KIND_STEP_CONVICTION, daa, body(&PalwCarriageV1::StepConviction(c)))
     }
 
+    /// A step conviction whose refutation passes every structural check and then meets an
+    /// uncatalogued kernel — the only carriage that reaches `Unadjudicable`, and therefore the only
+    /// way to test what a class coverage gap does to a block.
+    ///
+    /// Recorded twice as an untested path before the fixture existed. `conviction_row` beside it
+    /// cannot get this far: its skeleton refutation fails on its opening path, so it exercises the
+    /// walk's filters and never the outcome.
+    fn unadjudicable_conviction_row(daa: u64) -> (u8, u64, Vec<u8>) {
+        let refutation = crate::palw_step_refute::tests::unadjudicable_refutation();
+        let c = crate::palw_carriage::PalwStepConvictionCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: op(0xB1),
+            attestation: crate::palw_slash::PalwExecutionAttestationV1 {
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+                executor_id: h(0xE1),
+                job_context_hash: refutation.binding.job_context.context_hash(),
+                full_logits_trace_root: refutation.binding.full_logits_trace_root,
+                committed_root: refutation.binding.committed_execution_root,
+                bond_outpoint: op(0xB1),
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+            refutation,
+        };
+        (crate::palw_carriage::PALW_CARRIAGE_KIND_STEP_CONVICTION, daa, body(&PalwCarriageV1::StepConviction(c)))
+    }
+
     /// An equivocation certificate against `op(0xB1)` that ADJUDICATES — the fixtures' only route
     /// to a landed conviction, and therefore the only way to test what a landed conviction does
     /// (a step conviction cannot get past its structural checks here, see `conviction_row`).
@@ -1491,6 +1527,63 @@ mod resolver_tests {
         let mut huge = at(u64::MAX);
         huge.accepted_daa = u64::MAX - 1;
         assert!(freeze_record_is_in_scope_v1(u64::MAX, &huge), "saturating, not wrapping");
+    }
+
+    /// ADR-0038 I10 END TO END, which nothing could reach before `unadjudicable_refutation`
+    /// existed: a class whose catalog cannot decide a refuted step keeps its blocks out of `Final`.
+    ///
+    /// The rule was implemented as far as `class_frozen_before_close_v1` and then not consumed —
+    /// `resolve_block_facts_v1` filled the field named `dispute_open_or_unadjudicable` with the
+    /// dispute half alone, so a block with a full receipt quorum and a live coverage gap against it
+    /// matured to `Final` and entered `safe(C)`. A block nothing can be held to, counted as
+    /// finality.
+    ///
+    /// And the second half of the rule, which is the one the window bound is for: the SAME
+    /// carriage accepted after the window closed leaves a matured block alone. Without that a
+    /// freeze is a broader retroactive demotion than the late-`Open` already fixed as one, because
+    /// it is a fact about the class rather than about a block.
+    #[test]
+    fn a_coverage_gap_keeps_the_block_out_of_final() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let quorum = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+
+        // The control: this quorum matures on its own.
+        assert_eq!(
+            resolve_block_weight_v1(&input(&quorum, &panel, 9_000, &bonds, &NoStepWeights), &RAMP, accept_fixture_signature)
+                .unwrap()
+                .stage,
+            PalwWorkRampStageV1::Final
+        );
+
+        // Window closes at 1 500. A gap surfacing inside it clouds the block, permanently.
+        let mut clouded = quorum.clone();
+        clouded.push(unadjudicable_conviction_row(1_400));
+        let inp = input(&clouded, &panel, 9_000, &bonds, &NoStepWeights);
+        assert!(class_frozen_before_close_v1(&inp, accept_fixture_signature), "the fixture must actually reach Unadjudicable");
+        assert_eq!(
+            resolve_block_facts_v1(&inp, accept_fixture_signature).dispute_open_or_unadjudicable,
+            Some(true),
+            "the field's name promises this half too"
+        );
+        assert_eq!(
+            resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).unwrap().stage,
+            PalwWorkRampStageV1::Provisional,
+            "a block nothing can be held to must not enter safe(C)"
+        );
+        // It is a coverage gap, not a conviction: nobody is slashed and the block is not Voided.
+        assert_eq!(resolve_block_facts_v1(&inp, accept_fixture_signature).convicted_before_close, Some(false));
+
+        // And the same record after the window leaves the matured block alone.
+        let mut late = quorum.clone();
+        late.push(unadjudicable_conviction_row(1_501));
+        let late_inp = input(&late, &panel, 9_000, &bonds, &NoStepWeights);
+        assert!(!class_frozen_before_close_v1(&late_inp, accept_fixture_signature), "past the window");
+        assert_eq!(
+            resolve_block_weight_v1(&late_inp, &RAMP, accept_fixture_signature).unwrap().stage,
+            PalwWorkRampStageV1::Final,
+            "a gap surfacing after the window stops the class going forward, it does not rewrite safe weight"
+        );
     }
 
     /// The dominant term of block weight is looked up BY the block's class, not handed in beside
@@ -2066,45 +2159,39 @@ mod resolver_tests {
         assert_eq!(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).unwrap().stage, PalwWorkRampStageV1::Final);
     }
 
-    /// ADR-0039's reorg-equivalence obligation, as a SUITE rather than as two anecdotes.
+    /// ADR-0039's reorg-equivalence obligation, as a SUITE rather than as anecdotes.
     ///
-    /// The two fixes above each caught one attack, and each was found by asking the same question
-    /// of one more call site. The question generalises, so the test should: **with the carriage
-    /// fixed, the only thing a later point of view may do to a block is mature it further.**
+    /// Each fix above caught one attack, and each was found by asking the same question of one more
+    /// call site. The question generalises, so the test should: **a block's classification, once
+    /// decided, is permanent and unique.** `Final` and `Voided` are the decisions; every earlier
+    /// point of view may move freely between `Provisional` and `ReceiptLicensed`.
     ///
-    /// Stated on the ramp's own four stages, that is one invariant per scenario:
+    /// The looser half is not slack, it is ADR-0039 §3e: *"a conviction can never rewrite safe
+    /// weight — it can only prevent work from entering it. Retroactive void therefore acts on live
+    /// weight alone, inside the challenge window, above the safe frontier."* Below the decision the
+    /// stage governs only bounded live weight, and evidence arriving there is supposed to move it.
+    /// An earlier draft of this test asserted a monotone rank instead and forbade exactly that — it
+    /// failed the moment a real coverage gap became visible mid-window, which is the ADR working.
     ///
-    /// * `Voided` is CONSTANT, not merely absorbing. `convicted_before_close` no longer reads `pov`
-    ///   at all, so a conviction that landed is visible at the first point of view that can see the
-    ///   carriage and at every later one. A `Voided` that appeared partway through the sweep would
-    ///   mean weight had been taken back;
-    /// * otherwise the rank `Provisional < ReceiptLicensed < Final` never DECREASES. It may stand
-    ///   still forever — a block that never reaches quorum never matures, and that is not a defect.
-    ///
-    /// This is ADR-0039 §3e in test form: *"a conviction can never rewrite safe weight — it can
-    /// only prevent work from entering it."* Both halves of "cannot rewrite" are checked here,
-    /// because the implementation got each half wrong once and neither failure showed up in the
-    /// other's test.
+    /// Each point of view sees only the carriage it has REACHED. Holding the whole set visible
+    /// throughout would model a node that can see its own future, and the transition being tested
+    /// — a record becoming visible — would never happen.
     ///
     /// The sweep straddles every boundary the fixture has: the window close at 1 500, the unbond
     /// requests the leaving scenarios place at 1 800 and 2 000, and a point of view far past all of
     /// them, where a one-way `effective_bond_status` has long since flipped.
     ///
-    /// `panel_duty_v1` rides the same axis and is checked with it, under a stricter rule — it may
-    /// go `Pending` to exactly one `Closed` answer and never move again. A drifting duty set is
-    /// worse than a drifting stage: it names the seats a slash path would charge, so two nodes that
-    /// disagree about it charge different validators for the same block.
+    /// `panel_duty_v1` rides the same axis under a stricter rule — it may go `Pending` to exactly
+    /// one `Closed` answer and never move again. A drifting duty set is worse than a drifting
+    /// stage: it names the seats a slash path would charge, so two nodes that disagree about it
+    /// charge different validators for the same block.
     #[test]
-    fn with_carriage_fixed_a_later_point_of_view_only_matures() {
-        /// `Voided` is deliberately absent: it is not a rung on this ladder, and a scenario that
-        /// reaches it is checked by the constancy rule instead.
-        fn rank(stage: PalwWorkRampStageV1) -> u8 {
-            match stage {
-                PalwWorkRampStageV1::Provisional => 0,
-                PalwWorkRampStageV1::ReceiptLicensed => 1,
-                PalwWorkRampStageV1::Final => 2,
-                PalwWorkRampStageV1::Voided => unreachable!("the constancy rule handles Voided"),
-            }
+    fn once_decided_a_block_stays_decided() {
+        /// The two stages that are DECISIONS rather than positions. `Provisional` and
+        /// `ReceiptLicensed` are both "not decided yet" — they differ only in how much live weight
+        /// a chain may carry meanwhile, which is bounded by β and is not finality.
+        fn is_terminal(stage: PalwWorkRampStageV1) -> bool {
+            matches!(stage, PalwWorkRampStageV1::Final | PalwWorkRampStageV1::Voided)
         }
 
         // A bond view in which ONE party asks to unbond, at a DAA of the scenario's choosing.
@@ -2148,6 +2235,8 @@ mod resolver_tests {
             ("no carriage at all", vec![], bonds()),
             ("a conviction inside the window", with(equivocation_row(1_400)), bonds()),
             ("a conviction after the window", with(equivocation_row(1_600)), bonds()),
+            ("a coverage gap inside the window", with(unadjudicable_conviction_row(1_400)), bonds()),
+            ("a coverage gap after the window", with(unadjudicable_conviction_row(1_600)), bonds()),
             ("a dispute opened inside the window", with(open_row(1_200)), bonds()),
             ("a dispute opened after the window", with(open_row(2_400)), bonds()),
             ("a verifier unbonds after filing", quorum(), leaving_at(1, 1_800)),
@@ -2165,7 +2254,11 @@ mod resolver_tests {
             let mut stages: Vec<PalwWorkRampStageV1> = Vec::new();
             let mut duties: Vec<PalwPanelDutyV1> = Vec::new();
             for pov in POVS {
-                let inp = input(carriage, &panel, pov, bonds, &NoStepWeights);
+                // The carriage this point of view has actually REACHED. Holding the whole set
+                // visible at every pov would model a node that can see its own future, and the
+                // transition being tested — a record becoming visible — would never happen.
+                let visible: Vec<(u8, u64, Vec<u8>)> = carriage.iter().filter(|(_, daa, _)| *daa <= pov).cloned().collect();
+                let inp = input(&visible, &panel, pov, bonds, &NoStepWeights);
                 stages.push(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves").stage);
                 duties.push(panel_duty_v1(&inp, accept_fixture_signature));
             }
@@ -2189,27 +2282,23 @@ mod resolver_tests {
             }
             assert!(closed.is_some(), "{name}: the sweep must outlive the duty window or it proves nothing about it");
 
-            let voided: Vec<bool> = stages.iter().map(|s| *s == PalwWorkRampStageV1::Voided).collect();
-            assert!(
-                voided.iter().all(|v| *v) || voided.iter().all(|v| !*v),
-                "{name}: a conviction is a fact about the chain, not about when it is read — {stages:?}"
-            );
-
-            if voided[0] {
-                ever_voided = true;
-                continue;
+            let mut terminal: Option<(usize, PalwWorkRampStageV1)> = None;
+            for (i, stage) in stages.iter().enumerate() {
+                match terminal {
+                    Some((first, settled)) => assert_eq!(
+                        *stage, settled,
+                        "{name}: settled {settled:?} at pov {} and read {stage:?} at pov {}",
+                        POVS[first], POVS[i]
+                    ),
+                    None if is_terminal(*stage) => terminal = Some((i, *stage)),
+                    None => {}
+                }
             }
-            for (i, pair) in stages.windows(2).enumerate() {
-                assert!(
-                    rank(pair[1]) >= rank(pair[0]),
-                    "{name}: pov {} -> {} demoted {:?} to {:?}",
-                    POVS[i],
-                    POVS[i + 1],
-                    pair[0],
-                    pair[1]
-                );
+            match terminal {
+                Some((_, PalwWorkRampStageV1::Final)) => ever_final = true,
+                Some((_, PalwWorkRampStageV1::Voided)) => ever_voided = true,
+                _ => {}
             }
-            ever_final |= stages.last() == Some(&PalwWorkRampStageV1::Final);
         }
 
         // The sweep must actually exercise both terminals, or a suite that never matures anything
@@ -2268,14 +2357,15 @@ mod resolver_tests {
             let base_duty = duty_of(base);
             assert!(matches!(base_duty, PalwPanelDutyV1::Closed { .. }), "{base_name}: the duty window must be closed by now");
 
-            // One of every kind that carries weight meaning. `conviction_row` cannot adjudicate
-            // against these fixtures, so it stands for the shape rather than for a landed
-            // conviction — which is itself worth pinning: a late record that decodes must not move
-            // the stage even by being present.
+            // One of every kind that carries weight meaning, and every one of them REACHES its
+            // outcome: the equivocation lands a conviction, and the step conviction reaches
+            // `Unadjudicable`. This arm used to hold `conviction_row`, which fails on its opening
+            // path — it stood for the shape of a conviction and tested none of the rule, so the
+            // freeze's window bound was covered here in name only.
             for (kind, late) in [
                 ("a receipt", receipt_row(3, LATE)),
                 ("a landed conviction", equivocation_row(LATE)),
-                ("an unadjudicable conviction", conviction_row(LATE)),
+                ("an unadjudicable conviction", unadjudicable_conviction_row(LATE)),
                 ("a dispute", open_row(LATE)),
             ] {
                 let mut extended = base.clone();
