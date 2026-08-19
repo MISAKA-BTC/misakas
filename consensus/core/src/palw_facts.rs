@@ -1460,6 +1460,80 @@ mod resolver_tests {
         }
     }
 
+    /// **One rule, three types, and nothing tied the third to the other two.**
+    ///
+    /// "Only `Unadjudicable` freezes the class" is stated on `PalwJobStatusV3` (the ADR-0037 spine),
+    /// mirrored onto `PalwDisputeSummary::freeze_class` — which `palw_dispute` already pins against
+    /// the spine — and stated a third time here on the carriage adjudicator's `Result`.
+    /// `outcome_freezes_class_v1` was not tied to either.
+    ///
+    /// Left untied, adding a second freezing terminal to one side is silent: `demands_class_freeze`
+    /// is a `matches!`, so a new variant compiles. And the two sides carry the rule to DIFFERENT
+    /// consequences — the spine stops new jobs on the class, this one keeps blocks out of `safe(C)`.
+    /// A divergence is therefore not "a stale mirror" but two nodes disagreeing about a block's
+    /// weight depending on which path they consulted, which is the partition shape.
+    ///
+    /// The `match` below is exhaustive on purpose: a new terminal will not compile until whoever
+    /// adds it says which carriage outcome it corresponds to. That is the whole mechanism — this
+    /// tree has closed the same through-line defect twice by replacing two hand-kept lists with one
+    /// lookup, and where the types genuinely differ, an exhaustive map is the same trick.
+    #[test]
+    fn the_spine_and_the_carriage_adjudicator_freeze_on_the_same_terminal() {
+        use crate::palw_carriage::PalwCarriageError as E;
+        use crate::palw_job_state::PalwJobStatusV3 as J;
+
+        // Every status, mapped to the adjudication outcome that reports the same thing. `None`
+        // where the status is not something an adjudicator can return at all — a job mid-flight is
+        // not a verdict about a refutation.
+        let corresponding = |status: J| -> Option<Result<TransactionOutpoint, E>> {
+            match status {
+                J::Open
+                | J::Committed
+                | J::PanelSelected
+                | J::Provisional { .. }
+                | J::ChallengeWindow { .. }
+                | J::Disputed { .. }
+                | J::Adjudicating { .. } => None,
+                // The court reproduced divergent bits: the conviction lands and slashes.
+                J::Convicted => Some(Ok(op(0xB1))),
+                // The court reproduced the executor's bits: the challenger was wrong.
+                J::NoFaultFound => Some(Err(E::StepConvictionNotProven("no fault found".into()))),
+                // The window closed without the court deciding anything about the class.
+                J::FinalizedAccepted | J::FinalizedRejected => Some(Err(E::EquivocationNotProven("window closed".into()))),
+                // The one that is about the CLASS rather than about either party.
+                J::Unadjudicable => Some(Err(E::StepUnadjudicable)),
+            }
+        };
+
+        let statuses = [
+            J::Open,
+            J::Committed,
+            J::PanelSelected,
+            J::Provisional { accepted: true },
+            J::Provisional { accepted: false },
+            J::ChallengeWindow { provisionally_accepted: true },
+            J::Disputed { provisionally_accepted: true },
+            J::Adjudicating { provisionally_accepted: true },
+            J::FinalizedAccepted,
+            J::FinalizedRejected,
+            J::Convicted,
+            J::NoFaultFound,
+            J::Unadjudicable,
+        ];
+        let mut agreed = 0;
+        for status in statuses {
+            let Some(outcome) = corresponding(status) else { continue };
+            assert_eq!(
+                status.demands_class_freeze(),
+                outcome_freezes_class_v1(&outcome),
+                "{status:?}: the spine and the carriage adjudicator disagree about freezing"
+            );
+            agreed += 1;
+        }
+        assert!(agreed >= 5, "the map must actually reach the terminals, got {agreed}");
+        assert!(J::Unadjudicable.demands_class_freeze(), "and the shared answer is not 'never freeze'");
+    }
+
     /// The walk's filters: a record of the wrong kind, or one the evaluating point has not reached,
     /// cannot freeze — and neither can an unproven conviction, which is the case a real chain will
     /// see most often.
