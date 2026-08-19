@@ -2563,6 +2563,54 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// The two chain weights of the chain ending at `chain_tip`, over the blocks at or above
+    /// `daa_floor` — ADR-0039 W4′, assembled.
+    ///
+    /// `safe` counts `Final` only and governs IBD, deep-reorg bounds and finality; `live` adds
+    /// bounded immature work and governs tip selection alone. `chain_weights_v1` does the
+    /// arithmetic; this supplies the fact set, which is the half that can be wrong.
+    ///
+    /// **A window, and the floor is the caller's to justify.** The ADR writes these as sums over a
+    /// chain, which is unbounded; a node folds a window or it folds forever. The floor belongs to
+    /// the caller because the honest one differs by consumer — finality reads to the pruning
+    /// horizon, tip selection needs only enough depth to separate the candidates in front of it —
+    /// and a default here would silently make one of them wrong.
+    ///
+    /// **A block with no PALW commitment contributes nothing and is skipped, not refused.** That is
+    /// the difference from an unresolvable block below: a hash-lane block has no PALW weight to
+    /// resolve, so its absence from the fold is the correct answer rather than a gap in it. An
+    /// unresolvable PALW block is a gap, and `chain_weights_v1` refuses on it.
+    ///
+    /// `None` therefore means "some PALW block in this window could not be resolved", and a caller
+    /// must treat that as "cannot compare these chains" rather than as a zero — comparing a chain
+    /// whose weight is unknown against one whose weight is known is how a node picks the branch it
+    /// merely understands better.
+    #[allow(dead_code)]
+    fn palw_chain_weights_v1(
+        &self,
+        chain_tip: BlockHash,
+        daa_floor: u64,
+        bonds: &ActiveBondView,
+        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
+        ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
+        params: &kaspa_consensus_core::palw_chain_weight::PalwChainWeightParamsV1,
+    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
+        use kaspa_consensus_core::palw_chain_weight::chain_weights_v1;
+
+        let mut facts = Vec::new();
+        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
+            let Ok(header) = self.headers_store.get_header(block) else { break };
+            if header.daa_score < daa_floor {
+                break;
+            }
+            if header.palw_commitment.is_empty() {
+                continue; // no PALW claim on this block — nothing to weigh, not a hole
+            }
+            facts.push(self.palw_block_weight_v1(chain_tip, block, bonds, schedule, ramp));
+        }
+        chain_weights_v1(&facts, params).ok()
+    }
+
     /// One block's PALW weight fact: the ramp stage it has reached on this chain, and the pwu its
     /// class prices it at. The input `chain_weights_v1` folds.
     ///
