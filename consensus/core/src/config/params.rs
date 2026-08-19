@@ -447,6 +447,22 @@ pub struct Params {
     /// `palw_commitment` must be EMPTY. Installing it makes the field required and validated from
     /// `activation_daa_score`, which is why it is part of the fingerprint (Some-only, so a network
     /// that installs none fingerprints byte-identically to before this field existed).
+    /// ADR-0028 §3 / ADR-0038 Decision H: the class's registered windows — `delta_bind`, `w_replay`,
+    /// `w_answer`, `w_round`, `w_challenge`, `prosecution_slack`, `q`.
+    ///
+    /// `None` on every shipped preset. Installing it is what makes the panel draw, the duty
+    /// deadline and the challenge window configurable rather than derived from a placeholder, and
+    /// it is validated with [`crate::palw_schedule::PalwScheduleParamsV1::validate_for_value_network_v1`]
+    /// — so **a network that installs a schedule and is not on the frozen 120-second cadence is
+    /// refused at construction** rather than discovering it when no node can finish a join.
+    pub palw_schedule: Option<crate::palw_schedule::PalwScheduleParamsV1>,
+    /// ADR-0038 Decision B: the weight ramp's own two numbers — the receipt quorum that licenses
+    /// work and ρ_r, the fraction of pwu a licensed-but-immature block carries.
+    ///
+    /// `None` on every shipped preset. Separate from [`Self::palw_fork_choice`] because they are
+    /// different questions: this decides when a block MATURES, that decides how much an immature
+    /// block is worth to tip selection. A network could sensibly change one without the other.
+    pub palw_ramp: Option<crate::palw_weight::PalwWeightParamsV1>,
     pub palw_block_commitment: Option<crate::palw_block_commitment::PalwBlockCommitmentParamsV1>,
 
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
@@ -570,6 +586,32 @@ impl Params {
                 ));
             }
         }
+        // ADR-0038 Decision H, enforced where a network is BUILT rather than where a node syncs.
+        // A schedule is a set of windows sitting on a cadence, and the cadence is frozen at 120 s:
+        // below it the sync headroom against the pinned class drops under 1x, so no node can ever
+        // finish a join, and the pruning horizon caps the bisection ladder too shallow to prosecute
+        // step fraud. Both are measurements rather than preferences — see
+        // `validate_for_value_network_v1`. Refusing here means the failure is a network that cannot
+        // be constructed, not a network that runs and quietly admits nobody.
+        if let Some(schedule) = self.palw_schedule.as_ref() {
+            schedule
+                .validate_for_value_network_v1(&self.blockrate)
+                .map_err(|_| crate::palw_registry::PalwRegistryError::NotCanonical("palw_schedule is not admissible on this network's cadence"))?;
+            if self.palw_credit.is_none() {
+                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
+                    "palw_schedule is set without palw_credit — there is no registered class for these windows to describe",
+                ));
+            }
+        }
+        if let Some(ramp) = self.palw_ramp.as_ref() {
+            ramp.validate()
+                .map_err(|_| crate::palw_registry::PalwRegistryError::NotCanonical("palw_ramp is out of range"))?;
+            if self.palw_credit.is_none() {
+                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
+                    "palw_ramp is set without palw_credit — there is no registered class whose work it would ramp",
+                ));
+            }
+        }
         let Some(credit) = self.palw_credit.as_ref() else {
             return Ok(());
         };
@@ -677,6 +719,8 @@ impl Params {
             dns_params,
             palw_credit,
             palw_fork_choice,
+            palw_schedule,
+            palw_ramp,
             palw_block_commitment,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -765,6 +809,18 @@ impl Params {
         }
         // ADR-0039 W4′ fork-choice fence, Some-only for the same reason: a network that does not
         // install one must fingerprint byte-identically to before the field existed.
+        // Some-only, like every fence beside it: a network that installs neither fingerprints
+        // byte-identically to one built before these fields existed.
+        if let Some(schedule) = palw_schedule {
+            let bytes = borsh::to_vec(schedule).expect("PalwScheduleParamsV1 is borsh-serializable");
+            h.write((bytes.len() as u64).to_le_bytes());
+            h.write(&bytes);
+        }
+        if let Some(ramp) = palw_ramp {
+            let bytes = borsh::to_vec(ramp).expect("PalwWeightParamsV1 is borsh-serializable");
+            h.write((bytes.len() as u64).to_le_bytes());
+            h.write(&bytes);
+        }
         if let Some(fork_choice) = palw_fork_choice {
             let bytes = borsh::to_vec(fork_choice).expect("PalwChainWeightParamsV1 is borsh-serializable");
             h.write((bytes.len() as u64).to_le_bytes());
@@ -1005,6 +1061,8 @@ impl Params {
             dns_params: self.dns_params,
             palw_credit: self.palw_credit,
             palw_fork_choice: self.palw_fork_choice,
+            palw_schedule: self.palw_schedule,
+            palw_ramp: self.palw_ramp,
             palw_block_commitment: self.palw_block_commitment,
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -1794,6 +1852,8 @@ pub const MAINNET_PARAMS: Params = Params {
     dns_params: Some(PRODUCTION_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_schedule: None,
+    palw_ramp: None,
     palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -1916,6 +1976,8 @@ pub const TESTNET_PARAMS: Params = Params {
     dns_params: Some(TESTNET_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_schedule: None,
+    palw_ramp: None,
     palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -2020,6 +2082,8 @@ pub const SIMNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_schedule: None,
+    palw_ramp: None,
     palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -2162,6 +2226,8 @@ pub const DEVNET_PARAMS: Params = Params {
     dns_params: Some(GENESIS_ACTIVE_DNS_PARAMS),
     palw_credit: None,
     palw_fork_choice: None,
+    palw_schedule: None,
+    palw_ramp: None,
     palw_block_commitment: None,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
@@ -2447,6 +2513,27 @@ mod consensus_params_id_tests {
     /// the only PALW network) would fork on a binary upgrade.
     ///
     /// The constant is the fingerprint testnet-11 is running under right now, read off the node.
+    /// The schedule and ramp fences are Some-only too, so installing neither leaves every shipped
+    /// preset's fingerprint exactly where it was.
+    ///
+    /// The pinned-fingerprint test beside this one would catch a regression, but it would report it
+    /// as "the preset changed" — which sends a reader looking at the preset. This says what the
+    /// rule is: a fence nobody installed is not part of the rule set, so it must not be part of the
+    /// identity a node announces.
+    #[test]
+    fn absent_schedule_and_ramp_fences_do_not_move_the_fingerprint() {
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS] {
+            assert!(params.palw_schedule.is_none(), "a shipped preset installed a schedule fence");
+            assert!(params.palw_ramp.is_none(), "a shipped preset installed a ramp fence");
+        }
+        // Byte-identical to a build without the fields: the Some-only writes never ran.
+        let before = MAINNET_PARAMS.consensus_params_id();
+        let mut probe = MAINNET_PARAMS;
+        probe.palw_schedule = None;
+        probe.palw_ramp = None;
+        assert_eq!(probe.consensus_params_id(), before);
+    }
+
     /// If this test fails, the running network cannot upgrade without a re-genesis.
     #[test]
     fn adding_the_commitment_fence_does_not_move_any_shipped_fingerprint() {
