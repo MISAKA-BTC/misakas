@@ -141,6 +141,25 @@ where
     Ok(PalwAdmission::Admitted { commitment, executor_bond, ticket })
 }
 
+/// The `commitment_root` a header's PALW commitment announces — **what receipts target**.
+///
+/// Every consumer of that value (the receipt filter, the panel draw, the dispute's announced root)
+/// needs it, and none of them holds a header's pre-PoW derivation. This function is here rather
+/// than beside them for the reason admission states about its own re-decode: *one source for the
+/// value it goes on to use*. Two call sites deriving it independently is two chances to disagree
+/// about which bytes the network is committing to, and a disagreement there does not fail loudly —
+/// it makes one node's receipts target a root no other node recognises, so quorum silently never
+/// forms.
+///
+/// `None` when the header carries no decodable commitment, which is every header on a network
+/// whose fence is off.
+pub fn palw_header_commitment_root_v1(header: &kaspa_consensus_core::header::Header, network_id: &[u8]) -> Option<kaspa_hashes::Hash64> {
+    let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
+    let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+    let challenge = commitment.challenge_for(network_id, pre_pow_hash, header.timestamp, header.nonce);
+    Some(commitment.commitment_root(challenge))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +220,31 @@ mod tests {
     /// the Layer-0 digest is computed, so none of them needs the pinned model. The two that do
     /// need it — the happy path and the lottery — live in `tests/palw_admission_fixture.rs`,
     /// where the model-free fixture tag family can be selected for the whole binary.
+    /// The announced root is a function of the whole attempt, and the negative is what matters.
+    ///
+    /// Receipts target this value, so anything that moves it must move every receipt with it. The
+    /// nonce and the timestamp are inside the challenge the root expands from — two attempts over
+    /// the same payload are different claims, and a root that ignored them would let a miner
+    /// re-announce one panel's work under a second attempt.
+    #[test]
+    fn the_announced_root_binds_the_attempt_not_just_the_payload() {
+        let bytes = commitment(outpoint(1), EASY).encode();
+        let base = header(bytes.clone());
+        let root = palw_header_commitment_root_v1(&base, NETWORK).expect("decodable");
+        assert_eq!(palw_header_commitment_root_v1(&base, NETWORK), Some(root), "not a pure function");
+
+        let mut other_nonce = header(bytes.clone());
+        other_nonce.nonce = base.nonce.wrapping_add(1);
+        assert_ne!(palw_header_commitment_root_v1(&other_nonce, NETWORK), Some(root), "the nonce must move the root");
+
+        let mut other_time = header(bytes.clone());
+        other_time.timestamp = base.timestamp.wrapping_add(1);
+        assert_ne!(palw_header_commitment_root_v1(&other_time, NETWORK), Some(root), "the timestamp must move the root");
+
+        assert_ne!(palw_header_commitment_root_v1(&base, b"other-net"), Some(root), "the network must move the root");
+        assert_eq!(palw_header_commitment_root_v1(&header(Vec::new()), NETWORK), None, "no commitment, no root");
+    }
+
     fn header(commitment_bytes: Vec<u8>) -> Header {
         Header::new_finalized(
             1,
