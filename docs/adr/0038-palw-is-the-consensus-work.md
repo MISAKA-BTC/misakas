@@ -297,6 +297,19 @@ or before it. The same fixture also un-vacuums the reorg suite's "unadjudicable 
 which until now held a carriage that fails on its opening path — the shape of a conviction, and none
 of the rule.
 
+**And wiring it exposed a second gap the same fixture proved: the freeze was not scoped to a
+class.** `class_frozen_before_close_v1` froze on any `Unadjudicable` conviction on the chain,
+whatever class's execution it refuted. A coverage gap is a fact about ONE catalog, and manufacturing
+one is free — `Unadjudicable` slashes nobody — so an attacker registers a class with an uncatalogued
+kernel, refutes its own execution in it, and every block on the network stops maturing, at the price
+of one carriage record with no bond at risk. `runtime_class_id` and `execution_class_id` are one
+namespace (`PalwClassRegistrationV1` maps the first onto the second), so the comparison is direct.
+
+The fixture is what proved it: `unadjudicable_refutation`'s job context names a different class from
+the resolver fixtures' default, so the first version of the test froze a block of class `0xC1` with
+a gap in class `6` — and passed. The scenario now runs under the refuted class, receipts and all,
+with a gap-in-another-class case beside it.
+
 **The lesson for the rest of Decision C**: "this needs chain state" has meant "this needs a store"
 twice in this ADR's implementation, and both times the honest answer was a fold over the block's own
 chain. Reach for the store only when a fold provably cannot answer.

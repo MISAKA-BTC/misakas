@@ -779,6 +779,16 @@ where
     canonical_carriage_order_v1(input.carriage).into_iter().any(|(kind, accepted_daa, body)| {
         *kind == PALW_CARRIAGE_KIND_STEP_CONVICTION && freeze_record_is_in_scope_v1(*accepted_daa, input) && {
             let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body) else { return false };
+            // THIS block's class, and nothing else. A coverage gap is a fact about the catalog of
+            // the class whose execution was refuted; without this test a gap anywhere froze
+            // everywhere, and manufacturing one is free: `Unadjudicable` slashes nobody, so an
+            // attacker registers a class with an uncatalogued kernel, refutes its own execution in
+            // it, and every block on the network stops maturing. `runtime_class_id` and
+            // `execution_class_id` are one namespace — `PalwClassRegistrationV1` maps the first
+            // onto the second — so this is a direct comparison and not a translation.
+            if c.refutation.binding.job_context.runtime_class_id != input.execution_class_id {
+                return false;
+            }
             // At the DAA the conviction was ACCEPTED, like every other accountability question on
             // this walk. Read at `pov_daa` a freeze silently LIFTS once the accused's bond ages
             // out — the emergency stop undoing itself while the coverage gap it fired on is still
@@ -994,6 +1004,19 @@ mod resolver_tests {
 
     fn receipt_row(bond: u8, daa: u64) -> (u8, u64, Vec<u8>) {
         receipt_row_verdict(bond, daa, crate::palw_receipt::PalwReceiptVerdictV1::Match)
+    }
+
+    /// A quorum receipt naming a class other than the fixtures' default. Needed because a receipt
+    /// is authentic only for the class the block claims — so a test that moves the block to
+    /// another class must move its receipts with it, or it is testing an unlicensed block instead
+    /// of the thing it meant to.
+    fn receipt_row_for_class(bond: u8, daa: u64, class: Hash64) -> (u8, u64, Vec<u8>) {
+        let (kind, at, body_bytes) = receipt_row(bond, daa);
+        let Ok(PalwCarriageV1::Receipt(mut r)) = crate::palw_carriage::decode_palw_stage1_body(kind, &body_bytes) else {
+            unreachable!()
+        };
+        r.receipt.execution_class_id = class;
+        (kind, at, body(&PalwCarriageV1::Receipt(r)))
     }
 
     /// The same row with the verdict chosen. `Mismatch` is a discharged duty and never a quorum
@@ -1218,12 +1241,21 @@ mod resolver_tests {
     struct FixtureClasses;
     impl PalwClassFactsViewV1 for FixtureClasses {
         fn class_facts_for_block(&self, execution_class_id: &Hash64, _block_accepted_daa: u64) -> Option<PalwClassFactsV1> {
-            (*execution_class_id == h(0xC1)).then(|| PalwClassFactsV1 {
-                execution_class_id: h(0xC1),
+            // Two classes on the same numbers. The second is the one `unadjudicable_refutation`'s
+            // execution belongs to, and it is a DIFFERENT id from the fixtures' default on
+            // purpose: the freeze is scoped to the refuted class, and a fixture where the two
+            // shared an id could not tell that scoping from its absence.
+            (*execution_class_id == h(0xC1) || *execution_class_id == gap_class()).then(|| PalwClassFactsV1 {
+                execution_class_id: *execution_class_id,
                 class_target: u128::MAX >> 10, // 1_024 expected attempts
                 pwu_per_inference: 100,
             })
         }
+    }
+
+    /// The class `unadjudicable_refutation`'s execution names — `palw_step_refute`'s job context.
+    fn gap_class() -> Hash64 {
+        crate::palw_step_refute::tests::unadjudicable_refutation().binding.job_context.runtime_class_id
     }
     static FIXTURE_CLASSES: FixtureClasses = FixtureClasses;
 
@@ -1620,20 +1652,30 @@ mod resolver_tests {
     fn a_coverage_gap_keeps_the_block_out_of_final() {
         let bonds = bonds();
         let panel = [seat(1), seat(2)];
-        let quorum = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+        // Under the REFUTED class, receipts and all: a block of another class is a different case
+        // and is checked below.
+        let quorum = vec![receipt_row_for_class(1, 1_100, gap_class()), receipt_row_for_class(2, 1_110, gap_class())];
+        fn at<'a>(
+            carriage: &'a [(u8, u64, Vec<u8>)],
+            panel: &'a [PalwPanelSeatV3],
+            bonds: &'a crate::dns_finality::ActiveBondView,
+        ) -> PalwResolverInputV1<'a> {
+            let mut i = input(carriage, panel, 9_000, bonds, &NoStepWeights);
+            i.execution_class_id = gap_class();
+            i
+        }
 
         // The control: this quorum matures on its own.
         assert_eq!(
-            resolve_block_weight_v1(&input(&quorum, &panel, 9_000, &bonds, &NoStepWeights), &RAMP, accept_fixture_signature)
-                .unwrap()
-                .stage,
+            resolve_block_weight_v1(&at(&quorum, &panel, &bonds), &RAMP, accept_fixture_signature).unwrap().stage,
             PalwWorkRampStageV1::Final
         );
 
-        // Window closes at 1 500. A gap surfacing inside it clouds the block, permanently.
+        // Window closes at 1 500. A gap surfacing inside it clouds the block, permanently — for a
+        // block of the REFUTED class.
         let mut clouded = quorum.clone();
         clouded.push(unadjudicable_conviction_row(1_400));
-        let inp = input(&clouded, &panel, 9_000, &bonds, &NoStepWeights);
+        let inp = at(&clouded, &panel, &bonds);
         assert!(class_frozen_before_close_v1(&inp, accept_fixture_signature), "the fixture must actually reach Unadjudicable");
         assert_eq!(
             resolve_block_facts_v1(&inp, accept_fixture_signature).dispute_open_or_unadjudicable,
@@ -1648,10 +1690,22 @@ mod resolver_tests {
         // It is a coverage gap, not a conviction: nobody is slashed and the block is not Voided.
         assert_eq!(resolve_block_facts_v1(&inp, accept_fixture_signature).convicted_before_close, Some(false));
 
+        // A gap in ANOTHER class freezes nothing here, and this is the security property rather
+        // than tidiness: `Unadjudicable` slashes nobody, so manufacturing one is free. Register a
+        // class with an uncatalogued kernel, refute your own execution in it, and an unscoped
+        // freeze stops every block on the network from maturing — at the price of one carriage
+        // record and no bond at risk.
+        let mut other_class = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+        other_class.push(unadjudicable_conviction_row(1_400));
+        let elsewhere = input(&other_class, &panel, 9_000, &bonds, &NoStepWeights);
+        assert_ne!(elsewhere.execution_class_id, gap_class(), "the fixtures' default class is not the refuted one");
+        assert!(!class_frozen_before_close_v1(&elsewhere, accept_fixture_signature), "a gap elsewhere is not this class's gap");
+        assert_eq!(resolve_block_weight_v1(&elsewhere, &RAMP, accept_fixture_signature).unwrap().stage, PalwWorkRampStageV1::Final);
+
         // And the same record after the window leaves the matured block alone.
         let mut late = quorum.clone();
         late.push(unadjudicable_conviction_row(1_501));
-        let late_inp = input(&late, &panel, 9_000, &bonds, &NoStepWeights);
+        let late_inp = at(&late, &panel, &bonds);
         assert!(!class_frozen_before_close_v1(&late_inp, accept_fixture_signature), "past the window");
         assert_eq!(
             resolve_block_weight_v1(&late_inp, &RAMP, accept_fixture_signature).unwrap().stage,
@@ -2302,20 +2356,31 @@ mod resolver_tests {
             c
         };
 
+        // The coverage-gap scenarios run under the REFUTED class, receipts and all — a freeze is
+        // scoped to the class whose catalog the gap is in, so a block of another class is a
+        // different scenario and not this one.
+        let gap_quorum = || vec![receipt_row_for_class(1, 1_100, gap_class()), receipt_row_for_class(2, 1_110, gap_class())];
+        let gap_with = |extra: (u8, u64, Vec<u8>)| {
+            let mut c = gap_quorum();
+            c.push(extra);
+            c
+        };
+
         // Window closes at 1 000 + 500 = 1 500.
-        let scenarios: Vec<(&str, Vec<(u8, u64, Vec<u8>)>, crate::dns_finality::ActiveBondView)> = vec![
-            ("quorum and nothing against it", quorum(), bonds()),
-            ("one receipt short of quorum", vec![receipt_row(1, 1_100)], bonds()),
-            ("no carriage at all", vec![], bonds()),
-            ("a conviction inside the window", with(equivocation_row(1_400)), bonds()),
-            ("a conviction after the window", with(equivocation_row(1_600)), bonds()),
-            ("a coverage gap inside the window", with(unadjudicable_conviction_row(1_400)), bonds()),
-            ("a coverage gap after the window", with(unadjudicable_conviction_row(1_600)), bonds()),
-            ("a dispute opened inside the window", with(open_row(1_200)), bonds()),
-            ("a dispute opened after the window", with(open_row(2_400)), bonds()),
-            ("a verifier unbonds after filing", quorum(), leaving_at(1, 1_800)),
-            ("the accused unbonds after conviction", with(equivocation_row(1_400)), leaving_at(0xB1, 2_000)),
-            ("the challenger unbonds after opening", with(open_row(1_200)), leaving_at(0xC9, 1_800)),
+        let scenarios: Vec<(&str, Vec<(u8, u64, Vec<u8>)>, crate::dns_finality::ActiveBondView, Hash64)> = vec![
+            ("quorum and nothing against it", quorum(), bonds(), h(0xC1)),
+            ("one receipt short of quorum", vec![receipt_row(1, 1_100)], bonds(), h(0xC1)),
+            ("no carriage at all", vec![], bonds(), h(0xC1)),
+            ("a conviction inside the window", with(equivocation_row(1_400)), bonds(), h(0xC1)),
+            ("a conviction after the window", with(equivocation_row(1_600)), bonds(), h(0xC1)),
+            ("a coverage gap inside the window", gap_with(unadjudicable_conviction_row(1_400)), bonds(), gap_class()),
+            ("a coverage gap after the window", gap_with(unadjudicable_conviction_row(1_600)), bonds(), gap_class()),
+            ("a gap in another class", with(unadjudicable_conviction_row(1_400)), bonds(), h(0xC1)),
+            ("a dispute opened inside the window", with(open_row(1_200)), bonds(), h(0xC1)),
+            ("a dispute opened after the window", with(open_row(2_400)), bonds(), h(0xC1)),
+            ("a verifier unbonds after filing", quorum(), leaving_at(1, 1_800), h(0xC1)),
+            ("the accused unbonds after conviction", with(equivocation_row(1_400)), leaving_at(0xB1, 2_000), h(0xC1)),
+            ("the challenger unbonds after opening", with(open_row(1_200)), leaving_at(0xC9, 1_800), h(0xC1)),
         ];
 
         // Every point of view is >= the block's own acceptance at 1 000.
@@ -2324,7 +2389,7 @@ mod resolver_tests {
         let panel = [seat(1), seat(2)];
         let mut ever_final = false;
         let mut ever_voided = false;
-        for (name, carriage, bonds) in &scenarios {
+        for (name, carriage, bonds, class) in &scenarios {
             let mut stages: Vec<PalwWorkRampStageV1> = Vec::new();
             let mut duties: Vec<PalwPanelDutyV1> = Vec::new();
             for pov in POVS {
@@ -2332,7 +2397,8 @@ mod resolver_tests {
                 // visible at every pov would model a node that can see its own future, and the
                 // transition being tested — a record becoming visible — would never happen.
                 let visible: Vec<(u8, u64, Vec<u8>)> = carriage.iter().filter(|(_, daa, _)| *daa <= pov).cloned().collect();
-                let inp = input(&visible, &panel, pov, bonds, &NoStepWeights);
+                let mut inp = input(&visible, &panel, pov, bonds, &NoStepWeights);
+                inp.execution_class_id = *class;
                 stages.push(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves").stage);
                 duties.push(panel_duty_v1(&inp, accept_fixture_signature));
             }
