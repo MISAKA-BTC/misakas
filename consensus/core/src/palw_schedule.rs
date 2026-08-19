@@ -938,6 +938,61 @@ mod tests {
         );
     }
 
+    /// **The ladder cannot reach the pinned model's step space, at any shipped preset.**
+    ///
+    /// The affordable space is `2^10 = 1 024` on both presets, and the pruning horizon caps it at
+    /// `2^12` (deci-bps) / `2^17` (120 s). This test asks what the pinned Qwen3.5-2B actually needs,
+    /// and the answer clears the affordable space by four orders of magnitude at the coarsest
+    /// tiling anyone would use.
+    ///
+    /// **The envelope, not a point estimate**, because two inputs are not pinned anywhere in this
+    /// tree and one of them cannot be: the per-layer node count and the tile length live in a
+    /// `PalwShapeProfileV3` that has never been built for this model — every profile in the
+    /// repository is a test fixture, `fleet_registration()`'s included, at `layer_count: 4,
+    /// hidden_dim: 16`. So the test sweeps the plausible range and asserts the CONCLUSION, which is
+    /// the same everywhere in it. A point estimate here would be a number I cannot source.
+    ///
+    /// Geometry that IS pinned: `MODEL_LAYER_COUNT = 24`, `MODEL_HIDDEN_DIM = 2048` (`vlt.rs`).
+    ///
+    /// `leaves_per_position = Σ_nodes ceil(out_len / tile_len)` over pre ‖ 24 layers ‖ post, and
+    /// the job's positions multiply it. A 14-second CPU inference is not a handful of tokens.
+    #[test]
+    fn the_pinned_model_needs_a_deeper_ladder_than_any_preset_affords() {
+        const LAYERS: u64 = 24; // vlt::qwen35_pins::MODEL_LAYER_COUNT
+        const HIDDEN: u64 = 2_048; // vlt::qwen35_pins::MODEL_HIDDEN_DIM
+
+        let deci = PalwScheduleParamsV1::stage1_defaults_deci_bps();
+        let two_minute = PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
+        assert_eq!(max_ladder_space_v1(&deci), 1 << 10);
+        assert_eq!(max_ladder_space_v1(&two_minute), 1 << 10);
+
+        // The whole plausible envelope: a transformer layer is at least a norm, a projection and an
+        // output (3) and at most a fully split attention+FFN graph (12); tiles run from the whole
+        // hidden row down to a 256-element strip; a 14 s inference is at least 16 tokens.
+        for nodes_per_layer in [3u64, 6, 12] {
+            for tile in [HIDDEN, 512, 256] {
+                for positions in [16u64, 64, 256] {
+                    let per_position = LAYERS * nodes_per_layer * HIDDEN.div_ceil(tile);
+                    let leaves = per_position * positions;
+                    assert!(
+                        leaves > max_ladder_space_v1(&two_minute),
+                        "nodes/layer {nodes_per_layer}, tile {tile}, {positions} positions -> {leaves} leaves, \
+                         which the ladder would have to bisect in {} rounds",
+                        (leaves as f64).log2().ceil()
+                    );
+                }
+            }
+        }
+
+        // The floor of that envelope — 3 nodes, whole-row tiles, 16 tokens — already needs 11
+        // rounds against the 10 both presets afford. The pruning ceiling (12 / 17) is what a
+        // proposal to close this has to work inside, and only the 120 s preset has room at all,
+        // which is the second reason Decision H froze the cadence there.
+        let floor_leaves = LAYERS * 3 * 1 * 16;
+        assert_eq!(floor_leaves, 1_152);
+        assert!(floor_leaves > max_ladder_space_v1(&two_minute), "even the floor of the envelope exceeds the affordable space");
+    }
+
     /// ADR-0038 Decision H: the 120-second cadence is frozen, and "well-formed" does not imply
     /// "may carry value".
     ///

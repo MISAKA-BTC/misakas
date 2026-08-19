@@ -572,6 +572,45 @@ blue-work heap it replaced.
   few tens of tokens. Decision H keeps the *option* of closing that open; it does not close it.
 * Nothing has run this on a network. Every claim above is a claim about code and its tests.
 
+### The ladder gap, measured — and the prerequisite nobody has built
+
+Decision H's open item is now closed as a question and open as a problem: **the bisection ladder
+cannot reach the pinned model's step space at any shipped preset**, and this is pinned by
+`the_pinned_model_needs_a_deeper_ladder_than_any_preset_affords`.
+
+Both presets afford `2^10 = 1 024` steps. The pruning horizon caps them at `2^12` (deci-bps) and
+`2^17` (120 s). Against the pinned geometry — `MODEL_LAYER_COUNT = 24`, `MODEL_HIDDEN_DIM = 2048` —
+the floor of the plausible envelope (3 nodes per layer, whole-row tiles, 16 tokens) is **1 152
+leaves**, already past the affordable space; the middle of it is `2^16`–`2^18`. A step-level fraud
+is therefore **unprosecutable at these parameters**: the terminal opening and the conviction land
+past `w_challenge` and are discarded, so the ladder convicts nobody and the honest challenger spends
+its rungs for nothing.
+
+The test asserts the envelope rather than a number, and the reason it must is the larger finding.
+
+**No `PalwShapeProfileV3` has ever been built for the pinned model.** Every profile in the
+repository is a test fixture — `palw_step_leg`'s, `palw_step_refute`'s, `palw_adversarial`'s, and
+`palw_registry::fleet_registration()`'s, whose doc says it is "built from the REAL fleet measurement
+(slowest host, 2026-08-16)" and which carries `layer_count: 4, hidden_dim: 16, ffn_dim: 16,
+tile_len: 16`. The real model is 24 × 2048.
+
+That profile is what defines **what a step IS**. Without it:
+
+* the step space cannot be measured, only bounded — hence the envelope above;
+* **A4 cannot be evaluated at all.** "The court's kernel catalog is 100% of reachable kernels per
+  Active class" is a statement about the reachable set, and the reachable set is enumerated from the
+  profile. A catalog-coverage certificate over a 4-layer, 16-wide fixture certifies nothing about
+  Qwen3.5-2B;
+* a second class cannot be registered, because registration carries a profile;
+* the court's convictions are defined against a graph the network does not run.
+
+**This is the prerequisite for three of the four layers a mainnet needs** (the ladder, multi-class,
+and the numeric parameters that depend on step counts). It is not a gap in this ADR's decisions — A
+through H are implemented and tested — it is a missing description of the model to the court, and it
+must be derived from the pinned llama.cpp graph rather than from anyone's knowledge of transformer
+architecture: a profile that is *plausible* but not *what the runtime does* convicts honest
+producers on every step it gets wrong.
+
 ## Decision H — Block cadence is FROZEN at one block per 120 seconds (testnet and mainnet)
 
 **Confirmed, 2026-08-19. Not a tuning parameter and not a launch-window choice: every PALW network
