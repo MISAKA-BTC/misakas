@@ -208,9 +208,25 @@ pub struct PalwBlockCommitmentV1 {
     pub execution_class_id: Hash64,
     /// The executor's bond — accountable identity, slash target, and payee (I4, W8).
     pub executor_bond_outpoint: TransactionOutpoint,
-    /// Merkle root of the execution trace checkpoints (what samplers open).
+    /// The execution trace's root — **what samplers open**, so it must be openable.
+    ///
+    /// The only legal source is the v2 projection's `full_logits_trace_root`
+    /// ([`crate::palw_v2::full_logits_trace_root_v2`]), which wraps a real Merkle tree over the
+    /// ordered event hashes; [`crate::palw_v2::trace_event_opening_v2`] is the opening a sampler
+    /// gets. **Not** the layer-0 `gemm_trace_root`, which is one flat digest over concatenated
+    /// events: a commitment carrying that would name a trace nobody can challenge, so every
+    /// dispute over the block terminates `Unadjudicable` — rejected but unslashed, and under
+    /// ADR-0038 I10 it freezes the class instead of holding the block to anything.
     pub trace_root: Hash64,
-    /// Merkle root of the output/token stream.
+    /// The output/token stream's commitment — [`crate::palw_v2::output_commitment_v2`].
+    ///
+    /// **Flat, and deliberately so**, which this doc used to obscure by calling it a Merkle root
+    /// beside a field that genuinely is one. Nothing opens it: the token ids are bounded by the
+    /// job's `exact_decode_tokens`, so a dispute carries the stream whole rather than a path into
+    /// it, and the stream is already tied to the trace because
+    /// [`crate::palw_v2::output_token_ids_hash_v2`] is bound inside the trace root's summary. The
+    /// asymmetry with `trace_root` is the size of what is committed — one full-logits row per
+    /// token cannot be carried whole, and a token id list can.
     pub output_root: Hash64,
     /// The canonical PWU this block claims under its class's frozen derivation.
     ///
