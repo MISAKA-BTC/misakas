@@ -709,7 +709,7 @@ pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::pal
 /// gap surfacing at any later DAA would pull every matured block of that class back to
 /// `Provisional` at once. ADR-0039 §3e is explicit that a conviction "can never rewrite safe
 /// weight — it can only prevent work from entering it", and an unbounded freeze rewrites it
-/// wholesale. `carriage_accepted_after_the_window_cannot_change_the_stage` is the rule; this keeps
+/// wholesale. `carriage_accepted_after_the_window_changes_nothing` is the rule; this keeps
 /// the freeze inside it before anything wires the freeze to the ramp.
 ///
 /// What the bound leans on is the assumption the whole conviction path already leans on, and
@@ -2089,6 +2089,11 @@ mod resolver_tests {
     /// The sweep straddles every boundary the fixture has: the window close at 1 500, the unbond
     /// requests the leaving scenarios place at 1 800 and 2 000, and a point of view far past all of
     /// them, where a one-way `effective_bond_status` has long since flipped.
+    ///
+    /// `panel_duty_v1` rides the same axis and is checked with it, under a stricter rule — it may
+    /// go `Pending` to exactly one `Closed` answer and never move again. A drifting duty set is
+    /// worse than a drifting stage: it names the seats a slash path would charge, so two nodes that
+    /// disagree about it charge different validators for the same block.
     #[test]
     fn with_carriage_fixed_a_later_point_of_view_only_matures() {
         /// `Voided` is deliberately absent: it is not a rung on this ladder, and a scenario that
@@ -2157,13 +2162,32 @@ mod resolver_tests {
         let mut ever_final = false;
         let mut ever_voided = false;
         for (name, carriage, bonds) in &scenarios {
-            let stages: Vec<PalwWorkRampStageV1> = POVS
-                .iter()
-                .map(|pov| {
-                    let inp = input(carriage, &panel, *pov, bonds, &NoStepWeights);
-                    resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves").stage
-                })
-                .collect();
+            let mut stages: Vec<PalwWorkRampStageV1> = Vec::new();
+            let mut duties: Vec<PalwPanelDutyV1> = Vec::new();
+            for pov in POVS {
+                let inp = input(carriage, &panel, pov, bonds, &NoStepWeights);
+                stages.push(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves").stage);
+                duties.push(panel_duty_v1(&inp, accept_fixture_signature));
+            }
+
+            // The duty accounting rides the same axis, and a drifting one is worse than a drifting
+            // stage: it names the seats a slash path would charge, so two nodes that disagree about
+            // it charge different validators for the same block. It may only go `Pending` -> one
+            // `Closed` answer, and that answer may never change afterwards.
+            let mut closed: Option<&PalwPanelDutyV1> = None;
+            for (i, duty) in duties.iter().enumerate() {
+                match (duty, closed) {
+                    (PalwPanelDutyV1::Pending, None) => {}
+                    (PalwPanelDutyV1::Pending, Some(_)) => {
+                        panic!("{name}: pov {} went back to Pending after closing", POVS[i])
+                    }
+                    (d @ PalwPanelDutyV1::Closed { .. }, None) => closed = Some(d),
+                    (d @ PalwPanelDutyV1::Closed { .. }, Some(first)) => {
+                        assert_eq!(d, first, "{name}: pov {} named a different default set", POVS[i])
+                    }
+                }
+            }
+            assert!(closed.is_some(), "{name}: the sweep must outlive the duty window or it proves nothing about it");
 
             let voided: Vec<bool> = stages.iter().map(|s| *s == PalwWorkRampStageV1::Voided).collect();
             assert!(
@@ -2210,8 +2234,13 @@ mod resolver_tests {
     ///
     /// Two bases, because "cannot change" is only meaningful where there is room to move in that
     /// direction: a matured block has room to fall, and one short of quorum has room to rise.
+    ///
+    /// The duty accounting is checked on the same records. It is not weight, but it is the set a
+    /// slash path would charge, and a late receipt that discharged a seat's duty would let a
+    /// defaulter buy its way out of the accounting after the fact — at a moment of its choosing,
+    /// which is the shape of every defect on this axis.
     #[test]
-    fn carriage_accepted_after_the_window_cannot_change_the_stage() {
+    fn carriage_accepted_after_the_window_changes_nothing() {
         let bonds = bonds();
         let panel = [seat(1), seat(2), seat(3)];
         // Window closes at 1 000 + 500 = 1 500; every appended record lands well past it.
@@ -2223,6 +2252,11 @@ mod resolver_tests {
                 .expect("every fixture resolves")
                 .stage
         };
+        // Duty travels with it. A late receipt that discharged a seat's duty would let a defaulter
+        // buy its way out of the accounting after the fact, at a moment of its own choosing.
+        let duty_of = |carriage: &[(u8, u64, Vec<u8>)]| {
+            panel_duty_v1(&input(carriage, &panel, POV, &bonds, &NoStepWeights), accept_fixture_signature)
+        };
 
         let bases: [(&str, Vec<(u8, u64, Vec<u8>)>, PalwWorkRampStageV1); 2] = [
             ("matured", vec![receipt_row(1, 1_100), receipt_row(2, 1_110)], PalwWorkRampStageV1::Final),
@@ -2231,6 +2265,8 @@ mod resolver_tests {
 
         for (base_name, base, expected) in &bases {
             assert_eq!(stage_of(base), *expected, "{base_name}: the base itself must be what the case is about");
+            let base_duty = duty_of(base);
+            assert!(matches!(base_duty, PalwPanelDutyV1::Closed { .. }), "{base_name}: the duty window must be closed by now");
 
             // One of every kind that carries weight meaning. `conviction_row` cannot adjudicate
             // against these fixtures, so it stands for the shape rather than for a landed
@@ -2249,6 +2285,7 @@ mod resolver_tests {
                     *expected,
                     "{base_name}: {kind} accepted after the window changed the stage — late evidence is telemetry (W5)"
                 );
+                assert_eq!(duty_of(&extended), base_duty, "{base_name}: {kind} accepted after the window changed who defaulted");
             }
         }
     }

@@ -398,9 +398,14 @@ an identity-neutral rule.
   the carriage fixed and sweeps the point of view across every boundary the fixtures have: `Voided`
   must be *constant* rather than merely absorbing, and otherwise the rank
   `Provisional < ReceiptLicensed < Final` must never decrease.
-  `carriage_accepted_after_the_window_cannot_change_the_stage` holds the clock and appends one
-  record of every kind past the window, in both directions from both a matured base and one short
-  of quorum. `resolution_does_not_depend_on_walk_order` covers arrival order.
+  `carriage_accepted_after_the_window_changes_nothing` holds the clock and appends one record of
+  every kind past the window, in both directions from both a matured base and one short of quorum.
+  `resolution_does_not_depend_on_walk_order` covers arrival order.
+
+  Both axes carry `panel_duty_v1` with them. It is not weight, but it names the seats a slash path
+  would charge, so a duty set that drifts with the point of view means two nodes charging different
+  validators for the same block — and its rule is stricter than the stage's: `Pending` to exactly
+  one `Closed` answer, never moving again.
 
   The second axis is not redundancy. Removing the late-`Open` bound leaves *every* scenario in the
   point-of-view sweep `Provisional` at every point of view — constant, monotone, and passing. Each
