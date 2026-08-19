@@ -159,6 +159,19 @@ the deep-reorg bound, so pwu that leaves it is finality handed back. That test n
 control that keeps it from becoming "bonds are never checked": a filer that had already unbonded
 *before* it filed still counts for nothing.
 
+**And the fix was half-applied, in the direction that mattered more.** Resolving the accused's
+record at the accepted DAA did not reach the adjudicators' own re-check, which both conviction arms
+were still handing `pov_daa`. So the same erosion ran the other way: a landed conviction **voids** a
+block's PALW weight, and reading at `pov` meant the void *lifted* once the accused's bond aged out
+of `Active`. A block a proof said was wrong regained full weight by nothing but time passing, and
+the accused steered it — get convicted, unbond, be un-convicted. Both arms now judge at the DAA the
+accusation was accepted, and the property is pinned in both directions: with the carriage fixed,
+advancing the point of view moves a block neither out of `Final` nor out of `Voided`.
+
+The lesson is the one the three window arms already taught, restated for a second axis: a rule about
+*when* is written once per call site, so it is verified by sweeping every call site at once — never
+at the site being edited.
+
 ### The third unbounded carriage arm: a late `Open` un-matured a `Final` block
 
 Found by asking the same question of every arm after the receipt asymmetry above. `dispute_is_open_v1`

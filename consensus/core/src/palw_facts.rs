@@ -471,6 +471,16 @@ where
             // block's PALW weight permanently, which is B9's shape (re-audit §3.1). Both kinds now
             // run the same adjudicator a slash does, against the accused's own bond and key, and
             // the adjudicators refuse rather than convict when they cannot decide.
+            //
+            // Both arms judge the accused's bond at the DAA the CONVICTION was accepted, and pass
+            // that same DAA on — the adjudicator re-checks activity itself, so resolving the record
+            // at the filing moment while handing it `pov_daa` left the pov dependency exactly where
+            // it was. It runs the opposite way from the receipt defect and is worse for it: a
+            // proven conviction VOIDS this block's weight, so reading at pov means the void LIFTS
+            // once the accused's bond ages out of Active. The punished block quietly regains weight
+            // as time passes, and the accused steers it — get convicted, unbond, be un-convicted.
+            // Judged at the moment the accusation was accepted, a conviction that landed stays
+            // landed at every later point of view.
             PALW_CARRIAGE_KIND_STEP_CONVICTION => {
                 if *accepted_daa <= window_close
                     && let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body)
@@ -479,7 +489,7 @@ where
                     && adjudicate_step_conviction_carriage_v1(
                         &c,
                         accused,
-                        input.pov_daa,
+                        *accepted_daa,
                         input.network_id,
                         input.step_weights,
                         &verify_signature,
@@ -495,7 +505,7 @@ where
                     && (e.certificate.attestation_a.full_logits_trace_root == input.logits_trace_root
                         || e.certificate.attestation_b.full_logits_trace_root == input.logits_trace_root)
                     && let Some(accused) = input.bonds.active_bond_at(&e.accused_bond_outpoint, *accepted_daa)
-                    && adjudicate_equivocation_carriage_v1(&e, accused, input.pov_daa, input.network_id, &verify_signature).is_ok()
+                    && adjudicate_equivocation_carriage_v1(&e, accused, *accepted_daa, input.network_id, &verify_signature).is_ok()
                 {
                     convicted_before_close = true;
                 }
@@ -726,13 +736,17 @@ where
     canonical_carriage_order_v1(input.carriage).into_iter().any(|(kind, accepted_daa, body)| {
         *kind == PALW_CARRIAGE_KIND_STEP_CONVICTION && *accepted_daa <= input.pov_daa && {
             let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body) else { return false };
-            let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, input.pov_daa) else { return false };
+            // At the DAA the conviction was ACCEPTED, like every other accountability question on
+            // this walk. Read at `pov_daa` a freeze silently LIFTS once the accused's bond ages
+            // out — the emergency stop undoing itself while the coverage gap it fired on is still
+            // there, and undoing it later on some nodes than others.
+            let Some(accused) = input.bonds.active_bond_at(&c.accused_bond_outpoint, *accepted_daa) else { return false };
             // The ONLY outcome that freezes. A conviction that lands, and one that fails for
             // any other reason, both leave the class running.
             outcome_freezes_class_v1(&adjudicate_step_conviction_carriage_v1(
                 &c,
                 accused,
-                input.pov_daa,
+                *accepted_daa,
                 input.network_id,
                 input.step_weights,
                 &verify_signature,
@@ -1006,6 +1020,36 @@ mod resolver_tests {
             refutation,
         };
         (crate::palw_carriage::PALW_CARRIAGE_KIND_STEP_CONVICTION, daa, body(&PalwCarriageV1::StepConviction(c)))
+    }
+
+    /// An equivocation certificate against `op(0xB1)` that ADJUDICATES — the fixtures' only route
+    /// to a landed conviction, and therefore the only way to test what a landed conviction does
+    /// (a step conviction cannot get past its structural checks here, see `conviction_row`).
+    fn equivocation_row(daa: u64) -> (u8, u64, Vec<u8>) {
+        use crate::palw_carriage::{PALW_CARRIAGE_KIND_EQUIVOCATION, PalwEquivocationCarriageV1};
+        let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
+        let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
+            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+            executor_id: h(0xE1),
+            job_context_hash: ctx.context_hash(),
+            full_logits_trace_root: root,
+            committed_root: root,
+            bond_outpoint: op(0xB1),
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let e = PalwEquivocationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            accused_bond_outpoint: op(0xB1),
+            certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
+                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+                // The LOGITS leg of this block's execution, which is what an attestation signs — not the
+                // announced composite root. The two are distinct in the fixture on purpose.
+                attestation_a: att(h(0x1A)), // this block's commitment root
+                attestation_b: att(h(0x02)),
+                job_context: ctx,
+            },
+        };
+        (PALW_CARRIAGE_KIND_EQUIVOCATION, daa, body(&PalwCarriageV1::Equivocation(e)))
     }
 
     /// The chain identity the resolver runs under. It must equal the network the equivocation
@@ -1859,32 +1903,7 @@ mod resolver_tests {
     /// The comparison is against chain DAA, so every node agrees about which side it fell.
     #[test]
     fn a_conviction_counts_only_before_the_window_closes() {
-        use crate::palw_carriage::{PALW_CARRIAGE_KIND_EQUIVOCATION, PalwEquivocationCarriageV1};
-        let equivocation = |daa: u64| {
-            let ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
-            let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
-                version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
-                executor_id: h(0xE1),
-                job_context_hash: ctx.context_hash(),
-                full_logits_trace_root: root,
-                committed_root: root,
-                bond_outpoint: op(0xB1),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
-            };
-            let e = PalwEquivocationCarriageV1 {
-                version: PALW_CARRIAGE_VERSION_V1,
-                accused_bond_outpoint: op(0xB1),
-                certificate: crate::palw_slash::PalwClassContradictionCertificateV1 {
-                    version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
-                    // The LOGITS leg of this block's execution, which is what an attestation signs — not the
-                    // announced composite root. The two are distinct in the fixture on purpose.
-                    attestation_a: att(h(0x1A)), // this block's commitment root
-                    attestation_b: att(h(0x02)),
-                    job_context: ctx,
-                },
-            };
-            (PALW_CARRIAGE_KIND_EQUIVOCATION, daa, body(&PalwCarriageV1::Equivocation(e)))
-        };
+        let equivocation = equivocation_row;
         let panel = vec![seat(1), seat(2)];
 
         // Window closes at 1_000 + 500 = 1_500.
@@ -1914,6 +1933,66 @@ mod resolver_tests {
             PalwWorkRampStageV1::Final,
             "a late conviction cannot unmake finality (W5)"
         );
+    }
+
+    /// The other half of ADR-0039's reorg-equivalence property, and the half that runs the
+    /// dangerous way: **with the carriage fixed, advancing the point of view never un-VOIDS a
+    /// block either.**
+    ///
+    /// A landed conviction voids this block's PALW weight. The accused's bond used to be re-checked
+    /// by the adjudicator at `pov_daa` — resolving the record at the filing moment did not reach
+    /// that second check — and `effective_bond_status` is one-way, so once `pov` passed the
+    /// accused's unbond request the conviction stopped adjudicating and the void LIFTED. The
+    /// punished block regained full weight by nothing but time passing, and the accused steered
+    /// it: get convicted, unbond, be un-convicted.
+    ///
+    /// That direction is worse than the receipt one it mirrors. A receipt that stops counting
+    /// costs an honest block its finality; a conviction that stops counting hands weight back to
+    /// the block a proof said was wrong.
+    #[test]
+    fn a_voided_block_does_not_un_void_when_the_accused_leaves() {
+        let panel = vec![seat(1), seat(2)];
+        // Window closes at 1_000 + 500 = 1_500; the conviction lands inside it.
+        let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060), equivocation_row(1_400)];
+
+        // The accused requests unbonding at 2_000 — after it was convicted.
+        let leaving = {
+            let mut accused = bond(0xB1);
+            accused.validator_pubkey_hash = h(0xE1);
+            accused.unbond_request_daa_score = Some(2_000);
+            crate::dns_finality::ActiveBondView::from_records(
+                [1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))).chain([(op(0xB1), accused)]),
+            )
+        };
+
+        for pov in [1_500, 1_999, 2_000, 9_000] {
+            let inp = input(&carriage, &panel, pov, &leaving, &NoStepWeights);
+            assert_eq!(
+                resolve_block_facts_v1(&inp, accept_fixture_signature).convicted_before_close,
+                Some(true),
+                "pov {pov}: a conviction that landed stays landed"
+            );
+            assert_eq!(
+                resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).unwrap().stage,
+                PalwWorkRampStageV1::Voided,
+                "pov {pov}: voided weight must not be handed back"
+            );
+        }
+
+        // The rule it must NOT become: 'the accused's bond is never checked'. One already gone when
+        // the accusation was filed has nothing at stake to answer with, so the accusation is not
+        // adjudicable against it and the block keeps its weight.
+        let already_gone = {
+            let mut accused = bond(0xB1);
+            accused.validator_pubkey_hash = h(0xE1);
+            accused.unbond_request_daa_score = Some(1_200);
+            crate::dns_finality::ActiveBondView::from_records(
+                [1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))).chain([(op(0xB1), accused)]),
+            )
+        };
+        let inp = input(&carriage, &panel, 9_000, &already_gone, &NoStepWeights);
+        assert_eq!(resolve_block_facts_v1(&inp, accept_fixture_signature).convicted_before_close, Some(false));
+        assert_eq!(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).unwrap().stage, PalwWorkRampStageV1::Final);
     }
 
     /// An undecodable body is skipped, not fatal: it never passed admission on this chain, so it
