@@ -2522,6 +2522,10 @@ impl VirtualStateProcessor {
     /// the cheap answer for the chain this node actually has, not a general one.
     ///
     /// Read-only, and it takes the store's read lock only for the iteration.
+    /// Dormant with the rest of the weight layer: nothing resolves block facts yet, and this is
+    /// the input that resolution takes. Landed with the schema-v2 field it depends on so the two
+    /// cannot drift.
+    #[allow(dead_code)]
     fn palw_carriage_on_chain_v1(&self, chain_tip: BlockHash, daa_floor: u64) -> Vec<(u8, u64, Vec<u8>)> {
         self.palw_carriage_store
             .read()
