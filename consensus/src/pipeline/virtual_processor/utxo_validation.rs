@@ -1573,7 +1573,7 @@ impl VirtualStateProcessor {
     /// **is** the target, by `fold_class_target_v1`'s own definition. The collection is written as a
     /// walk rather than as an empty literal so it starts producing steps the moment blocks start
     /// declaring classes, instead of needing to be found again.
-    fn palw_class_facts_for_block(
+    pub(super) fn palw_class_facts_for_block(
         &self,
         class_id: &kaspa_hashes::Hash64,
         header: &Header,

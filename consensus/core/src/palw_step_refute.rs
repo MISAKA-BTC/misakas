@@ -424,6 +424,25 @@ pub trait PalwWeightOracleV1 {
     fn weight_row(&self, tensor_name: &str, layer: Option<u16>, row_start: u32, elements: u32) -> Option<Vec<u8>>;
 }
 
+/// A node that holds no model weights, as a production type rather than a test double.
+///
+/// Every full node is one of these under ADR-0038 W1 — full nodes never run the LLM, and a
+/// re-execution oracle exists only where somebody chose to keep the weights. It answers `None` to
+/// every row, so every step conviction adjudicates `Unadjudicable`, and that is the CORRECT
+/// direction rather than a degradation: a node that cannot check a refutation has not established
+/// that the step is wrong, so it must not let the claim void the block's weight.
+///
+/// A production type because the alternative is a caller inventing one at each site, and the
+/// tempting invention is an oracle that answers *something* — zeros, or a default row — which would
+/// convict honest producers on every step. `None` is the only safe answer to "I do not have this".
+pub struct PalwNoWeightsV1;
+
+impl PalwWeightOracleV1 for PalwNoWeightsV1 {
+    fn weight_row(&self, _tensor_name: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Canonical input derivation
 // ---------------------------------------------------------------------------------------------

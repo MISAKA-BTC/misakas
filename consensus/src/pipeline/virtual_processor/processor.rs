@@ -497,6 +497,32 @@ pub struct VirtualStateProcessor {
     _mining_rules: Arc<MiningRules>,
 }
 
+/// A [`PalwClassFactsViewV1`] over the single registered class, so the resolver looks its facts up
+/// BY the block's own class id rather than being handed values beside it.
+///
+/// The lookup is the point, not ceremony: the resolver used to take bare `Option`s that were never
+/// compared against the block's class, so the dominant term of block weight was whatever the caller
+/// passed. A view that answers `None` for any other class turns that into `Unresolved`.
+struct PalwOneClassView {
+    class_id: kaspa_hashes::Hash64,
+    class_target: u128,
+    pwu_per_inference: u64,
+}
+
+impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView {
+    fn class_facts_for_block(
+        &self,
+        execution_class_id: &kaspa_hashes::Hash64,
+        _block_accepted_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_facts::PalwClassFactsV1> {
+        (*execution_class_id == self.class_id).then_some(kaspa_consensus_core::palw_facts::PalwClassFactsV1 {
+            execution_class_id: self.class_id,
+            class_target: self.class_target,
+            pwu_per_inference: self.pwu_per_inference,
+        })
+    }
+}
+
 impl VirtualStateProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -2535,6 +2561,90 @@ impl VirtualStateProcessor {
             .filter(|(_, r)| r.accepted_block == chain_tip || self.reachability_service.is_chain_ancestor_of(r.accepted_block, chain_tip))
             .map(|(_, r)| (r.kind, r.accepted_daa_score, r.body))
             .collect()
+    }
+
+    /// One block's PALW weight fact: the ramp stage it has reached on this chain, and the pwu its
+    /// class prices it at. The input `chain_weights_v1` folds.
+    ///
+    /// This is where the five pieces that had to exist first meet — the chain-scoped carriage, the
+    /// panel, the announced root, the class facts, and a re-execution oracle. Each was landed
+    /// separately because each hid a way to be wrong that testing would not have caught: carriage
+    /// with no chain, a panel drawn at the reading node's tip, a root derived twice, class facts
+    /// unbound to the block's own class.
+    ///
+    /// **`None` is "this node cannot say", never "zero weight".** A missing header, an
+    /// undecodable commitment, a class this network does not hold, a panel whose anchor the chain
+    /// has not reached — each returns `None`, and `chain_weights_v1` refuses a `None` entry rather
+    /// than skipping it. That refusal is the point: silently treating an unresolvable block as
+    /// weightless is how a pruned node and an archival node come to disagree about a tip.
+    ///
+    /// The oracle is `PalwNoWeightsV1` because that is what a full node is under W1 — full nodes
+    /// never run the LLM. Every step conviction therefore adjudicates `Unadjudicable`, which does
+    /// NOT void the block: a node that cannot check a refutation has not established the step is
+    /// wrong. Under ADR-0038 I10 it freezes the class instead, and that is a separate walk.
+    #[allow(dead_code)]
+    fn palw_block_weight_v1(
+        &self,
+        chain_tip: BlockHash,
+        block: BlockHash,
+        bonds: &ActiveBondView,
+        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
+        ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
+    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwBlockWeightV1> {
+        use kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1;
+        use kaspa_consensus_core::palw_chain_weight::PalwBlockWeightV1;
+        use kaspa_consensus_core::palw_facts::{PalwResolverInputV1, block_pwu_v1, resolve_block_facts_v1, weight_facts_v1};
+        use kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
+        use kaspa_consensus_core::palw_weight::ramp_stage_v1;
+
+        let network_id = self.genesis.hash.as_bytes();
+        let network_id = network_id.as_slice();
+        let header = self.headers_store.get_header(block).ok()?;
+        let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
+        let commitment_root = kaspa_pow::palw_admission::palw_header_commitment_root_v1(&header, network_id)?;
+        let accepted_daa = header.daa_score;
+        let pov_daa = self.headers_store.get_header(chain_tip).ok()?.daa_score;
+
+        let executor_id = commitment.executor_bond_outpoint.transaction_id;
+        let panel =
+            self.palw_panel_for_block_v1(chain_tip, block, commitment_root, executor_id, commitment.execution_class_id, accepted_daa, bonds, schedule)?;
+
+        let facts = self.palw_class_facts_for_block(&commitment.execution_class_id, &header)?;
+        let classes = PalwOneClassView { class_id: commitment.execution_class_id, class_target: facts.class_target, pwu_per_inference: facts.pwu_per_inference };
+
+        let carriage = self.palw_carriage_on_chain_v1(chain_tip, accepted_daa);
+        let oracle = PalwNoWeightsV1;
+        let input = PalwResolverInputV1 {
+            carriage: &carriage,
+            network_id,
+            bonds,
+            step_weights: &oracle,
+            panel: &panel,
+            block_hash: block,
+            commitment_root,
+            // Bare-v2 today: the announced root IS the logits leg. A composite class must pass its
+            // own logits leg here — the two are deliberately separate fields because conflating
+            // them made one of the resolver's two consumers silently never match.
+            logits_trace_root: commitment.trace_root,
+            execution_class_id: commitment.execution_class_id,
+            accepted_daa,
+            pov_daa,
+            classes: &classes,
+            schedule: *schedule,
+        };
+
+        let resolved = resolve_block_facts_v1(&input, |key, digest, sig| {
+            kaspa_txscript::verify_mldsa87_with_context(
+                key,
+                digest.as_bytes().as_slice(),
+                sig,
+                kaspa_consensus_core::palw_receipt::PALW_RECEIPT_MLDSA87_CONTEXT,
+            )
+            .unwrap_or(false)
+        });
+        let weight_facts = weight_facts_v1(&resolved, schedule.w_challenge).ok()?;
+        let pwu = block_pwu_v1(Some(facts.class_target), Some(facts.pwu_per_inference)).ok()?;
+        Some(PalwBlockWeightV1 { pwu, stage: ramp_stage_v1(&weight_facts, ramp) })
     }
 
     /// The panel drawn for one block's PALW commitment, from chain state alone.
