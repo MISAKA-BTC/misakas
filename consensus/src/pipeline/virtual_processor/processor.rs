@@ -2533,6 +2533,72 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// The panel drawn for one block's PALW commitment, from chain state alone.
+    ///
+    /// Ties together the pieces that had to exist first — the candidate set
+    /// (`palw_panel_candidates_v1`), the eligible-set snapshot root (derived inside
+    /// `select_job_panel_at_anchor_v3`), the future anchor (`palw_panel_anchor_v1`), and the
+    /// capability declarations that say which class a bond has staked on being able to run.
+    ///
+    /// Every lookup is scoped to `chain_tip`'s own chain, never to this node's sink. The capability
+    /// filter is the shape `capability_set_root_at` already uses — `declaration_block` is the pin,
+    /// chain membership is asked of reachability — because a declaration living on a branch this
+    /// chain does not contain is not a fact about this chain, and seating a validator from it would
+    /// put two nodes on different panels for one block.
+    ///
+    /// `None` means "not drawable yet", which is a different statement from an empty panel: the
+    /// anchor is in this chain's future. See `palw_panel_anchor_v1` for why an empty vector is the
+    /// wrong answer there.
+    ///
+    /// The block hash serves as the draw's `job_id`. A block's PALW work has no funding request, so
+    /// `palw_job_id_v3`'s inputs do not exist for it — the block IS the job. No namespace collision
+    /// follows: the panel seed is keyed under its own domain and binds `commitment_root`
+    /// separately, so the draw is a function of (network, block, root, anchor, snapshot) whatever a
+    /// job id means elsewhere.
+    #[allow(dead_code)]
+    fn palw_panel_for_block_v1(
+        &self,
+        chain_tip: BlockHash,
+        block_hash: BlockHash,
+        commitment_root: kaspa_hashes::Hash64,
+        executor_id: kaspa_hashes::Hash64,
+        execution_class_id: kaspa_hashes::Hash64,
+        commitment_accepted_daa: u64,
+        bonds: &ActiveBondView,
+        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
+    ) -> Option<Vec<kaspa_consensus_core::palw_job_panel::PalwPanelSeatV3>> {
+        use kaspa_consensus_core::palw_job_panel::{palw_panel_candidates_v1, select_job_panel_at_anchor_v3};
+
+        let (anchor_block, anchor_daa) = self.palw_panel_anchor_v1(chain_tip, commitment_accepted_daa, schedule.delta_bind)?;
+
+        let declared = |bond: &TransactionOutpoint| {
+            self.compute_capability_store
+                .read()
+                .all()
+                .into_iter()
+                .find(|r| {
+                    r.bond_outpoint == *bond
+                        && r.is_live_at(anchor_daa)
+                        && (r.declaration_block == anchor_block
+                            || self.reachability_service.is_chain_ancestor_of(r.declaration_block, anchor_block))
+                })
+                .map(|r| r.runtime_class_id)
+        };
+
+        let candidates = palw_panel_candidates_v1(bonds, anchor_daa, declared, |_| false);
+        Some(select_job_panel_at_anchor_v3(
+            self.genesis.hash.as_bytes().as_slice(),
+            block_hash,
+            commitment_root,
+            anchor_block,
+            anchor_daa,
+            &executor_id,
+            &execution_class_id,
+            &candidates,
+            schedule.q as usize,
+        ))
+    }
+
     /// The **future anchor** a block's panel is drawn against: the first chain block at or after
     /// `commitment_accepted_daa + delta_bind`, on the chain that ends at `chain_tip`.
     ///
