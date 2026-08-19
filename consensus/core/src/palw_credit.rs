@@ -186,6 +186,26 @@ pub fn panel_candidates_at_anchor_v1(
 /// status it already refuses keeps ONE rejection path instead of two, and a caller cannot
 /// accidentally reinstate the seat by re-filtering. It never becomes a slash — nothing reads this
 /// status as a bond record.
+/// **`bond_status` here is an ELIGIBILITY VERDICT, not the bond's actual status**, and the two
+/// panel assemblers in this tree now disagree about that field on purpose. Read this before
+/// treating a `Slashed` here as a fact about a bond.
+///
+/// `palw_job_panel::palw_panel_candidates_v1` — the consensus-side assembler — reports
+/// `effective_bond_status`, the truth. This one reports `Active` iff the bond may take a seat and
+/// `Slashed` otherwise, because it must express **an exclusion the candidate type cannot hold**:
+/// every bond of the executor's OWNER is barred, and `eligible_seats_v3` is only given the
+/// executor's validator id. Encoding that as a status is how the exclusion survives the call.
+///
+/// The cost is that a merely `Unbonding` or not-yet-`Active` bond reads as `Slashed` downstream, so
+/// nothing may take a slash decision, a telemetry count, or an operator-facing message from this
+/// field. The draw is the only correct consumer; it asks one question of it and that question is
+/// answered correctly.
+///
+/// Stated rather than repaired because repairing it means an eligibility field on
+/// `PalwPanelCandidateV3` and a migration of both assemblers, and this path is audited and paying:
+/// a speculative refactor of a live mint path is the more expensive mistake. `the_credit_panel_
+/// encodes_eligibility_not_status` pins the encoding so a future edit that "fixes" the status
+/// breaks loudly instead of silently widening the panel to the executor's own operator.
 pub fn panel_seats_at_anchor_v3(
     bonds: &[crate::dns_finality::StakeBondRecord],
     runtime_class_id: Hash64,
@@ -373,6 +393,62 @@ pub fn decide_credit_v1(
 
 #[cfg(test)]
 mod tests {
+
+    /// The credit panel's `bond_status` is an ELIGIBILITY verdict, and this pins that encoding.
+    ///
+    /// The exclusion it carries cannot be expressed any other way: every bond of the executor's
+    /// OWNER is barred, while `eligible_seats_v3` is only told the executor's validator id. A
+    /// future edit that "corrects" this field to report the real status would silently widen the
+    /// panel to include the executor's own second bond — which is the executor attesting to its own
+    /// work and collecting the attester share for it.
+    #[test]
+    fn the_credit_panel_encodes_eligibility_not_status() {
+        fn rec(seed: u8) -> crate::dns_finality::StakeBondRecord {
+            crate::dns_finality::StakeBondRecord {
+                version: 1,
+                bond_outpoint: crate::tx::TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+                owner_pubkey_hash: Hash64::from_u64_word(seed as u64),
+                validator_pubkey_hash: Hash64::from_u64_word(seed as u64),
+                validator_pubkey: vec![seed; 32],
+                amount: 20_000,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0u8; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: crate::dns_finality::BondStatus::Active,
+            }
+        }
+        let owner = Hash64::from_u64_word(0xE0);
+        let mut executor_second_bond = rec(2);
+        executor_second_bond.owner_pubkey_hash = owner; // same owner as the executor
+        let mut outsider = rec(3);
+        outsider.owner_pubkey_hash = Hash64::from_u64_word(0xF0);
+        let mut unbonding = rec(4);
+        unbonding.owner_pubkey_hash = Hash64::from_u64_word(0xF1);
+        unbonding.unbond_request_daa_score = Some(500);
+
+        let seats = panel_seats_at_anchor_v3(
+            &[executor_second_bond.clone(), outsider.clone(), unbonding.clone()],
+            Hash64::from_u64_word(7),
+            1_000,
+            owner,
+        );
+        let status_of = |op| seats.iter().find(|s| s.bond_outpoint == op).unwrap().bond_status;
+
+        assert_eq!(
+            status_of(executor_second_bond.bond_outpoint),
+            crate::dns_finality::BondStatus::Slashed,
+            "the executor's own operator must be barred — this seat is the self-attestation hole"
+        );
+        assert_eq!(status_of(outsider.bond_outpoint), crate::dns_finality::BondStatus::Active);
+        assert_eq!(
+            status_of(unbonding.bond_outpoint),
+            crate::dns_finality::BondStatus::Slashed,
+            "an ineligible bond reads Slashed whatever it actually is — nothing may take a slash decision from this field"
+        );
+    }
     use super::*;
     // The id-keyed lottery, kept in the tests only: the v1 candidate form and its draw are still
     // the contrast these assertions are about (what the seat form can express and it cannot).

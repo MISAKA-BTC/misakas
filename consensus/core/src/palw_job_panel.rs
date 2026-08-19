@@ -74,6 +74,14 @@ pub struct PalwPanelSeatV3 {
 ///   nodes with different insertion histories". Returning sorted removes the footgun rather than
 ///   documenting it again.
 ///
+/// **`bond_status` here is the TRUTH, and the credit path's assembler writes something else into
+/// the same field.** `palw_credit::panel_seats_at_anchor_v3` uses it as an eligibility verdict —
+/// `Active` iff the bond may be seated, `Slashed` otherwise — because it must carry an exclusion
+/// the type cannot hold (every bond of the executor's OWNER, while the draw is only told the
+/// executor's validator id). Both are correct for their own draw and neither may read the other's
+/// value as a bond fact. Named at both sites rather than at one, because a reader arrives at
+/// whichever they were sent to.
+///
 /// `class_frozen` is carried per candidate rather than filtered here: a frozen class is a fact the
 /// draw weighs (ADR-0038 I10 froze it for a coverage gap, which is not the candidate's fault), and
 /// dropping those candidates here would silently shrink the eligible set for a reason the lottery
