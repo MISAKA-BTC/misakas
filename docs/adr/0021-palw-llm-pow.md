@@ -89,6 +89,30 @@ panics at the first template).
 no 1.2 GB model. A fixture node and a real-model node compute different tags — different rule
 sets that must not share a mesh, by design.
 
+**Fixture confinement is a property of the NETWORK, not of the process** (amended 2026-08-19).
+The rule is unchanged — the fixture family is honored on devnet only — and it now lives in
+`kaspa_pow::palw::fixture_permitted_on`, consulted by `palw_l1_tag` on the `network_id` it is
+already given, rather than only in kaspad's startup rail. Two reasons, and the first is the
+security one:
+
+* **Nothing can skip it.** The rail runs in kaspad. A miner, a harness, or any other library
+  consumer of `palw_l1_tag` was never subject to the confinement at all. This is the same argument
+  `verify_worker_calibration` already makes for checking lazily on the tag path as well as eagerly
+  at startup.
+* **One process may host several networks.** The rail's `exit(1)` was process-wide, so a node on
+  any non-devnet network refused to start while the variable was set — including networks whose
+  `pow_palw_activation` is `never()` and which therefore compute no PALW tag at all. That is
+  over-broad rather than wrong, and it had a measurable cost: the integration suite runs devnet
+  consensuses and simnet daemons in one binary, so no value of the variable ran it. It now runs in
+  one invocation, which is also what CI does.
+
+**The operator-facing change**, stated plainly because it is one: kaspad no longer exits when the
+variable is set on a network that does not validate PALW. It logs a warning naming the network and
+continues. Where PALW *is* active and the network is not devnet — testnet-11 today — it still
+exits with the same message, because there the variable would change what the node validates and
+failing at the first relayed header is the outcome the rail exists to prevent. A class-pinned
+network additionally refuses the probe in `verify_worker_calibration`, unchanged.
+
 **Resource control.** Worker spawns are serialized process-wide (each loads the 1.2 GB model;
 the pruning-proof path validates headers in parallel and would otherwise be a memory cliff), the
 pipe-drain-before-wait pattern from the VLT runtime is applied (llama.cpp's model-load stderr
@@ -123,8 +147,11 @@ per-block subsidy is `(per-second value × ttpb).div_ceil(1000)`.
   the algo-id cut-offs, the blockrate has no forked-params machinery, and building it
   (crescendo-style) is far heavier than a testnet re-genesis.
 * kaspad refuses to start on a PALW network without the worker runtime (actionable startup
-  error instead of a first-header panic), and refuses `MISAKA_PALW_POW_FIXTURE=1` outside
-  devnet — a mis-exported fixture var must not mint a private fork of the public testnet.
+  error instead of a first-header panic), and refuses `MISAKA_PALW_POW_FIXTURE=1` on a PALW
+  network outside devnet — a mis-exported fixture var must not mint a private fork of the public
+  testnet. Since 2026-08-19 the confinement itself is enforced per network at the tag path (see
+  *Fixture confinement* above); on a network that validates no PALW the rail warns instead of
+  exiting, because there the variable cannot change a single tag.
 * **Historical addendum (2026-08-11; superseded by `9736aec`): testnet-10 ran the OLLAMA flavor,
   `algo_id = 5`.**
   The public fleet is Ubuntu VPSes that cannot run the Metal-pinned worker; the runtime is a

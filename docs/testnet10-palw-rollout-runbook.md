@@ -433,7 +433,9 @@ Metal-pinned worker stays devnet's algo-4 runtime). Per host:
    ```
    kaspad checks at startup on PALW networks that the model env is set and the server is
    reachable, and exits with instructions otherwise — no first-header panic.
-   `MISAKA_PALW_POW_FIXTURE=1` is refused outside devnet.
+   `MISAKA_PALW_POW_FIXTURE=1` is honored on devnet only. On a PALW network that is not devnet
+   kaspad exits with that message; on a network that validates no PALW it logs a warning and
+   continues, because there the variable cannot change a single tag (2026-08-19, ADR-0021).
 6. **Tag semantics under Ollama** (ADR-0021 addendum): the API exposes no per-decode logits, so
    the algo-5 tag commits to the greedy response bytes + token counts — weaker binding than the
    worker's `gemm_trace_root`, still model-work-priced. Devnet keeps the stronger algo-4 worker

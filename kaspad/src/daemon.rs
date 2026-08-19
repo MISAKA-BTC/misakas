@@ -437,23 +437,46 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         // "Ever active on this network": is_active at the largest checkable score — false only
         // for `ForkActivation::never()`.
         let palw_ever_active = params.pow_palw_activation.is_active(u64::MAX - 1);
-        let fixture = std::env::var("MISAKA_PALW_POW_FIXTURE").as_deref() == Ok("1");
-        // The fixture derives DIFFERENT tags than the pinned model — fixture rules are a
-        // different network. Confine them to devnet so a mis-exported variable cannot make a
-        // node mint/accept fixture blocks on the public testnet (it would fork at block 1 and
-        // its blocks would be invalid to every real peer).
-        if fixture && network.network_type != kaspa_consensus_core::network::NetworkType::Devnet {
-            println!(
-                "MISAKA_PALW_POW_FIXTURE=1 is only honored on devnet: fixture PALW tags are a \
-                 different rule set than the pinned model, and running them against {} would just \
-                 fork you off the network at the first block. Unset it, or use --devnet.",
-                network
-            );
-            exit(1);
-        }
         // Phase 4b (algo_id = 5): the Ollama-runtime PALW network. Validation reaches a
         // host-local Ollama server, so check reachability and the model pin NOW.
         let palw_ollama_ever_active = params.pow_palw_ollama_activation.is_active(u64::MAX - 1);
+        let devnet = network.network_type == kaspa_consensus_core::network::NetworkType::Devnet;
+        // The fixture derives DIFFERENT tags than the pinned model — fixture rules are a
+        // different network. `kaspa_pow::palw::fixture_permitted_on` confines them to devnet at the
+        // point the tag is computed, so this rail no longer decides WHETHER the fixture applies; it
+        // decides what to tell the operator about a variable that will not do what they think.
+        //
+        // Two cases, and they used to be one `exit(1)`:
+        //
+        // * PALW is active here and this is not devnet — the operator asked for fixture rules on a
+        //   network that has real ones. Stop, with the message naming the variable: continuing
+        //   would need a real worker they have not configured, and failing at the first relayed
+        //   header is the outcome this whole block exists to prevent.
+        // * PALW is NOT active here — the variable cannot affect a single tag on this network,
+        //   because nothing on it computes one. Aborting was over-broad, and measurably so: it
+        //   made one process unable to host a devnet consensus and a simnet consensus at once, so
+        //   the integration suite could not be run in a single invocation whatever the variable was
+        //   set to. Say it once and carry on.
+        let fixture = kaspa_pow::palw::fixture_requested();
+        if fixture && !devnet {
+            if palw_ever_active || palw_ollama_ever_active {
+                println!(
+                    "MISAKA_PALW_POW_FIXTURE=1 is only honored on devnet: fixture PALW tags are a \
+                     different rule set than the pinned model, and running them against {} would just \
+                     fork you off the network at the first block. Unset it, or use --devnet.",
+                    network
+                );
+                exit(1);
+            }
+            warn!(
+                "MISAKA_PALW_POW_FIXTURE=1 is set but {} does not validate PALW proof-of-work — the \
+                 variable is ignored here and changes nothing this node accepts.",
+                network
+            );
+        }
+        // Below, "fixture" must mean "the fixture is what this node validates", not "somebody
+        // exported the variable" — on a non-devnet network the runtime checks still apply.
+        let fixture = fixture && devnet;
         if palw_ollama_ever_active && !fixture {
             let model = match std::env::var(kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV) {
                 Ok(m) => m,

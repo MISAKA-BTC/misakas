@@ -113,11 +113,20 @@ jobs:
       - name: Check misaka CLI evm-send feature
         run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
 
+      # PALW proof-of-work is active from genesis on devnet and testnet-11, and validating one
+      # header there replays a pinned 1.2 GB LLM. CI has no such model, so it runs the model-free
+      # fixture tag family — the reason that family exists. It is honored on devnet only
+      # (`kaspa_pow::palw::fixture_permitted_on`), so setting it here changes nothing about any
+      # other network's rules: tests that assert real-PoW behaviour still get it.
       - name: Run cargo test regular features
         run: cargo nextest run --workspace
+        env:
+          MISAKA_PALW_POW_FIXTURE: "1"
 
       - name: Run cargo doc tests
         run: cargo test --doc --workspace
+        env:
+          MISAKA_PALW_POW_FIXTURE: "1"
 
       - name: Run cargo test on kaspa-hashes without asm
         run: cargo nextest run -p kaspa-hashes --features=no-asm --benches

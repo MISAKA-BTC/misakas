@@ -902,16 +902,27 @@ mod native {
         Ok(tag)
     }
 
-    /// Memoized worker-class calibration (algo 4): the runtime cannot change under a running
-    /// process, and the probe costs a full inference — once per process is the right cadence.
-    /// A FAILURE is memoized too: an out-of-class runtime is a configuration fact.
-    static WORKER_CALIBRATION_VERIFIED: OnceLock<Result<(), String>> = OnceLock::new();
+    /// Memoized PROBE TAG (algo 4): what this host's worker computes for the canonical probe seed.
+    /// The runtime cannot change under a running process and the probe costs a full inference, so
+    /// once per process is the right cadence. A FAILURE is memoized too: a worker that cannot run
+    /// is a configuration fact.
+    ///
+    /// The **tag** and not the verdict, because the tag is a fact about this HOST while the verdict
+    /// is a fact about a host and a NETWORK. Memoizing the verdict in a bare `OnceLock` froze the
+    /// answer to whichever network asked first, so a process hosting two class-pinned networks
+    /// would hand the second one the first one's result. Latent today — `testnet-11` is the only
+    /// network that pins a class — and it is the same shape as the confinement bug this file just
+    /// moved out of the startup rail: a process-global answer to a per-network question.
+    static WORKER_CALIBRATION_PROBE: OnceLock<Result<String, String>> = OnceLock::new();
 
     pub(super) fn worker_calibration_once(expected: &'static str) -> Result<(), PowLayer0Error> {
-        WORKER_CALIBRATION_VERIFIED
+        WORKER_CALIBRATION_PROBE
             .get_or_init(|| {
                 let tag = tag_for_seed(&POW_L1_PALW_PROBE_SEED_V1).map_err(|e| e.to_string())?;
-                let got = faster_hex::hex_string(&tag);
+                Ok(faster_hex::hex_string(&tag))
+            })
+            .clone()
+            .and_then(|got| {
                 if got == expected {
                     Ok(())
                 } else {
@@ -924,7 +935,6 @@ mod native {
                     ))
                 }
             })
-            .clone()
             .map_err(PowLayer0Error::PalwUnavailable)
     }
 
