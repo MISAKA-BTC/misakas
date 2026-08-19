@@ -273,6 +273,22 @@ impl PalwDifficultyDomainSetV1 {
         Ok(())
     }
 
+    /// One class's share of the cadence, **looked up by its id**.
+    ///
+    /// `None` for a class this set does not hold, and that is the load-bearing half: a class with
+    /// no share is not in the difficulty domain, so it has no expectation to retarget against.
+    /// Answering `PALW_CLASS_SHARE_DENOMINATOR` — "it must be the only one" — is the failure this
+    /// exists to prevent, because it is exactly right while one class is registered and silently
+    /// wrong the moment a second becomes Active: both would then retarget against the whole
+    /// cadence, each crediting itself work the other did, and both targets would ease until the
+    /// chain ran at twice its intended rate.
+    ///
+    /// The same rule the class facts, the class target and the bonds view each ended up on —
+    /// bind by lookup key, never by adjacency.
+    pub fn share_permille(&self, class_id: &Hash64) -> Option<u16> {
+        self.class_shares_permille.get(class_id).copied()
+    }
+
     /// The base class's effective share right now — 1000‰ exactly when every other class has been
     /// frozen out, which is the designed degraded mode: the whole cadence on the portable
     /// integer-only floor, still PALW work, still auditable and convictable.
@@ -675,6 +691,35 @@ fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
+
+    /// ADR-0038 Decision D: a share is looked up, and a class outside the domain has none.
+    ///
+    /// The single-class case returns the full denominator, which is why hardcoding it looked
+    /// correct. The two-class case is the one that matters: each class must get its own share, and
+    /// a class the set does not hold must get `None` rather than the denominator — two classes each
+    /// retargeting against the whole cadence would credit themselves the work the other did, and
+    /// both targets would ease until the chain ran at twice its intended rate.
+    #[test]
+    fn a_class_share_is_looked_up_and_a_stranger_has_none() {
+        let a = Hash64::from_u64_word(0xA);
+        let b = Hash64::from_u64_word(0xB);
+        let stranger = Hash64::from_u64_word(0xF);
+
+        let single = PalwDifficultyDomainSetV1::new(a, BTreeMap::from([(a, PALW_CLASS_SHARE_DENOMINATOR)])).unwrap();
+        assert_eq!(single.share_permille(&a), Some(PALW_CLASS_SHARE_DENOMINATOR));
+        assert_eq!(single.share_permille(&stranger), None, "a class outside the domain must not be handed the cadence");
+
+        let split = PalwDifficultyDomainSetV1::new(a, BTreeMap::from([(a, 600), (b, 400)])).unwrap();
+        assert_eq!(split.share_permille(&a), Some(600));
+        assert_eq!(split.share_permille(&b), Some(400));
+        assert_eq!(split.share_permille(&stranger), None);
+        // The shares conserve, which is what makes 'each retargets against its own share' add up to
+        // one cadence rather than to several.
+        assert_eq!(
+            split.share_permille(&a).unwrap() as u32 + split.share_permille(&b).unwrap() as u32,
+            PALW_CLASS_SHARE_DENOMINATOR as u32
+        );
+    }
     use super::*;
     use crate::config::params::BlockrateParams;
 

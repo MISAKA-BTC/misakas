@@ -1588,15 +1588,21 @@ impl VirtualStateProcessor {
         // Steps from this block's own chain. Empty while no header declares a class — see above.
         let steps: Vec<kaspa_consensus_core::palw_class_daa::PalwRetargetStepV1> = Vec::new();
         let _ = header; // the walk's anchor once headers declare classes
+        // `None` refuses rather than defaulting: a class absent from the domain set is not Active,
+        // and a class that is not in the difficulty domain has no expectation to retarget against.
+        let share = daa.single_class_domain(credit.registration.runtime_class_id).ok()?.share_permille(class_id)?;
         let class_target = kaspa_consensus_core::palw_class_daa::fold_class_target_v1(
             daa.boot_target,
             &steps,
-            // One registered class holds the whole cadence, so its share is the full denominator.
-            // When a `PalwDifficultyDomainSetV1` with several Active classes exists, this must read
-            // the class's share out of it — the fold's expectation is a SHARE of realized
-            // production, and a class credited the whole cadence while others also produce would
-            // retarget against work it did not do.
-            kaspa_consensus_core::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR,
+            // ADR-0038 Decision D: the class's share, LOOKED UP in the difficulty domain set
+            // rather than assumed to be the whole cadence. Today the set holds one class and the
+            // lookup returns the full denominator, so this changes no number — what it changes is
+            // what happens when a second class becomes Active. Hardcoded, both classes would
+            // retarget against the whole cadence, each crediting itself the work the other did,
+            // and both targets would ease until the chain ran at twice its intended rate. The
+            // fold's expectation is a SHARE of realized production, and a share is a property of
+            // the class, so it is fetched by the class's own id.
+            share,
             daa.retarget_interval_daa,
             daa.max_factor,
         )

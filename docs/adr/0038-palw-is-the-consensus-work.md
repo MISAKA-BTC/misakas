@@ -545,6 +545,33 @@ the bond registry, and a signature over a foreign bond simply fails at admission
 registry resolves the key from the bond rather than from the commitment. That failure is a rejected
 block, not a loss.
 
+### Implementation status — Decisions A–D and H, 2026-08-19
+
+Every decision now has a code path. What each rests on is stated rather than implied:
+
+| | state |
+| --- | --- |
+| **A** — admission predicate | wired into the pipeline; the producer's signing seam exists (`sign_palw_block_commitment_v1`) |
+| **B** — acceptance now, weight later | block weight → chain weight → **fork choice**, via the `order_tips_v1` seam |
+| **C** — assigned sampling | panel drawn from chain state (candidates → anchor → seed); duty accounting; I10 freeze |
+| **D** — per-class DAA | the class's share is **looked up by class id**, not assumed to be the cadence |
+| **H** — 120 s cadence | frozen, and refused at `Params` construction rather than at sync time |
+
+**Dormant on every shipped network, and that is a fact about the presets rather than a structural
+guarantee.** Five fences — `palw_credit`, `palw_block_commitment`, `palw_schedule`, `palw_ramp`,
+`palw_fork_choice` — are `None` on every preset, each is Some-only in the fingerprint, and
+`absent_schedule_and_ramp_fences_do_not_move_the_fingerprint` pins that. With them off,
+`palw_tip_weights_v1` returns before touching a store and the sink heap is byte-identical to the
+blue-work heap it replaced.
+
+**Two things this does NOT make true**, because the same sentence would otherwise be read as
+"activate it":
+
+* The bisection ladder still affords 2^10 steps at both presets, and nothing has checked that
+  against the pinned model's real `step_leaf_count`. The floor arithmetic says it is exceeded at a
+  few tens of tokens. Decision H keeps the *option* of closing that open; it does not close it.
+* Nothing has run this on a network. Every claim above is a claim about code and its tests.
+
 ## Decision H — Block cadence is FROZEN at one block per 120 seconds (testnet and mainnet)
 
 **Confirmed, 2026-08-19. Not a tuning parameter and not a launch-window choice: every PALW network
