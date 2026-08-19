@@ -476,6 +476,35 @@ only verification distinguishes it from real work. Therefore:
 | **Decision 1 (hash floor as primary; PALW never block-critical)** | **Superseded.** Inverted by Decisions A–E. |
 | M0–M3 staging | Reshaped: M-stages now stage *class count, receipt quorum k, ρ_r, and the PALW share of subsidy*, not "PALW off→on". A soak network runs the full shape from its genesis. |
 
+### The producer's signing seam — the last thing that was not "write a function"
+
+Decision A's producer was blocked on a key, not on logic. The bonded ML-DSA-87 key lives in the
+validator sidecar; `misaminer` holds only its BIP39 payout key, so the miner cannot sign the
+commitment its own block carries. `ValidatorKey::sign_palw_block_commitment_v1` closes that, and its
+SHAPE is the security argument rather than a detail of it.
+
+**It is not a "sign these bytes" call, and must never become one.** A sidecar that signs a digest
+handed to it by another process has given that process the key: the digest of a stake attestation,
+of a precommit, or of a transaction input is bytes like any other, so a compromised — or merely
+buggy — miner could obtain a signature that slashes this bond or spends its funds, and nothing in
+the request would look wrong. Two properties prevent it, both structural:
+
+1. **The digest is derived inside the signer from a typed commitment.** The caller passes the
+   payload and the attempt it was mined under; `PalwBlockCommitmentV1::message` recomputes what gets
+   signed. No input to the method can express "an attestation".
+2. **The context is `PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT`**, disjoint from the attestation,
+   precommit and transaction contexts. ML-DSA binds the context into the signature, so even a digest
+   that collided with an attestation message yields a signature no attestation verifier accepts.
+   The test asserts the negative directly — the same message under the attestation and precommit
+   contexts does not verify.
+
+The signer shape-checks first, in `sign_precommit`'s spirit: signing what consensus will reject only
+burns an attempt, and doing it silently makes a misconfigured miner look broken. What it deliberately
+does NOT check is that `executor_bond_outpoint` is a bond this key backs — the sidecar does not hold
+the bond registry, and a signature over a foreign bond simply fails at admission, because the
+registry resolves the key from the bond rather than from the commitment. That failure is a rejected
+block, not a loss.
+
 ## Decision H — Block cadence is FROZEN at one block per 120 seconds (testnet and mainnet)
 
 **Confirmed, 2026-08-19. Not a tuning parameter and not a launch-window choice: every PALW network

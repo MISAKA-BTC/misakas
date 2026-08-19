@@ -236,6 +236,56 @@ impl ValidatorKey {
         self.sign_with_context(message, ATTESTATION_MLDSA87_CONTEXT)
     }
 
+    /// Sign a PALW **block commitment** on the miner's behalf — ADR-0038 Decision A's producer.
+    ///
+    /// The bonded ML-DSA-87 key lives here and the miner has only its BIP39 payout key, so the
+    /// miner cannot sign its own commitment. This is the seam that closes that, and its shape is
+    /// the whole security argument.
+    ///
+    /// **What this deliberately is NOT: a "sign these bytes" call.** A sidecar that signs a digest
+    /// handed to it by another process has given that process the key. The digest of a stake
+    /// attestation, a precommit, or a transaction input is bytes like any other, so a compromised
+    /// or merely buggy miner could obtain a signature over something that slashes this bond or
+    /// spends its funds, and nothing in the request would look wrong. Two properties stop that,
+    /// and both are structural rather than checks that could be forgotten:
+    ///
+    /// 1. **The digest is derived here, from a typed commitment.** The caller passes the payload
+    ///    and the attempt it was mined under; `PalwBlockCommitmentV1::message` recomputes what is
+    ///    signed. There is no input to this method that can express "an attestation".
+    /// 2. **The context is [`PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT`]**, disjoint from
+    ///    [`ATTESTATION_MLDSA87_CONTEXT`], [`PRECOMMIT_MLDSA87_CONTEXT`] and the transaction
+    ///    context. ML-DSA binds the context into the signature, so even a digest that collided
+    ///    with an attestation message would produce a signature no attestation verifier accepts.
+    ///
+    /// The commitment is shape-checked first, in `sign_precommit`'s spirit: signing something
+    /// consensus will reject only burns an attempt, and doing it silently makes the miner look
+    /// broken rather than misconfigured. `signature` on the input is ignored — pass anything.
+    ///
+    /// **What this does not check, on purpose**: that `executor_bond_outpoint` is a bond this key
+    /// backs. This process does not hold the bond registry, and guessing would be worse than not
+    /// answering — a signature over a foreign bond simply fails verification at admission, because
+    /// the registry resolves the key from the bond rather than from the commitment. The failure is
+    /// a rejected block, not a loss.
+    pub fn sign_palw_block_commitment_v1(
+        &self,
+        network_id: &[u8],
+        unsigned: &kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+    ) -> Result<Vec<u8>, String> {
+        let mut shaped = unsigned.clone();
+        shaped.signature = vec![0u8; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN];
+        shaped.validate_shape().map_err(|e| format!("refusing to sign a commitment consensus would reject: {e}"))?;
+        let message = shaped.message(network_id, pre_pow_hash, timestamp, nonce);
+        Ok(self
+            .sign_with_context(
+                message.as_bytes().as_slice(),
+                kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT,
+            )
+            .to_vec())
+    }
+
     /// Sign a **precommit** — round 2 of DNS finality (MISAKA §5).
     ///
     /// `held` is the lock this validator is currently carrying, as the chain shows it; `None`
@@ -1567,6 +1617,74 @@ mod tests {
     use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
     use kaspa_consensus_core::tx::ScriptPublicKey;
     use std::io::Write;
+
+    // ---- ADR-0038 Decision A: signing a block commitment on the miner's behalf ----
+
+    fn commitment_fixture() -> kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1 {
+        use kaspa_consensus_core::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
+        PalwBlockCommitmentV1 {
+            version: PALW_BLOCK_COMMITMENT_VERSION_V1,
+            execution_class_id: Hash64::from_bytes([0xC1; 64]),
+            executor_bond_outpoint: fop(7, 0),
+            trace_root: Hash64::from_bytes([0x7A; 64]),
+            output_root: Hash64::from_bytes([0x00; 64]),
+            pwu_claim: 4_242,
+            // Ignored by the signer, and deliberately the wrong length so the test proves it.
+            signature: vec![],
+        }
+    }
+
+    /// The sidecar signs the miner's commitment, and the signature is usable ONLY as one.
+    ///
+    /// The second assertion is the reason this method exists in this shape. A "sign these bytes"
+    /// RPC hands the bonded key to whoever can call it: the digest of a stake attestation is bytes
+    /// like any other, so a compromised miner could obtain a signature that slashes this bond. The
+    /// ML-DSA context is bound into the signature, so the same message under the attestation
+    /// context does not verify — the separation is cryptographic, not a check to remember.
+    #[test]
+    fn a_commitment_signature_cannot_be_replayed_as_an_attestation() {
+        use kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT;
+        let key = ValidatorKey::from_seed([9u8; VALIDATOR_SEED_LEN]);
+        let network = b"palw-test";
+        let (pre_pow, ts, nonce) = (Hash64::from_bytes([0xB0; 64]), 1_700_000_000u64, 12_345u64);
+
+        let unsigned = commitment_fixture();
+        let sig = key.sign_palw_block_commitment_v1(network, &unsigned, pre_pow, ts, nonce).expect("well-formed");
+
+        let mut signed = unsigned.clone();
+        signed.signature = sig.clone();
+        let message = signed.message(network, pre_pow, ts, nonce);
+
+        assert!(
+            kaspa_txscript::verify_mldsa87_with_context(
+                key.public_key(),
+                message.as_bytes().as_slice(),
+                &sig,
+                PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+            )
+            .unwrap(),
+            "the commitment signature must verify under its own context"
+        );
+        for foreign in [ATTESTATION_MLDSA87_CONTEXT, PRECOMMIT_MLDSA87_CONTEXT] {
+            assert!(
+                !kaspa_txscript::verify_mldsa87_with_context(key.public_key(), message.as_bytes().as_slice(), &sig, foreign)
+                    .unwrap(),
+                "a commitment signature verified under a foreign context — the domains are not disjoint"
+            );
+        }
+    }
+
+    /// The signer refuses what consensus would reject, rather than burning the attempt silently.
+    #[test]
+    fn the_signer_refuses_a_commitment_consensus_would_reject() {
+        let key = ValidatorKey::from_seed([9u8; VALIDATOR_SEED_LEN]);
+        let mut bad = commitment_fixture();
+        bad.pwu_claim = 0; // never legal — the class derivation is never zero
+        let err = key
+            .sign_palw_block_commitment_v1(b"palw-test", &bad, Hash64::from_bytes([0; 64]), 1, 1)
+            .expect_err("a zero pwu claim must not be signed");
+        assert!(err.contains("consensus would reject"), "the refusal should say why: {err}");
+    }
 
     // ---- funding selection (shared by the daemon + the in-process service) ----
 
