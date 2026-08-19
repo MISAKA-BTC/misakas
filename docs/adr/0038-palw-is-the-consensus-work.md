@@ -496,13 +496,25 @@ imagined, so it is a decision rather than a repetition:
 
 | | correctness | cost |
 | --- | --- | --- |
-| **Fold over the chain path's accepted transactions** | correct by construction, like every other PALW fact | the walk re-runs per candidate chain at fork-choice time |
-| **Add the accepting block hash to the row**, filter by chain membership | correct, and cheap to read | changes the stored row format — a reindex on every running node |
+| Fold over the chain path's accepted transactions | correct by construction, like every other PALW fact | the walk re-runs per candidate chain |
+| **Add the accepting block hash to the row**, filter by chain membership — **CHOSEN 2026-08-19** | correct, and cheap to read | changes the stored row format |
 
-Recorded at `PalwCarriageStore::all()` as well, because that is where someone wiring this will be
-standing. Until it is chosen, neither Decision B's fork-choice integration nor Decision C's live
-receipt collection can be built correctly, and building either on `all()` would produce a system
-that passes its tests and disagrees across a reorg.
+**Resolved: the row names its block.** `PalwCarriageRecord::accepted_block`, schema v2. The reindex
+cost priced into this decision turned out to be machinery that already existed —
+`PALW_CARRIAGE_SCHEMA_VERSION` discards rows written under an older layout and re-sweeps history on
+the next start, so it is automatic rather than an operator step.
+
+Reading it needs reachability, which the store does not have, so the filter lives on the virtual
+processor as `palw_carriage_on_chain_v1`: a row belongs to this chain iff its `accepted_block` is
+`chain_tip` or a selected-parent-chain ancestor of it. Asked, not guessed from a number.
+
+**What this does not solve, stated because the name invites the assumption.** `stage_palw_carriages`
+inserts for `chain_path.added` and deletes for `chain_path.removed`, so the store holds rows for the
+APPLIED chain. `accepted_block` lets a reader exclude a stale row; it cannot conjure a row for a
+candidate chain that was never applied. Weighing an unapplied candidate still requires walking that
+candidate's own accepted transactions. So this closes the correctness question for the chain a node
+has, and Decision B's fork choice — which compares against chains it does not have — carries the
+fold's cost for that comparison whatever this store does.
 
 ### The producer's signing seam — the last thing that was not "write a function"
 

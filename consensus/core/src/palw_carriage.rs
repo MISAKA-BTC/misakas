@@ -46,6 +46,7 @@
 //! the legs (8 KB activation rows), which is one of the two reasons composite is the
 //! recommended registered form.
 
+use crate::BlockHash;
 use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
 use crate::dns_finality::StakeBondRecord;
 use crate::palw_legs::{
@@ -1319,6 +1320,18 @@ pub struct PalwCarriageRecord {
     pub kind: u8,
     /// DAA score of the chain block that accepted the carrier.
     pub accepted_daa_score: u64,
+    /// **The chain block that accepted the carrier.**
+    ///
+    /// Without it a row cannot say which chain it belongs to, and a DAA score is not a chain
+    /// identifier — two competing branches both have them. `PalwResolverInputV1::carriage` is
+    /// specified as "records accepted on THE CHAIN BEING EVALUATED", so a reader that took the
+    /// whole store would mix evidence from branches the node reorged away from into the weight of
+    /// a block on the branch it kept, with nothing in the call looking wrong. This is the field
+    /// that lets a reader ask reachability instead of guessing.
+    ///
+    /// It costs a stored-layout change, which `PALW_CARRIAGE_SCHEMA_VERSION` already turns into an
+    /// automatic discard-and-resweep rather than an operator step.
+    pub accepted_block: BlockHash,
     /// The Stage-1 payload verbatim (the Borsh body — no magic, no kind prefix).
     pub body: Vec<u8>,
 }
@@ -1333,12 +1346,13 @@ impl MemSizeEstimator for PalwCarriageRecord {}
 pub fn palw_carriage_records_from_accepted_txs(
     txs: &[Transaction],
     accepted_daa_score: u64,
+    accepted_block: BlockHash,
 ) -> Vec<(TransactionId, PalwCarriageRecord)> {
     let mut out = Vec::new();
     for tx in txs {
         let Some(kind) = palw_carriage_tx_kind(&tx.subnetwork_id) else { continue };
         if validate_palw_carriage_stage1_tx(kind, &tx.payload, &tx.outputs).is_ok() {
-            out.push((tx.id(), PalwCarriageRecord { kind, accepted_daa_score, body: tx.payload.clone() }));
+            out.push((tx.id(), PalwCarriageRecord { kind, accepted_daa_score, accepted_block, body: tx.payload.clone() }));
         }
     }
     out
@@ -2163,12 +2177,17 @@ mod tests {
             // A native Stage-0 carrier is the OTHER extractor's business.
             tx_with(SUBNETWORK_ID_NATIVE, stage0_payload),
         ];
-        let extracted = palw_carriage_records_from_accepted_txs(&txs, 4_242);
+        let extracted = palw_carriage_records_from_accepted_txs(&txs, 4_242, Hash64::from_u64_word(0xB10C));
         assert_eq!(extracted.len(), 1, "exactly the valid Stage-1 carrier");
         assert_eq!(extracted[0].0, txs[0].id());
         assert_eq!(
             extracted[0].1,
-            PalwCarriageRecord { kind: PALW_CARRIAGE_KIND_ATTESTATION, accepted_daa_score: 4_242, body: good_body }
+            PalwCarriageRecord {
+                kind: PALW_CARRIAGE_KIND_ATTESTATION,
+                accepted_daa_score: 4_242,
+                accepted_block: Hash64::from_u64_word(0xB10C),
+                body: good_body
+            }
         );
         // The record's body decodes back to the object admission validated — bytes verbatim.
         assert_eq!(

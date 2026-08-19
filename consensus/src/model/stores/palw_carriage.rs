@@ -43,7 +43,7 @@ use rocksdb::WriteBatch;
 /// empty carriage index is indistinguishable from "nothing was carried", which would quietly
 /// un-ground whatever Stage 2 builds on it. Bump this on any layout change so the rows are
 /// discarded for re-sweeping instead of read as absent.
-pub const PALW_CARRIAGE_SCHEMA_VERSION: u32 = 1;
+pub const PALW_CARRIAGE_SCHEMA_VERSION: u32 = 2;
 
 /// Accepted PALW carriage objects, keyed by carrying transaction.
 #[derive(Clone)]
@@ -137,29 +137,15 @@ impl DbPalwCarriageStore {
     /// Every stored carriage row. Whole-store iteration like the capability pool — bounded by the
     /// walk horizon and the reorg discipline, not by chain length.
     ///
-    /// **Not a source for `PalwResolverInputV1::carriage`, and this is the trap to read before
-    /// wiring ADR-0038 Decision B or C.** That field is specified as "carriage records accepted on
-    /// THE CHAIN BEING EVALUATED, within the challenge horizon". These rows cannot answer that:
-    /// `PalwCarriageRecord` carries `kind`, `accepted_daa_score` and `body` — the exact tuple the
-    /// resolver wants, which is what makes the mistake so easy — but **no accepting block**. A DAA
-    /// score is not a chain identifier; two competing branches both have them.
+    /// **Not a source for `PalwResolverInputV1::carriage` on its own.** That field is specified as
+    /// "records accepted on THE CHAIN BEING EVALUATED", and a bare iteration cannot answer it: the
+    /// rows carry `accepted_daa_score`, and a DAA score is not a chain identifier — two competing
+    /// branches both have them. `PalwCarriageRecord::accepted_block` (schema v2) is what makes the
+    /// question askable, and asking it needs reachability, which lives on the virtual processor —
+    /// see `palw_carriage_on_chain_v1` there, which filters these rows by chain membership.
     ///
-    /// So a caller who fed `all()` to the resolver would mix evidence from branches the node has
-    /// since reorged away from into the weight of a block on the branch it kept. That is the same
-    /// defect the class-state store's header describes and that the class target, the class freeze
-    /// and the dispute walk were each rewritten to avoid: a fact that depends on where the reading
-    /// node's tip happens to point is not a fact about the chain being weighed.
-    ///
-    /// Two ways to make it answerable, and choosing is a real decision rather than an oversight:
-    ///
-    /// * **Fold over the chain path's accepted transactions, no store.** What every other PALW
-    ///   fact does today, and correct by construction. Cost: the walk re-runs per candidate chain
-    ///   at fork-choice time.
-    /// * **Add the accepting block hash to the row** and filter by chain membership. Cheap to read,
-    ///   but it changes the stored row format, so it costs a reindex on every running node.
-    ///
-    /// Until one is chosen, `all()` has exactly one correct consumer: the backfill/reindex
-    /// bookkeeping below, which is asking "what have I stored", not "what did this chain accept".
+    /// Consumers of `all()` proper are the ones asking "what have I stored" rather than "what did
+    /// this chain accept": the backfill and reindex bookkeeping above.
     pub fn all(&self) -> Vec<(TransactionId, PalwCarriageRecord)> {
         self.access
             .iterator()

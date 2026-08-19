@@ -2463,7 +2463,7 @@ impl VirtualStateProcessor {
                     }
                     let Ok(header) = self.headers_store.get_header(block) else { break };
                     for (tx_id, record) in
-                        palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score)
+                        palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block)
                     {
                         store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
                         swept += 1;
@@ -2483,7 +2483,7 @@ impl VirtualStateProcessor {
             // Only the keys matter on revert; the stamp the extractor puts on the discarded
             // records is irrelevant, so a header miss defaults it rather than skipping deletes.
             let daa = self.headers_store.get_header(*removed).map(|h| h.daa_score).unwrap_or_default();
-            for (tx_id, _) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed), daa) {
+            for (tx_id, _) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed), daa, *removed) {
                 store.delete_batch(batch, tx_id).unwrap();
                 reverted += 1;
             }
@@ -2496,11 +2496,41 @@ impl VirtualStateProcessor {
         }
         for added in chain_path.added.iter() {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };
-            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score)
+            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score, *added)
             {
                 store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
             }
         }
+    }
+
+    /// The carriage `PalwResolverInputV1` asks for: rows accepted **on the chain that ends at
+    /// `chain_tip`**, no further back than `daa_floor`.
+    ///
+    /// `PalwCarriageStore::all()` alone cannot answer this, and the reason it looks like it can is
+    /// that `PalwCarriageRecord` used to be `{ kind, accepted_daa_score, body }` — exactly the
+    /// tuple the resolver takes. A DAA score is not a chain identifier; two competing branches both
+    /// have them. `accepted_block` is the field that makes the question askable, and the filter
+    /// below is the asking: reachability on the selected-parent chain, not a guess from a number.
+    /// Without it a reader mixes evidence from branches this node reorged away from into the weight
+    /// of a block on the branch it kept, with nothing in the call looking wrong.
+    ///
+    /// **Scope, and it is narrower than the name might suggest.** `stage_palw_carriages` inserts
+    /// for `chain_path.added` and deletes for `chain_path.removed`, so the store holds rows for the
+    /// APPLIED chain. `accepted_block` therefore lets this reader exclude a stale row; it cannot
+    /// conjure a row for a candidate chain that was never applied. A caller weighing an unapplied
+    /// candidate must walk that candidate's own accepted transactions instead — the filter here is
+    /// the cheap answer for the chain this node actually has, not a general one.
+    ///
+    /// Read-only, and it takes the store's read lock only for the iteration.
+    fn palw_carriage_on_chain_v1(&self, chain_tip: BlockHash, daa_floor: u64) -> Vec<(u8, u64, Vec<u8>)> {
+        self.palw_carriage_store
+            .read()
+            .all()
+            .into_iter()
+            .filter(|(_, r)| r.accepted_daa_score >= daa_floor)
+            .filter(|(_, r)| r.accepted_block == chain_tip || self.reachability_service.is_chain_ancestor_of(r.accepted_block, chain_tip))
+            .map(|(_, r)| (r.kind, r.accepted_daa_score, r.body))
+            .collect()
     }
 
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
@@ -5047,7 +5077,7 @@ impl VirtualStateProcessor {
                 break;
             }
             chain_rev.push((current, cur_daa));
-            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa) {
+            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current) {
                 match decode_palw_stage1_body(record.kind, &record.body) {
                     Ok(PalwCarriageV1::Commitment(c)) => commitments.push((tx_id, c, cur_daa)),
                     Ok(PalwCarriageV1::Attestation(a)) => attestations.push((a, cur_daa)),
