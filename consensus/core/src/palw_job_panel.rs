@@ -54,6 +54,68 @@ pub struct PalwPanelSeatV3 {
 /// outpoint and per known operator root survives), then runs the audited v1 lottery with
 /// the V3 seed as its anchor. A smaller-than-`q` eligible set yields a smaller panel —
 /// whether that panel may license anything is the weight ramp's question, not this one's.
+/// The candidate set a block's panel is drawn from, assembled from chain state.
+///
+/// [`select_job_panel_v3`] takes candidates; this is where they come from. Three rules, each of
+/// which decides a case the obvious assembly gets wrong:
+///
+/// * **A bond that is not `Active` at `anchor_daa` is not a candidate.** The anchor is the point
+///   the draw is bound to, so it is the point eligibility is asked at — not the reading node's tip,
+///   which would make the panel depend on when a node looked and hand two nodes different seats for
+///   one block.
+/// * **A bond with no capability declaration is EXCLUDED, never defaulted.** `runtime_class_id`
+///   says which determinism class a validator has staked collateral on being able to run. A
+///   validator that never declared one cannot be assigned to replay a class it may not have, and
+///   assigning it anyway would manufacture no-shows against honest operators — the duty accounting
+///   in `palw_facts` charges exactly the seats this function names.
+/// * **The result is returned in canonical order.** `eligible_seats_v3` sorts internally, so this is
+///   not needed for the draw — it is needed because `ActiveBondView::records()` is HashMap-ordered
+///   and this type's own doc warns that hashing an unsorted slice is "a chain split waiting for two
+///   nodes with different insertion histories". Returning sorted removes the footgun rather than
+///   documenting it again.
+///
+/// `class_frozen` is carried per candidate rather than filtered here: a frozen class is a fact the
+/// draw weighs (ADR-0038 I10 froze it for a coverage gap, which is not the candidate's fault), and
+/// dropping those candidates here would silently shrink the eligible set for a reason the lottery
+/// is supposed to see.
+pub fn palw_panel_candidates_v1<C, F>(
+    bonds: &crate::dns_finality::ActiveBondView,
+    anchor_daa: u64,
+    runtime_class_of_bond: C,
+    class_is_frozen: F,
+) -> Vec<PalwPanelCandidateV3>
+where
+    C: Fn(&TransactionOutpoint) -> Option<Hash64>,
+    F: Fn(&Hash64) -> bool,
+{
+    let mut out: Vec<PalwPanelCandidateV3> = bonds
+        .records()
+        .into_iter()
+        .filter(|record| crate::dns_finality::is_bond_active_at(record, anchor_daa))
+        .filter_map(|record| {
+            let runtime_class_id = runtime_class_of_bond(&record.bond_outpoint)?;
+            Some(PalwPanelCandidateV3 {
+                validator_id: record.validator_pubkey_hash,
+                bond_outpoint: record.bond_outpoint,
+                runtime_class_id,
+                bond_status: crate::dns_finality::effective_bond_status(&record, anchor_daa),
+                class_frozen: class_is_frozen(&runtime_class_id),
+                // Best-effort by design, and this assembly knows no operator grouping: the chain
+                // learns one from a shared registration root, which is a registry question rather
+                // than a bond one. `None` costs a weaker dedup, never a wrong seat — dedup by bond
+                // outpoint is the one that must hold, and it does.
+                operator_root: None,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.validator_id
+            .cmp(&b.validator_id)
+            .then_with(|| (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index)))
+    });
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn select_job_panel_v3(
     network_id: &[u8],
@@ -252,6 +314,68 @@ mod tests {
 
     fn class() -> Hash64 {
         Hash64::from_u64_word(7)
+    }
+
+    fn bond_record(seed: u8, unbond_at: Option<u64>) -> crate::dns_finality::StakeBondRecord {
+        crate::dns_finality::StakeBondRecord {
+            version: 1,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
+            owner_pubkey_hash: Hash64::from_u64_word(seed as u64),
+            validator_pubkey_hash: Hash64::from_u64_word(seed as u64),
+            validator_pubkey: vec![seed; 32],
+            amount: 20_000,
+            activation_daa_score: 0,
+            created_daa_score: 0,
+            unbonding_period_blocks: 100,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: unbond_at,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    /// The candidate set is assembled from the chain, and the two exclusions are the point.
+    ///
+    /// Bond 3 has asked to unbond before the anchor: not eligible at the point the draw is bound
+    /// to. Bond 2 never declared a capability: it has staked nothing on being able to run any
+    /// class, so it cannot be assigned to replay one — and assigning it would manufacture a
+    /// no-show against an honest operator, since the duty accounting charges exactly these seats.
+    #[test]
+    fn a_candidate_must_be_bonded_at_the_anchor_and_have_declared_a_class() {
+        let bonds = crate::dns_finality::ActiveBondView::from_records([
+            (bond_record(1, None).bond_outpoint, bond_record(1, None)),
+            (bond_record(2, None).bond_outpoint, bond_record(2, None)),
+            (bond_record(3, Some(500)).bond_outpoint, bond_record(3, Some(500))),
+        ]);
+        let declared = |o: &TransactionOutpoint| {
+            // Bond 2 declared nothing.
+            (o.transaction_id != Hash64::from_bytes([2u8; 64])).then(class)
+        };
+
+        let got = palw_panel_candidates_v1(&bonds, 1_000, declared, |_| false);
+        assert_eq!(got.len(), 1, "only bond 1 is both bonded at the anchor and declared: {got:?}");
+        assert_eq!(got[0].bond_outpoint.transaction_id, Hash64::from_bytes([1u8; 64]));
+
+        // Before bond 3 asked to unbond it WAS eligible — the anchor is what decides, not the
+        // reading node's tip, which is why the same view answers differently at a different anchor.
+        assert_eq!(palw_panel_candidates_v1(&bonds, 400, declared, |_| false).len(), 2);
+    }
+
+    /// The order is canonical, so no caller can build the split this type's own doc warns about.
+    ///
+    /// `ActiveBondView::records()` is HashMap-ordered. `eligible_seats_v3` sorts internally, so the
+    /// DRAW is safe either way — what is not safe is a caller hashing the slice it was handed.
+    /// Returning it sorted removes that rather than documenting it again.
+    #[test]
+    fn the_candidate_set_is_returned_in_canonical_order() {
+        let records: Vec<_> = [9u8, 1, 5, 3].into_iter().map(|s| (bond_record(s, None).bond_outpoint, bond_record(s, None))).collect();
+        let bonds = crate::dns_finality::ActiveBondView::from_records(records);
+        let got = palw_panel_candidates_v1(&bonds, 1_000, |_| Some(class()), |_| false);
+        let ids: Vec<_> = got.iter().map(|c| c.validator_id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted, "candidates must come back canonically ordered");
+        assert_eq!(ids.len(), 4);
     }
 
     fn candidate(seed: u64) -> PalwPanelCandidateV3 {
