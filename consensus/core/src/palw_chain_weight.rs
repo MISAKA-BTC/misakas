@@ -217,6 +217,76 @@ mod tests {
         chain_weights_v1(chain, &PARAMS).expect("fixture chains resolve")
     }
 
+    /// **The bridge from the block layer's monotonicity to this one's**, and without it the block
+    /// layer's guarantee says nothing about fork choice.
+    ///
+    /// `palw_facts` pins that with the carriage fixed a block only ever moves UP the ladder
+    /// `Provisional < ReceiptLicensed < Final`. That is a statement about one block's stage; what
+    /// fork choice compares is `(safe, live)` over a whole chain. The two connect only if advancing
+    /// any block's stage moves both weights monotonically — so it is asserted here rather than
+    /// assumed, over every ordered pair of rungs and with the rest of the chain held fixed.
+    ///
+    /// `live` is the one that can surprise. A maturing block LEAVES the immature pool and enters
+    /// `safe`, so its contribution jumps from `β·pwu` to `pwu` — non-decreasing precisely because
+    /// `β <= 1000‰`, which is why `PalwChainWeightParamsV1::validate` rejects a larger bound. With
+    /// `β > 1000‰` a block would lower its own chain's live weight by maturing, and a chain could
+    /// be reorged away by the very act of its work being verified.
+    #[test]
+    fn advancing_a_blocks_stage_never_lowers_either_weight() {
+        // In ladder order. `Voided` is deliberately absent: the block layer's rule is that a
+        // conviction is constant, so no block ever enters or leaves it, and it is not a rung.
+        const LADDER: [S; 3] = [S::Provisional, S::ReceiptLicensed, S::Final];
+
+        // Enough context that the moving block is never the only contributor to either weight.
+        let context = [b(7_000, S::Final), b(3_000, S::ReceiptLicensed), b(500, S::Voided), b(11, S::Provisional)];
+
+        for (i, from) in LADDER.iter().enumerate() {
+            for to in &LADDER[i..] {
+                for moving_pwu in [0, 1, 999, 1_000_000] {
+                    let with = |stage: S| {
+                        let mut chain = context.to_vec();
+                        chain.insert(2, b(moving_pwu, stage));
+                        weights(&chain)
+                    };
+                    let (before, after) = (with(*from), with(*to));
+                    assert!(
+                        after.safe >= before.safe,
+                        "pwu {moving_pwu}: {from:?} -> {to:?} lowered safe {} -> {}",
+                        before.safe,
+                        after.safe
+                    );
+                    assert!(
+                        after.live >= before.live,
+                        "pwu {moving_pwu}: {from:?} -> {to:?} lowered live {} -> {}",
+                        before.live,
+                        after.live
+                    );
+                }
+            }
+        }
+
+        // Monotone alone is satisfied by a table that makes every rung identical, so the ladder
+        // must also be a ladder: below the neutral bound, maturing real work STRICTLY buys weight.
+        // This is what a chain gains by getting its receipts, and it is the reason withholding them
+        // delays maturity rather than production.
+        let rung = |stage: S| weights(&[b(4_242, stage)]);
+        assert_eq!(
+            rung(S::ReceiptLicensed).live,
+            rung(S::Provisional).live,
+            "the two immature rungs are alike here by design — ρ_r is priced inside pwu, not here"
+        );
+        assert!(rung(S::Final).live > rung(S::ReceiptLicensed).live, "maturing must buy live weight at β = 100‰");
+        assert!(rung(S::Final).safe > rung(S::ReceiptLicensed).safe, "and it is the only rung that buys safe weight at all");
+
+        // And the bound is what makes the `live` half true, not an accident of the fixture's
+        // numbers: at the largest bound `validate` admits, maturing is exactly weight-neutral for
+        // live — the boundary case, and the one a larger bound would push negative.
+        let flat = PalwChainWeightParamsV1 { immature_bound_permille: 1_000 };
+        let at = |stage: S| chain_weights_v1(&[b(4_242, stage)], &flat).expect("resolves").live;
+        assert_eq!(at(S::ReceiptLicensed), at(S::Final), "β = 1000‰ is the neutral boundary");
+        assert!(PalwChainWeightParamsV1 { immature_bound_permille: 1_001 }.validate().is_err(), "and nothing past it is admissible");
+    }
+
     /// A deterministic permutation generator — no `rand`, so the suite is reproducible and the
     /// test itself cannot introduce the nondeterminism it is checking for.
     fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {

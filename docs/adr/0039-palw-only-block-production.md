@@ -412,6 +412,17 @@ an identity-neutral rule.
   of the five defects fixed on this branch was re-introduced against the finished suite and each
   is caught by exactly one of the two axes.
 
+  **The bridge between the two layers is now asserted, not assumed.** The block layer pins that a
+  block only moves up the ladder; fork choice compares `(safe, live)` over a chain. Those connect
+  only if advancing any block's stage moves both weights monotonically —
+  `advancing_a_blocks_stage_never_lowers_either_weight`, over every ordered pair of rungs. `live` is
+  the half that can surprise: a maturing block leaves the immature pool for `safe`, so its
+  contribution jumps from `β·pwu` to `pwu`, which is non-decreasing *precisely because* `β <= 1000‰`
+  — the reason `PalwChainWeightParamsV1::validate` rejects a larger bound. Above it a block would
+  lower its own chain's live weight by maturing, and a chain could be reorged away by the very act
+  of its work being verified. Monotone alone is also satisfied by a table whose rungs are all
+  identical, so strictness is asserted with it.
+
   **Still open, and not provable at this level:** pruning point and IBD start height. Both are
   claims about a DAG rather than about a derivation over one block's carriage, so they need the
   wiring first — which is the honest reason they are not here rather than an omission.
