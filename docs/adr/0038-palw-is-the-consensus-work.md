@@ -117,16 +117,30 @@ than a placeholder.
    drives the PALW lottery (`mine_palw_sequential`), so this belongs there. Two links do not exist,
    and the first is not the one it looks like:
 
-   * **The roots must be OPENABLE, and the v1 projection's are not.**
+   * **The roots must be OPENABLE — and the v2 projection's are. CORRECTION.**
      `PalwBlockCommitmentV1::trace_root` is documented as "Merkle root of the execution trace
-     checkpoints (what samplers open)". The v1 worker's `gemm_trace_root` is
-     `keyed64("misaka-palw-lite/trace-root/v1", all trace events)` — one flat digest over
-     concatenated events, with nothing to open. A producer that put it in the commitment would
-     mint blocks whose traces no sampler can challenge, which makes every dispute over them
-     `Unadjudicable` — rejected but unslashed, the A4 hole in a new place. The openable structure
-     is the legs/checkpoint path (`palw_legs`: `checkpoint_state_root_v1`, checkpoint ancestry).
-     **So Decision A's producer depends on Decision C's proof material, not merely on plumbing.**
-     Surfacing the v1 roots would be worse than leaving them unsurfaced.
+     checkpoints (what samplers open)". This entry previously said no such root existed, on the
+     evidence of the v1 worker's `gemm_trace_root` — `keyed64(".../trace-root/v1", all events)`,
+     one flat digest with nothing to open — and concluded that **Decision A's producer depends on
+     Decision C's proof material**. That conclusion was wrong, and it was wrong because it read the
+     layer-0 v1 artifact instead of the v2 projection the worker actually publishes.
+
+     `misaka-palw-worker` sets `full_logits_trace_root` from
+     `PalwTraceCommitmentV2::full_logits_sequence_root`, and that is
+     `full_logits_trace_root_v2(context, summary, trace_event_merkle_root_v2(ordered_event_hashes))`
+     — a domain-separated binary Merkle tree with index-bound leaves and odd nodes promoted
+     unchanged. Openable by construction, and the worker holds the leaves.
+
+     One piece genuinely was missing: the tree had no **opening API**. `trace_event_opening_v2` and
+     `trace_event_opening_root_v2` now mirror `palw_step_leg`'s construction rather than inventing a
+     second convention. The count is bound by the OUTER root, not by the opening verifier — two
+     counts can imply the same path for a given index, so the verifier cannot be where that is
+     enforced, and the test says so where a reader would otherwise assume it.
+
+     The original warning still holds for the artifact it was about: surfacing `gemm_trace_root`
+     into a commitment would mint blocks no sampler can challenge, making every dispute over them
+     `Unadjudicable` — rejected but unslashed, the A4 hole in a new place. The producer must take
+     the v2 projection's root, not the layer-0 one.
    * **The signature needs bond key material the mining path is not given.** The commitment carries
      an ML-DSA-87 signature over the bond; that key is the validator seed held by
      `kaspa-pq-validator`, while `misaminer` holds only a BIP39-derived payout keypair. Closing

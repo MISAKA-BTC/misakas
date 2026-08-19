@@ -322,6 +322,14 @@ pub enum PalwV2Error {
     LogitsCountMismatch { got: usize, expected: usize },
     #[error("trace commitment is internally inconsistent: {0}")]
     InconsistentCommitment(String),
+    #[error("trace event index {index} is not below the event count {count}")]
+    EventIndexOutOfRange { index: u32, count: u32 },
+    #[error("opening carries {got} siblings, exceeding the {max} a {PALW_V2_MAX_TRACE_EVENTS}-leaf tree can need")]
+    OpeningTooDeep { got: usize, max: usize },
+    #[error("opening path ended before reaching the root")]
+    OpeningPathTooShort,
+    #[error("opening path carries {extra} siblings past the root")]
+    OpeningPathTooLong { extra: usize },
     #[error("runtime identity mismatch on {field}: envelope declares a runtime this worker is not")]
     RuntimeIdentityMismatch { field: &'static str },
     #[error("floating-point environment violates the canonical profile: {0}")]
@@ -685,6 +693,132 @@ pub fn trace_event_merkle_root_v2(ordered_event_hashes: &[Hash64]) -> Result<Has
         level = next;
     }
     Ok(level[0])
+}
+
+/// The deepest opening a [`PALW_V2_MAX_TRACE_EVENTS`]-leaf tree can require: one sibling per
+/// level, and odd promotion only ever removes levels from a path.
+pub const PALW_V2_MAX_TRACE_OPENING_SIBLINGS: usize = PALW_V2_MAX_TRACE_EVENTS.ilog2() as usize + 1;
+
+/// A membership proof for one trace event under [`trace_event_merkle_root_v2`].
+///
+/// **This is what "what samplers open" in [`crate::palw_block_commitment::PalwBlockCommitmentV1`]
+/// means.** A block commitment whose trace root cannot be opened is a block no sampler can
+/// challenge: every dispute against it terminates `Unadjudicable`, which under ADR-0038 I10 is
+/// rejected-but-unslashed and freezes the class. Committing to a root with no opening API is
+/// therefore strictly worse than committing to nothing — it mints work nothing can be held to.
+///
+/// The tree already had that shape; only the proof was missing. `palw_step_leg` carries the same
+/// construction for the step leg, and this mirrors it deliberately rather than inventing a second
+/// convention: index-bound leaves, distinct leaf and node keys, and an odd node **promoted
+/// unchanged** so the duplicate-leaf ambiguity (CVE-2012-2459 class) has no room.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTraceEventOpeningV2 {
+    /// Position of the opened event in the ordered list — bound into the leaf, so an opening
+    /// cannot be replayed at another index.
+    pub event_index: u32,
+    /// The event hash itself ([`logits_event_hash_v2`]'s output), NOT the Merkle leaf: the leaf is
+    /// derived here so a prover cannot hand over a leaf whose index binding it chose.
+    pub event_hash: Hash64,
+    /// Sibling hashes bottom-up. Promoted levels consume none, which is why the verifier derives
+    /// promotion from `(index, count)` rather than trusting the path's length.
+    pub siblings: Vec<Hash64>,
+}
+
+/// Produces the membership proof of `event_index` from the same ordered event hashes the root was
+/// built over.
+pub fn trace_event_opening_v2(ordered_event_hashes: &[Hash64], event_index: u32) -> Result<PalwTraceEventOpeningV2, PalwV2Error> {
+    let count = ordered_event_hashes.len();
+    if count == 0 {
+        return Err(PalwV2Error::EmptyTrace);
+    }
+    if count > PALW_V2_MAX_TRACE_EVENTS {
+        return Err(PalwV2Error::TooManyTraceEvents { got: count, max: PALW_V2_MAX_TRACE_EVENTS });
+    }
+    if event_index as usize >= count {
+        return Err(PalwV2Error::EventIndexOutOfRange { index: event_index, count: count as u32 });
+    }
+    let event_hash = ordered_event_hashes[event_index as usize];
+    let mut level: Vec<Hash64> = ordered_event_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, ev)| {
+            let mut w = CanonicalWriter::new();
+            w.put_u32(i as u32);
+            w.put_hash64(ev);
+            w.keyed64(PALW_V2_DOMAIN_TRACE_MERKLE_LEAF)
+        })
+        .collect();
+    let mut position = event_index as usize;
+    let mut siblings = Vec::new();
+    while level.len() > 1 {
+        let width = level.len();
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            siblings.push(level[position ^ 1]);
+        }
+        let mut next = Vec::with_capacity(width.div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(PALW_V2_DOMAIN_TRACE_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        position /= 2;
+        level = next;
+    }
+    Ok(PalwTraceEventOpeningV2 { event_index, event_hash, siblings })
+}
+
+/// Recomputes the root a valid opening implies; the caller compares it against the committed one.
+///
+/// `event_count` comes from the commitment's own summary, not from the opening — the count is
+/// bound by [`full_logits_trace_root_v2`], so a prover cannot restate it. Promotion is derived
+/// from `(index, count)` and consumes no sibling, and a path with anything left over is refused:
+/// accepting a longer-than-necessary path would let one event hash prove membership at more than
+/// one position.
+pub fn trace_event_opening_root_v2(event_count: u32, opening: &PalwTraceEventOpeningV2) -> Result<Hash64, PalwV2Error> {
+    if event_count == 0 {
+        return Err(PalwV2Error::EmptyTrace);
+    }
+    if event_count as usize > PALW_V2_MAX_TRACE_EVENTS {
+        return Err(PalwV2Error::TooManyTraceEvents { got: event_count as usize, max: PALW_V2_MAX_TRACE_EVENTS });
+    }
+    if opening.event_index >= event_count {
+        return Err(PalwV2Error::EventIndexOutOfRange { index: opening.event_index, count: event_count });
+    }
+    if opening.siblings.len() > PALW_V2_MAX_TRACE_OPENING_SIBLINGS {
+        return Err(PalwV2Error::OpeningTooDeep { got: opening.siblings.len(), max: PALW_V2_MAX_TRACE_OPENING_SIBLINGS });
+    }
+    let mut current = {
+        let mut w = CanonicalWriter::new();
+        w.put_u32(opening.event_index);
+        w.put_hash64(&opening.event_hash);
+        w.keyed64(PALW_V2_DOMAIN_TRACE_MERKLE_LEAF)
+    };
+    let mut position = opening.event_index as usize;
+    let mut width = event_count as usize;
+    let mut siblings = opening.siblings.iter();
+    while width > 1 {
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            let Some(sibling) = siblings.next() else {
+                return Err(PalwV2Error::OpeningPathTooShort);
+            };
+            current = if position.is_multiple_of(2) {
+                keyed64(PALW_V2_DOMAIN_TRACE_MERKLE_NODE, &[current.as_byte_slice(), sibling.as_byte_slice()])
+            } else {
+                keyed64(PALW_V2_DOMAIN_TRACE_MERKLE_NODE, &[sibling.as_byte_slice(), current.as_byte_slice()])
+            };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let leftover = siblings.count();
+    if leftover != 0 {
+        return Err(PalwV2Error::OpeningPathTooLong { extra: leftover });
+    }
+    Ok(current)
 }
 
 /// The metadata half of the trace root: everything the detailed design §10.6 requires the root
@@ -2025,5 +2159,120 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), PALW_LIBM_PROBE_V1.len(), "probe entries must be distinct");
+    }
+
+    /// **Commit / open / verify, held together.** The tree already had the shape; only the proof
+    /// was missing, and a committed root with no opening API is strictly worse than committing to
+    /// nothing — every dispute against such a block terminates `Unadjudicable`, which ADR-0038 I10
+    /// makes rejected-but-unslashed and freezes the class. It would mint work nothing can be held
+    /// to.
+    ///
+    /// Swept over every event count through the odd/even and promotion boundaries, and every index
+    /// within each: promotion is the case a hand-picked size misses, because it removes a level
+    /// from SOME paths and not others.
+    #[test]
+    fn every_trace_event_opens_under_the_committed_root() {
+        for count in 1usize..=17 {
+            let events: Vec<Hash64> = (0..count).map(|i| h64(0xE0 + i as u8)).collect();
+            let root = trace_event_merkle_root_v2(&events).expect("roots");
+            for index in 0..count as u32 {
+                let opening = trace_event_opening_v2(&events, index).expect("opens");
+                assert_eq!(opening.event_hash, events[index as usize]);
+                assert_eq!(
+                    trace_event_opening_root_v2(count as u32, &opening).expect("verifies"),
+                    root,
+                    "count {count}, index {index}"
+                );
+                assert!(
+                    opening.siblings.len() <= PALW_V2_MAX_TRACE_OPENING_SIBLINGS,
+                    "count {count}, index {index}: {} siblings",
+                    opening.siblings.len()
+                );
+            }
+        }
+    }
+
+    /// The forgeries the construction exists to refuse. Each is a way to make one event hash prove
+    /// membership somewhere it does not sit.
+    #[test]
+    fn a_trace_opening_cannot_be_moved_forged_or_padded() {
+        let events: Vec<Hash64> = (0..6).map(|i| h64(0xE0 + i as u8)).collect();
+        let root = trace_event_merkle_root_v2(&events).expect("roots");
+        let opening = trace_event_opening_v2(&events, 2).expect("opens");
+
+        // Replayed at another index: the index is inside the leaf, so the root moves.
+        let mut moved = opening.clone();
+        moved.event_index = 3;
+        assert_ne!(trace_event_opening_root_v2(6, &moved).expect("computes"), root, "an index-swapped opening must not verify");
+
+        // A different event under the same path.
+        let mut swapped = opening.clone();
+        swapped.event_hash = h64(0xFF);
+        assert_ne!(trace_event_opening_root_v2(6, &swapped).expect("computes"), root);
+
+        // A path with anything left over is REFUSED rather than ignored — accepting slack would
+        // let one hash prove membership at more than one position.
+        let mut padded = opening.clone();
+        padded.siblings.push(h64(0x99));
+        assert!(matches!(trace_event_opening_root_v2(6, &padded), Err(PalwV2Error::OpeningPathTooLong { extra: 1 })));
+
+        let mut short = opening.clone();
+        short.siblings.pop();
+        assert!(matches!(trace_event_opening_root_v2(6, &short), Err(PalwV2Error::OpeningPathTooShort)));
+
+        // The count decides the tree SHAPE, so an opening cut for one count generally will not
+        // reconstruct under another — here the 5-leaf path for index 4 is two promotions and one
+        // sibling, and the 6-leaf path needs two siblings.
+        let five: Vec<Hash64> = (0..5).map(|i| h64(0xE0 + i as u8)).collect();
+        let promoted = trace_event_opening_v2(&five, 4).expect("opens");
+        assert!(matches!(trace_event_opening_root_v2(6, &promoted), Err(PalwV2Error::OpeningPathTooShort)));
+        assert!(matches!(trace_event_opening_root_v2(2, &opening), Err(PalwV2Error::EventIndexOutOfRange { .. })));
+
+        // But shape alone is NOT what stops a prover restating the count — two counts can imply
+        // the same path for a given index, and this one does: index 2 opens identically under 6
+        // and 7 leaves. What actually binds the count is the OUTER root, which commits to
+        // `summary.event_count`; the sampler test below is where that is checked, and this
+        // assertion records why the check has to live there rather than here.
+        assert_eq!(
+            trace_event_opening_root_v2(7, &opening).expect("computes"),
+            root,
+            "the shape happens to agree at this index — the count is bound by the outer root, not by this function"
+        );
+        assert!(matches!(trace_event_opening_v2(&events, 6), Err(PalwV2Error::EventIndexOutOfRange { .. })));
+        assert!(matches!(trace_event_opening_v2(&[], 0), Err(PalwV2Error::EmptyTrace)));
+    }
+
+    /// The opening is against the SAME root a real commitment carries, not against a bare tree —
+    /// `full_logits_trace_root_v2` wraps the event root with the summary, so a test that stopped at
+    /// the inner root would not show that a sampler holding a block commitment can open anything.
+    #[test]
+    fn a_sampler_holding_the_commitment_can_open_one_event() {
+        let events: Vec<Hash64> = (0..5).map(|i| h64(0xA0 + i as u8)).collect();
+        let inner = trace_event_merkle_root_v2(&events).expect("roots");
+        let ctx_hash = h64(0xC7);
+        let summary = PalwTraceSummaryV2 {
+            vocab_size: 32,
+            logits_dtype: PalwLogitsDtypeV2::F32Le,
+            declared_prefill_tokens: 3,
+            exact_decode_tokens: 5,
+            event_count: 5,
+            first_event_kind: PalwTracePhaseV2::Prefill,
+            last_event_kind: PalwTracePhaseV2::Decode,
+            output_token_ids_hash: h64(0x11),
+            stop_reason: PalwStopReasonV2::ExactBudgetReached,
+        };
+        let outer = full_logits_trace_root_v2(&ctx_hash, &summary, &inner);
+
+        // What a sampler does: take the count from the summary the outer root binds, verify the
+        // opening against the inner root, and re-derive the outer root from it.
+        let opening = trace_event_opening_v2(&events, 4).expect("opens");
+        let reopened = trace_event_opening_root_v2(summary.event_count, &opening).expect("verifies");
+        assert_eq!(full_logits_trace_root_v2(&ctx_hash, &summary, &reopened), outer);
+
+        // And a summary that lies about the count cannot rescue a mismatched opening: the count is
+        // inside the outer root, so restating it changes the root the block committed to.
+        let mut lying = summary.clone();
+        lying.event_count = 4;
+        assert_ne!(full_logits_trace_root_v2(&ctx_hash, &lying, &reopened), outer);
     }
 }
