@@ -84,7 +84,22 @@ static TESTNET10_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     coinbase_transaction_stasis_period_daa: 500,
     user_transaction_maturity_period_daa: AtomicU64::new(100),
     additional_compound_transaction_mass: 100,
-    coinbase_settlement_long_maturity_daa: 30_000,
+    // MIRRORS `TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa`, and the two must be
+    // equal rather than merely similar: this value is fed to the SAME
+    // `coinbase_spend_settled` the node's mempool calls (see `UtxoEntryReferenceExtension::
+    // dns_settled`), so a wallet and a node built from one commit would otherwise disagree about
+    // whether a coinbase is spendable — the wallet's "pending" contradicting the node's
+    // "won't relay". `settlement_knob_mirrors_consensus_params` is what holds them together.
+    //
+    // The maturity periods above are NOT mirrors: they are the wallet's own, deliberately
+    // stricter, display ladder. Only this field crosses into consensus's rule.
+    //
+    // It read 30_000 for eight days: `7c980a85` re-genesised testnet-10 and re-sized it to 3_000,
+    // `9d69ddf4` re-sized it again to 600 for the 120 s block interval, and this side was left
+    // behind both times. The test caught it on the first day; nothing ran it, because
+    // `cargo test` stops at the first failing binary and the integration suite aborted ahead of
+    // this crate.
+    coinbase_settlement_long_maturity_daa: 600,
     dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
