@@ -1995,6 +1995,193 @@ mod resolver_tests {
         assert_eq!(resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).unwrap().stage, PalwWorkRampStageV1::Final);
     }
 
+    /// ADR-0039's reorg-equivalence obligation, as a SUITE rather than as two anecdotes.
+    ///
+    /// The two fixes above each caught one attack, and each was found by asking the same question
+    /// of one more call site. The question generalises, so the test should: **with the carriage
+    /// fixed, the only thing a later point of view may do to a block is mature it further.**
+    ///
+    /// Stated on the ramp's own four stages, that is one invariant per scenario:
+    ///
+    /// * `Voided` is CONSTANT, not merely absorbing. `convicted_before_close` no longer reads `pov`
+    ///   at all, so a conviction that landed is visible at the first point of view that can see the
+    ///   carriage and at every later one. A `Voided` that appeared partway through the sweep would
+    ///   mean weight had been taken back;
+    /// * otherwise the rank `Provisional < ReceiptLicensed < Final` never DECREASES. It may stand
+    ///   still forever — a block that never reaches quorum never matures, and that is not a defect.
+    ///
+    /// This is ADR-0039 §3e in test form: *"a conviction can never rewrite safe weight — it can
+    /// only prevent work from entering it."* Both halves of "cannot rewrite" are checked here,
+    /// because the implementation got each half wrong once and neither failure showed up in the
+    /// other's test.
+    ///
+    /// The sweep straddles every boundary the fixture has: the window close at 1 500, the unbond
+    /// requests the leaving scenarios place at 1 800 and 2 000, and a point of view far past all of
+    /// them, where a one-way `effective_bond_status` has long since flipped.
+    #[test]
+    fn with_carriage_fixed_a_later_point_of_view_only_matures() {
+        /// `Voided` is deliberately absent: it is not a rung on this ladder, and a scenario that
+        /// reaches it is checked by the constancy rule instead.
+        fn rank(stage: PalwWorkRampStageV1) -> u8 {
+            match stage {
+                PalwWorkRampStageV1::Provisional => 0,
+                PalwWorkRampStageV1::ReceiptLicensed => 1,
+                PalwWorkRampStageV1::Final => 2,
+                PalwWorkRampStageV1::Voided => unreachable!("the constancy rule handles Voided"),
+            }
+        }
+
+        // A bond view in which ONE party asks to unbond, at a DAA of the scenario's choosing.
+        let leaving_at = |seed: u8, daa: u64| {
+            let mut accused = bond(0xB1);
+            accused.validator_pubkey_hash = h(0xE1);
+            crate::dns_finality::ActiveBondView::from_records(
+                [1u8, 2, 3, 0xC9]
+                    .into_iter()
+                    .map(|s| {
+                        let mut b = bond(s);
+                        if s == seed {
+                            b.unbond_request_daa_score = Some(daa);
+                        }
+                        (op(s), b)
+                    })
+                    .chain([(
+                        op(0xB1),
+                        if seed == 0xB1 {
+                            let mut a = accused.clone();
+                            a.unbond_request_daa_score = Some(daa);
+                            a
+                        } else {
+                            accused
+                        },
+                    )]),
+            )
+        };
+
+        let quorum = || vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+        let with = |extra: (u8, u64, Vec<u8>)| {
+            let mut c = quorum();
+            c.push(extra);
+            c
+        };
+
+        // Window closes at 1 000 + 500 = 1 500.
+        let scenarios: Vec<(&str, Vec<(u8, u64, Vec<u8>)>, crate::dns_finality::ActiveBondView)> = vec![
+            ("quorum and nothing against it", quorum(), bonds()),
+            ("one receipt short of quorum", vec![receipt_row(1, 1_100)], bonds()),
+            ("no carriage at all", vec![], bonds()),
+            ("a conviction inside the window", with(equivocation_row(1_400)), bonds()),
+            ("a conviction after the window", with(equivocation_row(1_600)), bonds()),
+            ("a dispute opened inside the window", with(open_row(1_200)), bonds()),
+            ("a dispute opened after the window", with(open_row(2_400)), bonds()),
+            ("a verifier unbonds after filing", quorum(), leaving_at(1, 1_800)),
+            ("the accused unbonds after conviction", with(equivocation_row(1_400)), leaving_at(0xB1, 2_000)),
+            ("the challenger unbonds after opening", with(open_row(1_200)), leaving_at(0xC9, 1_800)),
+        ];
+
+        // Every point of view is >= the block's own acceptance at 1 000.
+        const POVS: [u64; 11] = [1_000, 1_200, 1_400, 1_499, 1_500, 1_501, 1_800, 2_000, 2_500, 5_000, 1_000_000];
+
+        let panel = [seat(1), seat(2)];
+        let mut ever_final = false;
+        let mut ever_voided = false;
+        for (name, carriage, bonds) in &scenarios {
+            let stages: Vec<PalwWorkRampStageV1> = POVS
+                .iter()
+                .map(|pov| {
+                    let inp = input(carriage, &panel, *pov, bonds, &NoStepWeights);
+                    resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves").stage
+                })
+                .collect();
+
+            let voided: Vec<bool> = stages.iter().map(|s| *s == PalwWorkRampStageV1::Voided).collect();
+            assert!(
+                voided.iter().all(|v| *v) || voided.iter().all(|v| !*v),
+                "{name}: a conviction is a fact about the chain, not about when it is read — {stages:?}"
+            );
+
+            if voided[0] {
+                ever_voided = true;
+                continue;
+            }
+            for (i, pair) in stages.windows(2).enumerate() {
+                assert!(
+                    rank(pair[1]) >= rank(pair[0]),
+                    "{name}: pov {} -> {} demoted {:?} to {:?}",
+                    POVS[i],
+                    POVS[i + 1],
+                    pair[0],
+                    pair[1]
+                );
+            }
+            ever_final |= stages.last() == Some(&PalwWorkRampStageV1::Final);
+        }
+
+        // The sweep must actually exercise both terminals, or a suite that never matures anything
+        // would pass it vacuously.
+        assert!(ever_final, "no scenario ever reached Final — the invariant would hold trivially");
+        assert!(ever_voided, "no scenario ever reached Voided — the constancy rule was never exercised");
+    }
+
+    /// The suite's second axis, and the one the point-of-view sweep provably cannot see.
+    ///
+    /// That sweep holds the carriage fixed and advances the clock. The three window defects fixed
+    /// on this branch all move the other way: the attacker holds the clock and **adds a record**.
+    /// Checked against the sweep alone, removing the late-`Open` bound leaves every scenario
+    /// `Provisional` at every point of view — constant, monotone, and passing. Two axes are needed
+    /// because the attacks use two.
+    ///
+    /// The rule on this axis is flat rather than monotone: **carriage accepted after the challenge
+    /// window closed cannot change a block's stage in either direction.** Late evidence is
+    /// telemetry (W5). Both directions are load-bearing and each was broken on its own once — a
+    /// late receipt used to top a block up to `Final` at a moment of the filer's choosing, and a
+    /// late `Open` used to demote one that already was.
+    ///
+    /// Two bases, because "cannot change" is only meaningful where there is room to move in that
+    /// direction: a matured block has room to fall, and one short of quorum has room to rise.
+    #[test]
+    fn carriage_accepted_after_the_window_cannot_change_the_stage() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2), seat(3)];
+        // Window closes at 1 000 + 500 = 1 500; every appended record lands well past it.
+        const LATE: u64 = 1_600;
+        const POV: u64 = 9_000;
+
+        let stage_of = |carriage: &[(u8, u64, Vec<u8>)]| {
+            resolve_block_weight_v1(&input(carriage, &panel, POV, &bonds, &NoStepWeights), &RAMP, accept_fixture_signature)
+                .expect("every fixture resolves")
+                .stage
+        };
+
+        let bases: [(&str, Vec<(u8, u64, Vec<u8>)>, PalwWorkRampStageV1); 2] = [
+            ("matured", vec![receipt_row(1, 1_100), receipt_row(2, 1_110)], PalwWorkRampStageV1::Final),
+            ("one short of quorum", vec![receipt_row(1, 1_100)], PalwWorkRampStageV1::Provisional),
+        ];
+
+        for (base_name, base, expected) in &bases {
+            assert_eq!(stage_of(base), *expected, "{base_name}: the base itself must be what the case is about");
+
+            // One of every kind that carries weight meaning. `conviction_row` cannot adjudicate
+            // against these fixtures, so it stands for the shape rather than for a landed
+            // conviction — which is itself worth pinning: a late record that decodes must not move
+            // the stage even by being present.
+            for (kind, late) in [
+                ("a receipt", receipt_row(3, LATE)),
+                ("a landed conviction", equivocation_row(LATE)),
+                ("an unadjudicable conviction", conviction_row(LATE)),
+                ("a dispute", open_row(LATE)),
+            ] {
+                let mut extended = base.clone();
+                extended.push(late);
+                assert_eq!(
+                    stage_of(&extended),
+                    *expected,
+                    "{base_name}: {kind} accepted after the window changed the stage — late evidence is telemetry (W5)"
+                );
+            }
+        }
+    }
+
     /// An undecodable body is skipped, not fatal: it never passed admission on this chain, so it
     /// is not a fact about it — and making one poison the resolve would hand any peer a way to
     /// make a block unweighable.

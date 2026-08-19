@@ -392,6 +392,24 @@ an identity-neutral rule.
   *equal DAGs ⟹ equal weights*, invariant under receipt arrival order, conviction observation
   order, pruning point, and IBD start height. ADR-0038 named mutable-weight fork choice as its
   own hardest correctness target; this makes that a gate rather than an intention.
+
+  **Status — two of the four invariances are now under test, and the suite has two axes because
+  the attacks do.** `palw_facts`'s `with_carriage_fixed_a_later_point_of_view_only_matures` holds
+  the carriage fixed and sweeps the point of view across every boundary the fixtures have: `Voided`
+  must be *constant* rather than merely absorbing, and otherwise the rank
+  `Provisional < ReceiptLicensed < Final` must never decrease.
+  `carriage_accepted_after_the_window_cannot_change_the_stage` holds the clock and appends one
+  record of every kind past the window, in both directions from both a matured base and one short
+  of quorum. `resolution_does_not_depend_on_walk_order` covers arrival order.
+
+  The second axis is not redundancy. Removing the late-`Open` bound leaves *every* scenario in the
+  point-of-view sweep `Provisional` at every point of view — constant, monotone, and passing. Each
+  of the five defects fixed on this branch was re-introduced against the finished suite and each
+  is caught by exactly one of the two axes.
+
+  **Still open, and not provable at this level:** pruning point and IBD start height. Both are
+  claims about a DAG rather than about a derivation over one block's carriage, so they need the
+  wiring first — which is the honest reason they are not here rather than an omission.
 * **Code sites this ADR commits to touching:** the header-selected-tip ordering
   (`header_processor/processor.rs:416`), virtual/tip selection in the virtual processor, and a
   new derivation module for the two weights. `blue_work`, pruning proof, difficulty and window
