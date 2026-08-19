@@ -476,6 +476,34 @@ only verification distinguishes it from real work. Therefore:
 | **Decision 1 (hash floor as primary; PALW never block-critical)** | **Superseded.** Inverted by Decisions A–E. |
 | M0–M3 staging | Reshaped: M-stages now stage *class count, receipt quorum k, ρ_r, and the PALW share of subsidy*, not "PALW off→on". A soak network runs the full shape from its genesis. |
 
+### What actually blocks Decisions B and C: the carriage store cannot name a chain
+
+Both remaining wirings need the same input — `PalwResolverInputV1::carriage`, specified as *"carriage
+records accepted on THE CHAIN BEING EVALUATED, within the challenge horizon"*. The store that holds
+those records cannot answer it.
+
+`PalwCarriageRecord` is `{ kind, accepted_daa_score, body }` — precisely the `(u8, u64, Vec<u8>)`
+tuple the resolver takes, which is what makes the mistake inviting — and it carries **no accepting
+block**. A DAA score is not a chain identifier; two competing branches both have them. A wirer who
+reaches for `PalwCarriageStore::all()` therefore mixes evidence from branches the node reorged away
+from into the weight of a block on the branch it kept, and nothing about the call looks wrong.
+
+This is the fourth appearance of one defect family in this ADR's implementation. The class target,
+the class freeze, and the dispute walk were each rewritten away from a store for it, and the
+recurring lesson recorded above — *"reach for the store only when a fold provably cannot answer"* —
+was written from the first three. This is the case where the fold's cost is real rather than
+imagined, so it is a decision rather than a repetition:
+
+| | correctness | cost |
+| --- | --- | --- |
+| **Fold over the chain path's accepted transactions** | correct by construction, like every other PALW fact | the walk re-runs per candidate chain at fork-choice time |
+| **Add the accepting block hash to the row**, filter by chain membership | correct, and cheap to read | changes the stored row format — a reindex on every running node |
+
+Recorded at `PalwCarriageStore::all()` as well, because that is where someone wiring this will be
+standing. Until it is chosen, neither Decision B's fork-choice integration nor Decision C's live
+receipt collection can be built correctly, and building either on `all()` would produce a system
+that passes its tests and disagrees across a reorg.
+
 ### The producer's signing seam — the last thing that was not "write a function"
 
 Decision A's producer was blocked on a key, not on logic. The bonded ML-DSA-87 key lives in the

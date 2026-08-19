@@ -136,6 +136,30 @@ impl DbPalwCarriageStore {
 
     /// Every stored carriage row. Whole-store iteration like the capability pool — bounded by the
     /// walk horizon and the reorg discipline, not by chain length.
+    ///
+    /// **Not a source for `PalwResolverInputV1::carriage`, and this is the trap to read before
+    /// wiring ADR-0038 Decision B or C.** That field is specified as "carriage records accepted on
+    /// THE CHAIN BEING EVALUATED, within the challenge horizon". These rows cannot answer that:
+    /// `PalwCarriageRecord` carries `kind`, `accepted_daa_score` and `body` — the exact tuple the
+    /// resolver wants, which is what makes the mistake so easy — but **no accepting block**. A DAA
+    /// score is not a chain identifier; two competing branches both have them.
+    ///
+    /// So a caller who fed `all()` to the resolver would mix evidence from branches the node has
+    /// since reorged away from into the weight of a block on the branch it kept. That is the same
+    /// defect the class-state store's header describes and that the class target, the class freeze
+    /// and the dispute walk were each rewritten to avoid: a fact that depends on where the reading
+    /// node's tip happens to point is not a fact about the chain being weighed.
+    ///
+    /// Two ways to make it answerable, and choosing is a real decision rather than an oversight:
+    ///
+    /// * **Fold over the chain path's accepted transactions, no store.** What every other PALW
+    ///   fact does today, and correct by construction. Cost: the walk re-runs per candidate chain
+    ///   at fork-choice time.
+    /// * **Add the accepting block hash to the row** and filter by chain membership. Cheap to read,
+    ///   but it changes the stored row format, so it costs a reindex on every running node.
+    ///
+    /// Until one is chosen, `all()` has exactly one correct consumer: the backfill/reindex
+    /// bookkeeping below, which is asking "what have I stored", not "what did this chain accept".
     pub fn all(&self) -> Vec<(TransactionId, PalwCarriageRecord)> {
         self.access
             .iterator()
