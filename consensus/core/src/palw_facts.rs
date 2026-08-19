@@ -1255,7 +1255,7 @@ mod resolver_tests {
             // execution belongs to, and it is a DIFFERENT id from the fixtures' default on
             // purpose: the freeze is scoped to the refuted class, and a fixture where the two
             // shared an id could not tell that scoping from its absence.
-            (*execution_class_id == h(0xC1) || *execution_class_id == gap_class()).then(|| PalwClassFactsV1 {
+            (*execution_class_id == h(0xC1) || *execution_class_id == gap_class()).then_some(PalwClassFactsV1 {
                 execution_class_id: *execution_class_id,
                 class_target: u128::MAX >> 10, // 1_024 expected attempts
                 pwu_per_inference: 100,
