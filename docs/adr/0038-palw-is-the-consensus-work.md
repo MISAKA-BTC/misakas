@@ -275,6 +275,25 @@ Splitting the rule out is what keeps that an uncovered path rather than an untes
 twice in this ADR's implementation, and both times the honest answer was a fold over the block's own
 chain. Reach for the store only when a fold provably cannot answer.
 
+**And the freeze had the same unbounded shape the three carriage arms did**, found by running
+ADR-0039's finished suite against it rather than by reading it again. `class_is_frozen_v1` walked
+every conviction the point of view had reached, with no window bound — so once wired it would have
+been a *broader* retroactive demotion weapon than the late-`Open` fixed as exactly that: a freeze is
+a fact about the CLASS, so one coverage gap surfacing at any later DAA pulls every matured block of
+that class back to `Provisional` at once. That is ADR-0039 §3e's "a conviction can never rewrite
+safe weight" rewritten wholesale.
+
+It is now `class_frozen_before_close_v1`, bounded by the same window every other arm carries, with
+the bound in the NAME because it must be read before the function is wired — it is per-block and it
+is not "is the class frozen right now". The scope rule is split out as `freeze_record_is_in_scope_v1`
+and tested exhaustively, for the same reason `outcome_freezes_class_v1` was split out: no fixture
+here reaches `Unadjudicable` end to end, so a bound left inline would be an untested bound.
+
+What the bound leans on is what the conviction path already leans on — ADR-0039's residual
+assumption 1, an honest party reachable within every challenge window. A gap surfacing inside the
+window pins those blocks at `Provisional` forever; one surfacing afterwards stops the class going
+FORWARD, which is the store-backed view's job on the panel and mint paths, fail-closed.
+
 Decisions B, C and D remain unimplemented beyond the pure arithmetic already in
 `palw_weight`, `palw_facts` and `palw_class_daa`. Decision C in particular is the panel assignment,
 receipt collection and challenge-window machinery, which is the bulk of the remaining work.

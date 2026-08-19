@@ -590,7 +590,7 @@ pub enum PalwPanelDutyV1 {
 /// Which drawn seats defaulted on this block's commitment.
 ///
 /// Derived by a fold over the carriage on the chain being evaluated — no store, for the reason
-/// [`class_is_frozen_v1`] states.
+/// [`class_frozen_before_close_v1`] states.
 ///
 /// Three rules, each of which decides a real case the other way round from the receipt count:
 ///
@@ -695,7 +695,40 @@ pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::pal
     matches!(outcome, Err(crate::palw_carriage::PalwCarriageError::StepUnadjudicable))
 }
 
-/// ADR-0038 I10: whether this class is FROZEN on the chain being evaluated.
+/// Which carriage rows a freeze may be derived FROM, split out of the walk for the same reason
+/// [`outcome_freezes_class_v1`] is: no fixture in this crate reaches `Unadjudicable` end to end, so
+/// a rule left inline here would be a rule nothing tests.
+///
+/// Two bounds, and the second is the one that matters.
+///
+/// * `<= pov_daa` — nothing the evaluating point has not reached is a fact about its chain;
+/// * `<= accepted_daa + w_challenge` — **the same window bound every other carriage arm carries**.
+///
+/// Without the window bound this is a retroactive demotion weapon, and a broader one than the
+/// late-`Open` that was fixed as exactly that: a freeze is a fact about the CLASS, so one coverage
+/// gap surfacing at any later DAA would pull every matured block of that class back to
+/// `Provisional` at once. ADR-0039 §3e is explicit that a conviction "can never rewrite safe
+/// weight — it can only prevent work from entering it", and an unbounded freeze rewrites it
+/// wholesale. `carriage_accepted_after_the_window_cannot_change_the_stage` is the rule; this keeps
+/// the freeze inside it before anything wires the freeze to the ramp.
+///
+/// What the bound leans on is the assumption the whole conviction path already leans on, and
+/// ADR-0039 states as residual assumption 1: an honest party reachable within every challenge
+/// window. A gap that surfaces inside the window pins those blocks at `Provisional` and they never
+/// mature; one that surfaces afterwards stops the class going FORWARD — which is the store-backed
+/// [`crate::palw_class_state::PalwClassStateView::is_frozen`]'s job on the panel and mint paths,
+/// fail-closed, and not this function's.
+fn freeze_record_is_in_scope_v1(record_accepted_daa: u64, input: &PalwResolverInputV1<'_>) -> bool {
+    record_accepted_daa <= input.pov_daa && record_accepted_daa <= input.accepted_daa.saturating_add(input.schedule.w_challenge)
+}
+
+/// ADR-0038 I10: whether a coverage gap in this class surfaced on the chain being evaluated
+/// **before this block's challenge window closed**.
+///
+/// The bound is in the name because it has to be read before the function is wired: this is not
+/// "is the class frozen right now", which is a question about the present and is the store-backed
+/// view's ([`freeze_record_is_in_scope_v1`] derives the difference). This one is per-block, and a
+/// gap that surfaces after a block matured leaves that block alone.
 ///
 /// A class freezes when a step conviction against it adjudicates `Unadjudicable` — this build's
 /// catalog cannot decide the refuted step. That is a fact about the class's coverage rather than
@@ -710,7 +743,7 @@ pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::pal
 /// all: the moves ARE carriage on the chain being evaluated, so replaying them is chain-scoped by
 /// construction and two nodes with the same DAG cannot disagree.
 ///
-/// Only records inside the challenge horizon count, in canonical order, and a record that fails to
+/// Only records [`freeze_record_is_in_scope_v1`] admits count, in canonical order, and a record that fails to
 /// decode or to adjudicate is skipped — an unparseable accusation cannot freeze a class, which is
 /// the safe direction: freezing on junk would be a denial-of-service against an honest class.
 /// **Two functions answer "is this class frozen", and they are not rivals.** `PalwClassStateView::is_frozen`
@@ -726,7 +759,7 @@ pub fn outcome_freezes_class_v1(outcome: &Result<TransactionOutpoint, crate::pal
 /// establish a freeze — which withholds nothing and lets the ordinary refutation paths run. Neither
 /// should be swapped for the other without re-deriving that.
 ///
-pub fn class_is_frozen_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
+pub fn class_frozen_before_close_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
 where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
 {
@@ -734,7 +767,7 @@ where
         PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
     };
     canonical_carriage_order_v1(input.carriage).into_iter().any(|(kind, accepted_daa, body)| {
-        *kind == PALW_CARRIAGE_KIND_STEP_CONVICTION && *accepted_daa <= input.pov_daa && {
+        *kind == PALW_CARRIAGE_KIND_STEP_CONVICTION && freeze_record_is_in_scope_v1(*accepted_daa, input) && {
             let Ok(PalwCarriageV1::StepConviction(c)) = decode_palw_stage1_body(*kind, body) else { return false };
             // At the DAA the conviction was ACCEPTED, like every other accountability question on
             // this walk. Read at `pov_daa` a freeze silently LIFTS once the accused's bond ages
@@ -1405,21 +1438,59 @@ mod resolver_tests {
         let bonds = bonds();
 
         let quiet = input(&[], &panel, 9_100, &bonds, &NoStepWeights);
-        assert!(!class_is_frozen_v1(&quiet, accept_fixture_signature), "an empty chain freezes nothing");
+        assert!(!class_frozen_before_close_v1(&quiet, accept_fixture_signature), "an empty chain freezes nothing");
 
         // Receipts are not convictions.
         let receipts = vec![receipt_row(1, 9_000)];
         let only_receipts = input(&receipts, &panel, 9_100, &bonds, &NoStepWeights);
-        assert!(!class_is_frozen_v1(&only_receipts, accept_fixture_signature), "the wrong kind freezes nothing");
+        assert!(!class_frozen_before_close_v1(&only_receipts, accept_fixture_signature), "the wrong kind freezes nothing");
 
         // A conviction whose signature does not verify is the challenger's problem.
         let carriage = vec![conviction_row(9_000)];
         let unproven = input(&carriage, &panel, 9_100, &bonds, &NoStepWeights);
-        assert!(!class_is_frozen_v1(&unproven, reject_every_signature), "an unproven conviction is not a coverage gap");
+        assert!(!class_frozen_before_close_v1(&unproven, reject_every_signature), "an unproven conviction is not a coverage gap");
 
         // And nothing the evaluating point has not reached counts.
         let before = input(&carriage, &panel, 8_999, &bonds, &NoStepWeights);
-        assert!(!class_is_frozen_v1(&before, accept_fixture_signature), "not yet on this chain");
+        assert!(!class_frozen_before_close_v1(&before, accept_fixture_signature), "not yet on this chain");
+    }
+
+    /// The freeze's temporal scope, exhaustively — split out for the reason
+    /// `only_the_unadjudicable_outcome_freezes_the_class` is: no fixture here reaches
+    /// `Unadjudicable` end to end, so a bound left inline in the walk would be an untested bound on
+    /// a rule that is about to be wired.
+    ///
+    /// The window half is the one that matters. Unbounded, a freeze is a broader retroactive
+    /// demotion weapon than the late-`Open` already fixed as exactly that: a freeze is a fact about
+    /// the CLASS, so one coverage gap surfacing at any later DAA would pull every matured block of
+    /// the class back to `Provisional` at once — ADR-0039 §3e's "can never rewrite safe weight",
+    /// rewritten wholesale.
+    #[test]
+    fn a_coverage_gap_freezes_only_inside_the_blocks_own_window() {
+        let panel = [seat(1), seat(2)];
+        let bonds = bonds();
+        // accepted at 1 000, w_challenge 500 — the window closes at 1 500.
+        let at = |pov: u64| input(&[], &panel, pov, &bonds, &NoStepWeights);
+
+        let late_pov = at(9_000);
+        for inside in [0, 1, 999, 1_000, 1_400, 1_499, 1_500] {
+            assert!(freeze_record_is_in_scope_v1(inside, &late_pov), "{inside} is inside the window");
+        }
+        for outside in [1_501, 1_600, 9_000, u64::MAX] {
+            assert!(!freeze_record_is_in_scope_v1(outside, &late_pov), "{outside} is after the window closed");
+        }
+
+        // And the point of view still bounds it, for records the window would otherwise admit:
+        // nothing the evaluating point has not reached is a fact about its chain.
+        let early_pov = at(1_200);
+        assert!(freeze_record_is_in_scope_v1(1_200, &early_pov), "reached");
+        assert!(!freeze_record_is_in_scope_v1(1_201, &early_pov), "not yet reached, though inside the window");
+
+        // A schedule whose window would overflow the DAA space saturates rather than wrapping —
+        // wrapping would make the bound admit nothing at all, which fails OPEN for the freeze.
+        let mut huge = at(u64::MAX);
+        huge.accepted_daa = u64::MAX - 1;
+        assert!(freeze_record_is_in_scope_v1(u64::MAX, &huge), "saturating, not wrapping");
     }
 
     /// The dominant term of block weight is looked up BY the block's class, not handed in beside
