@@ -2533,6 +2533,45 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// The **future anchor** a block's panel is drawn against: the first chain block at or after
+    /// `commitment_accepted_daa + delta_bind`, on the chain that ends at `chain_tip`.
+    ///
+    /// This is the last input `select_job_panel_at_anchor_v3` needs that is not already derivable —
+    /// the candidate set comes from the bond view, the snapshot root from the candidates, and every
+    /// other field from the block's own commitment.
+    ///
+    /// The anchor is what makes the draw unpredictable to the executor: `delta_bind` puts it in the
+    /// commitment's future, so a miner cannot shop for a block hash that seats a friendly panel.
+    /// ADR-0028 §2 is explicit that it is "a settling offset, not a finality bound" — it buys
+    /// unpredictability, not irreversibility, and the reorg protection is the challenge window's
+    /// job rather than this offset's.
+    ///
+    /// **`None` when the chain has not reached the anchor yet, and that is a real answer.** A panel
+    /// that does not exist yet is not an empty panel: an empty one licenses nothing and reads as a
+    /// quorum failure, while "not yet drawn" is the ordinary state of a fresh commitment and the
+    /// ramp's `Provisional` already describes it. Returning `Some(vec![])` here would turn every
+    /// young block into a block whose panel defaulted.
+    ///
+    /// Walks backward from the tip and keeps the DEEPEST block still at or above the target, which
+    /// is the first one at or after it going forward. DAA scores skip, so "first at or after" is
+    /// the rule rather than equality — an anchor defined by an exact score would simply not exist
+    /// on most chains.
+    fn palw_panel_anchor_v1(&self, chain_tip: BlockHash, commitment_accepted_daa: u64, delta_bind: u64) -> Option<(BlockHash, u64)> {
+        let target = commitment_accepted_daa.saturating_add(delta_bind);
+        let mut anchor: Option<(BlockHash, u64)> = None;
+        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
+            // A header this node cannot read ends the walk rather than being skipped: skipping it
+            // would let the walk step over the very block that is the anchor and return a deeper
+            // one, which is a different panel for the same block on two nodes.
+            let daa = self.headers_store.get_header(block).ok()?.daa_score;
+            if daa < target {
+                break;
+            }
+            anchor = Some((block, daa));
+        }
+        anchor
+    }
+
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
     /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
     /// serves both apply (added) and revert (removed).
