@@ -163,7 +163,12 @@ mod tests {
     use rocksdb::WriteBatch;
 
     fn record(v: u8) -> PalwCarriageRecord {
-        PalwCarriageRecord { kind: PALW_CARRIAGE_KIND_ATTESTATION, accepted_daa_score: 1_000 + v as u64, body: vec![v; 32] }
+        PalwCarriageRecord {
+            kind: PALW_CARRIAGE_KIND_ATTESTATION,
+            accepted_daa_score: 1_000 + v as u64,
+            accepted_block: kaspa_hashes::Hash64::from_bytes([v; 64]),
+            body: vec![v; 32],
+        }
     }
 
     /// A carriage on a branch that loses must not stay in the store: rows keyed by carrying tx id

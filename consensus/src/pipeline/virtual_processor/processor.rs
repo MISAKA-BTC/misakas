@@ -351,6 +351,11 @@ pub struct VirtualStateProcessor {
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
     /// and validated identically. Cloned from `Params::palw_credit` at construction.
     pub(super) palw_credit_params: Option<kaspa_consensus_core::palw_credit::PalwCreditParamsV1>,
+    /// ADR-0038 Decision B's three activation fences, carried so the tip preference can refuse
+    /// before touching a store. `None` on every shipped preset — see `palw_preferred_tip_v1`.
+    pub(super) palw_schedule: Option<kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1>,
+    pub(super) palw_ramp: Option<kaspa_consensus_core::palw_weight::PalwWeightParamsV1>,
+    pub(super) palw_fork_choice: Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightParamsV1>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
     // chain-context EVM step + canonical head pointers. Inert until
@@ -647,6 +652,9 @@ impl VirtualStateProcessor {
             dns_params: params.dns_params.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_credit_params: params.palw_credit.clone(),
+            palw_schedule: params.palw_schedule,
+            palw_ramp: params.palw_ramp,
+            palw_fork_choice: params.palw_fork_choice,
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
@@ -6716,6 +6724,43 @@ impl VirtualStateProcessor {
     /// direction for a rule whose false positive is "sink moved onto the wrong branch". The cost
     /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
     /// state, which the cheap staleness check settles first on every healthy resolve.
+    /// The PALW weights a tip is RANKED by — the value both `RankedTip` sites passed `None` for.
+    ///
+    /// This fills the seam `order_tips_v1` was built for rather than adding a second preference
+    /// beside it. That matters for a reason the seam's own doc gives: its comparison is total
+    /// (PALW weight, then the existing `SortableBlock` order, hash tie-break included), and
+    /// totality is what keeps two nodes with different insertion orders from picking different
+    /// tips. A parallel "preferred tip" path would decide before that order ran and give up the
+    /// property.
+    ///
+    /// **`None` on every shipped network, and the first three lines are the whole of it.** All of
+    /// `palw_schedule`, `palw_ramp` and `palw_fork_choice` are `None` on every preset, so this
+    /// returns before touching a store, every `RankedTip` carries `palw: None`, and — since the
+    /// rule is also `BlueWorkOnly` there — the heap is byte-identical to the blue-work heap it
+    /// replaced. That is a fact about the presets, not a structural guarantee, exactly as
+    /// `Params::palw_fork_choice` says about itself.
+    ///
+    /// `None` also means "this node could not weigh that chain", and `order_tips_v1` ranks such a
+    /// candidate BELOW any resolved one rather than treating it as zero. That is the seam's choice
+    /// and it is the safe direction here: a node does not build on a chain it cannot weigh, and it
+    /// does not get to call it weightless either.
+    ///
+    /// The window floor is the finality point's DAA. Every candidate must have the finality point
+    /// on its chain to be a candidate at all, so below it they share every block — folding deeper
+    /// adds identical terms to both sides.
+    fn palw_tip_weights_v1(
+        &self,
+        tip: BlockHash,
+        finality_point: BlockHash,
+        bond_view: &ActiveBondView,
+    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
+        let schedule = self.palw_schedule.as_ref()?;
+        let ramp = self.palw_ramp.as_ref()?;
+        let fork_choice = self.palw_fork_choice.as_ref()?;
+        let floor = self.headers_store.get_daa_score(finality_point).unwrap_or_default();
+        self.palw_chain_weights_v1(tip, floor, bond_view, schedule, ramp, fork_choice)
+    }
+
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
         let dns_params = self.dns_params.as_ref()?;
         let mult = dns_params.stake_preference_max_work_deficit_multiplier;
@@ -6840,7 +6885,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|block| RankedTip {
                 block: SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() },
-                palw: None,
+                palw: self.palw_tip_weights_v1(block, finality_point, bond_view),
                 rule: tip_order,
             })
             .collect::<BinaryHeap<_>>();
@@ -6933,7 +6978,7 @@ impl VirtualStateProcessor {
                 {
                     heap.push(RankedTip {
                         block: SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() },
-                        palw: None,
+                        palw: self.palw_tip_weights_v1(parent, finality_point, bond_view),
                         rule: tip_order,
                     });
                 }
