@@ -498,6 +498,11 @@ mod tests_pq {
     /// sensitivity (the grinding-closure property: a re-stamped header re-pays the tag), and
     /// easy-target acceptance. Env var is process-global; nothing else in this test binary
     /// computes algo-4 tags, and the prior value is restored on exit.
+    ///
+    /// The network id is `devnet`, the `NetworkId` display form consensus passes down, because the
+    /// fixture is honored on devnet ONLY — `kaspa_pow::palw::fixture_permitted_on`. This test used
+    /// to say `kaspa-devnet`, which is not a network this codebase names anywhere; it passed
+    /// because the fixture was selected by the variable alone.
     #[test]
     fn layer0_dispatches_palw_fixture_for_algo_id_4() {
         use kaspa_consensus_core::pow_layer0::{
@@ -509,14 +514,14 @@ mod tests_pq {
         unsafe { std::env::set_var(KEY, "1") };
 
         let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_PALW_LLM);
-        let s = StateLayer0::new(&h, b"kaspa-devnet");
+        let s = StateLayer0::new(&h, b"devnet");
 
         // Dispatch: the verifier's internal L1 tag must equal the fixture tag for the seed the
         // verifier is contractually bound to derive — (network, pre_pow_hash, timestamp, nonce).
         let mut buf = [0u8; POW_L1_TAG_MAX_BYTES];
         let n = s.calculate_l1_tag(5, &mut buf).unwrap();
         assert_eq!(n, POW_L1_PALW_OUT_BYTES, "PALW tag is 200 bytes");
-        let seed = palw_pow_seed_v1(s.pre_pow_hash_64, 1_700_000_000, 5, b"kaspa-devnet");
+        let seed = palw_pow_seed_v1(s.pre_pow_hash_64, 1_700_000_000, 5, b"devnet");
         assert_eq!(&buf[..n], palw_fixture_l1_tag_v1(&seed).as_slice(), "algo_id=4 must compute the PALW fixture tag");
 
         // Determinism + nonce sensitivity of the full Layer-0 digest.
@@ -528,7 +533,7 @@ mod tests_pq {
         // pre-PoW hash prefix computation but must produce different L1 tags (the seed binds the
         // timestamp) — this is what closes the free timestamp-grinding dimension.
         let h2 = dummy_header_algo(0x207fffff, 0, 1_700_000_001, POW_ALGO_ID_PALW_LLM);
-        let s2 = StateLayer0::new(&h2, b"kaspa-devnet");
+        let s2 = StateLayer0::new(&h2, b"devnet");
         let mut buf2 = [0u8; POW_L1_TAG_MAX_BYTES];
         let n2 = s2.calculate_l1_tag(5, &mut buf2).unwrap();
         assert_ne!(&buf2[..n2], &buf[..n], "timestamp must change the PALW L1 tag itself, not just the finalizer input");
@@ -551,12 +556,16 @@ mod tests_pq {
     fn layer0_palw_without_worker_is_unavailable_not_a_failed_pow() {
         use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM;
         let _env = PALW_ENV_LOCK.lock().unwrap();
-        // Only meaningful when the surrounding environment does not configure PALW.
-        if std::env::var("MISAKA_PALW_POW_FIXTURE").as_deref() == Ok("1") || std::env::var("PALW_WORKER").is_ok() {
+        // A configured WORKER would answer, so this stays conditional on that. The fixture
+        // variable no longer is: the network below is one the fixture is not permitted on, so the
+        // property under test holds whether or not the surrounding environment exports it. It used
+        // to bail out when it was set, which is exactly the environment CI now runs in — the test
+        // would have gone quiet in the run that needs it most.
+        if std::env::var("PALW_WORKER").is_ok() {
             return;
         }
         let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_PALW_LLM);
-        let s = StateLayer0::new(&h, b"kaspa-devnet");
+        let s = StateLayer0::new(&h, b"simnet");
         match s.check_pow_layer0(0) {
             Err(PowLayer0Error::PalwUnavailable(msg)) => {
                 assert!(msg.contains("PALW_WORKER"), "the error must tell the operator which knob to set: {msg}")

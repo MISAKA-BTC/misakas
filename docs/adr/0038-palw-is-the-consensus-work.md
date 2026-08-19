@@ -476,6 +476,68 @@ only verification distinguishes it from real work. Therefore:
 | **Decision 1 (hash floor as primary; PALW never block-critical)** | **Superseded.** Inverted by Decisions A–E. |
 | M0–M3 staging | Reshaped: M-stages now stage *class count, receipt quorum k, ρ_r, and the PALW share of subsidy*, not "PALW off→on". A soak network runs the full shape from its genesis. |
 
+## Decision H — Block cadence is FROZEN at one block per 120 seconds (testnet and mainnet)
+
+**Confirmed, 2026-08-19. Not a tuning parameter and not a launch-window choice: every PALW network
+carrying value — testnet-11 and mainnet — targets a 120-second block interval.** The deci-bps
+(10-second) preset stays in the tree for tests and must never be installed on such a network.
+
+Two independent constraints force it, and each alone is sufficient.
+
+### 1. Sync headroom — below 1× the network is permanently closed to new nodes
+
+```text
+headroom = block interval ÷ per-header verification cost
+```
+
+Below 1× a joining node falls further behind with every block it verifies and can never finish.
+This is not slow sync; it is a network that cannot admit a participant again, ever.
+
+Measured on the reference x86-64 CPU class host against the pinned Qwen3.5-2B:
+
+| cadence | per-header cost | headroom | |
+| --- | --- | --- | --- |
+| **120 s (this decision)** | 15.7 s (clean) | **3.0–5.4×** | converges |
+| 120 s, node co-located with another PALW process | 37–65 s (measured 2026-08-19) | 1.8–3.2× | converges, no margin |
+| 10 s (deci-bps preset) | 15.7 s | 0.64× | **never converges** |
+| 10 BPS (0.1 s) | 15.7 s | **0.0064×** | never converges |
+
+The 10-second preset is already below 1× at the pinned model on the reference host. That is the
+measurement that closes the question — the faster presets are not aggressive, they are outside the
+feasible set for this class.
+
+Decision A's W1 (full nodes never run the LLM) removes the per-header inference from this cost and
+will widen the margin substantially. It does **not** license a faster cadence on its own, because of
+the second constraint — and until W1 is wired, the running code has no margin to spend.
+
+### 2. Ladder depth — a shorter window cannot prosecute step fraud
+
+`affordable_ladder_rounds_v1` is `(w_challenge − w_replay − after·w_round) / (per_rung·w_round)`, and
+both shipped presets afford **10 rounds = 2^10 = 1,024 steps**. Raising `w_challenge` is bounded by
+the pruning horizon, which caps **deci-bps at 12 rounds (2^12)** and the **120-second preset at 17
+(2^17)** — a 32× difference in the step space that can be walked to a terminal index before the
+challenge window closes. A fraud deeper than that is unprosecutable: the terminal opening and the
+conviction land past `w_challenge` and are discarded.
+
+Only the 120-second preset has room to grow the ladder toward a realistic model's step space. A
+faster cadence forecloses the court permanently, and no amount of implementation fixes it.
+
+**Open item, tracked separately**: 2^10 has not been checked against the pinned 2B model's actual
+`step_leaf_count`, and the floor arithmetic says it is exceeded at a few tens of tokens. The cadence
+decision above is what keeps the *option* of closing that gap open; it does not close it.
+
+### Consequences
+
+* `PalwScheduleParamsV1::stage1_defaults_two_minute_bps` is the only preset admissible on a value
+  network. `stage1_defaults_deci_bps` is test-only.
+* Emission is the rate-preserving 120-second table (4445.62 MSK/block).
+* Any future proposal to shorten the interval must first re-measure headroom on the then-current
+  class and re-derive the affordable ladder depth. Neither is a review comment; both are numbers.
+* Enforced as `PalwScheduleParamsV1::validate_for_value_network_v1`, which checks the cadence
+  **before** the window arithmetic. That order is deliberate and is itself asserted: run the windows
+  first and an operator who shortened the interval is told the pruning-depth inequality failed —
+  true, and it reads as "widen a window", which is the one repair that cannot work here.
+
 ## Invariants v2 (release-blocking; supersede ADR-0037's I1/I2/I12, carry the rest)
 
 ```

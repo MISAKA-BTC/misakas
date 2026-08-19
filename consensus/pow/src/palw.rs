@@ -101,9 +101,43 @@ pub const PALW_OLLAMA_MODEL_ENV: &str = "MISAKA_PALW_OLLAMA_MODEL";
 pub const PALW_OLLAMA_URL_ENV: &str = "MISAKA_PALW_OLLAMA_URL";
 pub const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 
-/// Whether the fixture tag is selected in this process.
-pub fn fixture_enabled() -> bool {
+/// Whether the operator asked for the fixture family AT ALL — a process-global answer, because
+/// the variable is process-global.
+///
+/// Almost every caller wants [`fixture_enabled_for`] instead. This one exists for the two places
+/// that must react to the REQUEST rather than to its effect: the kaspad startup rail, which tells
+/// an operator their variable will not do what they think, and [`verify_worker_calibration`].
+pub fn fixture_requested() -> bool {
     std::env::var(PALW_FIXTURE_ENV).as_deref() == Ok("1")
+}
+
+/// Whether the fixture tag family is permitted to be the rule set of `network_id`.
+///
+/// **Devnet only**, which is the same rule the kaspad rail has always stated — moved to where the
+/// tag is COMPUTED, because that is where it can be enforced per network instead of per process.
+/// The fixture derives different tags than the pinned model, so a fixture node on a real PALW
+/// network forks at its first block and its blocks are invalid to every peer.
+///
+/// Two things follow from making this a function of the network rather than of the process:
+///
+/// * **Nothing can skip it.** The old confinement lived in kaspad's startup rail, so a miner, a
+///   harness or any other library consumer of [`palw_l1_tag`] was never subject to it. This is the
+///   same argument [`verify_worker_calibration`] already makes for checking lazily on the tag path.
+/// * **One process may host several networks.** A test binary that runs a devnet consensus and a
+///   simnet consensus is not a misconfiguration, and it used to be impossible: the variable the
+///   devnet side requires aborted the process on behalf of the simnet side, which never computes a
+///   PALW tag at all (`SIMNET_PARAMS.pow_palw_activation` is `never()`).
+///
+/// Matches the `NetworkId` display form the consensus layer passes down
+/// (`params.net.to_string()`), so a suffixed devnet (`devnet-3`) is devnet and a network merely
+/// containing the word (`kaspa-devnet`) is not.
+pub fn fixture_permitted_on(network_id: &[u8]) -> bool {
+    network_id == b"devnet" || network_id.starts_with(b"devnet-")
+}
+
+/// Whether the fixture tag is what THIS network's rules are, in this process.
+pub fn fixture_enabled_for(network_id: &[u8]) -> bool {
+    fixture_requested() && fixture_permitted_on(network_id)
 }
 
 /// Verify that the Ollama server at `url` serves the **pinned** model blob for `algo_id = 5`
@@ -168,7 +202,7 @@ pub fn palw_l1_tag(
     // runs BEFORE the fixture branch on purpose: the fixture tag family must fail a class-pinned
     // net loudly instead of minting tags no real peer accepts (class-less nets return instantly).
     verify_worker_calibration(network_id)?;
-    if fixture_enabled() {
+    if fixture_enabled_for(network_id) {
         return Ok(palw_fixture_l1_tag_v1(&seed));
     }
     native::tag_for_seed(&seed)
@@ -187,7 +221,13 @@ pub fn verify_worker_calibration(network_id: &[u8]) -> Result<(), PowLayer0Error
     let Some(expected) = palw_worker_calibration_v1(network_id) else {
         return Ok(());
     };
-    if fixture_enabled() {
+    if fixture_requested() {
+        // The REQUEST, not its effect. `fixture_permitted_on` already denies this network, so the
+        // tag path would compute real tags and this node could join with a real worker — but a
+        // class-pinned network is a live one, and a stray fixture variable pointed at it is a
+        // misconfiguration worth stopping for rather than quietly overriding. The message names
+        // the variable, which is what the operator has to remove.
+        //
         // The fixture is its own (model-free) tag family, permitted on devnet-class nets only —
         // and those pin no class. A class-pinned net running the fixture must fail the probe
         // loudly rather than mint fixture tags no real peer accepts.
@@ -208,7 +248,7 @@ pub fn palw_ollama_l1_tag(
     network_id: &[u8],
 ) -> Result<[u8; POW_L1_PALW_OLLAMA_OUT_BYTES], PowLayer0Error> {
     let seed = palw_pow_seed_v1(pre_pow_hash, timestamp, nonce, network_id);
-    if fixture_enabled() {
+    if fixture_enabled_for(network_id) {
         return Ok(palw_ollama_fixture_l1_tag_v1(&seed));
     }
     native::ollama_tag_for_seed(&seed)

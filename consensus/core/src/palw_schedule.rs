@@ -64,6 +64,8 @@ pub const PALW_SCHEDULE_REPLAY_KAPPA: u64 = 3;
 pub enum PalwScheduleError {
     #[error("unsupported palw-schedule object version {got} (expected {expected})")]
     UnsupportedVersion { got: u16, expected: u16 },
+    #[error("block cadence is frozen at {required_ms} ms per block (ADR-0038 Decision H); this network targets {got_ms} ms")]
+    CadenceNotFrozen { got_ms: u64, required_ms: u64 },
     #[error("window parameters are not canonical: {reason}")]
     ParamsNotCanonical { reason: &'static str },
     #[error("window inequality violated: {rule}")]
@@ -204,6 +206,12 @@ pub fn max_ladder_space_v1(params: &PalwScheduleParamsV1) -> u64 {
     if rounds >= 40 { crate::palw_bisect::PALW_BISECT_MAX_SPACE } else { 1u64 << rounds }
 }
 
+/// ADR-0038 Decision H: the frozen PALW block interval, in milliseconds.
+///
+/// One block per 120 seconds on every network carrying value. See
+/// [`PalwScheduleParamsV1::validate_for_value_network_v1`] for the two measurements that fix it.
+pub const PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS: u64 = 120_000;
+
 pub const PALW_SCHEDULE_PARAMS_VERSION_V1: u16 = 1;
 
 /// The per-class window parameters, DAA-denominated. Registered at class registration in later
@@ -267,6 +275,42 @@ impl PalwScheduleParamsV1 {
     /// The ADR-0028 §3 inequality set, checked against the network the class registers on.
     /// This is the check whose absence let the first draft ship a 48 h challenge window that
     /// no PALW network's pruning horizon can hold.
+    /// ADR-0038 Decision H: these params are admissible on a network CARRYING VALUE.
+    ///
+    /// [`Self::validate`] answers whether the windows are internally consistent. This answers a
+    /// second question that no relationship among the windows can express, because it is about the
+    /// cadence they sit on: **a PALW network targets one block per 120 seconds, frozen.**
+    ///
+    /// Two independent measurements force it, either alone sufficient.
+    ///
+    /// * **Sync headroom** = block interval ÷ per-header verification cost. Below 1× a joining node
+    ///   falls further behind with every header it verifies and can never finish — the network is
+    ///   permanently closed to new participants, which is not a slow sync but a dead one. Measured
+    ///   on the reference x86-64 CPU class against the pinned Qwen3.5-2B: 15.7 s per header clean,
+    ///   so 120 s gives 3.0–5.4× and the 10-second preset gives **0.64×**. The faster preset is not
+    ///   aggressive; it is outside the feasible set for this class.
+    /// * **Ladder depth.** The pruning horizon caps [`affordable_ladder_rounds_v1`] at 12 rounds on
+    ///   the deci-bps preset and 17 on this one — a 32× difference in the step space that can be
+    ///   walked to a terminal index before `w_challenge` closes. A faster cadence forecloses the
+    ///   court permanently, and no implementation work reopens it.
+    ///
+    /// Kept OUT of `validate` on purpose: the deci-bps preset is internally consistent and stays
+    /// valid for tests. What it is not is admissible, and conflating "well-formed" with "may carry
+    /// value" is how a test preset reaches a network.
+    pub fn validate_for_value_network_v1(&self, blockrate: &BlockrateParams) -> Result<(), PalwScheduleError> {
+        // The cadence is checked FIRST, and the order is the point. Run the window arithmetic
+        // first and a caller who shortened the interval gets a window-inequality error about
+        // pruning depth — true, but it reads as "widen a window", which is the repair that cannot
+        // work. The frozen fact should be the message.
+        if blockrate.target_time_per_block != PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS {
+            return Err(PalwScheduleError::CadenceNotFrozen {
+                got_ms: blockrate.target_time_per_block,
+                required_ms: PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS,
+            });
+        }
+        self.validate(blockrate)
+    }
+
     pub fn validate(&self, blockrate: &BlockrateParams) -> Result<(), PalwScheduleError> {
         if self.version != PALW_SCHEDULE_PARAMS_VERSION_V1 {
             return Err(PalwScheduleError::UnsupportedVersion { got: self.version, expected: PALW_SCHEDULE_PARAMS_VERSION_V1 });
@@ -891,6 +935,46 @@ mod tests {
         assert_eq!(
             two_minute.validate(&BlockrateParams::new_two_minute_bps()),
             Err(PalwScheduleError::WindowInequalityViolated { rule: "w_challenge + prosecution_slack < pruning_depth" })
+        );
+    }
+
+    /// ADR-0038 Decision H: the 120-second cadence is frozen, and "well-formed" does not imply
+    /// "may carry value".
+    ///
+    /// The deci-bps preset is internally consistent — `validate` accepts it — and is still refused
+    /// for a value network, because the two facts that rule it out are not relationships among its
+    /// own windows: its sync headroom against the pinned model is 0.64× (below 1×, so no node can
+    /// ever finish a join), and the pruning horizon caps its ladder at 2^12 against this preset's
+    /// 2^17. Conflating the two questions is how a test preset reaches a network.
+    #[test]
+    fn only_the_120_second_cadence_may_carry_value() {
+        let two_minute = PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
+        two_minute
+            .validate_for_value_network_v1(&BlockrateParams::new_two_minute_bps())
+            .expect("the frozen cadence is the admissible one");
+
+        let deci = PalwScheduleParamsV1::stage1_defaults_deci_bps();
+        deci.validate(&BlockrateParams::new_deci_bps()).expect("deci-bps is WELL-FORMED");
+        assert!(
+            matches!(
+                deci.validate_for_value_network_v1(&BlockrateParams::new_deci_bps()),
+                Err(PalwScheduleError::CadenceNotFrozen { required_ms: PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS, .. })
+            ),
+            "a well-formed test preset must still be refused for a value network"
+        );
+
+        // And the check is on the CADENCE, not on which preset was passed: keeping the admissible
+        // windows and shortening the interval is refused, and refused with THIS error rather than
+        // the window-inequality one those windows would also trip on a 10 s chain. The order in
+        // `validate_for_value_network_v1` is what decides that, so it is asserted, not assumed —
+        // a pruning-depth complaint reads as "widen a window", the one repair that cannot work.
+        assert!(matches!(
+            two_minute.validate_for_value_network_v1(&BlockrateParams::new_deci_bps()),
+            Err(PalwScheduleError::CadenceNotFrozen { got_ms: 10_000, .. })
+        ));
+        assert!(
+            matches!(two_minute.validate(&BlockrateParams::new_deci_bps()), Err(PalwScheduleError::WindowInequalityViolated { .. })),
+            "the window error this shadows is real — which is exactly why the cadence check runs first"
         );
     }
 
