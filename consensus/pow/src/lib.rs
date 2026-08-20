@@ -14,10 +14,12 @@ use crate::matrix::Matrix;
 use kaspa_consensus_core::{
     BlockLevel, hashing,
     header::Header,
+    palw_attempt_v2::{PALW_ATTEMPT_V2_L1_TAG_BYTES, PalwAttemptEnvelopeV2, challenge_v2, commitment_root_v2, l1_tag_v2},
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA,
-        POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES,
-        PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_LLM,
+        POW_ALGO_ID_PALW_OLLAMA, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES,
+        POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1,
+        l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};
