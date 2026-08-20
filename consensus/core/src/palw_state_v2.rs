@@ -354,14 +354,21 @@ pub enum PalwClassStatusV2 {
 
 /// The class's PWU rule — what Decision 6 item 6 checks an attempt's claimed `pwu` against.
 ///
-/// The real per-class PWU DERIVATION is ADR-0039's still-open item, and ADR-0042 requires it
-/// before any class carries weight; until that record lands, the only shape a registration can
-/// commit to is a ceiling. The enum exists so the derivation arrives as a new variant instead of
-/// a schema break — and so admission can already refuse a claim no rule would ever license.
+/// The derivation record ADR-0039 left open and ADR-0042 required "before any class carries
+/// weight" is ADR-0045 Decision 1, and it is the second variant. `MaxPerAttempt` survives as
+/// pre-derivation scaffolding — fixtures and cheap test classes need a shape whose pwu they can
+/// choose — but a value network registers only `DerivedV1` classes, and the register says so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwPwuRuleV2 {
     /// An attempt may claim at most this many pwu (and at least 1, enforced statelessly).
     MaxPerAttempt(u64),
+    /// ADR-0045 Decision 1: an attempt's `pwu` has exactly ONE legal value —
+    /// `palw_pwu_v1(class_target at the candidate point, pwu_per_inference)` — and admission
+    /// item 6 is equality, not a bound. Neither factor is a miner input: the target is rooted
+    /// candidate state (which is what voids the ADR-0039 amendment's altitude objection), and
+    /// `pwu_per_inference` is the registered normative operation count of one canonical
+    /// inference — the class's step-leaf count, the same number the court's ladder walks.
+    DerivedV1 { pwu_per_inference: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -644,6 +651,12 @@ pub enum PalwStateV2Error {
     EmptyOperatorKey(PalwBondKeyV2),
     #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
     ZeroSlashValue(Hash64),
+    #[error(
+        "class {0} was registered with a zero pwu_per_inference — a class whose canonical inference costs nothing is not a PALW class"
+    )]
+    ZeroPwuPerInference(Hash64),
+    #[error("class {0} was registered with a zero pwu ceiling — a rule that licenses no attempt is a frozen class in costume")]
+    ZeroPwuCeiling(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
     Retarget(String),
 }
@@ -1603,6 +1616,17 @@ fn apply_object(
             // cheap class, it is an unbonded one.
             if *slash_value_per_pwu == 0 {
                 return Err(PalwStateV2Error::ZeroSlashValue(*class_id));
+            }
+            // ADR-0045 Decision 1: both rule shapes must license SOMETHING. A `DerivedV1` with a
+            // zero per-inference cost would derive pwu = 0 for every attempt while the stateless
+            // layer requires pwu ≥ 1 — a class nobody can ever mine, registered as if it worked.
+            // A zero ceiling is the same dead class in the older costume.
+            match pwu_rule {
+                PalwPwuRuleV2::MaxPerAttempt(0) => return Err(PalwStateV2Error::ZeroPwuCeiling(*class_id)),
+                PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 0 } => {
+                    return Err(PalwStateV2Error::ZeroPwuPerInference(*class_id));
+                }
+                _ => {}
             }
             builder.write_class(
                 *class_id,
@@ -3531,6 +3555,31 @@ mod tests {
             None,
         );
         assert!(matches!(err, Err(PalwStateV2Error::ZeroClassTarget(_))));
+        // ADR-0045 Decision 1: both rule shapes must license something. A zero per-inference
+        // cost derives pwu = 0 against a stateless floor of 1 — a class nobody can mine; a zero
+        // ceiling is the same dead class in the older costume.
+        for (rule, name) in [
+            (PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 0 }, "zero per-inference cost"),
+            (PalwPwuRuleV2::MaxPerAttempt(0), "zero ceiling"),
+        ] {
+            let err = apply_palw_transition_v2(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &[PalwConsensusObjectV2::ClassRegistered {
+                    class_id: h64(9),
+                    artifact_root: h64(19),
+                    slash_value_per_pwu: 1,
+                    pwu_rule: rule,
+                    initial_target: u128::MAX / 2,
+                }],
+                None,
+            );
+            assert!(
+                matches!(err, Err(PalwStateV2Error::ZeroPwuPerInference(_)) | Err(PalwStateV2Error::ZeroPwuCeiling(_))),
+                "{name} must refuse registration"
+            );
+        }
     }
 
     // ---- params ----
