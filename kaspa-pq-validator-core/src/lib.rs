@@ -261,11 +261,25 @@ impl ValidatorKey {
     /// consensus will reject only burns an attempt, and doing it silently makes the miner look
     /// broken rather than misconfigured. `signature` on the input is ignored — pass anything.
     ///
-    /// **What this does not check, on purpose**: that `executor_bond_outpoint` is a bond this key
-    /// backs. This process does not hold the bond registry, and guessing would be worse than not
-    /// answering — a signature over a foreign bond simply fails verification at admission, because
-    /// the registry resolves the key from the bond rather than from the commitment. The failure is
-    /// a rejected block, not a loss.
+    /// **What this does not check**: that `executor_bond_outpoint` is a bond this key backs. This
+    /// process does not hold the bond registry.
+    ///
+    /// **CORRECTION (2026-08-19, external audit P0-2).** This paragraph said the omission was safe
+    /// because "a signature over a foreign bond simply fails verification at admission, because the
+    /// registry resolves the key from the bond". **That is false.**
+    /// `check_palw_block_admission_v1` verifies shape, that the named bond is Active, the class and
+    /// PWU claim, and the ticket — and never verifies this signature at all. So today an attacker
+    /// needs no key: naming any Active bond outpoint and attaching bytes of the right length passes
+    /// W8, and the signature this function produces is not what admits a block.
+    ///
+    /// The claim was written the same day as the code and was not checked against the admission
+    /// path it named. It is left here rather than deleted because the failure mode — asserting a
+    /// safety property held by a DIFFERENT function without reading that function — is worth more
+    /// as a marker than a clean doc is.
+    ///
+    /// Until admission verifies commitment signatures against the active bond's `validator_pubkey`
+    /// under [`PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT`], the typed-call discipline above protects
+    /// this KEY from misuse and protects nothing about who may produce a block.
     pub fn sign_palw_block_commitment_v1(
         &self,
         network_id: &[u8],

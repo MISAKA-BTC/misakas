@@ -545,6 +545,37 @@ the bond registry, and a signature over a foreign bond simply fails at admission
 registry resolves the key from the bond rather than from the commitment. That failure is a rejected
 block, not a loss.
 
+### External audit, 2026-08-19: NO-GO — and what the status table below does not mean
+
+An independent audit of this commit returned **NO-GO with ten independent activation blockers**
+(`docs/palw-critical-audit-2026-08-19-ja.md`). Four were re-verified on this side by running the
+code the auditor could not run, and all four hold. **Three of them are lines written the same day as
+the status table below**, and a fourth invalidates a safety claim made in that day's commits:
+
+| | |
+| --- | --- |
+| **P0-1** commitment is not bound to the PoW ticket | one PoW solution → unlimited distinct block identities |
+| **P0-2** the commitment signature is never verified at admission | W8 becomes "name any Active bond", not "hold a bond" |
+| **P0-3** a fresh tip can never resolve | PALW fork choice never fires; every contest falls back to blue work |
+| **P0-4** candidate weight depends on the reading node's sink | equal DAGs, different weights — the W3 violation, i.e. partition |
+| **P0-6** conviction/equivocation verified under the receipt context | a bond is slashed while its block keeps its weight |
+| **P0-7** executor exclusion compares an outpoint to a key hash | the producer sits on its own verification panel |
+| P0-5, P0-8, P0-9, P0-10 | two fork-choice authorities; a court that cannot adjudicate; an incomplete ladder; unbounded bond exposure |
+
+**So read the table below as "each decision has a code path", never as "PALW may be switched on".**
+The five fences stay `None`. The audit's own conclusion is the operative one: these do not close with
+small patches, because admission, fork choice, court and economics have to be closed together — and
+enabling one fence at a time is specifically what must not be done, since each defect is currently
+masked by another (every node still re-runs the LLM, which is itself a W1 violation, and that is
+what makes fake-root grinding expensive today).
+
+**The methodological finding matters as much as the list.** Decisions A–H were reported implemented
+and tested on 2026-08-19, with 932+207 tests passing and zero warnings, and the same day's code
+contained four P0s. Tests that pass are not evidence of soundness at a seam the tests do not model;
+this ADR's own record of four consensus defects found by reading rather than by testing (the late
+receipt, the late `Open`, the unbonding erosion, the carriage chain-scope) says the same thing from
+the other direction. **Activation requires an audit that clears, not a suite that passes.**
+
 ### Implementation status — Decisions A–D and H, 2026-08-19
 
 Every decision now has a code path. What each rests on is stated rather than implied:
