@@ -63,6 +63,7 @@ impl From<(HeaderFormat, &Header)> for protowire::BlockHeader {
             // header-hash preimage on every version, so it MUST survive relay/IBD
             // (the powAlgoId / EVM-commitment split-brain precedent).
             overlay_commitment_root: Some(item.overlay_commitment_root.into()),
+            palw_state_root: Some(item.palw_state_root.into()),
             // MISAKA ADR-0038: the post-PoW PALW commitment is part of the
             // block-identity preimage on PALW algo ids — dropping it on relay
             // would split-brain the identity hash between peers.
@@ -146,6 +147,7 @@ impl TryFrom<Versioned<protowire::BlockHeader>> for Header {
         // old peer ⇒ zero; on a re-genesis chain a zero would simply fail the
         // header-hash check, never silently fork).
         .with_overlay_commitment(item.overlay_commitment_root.map(BlockHash::try_from).transpose()?.unwrap_or_default())
+        .with_palw_state_root(item.palw_state_root.map(BlockHash::try_from).transpose()?.unwrap_or_default())
         // MISAKA ADR-0038: restore the post-PoW PALW commitment BEFORE the
         // identity re-hash — on a PALW header it is part of the preimage.
         .with_palw_commitment(item.palw_commitment))

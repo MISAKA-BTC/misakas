@@ -108,6 +108,11 @@ message BlockHeader{
   // the block-identity preimage on PALW algo ids, so it MUST survive P2P
   // relay/IBD (the powAlgoId split-brain precedent). Empty on non-PALW headers.
   bytes palwCommitment = 19;
+  // ADR-0042 Unit C step 5: the PALW V2 chain-state root after this block's transition. PRE-PoW
+  // and part of the header-hash preimage on V2-lineage algo ids, so it MUST survive P2P relay/IBD
+  // or peers compute mismatching block hashes (the powAlgoId split-brain precedent). Zero on every
+  // header of every network that keeps no V2 state, where the preimage gate reads it as absent.
+  Hash palwStateRoot = 20;
 }
 
 message BlockLevelParents {

@@ -332,6 +332,7 @@ impl TryCastFromJs for Header {
                     // ADR-0022: optional JS overlay-commitment field; default to zero
                     // (a WASM getter/setter is a later follow-on, like the EVM fields).
                     overlay_commitment_root: Default::default(),
+                    palw_state_root: Default::default(),
                 };
 
                 Ok(header.into())

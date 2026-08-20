@@ -1175,6 +1175,7 @@ async fn difficulty_test() {
             evm_commitment_root: Default::default(),
             // ADR-0022: overlay commitment defaults to zero in this fake genesis.
             overlay_commitment_root: Default::default(),
+            palw_state_root: Default::default(),
             // ADR-0038: a kHeavyHash header MUST carry an empty commitment
             // (`check_palw_commitment_shape` refuses any other value there).
             palw_commitment: Vec::new(),

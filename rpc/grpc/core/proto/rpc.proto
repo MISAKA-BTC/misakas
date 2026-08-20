@@ -75,6 +75,10 @@ message RpcBlockHeader {
   // on PALW algo ids — MUST survive the submit_block round-trip or a mined
   // PALW block loses its commitment. Empty on non-PALW headers.
   string palwCommitment = 20;
+  // ADR-0042 Unit C step 5: the PALW V2 chain-state root (128-char hex), PRE-PoW and part of the
+  // header-hash preimage on V2-lineage algo ids — MUST survive the mining round-trip or a mined
+  // V2 block loses the root its own chain committed to. Zero on non-V2 headers.
+  string palwStateRoot = 21;
 }
 
 message RpcBlockLevelParents {

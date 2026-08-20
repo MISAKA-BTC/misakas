@@ -205,6 +205,34 @@ pub struct Header {
     /// hard fork — every genesis hash is recomputed (ADR-0022 §8).
     pub overlay_commitment_root: Hash64,
 
+    /// ADR-0042 Decision 5 / Unit C step 5: the `PalwChainStateV2` state root this block's
+    /// transition STARTS FROM — the state as of its selected parent.
+    ///
+    /// **The parent's root, not this block's own, and that is forced rather than chosen.** The
+    /// post-state root is a function of `PalwBlockContextV2`, whose `block` field is this header's
+    /// own hash; putting it in the preimage makes the hash a function of the root and the root a
+    /// function of the hash. Measured, not reasoned about: a first version committed the
+    /// post-state and every block was disqualified at its own validation, because the template
+    /// computed the root under the pre-stamp hash and the validator recomputed it under the final
+    /// one.
+    ///
+    /// Committing the parent's root is non-circular and still binding: a chain of headers pins the
+    /// whole state history one block late, and any node can check each block against the state its
+    /// own walk reached before applying it. The tip's own state is committed by the NEXT block,
+    /// which is the standard cost of a non-circular state commitment.
+    ///
+    /// **Pre-PoW, unlike `palw_commitment`.** That field's root is a function of the winning
+    /// inference and therefore of the winning nonce, so it cannot precede the grind. The parent's
+    /// state root is fixed before this block exists at all, so it sits in the pre-PoW digest,
+    /// where a miner cannot change it after solving.
+    ///
+    /// Double-gated in the preimage exactly as `palw_commitment` is, for exactly its reason: by
+    /// ALGO (only V2-lineage ids hash it) and by ZERO (a default root contributes nothing). Both
+    /// gates are functions of committed bytes, so inclusion stays deterministic for every node,
+    /// and every shipped network's preimage — and therefore its genesis hash — is byte-identical
+    /// to what it was before this field existed.
+    pub palw_state_root: Hash64,
+
     /// MISAKA ADR-0038 Decision A: the block-carried PALW commitment (the
     /// PBC1-encoded [`crate::palw_block_commitment::PalwBlockCommitmentV1`]),
     /// opaque bytes at the header layer. This is a **post-PoW** field like
@@ -266,6 +294,7 @@ impl Header {
             // commitments it is hashed unconditionally, so this default participates
             // in the header hash (genesis recompute, ADR-0022 §8).
             overlay_commitment_root: Hash64::default(),
+            palw_state_root: Hash64::default(),
             // ADR-0038: empty by default (the only legal value on non-PALW
             // headers); the PALW mining path sets it via `with_palw_commitment`
             // after the winning nonce is known.
@@ -313,6 +342,15 @@ impl Header {
     /// re-finalize the header hash. Consuming builder used by the block-template
     /// path (and genesis construction) to carry the `OverlaySnapshot` digest.
     /// The field is hashed on every version, so this always changes the hash.
+    /// ADR-0042 Unit C step 5. Re-finalizes over the full preimage, like every other `with_*`
+    /// here — the root is IN the preimage on a V2-lineage header, so setting it without
+    /// re-finalizing would leave a header whose stored hash is not its own.
+    pub fn with_palw_state_root(mut self, palw_state_root: Hash64) -> Self {
+        self.palw_state_root = palw_state_root;
+        self.finalize();
+        self
+    }
+
     pub fn with_overlay_commitment(mut self, overlay_commitment_root: Hash64) -> Self {
         self.overlay_commitment_root = overlay_commitment_root;
         self.finalize();
@@ -355,6 +393,7 @@ impl Header {
             evm_commitment_root: Default::default(),
             // ADR-0022: hashed unconditionally; default to zero for this test ctor.
             overlay_commitment_root: Default::default(),
+            palw_state_root: Default::default(),
             // ADR-0038: kHeavyHash ctor — empty is the only legal value.
             palw_commitment: Vec::new(),
         }

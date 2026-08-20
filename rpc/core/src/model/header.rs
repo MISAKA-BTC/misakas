@@ -49,6 +49,9 @@ pub struct RpcRawHeader {
     /// mining (get_block_template → submit_block) and block RPCs — the
     /// pow_algo_id / EVM-commitment precedent.
     pub overlay_commitment_root: Hash64,
+    /// ADR-0042 Unit C step 5: the PALW V2 chain-state root. Pre-PoW and part of the header-hash
+    /// preimage on V2-lineage algo ids, so it must survive the mining round-trip.
+    pub palw_state_root: Hash64,
     /// MISAKA ADR-0038: the post-PoW PALW block commitment (PBC1 bytes). Part of
     /// the block-identity preimage on PALW algo ids, and set by the miner AFTER
     /// the winning nonce — so it MUST round-trip through submit_block or a mined
@@ -89,6 +92,9 @@ pub struct RpcHeader {
     /// mining (get_block_template → submit_block) and block RPCs — the
     /// pow_algo_id / EVM-commitment precedent.
     pub overlay_commitment_root: Hash64,
+    /// ADR-0042 Unit C step 5: the PALW V2 chain-state root. Pre-PoW and part of the header-hash
+    /// preimage on V2-lineage algo ids, so it must survive the mining round-trip.
+    pub palw_state_root: Hash64,
     /// MISAKA ADR-0038: the post-PoW PALW block commitment (see `RpcRawHeader`).
     #[serde(default)]
     pub palw_commitment: Vec<u8>,
@@ -126,6 +132,7 @@ impl From<Header> for RpcHeader {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         }
     }
@@ -151,6 +158,7 @@ impl From<&Header> for RpcHeader {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         }
     }
@@ -180,6 +188,7 @@ impl TryFrom<RpcHeader> for Header {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         })
     }
@@ -210,6 +219,7 @@ impl TryFrom<&RpcHeader> for Header {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         })
     }
@@ -217,7 +227,7 @@ impl TryFrom<&RpcHeader> for Header {
 
 impl Serializer for RpcHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
 
         store!(BlockHash, &self.hash, writer)?;
         store!(u16, &self.version, writer)?;
@@ -241,6 +251,8 @@ impl Serializer for RpcHeader {
         store!(Hash64, &self.overlay_commitment_root, writer)?;
         // MISAKA ADR-0038 (serializer v5): the post-PoW PALW block commitment.
         store!(Vec<u8>, &self.palw_commitment, writer)?;
+        // ADR-0042 Unit C (serializer v6): the PALW V2 state root.
+        store!(Hash64, &self.palw_state_root, writer)?;
 
         Ok(())
     }
@@ -279,6 +291,9 @@ impl Deserializer for RpcHeader {
         let overlay_commitment_root = if serializer_version >= 4 { load!(Hash64, reader)? } else { Default::default() };
         // MISAKA ADR-0038: palw commitment added in serializer v5; older peers ⇒ empty.
         let palw_commitment = if serializer_version >= 5 { load!(Vec<u8>, reader)? } else { Vec::new() };
+        // ADR-0042 Unit C: added in serializer v6; older peers ⇒ the zero root, which is exactly
+        // what the preimage gate reads as "this header keeps no V2 state".
+        let palw_state_root = if serializer_version >= 6 { load!(Hash64, reader)? } else { Default::default() };
 
         Ok(Self {
             hash,
@@ -299,6 +314,7 @@ impl Deserializer for RpcHeader {
             evm_commitment_root,
             overlay_commitment_root,
             palw_commitment,
+            palw_state_root,
         })
     }
 }
@@ -328,6 +344,7 @@ impl TryFrom<RpcRawHeader> for Header {
         .with_evm_commitment(header.evm_commitment_root)
         // kaspa-pq ADR-0022: restore the overlay-state commitment (re-genesis preimage).
         .with_overlay_commitment(header.overlay_commitment_root)
+        .with_palw_state_root(header.palw_state_root)
         // MISAKA ADR-0038: restore the post-PoW PALW commitment (submit_block path).
         .with_palw_commitment(header.palw_commitment.clone()))
     }
@@ -358,6 +375,7 @@ impl TryFrom<&RpcRawHeader> for Header {
         .with_evm_commitment(header.evm_commitment_root)
         // kaspa-pq ADR-0022: restore the overlay-state commitment (re-genesis preimage).
         .with_overlay_commitment(header.overlay_commitment_root)
+        .with_palw_state_root(header.palw_state_root)
         // MISAKA ADR-0038: restore the post-PoW PALW commitment (submit_block path).
         .with_palw_commitment(header.palw_commitment.clone()))
     }
@@ -382,6 +400,7 @@ impl From<&Header> for RpcRawHeader {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         }
     }
@@ -406,6 +425,7 @@ impl From<Header> for RpcRawHeader {
             evm_payload_hash: header.evm_payload_hash,
             evm_commitment_root: header.evm_commitment_root,
             overlay_commitment_root: header.overlay_commitment_root,
+            palw_state_root: header.palw_state_root,
             palw_commitment: header.palw_commitment.clone(),
         }
     }
@@ -413,7 +433,7 @@ impl From<Header> for RpcRawHeader {
 
 impl Serializer for RpcRawHeader {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
 
         store!(u16, &self.version, writer)?;
         store!(Vec<Vec<BlockHash>>, &self.parents_by_level, writer)?;
@@ -436,6 +456,8 @@ impl Serializer for RpcRawHeader {
         store!(Hash64, &self.overlay_commitment_root, writer)?;
         // MISAKA ADR-0038 (serializer v5): the post-PoW PALW block commitment.
         store!(Vec<u8>, &self.palw_commitment, writer)?;
+        // ADR-0042 Unit C (serializer v6): the PALW V2 state root.
+        store!(Hash64, &self.palw_state_root, writer)?;
 
         Ok(())
     }
@@ -473,6 +495,9 @@ impl Deserializer for RpcRawHeader {
         let overlay_commitment_root = if serializer_version >= 4 { load!(Hash64, reader)? } else { Default::default() };
         // MISAKA ADR-0038: palw commitment added in serializer v5; older peers ⇒ empty.
         let palw_commitment = if serializer_version >= 5 { load!(Vec<u8>, reader)? } else { Vec::new() };
+        // ADR-0042 Unit C: added in serializer v6; older peers ⇒ the zero root, which is exactly
+        // what the preimage gate reads as "this header keeps no V2 state".
+        let palw_state_root = if serializer_version >= 6 { load!(Hash64, reader)? } else { Default::default() };
 
         Ok(Self {
             version,
@@ -492,6 +517,7 @@ impl Deserializer for RpcRawHeader {
             evm_commitment_root,
             overlay_commitment_root,
             palw_commitment,
+            palw_state_root,
         })
     }
 }

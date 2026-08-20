@@ -87,6 +87,19 @@ fn write_header_preimage<H: HasherBase>(
     // identity is recomputed (ADR-0022 §8). Frozen byte position (last).
     hasher.update(header.overlay_commitment_root);
 
+    // ADR-0042 Unit C step 5: the PALW V2 state root. Double-gated on the `palw_commitment`
+    // pattern and for its reasons:
+    //   * by ALGO — only V2-lineage headers (`pow_algo_id` 6/7) hash it, and the id is already in
+    //     the preimage above, so inclusion is deterministic from committed bytes;
+    //   * by ZERO — a default root contributes NOTHING, so a network that does not keep V2 state
+    //     has a preimage byte-identical to the pre-field protocol. No genesis hash moves.
+    // Unlike `palw_commitment` this is PRE-PoW: the root is a function of the parent state, the
+    // block's accepted transactions and its (daa_score, blue_score), all fixed before the grind,
+    // so a miner cannot change it after solving. Frozen byte position (last).
+    if crate::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id) && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
+        hasher.update(header.palw_state_root);
+    }
+
     // MISAKA ADR-0038 Decision A: the PALW block commitment. Double-gated:
     //   * by ALGO — only PALW headers (`pow_algo_id` 4/5) hash it, so every
     //     hash-algo network's preimage (and genesis hash) is byte-identical to

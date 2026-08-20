@@ -420,6 +420,13 @@ pub enum PowLayer0Error {
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
 /// hash) a `palw_commitment`, and the gate `hashing::header::write_header_preimage` reads.
 #[inline]
+/// The V2-LINEAGE ids: the attempt lane and the receipt lane. Distinct from
+/// [`is_palw_algo_id`], which is the whole PALW family including the V1 lineage — these are the
+/// two ids that carry a `PalwChainStateV2`, and the ones the state root's preimage gate reads.
+pub fn is_palw_v2_algo_id(algo_id: u8) -> bool {
+    algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+}
+
 pub fn is_palw_algo_id(algo_id: u8) -> bool {
     algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA

@@ -323,6 +323,69 @@ async fn palw_v2_state_walks_with_the_utxo_diff() {
     assert_eq!(folded.state_root(), state.state_root(), "folding the deltas reproduces the materialized tip");
 }
 
+/// **Unit C step 5: the header's committed state root is CHECKED, in both of the two ways a
+/// wrong one can be wrong.**
+///
+/// A commitment nothing verifies is a field, not a commitment. Two refusals, and the first is the
+/// stronger one:
+///
+/// 1. **Moving the root alone is refused at the door.** The root is in the PRE-PoW preimage, so
+///    moving it moves `pre_pow_hash`, so the carried attempt's challenge is no longer the one its
+///    header position derives. A block cannot claim a wrong root and keep a valid ticket.
+/// 2. **Re-mining the ticket for the new position gets a valid block with a lying root**, and
+///    that is what the chain-level check is for: it never becomes the sink. Asserted the way this
+///    file's existing disqualification tests assert it — the sink does not move — because "did
+///    not become the selected chain" is the property, and a status code is only its shadow.
+#[tokio::test]
+async fn a_block_committing_to_the_wrong_palw_state_root_is_disqualified() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let sink_before = ctx.consensus.get_sink();
+
+    // The honest template commits to the parent's root — the state this chain really is at.
+    let honest = ctx.build_block_template(7, ctx.simulated_time + 1);
+    assert_ne!(honest.block.header.palw_state_root, kaspa_hashes::ZERO_HASH64, "a V2 template commits to a real root");
+
+    // (1) Moving the commitment alone breaks the position binding.
+    let mut liar = honest.block.clone();
+    liar.header.palw_state_root = kaspa_hashes::Hash64::from_u64_word(0xBAD);
+    liar.header.finalize();
+    assert_ne!(liar.header.hash, honest.block.header.hash, "moving the commitment moves the identity");
+    match ctx.consensus.validate_and_insert_block(liar.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 6, .. }) => {}
+        other => panic!("a moved state root must break the position binding, got {other:?}"),
+    }
+
+    // (2) A block that re-mines its ticket for the new position: valid carriage, lying root. It is
+    //     a well-formed block, and it must never become the chain.
+    let mut forger = honest.block.clone();
+    forger.header.palw_state_root = kaspa_hashes::Hash64::from_u64_word(0xBAD);
+    forger.header.palw_commitment = ctx.consensus.palw_v2_test_carriage(&forger.header);
+    forger.header.finalize();
+    let forger_hash = forger.header.hash;
+    ctx.validate_and_insert_block(forger.to_immutable()).await;
+    assert_ne!(forger_hash, sink_before);
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "a block whose committed root is not this chain's cannot become the sink");
+
+    // …and the honest sibling, built the same way and differing only in the root, DOES advance the
+    // chain — so the refusal is about the commitment and not about V2 blocks in general.
+    let honest_hash = honest.block.header.hash;
+    ctx.validate_and_insert_block(honest.block.to_immutable()).await;
+    assert_eq!(ctx.consensus.get_sink(), honest_hash, "the honest commitment advances the chain");
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {

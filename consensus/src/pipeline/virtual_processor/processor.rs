@@ -351,6 +351,12 @@ pub struct VirtualStateProcessor {
     /// a dead handle in a blue-work pipeline would be surface without semantics (ADR-0042
     /// Decision 9's own words about the fork-choice sites).
     pub(super) palw_state_params_v2: Option<kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
+    /// ADR-0044's free-prompt bundle, `Some` on the same networks as `palw_state_params_v2`. It is
+    /// what turns an accepted transaction into a consensus object (Unit C step 3).
+    pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
+    /// The network's own name bytes — the ONE source `palw_network_domain_v2` is derived from, so
+    /// the domain a payload must bind and the domain the Layer-0 digest binds are one fact.
+    pub(super) network_id_bytes: Vec<u8>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
     /// `update_dns_state` and written in the same batch as the `DnsState`.
@@ -640,6 +646,11 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
                 _ => None,
             },
+            palw_freeprompt_params_v3: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.freeprompt.clone()),
+                _ => None,
+            },
+            network_id_bytes: params.net.to_string().into_bytes(),
             dns_state_store: storage.dns_state_store.clone(),
             vlt_activation_store: storage.vlt_activation_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
@@ -1095,34 +1106,51 @@ impl VirtualStateProcessor {
                     } else {
                         debug!("VIRTUAL PROCESSOR, UTXO validated for {current}");
 
-                        // Accumulate the diff
-                        diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
-                        // Update the diff point
-                        diff_point = current;
                         // Unit C, first-validation leg: RUN the transition. A failure here means
                         // block validation admitted something the state machine refuses — a
                         // rule/state divergence, which no local handling makes safe — so the block
                         // is disqualified rather than skipped, and `palw_state` is moved only on
-                        // success. The object list is empty until the carriage-to-object seam
-                        // lands (Unit C step 3); an empty list is the honest content of a block
-                        // that carries no PALW transactions, which is every block on every network
-                        // that exists today.
+                        // success.
                         let palw_v2_staged = match palw_state.as_mut() {
                             Some(state) => {
                                 let state_params =
                                     self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
+                                // Unit C step 5: the header commits to the state this block's
+                                // transition STARTS from — the parent's root — so it is checked
+                                // BEFORE the transition runs, against the state this node's own
+                                // walk reached. Without it the root is something each node
+                                // computes privately and nobody can be held to.
+                                //
+                                // A mismatch disqualifies the block rather than the node: the
+                                // producer built on a state this chain does not have, and that is
+                                // a fact about the block.
+                                let parent_root = state.state_root();
+                                if header.palw_state_root != parent_root {
+                                    info!(
+                                        "Block {} is disqualified from virtual chain (PALW state root): committed {}, this chain is at {}",
+                                        current, header.palw_state_root, parent_root
+                                    );
+                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                    chain_disqualified_counter += 1;
+                                    continue;
+                                }
                                 let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                                     block: current,
                                     daa_score: header.daa_score,
                                     blue_score: header.blue_score,
                                 };
+                                // Unit C step 3: the block's own objects, in its own acceptance
+                                // order. Read from the acceptance data this validation just
+                                // produced rather than from the store — the store row is written
+                                // by the commit below, so reading it here would be reading a fact
+                                // that does not exist yet.
+                                let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data);
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
-                                    state, state_params, &point, &[], None,
+                                    state, state_params, &point, &objects, None,
                                 ) {
                                     Ok((next, delta)) => {
-                                        let root = next.state_root();
                                         *state = next;
-                                        Some((root, delta))
+                                        Some((state.state_root(), delta))
                                     }
                                     Err(palw_error) => {
                                         info!("Block {} is disqualified from virtual chain (PALW state): {}", current, palw_error);
@@ -1134,6 +1162,14 @@ impl VirtualStateProcessor {
                             }
                             None => None,
                         };
+                        // Everything that can disqualify has run. Only now does the walk MOVE —
+                        // `diff` and `diff_point` are advanced after the last refusal, not before
+                        // it. Advancing first was a real bug: a block disqualified afterwards left
+                        // `diff_point` naming a block whose UTXO data was never committed, and the
+                        // next `utxo_multisets_store.get(new_sink)` panicked on the missing row.
+                        // The order is the invariant, not the comment.
+                        diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
+                        diff_point = current;
                         if track_bonds {
                             // Advance the bond view by THIS block's mutations,
                             // derived from the in-memory acceptance data (its
@@ -3318,6 +3354,38 @@ impl VirtualStateProcessor {
     /// reaches the pruning point). Returning empty is semantically correct — a block with no
     /// accountable acceptance data contributes no txs; a genuine inconsistency on a non-pruned block
     /// surfaces in the trace log instead of crashing the virtual processor.
+    /// ADR-0042 Unit C step 3: this chain block's PALW consensus objects, in the block's own
+    /// deterministic acceptance order.
+    ///
+    /// The order is the acceptance order and nothing else, because the transition FOLDS these and
+    /// a fold is order-dependent: two nodes reading one block's objects in different orders would
+    /// reach different state roots for one chain, which is the divergence class Decision 5 exists
+    /// to make unrepresentable. `accepted_txs_from_acceptance_data` already produces that order.
+    ///
+    /// `skipped` carriers are logged rather than dropped in silence — a transaction routed to the
+    /// free-prompt subnetwork that produces no object is either a mistake someone should see or
+    /// an attack someone should count, and a silent drop is how neither gets noticed.
+    fn palw_v2_objects_of_block(
+        &self,
+        acceptance: &AcceptanceData,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
+            return Vec::new();
+        };
+        let txs = self.accepted_txs_from_acceptance_data(acceptance);
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+            &txs,
+            network_domain,
+            freeprompt,
+            kaspa_consensus_core::BlockHash::default(),
+        );
+        for (carrier, reason) in &extraction.skipped {
+            info!("[palw-fp] carrier {carrier} produced no object: {reason}");
+        }
+        extraction.objects.into_iter().map(|carried| carried.object).collect()
+    }
+
     pub(super) fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {
         match self.acceptance_data_store.get(chain_block) {
             Ok(ad) => self.accepted_txs_from_acceptance_data(&ad),
@@ -8137,6 +8205,36 @@ impl VirtualStateProcessor {
             header.with_overlay_commitment(overlay_root)
         } else {
             header
+        };
+        // ADR-0042 Unit C step 5: the template commits to the state root this block's transition
+        // will produce, computed from the SAME walked state the validation path holds — so a block
+        // mined from this template reproduces the root byte-for-byte (construction == validation,
+        // the `overlay_commitment_root` discipline). Inert (header unchanged, root stays zero)
+        // wherever the mode carries no V2 bundle, where the preimage gate reads zero as absent.
+        let header = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_record().ok().flatten()) {
+            (Some(state_params), Some(_)) => {
+                let (_, parent_state) = self
+                    .palw_state_v2_store
+                    .read()
+                    .load_tip(state_params)
+                    .expect("a stored V2 tip must load under its own committed root")
+                    .expect("the tip record exists");
+                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: header.hash,
+                    daa_score: header.daa_score,
+                    blue_score: header.blue_score,
+                };
+                // The template's own transactions are not accepted yet — acceptance is a
+                // chain-context fact this block's own validation produces — so the objects are
+                // empty here for the same reason the coinbase cannot commit to its own acceptance.
+                // A template that guessed would be a template whose block fails its own check.
+                let _ = (state_params, point);
+                // The PARENT's root: what this block's transition starts from. Non-circular by
+                // construction — it is fixed before this header exists, so stamping it cannot
+                // move the hash it would then have to match.
+                header.with_palw_state_root(parent_state.state_root())
+            }
+            _ => header,
         };
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
