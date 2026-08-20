@@ -668,6 +668,50 @@ mod tests {
         assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
 
+    /// **G5: two nodes of this profile can never be recomputed, and the coverage gate cannot see
+    /// it.**
+    ///
+    /// `base0_profile_names_only_adjudicable_kernels` passes because the gate compares kernel
+    /// IDs. It never asks whether the kernel can serve the NODE's operand shape — and BASE-0's
+    /// `MatMulQuant` resolves its second operand only through the weight oracle, so a node with
+    /// no `weight_name` has nothing to multiply by, and it refuses `KvScaled` widths outright.
+    /// Attention is exactly those two shapes: Q·Kᵀ multiplies an activation by the K cache and
+    /// P·V by the V cache, neither of which is a registered weight.
+    ///
+    /// So a class can be certified "100% covered" while two of its eighteen per-layer nodes are
+    /// structurally unadjudicable. This test states which nodes those are, so the claim is
+    /// measured rather than argued, and it will have to be rewritten when G5 is closed.
+    #[test]
+    fn g5_the_attention_matmuls_are_not_adjudicable_and_coverage_does_not_notice() {
+        let p = base0_profile_v1(geometry()).unwrap();
+        let catalogued = crate::palw_step_refute::catalogued_kernel_ids_v1();
+
+        let matmul = kernel_semantics_id_v1(KDESC_BASE0_MATMUL);
+        let unservable: Vec<usize> = p
+            .attn_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.kernel_semantics_id == matmul)
+            .filter(|(_, n)| {
+                // Either shape the BASE-0 matmul refuses: no registered weight to multiply by,
+                // or a width it will not derive.
+                n.weight_name.is_empty() || matches!(n.out_len, PalwStepOutLenV1::KvScaled { .. })
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(unservable, vec![5, 7], "the scores matmul and the P.V matmul, and only those");
+
+        // Both name a CATALOGUED kernel, which is why the gate is happy.
+        for slot in &unservable {
+            assert!(catalogued.contains(&p.attn_nodes[*slot].kernel_semantics_id));
+        }
+        assert!(
+            p.attn_nodes[5].weight_name.is_empty() && matches!(p.attn_nodes[5].out_len, PalwStepOutLenV1::KvScaled { .. }),
+            "the scores node hits both refusals at once"
+        );
+        assert!(p.attn_nodes[7].weight_name.is_empty(), "and P.V hits the operand one");
+    }
+
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0
     /// has exactly one weight type, and variance would mean it is not BASE-0.
     #[test]
