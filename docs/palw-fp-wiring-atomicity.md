@@ -98,6 +98,23 @@ Everything landed so far, and this list is the reason each piece was chosen:
 - Each is either unreachable from consensus or gated behind a mode no preset sets, and each
   brings its own test that the *next* layer must not break.
 
+## Pre-existing test-suite state, measured (so a wiring PR is not blamed for it)
+
+Measured 2026-08-20 on this branch AND on its base `palw-v2`, with identical results — these
+failures predate the free-prompt work and are not caused by it:
+
+| Suite | Result on `palw-freeprompt-v3` | Result on `palw-v2` (base) |
+|---|---|---|
+| `kaspa-consensus-core --lib` | 1063 passed, 0 failed | — (1046 before FP) |
+| every other workspace crate | passed | passed |
+| `kaspa-testing-integration --lib consensus_` | 18 passed, **2 failed** (`bounded_merge_depth_test`, `indirect_parents_test`) | 18 passed, **the same 2 failed** |
+| `kaspa-testing-integration --lib` (full, parallel) | aborts in the daemon tests | aborts likewise (different signal, same suite) |
+
+Anyone wiring Units A–D should re-measure this table first: the two red consensus-integration
+tests are the *existing* baseline, and the daemon-suite abort is an environment/harness issue in
+the same binary. A wiring PR is clean when it leaves this table unchanged, not when the suite is
+green.
+
 ## Sequencing note for the fleet drill (FP-09 stage 2)
 
 The drill needs Units A–D on a devnet preset carrying
