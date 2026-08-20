@@ -1546,17 +1546,33 @@ fn run_v3_job(trace_out: &Path) {
         trace_root,
         output_root: output_commitment_v2(&binding, &outputs, &rendered_output_hash_v2(&rendered)),
         schedule_root: schedule_commitment,
-        // **Deliberately null, and consensus refuses it.** The court binds a refutation to the
-        // claim's `committed_execution_root` (`PalwStepBindingV2`), which recomputes from the job
-        // context, both profiles, the leaf/checkpoint counts and their roots. This v3 path
-        // captures none of that — it runs the model and commits a schedule and a trace root — so
-        // there is no honest value to put here, and a fabricated one would be worse than none: it
-        // would make disputes fail in a way that looks like the producer winning them.
+        // **Deliberately null, and consensus refuses it — but the reason is NOT the one this
+        // comment used to give, and the correction matters.**
         //
-        // `apply_palw_transition_v3` refuses a free-prompt commitment with a null execution root
-        // (`UnadjudicableCommitment`), so this is fail-closed end to end rather than a hole. The
-        // remaining work is legs capture on this path; the v2-legs path already produces the
-        // binding this field wants.
+        // It said the v2-legs path "already produces the binding this field wants". It does not.
+        // The court binds a refutation to `PalwStepBindingV2::committed_execution_root`, which
+        // `execution_commitment_root_v2` builds from FOUR roots: the logits trace, the activation
+        // leg, a **v2** checkpoint leg (keyed differently from the v1 one and carrying a
+        // `state_chunk_map_id`), and a **step leg**. The v2-legs path produces the v1 composite —
+        // `execution_commitment_root_v1`, no step leg — so its root is a different value for a
+        // different purpose.
+        //
+        // **No worker path on this tree captures a step leg at all.** `PalwStepLegBuilderV1`
+        // wants one leaf per (call, node slot, position, tile) of every kernel invocation, and
+        // the shim exposes taps and logits, not per-kernel tile outputs. That is instrumentation
+        // this runtime does not have, and it is the same gap on BOTH lanes: an attempt envelope's
+        // `execution_root` is a value the miner supplies, bound into `attempt_id` and therefore
+        // into the PoW, but recomputed from a real execution by nothing.
+        //
+        // So the free-prompt lane's fail-closed refusal is not this lane being behind the attempt
+        // lane — it is the shared gap surfacing where a rule actually checks for it. A fabricated
+        // value would be strictly worse than none: it would make disputes fail in a way that looks
+        // like the producer winning them.
+        //
+        // What IS ready: `palw_fp_execution_v3` derives the context and the root from measured
+        // facts, so the day the step leg is captured this becomes
+        // `palw_fp_execution_root_v3(&ctx, &facts)` and nothing else moves. What is missing is the
+        // capture, in the shim.
         execution_root: Hash64::default(),
         trace_manifest_root,
         trace_chunk_count,

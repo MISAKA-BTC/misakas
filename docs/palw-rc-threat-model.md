@@ -210,6 +210,27 @@ honest "red (integration), lands in PR-N."
   is abandoned). **ADR-0042:** Decision 8. *(Runtime-removal half is Decision 4 / P0-W1 below —
   closed in PR-02.)*
 
+### P0-8b — nothing recomputes `execution_root` from a real execution (found 2026-08-20)
+
+- **Invariant:** the root the court binds a refutation to is a fact about an execution, not a
+  value its producer chose.
+- **Evidence:** `execution_commitment_root_v2` (`palw_step_leg.rs:481`) composes four roots
+  including a **step leg**; `PalwStepLegBuilderV1` wants one leaf per
+  `(call_index, node_slot, position, tile_index)`. The worker's v2-legs path builds
+  `execution_commitment_root_v1` — no step leg — and the shim exposes activation taps and logits
+  rows, not per-kernel tile outputs. Grep: `PalwStepBindingV2` has no producer outside tests.
+- **What it means on each lane.** The attempt envelope's `execution_root` is bound into
+  `attempt_id` and therefore into the PoW, so it is immutable after solving and unforgeable
+  against a DIFFERENT block — but it is whatever the miner wrote. On the free-prompt lane the
+  same gap is fail-closed and visible: `apply_palw_transition_v3` refuses a null root
+  (`UnadjudicableCommitment`), so no free-prompt claim can be admitted at all today. The quiet
+  lane is the worse one.
+- **Status:** **open — runtime instrumentation, not consensus.** The consensus half is done and
+  tested (`palw_fp_execution_v3`: the context derivation, the root by the court's own function,
+  and refusals for runs that could not have happened). The missing half is per-kernel tile
+  capture in the shim. Gates adjudicability on BOTH lanes, so it is a release-blocker for any
+  network that carries weight.
+
 ### P0-9 — bisection court incomplete (soundness + liveness)
 - **Invariant:** disputes terminate; deep fraud is prosecutable in-window.
 - **Evidence:** `palw_facts.rs:1866-1922`; `palw_schedule.rs:160-206` (10 rounds / 1024 steps);

@@ -239,10 +239,39 @@ schedule and a trace root, but captures no legs, so it has no `PalwStepBindingV2
 root from. It emits the null root deliberately rather than a fabricated one — a fabricated value
 would make disputes fail in a way that looks like the producer winning them.
 
-**The remaining work is legs capture on the free-prompt execution path.** The v2-legs path already
-produces the binding this field wants (`misaka-palw-worker` builds `PalwStepBindingV2` on its
-legs and open paths); the free-prompt path needs the same capture. Until then the chain refuses
-the claim at admission instead of at a dispute nobody can win, which is where a gap belongs.
+**Correction (2026-08-20): that is not the remaining work, and the sentence this replaces was
+wrong.** It said the v2-legs path "already produces the binding this field wants". It does not,
+and the difference is not a detail:
+
+* the court binds `PalwStepBindingV2::committed_execution_root`, which
+  `execution_commitment_root_v2` builds from FOUR roots — the logits trace, the activation leg, a
+  **v2** checkpoint leg (different domain key, carries a `state_chunk_map_id`), and a **step leg**;
+* the v2-legs worker path builds `execution_commitment_root_v1` — no step leg, v1 checkpoint leg.
+  Same-sounding name, different value, different purpose.
+
+**No worker path on this tree captures a step leg at all.** `PalwStepLegBuilderV1` wants one leaf
+per `(call_index, node_slot, position, tile_index)` — every tile of every kernel node of every
+call — and the shim exposes activation taps and logits rows, not per-kernel tile outputs. That is
+runtime instrumentation this build does not have.
+
+**And it is the same gap on BOTH lanes.** An attempt envelope's `execution_root` is bound into
+`attempt_id` and therefore into the PoW, so a miner cannot change it after solving — but nothing
+recomputes it from a real execution. The free-prompt lane's fail-closed
+`UnadjudicableCommitment` is not this lane lagging the attempt lane; it is the shared gap
+surfacing at the one place a rule actually checks for it. The attempt lane is quieter about the
+same hole, which is worse.
+
+**What is ready, and what is not.** `consensus/core/src/palw_fp_execution_v3.rs` derives the
+`PalwJobContextV2` from a job plus the facts a run measures, and derives the root by calling the
+court's own `execution_commitment_root_v2` with the court's own arguments — one derivation, so the
+two lanes cannot come to disagree about one value. It refuses runs that could not have happened (a
+zero decode count, a count over the ceiling, a stop reason that disagrees with the count, a
+context overflow). The day the step leg is captured, the worker line becomes
+`palw_fp_execution_root_v3(&ctx, &facts)` and nothing else moves.
+
+**What is missing is the capture, in the shim** — per-kernel tile outputs during a forward pass.
+That is its own piece of work, on the runtime rather than on consensus, and it gates the attempt
+lane's adjudicability just as much as the free-prompt lane's.
 
 ## Sequencing note for the fleet drill (FP-09 stage 2)
 
