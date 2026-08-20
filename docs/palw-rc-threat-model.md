@@ -39,10 +39,25 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_commitment_mutation_invalidates_pow` — build a valid header, flip one bit of
   the commitment root, assert the PoW verification now **fails**. Today it passes (PoW ignores the
   commitment) ⇒ **red**.
-- **Status:** **substrate green** (PR-01, `98e69283`): the V2 transcript binds the commitment
-  totally — the finalizer consumes `Expand(root)`, so one flipped commitment bit is a failed PoW,
-  and `palw_attempt_v2` tests pin it. The V1 (algo-4) path keeps its mixed-in binding until the
-  mode lands; no network demands V2 yet, by design. **ADR-0042:** Decision 3a.
+- **Status:** **RED (integration).** *Corrected 2026-08-20 by the follow-up audit — this row read
+  "substrate green" on a claim the tree did not support.* Two distinct facts were conflated:
+  * The **transcript** is now total, and more strongly than the row claimed: `commitment_root_v2`
+    is `H(attempt_id_v2(attempt))`, so the priced set and the identity set are the same set by
+    construction (fix C4). It had NOT been: PR-06 added `trace_manifest_root` /
+    `trace_chunk_count` / `trace_retention_daa` to the attempt without adding them to the six-field
+    transcript, so one solved nonce minted unlimited sibling identities for the price of a
+    re-signature. `every_priced_field_moves_the_pow_tag` now derives its field list from an
+    exhaustive destructuring, so a field added tomorrow does not compile until it is priced.
+  * The **finalizer** still has no arm for `POW_ALGO_ID_PALW_COMMITTED_V2`, and nothing carries a
+    `PalwAttemptEnvelopeV2` from a header to a verifier. `l1_tag_v2` and `commitment_root_v2` have
+    no non-test callers. So "the finalizer consumes `Expand(root)`" describes an intention, not a
+    code path, and the named red test `palw_v2_commitment_mutation_invalidates_pow` does not exist.
+  Since `a460cdd7` wired the DEMAND side into four pipeline gates, that gap was a total liveness
+  failure waiting on a config change (fix C1): `check_algo_id_known` no longer claims to verify
+  algo 6, and `PalwConsensusParamsV2::validate` refuses a ruleset whose algorithm this binary
+  cannot finalize. A V2 network now fails to boot instead of accepting genesis and rejecting every
+  block after it. This row goes green when the finalizer arm, the wire carrier and the named test
+  land together. **ADR-0042:** Decision 3a.
 
 ### P0-2 — block-commitment ML-DSA-87 signature never verified at admission
 - **Invariant:** ADR-0038 W8 (no bond, no block — the *holder's* authorization).
@@ -151,11 +166,23 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_matmul_fraud_convicts_without_model` — give a full node with **no model** a
   proof-carrying refutation (operands + weight row + quant params + Merkle proofs) of a wrong MatMul
   step; assert a conviction, not `Unadjudicable`.
-- **Status:** **substrate green** (P0-8 mechanism `b9333e47` + PR-07): evidence is
-  proof-carrying (`PalwProvenOperandsV1` against the class's registered artifact root), and
-  `adjudicate_court_close_v2` is the V2 consumer — a conviction is `ExecutorGuilty`, an honest
-  recomputation is `ChallengerDefeated`, and anything unadjudicable REFUSES the close (convicts
-  nobody, acquits nobody). Ladder no-show defaults are deliberately NOT acceptable V2 objects
+- **Status:** **substrate green, with a soundness defect since fixed and a test still owed.**
+  *Corrected 2026-08-20.* The mechanism is as described — evidence is proof-carrying
+  (`PalwProvenOperandsV1` against the class's registered artifact root), `adjudicate_court_close_v2`
+  is the V2 consumer, and anything unadjudicable REFUSES the close. What the row missed is that the
+  refutation was bound to the *refutation itself* and to the claim's PUBLIC `trace_root`, and
+  nothing else: `check_step_refutation_v1` reads a whole family of faults out of the binding alone
+  ("convict from the binding alone" — a `shape_profile` that fails `validate_shape`, a
+  non-canonical `step_leaf_count` or `checkpoint_count`), and on the V2 lineage the binding is
+  written entirely by the accuser. Any registered bond could copy the public trace root, attach a
+  deliberately invalid profile with `operand_openings: vec![]`, and take `Ok(ExecutorGuilty)` —
+  voiding an honest claim as `CourtFraud` and slashing its bond, at the cost of one message
+  (reproduced end to end). Closed (fix C3) by carrying the executor's own `execution_root` in the
+  attempt and the claim, and requiring `binding.committed_execution_root` to equal it before any
+  fault is read: `verify_binding` recomputes that root from the job context, both profile hashes
+  and every count and root, so pinning it pins all of them. **Still owed:** an end-to-end
+  `palw_v2_matmul_fraud_convicts_without_model` — no test anywhere asserts an `ExecutorGuilty`
+  conviction through the full path. Ladder no-show defaults are deliberately NOT acceptable V2 objects
   until the ladder itself is chain-carried — a forged default would void honest claims on
   demand; the system stays closed meanwhile (arithmetic conviction when data is held, the
   panel's `Unavailable` quorum when it is withheld, the `window_court` backstop when a challenge
@@ -208,7 +235,16 @@ honest "red (integration), lands in PR-N."
   `palw_class_daa.rs:300-306,1261-1284`. One registered class; retarget vector fixed empty; epoch
   budget derivation-only.
 - **Red test:** `palw_v2_class_freeze_redistributes_share_deterministically`.
-- **Status:** **substrate green** (PR-09): the retarget runs inside `apply_palw_transition_v2` at
+- **Status:** **substrate green, after a ratchet fix.** *Corrected 2026-08-20:* the expectation was
+  `share × Σ(realized production)` against the FULL share table, so any permille held by a class
+  that did not produce — frozen, unstaffed, or idle — made every class that DID produce a permanent
+  over-producer. The same verdict every boundary, in the same direction, `max_factor` bounding each
+  step and nothing bounding the walk: measured at 4^12 over twelve boundaries, ending at zero,
+  where `ZeroPreviousTarget` rejects every subsequent block deterministically. Fixed (H1) by
+  normalizing over the classes that actually competed in the closed span and skipping classes that
+  produced nothing, so expectations sum back to the realized total; genuine competition is
+  unchanged and still retargets both ways. A target floor of 1 stands behind it. Otherwise:
+  the retarget runs inside `apply_palw_transition_v2` at
   every global epoch boundary — V1's `retarget_over_span_v1` reused whole (share of REALIZED
   production, one-class no-op preserved), frozen classes skipped deterministically (the target
   freezes with the class), idle classes measured as zero, empty epochs measuring nothing. The
@@ -242,3 +278,55 @@ exactly what PR-03's candidate-scoped state makes testable.
 `runtime absent` · `model artifact absent` · `malformed proof` · `oversized evidence` ·
 `unknown opcode` · `unsupported class` · `corrupted DB row` · `peer disconnects mid-stream`.
 Each must be a typed rejection, never a panic. Lands alongside PR-02 (runtime) and PR-07 (court).
+
+---
+
+## Follow-up audit, 2026-08-20 — findings C1…C5, L1…L2, H1…H3
+
+An independent adversarial audit of the RC substrate at `a460cdd7` (13 parallel slices, every
+finding re-adjudicated against HEAD) returned NO-GO on five criticals, two of which the register
+above reported as green. The rows for P0-1, P0-8 and the per-class DAA are corrected in place; the
+rest are recorded here. Fixes landed on `palw-rc-audit-fixes`.
+
+### Live on a shipped preset
+
+| # | Where | Defect | Status |
+|---|---|---|---|
+| **L1** | `misaka-palw-pow-driver/src/lib.rs:377` | Every fork/exec errno — EAGAIN, ENOMEM, EMFILE — became `PalwUnavailable`, which `run_worker_with_retry` returns without spending an attempt and which both consumers price as a **failed PoW**. A node under momentary memory or fd pressure rejected an HONEST block and never retried. Live on testnet-11 and devnet (`pow_palw_activation: always()`); the same file's doc and both call sites already claimed the opposite. | **fixed** — `classify_spawn_error` classifies by errno; only `NotFound` / `PermissionDenied` stay permanent, everything else (unrecognized included) is retryable. 4 regression tests. |
+| **L2** | `kaspa-pq-validator-core/src/lib.rs:1541,1631` | Both anti-equivocation stores inserted into the in-memory index BEFORE the durable write and never rolled back. After a flush error the store believed a record existed that disk did not have; being cached for the process lifetime, the lie was never re-read, and the next request for the same key took `AllowRebroadcast`, released a signature and recorded nothing. A restart forgot the commitment entirely. The live instance is the `kaspa-pq-validator run` sidecar's `SignedEpochStore`. | **fixed** — the index becomes a function of what is durable in both stores. Regression test fails the write with EISDIR and asserts `Allow`, not `AllowRebroadcast`; mutation-checked. |
+
+### Reachable the moment `ConsensusV2` is switched on
+
+| # | Where | Defect | Status |
+|---|---|---|---|
+| **C1** | `consensus/pow/src/lib.rs:345` | `a460cdd7` wired only the DEMAND side: four pipeline gates require `pow_algo_id == 6`, while `calculate_l1_tag` has no arm for 6 and falls to `UnknownAlgoId`. A V2 network booted — every Decision 1 invariant held — accepted its parentless genesis, then rejected every block after it, its own miner's included; the pruning-proof path failed identically, so IBD could not recover. `check_algo_id_known` listed 6 under a doc-comment calling it "every algo this binary can verify". | **fail-closed** — 6 removed from `check_algo_id_known`; `PalwConsensusParamsV2::validate` reads that list and refuses a ruleset whose algorithm this binary cannot compute. Opens automatically when the finalizer arm lands. |
+| **C2** | `consensus/core/src/palw_state_v2.rs:1153` | The frontier advanced only when the GLOBAL unresolved set was empty — and step 4 of every apply inserts the block's own claim, so on a chain producing work it never moved. `pruning_ceiling_v2` froze with it. Worse than inert: a fork carrying no attempts at all had an empty unresolved set at every block, so it advanced its frontier for free and **outranked a chain that had matured real work** (reproduced: 60 empty blocks reach frontier 60 against an honest chain stuck at 1; `decide_deep_reorg_v2` said `Allow`). | **fixed** — the frontier is the deepest block whose PALW work is `Final` with nothing unresolved below it, which is the definition `palw_fork_choice` already stated. A chain that matured nothing has no frontier however long it grows. 2 regression tests, mutation-checked. |
+| **C3** | `consensus/core/src/palw_court_v2.rs:201` | See the corrected P0-8 row: an accuser-authored binding could harvest a shape-family conviction against an honest executor. | **fixed** — `check_execution_root_binding` pins the binding to the claim's own `execution_root` before any fault is read. |
+| **C4** | `consensus/core/src/palw_attempt_v2.rs:139` | See the corrected P0-1 row: six of fourteen fields priced, three of the rest unconstrained. A PR-01 closure re-opened by PR-06. | **fixed** — `commitment_root_v2 = H(attempt_id_v2)`; the exhaustive test cannot fall behind the struct. |
+| **C5** | `consensus/core/src/palw_panel_v2.rs:84` | One `quorum` licensed BOTH opposite transitions — `Valid` → `ReceiptLicensed` and `Unavailable` → `ProducerDefaulted` — with only `1 ≤ quorum ≤ seat_count` enforced. At `seat_count = 4, quorum = 2` both reach quorum simultaneously and the check ORDER decides. `vlt.rs` has carried `quorum_is_strictly_above_two_thirds` since its own audit; the panel had no analogue. | **partly fixed** — `2·quorum > seat_count` enforced at construction, so the two quorums are provably disjoint. **Still open:** `Unavailable` carries no request, deadline or proof and costs its signers nothing; `operator_id` is self-declared and unauthenticated, so seat-aggregation dedup is defeatable; an unwanted panel is re-rollable for free via `BindTimeout`; and no slash primitive exists anywhere in the tree. |
+| **H1** | `consensus/core/src/palw_state_v2.rs` retarget | See the corrected per-class DAA row. | **fixed**; the second half — the retargeted class target still has **no consumer on the V2 lane** — remains open. |
+| **H2** | `consensus/core/src/palw_mode_v2.rs:211` | `palw_ruleset_id_v2` hashes only `PalwConsensusParamsV2`, which has no cadence field, no fork-choice version, no trace-format version and no signature-context version — all named in Decision 11's preimage. Every window in the bundle is DAA-denominated, so the cadence is what gives them wall-clock meaning: two networks could share a ruleset id and run different rules. | **partly fixed** — `validate_palw_v2` refuses a V2 network that is not at the frozen 120 s cadence (ADR-0038 Decision H, enforced at construction as that decision requires). **Still open:** widening the id's preimage; and `worst_case_court_duration_daa` remains operator-attested rather than derived from the catalog's measured trace length, so both window inequalities bound the bundle against the operator's own claim. |
+| **H3** | `consensus/core/src/palw_state_v2.rs` `ClassRegistered` | `slash_value_per_pwu == 0` was refused nowhere. `reserved = pwu × slash_value_per_pwu`, so at zero every claim reserves zero and any number of immature claims fits under any ceiling — P0-10's remedy silently evaluates to no cap. | **fixed** — `ZeroSlashValue` at registration. **Still open:** `pwu_rule` is a `MaxPerAttempt` ceiling rather than a derivation, so Decision 6 item 6 bounds rather than checks — which makes PALW weight a collateral measure rather than a work measure; and the class epoch budget is a permanent hard halt with no startup invariant sizing it. |
+
+### A correction the audit made to itself
+
+`consensus_params_id` for **mainnet** differs from `origin/main` (`fc55b73e…` → `9110ee1c…`), but **not
+because of the RC**: `git log -L` on the pin attributes the last move to `569752bd` (algo-5 Ollama)
+and an earlier one to `899fefda` (`tkn: TokenParams` entering the hashed `DnsParams`). PR-01…PR-10
+and both follow-ups moved it zero times. Merging this branch is a mainnet flag day for reasons that
+predate the RC, and reverting the PALW lines alone would not restore neutrality.
+
+### ADR-0042 clauses that should be amended rather than implemented
+
+* **Decision 1, "challenge window > worst-case court duration."** Not implemented, deliberately.
+  The ADR's clause assumes a design where a court must finish inside the window that decides
+  maturity; the implementation chose a stronger one — an open court SUSPENDS
+  `ReceiptLicensed → Final` entirely, so the court is bounded by `window_court` and never races the
+  challenge window. Adding the inequality would force every honest claim to wait a full worst-case
+  prosecution before maturing, for no safety gained. The ADR should say which mechanism carries the
+  guarantee.
+* **Decision 7, "splitting collateral across bonds does not manufacture extra panel seats."** False
+  as implemented, because `operator_id` is unauthenticated. Retract it or make it true.
+* **Decision 1's catalog-coverage and D5e clauses** are not in the startup gate; the module doc
+  defers them to the RC genesis loader, which holds the catalog preimage. The ADR still lists them
+  as boot invariants.
