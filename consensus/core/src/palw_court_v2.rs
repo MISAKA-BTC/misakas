@@ -415,6 +415,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(0x21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_pubkey: op_key(0x22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
@@ -663,6 +664,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(1),
@@ -772,6 +774,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(1),

@@ -133,6 +133,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond(),

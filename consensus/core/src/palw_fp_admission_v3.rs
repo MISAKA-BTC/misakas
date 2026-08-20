@@ -241,6 +241,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),

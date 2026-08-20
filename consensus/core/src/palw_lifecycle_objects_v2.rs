@@ -226,6 +226,7 @@ mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(u64::MAX),
             initial_target: u128::MAX / 2,
             share_permille: 1000,
+            activation_daa: 0,
         };
         let fp = PalwConsensusObjectV2::FreePromptCommitted {
             claim: h64(0xF1),

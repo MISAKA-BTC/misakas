@@ -239,6 +239,7 @@ pub fn palw_fp_devnet_bundle_v3(
                 pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },
                 initial_target: GENESIS_CLASS_TARGET,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
                 bond: genesis_bond,
