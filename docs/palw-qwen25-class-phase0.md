@@ -364,3 +364,69 @@ LAST position, because a digest that missed the tail would be exactly as broken.
 
 Condition 6 asks for the requant parameters to be inside `artifact_root`. Until this commit they
 were not.
+
+
+---
+
+## Phase 3 — the depth sweep, measured (2026-08-21)
+
+The failure mode an int8 residual stack has and a float one does not is **silent collapse**: each
+residual add halves the stream, so after enough layers every code reaches zero, every downstream
+projection reads zeros, and the model still runs and still produces logits. `DepthHealthV1` and
+`measure_depth_health` report the numbers that separate "deep" from "dead".
+
+Measured on converted artifacts at 1, 4, 8 and 12 layers:
+
+| depth | residual peaks | gate peaks | min attention spread |
+| --- | --- | --- | --- |
+| 1 | `[96]` | `[91]` | 1,788,600 |
+| 4 | `[96, 70, 68, 71]` | `[91, 46, 43, 39]` | 274,624 |
+| 8 | `[96, 70, 68, 71, 73, 71, 71, 88]` | `[91, …, 48]` | 28,936 |
+| 12 | `[96, …, 92, 75]` | `[91, …, 43, 58]` | 28,936 |
+
+The shape of the curve is the finding: the residual peak **stabilises in a 56–96 band** rather
+than walking to zero, the gate peak drops sharply from layer 1 to layer 2 (91 → 46) and then
+holds in 39–58, and the attention spread falls with depth but stays far above uniform. None of
+the three is a collapse. **`global residual_requant` did not break**, so the per-layer requant
+extension Phase 3 held in reserve is not needed at these depths.
+
+### Two converter defects the sweep found
+
+* **The amplifying gains were unset.** `attn_logit_scale` and `ffn_gate_scale` were
+  `{multiplier: i32::MAX, shift: 0}` — no amplification — which is precisely the state ADR-0040 H
+  warns about: an attention logit arrives at `SoftMax` around 0.002 in Qk and the distribution is
+  uniform, and the SwiGLU gate degenerates to the linear `x/2`. Measured before the fix: gate
+  extremes `(0, 127)` (symmetric, i.e. degenerate) and residual peak 128 (railed).
+  `amplification_for` derives both from data the converter already has — **σ_w measured from the
+  quantized weights as an exact integer sum of squares** (order-independent, so two converters
+  agree, which a float RMS would not have given) and **σ_x a construction constant**, because the
+  other operand is an RMS-normed activation whose RMS is 1 by definition. After: `(-30, 91)` and
+  96.
+* Not a defect but worth recording: `derive_deterministic`'s `amplify_for` says "a real
+  artifact's scales come from calibrating against its own activation statistics". That is the
+  calibration point — the amplification, not the bias scale.
+
+### Three metrics of mine that were wrong, and what each taught
+
+Each was caught by the measurement disagreeing with a model that was fine, which is the useful
+direction for a metric to fail in:
+
+1. **Saturation measured on the logits.** Logits are raw `i32` accumulators out of the unembedding
+   matmul and are naturally in the thousands, so `|v| >= 127` reported every model as railed at
+   depth 1. It belongs on the residual stream, where int8 codes actually live.
+2. **Attention spread including position 0.** That position has exactly one key, so its
+   distribution is `[1.0]` and its spread is necessarily zero — a statement about the metric, not
+   the model.
+3. **Gate asymmetry at `|min| · 2 < max`.** As depth grows the positive peak decays while SiLU's
+   floor stays put, so the tight ratio reports signal DECAY as gate degeneracy. The property that
+   actually separates SiLU from its degenerate form is `|min| < max`; the decay is real and is
+   reported separately by `gate_peak_decay`.
+
+### And one thing the fixture cannot answer
+
+`a_deep_converted_class_is_reproducible` first asserted that the argmax varies with position.
+Under the fixture's RANDOM weights it does not — the argmax is pinned to whichever vocabulary row
+has the largest norm, whatever the prompt — and that is expected rather than a defect. The
+property worth asserting is that the model reads its input at all, so the check is on a digest of
+each position's full logit row. **Top-k agreement against the float model (condition 7's
+neighbour) needs the real checkpoint and is not answerable from a derived fixture.**

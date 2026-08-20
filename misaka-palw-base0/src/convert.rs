@@ -190,6 +190,38 @@ fn quantize_tensor(name: &str, values: &[f32]) -> Result<(Vec<i8>, f64), Convert
     Ok((values.iter().map(|v| quantize(*v, scale)).collect(), scale))
 }
 
+/// **The amplifying gain a `fan_in`-long int8 dot needs to land in the Qk band (ADR-0040 H).**
+///
+/// Without it an attention logit arrives at `SoftMax` around 0.002 in Qk and the distribution is
+/// uniform to four decimals — attention selecting nothing — and the SwiGLU gate degenerates to
+/// the linear `x/2`. `derive_deterministic` uses fixture constants for this and says so: "a real
+/// artifact's scales come from calibrating against its own activation statistics".
+///
+/// For a converted class both statistics are available without a forward pass:
+///
+/// * **σ_w is measured**, from the quantized weights themselves — an exact integer sum of squares
+///   in `i64`, so it is order-independent and reproducible, which a float RMS would not have
+///   been.
+/// * **σ_x is a construction constant.** The dot's other operand is an RMS-normed activation, and
+///   an RMS norm's output has RMS 1 by definition — so in codes its RMS is `1 / activation_scale`,
+///   which is 128 at the established `shift = K − 7`.
+///
+/// An `n`-term dot of independent terms then has σ ≈ `√n · σ_w · σ_x`, and the target is `2^22`,
+/// a quarter of Qk, leaving headroom before `rescale_q` saturates. `rescale` with
+/// `multiplier ≈ 2^31` is a gain of `2^(31 − shift)`, so the shift follows.
+pub fn amplification_for(fan_in: usize, weights: &[i8], activation_scale: f64) -> ScaleParams {
+    // Exact, integer, order-independent: a float accumulation here would make the artifact
+    // depend on summation order and two converters could disagree.
+    let sum_sq: i64 = weights.iter().map(|w| (*w as i64) * (*w as i64)).sum();
+    let sigma_w = ((sum_sq as f64) / (weights.len().max(1) as f64)).sqrt().max(1.0);
+    let sigma_x = 1.0 / activation_scale;
+    let dot_sigma = (fan_in as f64).sqrt() * sigma_w * sigma_x;
+    // gain = 2^22 / dot_sigma, and gain = 2^(31 - shift).
+    let gain_log2 = 22.0 - dot_sigma.log2();
+    let shift = (31.0 - gain_log2).round().clamp(0.0, 62.0) as u8;
+    ScaleParams { multiplier: i32::MAX, shift }
+}
+
 /// The geometry and the naming a conversion needs. Read from a real `config.json`; this type does
 /// not invent one.
 /// `Eq` is deliberately absent: the plan carries a float, and two plans that differ only by a
@@ -357,6 +389,8 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
                 .collect()
         };
 
+        let attn_logit_scale = amplification_for(s.d_head, &wq, activation_scale);
+        let ffn_gate_scale = amplification_for(d, &w_gate, activation_scale);
         layers.push(Base0LayerWeightsV1 {
             wq,
             wk,
@@ -375,8 +409,11 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
             ],
-            attn_logit_scale: ScaleParams { multiplier: i32::MAX, shift: 0 },
-            ffn_gate_scale: ScaleParams { multiplier: i32::MAX, shift: 0 },
+            // Measured from the tensors that feed each dot: the attention logit reduces over
+            // `d_head` against the ROTATED query codes, and the gate over `d_model` against the
+            // normed ones.
+            attn_logit_scale,
+            ffn_gate_scale,
         });
     }
 
@@ -405,6 +442,134 @@ pub fn biased_channel_count(artifact: &Base0ArtifactV1) -> usize {
         .flat_map(|v| v.iter())
         .filter(|q| q.zero != 0)
         .count()
+}
+
+/// **Phase 3's measurement: does a converted class stay numerically alive as it gets deeper?**
+///
+/// The failure mode integer inference has, and float inference does not, is silent collapse: each
+/// residual add halves the stream (`residual_requant`'s shift of 1, the standard int8-residual
+/// convention), so after enough layers every code can reach zero and every downstream projection
+/// reads zeros. A model in that state still runs, still produces logits, and means nothing.
+///
+/// So the numbers here are the ones that distinguish "deep" from "dead", and each has a reason:
+///
+/// * `residual_peak` — the largest `|code|` in the stream after each block. A run whose peak
+///   walks to zero has collapsed, and the LAYER it collapses at is what a depth sweep is for.
+/// * `saturated_channels` — how many codes sit at ±127. The opposite failure: a stream pinned at
+///   the rail carries no information either, and requantization that is too generous produces it.
+/// * `gate_extremes` — SiLU's asymmetry. Fed below its Qk domain `IntSigmoid` returns ≈0.5 and
+///   the gate becomes the linear `x/2`, whose output is still large and still weight-dependent —
+///   so the peak cannot see the defect. A working gate floors at −0.278 and passes positives, so
+///   `|min| ≪ max`; a degenerate one has `|min| ≈ max`.
+/// * `attention_spread` — a spread of zero is a uniform distribution, i.e. attention selecting
+///   nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepthHealthV1 {
+    pub layers: usize,
+    /// Per layer, over the whole run: the largest residual `|code|` seen.
+    pub residual_peak: Vec<i32>,
+    /// Per layer: `(most negative, most positive)` SiLU gate code.
+    pub gate_extremes: Vec<(i32, i32)>,
+    /// The smallest attention spread seen at a position with MORE THAN ONE key. Zero means some
+    /// head selected nothing among keys it had a choice between.
+    ///
+    /// Position 0 is excluded, and not as a convenience: it has exactly one key, so its
+    /// distribution is `[1.0]` and its spread is necessarily zero. Including it reported every
+    /// model as attention-dead, which is a statement about the metric rather than the model.
+    pub min_attention_spread: i32,
+    /// Layers whose residual peak sits at the int8 rail (`>= 127`), and how many layers there
+    /// were.
+    ///
+    /// Measured on the RESIDUAL STREAM, not on the logits: logits are raw `i32` accumulators out
+    /// of the unembedding matmul and are naturally in the thousands, so counting `|v| >= 127`
+    /// there measures nothing. (It was the first thing this struct did, and the depth sweep
+    /// reported every model as railed at depth 1.)
+    pub saturated_residual: (usize, usize),
+    /// The greedy argmax at each step — what a top-k agreement check compares.
+    pub argmax: Vec<usize>,
+    /// A cheap digest of the full logit row at each step.
+    ///
+    /// The argmax alone cannot answer "does the model read its input": under RANDOM weights it is
+    /// pinned to whichever vocabulary row has the largest norm, whatever the prompt, so a
+    /// constant argmax there is expected rather than a defect. The logits themselves do vary, and
+    /// this is what says so.
+    pub logits_digest: Vec<u64>,
+}
+
+impl DepthHealthV1 {
+    /// The stream is alive at every layer: no collapse to zero, and no rail.
+    pub fn is_alive(&self) -> bool {
+        self.residual_peak.iter().all(|p| *p > 0) && self.saturated_residual.0 * 2 < self.saturated_residual.1.max(1)
+    }
+
+    /// The SiLU gate is doing its job at every layer: it FLOORS while positives pass through.
+    ///
+    /// The test is `|min| < max`, strictly — which is the property that actually separates SiLU
+    /// from its degenerate form. Fed below its Qk domain `IntSigmoid` returns ≈0.5 and the gate
+    /// becomes the linear `x/2`, whose output is symmetric: `|min| == max`. A tighter ratio
+    /// (`|min| · 2 < max`) looks stricter and measures something else — as depth grows the
+    /// positive peak decays while SiLU's floor stays put, so that test reports signal DECAY as
+    /// gate degeneracy. The decay is real and is what [`Self::gate_peak_decay`] reports; it is
+    /// not this predicate's question.
+    pub fn gate_is_asymmetric(&self) -> bool {
+        self.gate_extremes.iter().all(|(lo, hi)| lo.abs() < *hi || *hi == 0)
+    }
+
+    /// The gate's positive peak at each layer — the number a depth sweep is looking for. A
+    /// sequence that walks toward zero is the signal dying with depth, whatever the ratios say.
+    pub fn gate_peak_decay(&self) -> Vec<i32> {
+        self.gate_extremes.iter().map(|(_, hi)| *hi).collect()
+    }
+}
+
+/// Run `prompt` through `artifact` and report [`DepthHealthV1`].
+pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Result<DepthHealthV1, crate::engine::EngineError> {
+    let engine = crate::engine::Base0Engine::new(artifact);
+    let mut cache = crate::engine::KvCache::new(artifact);
+    let n = artifact.shape.n_layers;
+    let mut residual_peak = vec![0i32; n];
+    let mut gate_extremes = vec![(0i32, 0i32); n];
+    let mut min_attention_spread = i32::MAX;
+    let mut argmax = Vec::with_capacity(prompt.len());
+    let mut logits_digest = Vec::with_capacity(prompt.len());
+
+    for (position, token) in prompt.iter().enumerate() {
+        let (logits, probe) = engine.forward_token_probed(&mut cache, *token, position)?;
+        for (i, p) in probe.residual_peak.iter().enumerate() {
+            residual_peak[i] = residual_peak[i].max(*p);
+        }
+        for (i, (lo, hi)) in probe.gate_extremes.iter().enumerate() {
+            gate_extremes[i].0 = gate_extremes[i].0.min(*lo);
+            gate_extremes[i].1 = gate_extremes[i].1.max(*hi);
+        }
+        // Only where there was a choice to make (see the field's doc).
+        if position > 0 {
+            for s in &probe.attention_spread {
+                min_attention_spread = min_attention_spread.min(*s);
+            }
+        }
+        argmax.push(crate::engine::argmax_lowest(&logits));
+        // FNV-1a over the row: order-sensitive, cheap, and enough to tell two rows apart.
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for v in &logits {
+            for b in v.to_le_bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        logits_digest.push(h);
+    }
+    // The rail, measured where int8 codes actually live. A layer whose peak reaches 127 has a
+    // stream pinned against the boundary, which carries as little information as a collapsed one.
+    let railed = residual_peak.iter().filter(|p| **p >= 127).count();
+    Ok(DepthHealthV1 {
+        layers: n,
+        residual_peak,
+        gate_extremes,
+        min_attention_spread: if min_attention_spread == i32::MAX { 0 } else { min_attention_spread },
+        saturated_residual: (railed, n),
+        argmax,
+        logits_digest,
+    })
 }
 
 #[cfg(test)]
@@ -543,6 +708,83 @@ mod tests {
         assert_eq!(first.len(), 3);
         assert!(first.iter().all(|l| l.len() == shape.vocab));
         assert_eq!(run(), first, "two runs of a converted artifact agree bit for bit");
+    }
+
+    /// **Phase 3's depth sweep, measured on converted artifacts.**
+    ///
+    /// The question is whether a converted class stays numerically alive as layers accumulate.
+    /// Each residual add halves the stream, so the failure mode is silent collapse — a model that
+    /// still runs, still produces logits, and means nothing.
+    ///
+    /// This prints nothing and asserts the properties: at every depth the residual peak is
+    /// non-zero at every layer, the gate keeps SiLU's asymmetry, attention selects something, and
+    /// the logits are not pinned at the rail.
+    #[test]
+    fn a_converted_class_stays_alive_as_it_deepens() {
+        let mut collapsed_at = None;
+        for layers in [1usize, 4, 8, 12] {
+            let mut shape = tiny_qwen_shape();
+            shape.n_layers = layers;
+            let blob = tiny_checkpoint(&shape);
+            let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+            let a = convert_qwen25(&blob, &plan).expect("converts at every depth");
+
+            let health = measure_depth_health(&a, &[1, 5, 9, 2]).expect("the run completes");
+            assert_eq!(health.layers, layers);
+            assert_eq!(health.residual_peak.len(), layers, "one peak per layer");
+
+            if health.residual_peak.iter().any(|p| *p == 0) {
+                collapsed_at = Some((layers, health.residual_peak.clone()));
+                continue;
+            }
+            assert!(health.is_alive(), "depth {layers}: the stream is alive and not railed — {health:?}");
+            assert!(health.gate_is_asymmetric(), "depth {layers}: SiLU floors while positives pass — {:?}", health.gate_extremes);
+            let decay = health.gate_peak_decay();
+            assert!(decay.iter().all(|p| *p > 0), "depth {layers}: the gate signal reached zero — {decay:?}");
+            // Measured 2026-08-21 on this fixture, and recorded because the shape of the curve is
+            // the finding: the residual peak stabilises in the 56..96 band rather than walking to
+            // zero, the gate peak drops sharply from layer 1 to layer 2 (91 → 46) and then holds
+            // in the 39..58 band, and the attention spread falls with depth but stays far above
+            // uniform. None of the three is the collapse an int8 residual stack is at risk of.
+            //
+            //   depth  residual peaks                          gate peaks                spread
+            //   1      [96]                                    [91]                      1_788_600
+            //   4      [96, 70, 68, 71]                        [91, 46, 43, 39]            274_624
+            //   8      [96, 70, 68, 71, 73, 71, 71, 88]        [91, …, 48]                  28_936
+            //   12     [96, …, 92, 75]                         [91, …, 43, 58]              28_936
+            assert!(
+                health.residual_peak.iter().all(|p| (16..127).contains(p)),
+                "depth {layers}: the residual band is neither collapsing nor railing — {:?}",
+                health.residual_peak
+            );
+            assert!(health.min_attention_spread > 0, "depth {layers}: every head selected something");
+            assert_eq!(health.argmax.len(), 4);
+        }
+        // A collapse is a RESULT, not a test failure — it is what a depth sweep exists to find,
+        // and the depth it happens at is the number Phase 3 owes. Fail loudly with it rather than
+        // passing quietly.
+        assert!(collapsed_at.is_none(), "the residual stream collapsed: {collapsed_at:?}");
+    }
+
+    /// **Determinism holds at depth**, which is the property the whole class rests on: the same
+    /// artifact and the same prompt produce the same argmax sequence, run after run.
+    #[test]
+    fn a_deep_converted_class_is_reproducible() {
+        let mut shape = tiny_qwen_shape();
+        shape.n_layers = 8;
+        let blob = tiny_checkpoint(&shape);
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+        let a = convert_qwen25(&blob, &plan).unwrap();
+        let prompt = [3usize, 11, 7, 1, 9];
+        let first = measure_depth_health(&a, &prompt).unwrap();
+        assert_eq!(measure_depth_health(&a, &prompt).unwrap(), first, "two runs at depth 8 agree exactly");
+        // …and the model reads its input: every position's logit row is distinct. A run that was
+        // merely "deterministic" while ignoring the prompt would satisfy the check above and mean
+        // nothing. The ARGMAX is not the right witness for that here — under the fixture's random
+        // weights it is pinned to whichever vocabulary row has the largest norm, whatever the
+        // prompt, so a constant argmax is expected rather than a defect.
+        let distinct: std::collections::BTreeSet<u64> = first.logits_digest.iter().copied().collect();
+        assert_eq!(distinct.len(), prompt.len(), "each position produced a different logit row");
     }
 
     /// The folds are applied where they belong, and the tests assert the direction — folding a
