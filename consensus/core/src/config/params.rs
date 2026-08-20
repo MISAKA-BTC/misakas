@@ -2194,6 +2194,11 @@ pub const TESTNET11_PARAMS: Params = Params {
     pow_blake2b_sha3_activation: ForkActivation::never(),
     pow_palw_activation: ForkActivation::always(),
     pow_palw_ollama_activation: ForkActivation::never(),
+    // ADR-0042 Decision 1: t11 is the LEGACY PALW lineage, and since the Relaunch-2 re-genesis
+    // (2026-08-20) it says so in the mode enum — the fingerprint already moved for the community
+    // allocation, so marking the mode rode the same flag day for free. `LegacyTn11` changes no
+    // rule (the legacy knobs above carry the values); it makes the lineage a handshake fact.
+    palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::LegacyTn11,
     ..TESTNET_PARAMS
 };
 
@@ -2488,7 +2493,10 @@ mod consensus_params_id_tests {
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
-            ("testnet-11", TESTNET11_PARAMS, "62781823f1dd5e5c530e080a72773c6d54f462209e12638ac9d7824e2bc57450"),
+            // Moved by the Relaunch-2 public re-genesis (2026-08-20): the 347M MSK community
+            // allocation entered the genesis utxo_commitment and the relaunch marker bumped, so
+            // the genesis hash — and with it this fingerprint — changed. Only this row moved.
+            ("testnet-11", TESTNET11_PARAMS, "49ff962891445eeef0411f6499561e8f00640339ad3cdb0ac306ad07ccf299db"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
@@ -2613,7 +2621,7 @@ mod consensus_params_id_tests {
         // 2026-08-18. Note the object: a node fingerprints `Params::from(NetworkId)`, which is
         // `with_registered_models(TESTNET11_PARAMS)` — NOT the bare preset, whose id is a
         // different value entirely. Asserting on the preset would pass while the network forked.
-        const TESTNET11_LIVE_FINGERPRINT: &str = "62781823f1dd5e5c530e080a72773c6d54f462209e12638ac9d7824e2bc57450";
+        const TESTNET11_LIVE_FINGERPRINT: &str = "49ff962891445eeef0411f6499561e8f00640339ad3cdb0ac306ad07ccf299db";
         let live: Params = crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11).into();
         assert_eq!(
             live.consensus_params_id().to_string(),

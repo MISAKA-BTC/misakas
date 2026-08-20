@@ -3,7 +3,7 @@ use std::sync::Arc;
 use kaspa_consensus_core::{
     BlockHash,
     api::ConsensusApi,
-    config::{Config, premine::misaka_premine_utxos},
+    config::{Config, premine::genesis_premine_utxos_for},
     header::Header,
     muhash::MuHashExtensions,
     tx::{TransactionOutpoint, UtxoEntry},
@@ -21,7 +21,9 @@ use crate::consensus::Consensus;
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
-    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = misaka_premine_utxos(config.params.net.network_type).into_iter().collect();
+    // Keyed by the full NetworkId: testnet-11 additionally carries the 347M MSK community
+    // allocation; testnet-10 (a running chain) and every other network carry the premine alone.
+    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = genesis_premine_utxos_for(config.params.net).into_iter().collect();
     #[cfg(feature = "devnet-prealloc")]
     set.extend(config.initial_utxo_set.iter().map(|(op, entry)| (*op, entry.clone())));
     #[cfg(not(feature = "devnet-prealloc"))]
@@ -81,7 +83,11 @@ pub fn set_initial_utxo_set(config: &Config, consensus: Arc<Consensus>, genesis_
 mod tests {
     use super::*;
     use kaspa_consensus_core::{
-        config::{Config, params::SIMNET_PARAMS, premine::MISAKA_PREMINE_SOMPI},
+        config::{
+            Config,
+            params::SIMNET_PARAMS,
+            premine::{MISAKA_PREMINE_SOMPI, misaka_premine_utxos},
+        },
         constants::SOMPI_PER_KASPA,
         muhash::MuHashExtensions,
         network::NetworkType,
@@ -140,10 +146,11 @@ mod tests {
     /// runtime "can't run a divergent genesis" property.
     #[test]
     fn all_networks_genesis_constants_match_premine() {
-        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
-        for params in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS] {
+        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS] {
             let mut config = Config::new(params);
-            // The assert inside panics if the pinned constants do not match the premine-derived ones.
+            // The assert inside panics if the pinned constants do not match the premine-derived
+            // ones — for testnet-11 that set includes the 347M community allocation.
             set_genesis_utxo_commitment_from_config(&mut config);
         }
     }

@@ -28,7 +28,7 @@
 
 use crate::{
     constants::SOMPI_PER_KASPA,
-    network::NetworkType,
+    network::{NetworkId, NetworkType},
     tx::{TransactionOutpoint, UtxoEntry},
     utxo::utxo_collection::UtxoCollection,
 };
@@ -158,6 +158,85 @@ pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
     UtxoCollection::from_iter(utxos)
 }
 
+/// The PALW public-testnet (testnet-11) COMMUNITY allocation — the operator-collected
+/// address list for the t11 public relaunch (Discord, 2026-08-11 … 2026-08-19), baked into
+/// the t11 genesis exactly like the premine: text addresses (auditable), one UTXO each on a
+/// dedicated sentinel txid, committed by `TESTNET11_GENESIS.utxo_commitment`.
+///
+/// **testnet-11 ONLY.** testnet-10's running chain, devnet, simnet and mainnet carry none of
+/// this — their commitments are untouched (see [`genesis_premine_utxos_for`]).
+///
+/// Two entrants CHANGED their address before the cut and the superseded ones are excluded
+/// (recorded here so the audit trail is in the file, not in a chat log):
+/// * tetsu31 2026-08-11 `qfdqr02rxqyqh4jqtcn8qhwgsad3xqqn502tw26yajv7jg7eqap5slhggrcyngq8g789cxymezhc8mjfr3q2fj0w8j5w7mk986fta7u049hfph2n`
+///   (no prefix as posted) → replaced 2026-08-18 by the entry below.
+/// * uki 2026-08-13 `misakatest:qfa2z97yspcra7pel80h06jg4a6mg0669fj5qx63e4v5y8geddd8hvyvy75rqaejgrq69e8yv4nd66rzlt5tqepw95q7q3k55qev84g6ey5yj8x8`
+///   → replaced 2026-08-19 by the entry below.
+///
+/// Amounts are whole MSK (× [`SOMPI_PER_KASPA`] at build). The fixed order feeds the genesis
+/// `utxo_commitment` via the outpoint index, so it must never be reordered.
+#[rustfmt::skip]
+pub const TESTNET11_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
+    // operator (2026-08-11)
+    ("misakatest:qt0meznnlhgxx9h99yn78erahuyql0fnaeh9fxwjhw5j2qftsvsdjy38hm89ul7dfvddy0v2uqkgr4tqgr9nxp23xtn4tylf370f2k9f8hpry2wz", 100_000_000),
+    // tetsu31 (changed address, 2026-08-18)
+    ("misakatest:qt8j52desseh38y3ed5wzt452fqycl5xz8ptdm0yu2m4jpppesa353nkr4wc6gsnu48ald2qy592j7sztzpj93nlaay2wcy90xme9urqkfzywukt", 5_000_000),
+    // Kurenai (2026-08-11)
+    ("misakatest:qtjw605sgh0uha25crcxy4sp8hl644x4ddl3msrtnurv3c4prz6cnag9hle8a5vyqkxgw54cl6tzyuap7j47yajf4wq3cl0tqdgup50rkdm9r4k3", 30_000_000),
+    // タケヤマ #1 (2026-08-12)
+    ("misakatest:q2utpunet56y6hxlm0pg39mx6sd6zertjqmrf2vrwhv9grr769pga6dsxhncyteexr6hvs8gcxyaumwxveth2qupe06l6maqpc5jhlp96s64ys7a", 100_000_000),
+    // タケヤマ #2 (2026-08-12)
+    ("misakatest:qgm8ft3wk722xp8ju7mv0weuhq9anqcp3q3v37fq2dz4xfhhc96ujw2hf39k6ncjav27mp2hkajyyyu4m4s8rgggaxtj8g2qtmuqgsk5y34fsncq", 100_000_000),
+    // コタヌキM (2026-08-12)
+    ("misakatest:qtpu9le2jr93fv094jasvl92x2ewqvh9xsnutzh3tegwy9x8amac5xjl40cwjx2yrl0w4dqnf8fsamagr024nmrdfsd7v2d7m97dqa7qcelse3lx", 1_000_000),
+    // uki (changed address, 2026-08-19)
+    ("misakatest:qt4uw0l8pemv6l0pqeuc247g2h3sp40kve88acz5xfzer3hwjaafw83jv77s8hemyyxnktc2v5zdu3v22s7d4067gtzupttchy23ycqym5vn82w6", 5_000_000),
+    // あかぼね (2026-08-17)
+    ("misakatest:qfcqlqw7kfgtg9g09rsz3m0e808th2e0p4stz0r4hn8prtnmvp6xy9adngl3xhfkyplpppwehfh7vkqlvqenhh2rj5sp388mezrc8tnk5uyxt65r", 5_000_000),
+    // kamil (2026-08-17)
+    ("misakatest:qga0xgy5xctju8da7scuwfxj93e205er5fs59qcr5w57nejl9h93rgt9thjnd87mmv5z98wxv26ewzqha4496nnxnza66s9l3jgyk5pq0wmepk43", 1_000_000),
+];
+
+/// Total community allocation: 347M MSK (100+5+30+100+100+1+5+5+1).
+pub const TESTNET11_COMMUNITY_SOMPI: u64 = 347_000_000 * SOMPI_PER_KASPA;
+
+/// Deterministic sentinel txid for the t11 community UTXOs: ASCII "misaka-t11-community"
+/// (20 bytes) zero-padded to 64. Distinct from [`MISAKA_PREMINE_TXID`] so the two tables can
+/// never collide on an outpoint whatever their lengths become.
+#[rustfmt::skip]
+const TESTNET11_COMMUNITY_TXID: [u8; 64] = [
+    0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x74, 0x31, 0x31, 0x2d, // "misaka-t11-"
+    0x63, 0x6f, 0x6d, 0x6d, 0x75, 0x6e, 0x69, 0x74, 0x79,             // "community"
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// The t11 community UTXO set: one single-key ML-DSA-87 P2PKH UTXO per entry, spendable from
+/// block 0, indices `0..TESTNET11_COMMUNITY_ALLOCATIONS.len()` on the community sentinel txid.
+pub fn testnet11_community_utxos() -> UtxoCollection {
+    let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(TESTNET11_COMMUNITY_ALLOCATIONS.len());
+    for (i, (addr, whole_msk)) in TESTNET11_COMMUNITY_ALLOCATIONS.iter().enumerate() {
+        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(addr));
+        let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
+        let amount = whole_msk.checked_mul(SOMPI_PER_KASPA).expect("a community allocation cannot overflow sompi");
+        utxos.push((outpoint, UtxoEntry { amount, script_public_key, block_daa_score: 0, is_coinbase: false }));
+    }
+    UtxoCollection::from_iter(utxos)
+}
+
+/// The FULL genesis UTXO set for one network id: the shared premine, plus — on testnet-11 and
+/// only there — the community allocation. Keyed by [`NetworkId`] rather than [`NetworkType`]
+/// because t10 and t11 share a type and must NOT share a UTXO set: t10 is a running chain whose
+/// commitment cannot move.
+pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
+    let mut set = misaka_premine_utxos(net.network_type);
+    if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
+        set.extend(testnet11_community_utxos());
+    }
+    set
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +262,69 @@ mod tests {
             let commitment = ms.finalize();
             let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
             println!("{net:?}_PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
+        }
+        // testnet-11: premine ∪ community — the value TESTNET11_GENESIS.utxo_commitment pins.
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("TESTNET11_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
+    }
+
+    /// The community table is exactly the operator's collected list: 9 UTXOs, 347M MSK, every
+    /// address a well-formed testnet-prefix single-key ML-DSA-87 P2PKH (the bech32 checksum in
+    /// `owner_payload` is what turns any transcription slip into a build failure instead of a
+    /// silently mis-locked allocation), every owner distinct — including distinct from all 41
+    /// premine owners — and the whole set confined to testnet-11.
+    #[test]
+    fn t11_community_allocation_is_the_collected_list() {
+        use kaspa_addresses::Prefix;
+
+        let utxos = testnet11_community_utxos();
+        assert_eq!(utxos.len(), 9, "nine entrants");
+        let total: u64 = utxos.values().map(|e| e.amount).sum();
+        assert_eq!(total, TESTNET11_COMMUNITY_SOMPI, "347M MSK exactly");
+        assert_eq!(total, 347_000_000 * SOMPI_PER_KASPA);
+
+        // Per-entry amounts, in table order (100/5/30/100/100/1/5/5/1 M).
+        let expected_msk =
+            [100_000_000u64, 5_000_000, 30_000_000, 100_000_000, 100_000_000, 1_000_000, 5_000_000, 5_000_000, 1_000_000];
+        let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
+        for (i, want) in expected_msk.iter().enumerate() {
+            let entry = &utxos[&TransactionOutpoint { transaction_id: txid, index: i as u32 }];
+            assert_eq!(entry.amount, want * SOMPI_PER_KASPA, "entry {i} amount");
+            assert!(!entry.is_coinbase, "spendable from block 0");
+            assert_eq!(entry.block_daa_score, 0);
+            assert_eq!(entry.script_public_key.script().len(), 69, "ML-DSA-87 P2PKH");
+        }
+
+        // Every address is testnet-prefixed (these are misakatest: recipients, never mainnet).
+        for (addr, _) in TESTNET11_COMMUNITY_ALLOCATIONS {
+            let parsed = Address::try_from(*addr).expect("community address parses");
+            assert_eq!(parsed.prefix, Prefix::Testnet, "{addr} must be a testnet address");
+        }
+
+        // Distinct owners, and distinct from every premine owner.
+        let mut owners: Vec<[u8; 64]> = TESTNET11_COMMUNITY_ALLOCATIONS.iter().map(|(a, _)| owner_payload(a)).collect();
+        for vault in VAULT_ADDRESSES {
+            owners.push(owner_payload(vault));
+        }
+        owners.push(owner_payload(main_address(NetworkType::Testnet)));
+        for i in 0..owners.len() {
+            for j in (i + 1)..owners.len() {
+                assert_ne!(owners[i], owners[j], "owner {i} and {j} collide");
+            }
+        }
+
+        // Confinement: only testnet-11 carries the community set.
+        let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        assert_eq!(t11.len(), VAULT_COUNT + 1 + 9, "t11 = 41 premine + 9 community");
+        let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
+        assert_eq!(t10.len(), VAULT_COUNT + 1, "t10 keeps the running chain's exact set");
+        for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {
+            assert_eq!(genesis_premine_utxos_for(NetworkId::new(net)).len(), VAULT_COUNT + 1, "{net:?} carries no community set");
         }
     }
 

@@ -308,11 +308,14 @@ mod tests {
     /// as a fact, and the config gate holds the atomicity rules the arm implies.
     #[test]
     fn every_shipped_preset_is_disabled_and_the_gate_refuses_mixed_lineages() {
-        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
         for params in [&MAINNET_PARAMS, &TESTNET_PARAMS, &DEVNET_PARAMS, &SIMNET_PARAMS] {
             assert_eq!(params.palw_consensus_mode, PalwConsensusMode::Disabled, "{} ships Disabled", params.net);
             params.validate_palw_v2().expect("Disabled has nothing to validate");
         }
+        // …except the PALW staging net, which says what it is since the Relaunch-2 re-genesis.
+        assert_eq!(TESTNET11_PARAMS.palw_consensus_mode, PalwConsensusMode::LegacyTn11, "t11 marks the legacy lineage");
+        TESTNET11_PARAMS.validate_palw_v2().expect("LegacyTn11 adds no new constraints");
 
         // A ConsensusV2 params set with a conforming bundle and no V1 residue validates.
         // SIMNET is the clean base: its `pow_palw_activation` is `never()`.
