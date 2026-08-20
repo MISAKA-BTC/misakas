@@ -179,17 +179,36 @@ Measured on the shipped BASE-0 profile, the gate refuses four of its twenty-one 
 | node | reason | status |
 | --- | --- | --- |
 | `attn/9` | a `Requantize` kernel with no registered parameters | **authoring bug, fixed** |
-| `attn/5` (Q·Kᵀ) | KV sentinel is registration-opaque | **open — G5c** |
-| `attn/7` (P·V) | KV sentinel is registration-opaque | **open — G5c** |
+| `attn/5` (Q·Kᵀ) | KV sentinel is registration-opaque | **closed — G5c** |
+| `attn/7` (P·V) | KV sentinel is registration-opaque | **closed — G5c** |
 | `pre/0` (embedding) | `Embed` needs one input row; the pre table has no upstream | **open — G5d** |
 
-### G5c — `canonical_input_leaves` cannot name the KV series
+### G5c — `canonical_input_leaves` could not name the KV series — **closed**
 
-*Category:* **実装不足**. The leg already commits a KV aux series (`push_kv_chunk`,
-`kv_aux_leaf_count`, `PalwKvChunkLeafV1`), so the leaves exist; the resolver just does not map
-the sentinels onto them. Closing it means defining, for a given `(call, position, node)`, exactly
-which cache leaves that step reads — and getting it wrong in the permissive direction convicts
-honest producers, so it is not a place to guess.
+*Category:* **実装不足**, and the closure did not need what it first looked like it needed.
+
+The KV aux series (`PalwKvChunkLeafV1`) is **f16** — `2 x head_dim x position_count` little-endian
+f16 bytes — and ADR-0040 Decision D forbids a float cache outright ("`CpyF32F16` does not exist,
+because no cache holds floats"). So that series could never carry an integer class's cache, and
+mapping the sentinels onto it would have been wrong in the one direction that matters.
+
+The cache contents are **already ordinary step tiles**. The K and V projection nodes carry
+`KCacheWrite` / `VCacheWrite` and commit their output at every position — which is what those
+roles are for. So the sentinel resolves to whichever node of this layer's table holds the
+matching role, read over the position history, with no new leaf format and no float series.
+
+The one structural change: the position set is a property of the input REF, not of the node. An
+attention step reads its query at the CURRENT position and the cached keys at EVERY position up
+to it, which a node-wide `required_positions` cannot express — and that is why the sentinels were
+left opaque. The KV path groups ref-major (one concatenated row per input, which is the
+`out_dim x in_dim` matrix `MatMulQuant` wants); the GDN path keeps its position-major grouping
+untouched, because `gdn_core` consumes five rows per prior position and reordering them would be
+a different program.
+
+Two refusals guard the resolution: a layer with **no** node carrying the role names nothing, and a
+layer with **two** makes "the K cache" ambiguous — a court that had to choose would be choosing
+its own evidence. `palw_v2_the_kv_sentinels_resolve_to_the_cache_nodes_over_the_history` asserts
+which node is named and which positions are spanned, not merely that a function returned `Some`.
 
 ### G5d — the embedding gather has no adjudicable input
 
@@ -200,10 +219,10 @@ the token ids become part of the adjudicable context, or the embedding output is
 given that no dispute may address — and that second option must be stated, because a step nobody
 can challenge is a step a producer may write freely.
 
-**Consequence for the RC floor:** the BASE-0 profile shipped 2026-08-20 is **not adjudicable as
-written**, and `verify_profile_coverage_v1` refuses it. That supersedes the previous day's status
-line. The floor needs G5c and G5d closed — or a graph that avoids both — before it can carry
-weight.
+**Consequence for the RC floor:** 20 of the BASE-0 profile's 21 nodes are servable now;
+`verify_profile_coverage_v1` still refuses the profile as a whole, on the embedding gather alone.
+The floor needs G5d closed — or an embedding step defined as a given that no dispute may address,
+which must be *stated* rather than left implicit — before it can carry weight.
 
 ### G4 — GQA is not a gap
 

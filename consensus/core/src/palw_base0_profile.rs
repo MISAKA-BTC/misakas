@@ -681,30 +681,28 @@ mod tests {
         assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
 
-    /// **G5, measured: three nodes of this graph are still unadjudicable, and now they say so.**
+    /// **G5, measured: one node of this graph is still unadjudicable, and it says so.**
     ///
     /// The id gate certified this profile at "100% coverage" while several nodes could never be
     /// recomputed, because it compares kernel IDs and never asks what a kernel can SERVE. Asking
     /// properly — `kernel_can_serve_node_v1`, which lives next to the code that does the serving
     /// — turns each of those into a registration-time refusal with a reason.
     ///
-    /// Two of the four it found are now closed: the attention matmuls multiply an activation by
-    /// an opened row instead of demanding a registered weight, and `KvScaled` widths are derived
-    /// from the kv length the caller already holds. Three remain, and each is a blocker recorded
-    /// in `docs/palw-qwen25-class-phase0.md` rather than something to route around:
+    /// Three of the four it found are closed. The attention matmuls multiply an activation by an
+    /// opened row instead of demanding a registered weight (G5a), `KvScaled` widths are derived
+    /// from the kv length the caller already holds (G5b), and the KV sentinels resolve to this
+    /// layer's cache-role nodes over the position history (G5c) — no new leaf format and no float
+    /// aux series, because the cache contents are already ordinary step tiles.
     ///
-    /// * **pre/0, the embedding gather** — `Base0Op::Embed` needs one input row and the pre table
-    ///   has no upstream to name. Adjudicating a real gather needs the TOKEN ID, which is not a
-    ///   step input and is not in the job context (only `prompt_token_ids_hash` is).
-    /// * **attn/5 and attn/7, the attention matmuls** — their second operand is the K or V cache
-    ///   series, and `canonical_input_leaves` answers `None` for those sentinels: "KV /
-    ///   checkpoint arms: registration-opaque today". A `None` there is `Unadjudicable` at the
-    ///   first dispute whatever the kernel can compute, so the kernel fix alone does not reach
-    ///   them.
+    /// One remains, and it is a blocker recorded in `docs/palw-qwen25-class-phase0.md` rather
+    /// than something to route around:
+    ///
+    /// * **pre/0, the embedding gather (G5d)** — `Base0Op::Embed` needs one input row and the pre
+    ///   table has no upstream to name. Adjudicating a real gather needs the TOKEN ID, which is
+    ///   not a step input and is not in the job context (only `prompt_token_ids_hash` is).
     ///
     /// This test asserts the CURRENT truth so the state is measured rather than believed. When
-    /// the resolver learns the KV series it must be rewritten to expect zero refusals — the
-    /// number is the point, not the list.
+    /// G5d closes it must be rewritten to expect zero refusals — the number is the point.
     #[test]
     fn the_servability_gate_names_exactly_what_is_still_unadjudicable() {
         use crate::palw_catalog_coverage::verify_profile_coverage_v1;
@@ -721,8 +719,8 @@ mod tests {
         }
         assert_eq!(
             refused,
-            vec![("pre", 0), ("attn", 5), ("attn", 7)],
-            "the embedding gather and the two attention matmuls — and nothing else, so the other 18 nodes really are servable"
+            vec![("pre", 0)],
+            "the embedding gather alone — the two attention matmuls closed with G5a/b/c, so 20 of 21 nodes are servable"
         );
         // Which means the profile as a whole is refused, and the refusal names a node.
         assert!(matches!(

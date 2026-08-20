@@ -555,7 +555,7 @@ impl PalwShapeProfileV3 {
         }
     }
 
-    fn layer_table(&self, layer: u16) -> &[PalwStepNodeV1] {
+    pub(crate) fn layer_table(&self, layer: u16) -> &[PalwStepNodeV1] {
         match self.layer_kind(layer) {
             PalwLayerKindV1::GatedDeltaNet => &self.gdn_nodes,
             PalwLayerKindV1::Attention => &self.attn_nodes,

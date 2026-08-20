@@ -220,13 +220,25 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
     // the first dispute no matter what the kernel can compute, so a node that asks for one is a
     // node no court can reach.
     for r in &node.input_refs {
-        if *r >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
-            if *r != crate::palw_step::PALW_STEP_INPUT_LAYER_IN {
-                return Err("the KV and checkpoint input sentinels are registration-opaque: canonical_input_leaves cannot name their leaves");
+        if *r < crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+            continue;
+        }
+        match *r {
+            crate::palw_step::PALW_STEP_INPUT_LAYER_IN => {
+                if table_is_pre {
+                    return Err("the pre table has no upstream, so LAYER_IN names nothing there");
+                }
             }
-            if table_is_pre {
-                return Err("the pre table has no upstream, so LAYER_IN names nothing there");
+            // Resolvable since G5c: the sentinel names whichever node of this layer's table
+            // carries the matching cache role, read over the position history. The role must
+            // exist and be unique, or "the K cache" names nothing or two things — and a court
+            // that had to choose would be choosing its own evidence.
+            crate::palw_step::PALW_STEP_INPUT_KV_K | crate::palw_step::PALW_STEP_INPUT_KV_V => {
+                if table_is_pre {
+                    return Err("the pre table has no cache-role nodes for a KV sentinel to name");
+                }
             }
+            _ => return Err("the checkpoint input sentinel is registration-opaque: canonical_input_leaves cannot name its leaves"),
         }
     }
     let inputs = node.input_refs.len();
@@ -618,6 +630,75 @@ fn canonical_input_leaves(
         expanded.extend(positions.drain(1..));
         positions = expanded;
     }
+    // **The KV arms (G5c).** An attention step reads its query at the CURRENT position and the
+    // cached keys or values at EVERY position up to it — so the position set is a property of the
+    // input ref, not of the node, which is why a node-wide `required_positions` could not express
+    // it and the sentinels were left "registration-opaque".
+    //
+    // No new leaf format is needed and no float aux series is read: the cache contents are
+    // already ordinary step tiles. The K and V projection nodes carry `KCacheWrite` /
+    // `VCacheWrite` roles and commit their output at every position, which is what those roles
+    // are FOR — the sentinel resolves to whichever node of this layer's table holds the role.
+    //
+    // The grouping is ref-major here, one concatenated row per input: `MatMulQuant` wants its
+    // second operand as a single `out_dim x in_dim` row, and the history is that matrix. The
+    // GDN path below keeps its position-major grouping untouched, because `gdn_core` consumes
+    // five rows per prior position and reordering them would be a different program.
+    use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V};
+    if node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V) {
+        let history: Vec<(u32, u32)> = if out_coord.call_index == 0 {
+            (0..=out_coord.position).map(|p| (0, p)).collect()
+        } else {
+            (0..context.declared_prefill_tokens)
+                .map(|p| (0, p))
+                .chain((1..=out_coord.call_index).map(|c| (c, 0)))
+                .collect()
+        };
+        for &r in &node.input_refs {
+            let (in_slot, positions_for_ref) = match r {
+                PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => {
+                    let want = if r == PALW_STEP_INPUT_KV_K {
+                        crate::palw_step::PalwStepNodeRoleV1::KCacheWrite
+                    } else {
+                        crate::palw_step::PalwStepNodeRoleV1::VCacheWrite
+                    };
+                    let table = profile.layer_table(layer?);
+                    // Exactly one node may hold each cache role: two would make "the K cache"
+                    // ambiguous, and a court that had to choose would be choosing the evidence.
+                    let mut found = table.iter().enumerate().filter(|(_, n)| n.role == want);
+                    let (idx, _) = found.next()?;
+                    if found.next().is_some() {
+                        return None;
+                    }
+                    (table_first_slot + idx as u32, history.clone())
+                }
+                PALW_STEP_INPUT_LAYER_IN => {
+                    if table_first_slot == 0 {
+                        return None;
+                    }
+                    (table_first_slot - 1, vec![(out_coord.call_index, out_coord.position)])
+                }
+                _ if r >= PALW_STEP_INPUT_SENTINEL_MIN => return None,
+                _ => (table_first_slot + r as u32, vec![(out_coord.call_index, out_coord.position)]),
+            };
+            let (in_node, _) = profile.resolve_node_slot(in_slot)?;
+            let mut row = Vec::new();
+            for (call, pos) in positions_for_ref {
+                let kv_len = if call == 0 { pos as u64 + 1 } else { context.declared_prefill_tokens as u64 + call as u64 };
+                let len = match in_node.out_len {
+                    crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+                    crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+                };
+                for t in 0..len.div_ceil(in_node.tile_len as u64) as u32 {
+                    let coord = PalwStepCoordinateV1 { call_index: call, node_slot: in_slot, position: pos, tile_index: t };
+                    row.push((canonical_step_leaf_index(profile, context, &coord)?, coord));
+                }
+            }
+            out.push(row);
+        }
+        return Some(out);
+    }
+
     for &(call, pos) in &positions {
         for &r in &node.input_refs {
             let in_slot = if r >= PALW_STEP_INPUT_SENTINEL_MIN {
@@ -628,7 +709,7 @@ fn canonical_input_leaves(
                         }
                         table_first_slot - 1
                     }
-                    _ => return None, // KV / checkpoint arms: registration-opaque today
+                    _ => return None, // the checkpoint arm: registration-opaque today
                 }
             } else {
                 table_first_slot + r as u32
@@ -649,7 +730,6 @@ fn canonical_input_leaves(
             out.push(row);
         }
     }
-    let _ = layer;
     Some(out)
 }
 
@@ -1673,6 +1753,116 @@ pub(crate) mod tests {
 
         // An opening against a DIFFERENT root proves nothing, so it never becomes an oracle.
         assert!(PalwProvenOperandsV1::from_openings_v1(&openings, h64(0xBD)).is_err());
+    }
+
+    /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**
+    ///
+    /// `canonical_input_leaves` used to answer `None` for them — "KV / checkpoint arms:
+    /// registration-opaque today" — and a `None` is `Unadjudicable` before any kernel runs, so
+    /// attention was unreachable however capable the kernel became.
+    ///
+    /// The fix needs no new leaf format and reads no float aux series: the cache contents are
+    /// already ordinary step tiles, because the K and V projection nodes carry `KCacheWrite` /
+    /// `VCacheWrite` and commit their output at every position. This asserts the resolution
+    /// itself — which node it names and which positions it spans — rather than that some function
+    /// returned `Some`.
+    #[test]
+    fn palw_v2_the_kv_sentinels_resolve_to_the_cache_nodes_over_the_history() {
+        use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepNodeRoleV1};
+        let mut p = base0_matmul_profile();
+        // Every layer is an attention layer: `KvScaled` widths are only meaningful in a graph
+        // that has one, and the cache roles live in the attention table.
+        p.full_attention_interval = 1;
+        let node = |kind, desc: &str, role, out, refs: Vec<u16>| PalwStepNodeV1 {
+            op_kind: kind,
+            role,
+            weight_name: String::new(),
+            weight_dtypes: Vec::new(),
+            out_len: out,
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(desc),
+            input_refs: refs,
+        };
+        // slot 0: the layer input. 1: K cache write. 2: V cache write. 3: scores (q x K^T).
+        p.gdn_nodes = Vec::new();
+        p.attn_nodes = vec![
+            node(
+                PalwStepOpKindV1::Silu,
+                KDESC_BASE0_SILU,
+                PalwStepNodeRoleV1::Plain,
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements: 32 },
+                vec![crate::palw_step::PALW_STEP_INPUT_LAYER_IN],
+            ),
+            node(
+                PalwStepOpKindV1::Silu,
+                KDESC_BASE0_SILU,
+                PalwStepNodeRoleV1::KCacheWrite,
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements: 16 },
+                vec![0],
+            ),
+            node(
+                PalwStepOpKindV1::Silu,
+                KDESC_BASE0_SILU,
+                PalwStepNodeRoleV1::VCacheWrite,
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements: 16 },
+                vec![0],
+            ),
+            node(
+                PalwStepOpKindV1::MatMulQuant,
+                KDESC_BASE0_MATMUL,
+                PalwStepNodeRoleV1::Plain,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier: 1 },
+                vec![0, PALW_STEP_INPUT_KV_K],
+            ),
+        ];
+        p.validate_shape().expect("the probe profile is well-formed");
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
+
+        // Challenge the scores node at the last prefill position (the fixture context declares
+        // two prefill tokens, so positions are 0 and 1): it reads its query at position 1 and the
+        // cached keys at positions 0 and 1.
+        let scores_slot = 1 + 3; // pre(1) + attn slots 0..2
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: scores_slot, position: 1, tile_index: 0 };
+        let required = canonical_input_leaves(&p, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul))
+            .expect("the KV sentinel resolves — this returned None before G5c");
+
+        assert_eq!(required.len(), 2, "one group per input ref: the query row, then the whole key history");
+        let query: Vec<_> = required[0].iter().map(|(_, c)| (c.node_slot, c.position)).collect();
+        assert_eq!(query, vec![(1, 1), (1, 1)], "the query is this position's layer-input row, both its tiles");
+        let keys: Vec<_> = required[1].iter().map(|(_, c)| (c.node_slot, c.position)).collect();
+        assert_eq!(
+            keys,
+            vec![(2, 0), (2, 1)],
+            "the keys are the KCacheWrite node (slot 2) at every position up to the challenged one"
+        );
+
+        // The V sentinel names the OTHER role, so the two are not interchangeable.
+        let mut v_node = p.clone();
+        v_node.attn_nodes[3].input_refs = vec![0, PALW_STEP_INPUT_KV_V];
+        let required_v = canonical_input_leaves(&v_node, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul))
+            .expect("the V sentinel resolves too");
+        assert_eq!(
+            required_v[1].iter().map(|(_, c)| c.node_slot).collect::<Vec<_>>(),
+            vec![3, 3],
+            "the V sentinel names the VCacheWrite node (slot 3), not the K one"
+        );
+
+        // A layer with no such role names nothing, and that is a refusal rather than a guess.
+        let mut roleless = p.clone();
+        roleless.attn_nodes[1].role = PalwStepNodeRoleV1::Plain;
+        assert!(
+            canonical_input_leaves(&roleless, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul)).is_none(),
+            "no KCacheWrite node means the K sentinel names nothing"
+        );
+        // Two of them would make "the K cache" ambiguous, and a court that had to choose would be
+        // choosing its own evidence.
+        let mut doubled = p.clone();
+        doubled.attn_nodes[2].role = PalwStepNodeRoleV1::KCacheWrite;
+        assert!(
+            canonical_input_leaves(&doubled, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul)).is_none(),
+            "two KCacheWrite nodes is an ambiguous cache"
+        );
     }
 
     #[test]
