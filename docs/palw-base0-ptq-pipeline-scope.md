@@ -190,17 +190,27 @@ implementations keep the residual in wider precision — and BASE-0 cannot, beca
 `i8 → i32` by ADR-0040 Decision D. Widening it is a **new kernel**, i.e. the one change that would
 re-open the catalog.
 
-Two mitigations, in order of preference:
+**Measured 2026-08-21 — see `docs/palw-base0-depth-measurement-2026-08-21.md`. Two corrections
+to the paragraph above.**
 
-1. **Make `residual_requant` per-layer** (artifact + engine change, catalog-compatible). The
-   calibrator then tracks measured stream growth and spends attenuation only where the stream
-   actually grows.
-2. **Bound depth.** Choose `n_layers` from measurement rather than from the source model.
+*The `g_res = 1/2` claim was wrong.* A feature is not attenuated to nothing: C1 rounds half away
+from zero on the magnitude, so `RSR(1, 1) = 1` and the decay `127 → 64 → … → 2 → 1` **floors at ±1
+forever**. The residual highway carries ~7 adds ≈ 3.5 layers of magnitude, after which a feature
+survives as a sign. Nothing saturates or collapses at 32 layers, at either width.
 
-**This should be resolved by experiment before anything else is built.** The experiment is cheap:
-take a small pretrained model, quantise a growing prefix of its layers, and plot
-`ForwardProbe::residual_peak` and output agreement against depth. It answers "how deep can BASE-0
-go" with a number, and that number decides §7 stage 0.
+*The trade is now quantified.* `g_res = 1` needs every layer's residual write attenuated to keep
+off the rail — **2–3 bits of the code range at depth 24–32**, and width makes it worse rather than
+better. So:
+
+| | residual highway | per-layer write |
+|---|---|---|
+| gain 1/2 | ~7 adds, then a sign | full 7 bits |
+| gain 1 + attenuation | unbounded | 2–3 bits at depth 24–32 |
+
+**Depth is not a wall.** 24–32 layers is arithmetically reachable; the residual binds quality, not
+liveness. Mitigation 1 (per-layer `residual_requant`) survives as *useful* rather than *required* —
+it places the budget, it does not enlarge it. The only thing that enlarges it is `AddElem` at a
+wider type (`i16` buys 10–11 bits per write), which is a new kernel and an ADR-0040 amendment.
 
 ---
 
