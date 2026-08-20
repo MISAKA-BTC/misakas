@@ -25,6 +25,24 @@
 
 つまり、同日に「実装完了」と報告した層に対して、**その報告と同じ日のコードから P0 が 4 件出ている**。この発見率自体が、再監査なしに activation を語れないことの根拠である。
 
+## 対応状況（被監査側）
+
+| | 状態 |
+|---|---|
+| **P0-1** commitment が PoW に未束縛 | **CLOSED** — `bind_l1_tag_v1` で commitment root を L1 tag に混合。`one_pow_solution_cannot_carry_two_commitments` が trace/output/bond の 3 フィールドを個別に固定 |
+| **P0-2** commitment 署名が未検証 | **CLOSED** — admission が ticket より前に検証。`a_commitment_nobody_signed_is_refused_before_the_inference` |
+| P0-3〜P0-10 | 未着手 |
+
+### P0-1 で監査の推奨 remedy を採らなかった理由
+
+監査は「PoW finalizer が `Expand(commitment_root)` を L1 tag として消費する」ことを求めている。**これは `l1_tag_bytes` が既に実装している内容だが、採用しなかった。**
+
+それは推論を**置き換える**変更、すなわち W1 そのものだからである。tag の生成が無料になり、監査自身が P0-10 で「W1 だけを直すと fake-root grinding が急に安くなる」と指摘している。**bond ごとの未成熟 exposure 上限（P0-10）が入る前に work を無料にしてはならない。**
+
+そこで採ったのは**束縛のみ**：推論は work のまま残し、commitment root を tag に混合する。これで「1 つの PoW 解 → 無制限の block identity」は閉じ、work の価格は変わらない。単独で安全に着地できる。
+
+`bind_l1_tag_v1` は leaf discriminator を `2` にして `l1_tag_bytes` の `1` と分離してある。同じ root に対して両者が同じ bytes を出すと、bound-work 体制と bound-inference 体制の間をネットワークが digest に気付かれず移動できてしまうため。
+
 ## 結論
 
 **現状は NO-GO。PALW を有効化して価値を載せてはいけない。**

@@ -338,6 +338,43 @@ impl PalwBlockCommitmentV1 {
         Hash64::from_bytes(out)
     }
 
+    /// **Bind an attempt's L1 tag to this commitment** — the fix for "one PoW solution, unlimited
+    /// distinct block identities" (external audit P0-1).
+    ///
+    /// The block identity hash covers `palw_commitment`; every PoW-path digest excludes it. So a
+    /// miner who solves once can swap `trace_root`, `output_root` or `executor_bond_outpoint`, keep
+    /// the same PoW, and mint sibling blocks without limit. Mixing the commitment root into the tag
+    /// closes that: one bit of the commitment moves the root, the root moves the tag, the tag moves
+    /// the finalizer digest, and the PoW fails.
+    ///
+    /// **This is NOT [`Self::l1_tag_bytes`], and the difference is the whole safety argument.**
+    /// That function REPLACES the inference with an expansion of the commitment root — it is the W1
+    /// change, and it makes producing a tag free. Free tags are safe only once a bond's immature
+    /// exposure is capped in consensus (audit P0-10); until then, replacing the work is what turns
+    /// fake-root grinding from expensive into cheap. This function keeps the inference as the work
+    /// and only BINDS the commitment to it, so it can land on its own.
+    ///
+    /// Same width as the input, so the finalizer's call shape is unchanged.
+    pub fn bind_l1_tag_v1(
+        inference_tag: &[u8],
+        commitment_root: Hash64,
+    ) -> [u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES] {
+        let mut out = [0u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES];
+        for (chunk_index, chunk) in out.chunks_mut(64).enumerate() {
+            let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG).to_state();
+            // Leaf discriminator 2, distinct from `l1_tag_bytes`'s 1: the two must never produce the
+            // same bytes for the same root, or a network could be moved between the bound-work and
+            // bound-inference regimes without the digest noticing.
+            state.update(&[2u8]);
+            state.update(&(inference_tag.len() as u32).to_le_bytes());
+            state.update(inference_tag);
+            state.update(commitment_root.as_byte_slice());
+            state.update(&(chunk_index as u32).to_le_bytes());
+            chunk.copy_from_slice(&state.finalize().as_bytes()[..chunk.len()]);
+        }
+        out
+    }
+
     /// The 200 tag bytes the Layer-0 finalizer consumes in place of the re-run inference:
     /// a domain-keyed expansion of the commitment root for **this attempt's challenge**
     /// (deterministic, admission-checkable by any CPU). The expansion width keeps the

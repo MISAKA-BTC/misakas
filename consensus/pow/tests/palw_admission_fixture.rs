@@ -24,6 +24,14 @@ use kaspa_pow::palw_admission::{PalwAdmission, PalwAdmissionClassFacts, PalwAdmi
 /// no-op.
 const NETWORK: &[u8] = b"devnet";
 
+/// Accepts iff the signature is the fixture's own bytes under the block-commitment context —
+/// admission must ASK, and a permissive stub would hide the P0-2 regression.
+fn accept_fixture_signature(key: &[u8], _message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    !key.is_empty()
+        && signature == vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN].as_slice()
+        && context == kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+}
+
 fn outpoint(seed: u64) -> TransactionOutpoint {
     TransactionOutpoint::new(Hash64::from_u64_word(seed), 0)
 }
@@ -96,7 +104,7 @@ fn a_complete_block_admits_and_names_its_payee() {
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
-    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true).expect("every conjunct holds") {
+    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature).expect("every conjunct holds") {
         PalwAdmission::Admitted { executor_bond, commitment, ticket } => {
             assert_eq!(executor_bond.bond_outpoint, op, "the payee is the bond that acted");
             assert_eq!(commitment.executor_bond_outpoint, op);
@@ -108,6 +116,56 @@ fn a_complete_block_admits_and_names_its_payee() {
 
 /// The lottery clause: at the hardest possible target this header's ticket misses, and the block
 /// does not admit however well-formed everything else is.
+/// **Audit P0-1**: one PoW solution must not yield two block identities.
+///
+/// The block identity hash covers `palw_commitment`; every PoW-path digest excluded it. So a miner
+/// who solved once could swap `trace_root`, `output_root` or `executor_bond_outpoint`, keep the
+/// same `(pre_pow_hash, timestamp, nonce)` — and therefore the same PoW — and mint sibling blocks
+/// without limit: DAG flooding, panel grinding, one ticket reused arbitrarily often.
+///
+/// This is the consensus test the audit asks for: **change one field of the commitment and the
+/// Layer-0 digest moves.** Three fields are swept, one at a time, because binding "the commitment"
+/// is only worth as much as its weakest field — a binding over the trace root alone would leave the
+/// bond swappable, which is the attribution half of the attack.
+///
+/// The fourth assertion is the one that keeps this honest for every network that has NOT opened the
+/// fence: a header with an empty `palw_commitment` must produce exactly the digest it produced
+/// before this binding existed. That is what makes the change inert where the fence is shut.
+#[test]
+fn one_pow_solution_cannot_carry_two_commitments() {
+    // SAFETY: single-threaded test process; the fixture family is selected for this whole test.
+    unsafe { std::env::set_var("MISAKA_PALW_POW_FIXTURE", "1") };
+    let op = outpoint(1);
+    let base = commitment(op, PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100 });
+    // The nonce comes off the header the digest is taken over, so the two can never drift apart.
+    let digest_of = |c: &PalwBlockCommitmentV1| {
+        let h = header(c.encode());
+        kaspa_pow::StateLayer0::new(&h, NETWORK).calculate_pow_layer0(h.nonce).expect("fixture tag family")
+    };
+    let baseline = digest_of(&base);
+
+    let mut other_trace = base.clone();
+    other_trace.trace_root = Hash64::from_u64_word(0xDEAD);
+    assert_ne!(digest_of(&other_trace), baseline, "swapping the trace root must invalidate the PoW");
+
+    let mut other_output = base.clone();
+    other_output.output_root = Hash64::from_u64_word(0xBEEF);
+    assert_ne!(digest_of(&other_output), baseline, "swapping the output root must invalidate the PoW");
+
+    let mut other_bond = base.clone();
+    other_bond.executor_bond_outpoint = outpoint(2);
+    assert_ne!(digest_of(&other_bond), baseline, "swapping the executor bond must invalidate the PoW");
+
+    // Inert where the fence is shut: no commitment, no binding, the pre-existing digest.
+    let bare_header = header(Vec::new());
+    let bare =
+        kaspa_pow::StateLayer0::new(&bare_header, NETWORK).calculate_pow_layer0(bare_header.nonce).expect("fixture tag family");
+    assert_ne!(bare, baseline, "a bound header and a bare one are different rule sets");
+    let bare_again =
+        kaspa_pow::StateLayer0::new(&bare_header, NETWORK).calculate_pow_layer0(bare_header.nonce).expect("fixture tag family");
+    assert_eq!(bare, bare_again, "the unbound path must stay a pure function of the header");
+}
+
 #[test]
 fn a_ticket_over_the_class_target_does_not_admit() {
     select_the_fixture_tag_family();
@@ -115,7 +173,7 @@ fn a_ticket_over_the_class_target_does_not_admit() {
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
-    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true) {
+    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature) {
         Err(PalwAdmissionError::TicketDoesNotAdmit { ticket, class_target }) => {
             assert_eq!(class_target, 0);
             // A ticket of exactly 0 would admit at target 0 and make this vacuous. It is a

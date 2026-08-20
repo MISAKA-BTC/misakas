@@ -716,6 +716,11 @@ impl VirtualStateProcessor {
             // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
             self.genesis.hash.as_bytes().as_slice(),
             commitment_bound,
+            // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
+            // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
+            |key, message, signature, context| {
+                kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+            },
         )
         .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
 

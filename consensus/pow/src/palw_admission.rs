@@ -69,6 +69,8 @@ pub enum PalwAdmissionError {
     Pwu(#[from] kaspa_consensus_core::palw_pwu::PalwPwuError),
     /// The lottery clause. Reported with both sides because a ticket that missed by little and one
     /// that missed by a lot are different operational stories.
+    #[error("the commitment's ML-DSA-87 signature does not verify under the executor bond's key")]
+    CommitmentSignatureInvalid,
     #[error("palw ticket {ticket} does not admit under the class target {class_target}")]
     TicketDoesNotAdmit { ticket: u128, class_target: u128 },
     /// The header's PoW could not be computed at all — a runtime fault, not a verdict on the
@@ -100,15 +102,17 @@ pub enum PalwAdmissionError {
 ///   made the call impossible to place in a pipeline that has no class store yet, which is exactly
 ///   the position every shipped network is in. Lazy, the unbound path costs nothing and the call
 ///   can sit in the pipeline today, inert.
-pub fn check_palw_block_admission_v1<'a, F>(
+pub fn check_palw_block_admission_v1<'a, F, V>(
     header: &Header,
     bonds: &'a ActiveBondView,
     class_facts: F,
     network_id: &[u8],
     bound: bool,
+    verify_mldsa87: V,
 ) -> Result<PalwAdmission<'a>, PalwAdmissionError>
 where
     F: FnOnce(&kaspa_hashes::Hash64) -> Option<PalwAdmissionClassFacts>,
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     // Shape first, and unconditionally: this also enforces the pre-ADR rule when the fence is off,
     // so an unfenced network still refuses a header that carries bytes nothing validates.
@@ -123,6 +127,30 @@ where
 
     // W8, before the inference: no bond, no block.
     let executor_bond = commitment.validate_executor_bond_v1(bonds, header.daa_score)?;
+
+    // …and the bond must have SIGNED this commitment (external audit P0-2). Without it W8 read
+    // "name any Active bond outpoint and attach bytes of the right length": `validate_shape` checks
+    // the signature's LENGTH, `validate_executor_bond_v1` checks the named bond is Active, and
+    // nothing checked that the bond's holder authorised anything. An attacker with no stake could
+    // produce blocks under a victim's bond, and every downstream attribution — payee, slash target,
+    // panel exclusion — pointed at the victim.
+    //
+    // The verifier is passed in because this crate holds no curve, but the CONTEXT is not: it is
+    // applied here, so no caller can supply the wrong domain. That is the shape audit P0-6 asks
+    // for — the defect there was one context-free closure serving three object families, and the
+    // repair is that the family's own code chooses the domain.
+    //
+    // Before the ticket, which is the expensive part: an unsigned commitment must cost a peer a
+    // signature verification, not an inference.
+    let attempt_digest = commitment.message(network_id, kaspa_consensus_core::hashing::header::pre_pow_hash_64(header), header.timestamp, header.nonce);
+    if !verify_mldsa87(
+        &executor_bond.validator_pubkey,
+        attempt_digest.as_bytes().as_slice(),
+        &commitment.signature,
+        kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT,
+    ) {
+        return Err(PalwAdmissionError::CommitmentSignatureInvalid);
+    }
 
     // Resolved BY the block's own class id, and only now that the block has earned the lookup.
     let facts = class_facts(&commitment.execution_class_id)
@@ -175,6 +203,17 @@ mod tests {
     /// is about something else. The one test that IS about the lottery tightens it.
     const EASY: PalwAdmissionClassFacts = PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100 };
 
+    /// Accepts iff the signature is the fixture's own `[0x5A; SIG_LEN]` under a non-empty key and
+    /// the block-commitment context. Stands in for ML-DSA-87, which lives outside this crate.
+    ///
+    /// Deliberately NOT "accept everything": the point of these tests is that admission ASKS, and a
+    /// permissive stub would let the P0-2 regression back in without a single assertion changing.
+    fn accept_fixture_signature(key: &[u8], _message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+        !key.is_empty()
+            && signature == vec![0x5A; STAKE_ATTESTATION_SIG_LEN].as_slice()
+            && context == kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+    }
+
     fn outpoint(seed: u64) -> TransactionOutpoint {
         TransactionOutpoint::new(Hash64::from_u64_word(seed), 0)
     }
@@ -220,6 +259,50 @@ mod tests {
     /// the Layer-0 digest is computed, so none of them needs the pinned model. The two that do
     /// need it — the happy path and the lottery — live in `tests/palw_admission_fixture.rs`,
     /// where the model-free fixture tag family can be selected for the whole binary.
+    /// **Audit P0-2**: naming an Active bond is not holding one.
+    ///
+    /// The attack this closes needs no key at all — write any Active bond's outpoint into the
+    /// commitment, attach bytes of the right LENGTH, and W8 used to pass: `validate_shape` measured
+    /// the signature, `validate_executor_bond_v1` confirmed the named bond was Active, and nobody
+    /// asked whether that bond's holder had authorised anything. Every downstream attribution —
+    /// payee, slash target, panel exclusion — then pointed at the victim.
+    ///
+    /// The refusal must also land BEFORE the digest: an unsigned commitment should cost a peer one
+    /// signature verification, never an inference. That ordering is what the second assertion pins —
+    /// this test runs with no fixture tag family and no model, so reaching the digest would fail
+    /// differently (`Unresolvable`), and `CommitmentSignatureInvalid` is only reachable if the check
+    /// is upstream of it.
+    #[test]
+    fn a_commitment_nobody_signed_is_refused_before_the_inference() {
+        let op = outpoint(1);
+        let bonds = ActiveBondView::from_records([(op, bond_record(op))]);
+        let mut c = commitment(op, EASY);
+        c.signature = vec![0xAA; STAKE_ATTESTATION_SIG_LEN]; // right length, wrong bytes
+
+        assert!(
+            matches!(
+                check_palw_block_admission_v1(&header(c.encode()), &bonds, |_| Some(EASY), NETWORK, true, accept_fixture_signature),
+                Err(PalwAdmissionError::CommitmentSignatureInvalid)
+            ),
+            "a commitment the bond did not sign must be refused"
+        );
+
+        // And the domain is chosen by admission, not by the caller: a verifier that only accepts
+        // some OTHER context sees the block-commitment context and refuses.
+        let wrong_domain = |_k: &[u8], _m: &[u8], _s: &[u8], context: &[u8]| context == b"some-other-domain".as_slice();
+        assert!(matches!(
+            check_palw_block_admission_v1(
+                &header(commitment(op, EASY).encode()),
+                &bonds,
+                |_| Some(EASY),
+                NETWORK,
+                true,
+                wrong_domain
+            ),
+            Err(PalwAdmissionError::CommitmentSignatureInvalid)
+        ));
+    }
+
     /// The announced root is a function of the whole attempt, and the negative is what matters.
     ///
     /// Receipts target this value, so anything that moves it must move every receipt with it. The
@@ -270,13 +353,13 @@ mod tests {
     fn unfenced_is_the_old_rule_and_stops_there() {
         let empty = ActiveBondView::from_records([]);
         assert_eq!(
-            check_palw_block_admission_v1(&header(Vec::new()), &empty, |_| Some(EASY), NETWORK, false).unwrap(),
+            check_palw_block_admission_v1(&header(Vec::new()), &empty, |_| Some(EASY), NETWORK, false, accept_fixture_signature).unwrap(),
             PalwAdmission::NotBound
         );
         // And an unfenced header carrying bytes is still refused, by the shape rule.
         let carrying = header(commitment(outpoint(2), EASY).encode());
         assert!(matches!(
-            check_palw_block_admission_v1(&carrying, &empty, |_| Some(EASY), NETWORK, false),
+            check_palw_block_admission_v1(&carrying, &empty, |_| Some(EASY), NETWORK, false, accept_fixture_signature),
             Err(PalwAdmissionError::Commitment(_))
         ));
     }
@@ -289,13 +372,13 @@ mod tests {
         let h = header(commitment(op, EASY).encode());
         let nobody = ActiveBondView::from_records([]);
         assert!(matches!(
-            check_palw_block_admission_v1(&h, &nobody, |_| Some(EASY), NETWORK, true),
+            check_palw_block_admission_v1(&h, &nobody, |_| Some(EASY), NETWORK, true, accept_fixture_signature),
             Err(PalwAdmissionError::Claim(PalwBlockCommitmentError::ExecutorBondNotActive { .. }))
         ));
         // Someone else's active bond does not stand in.
         let theirs = bonds_with(outpoint(99));
         assert!(matches!(
-            check_palw_block_admission_v1(&h, &theirs, |_| Some(EASY), NETWORK, true),
+            check_palw_block_admission_v1(&h, &theirs, |_| Some(EASY), NETWORK, true, accept_fixture_signature),
             Err(PalwAdmissionError::Claim(PalwBlockCommitmentError::ExecutorBondNotActive { .. }))
         ));
     }
@@ -309,7 +392,7 @@ mod tests {
         let mut c = commitment(op, EASY);
         c.pwu_claim = c.pwu_claim.saturating_mul(1_000);
         assert!(matches!(
-            check_palw_block_admission_v1(&header(c.encode()), &bonds, |_| Some(EASY), NETWORK, true),
+            check_palw_block_admission_v1(&header(c.encode()), &bonds, |_| Some(EASY), NETWORK, true, accept_fixture_signature),
             Err(PalwAdmissionError::Pwu(_))
         ));
     }
@@ -324,7 +407,7 @@ mod tests {
         h.pow_algo_id = POW_ALGO_ID_KHEAVYHASH;
         for bound in [false, true] {
             assert!(matches!(
-                check_palw_block_admission_v1(&h, &bonds, |_| Some(EASY), NETWORK, bound),
+                check_palw_block_admission_v1(&h, &bonds, |_| Some(EASY), NETWORK, bound, accept_fixture_signature),
                 Err(PalwAdmissionError::Commitment(_))
             ));
         }

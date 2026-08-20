@@ -205,6 +205,12 @@ pub struct StateLayer0 {
     /// is the header-validation rule's job (consensus/src), not the
     /// finalizer's.
     pub(crate) pow_algo_id: u8,
+    /// The block's PALW commitment, decoded once, when the header carries one.
+    ///
+    /// Present only where the commitment fence is open — `check_palw_commitment_shape` requires an
+    /// EMPTY `palw_commitment` on every network whose fence is shut, so this is `None` everywhere
+    /// today and the tag path below is byte-identical to before it existed.
+    pub(crate) palw_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1>,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
@@ -239,6 +245,10 @@ impl StateLayer0 {
         Self {
             matrix,
             target_512,
+            // Decoded, never trusted: a header whose bytes do not decode carries no commitment to
+            // bind to, and admission refuses it separately. Silently binding nothing would be the
+            // dangerous reading, so the tag only changes when a commitment is actually present.
+            palw_commitment: kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::decode(&header.palw_commitment).ok(),
             pre_pow_hash_64,
             network_id: network_id.to_vec(),
             timestamp: header.timestamp,
@@ -270,8 +280,31 @@ impl StateLayer0 {
             // from (network, pre_pow_hash, timestamp, nonce). 200 bytes.
             POW_ALGO_ID_PALW_LLM => {
                 let tag = palw::palw_l1_tag(self.pre_pow_hash_64, self.timestamp, nonce, &self.network_id)?;
-                buf[..POW_L1_PALW_OUT_BYTES].copy_from_slice(&tag);
-                Ok(POW_L1_PALW_OUT_BYTES)
+                // Audit P0-1: the block identity hash covers `palw_commitment` and every PoW-path
+                // digest excludes it, so a miner who solved once could swap the trace root, the
+                // output root or the executor bond and mint sibling blocks on the SAME PoW. Binding
+                // the commitment into the tag closes that — one bit of it moves the root, the root
+                // moves the tag, the tag moves the digest, and the PoW fails.
+                //
+                // The inference stays the work. `PalwBlockCommitmentV1::l1_tag_bytes` would REPLACE
+                // it with a free CPU expansion, which is the W1 change and must not land before a
+                // bond's immature exposure is capped in consensus (audit P0-10) — free tags plus
+                // uncapped exposure is what makes fake-root grinding cheap.
+                match self.palw_commitment.as_ref() {
+                    Some(commitment) => {
+                        let challenge = commitment.challenge_for(&self.network_id, self.pre_pow_hash_64, self.timestamp, nonce);
+                        let bound = kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::bind_l1_tag_v1(
+                            &tag,
+                            commitment.commitment_root(challenge),
+                        );
+                        buf[..bound.len()].copy_from_slice(&bound);
+                        Ok(bound.len())
+                    }
+                    None => {
+                        buf[..POW_L1_PALW_OUT_BYTES].copy_from_slice(&tag);
+                        Ok(POW_L1_PALW_OUT_BYTES)
+                    }
+                }
             }
             // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
             POW_ALGO_ID_BLAKE2B_SHA3 => {
