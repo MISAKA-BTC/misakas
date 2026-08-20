@@ -120,10 +120,48 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 // Parameters
 // ---------------------------------------------------------------------------------------------
 
+/// Per-class DAA constants for the V2 retarget (ADR-0042 release-gate item 11, PR-09): the
+/// share table ADR-0039 D5's expectation derives from, and the clamp factor. Constructed only
+/// through [`PalwClassDaaV2Params::new`]. The startup gate (Decision 1, PR-10) additionally
+/// demands the table sum to exactly 1000‰ with BASE-0 non-zero; here each entry is validated to
+/// be a real share and the sum not to exceed the denominator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwClassDaaV2Params {
+    shares_permille: BTreeMap<Hash64, u16>,
+    max_factor: u32,
+}
+
+impl PalwClassDaaV2Params {
+    pub fn new(shares_permille: BTreeMap<Hash64, u16>, max_factor: u32) -> Result<Self, PalwStateV2Error> {
+        if max_factor < 2 {
+            return Err(PalwStateV2Error::InvalidParams("max_factor below 2 freezes the retarget"));
+        }
+        let mut sum: u32 = 0;
+        for share in shares_permille.values() {
+            if *share == 0 || *share > 1000 {
+                return Err(PalwStateV2Error::InvalidParams("a class share must be 1..=1000 permille"));
+            }
+            sum += *share as u32;
+        }
+        if sum > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("class shares exceed the denominator"));
+        }
+        Ok(Self { shares_permille, max_factor })
+    }
+
+    pub fn share_permille(&self, class_id: &Hash64) -> Option<u16> {
+        self.shares_permille.get(class_id).copied()
+    }
+
+    pub fn max_factor(&self) -> u32 {
+        self.max_factor
+    }
+}
+
 /// The state machine's network constants. Constructed only through [`PalwStateParamsV2::new`],
 /// which refuses out-of-range values — there is no `Default`, because a defaulted consensus
 /// parameter is a flipped fence wearing a convenience API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStateParamsV2 {
     /// Immature live-weight fraction in permille, `β ≤ 1000` (ADR-0042 Decision 2).
     beta_permille: u16,
@@ -140,8 +178,12 @@ pub struct PalwStateParamsV2 {
     /// finishes must not freeze an honest claim forever. Decision 1's startup gate must hold
     /// `window_court > worst-case ladder duration` so an honest prosecution always fits.
     window_court: u64,
-    /// Length of a class-production epoch in DAA score units (ADR-0039 D5 counters).
+    /// Length of a class-production epoch in DAA score units (ADR-0039 D5 counters), and the
+    /// retarget span: each global epoch boundary the chain crosses closes one span and retargets
+    /// every share-bearing, unfrozen class against it.
     epoch_length: u64,
+    /// The per-class DAA constants (see [`PalwClassDaaV2Params`]).
+    class_daa: PalwClassDaaV2Params,
 }
 
 impl PalwStateParamsV2 {
@@ -152,6 +194,7 @@ impl PalwStateParamsV2 {
         window_challenge: u64,
         window_court: u64,
         epoch_length: u64,
+        class_daa: PalwClassDaaV2Params,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
             return Err(PalwStateV2Error::InvalidParams("beta_permille exceeds 1000 (β ≤ 1)"));
@@ -162,7 +205,7 @@ impl PalwStateParamsV2 {
         if epoch_length == 0 {
             return Err(PalwStateV2Error::InvalidParams("epoch_length must be at least one DAA unit"));
         }
-        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length })
+        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length, class_daa })
     }
 
     pub fn beta_permille(&self) -> u16 {
@@ -190,6 +233,10 @@ impl PalwStateParamsV2 {
     /// The per-session court budget (see the field's doc).
     pub fn window_court(&self) -> u64 {
         self.window_court
+    }
+
+    pub fn class_daa(&self) -> &PalwClassDaaV2Params {
+        &self.class_daa
     }
 }
 
@@ -279,11 +326,11 @@ pub struct PalwClassStateV2 {
     pub registered_daa: u64,
 }
 
-/// Per-class difficulty slot. PR-09 owns retargeting; the state carries the target so the root
-/// commits to it and the carriage moves it.
+/// Per-class difficulty slot — the full-width target `retarget_over_span_v1` folds (PR-09). The
+/// state carries it so the root commits to it and the carriage moves it.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassTargetV2 {
-    pub compact_target: u32,
+    pub target: u128,
 }
 
 /// Carried and rooted, but no PR-03 object writes it: capability issuance semantics arrive with
@@ -424,7 +471,7 @@ pub enum PalwConsensusObjectV2 {
         artifact_root: Hash64,
         slash_value_per_pwu: u64,
         pwu_rule: PalwPwuRuleV2,
-        initial_compact_target: u32,
+        initial_target: u128,
     },
     ClassFrozen {
         class_id: Hash64,
@@ -501,6 +548,10 @@ pub enum PalwStateV2Error {
     DeltaMismatch(&'static str),
     #[error("no state stored for parent block {0}")]
     MissingParentState(BlockHash),
+    #[error("class {0} registered with a zero target — an unmeetable difficulty is a dead class in costume")]
+    ZeroClassTarget(Hash64),
+    #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
+    Retarget(String),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1067,6 +1118,11 @@ pub fn apply_palw_transition_v2(
     sweep_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
 
+    // 2b. Per-class retarget (PR-09): crossing a global epoch boundary closes the previous
+    //     epoch as one span and retargets every share-bearing, unfrozen class against it. Runs
+    //     between the sweeps and the objects — a fixed slot, because fixed IS the requirement.
+    apply_class_retargets(&mut builder, parent, ctx)?;
+
     // 3. The block's accepted objects, in consensus acceptance order.
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
@@ -1141,6 +1197,72 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
     Ok(())
 }
 
+/// The V2 face of ADR-0039 D5's per-class retarget, driven by the state's own counters and the
+/// chain's own epochs — no clock, no store, no second timeline.
+///
+/// When this block's epoch exceeds the parent chain point's, the PARENT's epoch has closed:
+/// its realized total is Σ produced_blocks over counters still standing at that epoch (a
+/// counter from an older epoch means the class produced nothing in the closed one — observed
+/// zero). With zero realized total there is nothing to measure and no target moves (the empty
+/// epochs of a gap measure nothing rather than easing everyone). Otherwise every registered
+/// class retargets through `retarget_over_span_v1` — the V1 rule, reused whole: expectation is
+/// the class's SHARE of realized production, so the loop only redistributes between classes and
+/// a one-class network at 1000‰ is a deliberate no-op. Classes skip the span if they are frozen
+/// (the target freezes with the class — easing while frozen would hand the unfreeze a burst) or
+/// carry no share in the table (a share-less class cannot be admitted anyway).
+fn apply_class_retargets(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
+    let Some(last) = &parent.last_point else { return Ok(()) };
+    let epoch_length = builder.params.epoch_length;
+    let closed_epoch = last.daa_score / epoch_length;
+    if ctx.daa_score / epoch_length <= closed_epoch {
+        return Ok(());
+    }
+    let total: u64 = builder
+        .state
+        .epoch_counters
+        .values()
+        .filter(|counter| counter.epoch_index == closed_epoch)
+        .map(|counter| counter.produced_blocks)
+        .sum();
+    if total == 0 {
+        return Ok(());
+    }
+    // Snapshot the iteration set: the writes below mutate `class_targets`, never `classes`, but
+    // borrowing rules want the plan separated from the writes anyway.
+    let class_ids: Vec<Hash64> = builder.state.classes.keys().copied().collect();
+    for class_id in class_ids {
+        let class = builder.state.classes.get(&class_id).expect("iterating the map's own keys");
+        if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
+            continue;
+        }
+        let Some(share) = builder.params.class_daa.share_permille(&class_id) else { continue };
+        let observed = builder
+            .state
+            .epoch_counters
+            .get(&class_id)
+            .filter(|counter| counter.epoch_index == closed_epoch)
+            .map(|counter| counter.produced_blocks)
+            .unwrap_or(0);
+        let current = builder
+            .state
+            .class_targets
+            .get(&class_id)
+            .ok_or_else(|| PalwStateV2Error::Retarget(format!("class {class_id} has no target slot")))?
+            .target;
+        let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: observed, total_daa_blocks: total };
+        let next = crate::palw_class_daa::retarget_over_span_v1(current, &census, share, builder.params.class_daa.max_factor())
+            .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?;
+        if next != current {
+            builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+        }
+    }
+    Ok(())
+}
+
 fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // One at a time, smallest (deadline, claim) first: resolving a claim mutates the set, and
     // the (deadline, claim) order is what makes the sweep identical on every node.
@@ -1205,9 +1327,12 @@ fn apply_object(
                 }
             }
         }
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_compact_target } => {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target } => {
             if builder.state.classes.contains_key(class_id) {
                 return Err(PalwStateV2Error::DuplicateClass(*class_id));
+            }
+            if *initial_target == 0 {
+                return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
             }
             builder.write_class(
                 *class_id,
@@ -1219,7 +1344,7 @@ fn apply_object(
                     registered_daa: ctx.daa_score,
                 }),
             );
-            builder.write_target(*class_id, Some(PalwClassTargetV2 { compact_target: *initial_compact_target }));
+            builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
         }
         PalwConsensusObjectV2::ClassFrozen { class_id } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
@@ -1722,7 +1847,11 @@ mod tests {
     use crate::tx::TransactionId;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa()).unwrap()
+    }
+
+    fn class_daa() -> PalwClassDaaV2Params {
+        PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap()
     }
 
     fn h64(v: u64) -> Hash64 {
@@ -1748,7 +1877,7 @@ mod tests {
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
-                initial_compact_target: 0x207fffff,
+                initial_target: u128::MAX / 2,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_id: h64(21), collateral: 1_000 },
         ]
@@ -2258,7 +2387,7 @@ mod tests {
                 artifact_root: h64(12),
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
-                initial_compact_target: 0x207fffff,
+                initial_target: u128::MAX / 2,
             }],
             None,
         );
@@ -2361,6 +2490,10 @@ mod tests {
             ),
             (7, 151, 7, vec![], None),
             (8, 152, 8, vec![], None),
+            // Cross the global epoch boundary (epoch_length 1000): every differential below —
+            // restart, IBD cut points, prior-sink invariance, reorg — now exercises the
+            // per-class retarget path too.
+            (9, 1_001, 9, vec![], None),
         ]
     }
 
@@ -2374,14 +2507,14 @@ mod tests {
         let genesis_block = block(0);
 
         // Node 1's history: an A-branch full of unrelated claims, applied FIRST.
-        let mut node1 = PalwStateBookV2::new(p);
+        let mut node1 = PalwStateBookV2::new(p.clone());
         node1.insert_genesis(genesis_block);
         node1.apply_block(genesis_block, ctx(21, 100, 1), &register_class_and_bond(), None).unwrap();
         node1.apply_block(block(21), ctx(22, 101, 2), &[], Some(&attempt(1000, 91))).unwrap();
         node1.apply_block(block(22), ctx(23, 102, 3), &[], Some(&attempt(1000, 92))).unwrap();
 
         // Node 2's history: a different B-branch, applied FIRST.
-        let mut node2 = PalwStateBookV2::new(p);
+        let mut node2 = PalwStateBookV2::new(p.clone());
         node2.insert_genesis(genesis_block);
         node2.apply_block(genesis_block, ctx(31, 100, 1), &register_class_and_bond(), None).unwrap();
         node2.apply_block(block(31), ctx(32, 105, 2), &[], Some(&attempt(3, 93))).unwrap();
@@ -2395,10 +2528,10 @@ mod tests {
                 last_root = Some(node.apply_block(parent, ctx(b, daa, blue), &objects, att.as_ref()).unwrap());
                 parent = block(b);
             }
-            let state = node.state_of(&block(8)).unwrap();
+            let state = node.state_of(&block(9)).unwrap();
             state.assert_internal_consistency().unwrap();
             state.assert_deadline_consistency(&p).unwrap();
-            roots.push((last_root.unwrap(), state.candidate_order(block(8))));
+            roots.push((last_root.unwrap(), state.candidate_order(block(9))));
         }
         assert_eq!(roots[0].0, roots[1].0, "same candidate chain, different prior sink ⇒ different root: the P0-4 partition");
         assert_eq!(roots[0].1, roots[1].1, "the candidate order must not see the sink either");
@@ -2474,26 +2607,100 @@ mod tests {
         assert_eq!(b1_via_reorg.state_root(), b1_fresh.state_root());
     }
 
+    // ---- per-class retarget (PR-09) ----
+
+    /// The V1 rule through the V2 driver: at 1000‰ with every block in the class, observed
+    /// equals expected and the target does not move — the one-class no-op that catches any
+    /// mutation toward a cadence-based expectation. And with a 500‰ share producing ALL blocks,
+    /// the class out-produced its expectation and its target HARDENS, while a frozen co-class's
+    /// target does not move at all (it freezes with the class), and a boundary nobody produced
+    /// across measures nothing.
+    #[test]
+    fn crossing_an_epoch_boundary_retargets_by_share_and_skips_the_frozen() {
+        let boot = u128::MAX / 2;
+
+        // Case 1: single class at 1000‰ — no-op.
+        let p_full = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p_full, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&s1, &p_full, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
+        let (s3, _) = apply(&s2, &p_full, &ctx(3, 1_001, 3), &[], None);
+        assert_eq!(s3.class_target(&h64(1)).unwrap().target, boot, "1000‰ with every block: observed == expected, no move");
+
+        // Case 2: class 1 at 500‰ produces everything; class 2 (500‰) is frozen before the
+        // boundary. Class 1 hardens; class 2 does not move.
+        let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
+        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: boot,
+        });
+        objects.push(PalwConsensusObjectV2::ClassFrozen { class_id: h64(2) });
+        let (s1, _) = apply(&genesis, &p_half, &ctx(1, 100, 1), &objects, None);
+        let (s2, _) = apply(&s1, &p_half, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
+        let (s3, _) = apply(&s2, &p_half, &ctx(3, 102, 3), &[], Some(&attempt(40, 2)));
+        let (s4, _) = apply(&s3, &p_half, &ctx(4, 1_001, 4), &[], None);
+        assert!(s4.class_target(&h64(1)).unwrap().target < boot, "500‰ producing 100% of the span hardens");
+        assert_eq!(s4.class_target(&h64(2)).unwrap().target, boot, "a frozen class's target freezes with it");
+
+        // Case 3: a boundary crossed with nothing produced (the counters are stale after case
+        // 2's crossing) measures nothing and moves nothing.
+        let hardened = s4.class_target(&h64(1)).unwrap().target;
+        let (s5, _) = apply(&s4, &p_half, &ctx(5, 2_001, 5), &[], None);
+        assert_eq!(s5.class_target(&h64(1)).unwrap().target, hardened, "an empty epoch measures nothing");
+    }
+
+    #[test]
+    fn class_daa_params_refuse_broken_tables() {
+        assert!(PalwClassDaaV2Params::new([(h64(1), 0u16)].into_iter().collect(), 4).is_err(), "zero share");
+        assert!(PalwClassDaaV2Params::new([(h64(1), 1001u16)].into_iter().collect(), 4).is_err(), "share above 1000");
+        assert!(
+            PalwClassDaaV2Params::new([(h64(1), 600u16), (h64(2), 600u16)].into_iter().collect(), 4).is_err(),
+            "shares exceeding the denominator"
+        );
+        assert!(PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 1).is_err(), "max_factor below 2");
+        // Registration refuses a zero boot target — an unmeetable difficulty is a dead class.
+        let p = params();
+        let err = apply_palw_transition_v2(
+            &PalwChainStateV2::genesis(),
+            &p,
+            &ctx(1, 100, 1),
+            &[PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(9),
+                artifact_root: h64(19),
+                slash_value_per_pwu: 1,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
+                initial_target: 0,
+            }],
+            None,
+        );
+        assert!(matches!(err, Err(PalwStateV2Error::ZeroClassTarget(_))));
+    }
+
     // ---- params ----
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1).is_err(), "zero court window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, class_daa()).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, class_daa()).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, class_daa()).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, class_daa()).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, class_daa()).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, class_daa()).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, class_daa()).is_ok(), "β = 1 exactly is the boundary");
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, class_daa()).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, class_daa()).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 }

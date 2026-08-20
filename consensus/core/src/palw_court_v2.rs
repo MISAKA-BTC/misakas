@@ -236,7 +236,16 @@ mod tests {
     }
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000).unwrap()
+        PalwStateParamsV2::new(
+            100,
+            10,
+            10,
+            20,
+            500,
+            1000,
+            crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+        )
+        .unwrap()
     }
 
     fn bond_key(v: u64) -> PalwBondKeyV2 {
@@ -280,7 +289,7 @@ mod tests {
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
-                initial_compact_target: 0x207fffff,
+                initial_target: u128::MAX / 2,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_id: h64(0x21), collateral: 1_000 },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_id: h64(0x22), collateral: 1_000 },
