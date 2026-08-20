@@ -142,7 +142,8 @@ where
     //
     // Before the ticket, which is the expensive part: an unsigned commitment must cost a peer a
     // signature verification, not an inference.
-    let attempt_digest = commitment.message(network_id, kaspa_consensus_core::hashing::header::pre_pow_hash_64(header), header.timestamp, header.nonce);
+    let attempt_digest =
+        commitment.message(network_id, kaspa_consensus_core::hashing::header::pre_pow_hash_64(header), header.timestamp, header.nonce);
     if !verify_mldsa87(
         &executor_bond.validator_pubkey,
         attempt_digest.as_bytes().as_slice(),
@@ -181,7 +182,10 @@ where
 ///
 /// `None` when the header carries no decodable commitment, which is every header on a network
 /// whose fence is off.
-pub fn palw_header_commitment_root_v1(header: &kaspa_consensus_core::header::Header, network_id: &[u8]) -> Option<kaspa_hashes::Hash64> {
+pub fn palw_header_commitment_root_v1(
+    header: &kaspa_consensus_core::header::Header,
+    network_id: &[u8],
+) -> Option<kaspa_hashes::Hash64> {
     let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
     let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
     let challenge = commitment.challenge_for(network_id, pre_pow_hash, header.timestamp, header.nonce);
@@ -291,14 +295,7 @@ mod tests {
         // some OTHER context sees the block-commitment context and refuses.
         let wrong_domain = |_k: &[u8], _m: &[u8], _s: &[u8], context: &[u8]| context == b"some-other-domain".as_slice();
         assert!(matches!(
-            check_palw_block_admission_v1(
-                &header(commitment(op, EASY).encode()),
-                &bonds,
-                |_| Some(EASY),
-                NETWORK,
-                true,
-                wrong_domain
-            ),
+            check_palw_block_admission_v1(&header(commitment(op, EASY).encode()), &bonds, |_| Some(EASY), NETWORK, true, wrong_domain),
             Err(PalwAdmissionError::CommitmentSignatureInvalid)
         ));
     }
@@ -353,7 +350,8 @@ mod tests {
     fn unfenced_is_the_old_rule_and_stops_there() {
         let empty = ActiveBondView::from_records([]);
         assert_eq!(
-            check_palw_block_admission_v1(&header(Vec::new()), &empty, |_| Some(EASY), NETWORK, false, accept_fixture_signature).unwrap(),
+            check_palw_block_admission_v1(&header(Vec::new()), &empty, |_| Some(EASY), NETWORK, false, accept_fixture_signature)
+                .unwrap(),
             PalwAdmission::NotBound
         );
         // And an unfenced header carrying bytes is still refused, by the shape rule.
