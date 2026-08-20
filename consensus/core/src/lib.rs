@@ -196,6 +196,7 @@ pub mod palw_job_panel;
 pub mod palw_base0;
 pub mod palw_base0_ops;
 pub mod palw_chain_weight;
+pub mod palw_attempt_v2;
 pub mod palw_artifact;
 pub mod palw_exposure;
 pub mod palw_facts;

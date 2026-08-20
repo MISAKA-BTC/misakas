@@ -198,6 +198,19 @@ pub fn palw_worker_calibration_v1(network_id: &[u8]) -> Option<&'static str> {
 ///   the same arch-scoping the CPU compute class documents. One network = one class.
 pub const POW_ALGO_ID_PALW_OLLAMA: u8 = 5;
 
+/// ADR-0042 Decision 3d: the V2 committed-attempt PoW.
+///
+/// Distinct from `POW_ALGO_ID_PALW_LLM` (4) and `POW_ALGO_ID_PALW_OLLAMA` (5) **so no pre-V2 node
+/// can mistake a V2 block for a legacy algo-4 one.** Their L1 tags mean opposite things: algo-4's
+/// is the inference itself, V2's is an expansion of the commitment root, and a node applying the
+/// wrong reading would accept a block whose work it never checked.
+///
+/// Reusing 4 and changing its meaning was the alternative, and it is worse for the reason a new
+/// genesis makes cheap to avoid: the RC starts from its own genesis, so nothing is owed a
+/// compatibility shim, and an id that means two things across a fork is a permanent hazard for a
+/// saving of one byte.
+pub const POW_ALGO_ID_PALW_COMMITTED_V2: u8 = 6;
+
 /// Output width of the `algo_id = 5` tag:
 /// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
 pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;
@@ -367,7 +380,7 @@ pub enum PowLayer0Error {
 /// hash) a `palw_commitment`, and the gate `hashing::header::write_header_preimage` reads.
 #[inline]
 pub fn is_palw_algo_id(algo_id: u8) -> bool {
-    algo_id == POW_ALGO_ID_PALW_LLM || algo_id == POW_ALGO_ID_PALW_OLLAMA
+    algo_id == POW_ALGO_ID_PALW_LLM || algo_id == POW_ALGO_ID_PALW_OLLAMA || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
 }
 
 /// MISAKA ADR-0038: wire cap for `Header::palw_commitment` — the PBC1 envelope (4 magic +
@@ -459,6 +472,13 @@ pub fn check_algo_id_phase1(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) }
 }
 
+/// **V2 is deliberately absent from this cascade** (ADR-0042 Decision 1). Its activation is not a
+/// sixth boolean beside the others — the ADR's whole point is that a ruleset with five independently
+/// flippable switches is the defect, since a human flips them in the wrong order. `PalwConsensusMode`
+/// carries the V2 ruleset whole or not at all, and the arm that returns
+/// [`POW_ALGO_ID_PALW_COMMITTED_V2`] lands with it in PR-10. Until then this function can never
+/// return it, which is what makes the id inert on every shipped network while its semantics exist.
+///
 /// The Layer-1 algorithm a header MUST declare, given which PoW forks are active at the header's
 /// DAA score. The PALW-Ollama fork (`algo_id = 5`) supersedes everything where activated; then
 /// the PALW worker fork (`algo_id = 4`); then the Phase-3 BLAKE2b-512 ∥ SHA3-512 fork
@@ -546,6 +566,7 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_BLAKE2B_SHA3
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
+        || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
     {
         Ok(())
     } else {
@@ -958,13 +979,36 @@ mod tests {
     /// rejects the rest.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
-        for ok in
-            [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]
-        {
+        for ok in [
+            POW_ALGO_ID_KHEAVYHASH,
+            POW_ALGO_ID_ARGON2ID,
+            POW_ALGO_ID_BLAKE2B_SHA3,
+            POW_ALGO_ID_PALW_LLM,
+            POW_ALGO_ID_PALW_OLLAMA,
+            POW_ALGO_ID_PALW_COMMITTED_V2,
+        ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 6, 7, 0xff] {
+        for bad in [0u8, 7, 8, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
+        }
+
+        // Knowing the V2 id is not accepting a V2 block. `required_algo_id` has no V2 arm until the
+        // atomic bundle lands (ADR-0042 Decision 1), so no combination of today's fork flags demands
+        // it — which is what keeps the id inert on every shipped network while its semantics exist.
+        for (ollama, llm, sha3) in
+            [(false, false, false), (false, false, true), (false, true, false), (false, true, true), (true, true, true)]
+        {
+            assert_ne!(
+                required_algo_id(ollama, llm, sha3),
+                POW_ALGO_ID_PALW_COMMITTED_V2,
+                "no fork-flag combination may demand V2 before the bundle exists"
+            );
+            assert_eq!(
+                check_algo_id(POW_ALGO_ID_PALW_COMMITTED_V2, ollama, llm, sha3),
+                Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_COMMITTED_V2)),
+                "a V2 header must be refused everywhere today"
+            );
         }
     }
 
