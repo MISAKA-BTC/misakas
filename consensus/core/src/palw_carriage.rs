@@ -855,7 +855,7 @@ pub fn adjudicate_equivocation_carriage_v1<F>(
     verify_signature: F,
 ) -> Result<TransactionOutpoint, PalwCarriageError>
 where
-    F: Fn(&[u8], &Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &Hash, &[u8], &[u8]) -> bool,
 {
     require_version(carriage.version)?;
     if accused_bond.bond_outpoint != carriage.accused_bond_outpoint {
@@ -875,7 +875,12 @@ where
         &carriage.certificate,
         chain_network_id,
         |digest, attestation: &crate::palw_slash::PalwExecutionAttestationV1| {
-            verify_signature(&accused_bond.validator_pubkey, digest, &attestation.signature)
+            verify_signature(
+                &accused_bond.validator_pubkey,
+                digest,
+                &attestation.signature,
+                crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+            )
         },
     )
     .map_err(|e| PalwCarriageError::EquivocationNotProven(e.to_string()))?;
@@ -919,7 +924,7 @@ pub fn adjudicate_step_conviction_carriage_v1<F>(
     verify_signature: F,
 ) -> Result<TransactionOutpoint, PalwCarriageError>
 where
-    F: Fn(&[u8], &Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &Hash, &[u8], &[u8]) -> bool,
 {
     require_version(carriage.version)?;
     if accused_bond.bond_outpoint != carriage.accused_bond_outpoint {
@@ -957,7 +962,12 @@ where
         ));
     }
     let message = carriage.attestation.message(chain_network_id);
-    if !verify_signature(&accused_bond.validator_pubkey, &message, &carriage.attestation.signature) {
+    if !verify_signature(
+        &accused_bond.validator_pubkey,
+        &message,
+        &carriage.attestation.signature,
+        crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    ) {
         return Err(PalwCarriageError::EquivocationNotProven("attestation signature does not verify".into()));
     }
     // `Unadjudicable` is kept apart from every other failure here, and the distinction is the
@@ -2291,7 +2301,7 @@ mod equivocation_tests {
         s.extend_from_slice(digest.as_bytes().as_slice());
         s
     }
-    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8]) -> bool {
+    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8], _context: &[u8]) -> bool {
         signature == mock_sign(key, digest).as_slice()
     }
 
@@ -2515,7 +2525,7 @@ mod step_conviction_tests {
         s.extend_from_slice(digest.as_bytes().as_slice());
         s
     }
-    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8]) -> bool {
+    fn mock_verify(key: &[u8], digest: &Hash, signature: &[u8], _context: &[u8]) -> bool {
         signature == mock_sign(key, digest).as_slice()
     }
 

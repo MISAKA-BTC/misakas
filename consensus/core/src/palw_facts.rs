@@ -432,7 +432,7 @@ pub struct PalwResolverInputV1<'a> {
 /// [`weight_facts_v1`]'s job.
 pub fn resolve_block_facts_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> PalwResolvedBlockFactsV1
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     use crate::palw_carriage::{
         PALW_CARRIAGE_KIND_EQUIVOCATION, PALW_CARRIAGE_KIND_RECEIPT, PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1,
@@ -568,7 +568,7 @@ fn receipt_is_authentic_v1<F>(
     verify_signature: &F,
 ) -> bool
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     if receipt.validate_shape().is_err() {
         return false;
@@ -579,7 +579,12 @@ where
     let Some(bond) = input.bonds.active_bond_at(&receipt.verifier_bond_outpoint, filed_daa) else {
         return false;
     };
-    verify_signature(&bond.validator_pubkey, &receipt.message(input.network_id), &receipt.signature)
+    verify_signature(
+        &bond.validator_pubkey,
+        &receipt.message(input.network_id),
+        &receipt.signature,
+        crate::palw_receipt::PALW_RECEIPT_MLDSA87_CONTEXT,
+    )
 }
 
 /// What a drawn seat owed this block, once its window is over.
@@ -629,7 +634,7 @@ pub enum PalwPanelDutyV1 {
 /// live slash path exists to exercise yet.
 pub fn panel_duty_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> PalwPanelDutyV1
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     use crate::palw_carriage::{PALW_CARRIAGE_KIND_RECEIPT, PalwCarriageV1, decode_palw_stage1_body};
 
@@ -781,7 +786,7 @@ fn freeze_record_is_in_scope_v1(record_accepted_daa: u64, input: &PalwResolverIn
 ///
 pub fn class_frozen_before_close_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> bool
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     use crate::palw_carriage::{
         PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
@@ -950,7 +955,7 @@ pub fn resolve_block_weight_v1<F>(
     verify_signature: F,
 ) -> Result<crate::palw_chain_weight::PalwBlockWeightV1, PalwFactsError>
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     let resolved = resolve_block_facts_v1(input, verify_signature);
     let facts = weight_facts_v1(&resolved, input.schedule.w_challenge)?;
@@ -1210,12 +1215,12 @@ mod resolver_tests {
     /// Accepts a signature iff it is the fixture's own: `[0x5A; SIG_LEN]` under a known key. Stands
     /// in for ML-DSA-87, which lives outside consensus-core — the point under test is that the
     /// resolver ASKS, not what the curve answers.
-    fn accept_fixture_signature(key: &[u8], _digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
+    fn accept_fixture_signature(key: &[u8], _digest: &kaspa_hashes::Hash, signature: &[u8], _context: &[u8]) -> bool {
         !key.is_empty() && signature == vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN].as_slice()
     }
 
     /// Rejects everything — a node that cannot verify must count nothing.
-    fn reject_every_signature(_key: &[u8], _digest: &kaspa_hashes::Hash, _signature: &[u8]) -> bool {
+    fn reject_every_signature(_key: &[u8], _digest: &kaspa_hashes::Hash, _signature: &[u8], _context: &[u8]) -> bool {
         false
     }
 
@@ -1473,6 +1478,48 @@ mod resolver_tests {
             panel_duty_v1(&inp, reject_every_signature),
             PalwPanelDutyV1::Closed { no_shows: vec![op(1), op(2)] },
             "unverifiable receipts leave every seat looking defaulted — the caller's problem, stated"
+        );
+    }
+
+    /// **Audit P0-6**: each carriage family must be verified under its OWN signing domain.
+    ///
+    /// One context-free closure served receipts, step convictions and equivocations, and the live
+    /// caller baked in the receipt context. So a valid execution attestation — the evidence behind
+    /// a conviction — failed signature verification in the weight path while the slash path, which
+    /// uses the right domain, convicted on it. The bond was slashed and the block kept its weight.
+    ///
+    /// The double records what it was handed rather than asserting a boolean, because the defect
+    /// was invisible to any test that only asked "did it verify": with one domain baked in, every
+    /// family verified consistently and consistently wrong.
+    #[test]
+    fn each_carriage_family_is_verified_under_its_own_domain() {
+        use std::cell::RefCell;
+        let seen: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
+        let recorder = |key: &[u8], _d: &kaspa_hashes::Hash, sig: &[u8], context: &[u8]| {
+            seen.borrow_mut().push(context.to_vec());
+            accept_fixture_signature(key, _d, sig, context)
+        };
+
+        let bonds = bonds();
+        let panel = [seat(1)];
+        let weights = NoStepWeights;
+        // A receipt and an EQUIVOCATION in one window, so both arms run on one resolve.
+        //
+        // Equivocation rather than step conviction, and the reason is worth stating: the step
+        // conviction arm short-circuits on the skeleton refutation's structure before it ever
+        // reaches a signature, so it cannot witness a domain at all. A test that used it would pass
+        // by never asking — which is the same shape of vacuity as the defect under test.
+        let carriage = vec![receipt_row(1, 1_100), equivocation_row(1_200)];
+        let _ = resolve_block_facts_v1(&input(&carriage, &panel, 2_000, &bonds, &weights), recorder);
+
+        let seen = seen.into_inner();
+        assert!(
+            seen.iter().any(|c| c.as_slice() == crate::palw_receipt::PALW_RECEIPT_MLDSA87_CONTEXT),
+            "the receipt arm must ask under the receipt domain: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|c| c.as_slice() == crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT),
+            "the conviction arm must ask under the EXECUTION ATTESTATION domain, not the receipt one: {seen:?}"
         );
     }
 

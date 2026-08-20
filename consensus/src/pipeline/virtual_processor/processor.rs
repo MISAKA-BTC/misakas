@@ -2661,9 +2661,25 @@ impl VirtualStateProcessor {
         let accepted_daa = header.daa_score;
         let pov_daa = self.headers_store.get_header(chain_tip).ok()?.daa_score;
 
-        let executor_id = commitment.executor_bond_outpoint.transaction_id;
-        let panel =
-            self.palw_panel_for_block_v1(chain_tip, block, commitment_root, executor_id, commitment.execution_class_id, accepted_daa, bonds, schedule)?;
+        // Audit P0-7: the exclusion id must be the executor's VALIDATOR key hash, not its bond's
+        // transaction id. Those are different namespaces, so the comparison against a candidate's
+        // `validator_id` never matched and the producer sat on its own verification panel. Resolved
+        // from the bond record rather than restated by the commitment, for the reason the credit
+        // path already learned: a claimed id and a resolved one are two chances to disagree.
+        let executor_id = bonds.active_bond_at(&commitment.executor_bond_outpoint, accepted_daa)?.validator_pubkey_hash;
+
+        // Audit P0-3: a panel that is not drawable YET is not a block this node cannot weigh.
+        //
+        // The anchor sits at `accepted_daa + delta_bind`, so a block's own tip never has one — and
+        // propagating that `None` made every fresh tip unresolvable, every candidate chain
+        // unresolvable with it, and `order_tips_v1` fall back to blue work on every contest. PALW
+        // fork choice could not fire even once. An empty panel is the honest state instead: nobody
+        // has been assigned, so no assigned receipt exists, so the ramp holds the block at
+        // `Provisional` — which is exactly what a fresh commitment is. The panel is drawn on a
+        // later evaluation, once the chain has reached the anchor, and maturity follows then.
+        let panel = self
+            .palw_panel_for_block_v1(chain_tip, block, commitment_root, executor_id, commitment.execution_class_id, accepted_daa, bonds, schedule)
+            .unwrap_or_default();
 
         let facts = self.palw_class_facts_for_block(&commitment.execution_class_id, &header)?;
         let classes = PalwOneClassView { class_id: commitment.execution_class_id, class_target: facts.class_target, pwu_per_inference: facts.pwu_per_inference };
@@ -2689,14 +2705,16 @@ impl VirtualStateProcessor {
             schedule: *schedule,
         };
 
-        let resolved = resolve_block_facts_v1(&input, |key, digest, sig| {
-            kaspa_txscript::verify_mldsa87_with_context(
-                key,
-                digest.as_bytes().as_slice(),
-                sig,
-                kaspa_consensus_core::palw_receipt::PALW_RECEIPT_MLDSA87_CONTEXT,
-            )
-            .unwrap_or(false)
+        // Audit P0-6: the CURVE is supplied here, the DOMAIN is not.
+        //
+        // This closure used to bake in the receipt context and serve all three carriage families,
+        // so a valid execution attestation — the evidence behind a step conviction or an
+        // equivocation — failed signature verification in the weight path while the slash path
+        // (which uses the right domain) convicted on it. A bond was slashed and its block kept its
+        // weight: the court and the ledger in different universes. Each family now names its own
+        // domain where it builds its digest.
+        let resolved = resolve_block_facts_v1(&input, |key, digest, sig, context| {
+            kaspa_txscript::verify_mldsa87_with_context(key, digest.as_bytes().as_slice(), sig, context).unwrap_or(false)
         });
         let weight_facts = weight_facts_v1(&resolved, schedule.w_challenge).ok()?;
         let pwu = block_pwu_v1(Some(facts.class_target), Some(facts.pwu_per_inference)).ok()?;
@@ -3022,9 +3040,12 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         accepted_daa_score: u64,
     ) -> Vec<BondMutation> {
-        use kaspa_consensus_core::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT;
-        let verify = |key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]| {
-            matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, PALW_S_MLDSA87_ATTESTATION_CONTEXT), Ok(true))
+        // The curve only — the domain comes from whichever family builds the digest (audit P0-6).
+        // This path used to pin the attestation context here, which was RIGHT for its own evidence
+        // and is why the weight path's receipt-context twin went unnoticed: the two disagreed about
+        // one signature and only one of them was wrong.
+        let verify = |key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8], context: &[u8]| {
+            matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, context), Ok(true))
         };
         let fence = self.palw_credit_params.is_some();
         // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash. Passed from the
@@ -8500,7 +8521,7 @@ pub(super) fn palw_equivocation_slashes_v1<F>(
     verify: F,
 ) -> Vec<BondMutation>
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     use kaspa_consensus_core::palw_carriage::{
         PALW_CARRIAGE_KIND_EQUIVOCATION, PalwCarriageV1, adjudicate_equivocation_carriage_v1, decode_palw_stage1_body,
@@ -8595,7 +8616,7 @@ pub(super) fn palw_step_conviction_slashes_v1<F>(
     verify: F,
 ) -> Vec<BondMutation>
 where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8]) -> bool,
+    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
 {
     use kaspa_consensus_core::palw_carriage::{
         PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
@@ -8658,7 +8679,7 @@ mod palw_equivocation_wiring_tests {
         s.extend_from_slice(digest.as_bytes().as_slice());
         s
     }
-    fn mock_verify(key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
+    fn mock_verify(key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8], _context: &[u8]) -> bool {
         signature == mock_sign(key, digest).as_slice()
     }
 
