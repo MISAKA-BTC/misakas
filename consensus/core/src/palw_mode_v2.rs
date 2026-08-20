@@ -36,8 +36,11 @@ use blake2b_simd::Params as Blake2bParams;
 pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
 /// Keyed domain for [`palw_network_domain_v2`].
 pub const PALW_NETWORK_DOMAIN_V2: &[u8] = b"misaka-palw/network-domain-v2/v1";
+/// Keyed domain for [`palw_class_catalog_root_v2`].
+pub const PALW_CLASS_CATALOG_ROOT_V2: &[u8] = b"misaka-palw/class-catalog-root-v2/v1";
 
-pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN, PALW_NETWORK_DOMAIN_V2];
+pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] =
+    &[PALW_RULESET_ID_V2_DOMAIN, PALW_NETWORK_DOMAIN_V2, PALW_CLASS_CATALOG_ROOT_V2];
 
 /// `H(network_id_bytes)` — the value every V2-lineage object binds as its `network_domain`
 /// (ADR-0042 Decision 3a, ADR-0044).
@@ -54,6 +57,82 @@ pub fn palw_network_domain_v2(network_id: &[u8]) -> Hash64 {
     let mut out = [0u8; 64];
     out.copy_from_slice(state.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// One class the genesis registers (ADR-0042 Decision 1: "the genesis that registers BASE-0 must
+/// hash to [the catalog root]").
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenesisClassV2 {
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub slash_value_per_pwu: u64,
+    pub pwu_rule: crate::palw_state_v2::PalwPwuRuleV2,
+    pub initial_target: u128,
+}
+
+/// One bond the genesis registers.
+///
+/// A V2 network needs at least one bonded producer to exist before any block can be produced —
+/// there is no transaction that registers the FIRST bond, because producing the block that would
+/// carry it already requires one. Genesis is where that circle is cut, and naming the bonds in
+/// the ruleset means every node agrees on which they are, byte for byte.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenesisBondV2 {
+    pub bond: crate::tx::TransactionOutpoint,
+    pub pubkey: Vec<u8>,
+    pub operator_id: Hash64,
+    pub collateral: u64,
+}
+
+/// What the genesis registers into the PALW state.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenesisRegistrationsV2 {
+    pub classes: Vec<PalwGenesisClassV2>,
+    pub bonds: Vec<PalwGenesisBondV2>,
+}
+
+/// `H(canonical(classes))` — the value [`PalwConsensusParamsV2::class_catalog_root`] commits to.
+///
+/// Keeping BOTH the root and its preimage in the bundle is deliberate: the root is what the
+/// ruleset id and the P2P handshake compare (Decision 11), and the preimage is what the boot path
+/// verifies against it. A bundle carrying only the root would be a commitment nobody could open;
+/// one carrying only the classes would move the handshake's value every time a class was added.
+pub fn palw_class_catalog_root_v2(classes: &[PalwGenesisClassV2]) -> Hash64 {
+    let bytes = borsh::to_vec(classes).expect("genesis classes are borsh-serializable");
+    let mut state = Blake2bParams::new().hash_length(64).key(PALW_CLASS_CATALOG_ROOT_V2).to_state();
+    state.update(&(bytes.len() as u64).to_le_bytes());
+    state.update(&bytes);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The registrations as the transition consumes them: classes first, then bonds, in the order
+/// the bundle lists them.
+///
+/// Classes first because nothing depends on a bond existing, while a claim depends on its class —
+/// and a fixed order is what makes every node's genesis state the same bytes.
+pub fn palw_genesis_objects_v2(registrations: &PalwGenesisRegistrationsV2) -> Vec<crate::palw_state_v2::PalwConsensusObjectV2> {
+    use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+    let mut objects = Vec::with_capacity(registrations.classes.len() + registrations.bonds.len());
+    for class in &registrations.classes {
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: class.class_id,
+            artifact_root: class.artifact_root,
+            slash_value_per_pwu: class.slash_value_per_pwu,
+            pwu_rule: class.pwu_rule,
+            initial_target: class.initial_target,
+        });
+    }
+    for bond in &registrations.bonds {
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(bond.bond),
+            pubkey: bond.pubkey.clone(),
+            operator_id: bond.operator_id,
+            collateral: bond.collateral,
+        });
+    }
+    objects
 }
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
@@ -127,6 +206,9 @@ pub struct PalwConsensusParamsV2 {
     /// ruleset without it is a different ruleset (a different `palw_ruleset_id_v2`), never this
     /// one with a switch off.
     pub freeprompt: PalwFreePromptParamsV3,
+    /// What the genesis registers (Decision 1). `class_catalog_root` above must be this list's
+    /// root, and the boot gate checks it — a commitment nobody can open is not a commitment.
+    pub genesis: PalwGenesisRegistrationsV2,
     /// Reorg safety margin added to the liability period in the withdrawal-delay invariant.
     pub reorg_margin_daa: u64,
     /// Measured worst-case honest prosecution time (the ladder-gap measurement's output); the
@@ -149,6 +231,18 @@ impl PalwConsensusParamsV2 {
         if self.class_catalog_root == Hash64::default() || self.court_catalog_root == Hash64::default() {
             return Err(PalwModeV2Error::Invalid("a zero catalog root commits to nothing adjudicable"));
         }
+        // The catalog root opens: the classes the genesis registers ARE the ones the handshake
+        // commits to. Without this the two could drift and every node would still agree with
+        // itself.
+        if palw_class_catalog_root_v2(&self.genesis.classes) != self.class_catalog_root {
+            return Err(PalwModeV2Error::Invalid("the genesis class list does not hash to class_catalog_root"));
+        }
+        if self.genesis.bonds.is_empty() {
+            return Err(PalwModeV2Error::Invalid("a V2 network with no genesis bond can never produce its first block"));
+        }
+        if self.genesis.bonds.iter().any(|bond| bond.pubkey.is_empty() || bond.collateral < self.bond.min_collateral_sompi()) {
+            return Err(PalwModeV2Error::Invalid("a genesis bond must carry a key and at least the minimum collateral"));
+        }
 
         // BASE-0 exists and holds non-zero target share, and the share table sums to EXACTLY the
         // denominator here (the constructor allows partial tables for tests; a live bundle does
@@ -163,6 +257,14 @@ impl PalwConsensusParamsV2 {
         }
         if self.state.class_daa().shares_sum_permille() != 1000 {
             return Err(PalwModeV2Error::Invalid("the class share table must allocate exactly 1000 permille"));
+        }
+
+        // Every share-bearing class is actually registered at genesis — a share for a class that
+        // does not exist is production nobody can produce.
+        for class_id in self.state.class_daa().class_ids() {
+            if !self.genesis.classes.iter().any(|class| class.class_id == class_id) {
+                return Err(PalwModeV2Error::Invalid("a share-bearing class is not registered at genesis"));
+            }
         }
 
         // Table coherence: every share-bearing class has an epoch budget and every budgeted
@@ -318,14 +420,33 @@ mod tests {
         .unwrap()
     }
 
+    pub(crate) fn conforming_genesis(base: Hash64) -> PalwGenesisRegistrationsV2 {
+        PalwGenesisRegistrationsV2 {
+            classes: vec![PalwGenesisClassV2 {
+                class_id: base,
+                artifact_root: h64(0xA7),
+                slash_value_per_pwu: 5,
+                pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+            }],
+            bonds: vec![PalwGenesisBondV2 {
+                bond: crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0),
+                pubkey: vec![7u8; 32],
+                operator_id: h64(0xE0),
+                collateral: 1_000_000,
+            }],
+        }
+    }
+
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
         let base = h64(1);
         let class_daa = PalwClassDaaV2Params::new([(base, 1000u16)].into_iter().collect(), 4).unwrap();
+        let genesis = conforming_genesis(base);
         PalwConsensusParamsV2 {
             protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
             algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
             base_class_id: base,
-            class_catalog_root: h64(0xCA7),
+            class_catalog_root: palw_class_catalog_root_v2(&genesis.classes),
             court_catalog_root: h64(0xC0517),
             // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
             state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 800, class_daa).unwrap(),
@@ -334,6 +455,7 @@ mod tests {
             reward: PalwRewardParamsV2::new(620).unwrap(),
             bond: PalwBondParamsV2::new(20_000, 2_000).unwrap(),
             freeprompt: conforming_freeprompt(),
+            genesis,
             reorg_margin_daa: 100,
             worst_case_court_duration_daa: 400,
         }
@@ -363,6 +485,17 @@ mod tests {
             ("protocol", Box::new(|b| b.protocol_version = 1)),
             ("algorithm", Box::new(|b| b.algorithm_id = 4)),
             ("class root", Box::new(|b| b.class_catalog_root = Hash64::default())),
+            ("catalog root that does not open", Box::new(|b| b.class_catalog_root = h64(0xDEAD))),
+            ("no genesis bond", Box::new(|b| b.genesis.bonds.clear())),
+            ("a keyless genesis bond", Box::new(|b| b.genesis.bonds[0].pubkey.clear())),
+            ("an underfunded genesis bond", Box::new(|b| b.genesis.bonds[0].collateral = 1)),
+            (
+                "a share-bearing class that genesis does not register",
+                Box::new(|b| {
+                    b.genesis.classes[0].class_id = h64(0xBEEF);
+                    b.class_catalog_root = palw_class_catalog_root_v2(&b.genesis.classes);
+                }),
+            ),
             ("court root", Box::new(|b| b.court_catalog_root = Hash64::default())),
             ("unfunded base", Box::new(|b| b.base_class_id = h64(9))),
             (

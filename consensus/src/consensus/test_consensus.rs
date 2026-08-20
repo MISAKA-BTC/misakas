@@ -38,6 +38,10 @@ use std::future::Future;
 use std::{sync::Arc, thread::JoinHandle};
 
 pub struct TestConsensus {
+    /// Test-installed builder for a V2-lineage header's carriage (see
+    /// `set_palw_carriage_provider`). `None` by default, which is why a V2 network cannot be
+    /// mined on until a test says how its blocks are signed.
+    palw_carriage_provider: Option<Arc<dyn Fn(&Header) -> Vec<u8> + Send + Sync>>,
     params: Params,
     consensus: Arc<Consensus>,
     block_builder: TestBlockBuilder,
@@ -62,7 +66,7 @@ impl TestConsensus {
         ));
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
-        Self { params: config.params.clone(), consensus, block_builder, _db_lifetime: Default::default() }
+        Self { params: config.params.clone(), consensus, block_builder, palw_carriage_provider: None, _db_lifetime: Default::default() }
     }
 
     /// Creates a test consensus instance based on `config` with a temp DB and the provided `notification_sender`
@@ -83,7 +87,7 @@ impl TestConsensus {
         ));
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
-        Self { consensus, block_builder, params: config.params.clone(), _db_lifetime: db_lifetime }
+        Self { consensus, block_builder, params: config.params.clone(), palw_carriage_provider: None, _db_lifetime: db_lifetime }
     }
 
     /// Creates a test consensus instance based on `config` with a temp DB and no notifier
@@ -105,7 +109,7 @@ impl TestConsensus {
         ));
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
-        Self { consensus, block_builder, params: config.params.clone(), _db_lifetime: db_lifetime }
+        Self { consensus, block_builder, params: config.params.clone(), palw_carriage_provider: None, _db_lifetime: db_lifetime }
     }
 
     /// Clone the inner consensus Arc. For general usage of the underlying consensus simply deref
@@ -147,62 +151,28 @@ impl TestConsensus {
         header
     }
 
-    /// Attach the carriage a V2-lineage header needs, bound to THIS header's position.
+    /// Attach the carriage a V2-lineage header needs, from the provider a test installed.
     ///
-    /// Test-only, and deliberately shallow: the trace/output roots are fixtures, because what a
-    /// harness can honestly produce is a well-formed, correctly-BOUND envelope — proving the
-    /// inference behind it is the panel's job, and the stateful admission that would demand a
-    /// real bond is not what these tests exercise. The BINDING is real: change the header's
-    /// position and this envelope stops matching, exactly as a peer's would.
+    /// There is deliberately NO built-in fixture. A V2-lineage carriage must be SIGNED by a bond
+    /// the chain registered, and this file is compiled outside `cfg(test)` — it has no signing
+    /// crate and no business inventing a key. A test that wants to mine on a V2 network installs
+    /// a provider that signs with the genesis bond's key (see
+    /// `TestConsensus::set_palw_carriage_provider`); one that does not simply cannot, which is
+    /// the honest failure rather than a header that looks valid and is refused deeper in.
     fn attach_palw_carriage_for_tests(&self, header: &mut Header) {
-        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
-        let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(self.params.net.to_string().as_bytes());
-        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(0xB0), 0);
-        let signature = vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN];
-        match header.pow_algo_id {
-            POW_ALGO_ID_PALW_COMMITTED_V2 => {
-                use kaspa_consensus_core::palw_attempt_v2::{
-                    PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2,
-                };
-                let class_id = kaspa_hashes::Hash64::from_u64_word(0xC1);
-                let attempt = PalwAttemptUnsignedV2 {
-                    version: PALW_ATTEMPT_V2_VERSION,
-                    network_domain,
-                    challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class_id, &bond),
-                    class_id,
-                    executor_bond: bond,
-                    executor_pubkey: vec![7u8; 32],
-                    operator_id: kaspa_hashes::Hash64::from_u64_word(0xE0),
-                    artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
-                    trace_root: kaspa_hashes::Hash64::from_u64_word(0x7A),
-                    output_root: kaspa_hashes::Hash64::from_u64_word(0x00),
-                    pwu: 1,
-                    trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0xD0),
-                    trace_chunk_count: 1,
-                    trace_retention_daa: u64::MAX,
-                };
-                header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode();
-            }
-            POW_ALGO_ID_PALW_RECEIPT_V3 => {
-                use kaspa_consensus_core::palw_freeprompt_v3::{
-                    PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3, spend_challenge_v3,
-                };
-                let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
-                let spend = PalwReceiptSpendUnsignedV3 {
-                    version: PALW_FP_V3_VERSION,
-                    network_domain,
-                    challenge: spend_challenge_v3(network_domain, pre_pow, header.timestamp, header.nonce, claim_id, 0, &bond),
-                    claim_id,
-                    quantum_index: 0,
-                    beacon_block: kaspa_hashes::Hash64::from_u64_word(0xBEAC),
-                    producer_bond: bond,
-                    producer_pubkey: vec![7u8; 32],
-                };
-                header.palw_commitment = PalwReceiptSpendEnvelopeV3 { spend, signature }.encode();
-            }
-            _ => {}
+        if !kaspa_consensus_core::pow_layer0::is_palw_algo_id(header.pow_algo_id) {
+            return;
         }
+        if let Some(provider) = self.palw_carriage_provider.as_ref() {
+            header.palw_commitment = provider(header);
+        }
+    }
+
+    /// Install the carriage provider V2-lineage blocks are built with (see
+    /// [`Self::attach_palw_carriage_for_tests`]). The closure receives the header with everything
+    /// but the carriage filled in, so it can bind the position.
+    pub fn set_palw_carriage_provider(&mut self, provider: Arc<dyn Fn(&Header) -> Vec<u8> + Send + Sync>) {
+        self.palw_carriage_provider = Some(provider);
     }
 
     pub fn add_header_only_block_with_parents(

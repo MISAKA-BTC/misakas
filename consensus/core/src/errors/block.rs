@@ -50,6 +50,16 @@ pub enum RuleError {
     #[error("PALW header (algo_id = {algo_id}) failed stateless admission: {reason}")]
     BadPalwCarriageAdmission { algo_id: u8, reason: String },
 
+    /// MISAKA ADR-0044 Unit C: a chain block's PALW work was refused against the candidate
+    /// chain's own state — an attempt whose bond, class, budget or exposure does not hold, or a
+    /// spend whose claim is uncertified, whose quantum is spent, or whose ticket does not admit.
+    ///
+    /// This DISQUALIFIES the block from the selected chain, exactly like a UTXO fault, and for
+    /// the same reason: the block is well-formed but its effect on this chain is not licensed.
+    /// The block stays in the DAG.
+    #[error("PALW work is not admissible on this chain: {0}")]
+    PalwWorkInadmissible(String),
+
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020). The EVM state-root / receipts
     // / commitment mismatch variants are added in the executor phase (P2) when
     // they are actually produced.

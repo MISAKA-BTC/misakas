@@ -543,6 +543,13 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
     }
 }
 
+/// A block's own PALW work, owned across the admission/apply pair (the transition borrows it).
+enum PalwBlockWork {
+    None,
+    Attempt(kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2),
+    Spend(kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
+}
+
 /// The PALW state as a walk carries it.
 ///
 /// Where the walk STANDS is derived from the state itself (`last_point`), never tracked beside
@@ -1084,6 +1091,25 @@ impl VirtualStateProcessor {
                     } else {
                         debug!("VIRTUAL PROCESSOR, UTXO validated for {current}");
 
+                        // ADR-0044 Unit C: the block's PALW work is admitted against the state the
+                        // walk holds as-of its selected parent — the same view
+                        // `verify_expected_utxo_state` just read — and applied in the same step.
+                        //
+                        // BEFORE the diff is accumulated and before `diff_point` moves, because a
+                        // disqualified block must leave neither behind. (The first draft ran this
+                        // after both, and a PALW-disqualified block still advanced `diff_point`,
+                        // so `sink_search_algorithm` accepted it as a valid sink and then panicked
+                        // reading a multiset that was never committed.)
+                        let palw_delta = match self.palw_apply_block(&mut palw_walk, current, &header, &ctx.mergeset_acceptance_data) {
+                            Ok(delta) => delta,
+                            Err(rule_error) => {
+                                info!("Block {} is disqualified from virtual chain (PALW): {}", current, rule_error);
+                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                chain_disqualified_counter += 1;
+                                continue;
+                            }
+                        };
+
                         // Accumulate the diff
                         diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
                         // Update the diff point
@@ -1101,11 +1127,6 @@ impl VirtualStateProcessor {
                             bond_view.apply(&bond_muts);
                         }
                         // Commit UTXO data for current chain block
-                        // ADR-0044 Unit C: the block's PALW transition runs HERE, on the state
-                        // the walk holds as-of its selected parent — the same view
-                        // `verify_expected_utxo_state` just read. `None` unless this network
-                        // runs a V2 ruleset AND the walk is intact.
-                        let palw_delta = self.palw_apply_block(&mut palw_walk, current, &header, &ctx.mergeset_acceptance_data);
                         self.commit_utxo_state(
                             current,
                             ctx.mergeset_diff,
@@ -1236,7 +1257,25 @@ impl VirtualStateProcessor {
     /// ruleset. A no-op everywhere else.
     fn seed_palw_genesis_anchor(&self) {
         let Some(bundle) = self.palw_consensus_v2.as_ref() else { return };
-        let state = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis();
+        // ADR-0042 Decision 1: the genesis REGISTERS the classes the catalog root commits to, and
+        // the bonds without which no first block could ever be produced. Applying them here — at
+        // the genesis chain point, from the empty state — is what makes the anchor a state a
+        // network can actually mine on, and the bundle's own gate already proved the class list
+        // opens the root.
+        let objects = kaspa_consensus_core::palw_mode_v2::palw_genesis_objects_v2(&bundle.genesis);
+        let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: self.genesis.hash,
+            daa_score: self.genesis.daa_score,
+            blue_score: 0,
+        };
+        let (state, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
+            &bundle.state,
+            &ctx,
+            &objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+        )
+        .expect("the genesis registrations apply to the empty state");
         let root = state.state_root();
         let carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
         // Sanity: the snapshot must reload under its own root before it becomes the anchor every
@@ -1267,9 +1306,9 @@ impl VirtualStateProcessor {
         current: BlockHash,
         header: &Header,
         acceptance_data: &AcceptanceData,
-    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2> {
-        let bundle = self.palw_consensus_v2.as_ref()?;
-        let active = walk.as_mut()?;
+    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2>, RuleError> {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else { return Ok(None) };
+        let Some(active) = walk.as_mut() else { return Ok(None) };
         let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
             block: current,
             daa_score: header.daa_score,
@@ -1299,26 +1338,162 @@ impl VirtualStateProcessor {
             objects.extend(extracted.objects.into_iter().map(|c| c.object));
         }
 
-        match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
-            &active.state,
-            &bundle.state,
-            &ctx,
-            &objects,
-            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
-        ) {
+        // The block's OWN work, admitted against this very state and applied in the same step.
+        // Admitting-then-applying must be atomic: a state that absorbed work nobody licensed is
+        // not this chain's, and one that licensed work it did not absorb is a claim nobody can
+        // spend.
+        let work = self.palw_block_work(current, header, &active.state, bundle).map_err(|e| {
+            // The walk is abandoned too: this block will be disqualified, and continuing to
+            // derive from a state that skipped it would answer for a chain that does not exist.
+            RuleError::PalwWorkInadmissible(e)
+        });
+        let work = match work {
+            Ok(work) => work,
+            Err(e) => {
+                *walk = None;
+                return Err(e);
+            }
+        };
+        let work_ref = match &work {
+            PalwBlockWork::None => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+            PalwBlockWork::Attempt(envelope) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+            PalwBlockWork::Spend(envelope) => {
+                kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(&envelope.spend)
+            }
+        };
+
+        match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(&active.state, &bundle.state, &ctx, &objects, work_ref) {
             Ok((child, delta)) => {
                 active.state = child;
-                Some(delta)
+                Ok(Some(delta))
             }
             Err(e) => {
                 // The transition rejects a block's PALW content wholesale (a partial application
-                // is a state nobody else can recompute). Abandoning the walk here means this pass
-                // derives no PALW state — loud, and better than a state this chain does not have.
-                warn!("[palw-state] block {current} PALW transition failed: {e}; abandoning the PALW walk for this pass");
+                // is a state nobody else can recompute). It disagreed with admission, which
+                // means one of the two is wrong about this chain — so the block is refused and
+                // the walk is dropped rather than continued from a state nobody can recompute.
                 *walk = None;
-                None
+                Err(RuleError::PalwWorkInadmissible(format!("transition refused block {current}: {e}")))
             }
         }
+    }
+
+    /// Admit the block's own PALW work against `state`, returning it for the transition.
+    ///
+    /// The carriage was already decoded and position-checked at the header stage; what is added
+    /// here is everything that needs the candidate chain: the bond exists, is Active and holds
+    /// the carried key; the class is registered and unfrozen; the pwu, the epoch budget and the
+    /// exposure ceiling hold; and, for a spend, the claim is certified, the quantum unspent, the
+    /// beacon the chain's own, the window open and the ticket admitted.
+    ///
+    /// The SIGNATURE is verified here rather than at the header stage: what it proves ("the
+    /// carried key signed this") only means something beside the stateful fact that the carried
+    /// key IS the named bond's key, and pairing them keeps a peer from spending our ML-DSA time
+    /// on a header whose bond does not exist.
+    fn palw_block_work(
+        &self,
+        current: BlockHash,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    ) -> Result<PalwBlockWork, String> {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+        let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: current,
+            daa_score: header.daa_score,
+            blue_score: header.blue_score,
+        };
+        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let verify = |key: &[u8], message: &[u8], signature: &[u8], context: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+        };
+        match header.pow_algo_id {
+            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+                let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(&header.palw_commitment)
+                    .map_err(|e| format!("attempt carriage: {e}"))?;
+                kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
+                    state,
+                    &bundle.state,
+                    &bundle.admission,
+                    &ctx,
+                    self.palw_network_domain,
+                    pre_pow_hash,
+                    header.timestamp,
+                    header.nonce,
+                    &envelope,
+                    verify,
+                )
+                .map_err(|e| format!("attempt: {e}"))?;
+                Ok(PalwBlockWork::Attempt(envelope))
+            }
+            POW_ALGO_ID_PALW_RECEIPT_V3 => {
+                let envelope = kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
+                    .map_err(|e| format!("spend carriage: {e}"))?;
+                // The beacon is derived from THIS candidate's chain, never read from the block:
+                // a spending block asserting its own randomness is the whole attack the beacon
+                // construction exists to close (ADR-0044 Decision 4).
+                let beacon = self.palw_derive_beacon(current, state, &envelope, bundle)?;
+                kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+                    state,
+                    &ctx,
+                    self.palw_network_domain,
+                    pre_pow_hash,
+                    header.timestamp,
+                    header.nonce,
+                    bundle.freeprompt.receipt_maturity_daa(),
+                    bundle.freeprompt.receipt_use_window_daa(),
+                    &beacon,
+                    &envelope,
+                    verify,
+                )
+                .map_err(|e| format!("spend: {e}"))?;
+                Ok(PalwBlockWork::Spend(envelope))
+            }
+            _ => Ok(PalwBlockWork::None),
+        }
+    }
+
+    /// Derive the beacon fact for a spend's claim, by walking THIS block's own chain downwards.
+    ///
+    /// The walk is bounded by the use window: a spend may only be made inside
+    /// `[beacon_daa, beacon_daa + use_window]`, so a beacon older than that cannot license this
+    /// block anyway, and an unbounded scan on a peer-supplied claim would be a denial of service.
+    fn palw_derive_beacon(
+        &self,
+        current: BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        envelope: &kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3, String> {
+        use kaspa_consensus_core::palw_fp_beacon_v3::{PalwChainBlockFactV3, derive_beacon_fact_to_genesis_v3};
+        use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+
+        let claim = state.claim(&envelope.spend.claim_id).ok_or("spend names a claim this chain does not hold")?;
+        if !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) {
+            return Err("spend names an attempt claim".into());
+        }
+        let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
+            return Err("spend names a claim that is not certified".into());
+        };
+        let slot = final_daa.checked_add(bundle.freeprompt.receipt_maturity_daa()).ok_or("the draw slot overflows")?;
+        // Nothing below the slot minus one window can matter: the beacon must sit at or after the
+        // slot, and the block must sit within one use window of it.
+        let floor = slot.saturating_sub(1);
+        let mut facts = Vec::new();
+        for block in self.reachability_service.default_backward_chain_iterator(current) {
+            let Ok(block_header) = self.headers_store.get_header(block) else { break };
+            facts.push(PalwChainBlockFactV3 {
+                block,
+                daa_score: block_header.daa_score,
+                pow_algo_id: block_header.pow_algo_id,
+            });
+            // One block strictly below the slot is the predecessor witness; past it the walk
+            // learns nothing more.
+            if block_header.daa_score < floor {
+                break;
+            }
+        }
+        derive_beacon_fact_to_genesis_v3(slot, bundle.algorithm_id, facts).map_err(|e| format!("beacon: {e}"))
     }
 
     /// The PALW fork-choice order of an ARBITRARY candidate (ADR-0042 Decision 9, Unit D's

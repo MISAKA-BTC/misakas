@@ -99,6 +99,57 @@ const WITHDRAWAL_DELAY: u64 = 6_000;
 /// The worker share of the fixed subsidy (a carve, never an addition).
 const WORKER_CARVE_PERMILLE: u16 = 620;
 
+/// BASE-0's registered artifact root on a devnet.
+///
+/// A PLACEHOLDER, and named one: the real value is the hash of the registered BASE-0 artifact
+/// set, which arrives with the class registration itself. A devnet drill exercises the wiring,
+/// not the arithmetic, and a made-up value that pretended to be measured would be worse than one
+/// that says what it is.
+fn base0_artifact_root_placeholder() -> Hash64 {
+    Hash64::from_u64_word(0xBA5E_0A27)
+}
+/// Sompi of collateral one pwu puts at stake.
+const SLASH_VALUE_PER_PWU: u64 = 5;
+/// The class rule's ceiling (ADR-0039's real PWU derivation is still its own record).
+const MAX_PWU_PER_ATTEMPT: u64 = 1_000_000;
+/// The class's initial difficulty target: the whole 128-bit space, so a fresh chain produces
+/// before its DAA has measured anything. The retarget takes over from the first closed epoch.
+const INITIAL_CLASS_TARGET: u128 = u128::MAX;
+/// What a genesis bond stakes.
+const GENESIS_BOND_COLLATERAL: u64 = 1_000_000;
+
+/// The devnet bundle with its catalog root DERIVED — for tests and drills that want a valid
+/// bundle without hand-typing a hash.
+///
+/// A preset must NOT use this: it should state the root it believes in and let construction
+/// refuse a mismatch (carrying both the root and its preimage is what makes that refusal
+/// possible). This exists so a test is not forced to hard-code a value that moves whenever a
+/// class constant does.
+pub fn palw_fp_devnet_bundle_derived_root_v3(
+    base_class_id: Hash64,
+    court_catalog_root: Hash64,
+    genesis_bond: crate::tx::TransactionOutpoint,
+    genesis_bond_pubkey: Vec<u8>,
+    genesis_operator_id: Hash64,
+) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    let classes = vec![crate::palw_mode_v2::PalwGenesisClassV2 {
+        class_id: base_class_id,
+        artifact_root: base0_artifact_root_placeholder(),
+        slash_value_per_pwu: SLASH_VALUE_PER_PWU,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(MAX_PWU_PER_ATTEMPT),
+        initial_target: INITIAL_CLASS_TARGET,
+    }];
+    let root = crate::palw_mode_v2::palw_class_catalog_root_v2(&classes);
+    palw_fp_devnet_bundle_with_genesis_bond_v3(
+        base_class_id,
+        root,
+        court_catalog_root,
+        genesis_bond,
+        genesis_bond_pubkey,
+        genesis_operator_id,
+    )
+}
+
 /// The devnet bundle. `base_class_id` is the caller's — the class id is a genesis artifact (the
 /// registered BASE-0 class), and inventing one here would put a second source of that fact in
 /// the tree. `class_catalog_root` / `court_catalog_root` likewise come from the genesis that
@@ -110,6 +161,34 @@ pub fn palw_fp_devnet_bundle_v3(
     base_class_id: Hash64,
     class_catalog_root: Hash64,
     court_catalog_root: Hash64,
+) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    // A bundle with no usable genesis bond cannot produce a block; this convenience form is for
+    // tests of the PARAMETERS, so it registers a placeholder key. A network takes the
+    // `_with_genesis_bond` form and supplies the real one.
+    palw_fp_devnet_bundle_with_genesis_bond_v3(
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0),
+        vec![0x11; 32],
+        Hash64::from_u64_word(0xE0),
+    )
+}
+
+/// [`palw_fp_devnet_bundle_v3`] with the genesis bond named explicitly — the form a preset uses,
+/// because the bond's PUBLIC KEY is a network artifact (some operator holds the secret) and a
+/// library cannot invent one.
+///
+/// `class_catalog_root` is still passed in and still CHECKED against the class list this builds:
+/// the caller states what it believes the catalog is, and construction refuses if the belief and
+/// the classes disagree. Deriving it silently would turn a mismatched preset into a working one.
+pub fn palw_fp_devnet_bundle_with_genesis_bond_v3(
+    base_class_id: Hash64,
+    class_catalog_root: Hash64,
+    court_catalog_root: Hash64,
+    genesis_bond: crate::tx::TransactionOutpoint,
+    genesis_bond_pubkey: Vec<u8>,
+    genesis_operator_id: Hash64,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
     let class_daa = PalwClassDaaV2Params::new([(base_class_id, 1000u16)].into_iter().collect(), 4)?;
     let state = PalwStateParamsV2::new(
@@ -141,6 +220,23 @@ pub fn palw_fp_devnet_bundle_v3(
         RECEIPT_USE_WINDOW,
         MAX_BEACON_GAP,
     )?;
+    // The one class a devnet registers: BASE-0, at the initial target the whole space admits so a
+    // fresh chain can actually produce its first blocks before the DAA has measured anything.
+    let genesis = crate::palw_mode_v2::PalwGenesisRegistrationsV2 {
+        classes: vec![crate::palw_mode_v2::PalwGenesisClassV2 {
+            class_id: base_class_id,
+            artifact_root: base0_artifact_root_placeholder(),
+            slash_value_per_pwu: SLASH_VALUE_PER_PWU,
+            pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(MAX_PWU_PER_ATTEMPT),
+            initial_target: INITIAL_CLASS_TARGET,
+        }],
+        bonds: vec![crate::palw_mode_v2::PalwGenesisBondV2 {
+            bond: genesis_bond,
+            pubkey: genesis_bond_pubkey,
+            operator_id: genesis_operator_id,
+            collateral: GENESIS_BOND_COLLATERAL,
+        }],
+    };
     let bundle = PalwConsensusParamsV2 {
         protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
         algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
@@ -153,6 +249,7 @@ pub fn palw_fp_devnet_bundle_v3(
         reward: PalwRewardParamsV2::new(WORKER_CARVE_PERMILLE)?,
         bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, WITHDRAWAL_DELAY)?,
         freeprompt,
+        genesis,
         reorg_margin_daa: REORG_MARGIN,
         worst_case_court_duration_daa: WORST_CASE_COURT,
     };
@@ -172,7 +269,25 @@ mod tests {
     }
 
     fn bundle() -> PalwConsensusParamsV2 {
-        palw_fp_devnet_bundle_v3(h64(0xBA5E), h64(0xCA7), h64(0xC0757)).expect("the devnet bundle validates")
+        devnet_bundle_for_test(h64(0xBA5E))
+    }
+
+    /// The catalog root is checked against the class list, so a test that wants a valid bundle
+    /// must derive it — which is the point: a preset that types the wrong root does not boot.
+    fn devnet_bundle_for_test(base_class_id: Hash64) -> PalwConsensusParamsV2 {
+        // A catalog root that does not open must not validate — the check this module makes.
+        assert!(
+            palw_fp_devnet_bundle_v3(base_class_id, h64(0xCA7), h64(0xC0757)).is_err(),
+            "a catalog root that does not open must not validate"
+        );
+        palw_fp_devnet_bundle_derived_root_v3(
+            base_class_id,
+            h64(0xC0757),
+            crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0),
+            vec![0x11; 32],
+            h64(0xE0),
+        )
+        .expect("the devnet bundle validates")
     }
 
     /// **The interlock exists.** Every Decision-1 and ADR-0044 startup invariant holds on one
@@ -200,7 +315,7 @@ mod tests {
         let b = bundle();
         let id = palw_ruleset_id_v2(&b);
         assert_eq!(id, palw_ruleset_id_v2(&bundle()), "the fingerprint is a pure function of the values");
-        assert_ne!(id, palw_ruleset_id_v2(&palw_fp_devnet_bundle_v3(h64(0xBA5E), h64(0xCA8), h64(0xC0757)).unwrap()));
+        assert_ne!(id, palw_ruleset_id_v2(&devnet_bundle_for_test(h64(0xBA5F))), "a different base class is a different ruleset");
         assert_eq!(
             PalwConsensusMode::ConsensusV2(b.clone()).required_algo_id(),
             Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2)

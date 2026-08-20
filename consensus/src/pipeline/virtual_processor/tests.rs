@@ -4950,13 +4950,87 @@ mod palw_state_walk_wiring {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_hashes::Hash64;
 
-    fn v2_config() -> kaspa_consensus_core::config::Config {
-        let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+    /// The genesis bond a V2 devnet registers here: a fixed seed, so the harness can sign an
+    /// attempt with the very key the chain's genesis registered. That equality is the whole
+    /// reason a test can mine at all — admission checks the carried key against the bond record.
+    const GENESIS_BOND_SEED: [u8; 32] = [0x2A; 32];
+
+    fn genesis_bond_outpoint() -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)
+    }
+
+    fn v2_bundle() -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+        let kp = mldsa::generate_key_pair(GENESIS_BOND_SEED);
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_derived_root_v3(
             Hash64::from_u64_word(0xBA5E),
-            Hash64::from_u64_word(0xCA7),
             Hash64::from_u64_word(0xC0757),
+            genesis_bond_outpoint(),
+            kp.verification_key.as_ref().to_vec(),
+            Hash64::from_u64_word(0xE0),
         )
-        .expect("the devnet bundle validates");
+        .expect("the devnet bundle validates")
+    }
+
+    /// Build the attempt carriage a V2 header needs, SIGNED by the genesis bond.
+    ///
+    /// The trace and output roots are fixtures — proving the inference behind them is the panel's
+    /// job, not a harness's — but everything admission checks is real: the class is the one
+    /// genesis registered, the bond is the one genesis registered, the key is that bond's key,
+    /// the challenge binds this header's position, and the signature verifies over the attempt id
+    /// in its own context.
+    fn signed_attempt_carriage(network_domain: Hash64, bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2, header: &kaspa_consensus_core::header::Header) -> Vec<u8> {
+        use kaspa_consensus_core::palw_attempt_v2::{
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+            challenge_v2,
+        };
+        let kp = mldsa::generate_key_pair(GENESIS_BOND_SEED);
+        let class = &bundle.genesis.classes[0];
+        let bond = bundle.genesis.bonds[0].bond;
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class.class_id, &bond),
+            class_id: class.class_id,
+            executor_bond: bond,
+            executor_pubkey: kp.verification_key.as_ref().to_vec(),
+            operator_id: bundle.genesis.bonds[0].operator_id,
+            artifact_root: class.artifact_root,
+            trace_root: Hash64::from_u64_word(0x7A),
+            output_root: Hash64::from_u64_word(0x00),
+            // 100 pwu: inside the class rule's ceiling, the epoch budget and — at this bond's
+            // collateral — the exposure ceiling, with room for a long test chain. NOT 1: β is
+            // 100‰ and floors, so a 1-pwu claim contributes ZERO immature weight and every
+            // candidate ties down to the hash tie-break. (That is exactly what the first draft of
+            // the ordering test below hit, and it read as a broken comparator rather than a
+            // fixture too small to weigh.)
+            pwu: 100,
+            trace_manifest_root: Hash64::from_u64_word(0xD0),
+            trace_chunk_count: 1,
+            trace_retention_daa: u64::MAX,
+        };
+        let id = attempt_id_v2(&attempt);
+        let signature = mldsa::sign(&kp.signing_key, id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Au8; 32])
+            .expect("the harness signs its own attempt")
+            .as_ref()
+            .to_vec();
+        PalwAttemptEnvelopeV2 { attempt, signature }.encode()
+    }
+
+    /// A `TestConsensus` on a V2 network, with the carriage provider installed.
+    fn v2_consensus(config: &kaspa_consensus_core::config::Config) -> TestConsensus {
+        let bundle = v2_bundle();
+        let network_domain =
+            kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+        let mut tc = TestConsensus::new(config);
+        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header| signed_attempt_carriage(network_domain, &bundle, header)));
+        tc
+    }
+
+    fn v2_config() -> kaspa_consensus_core::config::Config {
+        let bundle = v2_bundle();
         // SIMNET is the clean base: no V1 PALW activation, so a V2 mode is not a mixed lineage.
         // `skip_proof_of_work` is what lets the harness mine at all — the V2 attempt arm exists
         // now, but a test block carries no attempt envelope, so its PoW would fail.
@@ -4977,7 +5051,7 @@ mod palw_state_walk_wiring {
     #[tokio::test]
     async fn a_v2_network_walks_its_palw_state_through_a_reorg() {
         let config = v2_config();
-        let tc = TestConsensus::new(&config);
+        let tc = v2_consensus(&config);
         let handles = tc.init();
         let genesis = config.genesis.hash;
 
@@ -5040,7 +5114,7 @@ mod palw_state_walk_wiring {
         use kaspa_consensus_core::palw_fork_choice::compare_palw_candidates_v1;
 
         let config = v2_config();
-        let tc = TestConsensus::new(&config);
+        let tc = v2_consensus(&config);
         let handles = tc.init();
         let genesis = config.genesis.hash;
 
@@ -5064,9 +5138,10 @@ mod palw_state_walk_wiring {
         let loser = tc.virtual_processor().palw_candidate_order(*short.last().unwrap()).expect("the loser orders too");
         let at_genesis = tc.virtual_processor().palw_candidate_order(genesis).expect("genesis orders");
 
-        // These blocks carry no PALW content, so weights are zero everywhere and the frontier is
-        // what separates them: it advances with a resolved past, so the longer branch's frontier
-        // sits higher.
+        // Every block carries an attempt, so every block leaves an unresolved claim behind: the
+        // safe frontier stays at genesis for all three (a claim resolves only after its windows),
+        // and what separates them is the bounded immature weight their claims contribute. The
+        // longer branch has more of it.
         assert_eq!(compare_palw_candidates_v1(&winner, &loser), std::cmp::Ordering::Greater, "the longer branch outranks the shorter");
         assert_eq!(compare_palw_candidates_v1(&loser, &at_genesis), std::cmp::Ordering::Greater, "and both outrank genesis");
         assert_eq!(compare_palw_candidates_v1(&winner, &winner), std::cmp::Ordering::Equal, "the comparator is reflexive");
@@ -5076,6 +5151,129 @@ mod palw_state_walk_wiring {
             tc.virtual_processor().palw_candidate_order(Hash64::from_u64_word(0xDEAD)).is_none(),
             "an underivable candidate is no opinion, not zero weight"
         );
+
+        tc.shutdown(handles);
+    }
+
+    /// **The block's own work is admitted against this chain's state, and creates a claim.**
+    ///
+    /// A V2 block's attempt is not decoration: it names a bond and a class the GENESIS registered,
+    /// its signature verifies under that bond's key, and applying it puts a claim in the state
+    /// with the exposure it reserves. This is the property that makes the lane a lane.
+    #[tokio::test]
+    async fn a_v2_block_creates_a_claim_and_reserves_exposure() {
+        use crate::model::stores::headers::HeaderStoreReader;
+        use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2, PalwClaimSourceV2};
+
+        let config = v2_config();
+        let bundle = v2_bundle();
+        let tc = v2_consensus(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        // Genesis already holds the registered class and bond — without them no block could be
+        // admitted at all.
+        let genesis_state = {
+            let store = tc.palw_state_v2_store.read();
+            let anchor = store.anchor().unwrap().unwrap();
+            anchor.decode().unwrap().into_state(&bundle.state, Some(anchor.state_root)).unwrap()
+        };
+        assert!(genesis_state.class(&bundle.genesis.classes[0].class_id).is_some(), "genesis registered BASE-0");
+        let bond_key = PalwBondKeyV2(bundle.genesis.bonds[0].bond);
+        assert!(genesis_state.bond(&bond_key).is_some(), "genesis registered the bond");
+
+        let block = Hash64::from_u64_word(0xF001);
+        tc.add_utxo_valid_block_with_parents(block, vec![genesis], vec![]).await.unwrap();
+        assert_eq!(tc.get_sink(), block, "the block is UTXO-valid and takes the sink");
+
+        let state = {
+            let store = tc.palw_state_v2_store.read();
+            let anchor = store.anchor().unwrap().unwrap();
+            assert_eq!(anchor.block, block, "the anchor followed");
+            anchor.decode().unwrap().into_state(&bundle.state, Some(anchor.state_root)).unwrap()
+        };
+        // One claim, from this block's attempt, Provisional and holding the bond's exposure.
+        let claim_id = {
+            let carriage = tc.headers_store.get_header(block).unwrap().palw_commitment.clone();
+            let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(&carriage).unwrap();
+            kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)
+        };
+        let claim = state.claim(&claim_id).expect("the block's attempt became a claim");
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional), "a fresh claim is Provisional");
+        assert!(matches!(claim.source, PalwClaimSourceV2::Attempt), "and it is an attempt claim");
+        assert_eq!(claim.pwu, 100);
+        assert_eq!(
+            state.reserved_exposure(&bond_key),
+            100 * bundle.genesis.classes[0].slash_value_per_pwu as u128,
+            "the claim reserved pwu × slash_value_per_pwu against its bond"
+        );
+        assert_eq!(state.bounded_immature(), 10, "β = 100‰ of 100 pwu");
+        assert_eq!(state.safe_weight(), 0, "and nothing is safe until it resolves");
+
+        tc.shutdown(handles);
+    }
+
+    /// **Inadmissible work disqualifies the block from the chain**, exactly like a UTXO fault —
+    /// and the block stays in the DAG. Here the carriage names a bond the chain never registered,
+    /// which is the cheapest lie a producer can tell.
+    #[tokio::test]
+    async fn a_block_whose_palw_work_is_inadmissible_is_disqualified() {
+        use crate::model::stores::headers::HeaderStoreReader;
+        use kaspa_consensus_core::blockstatus::BlockStatus;
+
+        let config = v2_config();
+        let bundle = v2_bundle();
+        let network_domain =
+            kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+        let mut tc = TestConsensus::new(&config);
+        // A provider that signs with a key the genesis did NOT register: well-formed, correctly
+        // position-bound, and naming a bond that does not exist.
+        let foreign = bundle.clone();
+        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header| {
+            use kaspa_consensus_core::palw_attempt_v2::{
+                PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2,
+                attempt_id_v2, challenge_v2,
+            };
+            let kp = mldsa::generate_key_pair([0x77; 32]);
+            let bond = TransactionOutpoint::new(Hash64::from_u64_word(0xDEAD), 0);
+            let class = &foreign.genesis.classes[0];
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+            let attempt = PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain,
+                challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class.class_id, &bond),
+                class_id: class.class_id,
+                executor_bond: bond,
+                executor_pubkey: kp.verification_key.as_ref().to_vec(),
+                operator_id: Hash64::from_u64_word(0xE0),
+                artifact_root: class.artifact_root,
+                trace_root: Hash64::from_u64_word(0x7A),
+                output_root: Hash64::from_u64_word(0x00),
+                pwu: 100,
+                trace_manifest_root: Hash64::from_u64_word(0xD0),
+                trace_chunk_count: 1,
+                trace_retention_daa: u64::MAX,
+            };
+            let id = attempt_id_v2(&attempt);
+            let signature = mldsa::sign(&kp.signing_key, id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Au8; 32])
+                .unwrap()
+                .as_ref()
+                .to_vec();
+            PalwAttemptEnvelopeV2 { attempt, signature }.encode()
+        }));
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        let block = Hash64::from_u64_word(0xF002);
+        tc.add_utxo_valid_block_with_parents(block, vec![genesis], vec![]).await.unwrap();
+        assert_eq!(
+            tc.block_status(block),
+            BlockStatus::StatusDisqualifiedFromChain,
+            "a block whose PALW work names an unregistered bond is disqualified from the chain"
+        );
+        assert_eq!(tc.get_sink(), genesis, "…and the sink stays where it was");
+        // The block is still in the DAG — disqualification is not rejection.
+        assert!(tc.headers_store.get_header(block).is_ok());
 
         tc.shutdown(handles);
     }
