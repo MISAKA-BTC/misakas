@@ -1,8 +1,9 @@
 # The free-prompt gateway — run your own LLM, mine with the same inference (ADR-0044)
 
-Status: FP-06/07 landed and measured on the pinned model. Consensus-inert: nothing here submits
-to a chain yet (the executor rail is FP-08); what it produces today is the user's answer and the
-outbox artifact every later step consumes.
+Status: FP-06 through FP-09b landed and measured on the pinned model — the gateway, the retained
+trace, and the executor rail that signs a real commitment transaction. Consensus-inert by
+design: nothing submits, because no network accepts the free-prompt subnetwork yet and the
+remaining consensus wiring lands as whole units (`docs/palw-fp-wiring-atomicity.md`).
 
 ## What this is
 
@@ -76,13 +77,41 @@ roots, the derived CU, and the artifact path.
 
 ## What the artifact is, and is not
 
-`<outbox>/fp-job-<id>.result.borsh` is the framed `PalwFpWorkerResultV3`; `<id>.json` is the
-human summary. Together they hold everything the executor rail needs to assemble the on-chain
-commitment — and the summary names, honestly, what is still pending before submission:
+Per job the outbox holds `fp-job-<id>.result.borsh` (the framed `PalwFpWorkerResultV3`),
+`fp-job-<id>.commitment-unsigned.borsh` (the assembled commitment, DA trio included),
+`fp-job-<id>.json` (the human summary), and `traces/<job-id>/` (the retained event-hash chunks
+plus their manifest — written by the worker BEFORE its result frame exists, because a producer
+that kept nothing would default in court).
 
-1. trace chunk retention + the DA manifest (the worker returns roots only at v1);
-2. the ML-DSA-87 signature over the claim id (the signer sidecar's job, never this process's);
-3. commitment transaction assembly and submission (the executor rail, FP-08).
+What is still pending before an on-chain commitment lands: the signature (below) and submission
+to a network that accepts subnetwork `0x4a` — and none does yet, by design
+(`docs/palw-fp-wiring-atomicity.md` explains why the remaining consensus wiring lands as whole
+units rather than piecemeal).
+
+## The executor rail — signing the commitment
+
+```bash
+./target/release/misaka-palw-fp-rail --artifact ~/.misaka-palw-outbox/fp-job-<id> --print-claim
+```
+
+prints the claim id and the signing purpose (`PalwFpCommitmentV3`) — exactly the digest a
+`kaspa-pq-signer` sidecar signs, so a signer-backed rail needs no key in this process. For drills
+and devnets the rail can hold the key itself:
+
+```bash
+./target/release/misaka-palw-fp-rail --bond-key-seed bond.seed --print-bond-pubkey
+```
+
+(put that `executor_pubkey` in `identity.json` before any inference runs — the rail refuses to
+sign a job whose commitment names a different key), then:
+
+```bash
+./target/release/misaka-palw-fp-rail --artifact ~/.misaka-palw-outbox/fp-job-<id> --bond-key-seed bond.seed --funding-outpoint <txid>:<index> --funding-amount <sompi>
+```
+
+writes `fp-job-<id>.commitment-tx.borsh` and a `rail.json` summary carrying the claim id, the CU,
+and the quanta/pwu the job earns. The rail cross-checks the result and the commitment against each
+other before signing, so an outbox edited in between is refused.
 
 ## Boundaries to know
 
@@ -101,6 +130,7 @@ commitment — and the summary names, honestly, what is still pending before sub
 ```bash
 python3 scripts/misaka-palw-fp-v3-worker-smoke.py ./target/release/palw-worker "$MISAKA_PALW_GGUF"
 python3 scripts/misaka-palw-fp-gateway-smoke.py ./target/release/misaka-palw-gateway ./target/release/palw-worker "$MISAKA_PALW_GGUF"
+python3 scripts/misaka-palw-fp-rail-smoke.py ./target/release/misaka-palw-gateway ./target/release/misaka-palw-fp-rail ./target/release/palw-worker "$MISAKA_PALW_GGUF"
 ```
 
 The worker smoke pins the property everything else stands on: the Text arm and the TokenIds

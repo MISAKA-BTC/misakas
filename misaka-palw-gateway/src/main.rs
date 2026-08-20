@@ -39,7 +39,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    fp_cu_v3, fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3, PalwFpCuWeightsV3, PalwFpStopReasonV3, PalwFpWorkerInputV3,
+    fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3, PalwFpCuWeightsV3, PalwFpStopReasonV3, PalwFpWorkerInputV3,
     PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
 };
 use kaspa_consensus_core::palw_v2::{read_framed, write_framed, PALW_V2_MAX_FRAME_BYTES};
