@@ -117,6 +117,8 @@ pub enum PalwAdmissionV2Error {
     ArtifactRootMismatch,
     #[error("claimed pwu {claimed} exceeds the class rule's ceiling {ceiling}")]
     PwuExceedsClassRule { claimed: u64, ceiling: u64 },
+    #[error("claimed pwu {claimed} is not the derived {derived} — pwu is chain state, not a miner input (ADR-0045 Decision 1)")]
+    PwuClaimNotDerived { claimed: u64, derived: u64 },
     #[error("class {0} has no epoch budget entry — a missing budget admits nothing, not everything")]
     EpochBudgetUnspecified(Hash64),
     #[error("epoch budget exceeded for class {class_id}: produced {produced} + claimed {claimed} > budget {budget}")]
@@ -178,6 +180,19 @@ pub fn check_palw_attempt_admission_v2(
         PalwPwuRuleV2::MaxPerAttempt(ceiling) => {
             if attempt.pwu > ceiling {
                 return Err(PalwAdmissionV2Error::PwuExceedsClassRule { claimed: attempt.pwu, ceiling });
+            }
+        }
+        // ADR-0045 Decision 1: EQUALITY, not a bound. Both factors are chain facts — the class's
+        // target at this candidate point and its registered per-inference cost — so any other
+        // value is a mistake or a weight-inflation attempt, and both are rejections. The target
+        // is fetched here rather than shared with item 6b below on purpose: 6b's job is the
+        // lottery, this one's is the price, and each names its own missing-fact error.
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
+            let target =
+                state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
+            let derived = crate::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference);
+            if attempt.pwu != derived {
+                return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
             }
         }
     }
@@ -298,7 +313,9 @@ mod tests {
             20,
             500,
             1000,
-            crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            h64(1),
+            4,
+            1000,
             100,
         )
         .unwrap()
@@ -327,6 +344,7 @@ mod tests {
                 // Every ticket passes, so the OTHER nine items are what these tests measure.
                 // The class lottery has its own test below, where the target is the variable.
                 initial_target: u128::MAX,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -473,6 +491,7 @@ mod tests {
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                     initial_target: target,
+                    share_permille: 1000,
                 },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -531,6 +550,101 @@ mod tests {
         let (state, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(5, 120, 5), &[], None).unwrap();
         assert_eq!(state.reserved_exposure(&PalwBondKeyV2(bond_outpoint(1))), 0, "both claims void-timed-out and released");
         admit(&state, &ctx(6, 121, 6), &third).expect("released exposure is headroom again");
+    }
+
+    // ---- ADR-0045 Decision 1: pwu has exactly one legal value ----
+
+    /// A second class under `DerivedV1`, beside the fixture's ceiling class. The target is
+    /// `u128::MAX / 2` (two expected attempts), the per-inference cost 7 — so the one legal
+    /// claim is 14, and everything else is the H3 attack, refused by equality rather than
+    /// bounded by a ceiling.
+    fn state_with_derived_class(initial_target: u128) -> PalwChainStateV2 {
+        let objects = vec![PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(22),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
+            initial_target,
+            share_permille: 100,
+        }];
+        let (state, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
+        state
+    }
+
+    fn derived_class_attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
+        let mut env = attempt(pwu, nonce);
+        env.attempt.class_id = h64(2);
+        env.attempt.artifact_root = h64(22);
+        env
+    }
+
+    /// The derived class's target is real (unlike the fixture class's pass-everything MAX), so an
+    /// ADMIT case must also win the item-6b lottery: hunt the deterministic ticket space for a
+    /// nonce that lands under `target`. Refusal cases need no hunt — item 6 fires before 6b.
+    fn derived_class_attempt_admitting(pwu: u64, target: u128) -> PalwAttemptEnvelopeV2 {
+        for nonce in 0..512 {
+            let env = derived_class_attempt(pwu, nonce);
+            if crate::palw_attempt_v2::class_ticket_v2(&env.attempt) <= target {
+                return env;
+            }
+        }
+        panic!("no admitting nonce in 512 draws at target {target} — the ticket space is broken, not unlucky");
+    }
+
+    fn admission_params_with_derived_class() -> PalwAdmissionParamsV2 {
+        PalwAdmissionParamsV2::new(500, [(h64(1), 10_000u128), (h64(2), 10_000u128)].into_iter().collect()).unwrap()
+    }
+
+    #[test]
+    fn derived_pwu_admits_exactly_one_value() {
+        let state = state_with_derived_class(u128::MAX / 2);
+        let admission = admission_params_with_derived_class();
+        let c = ctx(3, 102, 3);
+        let derived = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, 7);
+        assert_eq!(derived, 14, "two expected attempts at seven per inference");
+
+        // The one legal value admits (with a nonce that also wins the 6b lottery).
+        check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt_admitting(derived, u128::MAX / 2))
+            .expect("the derived claim admits");
+
+        // The H3 attack — claim the maximum — is refused by equality, not by a ceiling.
+        let err =
+            check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(u64::MAX, 2))
+                .unwrap_err();
+        assert_eq!(err, PalwAdmissionV2Error::PwuClaimNotDerived { claimed: u64::MAX, derived });
+
+        // And so is one unit off in either direction — there is no tolerance band, because
+        // neither factor is something the miner chooses.
+        for wrong in [derived - 1, derived + 1] {
+            let err =
+                check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(wrong, 3))
+                    .unwrap_err();
+            assert!(matches!(err, PalwAdmissionV2Error::PwuClaimNotDerived { .. }), "got {err:?}");
+        }
+    }
+
+    /// The equality is anchored to the CANDIDATE state's target, not to any constant of the
+    /// class: the same claim value admits under one target and is refused under another, with
+    /// the harder chain demanding proportionally more work per block.
+    #[test]
+    fn derived_pwu_reads_the_target_at_the_candidate_point() {
+        let admission = admission_params_with_derived_class();
+        let c = ctx(3, 102, 3);
+
+        let easy = state_with_derived_class(u128::MAX / 2); // 2 attempts expected → pwu 14
+        let hard = state_with_derived_class(u128::MAX / 8); // 8 attempts expected → pwu 56
+
+        check_palw_attempt_admission_v2(&easy, &state_params(), &admission, &c, &derived_class_attempt_admitting(14, u128::MAX / 2))
+            .expect("14 is the easy chain's one legal value");
+        let err = check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(14, 1))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: 14, derived: 56 },
+            "the harder chain derives a different — larger — legal value for the same class"
+        );
+        check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt_admitting(56, u128::MAX / 8))
+            .expect("56 is the hard chain's one legal value");
     }
 
     // ---- the remaining items, one refusal each ----
