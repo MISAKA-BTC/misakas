@@ -264,7 +264,7 @@ impl<'a> Base0Engine<'a> {
             }
 
             let projected = requantize_row_uniform(&matmul_quant(&layer.wo, &attn, d)?, layer.requant[3]);
-            h = requantize_row_uniform(&add_elem(&h, &projected)?, self.artifact.residual_requant);
+            h = requantize_row_uniform(&add_elem(&h, &projected)?, self.artifact.residual_requant_at(li, 0));
 
             // ---- SwiGLU feed-forward --------------------------------------------------------
             let normed = self.norm_to_code(&h)?;
@@ -277,7 +277,7 @@ impl<'a> Base0Engine<'a> {
             let up = requantize_row_uniform(&matmul_quant(&layer.w_up, &normed, shape.d_ff)?, layer.requant[5]);
             let gated = requantize_row_uniform(&mul_elem(&gate, &up)?, CODE_PRODUCT_TO_CODE);
             let down = requantize_row_uniform(&matmul_quant(&layer.w_down, &gated, d)?, layer.requant[6]);
-            h = requantize_row_uniform(&add_elem(&h, &down)?, self.artifact.residual_requant);
+            h = requantize_row_uniform(&add_elem(&h, &down)?, self.artifact.residual_requant_at(li, 1));
             probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
         }
 
@@ -696,19 +696,20 @@ mod tests {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
             a.execution_class_id().to_string(),
-            // Re-frozen 2026-08-21, three times: the shape digest gained `n_kv_heads`, the
+            // Re-frozen 2026-08-21, four times: the shape digest gained `n_kv_heads`, the
             // artifact digest gained the requantization ZERO POINTS and the per-channel triples
             // (without which two artifacts whose every bias differs shared one class id), and
             // then the TOKENIZER commitment (without which two classes computing different things
-            // from the same ids shared one). The LOGITS below have not moved once across the
-            // three, which is the assertion that matters: each was a renaming, not a new model.
+            // from the same ids shared one), and then the per-layer residual narrowing. The
+            // LOGITS below have not moved once across the four, which is the assertion that
+            // matters: each was a renaming, not a new model.
             // The LOGITS below did not, and that is the assertion that matters — the arithmetic is
             // untouched at `n_kv_heads == n_heads`, which is what every artifact built before
             // grouped-query attention meant. A class id that moved while the trace held is a
             // renaming; one where the trace moved too would have been a different model.
             concat!(
-                "5929acb61d6356e34002e245575df00b049da500cfc93743bac7ea257faa27b1",
-                "85b01764548d9e7e07e01017e1d982455d6a4673d963b799f87293809bf51e95"
+                "2be6f6bf4f36637a7f26a37173a88e7352456bf765e41cf6571eb0906adf5b89",
+                "fbda9b4d1f35e5478cf0d111fb17b9543f03991ab6b55af6e2fa7eecc0204868"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );

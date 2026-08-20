@@ -254,6 +254,22 @@ pub struct Base0ArtifactV1 {
     /// something must bring the stream back to `int8`; this is the parameter that says by how
     /// much, rather than leaving it to an implicit cast.
     pub residual_requant: QuantParams,
+    /// **Per-layer residual narrowing (Phase 3's contingency, triggered by measurement).**
+    ///
+    /// `residual_requant` above is ONE parameter for the whole stack, and on the real
+    /// Qwen2.5-1.5B that is not enough: measured at 28 layers the residual peak reaches 11 out of
+    /// 127, so the stream occupies under a tenth of the int8 range, its effective precision is
+    /// around 3.5 bits, and quantization noise dominates what the layers compute — the argmax
+    /// degenerates to a single constant token. A global shift cannot hold the stream up as the
+    /// projections' gains vary from layer to layer, because there is only one of it.
+    ///
+    /// Two entries per layer, in the order the engine applies them: after the attention residual,
+    /// then after the FFN residual. `None` means "use the global one at every site", which is
+    /// what every artifact built before this field meant.
+    ///
+    /// The shifts are a CALIBRATION output, not a choice: converted once with the global rule,
+    /// measured, and re-derived from each layer's own peak.
+    pub layer_residual_requant: Option<Vec<[QuantParams; 2]>>,
     derived_seed: Option<u64>,
 }
 
@@ -306,6 +322,7 @@ impl Base0ArtifactV1 {
             tokenizer_commitment: Hash64::default(),
             norm_requant,
             residual_requant,
+            layer_residual_requant: None,
             derived_seed: None,
         })
     }
@@ -374,6 +391,26 @@ impl Base0ArtifactV1 {
         Ok(artifact)
     }
 
+    /// Install per-layer residual narrowing (see the field).
+    ///
+    /// Refuses a list that is not one pair per layer: a shorter one would leave later layers
+    /// silently on the global rule, which is the arrangement this exists to replace.
+    pub fn with_layer_residual_requant(mut self, per_layer: Vec<[QuantParams; 2]>) -> Result<Self, ArtifactError> {
+        if per_layer.len() != self.shape.n_layers {
+            return Err(ArtifactError::WeightLen { tensor: "layer_residual_requant", want: self.shape.n_layers, got: per_layer.len() });
+        }
+        self.layer_residual_requant = Some(per_layer);
+        Ok(self)
+    }
+
+    /// The narrowing for `layer`'s attention (`site` 0) or FFN (`site` 1) residual.
+    pub fn residual_requant_at(&self, layer: usize, site: usize) -> QuantParams {
+        match &self.layer_residual_requant {
+            Some(per) => per.get(layer).map(|pair| pair[site]).unwrap_or(self.residual_requant),
+            None => self.residual_requant,
+        }
+    }
+
     /// Declare which tokenizer this class's token ids belong to.
     ///
     /// The commitment is over the tokenizer's own bytes — `tokenizer.json` as shipped — so a
@@ -421,6 +458,22 @@ impl Base0ArtifactV1 {
         absorb_tensor(&mut state, b"unembed", &self.unembed);
         absorb_quant(&mut state, &self.norm_requant);
         absorb_quant(&mut state, &self.residual_requant);
+        // Per-layer residual narrowing, presence-tagged and length-prefixed for the same reason
+        // the per-channel triples are: `None` and an empty `Some` must be different streams, and
+        // a class calibrated per layer is not the class that was not.
+        match &self.layer_residual_requant {
+            None => {
+                state.update(&[0u8]);
+            }
+            Some(per) => {
+                state.update(&[1u8]);
+                state.update(&(per.len() as u64).to_le_bytes());
+                for pair in per {
+                    absorb_quant(&mut state, &pair[0]);
+                    absorb_quant(&mut state, &pair[1]);
+                }
+            }
+        };
         for (i, l) in self.layers.iter().enumerate() {
             state.update(&(i as u64).to_le_bytes());
             for (label, w) in [

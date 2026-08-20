@@ -572,6 +572,96 @@ pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Res
     })
 }
 
+/// **Phase 3's contingency: derive a per-layer residual narrowing from a measured pass.**
+///
+/// One global `residual_requant` was not enough on the real Qwen2.5-1.5B — measured at 28 layers
+/// the residual peak reaches 11 out of 127, so the stream occupies under a tenth of the int8
+/// range, its effective precision is about 3.5 bits, and the argmax degenerates to a constant
+/// token. A single shift cannot hold the stream up as the projections' gains vary from layer to
+/// layer, because there is only one of it.
+///
+/// So: convert once with the global rule, run a pass, and re-derive each layer's shift from the
+/// peak that layer actually produced. A layer whose stream sits at 11 of 127 is shifting one bit
+/// too many; one at 127 is shifting one too few. The target is a peak near 64 — half the range,
+/// which leaves a bit of headroom on each side rather than either rail.
+///
+/// Iterated, because one pass measures the stream the OLD shifts produced: changing layer 3's
+/// shift changes what layer 4 sees. Two or three rounds is enough in practice and the loop stops
+/// when nothing moves, so a shape that will not settle costs a bounded number of passes rather
+/// than looping.
+///
+/// # What this can and cannot fix, measured
+///
+/// On the real Qwen2.5-1.5B it moves the argmax off a single constant token — `[11, 11, 11, 11]`
+/// before, `[476, 854, 2878, 854]` after — and roughly triples the attention spread (2,855 →
+/// 8,442). That is a real improvement and it is not the whole fix.
+///
+/// **A requantization can only ever REDUCE.** `QuantParams`' gain is `multiplier / 2^shift` with
+/// the multiplier at most 1.0, so every setting attenuates and the best a decayed layer can be
+/// given is `shift = 0`. Measured: the calibrated table is `[1, 0, 1, 1, …]` — layer 1 took the
+/// one bit available and every other layer was already at the floor. A stream that has decayed
+/// needs AMPLIFICATION, and that is `Rescale` (ADR-0040 Decision H), the op that exists precisely
+/// because "requantize cannot: its gain is at most 1 at every parameter".
+///
+/// So the residual peak still reaches 5 of 127 at its worst. Closing that means an amplifying
+/// residual — a `Rescale` before the narrowing, per layer — which is a change to BASE-0's own
+/// residual arithmetic and therefore an ADR decision rather than a calibration constant.
+///
+/// **This is calibration, and its output is part of the class identity** — `artifact_root` covers
+/// the per-layer table, so a class calibrated on one prompt set is a different class from one
+/// calibrated on another. The prompt is an argument for exactly that reason: it is a registration
+/// input, not a detail.
+pub fn calibrate_layer_residuals(
+    artifact: &Base0ArtifactV1,
+    prompt: &[usize],
+    rounds: usize,
+) -> Result<Base0ArtifactV1, crate::engine::EngineError> {
+    /// Half the int8 range: headroom on both sides rather than a rail on either.
+    const TARGET_PEAK: i32 = 64;
+    let n = artifact.shape.n_layers;
+    let mut current = artifact.clone();
+    let mut shifts: Vec<[u8; 2]> = (0..n).map(|_| [artifact.residual_requant.shift; 2]).collect();
+
+    for _ in 0..rounds.max(1) {
+        let health = measure_depth_health(&current, prompt)?;
+        let mut moved = false;
+        for (layer, peak) in health.residual_peak.iter().enumerate() {
+            // How many bits the stream is away from the target, as a shift correction. A peak of
+            // 11 against 64 wants two bits back; a peak of 127 wants one bit given up.
+            let delta = if *peak <= 0 {
+                // A dead layer wants every bit it can get.
+                -2i32
+            } else {
+                -((TARGET_PEAK as f64 / *peak as f64).log2().round() as i32)
+            };
+            if delta == 0 {
+                continue;
+            }
+            for site in 0..2 {
+                let next = (shifts[layer][site] as i32 + delta).clamp(0, 31) as u8;
+                if next != shifts[layer][site] {
+                    shifts[layer][site] = next;
+                    moved = true;
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+        let table: Vec<[QuantParams; 2]> = shifts
+            .iter()
+            .map(|pair| {
+                [
+                    QuantParams { multiplier: i32::MAX, shift: pair[0], zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: pair[1], zero: 0 },
+                ]
+            })
+            .collect();
+        current = current.with_layer_residual_requant(table).expect("one pair per layer, by construction");
+    }
+    Ok(current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

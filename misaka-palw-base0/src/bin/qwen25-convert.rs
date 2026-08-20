@@ -10,7 +10,10 @@
 //! class id, which is why the conversion has to be bit-reproducible.
 
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
-use misaka_palw_base0::convert::{Qwen25ConvertPlan, activation_scale_of, biased_channel_count, convert_qwen25, measure_depth_health};
+use misaka_palw_base0::convert::{
+    Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25,
+    measure_depth_health,
+};
 
 fn die(message: String) -> ! {
     eprintln!("qwen25-convert: {message}");
@@ -74,6 +77,24 @@ fn main() {
     println!("max_position  {} (the tool's default, not the model's context length)", artifact.shape.max_position);
 
     let prompt = [9707usize, 11, 1879, 0];
+
+    // Phase 3's contingency: one global residual shift is not enough at depth, so each layer's is
+    // re-derived from the peak that layer actually produces. Calibration is part of the class
+    // identity — `artifact_root` covers the table — so the class id below is the CALIBRATED one.
+    let artifact = if args.iter().any(|a| a == "--no-calibrate") {
+        artifact
+    } else {
+        let started = std::time::Instant::now();
+        let calibrated =
+            calibrate_layer_residuals(&artifact, &prompt, 4).unwrap_or_else(|e| die(format!("calibration failed: {e:?}")));
+        println!("calibrated in {:?}", started.elapsed());
+        if let Some(table) = &calibrated.layer_residual_requant {
+            let shifts: Vec<u8> = table.iter().map(|p| p[1].shift).collect();
+            println!("  ffn residual shifts {shifts:?}");
+        }
+        println!("  class id (calibrated) {}", calibrated.execution_class_id());
+        calibrated
+    };
     let started = std::time::Instant::now();
     let health = measure_depth_health(&artifact, &prompt).unwrap_or_else(|e| die(format!("forward failed: {e:?}")));
     println!("forward {} tokens in {:?}", prompt.len(), started.elapsed());

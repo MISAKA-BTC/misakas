@@ -496,3 +496,34 @@ adjust, re-convert.
 deterministically and a court adjudicates its steps from one opening. Condition 13 does not: a
 class whose argmax is a constant is not a *practical* weight-bearing class, and this is exactly
 what a soak is for. **The class must not be activated on these numbers.**
+
+
+### Phase 3's contingency, implemented and measured
+
+`calibrate_layer_residuals` converts once with the global rule, runs a pass, and re-derives each
+layer's residual shift from the peak that layer actually produced, iterating because changing
+layer 3's shift changes what layer 4 sees.
+
+On the real checkpoint it helps, measurably:
+
+| | global | calibrated |
+| --- | --- | --- |
+| argmax | `[11, 11, 11, 11]` | `[476, 854, 2878, 854]` |
+| attention spread | 2,855 | 8,442 |
+| residual peak (max) | 38 | 56 |
+
+**And it is not the whole fix, for a structural reason.** A requantization can only REDUCE:
+`QuantParams`' gain is `multiplier / 2^shift` with the multiplier at most 1.0, so every setting
+attenuates and the most a decayed layer can be given is `shift = 0`. The calibrated table came out
+`[1, 0, 1, 1, …]` — layer 1 took the one bit available and every other layer was already at the
+floor. The residual peak still reaches 5 of 127 at its worst.
+
+A stream that has decayed needs **amplification**, which is exactly what `Rescale` exists for
+(ADR-0040 Decision H: "requantize cannot: its gain is at most 1 at every parameter"). Closing the
+gap means an amplifying residual — a per-layer `Rescale` before the narrowing — which changes
+BASE-0's own residual arithmetic and is therefore an ADR decision, not a calibration constant.
+
+*Category:* **量子化品質**, improved and still open. The class runs deterministically and its
+steps adjudicate; it is not yet a model whose output is worth carrying weight. **It must not be
+activated on these numbers**, which is what conditions 12 and 13 are arranged for: register
+weightless, soak, and activate only on numbers that justify it.
