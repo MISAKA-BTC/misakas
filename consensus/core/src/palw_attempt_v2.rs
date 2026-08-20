@@ -91,6 +91,18 @@ pub struct PalwAttemptUnsignedV2 {
     pub trace_root: Hash64,
     pub output_root: Hash64,
     pub pwu: u64,
+    /// Root of the trace MANIFEST (chunk index -> chunk digest list) the producer must serve
+    /// (ADR-0042 Decision 7: the commitment binds the data-availability obligation). `trace_root`
+    /// stays the step-level merkle root the court opens against (Decision 8); the manifest is how
+    /// a panel fetches chunks to verify at all.
+    pub trace_manifest_root: Hash64,
+    /// Number of trace chunks behind `trace_manifest_root`. Zero chunks is an unverifiable
+    /// attempt and is refused statelessly.
+    pub trace_chunk_count: u32,
+    /// DAA score until which the producer is obliged to serve openings/chunks. Failing a request
+    /// inside this window defaults the producer: claim void, bond slash (Decision 7) — silence
+    /// can never pin a block at `Provisional` forever.
+    pub trace_retention_daa: u64,
 }
 
 /// The signed envelope. The signature is a **witness**, never part of identity.
@@ -174,6 +186,8 @@ pub enum PalwAttemptV2Error {
     ChallengeMismatch,
     #[error("pwu is zero — an attempt claiming no work is not an attempt")]
     ZeroPwu,
+    #[error("trace_chunk_count is zero — a trace nobody can fetch is a trace nobody can verify")]
+    ZeroTraceChunks,
     #[error("the signature is {got} bytes, not the ML-DSA-87 {expected}")]
     SignatureLength { got: usize, expected: usize },
     #[error("the executor public key is empty")]
@@ -209,6 +223,9 @@ impl PalwAttemptEnvelopeV2 {
         }
         if a.pwu == 0 {
             return Err(PalwAttemptV2Error::ZeroPwu);
+        }
+        if a.trace_chunk_count == 0 {
+            return Err(PalwAttemptV2Error::ZeroTraceChunks);
         }
         if a.network_domain != network_domain
             || a.challenge != challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, a.class_id, &a.executor_bond)
@@ -272,6 +289,9 @@ mod tests {
             trace_root: Hash64::from_u64_word(0x7A),
             output_root: Hash64::from_u64_word(0x00),
             pwu: 4_242,
+            trace_manifest_root: Hash64::from_u64_word(0xD0),
+            trace_chunk_count: 8,
+            trace_retention_daa: 999_999,
         }
     }
 
@@ -353,6 +373,11 @@ mod tests {
             |x: &mut PalwAttemptUnsignedV2| x.operator_id = Hash64::from_u64_word(0xE1),
             |x: &mut PalwAttemptUnsignedV2| x.artifact_root = Hash64::from_u64_word(0xA8),
             |x: &mut PalwAttemptUnsignedV2| x.network_domain = Hash64::from_u64_word(0x99),
+            // The DA obligation is identity too (Decision 7): two attempts differing only in what
+            // they promise to serve are two claims, or the weaker promise rides the stronger's id.
+            |x: &mut PalwAttemptUnsignedV2| x.trace_manifest_root = Hash64::from_u64_word(0xD1),
+            |x: &mut PalwAttemptUnsignedV2| x.trace_chunk_count += 1,
+            |x: &mut PalwAttemptUnsignedV2| x.trace_retention_daa += 1,
         ] {
             let mut m = a.clone();
             mutate(&mut m);
@@ -374,6 +399,10 @@ mod tests {
         let mut zero = a.clone();
         zero.pwu = 0;
         assert_eq!(envelope(zero).validate_stateless_v2(net(), pph(), TS, NONCE), Err(PalwAttemptV2Error::ZeroPwu));
+
+        let mut chunkless = a.clone();
+        chunkless.trace_chunk_count = 0;
+        assert_eq!(envelope(chunkless).validate_stateless_v2(net(), pph(), TS, NONCE), Err(PalwAttemptV2Error::ZeroTraceChunks));
 
         let mut short = envelope(a);
         short.signature.pop();

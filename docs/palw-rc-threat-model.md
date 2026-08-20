@@ -69,7 +69,10 @@ honest "red (integration), lands in PR-N."
   whole chain rejected ⇒ silent blue-work fallback.
 - **Red test:** `palw_v2_fresh_tip_is_provisional_weighted` — a candidate tip with a valid commitment
   and no descendant must receive a positive `live` weight (`Provisional`), not `UnresolvedBlock`.
-- **Status:** red (integration). **Greens in:** PR-06 (state machine). **ADR-0042:** Decision 2.
+- **Status:** **substrate green** (PR-03/PR-06): the named test passes — a descendant-less claim is
+  `Provisional` with `β·pwu` live weight the moment it applies, no panel required; the panel gates
+  only `PanelBound → ReceiptLicensed → Final` (`palw_panel_v2`). The V1 weigher's anchor demand
+  stands until PR-08 retires that substrate. **ADR-0042:** Decision 2.
 
 ### P0-4 — same DAG, different node sink ⇒ different candidate weight
 - **Invariant:** W3 (equal DAGs ⇒ equal weights everywhere).
@@ -125,7 +128,14 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_executor_excluded_from_own_panel` — assemble a candidate set including the
   executor's own bond; assert the drawn panel never contains it (by validator key hash AND operator
   id). `palw_v2_panel_noshow_is_slashed` — an assigned seat past deadline loses collateral.
-- **Status:** red (integration). **Greens in:** PR-06/PR-07. **ADR-0042:** Decision 7.
+- **Status:** **exclusion green** (PR-06): `palw_v2_executor_excluded_from_own_panel` passes —
+  `derive_panel_v2` reads bond, operator and key from the one registry (no second namespace to
+  diverge in), dedups operators, and `validate_panel_bound_v2` accepts only the exact derived
+  panel at the exact anchor slot. The no-show COLLATERAL penalty
+  (`palw_v2_panel_noshow_is_slashed`) stays red for PR-07: the chain-scoped fact exists (a
+  `ReceiptTimeout`-voided claim beside its panel record names who owed a verdict), and the
+  `Unavailable` verdict keeps a seat reporting withheld data from ever being that no-show.
+  **ADR-0042:** Decision 7.
 
 ### P0-8 — the arithmetic court is unadjudicable on a normal full node
 - **Invariant:** W1 (full node adjudicates every dispute with no LLM).

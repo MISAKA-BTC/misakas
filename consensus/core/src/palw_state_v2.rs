@@ -167,6 +167,12 @@ impl PalwStateParamsV2 {
     pub fn epoch_length(&self) -> u64 {
         self.epoch_length
     }
+
+    /// The bind window, exposed for the acceptance layers that must agree with the sweep about
+    /// when a claim's panel may still legally bind.
+    pub fn window_bind(&self) -> u64 {
+        self.window_bind
+    }
 }
 
 /// `⌊β · pwu / 1000⌋` — THE definition of an immature claim's live contribution. Floor, so the
@@ -559,6 +565,11 @@ impl PalwChainStateV2 {
 
     pub fn epoch_counter(&self, class_id: &Hash64) -> Option<&PalwEpochCounterV2> {
         self.epoch_counters.get(class_id)
+    }
+
+    /// Iterate the bond registry in canonical key order — what the panel sortition tickets.
+    pub fn bonds_iter(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &PalwBondStateV2)> {
+        self.bonds.iter()
     }
 
     /// Decision 6's `reserved_exposure(bond)` — what the admission ceiling is checked against.
@@ -1679,6 +1690,9 @@ mod tests {
                 trace_root: h64(31),
                 output_root: h64(32),
                 pwu,
+                trace_manifest_root: h64(33),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
             },
             signature: vec![0; 8],
         }
@@ -1733,6 +1747,30 @@ mod tests {
         assert_eq!((s5.safe_weight(), s5.bounded_immature()), (40, 0), "Final: full pwu safe, immature released");
         assert_eq!(s5.reserved_exposure(&bond_key(1)), 0, "exposure released on Final");
         assert_eq!(s5.safe_frontier(), (5, block(5)), "with the whole past resolved, the frontier is here");
+    }
+
+    /// **The audit register's P0-3 red test.** A candidate tip whose claim has no descendants —
+    /// no panel, no anchor, nothing after it — is `Provisional` and carries positive live
+    /// weight IMMEDIATELY. The old weigher demanded a future anchor a fresh tip cannot have, so
+    /// every live tip read `Unresolved`, PALW weight was never consulted, and fork choice
+    /// silently fell back to blue work.
+    #[test]
+    fn palw_v2_fresh_tip_is_provisional_weighted() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (tip, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+
+        assert!(
+            matches!(tip.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional),
+            "a fresh tip is Provisional, not Unresolved"
+        );
+        let before = s1.candidate_order(h64(0xF1));
+        let after = tip.candidate_order(h64(0xF1));
+        assert!(after.live_total > before.live_total, "the fresh tip's claim weighs NOW — β·pwu, no panel required");
+        assert_eq!(after.safe_weight, before.safe_weight, "and none of it is safe yet — the ramp is live-only");
     }
 
     /// Maturing never lowers the candidate order — the state and the comparator agree end to end.
