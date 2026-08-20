@@ -1,13 +1,13 @@
 # The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
 
-Status, updated: **Units A, B and C are landed and wired. Unit D is not, and its prerequisite
-is.** This document was written before any of it, because the wiring is where every P0 in this
+Status, updated: **Units A–E are landed and wired, and FP-09's drill has run against them.**
+This document was written before any of it, because the wiring is where every P0 in this
 project's audit history was born; it now records what each unit turned out to be.
 
 ## What the units cost, in defects found
 
-Writing them under this discipline surfaced three defects *before* they could ship, all of the
-same family — an object that was not bound to its position or its state:
+Writing them under this discipline surfaced six defects *before* they could ship. The first three
+are one family — an object that was not bound to its position or its state:
 
 1. **The spend envelope had no header-position binding** (found while designing Unit B): one
    signature would have minted unlimited block identities, P0-1's shape arriving through the lane
@@ -20,8 +20,24 @@ same family — an object that was not bound to its position or its state:
 3. **`palw_candidate_order` panicked on an unknown hash** (found by Unit D's prerequisite test):
    "no opinion" delivered as a panic, on a path whose callers see peer-supplied hashes.
 
-None of the three would have been caught by reading the code; each was caught by a test written
-to state a property the unit had to hold.
+The last three came from Units D and E and from running the drill:
+
+4. **Unvalidated candidates cannot be ordered** (Unit D): a tip with no delta has no PALW
+   standing, so ranking the sink search's heap by the comparator would be ranking by a state
+   nobody computed. The first draft did exactly that and could not even mine. The heap stays a
+   SEARCH order; the authority sits at the point the sink MOVES.
+5. **ADR-0043 §2's frozen preimage was stale** (Unit E): it listed the state root without
+   `receipt_targets` or `receipt_epoch_counters`, which `state_root` has covered since the receipt
+   lane landed. The code was right; the written record — the thing a second implementation would
+   be built from — was not.
+6. **The rail could not build a transaction at all** (FP-09's drill): it stated a placeholder
+   catalog root, and the gate that checks the root against the class list landed later, in Unit C.
+   The rail smoke was green at `2c264313` and red from `d10e23b7` onward, unnoticed for the whole
+   interval. **A real-model script no CI runs is a test that stops being true silently** — which
+   is the argument for `scripts/misaka-palw-fp-fleet-drill.py` being one command.
+
+None of these would have been caught by reading the code; each was caught by a test, or a drill,
+written to state a property the unit had to hold.
 
 ## The original finding (resolved by Units A and B)
 
@@ -127,6 +143,18 @@ naming an absent bond or a frozen class, so the derived state can only ever be a
 complete wiring holds, never a superset. The reverse order — applying work before it is admitted —
 would not be.
 
+### Unit E — the pruning point's PALW state (ADR-0042 Decision 5) — **LANDED**
+
+1. One decoder for the carriage, shared by the block validator and the import gate, keyed on the
+   BUNDLE's lane ids (`palw_fp_carriage_v3`).
+2. Capture at pruning-advance, walking forward from the PREVIOUS pruning carriage — the anchor
+   tracks the sink, a full pruning depth above.
+3. The import gate: `into_state(_, Some(committed_root))` against the root a child header of the
+   pruning point committed, and a REFUSAL when no such header exists.
+4. The wire pair (`RequestPalwPruningCarriage` / `PalwPruningCarriage`), both routes registered —
+   request on the serving side, response on the IBD side, because a reply nobody subscribed to
+   disconnects the peer.
+
 ## What is safe to do before the units
 
 Everything landed so far, and this list is the reason each piece was chosen:
@@ -157,11 +185,18 @@ tests are the *existing* baseline, and the daemon-suite abort is an environment/
 the same binary. A wiring PR is clean when it leaves this table unchanged, not when the suite is
 green.
 
-## Sequencing note for the fleet drill (FP-09 stage 2)
+## The fleet drill (FP-09) — run
 
-The drill needs Units A–D on a devnet preset carrying
-`palw_fp_devnet_bundle_v3`. Until then the honest drill is the one already run: the sidecar path
-end to end on the real model (`scripts/misaka-palw-fp-v3-worker-smoke.py`,
-`scripts/misaka-palw-fp-gateway-smoke.py`), which measures everything that does not require a
-chain — one inference producing answer and commitment, arm equality, retention, and the
-transaction the executor rail would submit.
+`scripts/misaka-palw-fp-fleet-drill.py` is one command over the whole path that exists: the three
+real-model sidecar smokes, the **seam** (a transaction the rail really built, read by the
+consensus extractor and accepted by the state machine), the consensus-side V2 wiring tests, and
+the CU calibration. Run and results are in `docs/palw-fp-fleet-drill.md`.
+
+What it reaches: `inference -> artifact -> signed tx -> extractor -> state machine -> Provisional
+claim`, with the CU weights measured on both backends and the shipped 1 : 64 shown to clear the
+binding ratio with ~5× headroom.
+
+What it does not: certification. `Provisional -> PanelBound -> ReceiptLicensed -> Final` needs the
+panel's overlay rounds on more than one node, and only a `Final` claim can be spent by a receipt
+block. That is the next drill, and `WORST_CASE_COURT` — still declared rather than measured — is
+the constant it replaces first.
