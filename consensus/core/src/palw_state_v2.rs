@@ -405,7 +405,11 @@ pub enum PalwPwuRuleV2 {
     /// item 6 is equality, not a bound. Neither factor is a miner input: the target is rooted
     /// candidate state (which is what voids the ADR-0039 amendment's altitude objection), and
     /// `pwu_per_inference` is the registered normative operation count of one canonical
-    /// inference — the class's step-leaf count, the same number the court's ladder walks.
+    /// inference — the class's step-leaf count, the same number the court's ladder walks. The
+    /// registration DECLARES it; `palw_genesis_v2::verify_palw_genesis_v2` is what makes the
+    /// declaration true, by demanding it equal the catalog's counted
+    /// `canonical_step_leaf_count`. Without that gate this number is a direct, permanent
+    /// multiplier on the class's fork-choice weight that breaks no other rule.
     DerivedV1 { pwu_per_inference: u64 },
 }
 

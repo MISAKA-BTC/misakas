@@ -369,11 +369,15 @@ impl PalwConsensusParamsV2 {
         // for no safety gained. ADR-0042 Decision 1 should be amended to say which mechanism
         // carries the guarantee.
         //
-        // RESIDUAL: `court.max_step_leaf_count` is still a number the bundle asserts rather than
-        // one this gate can read off the catalog — the catalog PREIMAGE arrives with the RC
-        // genesis loader, and only `class_catalog_root` is here. What changed is that the
-        // unchecked quantity is now a named catalog FACT with a place to be checked, instead of
-        // an opaque duration with nowhere to check it.
+        // `court.max_step_leaf_count` is a number the bundle ASSERTS and this gate cannot read off
+        // the catalog — only `class_catalog_root` is here, and the preimage travels with the
+        // genesis artifact. That is by construction, not a residual: the catalog is deliberately
+        // outside the bundle so RC and mainnet share one ruleset id. The assertion is checked
+        // against the fact one altitude up, at `verify_against_catalog`, which
+        // `palw_genesis_v2::verify_palw_genesis_v2` runs at genesis load — the same landing that
+        // now also checks each registration's declared `pwu_per_inference` against the catalog's
+        // counted one (ADR-0045 Decision 1). A node whose court is shallower than its catalog
+        // refuses to start; it does not start and stall.
 
         // Withdrawal outlasts the whole liability period plus the reorg margin: a bond cannot
         // commit fraud and leave before it is provable.
@@ -456,6 +460,20 @@ pub struct PalwClassCatalogEntryV2 {
     /// walk. This is the quantity `PalwCourtParamsV2::max_step_leaf_count` ASSERTS; the catalog
     /// is where it is a fact.
     pub max_step_leaf_count: u64,
+    /// The COUNTED step-leaf count of this class's canonical inference — the quantity ADR-0045
+    /// Decision 1 makes `pwu_per_inference` normatively equal to.
+    ///
+    /// A registration DECLARES `pwu_per_inference`; only this says what it should be. Without the
+    /// number living here the declaration was self-certifying, and since Decision 1 turned pwu
+    /// into `palw_pwu_v1(class_target, pwu_per_inference)` an overstated declaration is a direct
+    /// multiplier on the class's fork-choice weight. It is a catalog fact for the same reason
+    /// `max_step_leaf_count` is: the catalog root is committed to the genesis, so the number an
+    /// operator would have to lie about is one the chain already hashed.
+    ///
+    /// Bounded above by `max_step_leaf_count` — a canonical run cannot be deeper than the class's
+    /// own worst case — which is what keeps "work worth paying for" and "work the ladder can
+    /// walk" the same quantity.
+    pub canonical_step_leaf_count: u64,
     /// Every `kernel_semantics_id` this class's shape profile can reach at adjudication time.
     /// `verify_catalog_coverage_v1` compares it against THIS BUILD's adjudicable catalog.
     pub reachable_kernels: BTreeSet<Hash64>,
@@ -482,6 +500,14 @@ impl PalwClassCatalogV2 {
         if entries.iter().any(|e| e.max_step_leaf_count < 2) {
             return Err(PalwModeV2Error::Invalid("a class whose trace has fewer than two step leaves cannot be bisected"));
         }
+        if entries.iter().any(|e| e.canonical_step_leaf_count == 0) {
+            return Err(PalwModeV2Error::Invalid("a canonical inference of zero steps is work worth nothing and priced as something"));
+        }
+        if entries.iter().any(|e| e.canonical_step_leaf_count > e.max_step_leaf_count) {
+            return Err(PalwModeV2Error::Invalid(
+                "a class's canonical inference is deeper than its own worst case — the ladder could not walk what the price claims",
+            ));
+        }
         Ok(Self { entries })
     }
 
@@ -504,6 +530,11 @@ impl PalwClassCatalogV2 {
     /// The deepest trace any registered class can produce.
     pub fn max_step_leaf_count(&self) -> u64 {
         self.entries.iter().map(|e| e.max_step_leaf_count).max().expect("a catalog is non-empty by construction")
+    }
+
+    /// The entry for `class_id`, if the catalog registers it.
+    pub fn entry(&self, class_id: &Hash64) -> Option<&PalwClassCatalogEntryV2> {
+        self.entries.iter().find(|e| e.class_id == *class_id)
     }
 }
 
@@ -591,7 +622,7 @@ pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn h64(v: u64) -> Hash64 {
@@ -974,6 +1005,9 @@ mod tests {
             class_id,
             artifact_root: h64(11),
             max_step_leaf_count: leaves,
+            // Half the worst case: distinct from it on purpose, so a fixture cannot pass by the
+            // two being interchangeable.
+            canonical_step_leaf_count: (leaves / 2).max(1),
             // The BASE-0 kernels this build adjudicates — the honest reachable set for a class
             // whose shape profile is BASE-0's.
             reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
