@@ -2831,7 +2831,10 @@ impl VirtualStateProcessor {
             let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
             let mut swept = 0usize;
             if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
-                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
+                // `default_backward_chain_iterator` YIELDS its starting block (its `inclusive`
+                // flag is about the ancestor end), so the tip needs no prefix — one used to be
+                // chained here and visited it twice, inflating `swept` in the line below.
+                for block in self.reachability_service.default_backward_chain_iterator(sweep_tip) {
                     let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
                     if sink_blue.saturating_sub(bs) > horizon {
                         break;
@@ -3045,7 +3048,10 @@ impl VirtualStateProcessor {
             let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
             let mut swept = 0usize;
             if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
-                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
+                // `default_backward_chain_iterator` YIELDS its starting block (its `inclusive`
+                // flag is about the ancestor end), so the tip needs no prefix — one used to be
+                // chained here and visited it twice, inflating `swept` in the line below.
+                for block in self.reachability_service.default_backward_chain_iterator(sweep_tip) {
                     let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
                     if sink_blue.saturating_sub(bs) > horizon {
                         break;
