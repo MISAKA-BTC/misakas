@@ -214,6 +214,7 @@ pub mod palw_fp_devnet_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_execution_v3;
 pub mod palw_base0_profile;
+pub mod palw_qwen25_profile;
 pub mod palw_fp_objects_v3;
 pub mod palw_lifecycle_objects_v2;
 pub mod palw_facts;
