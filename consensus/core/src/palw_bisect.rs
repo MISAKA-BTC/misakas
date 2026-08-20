@@ -227,9 +227,11 @@ pub struct PalwBisectLadderV1 {
     /// longer drive the interval onto endpoints that are equal — an interval whose ends agree
     /// contains no divergence, so a ladder that reached one has disproved its own dispute.
     ///
-    /// The pair also IS the terminal check's anchor pair, so its absence is no longer what blocks
-    /// that check; the remaining blockers are the terminal-opening move itself and the authorship
-    /// half for a withheld execution (items 2-4).
+    /// The pair also IS the terminal check's anchor pair, so its ABSENCE no longer blocks that
+    /// check. Its weakness still does: a responder that discloses DISTINCT junk at every rung is
+    /// refused nothing here and steers the interval exactly as before, so a terminal move added on
+    /// the strength of this alone would be fail-open. See the four grounds recorded in `palw_facts`
+    /// — this settles the anchor pair, not the steering.
     pub disclosures: Vec<(u64, Hash64)>,
 }
 

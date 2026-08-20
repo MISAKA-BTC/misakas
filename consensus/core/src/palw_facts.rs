@@ -2008,16 +2008,22 @@ mod resolver_tests {
         //
         // REMAINING, and each voids the move on its own:
         //
-        // 1. `mid_state` IS NEVER CHECKED, so the rungs bind nothing. `apply_disclosure` pushes it
-        //    into `PalwBisectLadderV1::disclosures` and NOTHING in the tree reads it — verified by
-        //    grep. The field's own doc says "the terminal check's anchor pair comes from here", and
-        //    that check does not exist. Consequence, with a terminal move added: a guilty responder
-        //    discloses junk at every rung, the honest challenger's agree-iff-divergence-past-midpoint
-        //    strategy disagrees every time, the interval collapses on an index the RESPONDER steered,
-        //    and it then opens an honest early leaf. The challenger has nothing to convict on, goes
-        //    quiet, and a challenger no-show settles `NoFaultFound` — the fraud is credited and the
-        //    honest challenger's bond is forfeited. Closing it needs a definition of "state
-        //    commitment at index i" for each `PalwBisectSpaceV1`, verified at every disclosure.
+        // 1. `mid_state` binds the responder to its own claims, and STILL does not stop steering.
+        //    PARTLY CLOSED (audit P0-9 item 1): the ladder now carries the interval's endpoint
+        //    states and `apply_disclosure` refuses one that repeats either, so the anchor pair a
+        //    terminal check needs exists and a responder cannot answer with a state it has already
+        //    committed to. **That is accountability, not verification, and the steering attack
+        //    survives it**: a guilty responder discloses DISTINCT junk at every rung, the honest
+        //    challenger's agree-iff-divergence-past-midpoint strategy disagrees every time, the
+        //    interval still collapses on an index the responder steered, and it opens an honest
+        //    early leaf. The challenger has nothing to convict on, goes quiet, and a challenger
+        //    no-show settles `NoFaultFound` — fraud credited, honest bond forfeited.
+        //
+        //    So this ground still voids the terminal move. Closing it needs what it always did: a
+        //    definition of "state commitment at index i" per `PalwBisectSpaceV1` that a full node
+        //    can CHECK — which is now within reach, because `palw_artifact` gives a disclosure a way
+        //    to carry proven operands, and a state commitment checkable against them is the piece
+        //    that turns the endpoint pair from a record into a proof.
         //
         // 2. THE LADDER'S OUTCOME CANNOT BE A MATURITY TRIGGER while the conviction it defers to is
         //    unfileable. The ladder exists for a miner that WITHHELD, so no execution attestation is
