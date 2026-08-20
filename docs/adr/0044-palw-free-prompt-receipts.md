@@ -515,11 +515,29 @@ any point before a dedicated RC/devnet preset PR.
 | **FP-08** | pipeline wiring: objects from carriage, beacon facts from stores, seam swap to the two-id set, trace DA retention + the signer/executor rail, store layer (shared with V2's own pending wiring) | devnet blocks of both kinds validate cross-node |
 | **FP-09** | fleet drill + measured params + RC/devnet preset | soak outputs fill the bundle |
 
-This branch lands FP-00 through FP-07. FP-06/07 are measured on the real pinned model
-(Qwen3.5-2B): one inference produced the user's answer AND the commitment roots; the Text arm
-and the TokenIds replay arm reached byte-identical roots; repeated runs were byte-identical on
-every consensus-visible field; the OpenAI-compatible surface answered with the roots and the CU
-in-band and the artifact in the outbox.
+This branch lands **FP-00 through FP-09**, with FP-08's pipeline wiring staged as five atomic
+units (A–E) recorded in `docs/palw-fp-wiring-atomicity.md`:
+
+| Unit | Content |
+|---|---|
+| **A** | the attempt lane's PoW arm (algo 6) |
+| **B** | the receipt lane's arm (algo 7) — no PoW, level 0, ticket-admitted |
+| **C** | the store layer, the candidate-scoped walk, the block's own work, objects from accepted txs, beacon facts from the chain |
+| **D** | one fork-choice authority at all four sites — virtual sink, deep reorg, pruning ceiling, IBD commit |
+| **E** | the pruning point's PALW carriage: capture, the wire pair, and an import gate that refuses what no header commits to |
+
+FP-06/07 are measured on the real pinned model (Qwen3.5-2B): one inference produced the user's
+answer AND the commitment roots; the Text arm and the TokenIds replay arm reached byte-identical
+roots; repeated runs were byte-identical on every consensus-visible field; the OpenAI-compatible
+surface answered with the roots and the CU in-band and the artifact in the outbox.
+
+FP-09's drill (`docs/palw-fp-fleet-drill.md`) carries a transaction the rail really built across
+into the consensus extractor and state machine — the one boundary nothing else in the tree
+crosses — and measures the CU weights on both backends (CPU 8.0 : 1, Metal 11.9 : 1), which is
+what lets the shipped 1 : 64 be stated as a bound rather than a guess. It reaches a **Provisional**
+claim and says so: certification needs the panel's overlay rounds on more than one node, and only
+a `Final` claim can be spent by a receipt block. `WORST_CASE_COURT` remains declared, not
+measured, and is labelled as such in the source.
 
 ## What this ADR does not decide
 
