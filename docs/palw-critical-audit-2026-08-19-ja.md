@@ -39,7 +39,8 @@
 | **P0-10** bond exposure 上限なし | **CLOSED** — `palw_exposure` (`Σ immature_pwu ≤ collateral / penalty_per_pwu`、prefix-mandatory、bond ごと、overflow は拒否) を chain weight fold に配線。超過分は live weight を失うが block は有効（そうしないと他人の bond に安い commitment を先着させる griefing になる）。`penalty_sompi_per_pwu` は既存の fork-choice fence に追加（6 本目を作らない — β と対で意味を持つため）|
 | **P0-7** executor 除外 ID / operator dedup | **CLOSED** — 除外 ID は bond record から解決、`operator_root` は owner hash（`None` だと 1 operator が k bond で k 席、quorum の購入価格が bond 下限 × k）|
 | **P0-7** no-show 罰則 | **意図的に未実装** — 現状の consequence は「share の没収」（credit は receipt から payee を作るので既に発生している）。それを超える罰則は `BondMutation` に `Slash`（**全額 burn**）しか無く、no-show に配線すると liveness 障害を equivocation と同罰にし、**seated な validator を 1 duty window だけ eclipse すれば担保全額を焼ける**というより安い攻撃を作る。必要なのは partial-forfeit mutation と罰則の大きさ（後者は ADR-0038 が「決めない」と明記する数値パラメータ）|
-| P0-8, P0-9 | 未着手 |
+| **P0-8** 法廷が通常ノードで判決不能 | **機構 CLOSED / 母集団は前提待ち** — `palw_artifact` で証明付き operand（leaf は位置も束縛、奇数ノードは promote、tail 付き path は拒否、1 件でも偽なら全体を拒否）。法廷の算術は不変で、oracle だけが「持っているファイル」から「証明された証拠」に変わる。**残るのは inventory の登録**（どの tensor をどの順で行に切るか）で、これは実モデルの shape profile が無いという既知の前提に依存する |
+| P0-9 | 未着手 |
 
 ### P0-1 で監査の推奨 remedy を採らなかった理由
 
