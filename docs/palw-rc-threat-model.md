@@ -39,7 +39,10 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_commitment_mutation_invalidates_pow` — build a valid header, flip one bit of
   the commitment root, assert the PoW verification now **fails**. Today it passes (PoW ignores the
   commitment) ⇒ **red**.
-- **Status:** red (unit, `consensus/pow`). **Greens in:** PR-01. **ADR-0042:** Decision 3a.
+- **Status:** **substrate green** (PR-01, `98e69283`): the V2 transcript binds the commitment
+  totally — the finalizer consumes `Expand(root)`, so one flipped commitment bit is a failed PoW,
+  and `palw_attempt_v2` tests pin it. The V1 (algo-4) path keeps its mixed-in binding until the
+  mode lands; no network demands V2 yet, by design. **ADR-0042:** Decision 3a.
 
 ### P0-2 — block-commitment ML-DSA-87 signature never verified at admission
 - **Invariant:** ADR-0038 W8 (no bond, no block — the *holder's* authorization).
@@ -73,7 +76,12 @@ honest "red (integration), lands in PR-N."
   DAG — permanent partition.
 - **Red test:** `palw_v2_weight_invariant_under_prior_sink` — apply branch A then weigh candidate C;
   apply branch B then weigh candidate C; assert identical `palw_state_root` + `(safe, live)`.
-- **Status:** red (integration, differential). **Greens in:** PR-03. **ADR-0042:** Decision 5.
+- **Status:** **substrate green** (PR-03): `palw_v2_weight_invariant_under_prior_sink` passes
+  against `PalwChainStateV2` — two books with different prior branches produce identical
+  `state_root` and candidate order for the same chain, and the restart / IBD-start / reorg
+  differentials pass beside it. The V1 weigher's sink reads remain in the tree until PR-08
+  retires that substrate; nothing routes weight through them on any V2 network before then.
+  **ADR-0042:** Decision 5, ADR-0043.
 
 ### P0-5 — header-selected tip / IBD / pruning use blue work, virtual uses PALW
 - **Invariant:** one canonical-chain authority.
