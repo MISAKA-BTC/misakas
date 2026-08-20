@@ -80,6 +80,32 @@ The reorg-equivalence gate for this unit is already committed
 siblings): the wiring is written against tests that are red on regression, rather than
 discovered to have forked in the field.
 
+**Unit C step 2 has LANDED** (2026-08-20): the walk is in `calculate_utxo_state_relatively`,
+in lockstep with the UTXO diff, exactly as `ActiveBondView` walks beside it — `revert_delta_v2` on
+the reverse leg, `apply_delta_v2` on the already-validated forward leg, `apply_palw_transition_v2`
+in the `KeyNotFound` arm with the delta staged into the block's OWN `WriteBatch`. The tip is
+written once where the walk ends, in its own batch after every per-block commit: if that write is
+lost the deltas are still on disk and the next `load_tip` resumes from the older tip and walks
+forward over them, reproducing exactly the same state. Losing a DELTA would not be recoverable,
+which is why those ride the block's batch and the tip does not.
+
+Steps 3 (objects from carriage), 4 (beacon facts from the chain) and 5 (`palw_state_root` in the
+header) are still open. The transition is called with an empty object list, which is the honest
+content of a block that carries no PALW transactions — every block on every network that exists
+today.
+
+**A harness limit found while testing it, recorded so it is not rediscovered:** a `ConsensusV2`
+network demands `pow_algo_id == 6` at `check_algo_id_for_mode`, before GHOSTDAG.
+`skip_proof_of_work` does not reach that gate — it skips the DIFFICULTY check, not the
+algorithm-id one — so the virtual-processor harness cannot build a chain on a V2 network at all,
+and a test that tries hangs rather than failing. Testing the walk end-to-end on a V2 network needs
+a harness that mines algo-6 headers, which is PR-10's miner-side work. What is covered today:
+`a_network_without_a_v2_bundle_keeps_no_palw_state` asserts the inert half against real block
+processing (the half every shipped network depends on), and the three legs are covered where they
+are pure — `processes::palw_state_v2_sync` (advance / retreat / restart) and
+`processes::palw_state_walk` (a reorg walked through the store reaching the state the winning
+branch was built as).
+
 ### Unit D — one fork-choice authority
 
 `palw_fork_authority_v2`'s four functions wired into virtual tip selection, IBD commit, pruning

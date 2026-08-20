@@ -341,6 +341,16 @@ pub struct VirtualStateProcessor {
     /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
     pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
     pub(super) palw_class_state_store: Arc<RwLock<crate::model::stores::palw_class_state::DbPalwClassStateStore>>,
+    /// ADR-0042 Decision 5 / ADR-0044 Unit C: per-chain-block `PalwStateDeltaV2` rows and the
+    /// materialized tip. Written in the same `WriteBatch` as the block's UTXO data by the walk in
+    /// `calculate_utxo_state_relatively`, so the two can never be half-written relative to each
+    /// other. Empty on every shipped preset — the walk is gated on `ConsensusV2`.
+    pub(super) palw_state_v2_store: Arc<RwLock<crate::model::stores::palw_state_v2::DbPalwStateV2Store>>,
+    /// The V2 state parameters, `Some` exactly when this network's mode is `ConsensusV2`. It is
+    /// the ONE gate on the state walk: a network without a V2 bundle has no V2 state to keep, and
+    /// a dead handle in a blue-work pipeline would be surface without semantics (ADR-0042
+    /// Decision 9's own words about the fork-choice sites).
+    pub(super) palw_state_params_v2: Option<kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
     /// `update_dns_state` and written in the same batch as the `DnsState`.
@@ -625,6 +635,11 @@ impl VirtualStateProcessor {
             compute_capability_store: storage.compute_capability_store.clone(),
             palw_carriage_store: storage.palw_carriage_store.clone(),
             palw_class_state_store: storage.palw_class_state_store.clone(),
+            palw_state_v2_store: storage.palw_state_v2_store.clone(),
+            palw_state_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
+                _ => None,
+            },
             dns_state_store: storage.dns_state_store.clone(),
             vlt_activation_store: storage.vlt_activation_store.clone(),
             pruning_overlay_snapshot_store: storage.pruning_overlay_snapshot_store.clone(),
@@ -914,6 +929,21 @@ impl VirtualStateProcessor {
         // `verify_expected_utxo_state` inert.
         let track_bonds = self.dns_params.is_some();
 
+        // ADR-0042 Decision 5 / Unit C. `Some` exactly on a `ConsensusV2` network, where it is
+        // loaded from the stored tip ROOT-VERIFIED (`load_tip` runs the full `into_state` rebuild),
+        // so a corrupted or hand-edited snapshot refuses to become a sink instead of becoming one
+        // quietly. `None` everywhere else, and every leg below is a no-op there — the walk is not a
+        // dead handle in the blue-work pipeline, it is absent from it.
+        let mut palw_state = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_record()) {
+            (Some(params), Ok(Some(_))) => self
+                .palw_state_v2_store
+                .read()
+                .load_tip(params)
+                .expect("a stored V2 tip must load under its own committed root")
+                .map(|(_, state)| state),
+            _ => None,
+        };
+
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
             return from;
@@ -935,6 +965,20 @@ impl VirtualStateProcessor {
                 // Mirror the reverse on the bond view. `current` is leaving the
                 // selected chain, so its acceptance data is committed.
                 bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
+            }
+            // ADR-0042 Unit C: the PALW state walks in lockstep with `diff`, for the same reason
+            // the bond view does — a candidate's V2 standing must be a fold over THAT candidate's
+            // chain and never a read of the node's sink (P0-4, the partition this layout exists to
+            // make unrepresentable). `revert_delta_v2` verifies every value it replaces, so a
+            // delta applied to the wrong parent is an error rather than a quiet divergence.
+            if let Some(state) = palw_state.as_mut() {
+                let (_, delta) = self.palw_state_v2_store.read().delta_of(current).expect("a chain block on this walk has a delta");
+                *state = kaspa_consensus_core::palw_state_v2::revert_delta_v2(
+                    state,
+                    &delta,
+                    self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are"),
+                )
+                .expect("the delta reverts from the state it produced");
             }
         }
 
@@ -974,6 +1018,20 @@ impl VirtualStateProcessor {
                         // `current` is an already-validated chain block joining
                         // the diff; its acceptance data is committed.
                         bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
+                    }
+                    // Unit C, forward leg: this block was validated before, so its delta is on
+                    // disk and re-applying it reproduces the transition bit-for-bit. Re-running
+                    // the transition here instead would be a second computation of one fact, and
+                    // a second chance to disagree with what the chain already committed to.
+                    if let Some(state) = palw_state.as_mut() {
+                        let (_, delta) =
+                            self.palw_state_v2_store.read().delta_of(current).expect("a validated chain block has a delta");
+                        *state = kaspa_consensus_core::palw_state_v2::apply_delta_v2(
+                            state,
+                            &delta,
+                            self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are"),
+                        )
+                        .expect("the delta applies to its own parent");
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {
@@ -1041,6 +1099,41 @@ impl VirtualStateProcessor {
                         diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
                         // Update the diff point
                         diff_point = current;
+                        // Unit C, first-validation leg: RUN the transition. A failure here means
+                        // block validation admitted something the state machine refuses — a
+                        // rule/state divergence, which no local handling makes safe — so the block
+                        // is disqualified rather than skipped, and `palw_state` is moved only on
+                        // success. The object list is empty until the carriage-to-object seam
+                        // lands (Unit C step 3); an empty list is the honest content of a block
+                        // that carries no PALW transactions, which is every block on every network
+                        // that exists today.
+                        let palw_v2_staged = match palw_state.as_mut() {
+                            Some(state) => {
+                                let state_params =
+                                    self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
+                                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                                    block: current,
+                                    daa_score: header.daa_score,
+                                    blue_score: header.blue_score,
+                                };
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+                                    state, state_params, &point, &[], None,
+                                ) {
+                                    Ok((next, delta)) => {
+                                        let root = next.state_root();
+                                        *state = next;
+                                        Some((root, delta))
+                                    }
+                                    Err(palw_error) => {
+                                        info!("Block {} is disqualified from virtual chain (PALW state): {}", current, palw_error);
+                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                        chain_disqualified_counter += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                            None => None,
+                        };
                         if track_bonds {
                             // Advance the bond view by THIS block's mutations,
                             // derived from the in-memory acceptance data (its
@@ -1064,6 +1157,7 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
+                            palw_v2_staged,
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -1072,6 +1166,23 @@ impl VirtualStateProcessor {
                 Err(err) => panic!("unexpected error {err}"),
             }
         }
+        // ADR-0042 Unit C: the walked state is the state AT `diff_point`, which is exactly what
+        // the tip row means — so it is written where the walk ends rather than at each block. A
+        // per-block tip write would be the same value re-derived N times, and the delta rows are
+        // already the per-block record; the tip is the materialization the next walk resumes from.
+        //
+        // Written in its own batch, AFTER every per-block commit above: if this write is lost the
+        // deltas are still on disk and the next `load_tip` resumes from the older tip and walks
+        // forward over them, which reproduces exactly this state. Losing a delta would not be
+        // recoverable, which is why those ride the block's own batch and this does not.
+        if let Some(state) = palw_state.as_ref() {
+            let mut batch = WriteBatch::default();
+            let mut store = self.palw_state_v2_store.write();
+            store.set_tip_batch(&mut batch, diff_point, state).unwrap();
+            drop(store);
+            self.db.write(batch).unwrap();
+        }
+
         // Report counters
         self.counters.chain_block_counts.fetch_add(chain_block_counter, Ordering::Relaxed);
         if chain_disqualified_counter > 0 {
@@ -1792,8 +1903,17 @@ impl VirtualStateProcessor {
         // and the block's UTXO diff are atomic. `None` on every current
         // network (lane inert) and on non-evm builds.
         evm_staged: Option<crate::processes::evm::EvmStaged>,
+        // ADR-0042 Decision 5 / Unit C: this block's PALW V2 transition outcome — the state root
+        // it produced and the delta that produces it — staged in THIS batch so the PALW state and
+        // the block's UTXO data can never be half-written relative to each other. `None` on every
+        // network whose mode is not `ConsensusV2`, which is every shipped preset.
+        palw_v2_staged: Option<(kaspa_hashes::Hash64, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2)>,
     ) {
         let mut batch = WriteBatch::default();
+        if let Some((state_root, delta)) = palw_v2_staged {
+            let mut store = self.palw_state_v2_store.write();
+            store.insert_delta_batch(&mut batch, current, state_root, &delta).unwrap();
+        }
         if let Some(mut staged) = evm_staged {
             // §12: in a mode that keeps no long-term EVM state history (`head`), drop
             // the archive diff so staging writes no diff/code/checkpoint rows
@@ -8069,7 +8189,21 @@ impl VirtualStateProcessor {
             0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
             0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
             None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
+            None, // ADR-0042 Unit C: genesis stages no PALW delta — the tip is installed below.
         );
+
+        // ADR-0042 Decision 5 / Unit C: the V2 state's zero point. Installed beside the genesis
+        // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
+        // network with no V2 bundle (every shipped preset), where the store stays empty.
+        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+            let mut batch = WriteBatch::default();
+            let genesis_state = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis();
+            let mut store = self.palw_state_v2_store.write();
+            store.set_tip_batch(&mut batch, self.genesis.hash, &genesis_state).unwrap();
+            drop(store);
+            self.db.write(batch).unwrap();
+            let _ = state_params;
+        }
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();

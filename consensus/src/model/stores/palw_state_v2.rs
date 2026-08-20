@@ -152,6 +152,17 @@ impl DbPalwStateV2Store {
         self.deltas.has(block)
     }
 
+    /// Every chain block that has a delta row, in store order. For assertions about the store as
+    /// a whole — "this network wrote nothing" is a fact about the absence of rows, and only an
+    /// iterator can say it.
+    pub fn iter_delta_blocks(&self) -> impl Iterator<Item = BlockHash> + '_ {
+        self.deltas.iterator().filter_map(|r| r.ok()).map(|(key, _)| {
+            let mut bytes = [0u8; 64];
+            bytes.copy_from_slice(&key);
+            BlockHash::from_bytes(bytes)
+        })
+    }
+
     /// A block's recorded root without decoding its delta.
     pub fn state_root_of(&self, block: BlockHash) -> StoreResult<Hash64> {
         Ok(self.deltas.read(block)?.state_root)

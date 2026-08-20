@@ -207,6 +207,47 @@ async fn template_mining_sanity_test() {
     }
 }
 
+/// **ADR-0042 Unit C, through the real pipeline: the PALW V2 state is ABSENT — not idle — on a
+/// network with no V2 bundle.**
+///
+/// The wiring note this closes says the fork-choice and state sites "consume these functions when
+/// `PalwConsensusMode::ConsensusV2` exists to demand them — a dead handle in today's blue-work
+/// pipeline would be surface without semantics". This is that property, asserted against real
+/// block processing rather than against the gate's source: four rows of blocks go through the
+/// whole virtual processor on a shipped-shaped network, and the PALW store is untouched at the
+/// end — no genesis tip, no delta rows.
+///
+/// **The V2 half of this property cannot be tested here, and the reason is worth recording** so
+/// the next person does not spend the afternoon I spent on it: a `ConsensusV2` network demands
+/// `pow_algo_id == 6` at `check_algo_id_for_mode`, before GHOSTDAG. `skip_proof_of_work` does not
+/// reach that gate — it skips the DIFFICULTY check, not the algorithm-id one — so every block
+/// this harness mines is refused at the door and no chain is ever built. Testing the walk on a V2
+/// network needs a harness that mines algo-6 headers, which is PR-10's miner-side work. Until
+/// then the walk's three legs are covered where they are pure and the coverage is real:
+/// `processes::palw_state_v2_sync` (advance / retreat / restart against the same store this
+/// pipeline writes) and `processes::palw_state_walk` (a reorg walked through the store reaching
+/// the state the winning branch was built as).
+#[tokio::test]
+async fn a_network_without_a_v2_bundle_keeps_no_palw_state() {
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    assert!(
+        config.params.palw_consensus_mode.required_algo_id().is_none(),
+        "the fixture must be a network with no V2 bundle — that is the property under test"
+    );
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+    assert!(store.tip_record().unwrap().is_none(), "no V2 bundle, no PALW tip — the walk is absent, not idle");
+    assert!(
+        store.iter_delta_blocks().next().is_none(),
+        "no V2 bundle, no delta rows — real block processing wrote nothing into the PALW store"
+    );
+}
+
 #[tokio::test]
 async fn antichain_merge_test() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
