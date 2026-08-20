@@ -138,8 +138,71 @@ impl TestConsensus {
         header.timestamp = self.consensus.services.window_manager.calc_past_median_time(&ghostdag_data).unwrap().0 + 1;
         header.blue_score = ghostdag_data.blue_score;
         header.blue_work = ghostdag_data.blue_work;
+        // ADR-0042 Unit A / ADR-0044 Unit B: on a V2-lineage network the header MUST carry its
+        // lane's envelope — the finalizer expands it into the tag and the shape gate demands it.
+        // A harness that skipped this could not mine a single block on such a network, so it
+        // would silently be unable to test them at all.
+        self.attach_palw_carriage_for_tests(&mut header);
 
         header
+    }
+
+    /// Attach the carriage a V2-lineage header needs, bound to THIS header's position.
+    ///
+    /// Test-only, and deliberately shallow: the trace/output roots are fixtures, because what a
+    /// harness can honestly produce is a well-formed, correctly-BOUND envelope — proving the
+    /// inference behind it is the panel's job, and the stateful admission that would demand a
+    /// real bond is not what these tests exercise. The BINDING is real: change the header's
+    /// position and this envelope stops matching, exactly as a peer's would.
+    fn attach_palw_carriage_for_tests(&self, header: &mut Header) {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+        let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(self.params.net.to_string().as_bytes());
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(0xB0), 0);
+        let signature = vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN];
+        match header.pow_algo_id {
+            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+                use kaspa_consensus_core::palw_attempt_v2::{
+                    PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2,
+                };
+                let class_id = kaspa_hashes::Hash64::from_u64_word(0xC1);
+                let attempt = PalwAttemptUnsignedV2 {
+                    version: PALW_ATTEMPT_V2_VERSION,
+                    network_domain,
+                    challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class_id, &bond),
+                    class_id,
+                    executor_bond: bond,
+                    executor_pubkey: vec![7u8; 32],
+                    operator_id: kaspa_hashes::Hash64::from_u64_word(0xE0),
+                    artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
+                    trace_root: kaspa_hashes::Hash64::from_u64_word(0x7A),
+                    output_root: kaspa_hashes::Hash64::from_u64_word(0x00),
+                    pwu: 1,
+                    trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0xD0),
+                    trace_chunk_count: 1,
+                    trace_retention_daa: u64::MAX,
+                };
+                header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode();
+            }
+            POW_ALGO_ID_PALW_RECEIPT_V3 => {
+                use kaspa_consensus_core::palw_freeprompt_v3::{
+                    PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3, spend_challenge_v3,
+                };
+                let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
+                let spend = PalwReceiptSpendUnsignedV3 {
+                    version: PALW_FP_V3_VERSION,
+                    network_domain,
+                    challenge: spend_challenge_v3(network_domain, pre_pow, header.timestamp, header.nonce, claim_id, 0, &bond),
+                    claim_id,
+                    quantum_index: 0,
+                    beacon_block: kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+                    producer_bond: bond,
+                    producer_pubkey: vec![7u8; 32],
+                };
+                header.palw_commitment = PalwReceiptSpendEnvelopeV3 { spend, signature }.encode();
+            }
+            _ => {}
+        }
     }
 
     pub fn add_header_only_block_with_parents(
@@ -192,6 +255,11 @@ impl TestConsensus {
     ) -> MutableBlock {
         let mut template = self.block_builder.build_block_template_with_parents(parents, miner_data, txs).unwrap();
         template.block.header.hash = hash;
+        // The template path builds its own header, so it needs the V2-lineage carriage too — see
+        // `attach_palw_carriage_for_tests`. Attaching it here rather than inside the builder
+        // keeps the production template path (which a real miner fills with its OWN envelope)
+        // free of test fixtures.
+        self.attach_palw_carriage_for_tests(&mut template.block.header);
         template.block
     }
 

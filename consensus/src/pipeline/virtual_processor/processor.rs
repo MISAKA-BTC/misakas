@@ -340,6 +340,8 @@ pub struct VirtualStateProcessor {
     /// carrying tx. Written/reverted by `stage_palw_carriages` beside the capability walk;
     /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
     pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
+    /// ADR-0044 Unit C: the per-chain-block PALW state deltas the walk reads and writes.
+    pub(super) palw_state_v2_store: Arc<RwLock<crate::model::stores::palw_state_v2::DbPalwStateV2Store>>,
     pub(super) palw_class_state_store: Arc<RwLock<crate::model::stores::palw_class_state::DbPalwClassStateStore>>,
     pub(super) dns_state_store: Arc<RwLock<DbDnsStateStore>>,
     /// MISAKA VLT PR 1: the persisted §6 activation record, stepped once per blue-score epoch in
@@ -348,6 +350,15 @@ pub struct VirtualStateProcessor {
     // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
+    /// ADR-0044 Unit C: the free-prompt ruleset, when this network runs one.
+    ///
+    /// `None` on every shipped preset (all are `Disabled` or `LegacyTn11`), and the PALW state
+    /// walk is gated on it exactly as the bond view is gated on `dns_params` — one `is_some()`
+    /// per reorg leg, and nothing else changes for a hash network.
+    pub(super) palw_consensus_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2>,
+    /// The network's PALW domain separator, precomputed (a hash per header would be waste, and
+    /// two derivations would be two facts).
+    pub(super) palw_network_domain: kaspa_consensus_core::Hash64,
     /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
 
@@ -532,6 +543,26 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
     }
 }
 
+/// The PALW state as a walk carries it.
+///
+/// Where the walk STANDS is derived from the state itself (`last_point`), never tracked beside
+/// it. The first draft carried an `at` field and set it to the block just processed — which is
+/// right after an apply and WRONG after a revert, where the walk stands at that block's parent.
+/// The anchor written from such a walk claimed a position the state did not hold, and the next
+/// pass's catch-up failed with "frontier does not match the delta's expectation". Deriving the
+/// position makes that drift unrepresentable rather than merely fixed.
+struct PalwStateWalk {
+    state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    /// The point a state with no applied block stands at (genesis) — `last_point` is `None` there.
+    genesis: BlockHash,
+}
+
+impl PalwStateWalk {
+    fn at(&self) -> BlockHash {
+        self.state.last_point().map(|point| point.block).unwrap_or(self.genesis)
+    }
+}
+
 impl VirtualStateProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -624,6 +655,7 @@ impl VirtualStateProcessor {
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
             palw_carriage_store: storage.palw_carriage_store.clone(),
+            palw_state_v2_store: storage.palw_state_v2_store.clone(),
             palw_class_state_store: storage.palw_class_state_store.clone(),
             dns_state_store: storage.dns_state_store.clone(),
             vlt_activation_store: storage.vlt_activation_store.clone(),
@@ -655,6 +687,11 @@ impl VirtualStateProcessor {
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
+            palw_consensus_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
+                _ => None,
+            },
+            palw_network_domain: kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(params.net.to_string().as_bytes()),
             palw_block_commitment: params.palw_block_commitment,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,
@@ -913,6 +950,10 @@ impl VirtualStateProcessor {
         // without the overlay. No consumer yet (b2a) — the view is passed to
         // `verify_expected_utxo_state` inert.
         let track_bonds = self.dns_params.is_some();
+        // ADR-0044 Unit C: the PALW state walks in lockstep with `diff` too, so it always equals
+        // the candidate chain's state as-of the block whose UTXO state `diff` represents. `None`
+        // on every shipped network — one `is_some()` per leg and nothing else changes.
+        let mut palw_walk = self.begin_palw_state_walk(from);
 
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
@@ -936,6 +977,9 @@ impl VirtualStateProcessor {
                 // selected chain, so its acceptance data is committed.
                 bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
             }
+            // …and the same reverse on the PALW state, from the delta this block stored when it
+            // joined. A block leaving the chain gives its delta back.
+            self.palw_walk_revert(&mut palw_walk, current);
         }
 
         let split_point = split_point.expect("chain iterator was expected to reach the reorg split point");
@@ -975,6 +1019,9 @@ impl VirtualStateProcessor {
                         // the diff; its acceptance data is committed.
                         bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
                     }
+                    // Its PALW delta was stored when it was first validated, so re-joining costs
+                    // an apply rather than a re-run.
+                    self.palw_walk_apply_stored(&mut palw_walk, current);
                 }
                 Err(StoreError::KeyNotFound(_)) => {
                     if self.statuses_store.read().get(current).unwrap() == StatusDisqualifiedFromChain {
@@ -1054,6 +1101,11 @@ impl VirtualStateProcessor {
                             bond_view.apply(&bond_muts);
                         }
                         // Commit UTXO data for current chain block
+                        // ADR-0044 Unit C: the block's PALW transition runs HERE, on the state
+                        // the walk holds as-of its selected parent — the same view
+                        // `verify_expected_utxo_state` just read. `None` unless this network
+                        // runs a V2 ruleset AND the walk is intact.
+                        let palw_delta = self.palw_apply_block(&mut palw_walk, current, &header, &ctx.mergeset_acceptance_data);
                         self.commit_utxo_state(
                             current,
                             ctx.mergeset_diff,
@@ -1064,6 +1116,7 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
+                            palw_delta,
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -1072,6 +1125,9 @@ impl VirtualStateProcessor {
                 Err(err) => panic!("unexpected error {err}"),
             }
         }
+        // The walk's final standing becomes the next pass's starting point.
+        self.advance_palw_anchor(&palw_walk);
+
         // Report counters
         self.counters.chain_block_counts.fetch_add(chain_block_counter, Ordering::Relaxed);
         if chain_disqualified_counter > 0 {
@@ -1079,6 +1135,190 @@ impl VirtualStateProcessor {
         }
 
         diff_point
+    }
+
+    // ---- ADR-0044 Unit C: the PALW state walk, in lockstep with the UTXO diff ----
+
+    /// Begin a walk at `from` (the current sink), or `None` on a network that runs no V2 ruleset.
+    ///
+    /// A node whose anchor is missing or unreadable gets `None` too, and that is the conservative
+    /// answer rather than a gap: with no walk, no PALW state is derived and no block is admitted
+    /// on PALW grounds — the lane stalls loudly instead of advancing on a state nobody can
+    /// reconstruct. (Seeding the anchor is the wiring's own step, below.)
+    fn begin_palw_state_walk(&self, from: BlockHash) -> Option<PalwStateWalk> {
+        let bundle = self.palw_consensus_v2.as_ref()?;
+        let store = self.palw_state_v2_store.read();
+        let (anchor_block, anchor_state) = match crate::processes::palw_state_walk::load_anchor(&store, &bundle.state) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                warn!("[palw-state] cannot load the PALW state anchor: {e}; PALW state is not derived for this pass");
+                return None;
+            }
+        };
+        if anchor_block == from {
+            return Some(PalwStateWalk { state: anchor_state, genesis: self.genesis.hash });
+        }
+        // The anchor lags the sink (it advances once per pass, not once per block) or sits on a
+        // branch this pass abandoned. Either way the chain path from it to `from` is exactly the
+        // deltas to give back and take up — the same walk a reorg does, run to catch up.
+        let path = self.dag_traversal_manager.calculate_chain_path(anchor_block, from, None);
+        match crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, anchor_state, &path.removed, &path.added) {
+            Ok(state) => Some(PalwStateWalk { state, genesis: self.genesis.hash }),
+            Err(e) => {
+                warn!(
+                    "[palw-state] cannot walk the PALW state from the anchor {anchor_block} to {from}: {e}; \
+                     PALW state is not derived for this pass"
+                );
+                None
+            }
+        }
+    }
+
+    /// Move the anchor to where the walk now stands, once per pass.
+    ///
+    /// Per-PASS and not per-block on purpose: the anchor is a snapshot of the WHOLE state, so
+    /// writing one per block would store the world per block — the very cost the delta store
+    /// exists to avoid. Between anchor moves, `begin_palw_state_walk` catches up over the chain
+    /// path, which is bounded by how far the sink moved.
+    fn advance_palw_anchor(&self, walk: &Option<PalwStateWalk>) {
+        // The mode gate is implicit here: a walk only ever exists on a V2 network, because
+        // `begin_palw_state_walk` is the only thing that creates one.
+        let Some(active) = walk.as_ref() else { return };
+        let at = active.at();
+        let root = active.state.state_root();
+        let carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&active.state);
+        let mut batch = WriteBatch::default();
+        let record = crate::model::stores::palw_state_v2::PalwStateAnchorRecord::encode(at, &carriage, root);
+        if let Err(e) = self.palw_state_v2_store.write().set_anchor_batch(&mut batch, record) {
+            // A stale anchor is a slower catch-up next pass, never a wrong answer — the walk
+            // re-derives from wherever the anchor actually is.
+            warn!("[palw-state] cannot advance the PALW anchor to {at}: {e}");
+            return;
+        }
+        if let Err(e) = self.db.write(batch) {
+            warn!("[palw-state] cannot commit the PALW anchor move: {e}");
+        }
+    }
+
+    /// Give back one block's delta as it leaves the selected chain.
+    fn palw_walk_revert(&self, walk: &mut Option<PalwStateWalk>, block: BlockHash) {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else { return };
+        let Some(active) = walk.as_mut() else { return };
+        let store = self.palw_state_v2_store.read();
+        match crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, active.state.clone(), &[block], &[]) {
+            Ok(state) => active.state = state,
+            Err(e) => {
+                // A walk that cannot revert has lost the property everything else rests on
+                // (same DAG, same state). Dropping it here means no PALW admission happens on
+                // this pass — visible, and preferable to continuing from a state that is not
+                // this chain's.
+                warn!("[palw-state] cannot revert block {block}: {e}; abandoning the PALW walk for this pass");
+                *walk = None;
+            }
+        }
+    }
+
+    /// Re-apply one already-validated block's stored delta as it re-joins the chain.
+    fn palw_walk_apply_stored(&self, walk: &mut Option<PalwStateWalk>, block: BlockHash) {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else { return };
+        let Some(active) = walk.as_mut() else { return };
+        let store = self.palw_state_v2_store.read();
+        match crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, active.state.clone(), &[], &[block]) {
+            Ok(state) => active.state = state,
+            Err(e) => {
+                warn!("[palw-state] cannot apply block {block}: {e}; abandoning the PALW walk for this pass");
+                *walk = None;
+            }
+        }
+    }
+
+    /// Seed the PALW walk's anchor with the genesis (empty) state, on a network that runs a V2
+    /// ruleset. A no-op everywhere else.
+    fn seed_palw_genesis_anchor(&self) {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else { return };
+        let state = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis();
+        let root = state.state_root();
+        let carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        // Sanity: the snapshot must reload under its own root before it becomes the anchor every
+        // later walk trusts.
+        carriage
+            .clone()
+            .into_state(&bundle.state, Some(root))
+            .expect("the genesis PALW state reloads under its own root");
+        let mut batch = WriteBatch::default();
+        let record = crate::model::stores::palw_state_v2::PalwStateAnchorRecord::encode(self.genesis.hash, &carriage, root);
+        self.palw_state_v2_store.write().set_anchor_batch(&mut batch, record).expect("cannot seed the PALW genesis anchor");
+        self.db.write(batch).unwrap();
+    }
+
+    /// Run one freshly-validated chain block's PALW transition on the walk's state, returning the
+    /// delta to persist. `None` when this network runs no V2 ruleset, or when the walk was
+    /// abandoned earlier in this pass.
+    ///
+    /// **What this does NOT do yet**: it folds the block's accepted free-prompt commitments and
+    /// its own attempt/spend work is still absent, because that work must be admitted against
+    /// this very state (the stateful admission call sites are the rest of Unit C). Folding the
+    /// objects without admitting the work is deliberate and safe in that order — an object that
+    /// names an absent bond or a frozen class is refused by the transition itself, so the state
+    /// can only ever be a subset of what a complete wiring would hold, never a superset.
+    fn palw_apply_block(
+        &self,
+        walk: &mut Option<PalwStateWalk>,
+        current: BlockHash,
+        header: &Header,
+        acceptance_data: &AcceptanceData,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2> {
+        let bundle = self.palw_consensus_v2.as_ref()?;
+        let active = walk.as_mut()?;
+        let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: current,
+            daa_score: header.daa_score,
+            blue_score: header.blue_score,
+        };
+        // The block's accepted free-prompt commitments, in acceptance order — the transition's
+        // ordering IS consensus, so the extraction must not reorder them.
+        let mut objects = Vec::new();
+        for parent_data in acceptance_data.iter() {
+            let txs: Vec<kaspa_consensus_core::tx::Transaction> = parent_data
+                .accepted_transactions
+                .iter()
+                .filter_map(|accepted| self.block_transactions_store.get(parent_data.block_hash).ok().and_then(|block_txs| {
+                    block_txs.get(accepted.index_within_block as usize).cloned()
+                }))
+                .collect();
+            let extracted = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+                &txs,
+                self.palw_network_domain,
+                &bundle.freeprompt,
+                current,
+            );
+            for (carrier, why) in &extracted.skipped {
+                // Named, never silent: a peer thought this was a valid carrier.
+                info!("[palw-state] block {current} skipped free-prompt carrier {carrier}: {why}");
+            }
+            objects.extend(extracted.objects.into_iter().map(|c| c.object));
+        }
+
+        match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+            &active.state,
+            &bundle.state,
+            &ctx,
+            &objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+        ) {
+            Ok((child, delta)) => {
+                active.state = child;
+                Some(delta)
+            }
+            Err(e) => {
+                // The transition rejects a block's PALW content wholesale (a partial application
+                // is a state nobody else can recompute). Abandoning the walk here means this pass
+                // derives no PALW state — loud, and better than a state this chain does not have.
+                warn!("[palw-state] block {current} PALW transition failed: {e}; abandoning the PALW walk for this pass");
+                *walk = None;
+                None
+            }
+        }
     }
 
     /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
@@ -1766,6 +2006,10 @@ impl VirtualStateProcessor {
         Ok((header, Default::default(), vec![]))
     }
 
+    // Eleven arguments, and deliberately so: each one is a store row this block's WriteBatch must
+    // carry atomically with its UTXO data. Bundling them into a struct would move the same fields
+    // one indirection away without making any of them optional — and the atomicity is the point.
+    #[allow(clippy::too_many_arguments)]
     fn commit_utxo_state(
         &self,
         current: BlockHash,
@@ -1792,8 +2036,20 @@ impl VirtualStateProcessor {
         // and the block's UTXO diff are atomic. `None` on every current
         // network (lane inert) and on non-evm builds.
         evm_staged: Option<crate::processes::evm::EvmStaged>,
+        // ADR-0044 Unit C: this block's PALW state delta, written in THIS batch so the delta and
+        // the block's UTXO data can never be half-written relative to each other — the same
+        // atomicity the EVM rows above get, for the same reason. `None` on every current network
+        // (no preset carries a V2 ruleset), so no row is written there.
+        palw_delta: Option<kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2>,
     ) {
         let mut batch = WriteBatch::default();
+        if let Some(delta) = palw_delta.as_ref()
+            && let Err(e) = self.palw_state_v2_store.write().insert_delta_batch(&mut batch, current, delta)
+        {
+            // A delta that cannot be written is a block whose PALW effect no reorg could ever
+            // undo. Panicking here matches how this function treats every other store write.
+            panic!("cannot persist the PALW state delta for {current}: {e}");
+        }
         if let Some(mut staged) = evm_staged {
             // §12: in a mode that keeps no long-term EVM state history (`head`), drop
             // the archive diff so staging writes no diff/code/checkpoint rows
@@ -8069,7 +8325,13 @@ impl VirtualStateProcessor {
             0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
             0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
             None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
+            None, // ADR-0044 Unit C: genesis has no PALW delta — it IS the empty state.
         );
+        // …and the walk's starting point is that empty state, seeded here so a V2 network has an
+        // anchor from its first moment. Without it every walk would report "no anchor" forever,
+        // which is a lane that never starts rather than one that starts wrong — visible, but
+        // still a network that does nothing.
+        self.seed_palw_genesis_anchor();
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();

@@ -4940,3 +4940,121 @@ async fn dns_stale_anchor_ttl_releases_a_dead_branch_wedge() {
         "with the anchor aged past the TTL the veto releases and the node follows the work-dominant chain"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0044 Unit C: the PALW state walk, driven through a real consensus instance.
+// ---------------------------------------------------------------------------------------------
+mod palw_state_walk_wiring {
+    use super::*;
+    use kaspa_consensus_core::config::params::SIMNET_PARAMS;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_hashes::Hash64;
+
+    fn v2_config() -> kaspa_consensus_core::config::Config {
+        let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+            Hash64::from_u64_word(0xBA5E),
+            Hash64::from_u64_word(0xCA7),
+            Hash64::from_u64_word(0xC0757),
+        )
+        .expect("the devnet bundle validates");
+        // SIMNET is the clean base: no V1 PALW activation, so a V2 mode is not a mixed lineage.
+        // `skip_proof_of_work` is what lets the harness mine at all — the V2 attempt arm exists
+        // now, but a test block carries no attempt envelope, so its PoW would fail.
+        ConfigBuilder::new(SIMNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            })
+            .build()
+    }
+
+    /// **A V2 network seeds its anchor at genesis and keeps its PALW state walking.**
+    ///
+    /// The blocks here carry no PALW content, so the state stays empty — what is under test is
+    /// the WALK: that the anchor exists from genesis, that every chain block's delta is stored,
+    /// and that the walk survives a reorg. A lane whose walk cannot start is a lane that never
+    /// runs, so this is the property the rest of Unit C builds on.
+    #[tokio::test]
+    async fn a_v2_network_walks_its_palw_state_through_a_reorg() {
+        let config = v2_config();
+        let tc = TestConsensus::new(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        // The anchor is seeded by `process_genesis`, before any block is added.
+        {
+            let store = tc.palw_state_v2_store.read();
+            let anchor = store.anchor().unwrap().expect("a V2 network has a genesis anchor");
+            assert_eq!(anchor.block, genesis, "the anchor stands at genesis");
+            let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { panic!("a V2 config") };
+            let state = anchor.decode().unwrap().into_state(&bundle.state, Some(anchor.state_root)).unwrap();
+            assert_eq!(state.safe_weight(), 0, "genesis carries no PALW weight");
+        }
+
+        // A short chain, then a heavier sibling branch that reorgs it out.
+        let mut chain_a = vec![genesis];
+        for i in 1..=3u64 {
+            let hash = Hash64::from_u64_word(0xA000 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*chain_a.last().unwrap()], vec![]).await.unwrap();
+            chain_a.push(hash);
+        }
+        // Every chain block stored a delta — the walk's rows exist.
+        {
+            let store = tc.palw_state_v2_store.read();
+            for block in chain_a.iter().skip(1) {
+                assert!(store.has_delta(*block).unwrap(), "chain block {block} stored its PALW delta");
+            }
+            let anchor = store.anchor().unwrap().expect("the anchor advanced with the chain");
+            assert_eq!(anchor.block, *chain_a.last().unwrap(), "the anchor follows the sink");
+        }
+        assert_eq!(tc.get_sink(), *chain_a.last().unwrap());
+
+        // Branch B off genesis, one block longer, so it takes the sink.
+        let mut chain_b = vec![genesis];
+        for i in 1..=5u64 {
+            let hash = Hash64::from_u64_word(0xB000 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*chain_b.last().unwrap()], vec![]).await.unwrap();
+            chain_b.push(hash);
+        }
+        assert_eq!(tc.get_sink(), *chain_b.last().unwrap(), "the heavier branch took the sink");
+        {
+            let store = tc.palw_state_v2_store.read();
+            for block in chain_b.iter().skip(1) {
+                assert!(store.has_delta(*block).unwrap(), "branch-B block {block} stored its PALW delta");
+            }
+            // Branch A's rows survive the reorg — a reverted branch keeps its deltas so
+            // re-applying it costs an apply rather than a re-run.
+            for block in chain_a.iter().skip(1) {
+                assert!(store.has_delta(*block).unwrap(), "branch-A block {block} kept its delta after the reorg");
+            }
+        }
+
+        tc.shutdown(handles);
+    }
+
+    /// **Every shipped network is untouched.** A `Disabled` preset writes no anchor and no
+    /// deltas, and mines exactly as it did before Unit C existed — the gate is one `is_some()`.
+    #[tokio::test]
+    async fn a_disabled_network_writes_nothing() {
+        let config = ConfigBuilder::new(SIMNET_PARAMS).skip_proof_of_work().build();
+        assert_eq!(config.params.palw_consensus_mode, PalwConsensusMode::Disabled, "the base preset is Disabled");
+        let tc = TestConsensus::new(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        let mut parent = genesis;
+        for i in 1..=3u64 {
+            let hash = Hash64::from_u64_word(0xC000 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![parent], vec![]).await.unwrap();
+            parent = hash;
+        }
+        assert_eq!(tc.get_sink(), parent, "a Disabled network mines exactly as before");
+
+        let store = tc.palw_state_v2_store.read();
+        assert!(store.anchor().unwrap().is_none(), "no anchor on a Disabled network");
+        assert!(!store.has_delta(parent).unwrap(), "and no deltas");
+
+        drop(store);
+        tc.shutdown(handles);
+    }
+}
