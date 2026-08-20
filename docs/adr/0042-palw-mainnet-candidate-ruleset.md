@@ -101,7 +101,7 @@ Startup invariants (all must hold, or the node does not boot):
 ```
 BASE-0 exists in the class catalog and holds non-zero target share
 BASE-0 court coverage == 100% (every reachable primitive is adjudicable)
-challenge window  >  worst-case court duration (bisection depth × per-turn deadline)
+window_court  >=  worst-case court duration ((ceil(log2(max_step_leaves)) + terminal) × turn deadline)   [amended A1]
 bond withdrawal delay  >  bind + receipt + challenge + prosecution + reorg margin   (Decision 6)
 the class share table SATISFIES the exposure/starvation inequality (ADR-0039 D5e: no StarvedClass)
 a live exposure ceiling is set                                                       (Decision 6)
@@ -194,13 +194,21 @@ pub struct PalwAttemptEnvelopeV2 {
 }
 ```
 
-### 3c. Block identity is `attempt_id`, not the raw signature
+### 3c. Block identity is `attempt_id`, not the raw signature — **deferred with cause (Amendments §A2)**
 
 `block_id` incorporates `attempt_id = H(canonical(PalwAttemptUnsignedV2))`, **not** the signature
 bytes. ML-DSA-87 signatures are not guaranteed unique, so folding raw signature bytes into the
 identity would re-open malleability under the disguise of a fix: a second valid signature over the
 same message would yield a second block id. The signature is verified as a *witness* at admission;
 identity is `canonical header ‖ attempt_id`.
+
+> **Amended at implementation (2026-08-20):** as written, this clause hands a third party a
+> zero-cost censorship primitive and MUST NOT land naively — flip one signature bit and the block
+> keeps its id but fails admission, so the first-seen mutated copy poisons the honest block's id
+> in every known-invalid cache. The tree keeps raw-carrier-bytes identity (a mutated copy is a
+> DIFFERENT id that dies alone; only the key holder can mint valid-signature siblings, and those
+> deduplicate at the claim, `claim_id = attempt_id`). 3c lands only together with a
+> mutated-witness path that rejects without caching id-invalidity. See §A2 for the full analysis.
 
 ### 3d. A new algo id, so no old node re-interprets a V2 block
 
@@ -335,8 +343,11 @@ executor is never actually excluded, and `operator_root` is always `None`. V2 wi
 bond-registry-resolved identity:
 
 - exclude executor's **bond**, executor's **validator key hash**, and executor's **operator_id**;
-- `operator_id` is a **required** bond-registration field (so splitting collateral across bonds does
-  not manufacture extra panel seats);
+- `operator_id` is a **required** bond-registration field, DERIVED from an operator key
+  (`palw_operator_id_v2(key)`), and every identity must carry the bundle's `min_collateral_sompi`
+  — so splitting X collateral across bonds manufactures at most `⌊X / min_collateral⌋` panel
+  identities. **Sybil is bounded, not prevented** (Amendments §A3); the original wording ("does
+  not manufacture extra panel seats") overclaimed;
 - an assigned seat that no-shows past its deadline is slashed / loses collateral, derived
   chain-scoped so reorg and replay reach the same verdict.
 
@@ -378,10 +389,14 @@ rounds  =  ceil(log2(max_step_leaf_count)) + terminal/opening rounds
 ```
 
 and it is an **activation condition** that, for every registered class, the worst-case terminal
-verdict fits inside the challenge window (Decision 1's `challenge window > worst-case court
-duration`). The committed ladder-gap test on this branch (`palw_schedule.rs`, commit `d1891333`)
-already measures that a 10-round ladder cannot reach the pinned model; V2 sizes the ladder to the
-measured trace instead.
+verdict fits inside the COURT window (Decision 1's amended `window_court ≥ worst-case court
+duration` — see Amendments §A1: an open court suspends finality, so the court races its own
+window, never the challenge window). The committed ladder-gap test on this branch
+(`palw_schedule.rs`, commit `d1891333`) already measures that a 10-round ladder cannot reach the
+pinned model; V2 sizes the ladder to the measured trace instead, and `a7be964e` closes the loop
+against the catalog: `PalwCourtParamsV2::max_step_leaf_count` must cover
+`PalwClassCatalogV2::max_step_leaf_count()`, so understating the ladder to shrink `window_court`
+contradicts the catalog the same bundle commits to.
 
 ---
 
@@ -492,6 +507,56 @@ last PR.
 
 **The next file to touch is not the five `None`s in `params.rs`.** It is PR-01. The public profile
 is PR-10, and only after PR-00…PR-09 close.
+
+---
+
+## Amendments (2026-08-20, implementation-time)
+
+Three clauses changed when the implementation tested them. Each is amended in place above and
+recorded here with the reasoning, so the spec a reader audits is the spec the tree implements.
+
+### A1 — The court races `window_court`, not the challenge window (Decision 1, Decision 8)
+
+Original invariant: `challenge window > worst-case court duration`. That presumes finality RACES
+an open court — that a claim could reach `Final` while its dispute is still being bisected, so the
+challenge window had to be long enough to contain the whole prosecution. The implemented state
+machine is stronger: **an open court session suspends `ReceiptLicensed → Final` outright**, so a
+challenged claim cannot finalize early no matter how the windows compare, and what actually needs
+bounding is the court against its own deadline. The binding inequality is therefore
+`window_court ≥ (ceil(log2(max_step_leaf_count)) + terminal_rounds) × turn_deadline_daa`,
+enforced at bundle construction (`PalwCourtParamsV2`, Decision 8's formula, overflow = refusal)
+and cross-checked against the class catalog's real worst case (`verify_against_catalog`,
+`a7be964e`). Implementing the original inequality was attempted and withdrawn: it added no safety
+(the suspension already provides it) and taxed every honest, unchallenged claim with the
+worst-case court duration for nothing.
+
+### A2 — Decision 3c must not land without a mutated-witness path
+
+With identity = `attempt_id` (signature excluded), any third party can flip one bit of a carried
+signature and relay the result: same block id, invalid witness. The first-seen mutated copy fails
+admission and the id lands in known-invalid caches — after which the HONEST block, arriving
+second with the same id, is refused unseen. One flipped bit censors one block, network-wide, at
+zero cost. (Bitcoin met this exact shape in its mutated-block/witness-malleation handling: reject
+the copy without caching invalidity for the id.)
+
+The tree therefore keeps **raw-carrier-bytes identity** for the `palw_commitment` field: a
+mutated copy is a *different* id that dies alone at admission; valid-signature siblings of one
+attempt are mintable only by the bond holder (ML-DSA-87 signing is hedged), share one PoW ticket,
+and deduplicate at the claim (`claim_id = attempt_id`), so self-malleation buys DAG spam bounded
+by the holder's own ban exposure, never a second paid claim. The PoW side of 3c is fully in force
+— the signature is outside `attempt_id`, outside `commitment_root_v2`, and moves no digest
+(`palw_v2_commitment_mutation_invalidates_pow` pins this). 3c's identity half lands only together
+with a pipeline path that rejects witness-mutated carriers WITHOUT marking the block id invalid.
+
+### A3 — Decision 7's Sybil guarantee, restated as the bound it is
+
+Original wording: requiring `operator_id` at bond registration means "splitting collateral across
+bonds does not manufacture extra panel seats." It does — up to a bound. What the implementation
+provides (`4596a644`): `operator_id` is derived from an operator KEY, and every distinct identity
+must independently carry `min_collateral_sompi`. Splitting X collateral therefore yields at most
+`⌊X / min_collateral⌋` panel identities. That is a real economic floor per seat, and it is the
+honest claim: **Sybil-bounded, not Sybil-proof.** Panel quorum math and slash sizing must assume
+an adversary holds every identity their collateral can fund.
 
 ---
 
