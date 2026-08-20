@@ -57,6 +57,8 @@ pub const PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT: &[u8] = b"misaka-palw/fp-v3/com
 /// commitment are different promises by the same key, and one context serving both is how a
 /// signature crosses meanings.
 pub const PALW_FP_V3_MLDSA87_SPEND_CONTEXT: &[u8] = b"misaka-palw/fp-v3/spend-mldsa87/v1";
+/// Keyed hash over the raw worker-request frame — the wire-level echo the caller re-verifies.
+pub const PALW_FP_V3_DOMAIN_WORKER_REQUEST: &[u8] = b"misaka-palw/fp-v3/worker-request/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -67,6 +69,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_SPEND_L1_TAG,
     PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
     PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    PALW_FP_V3_DOMAIN_WORKER_REQUEST,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -498,6 +501,8 @@ pub enum PalwFpV3Error {
     CuMismatch { claimed: u128, derived: u128 },
     #[error("trace_chunk_count is zero — a trace nobody can fetch is a trace nobody can verify")]
     ZeroTraceChunks,
+    #[error("the worker result does not bind the request: {0}")]
+    WorkerResultMismatch(&'static str),
     #[error("beacon at daa {beacon_daa} sits before the draw slot {slot}")]
     BeaconBeforeSlot { beacon_daa: u64, slot: u64 },
     #[error("an attempt-class block at daa {prev_attempt_daa} already occupies the slot {slot} — the named beacon is not the first")]
@@ -617,6 +622,180 @@ impl PalwReceiptSpendEnvelopeV3 {
             return Err(PalwFpV3Error::SignatureInvalid);
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The worker wire (FP-06): one framed request in, one framed result out — the subprocess
+// contract `misaka-palw-gateway` drives and a panel replay re-drives.
+// ---------------------------------------------------------------------------------------------
+
+/// What the worker executes. Two arms, ONE loop:
+///
+/// * `Text` — the gateway's canonical-template-rendered UTF-8. The worker tokenizes it under the
+///   pinned GGUF tokenizer (the class's `tokenizer_id`) and returns the ids; the CONSENSUS
+///   identity is those ids (invariant F2), never the text.
+/// * `TokenIds` — the replay arm: a panel seat rebuilds the request from chain data (the
+///   commitment carries the ids whole under PublicDA), and MUST reach byte-identical roots.
+///
+/// The two arms differ only in where tokenization happens; after it, the execution — and
+/// therefore the trace — is one code path, which is what makes text-in and ids-in equality a
+/// property a smoke test can pin rather than a hope.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwFpWorkerInputV3 {
+    Text(Vec<u8>) = 0,
+    TokenIds(Vec<u32>) = 1,
+}
+
+/// The v3 job request: every field of the eventual [`PalwFreePromptJobV3`] the worker cannot
+/// derive itself, plus the runtime identity pins (the worker refuses a request meant for a
+/// runtime it is not), plus the input. The worker builds the job, binds the trace to
+/// [`fp_job_id_v3`] — a value a replayer can rebuild from CHAIN data alone, which is the whole
+/// requirement — and hands the job back for the gateway to cross-check field by field.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerRequestV3 {
+    pub version: u16,
+    pub network_domain: Hash64,
+    pub class_id: Hash64,
+    pub executor_bond: TransactionOutpoint,
+    pub executor_pubkey: Vec<u8>,
+    pub operator_id: Hash64,
+    pub anchor_block: Hash64,
+    pub anchor_daa: u64,
+    pub job_nonce: [u8; 32],
+    pub decode_token_limit: u32,
+    pub max_context_tokens: u32,
+    pub privacy_mode: u8,
+    pub input: PalwFpWorkerInputV3,
+    /// Runtime identity pins, checked against the worker's own manifest-derived values —
+    /// running a job under a mis-declared identity would let one runtime impersonate another's
+    /// determinism class. (`tokenizer_id` and the CU rule are not pinned here: the tokenizer is
+    /// inside the manifest-pinned GGUF, and CU derivation is the consensus bundle's, applied by
+    /// the caller over the returned counts.)
+    pub model_profile_id: Hash64,
+    pub runtime_manifest_hash: Hash64,
+    pub runtime_class_id: Hash64,
+    pub shape_profile_id: Hash64,
+    pub trace_scheme_id: Hash64,
+}
+
+/// `H(domain ‖ len ‖ raw-frame)` — computed over the exact bytes read, echoed in the result, and
+/// re-derived by the caller from its OWN canonical encoding, so a worker cannot answer a
+/// different request than the one sent.
+pub fn fp_worker_request_hash_v3(payload: &[u8]) -> Hash64 {
+    canonical_id(PALW_FP_V3_DOMAIN_WORKER_REQUEST, payload)
+}
+
+/// The v3 job result: the consensus-grade commitment inputs AND the answer, from ONE execution.
+///
+/// This is the deliberate amendment to the v2 observability rule (ADR-0044 Decision 10): the v2
+/// job path forbids rendered output leaving the process because its caller is a mining pipeline;
+/// this path's caller is the USER's gateway, and returning the answer is the point. The
+/// *projection-grade fields* (roots, counts) remain hashes — what consensus compares never
+/// carries raw text.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerResultV3 {
+    pub version: u16,
+    pub request_hash: Hash64,
+    /// The exact job identity the worker bound the trace to. The caller MUST cross-check every
+    /// field against its own request (and the prompt hash against the returned ids) before
+    /// building a commitment on it.
+    pub job: PalwFreePromptJobV3,
+    /// The canonical token ids (the `Text` arm's tokenization, or the `TokenIds` arm echoed) —
+    /// what the PublicDA commitment carries whole.
+    pub prompt_token_ids: Vec<u32>,
+    pub trace_root: Hash64,
+    pub output_root: Hash64,
+    pub schedule_root: Hash64,
+    pub trace_event_count: u32,
+    pub decode_tokens_executed: u32,
+    pub stop_reason: PalwFpStopReasonV3,
+    pub output_token_ids: Vec<u32>,
+    /// The rendered answer bytes — the user's reply.
+    pub rendered: Vec<u8>,
+    pub model_load_ms: u64,
+    pub execute_ms: u64,
+}
+
+impl PalwFpWorkerResultV3 {
+    /// The caller-side re-binding (the `agent_client` discipline): everything the result claims
+    /// is re-verified from the CALLER's own request — the worker is never trusted about what it
+    /// was asked.
+    pub fn validate_against_request(&self, request: &PalwFpWorkerRequestV3, request_hash: Hash64) -> Result<(), PalwFpV3Error> {
+        if self.version != PALW_FP_V3_VERSION || self.job.version != PALW_FP_V3_VERSION {
+            return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
+        }
+        if self.request_hash != request_hash {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the result echoes a different request"));
+        }
+        let j = &self.job;
+        if j.network_domain != request.network_domain
+            || j.class_id != request.class_id
+            || j.executor_bond != request.executor_bond
+            || j.executor_pubkey != request.executor_pubkey
+            || j.operator_id != request.operator_id
+            || j.anchor_block != request.anchor_block
+            || j.anchor_daa != request.anchor_daa
+            || j.job_nonce != request.job_nonce
+            || j.decode_token_limit != request.decode_token_limit
+            || j.max_context_tokens != request.max_context_tokens
+            || j.privacy_mode != request.privacy_mode
+        {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the returned job's fields are not the request's"));
+        }
+        if j.prompt_tokens as usize != self.prompt_token_ids.len()
+            || j.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&self.prompt_token_ids)
+        {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the returned job does not bind the returned token ids"));
+        }
+        if let PalwFpWorkerInputV3::TokenIds(ids) = &request.input
+            && ids != &self.prompt_token_ids
+        {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the ids arm must echo the ids it was given"));
+        }
+        if self.decode_tokens_executed == 0 || self.decode_tokens_executed > j.decode_token_limit {
+            return Err(PalwFpV3Error::WorkerResultMismatch("executed decode count is outside the job's budget"));
+        }
+        let canonical = match self.stop_reason {
+            PalwFpStopReasonV3::ExactBudgetReached => self.decode_tokens_executed == j.decode_token_limit,
+            PalwFpStopReasonV3::EndOfGeneration => self.decode_tokens_executed < j.decode_token_limit,
+        };
+        if !canonical {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the stop reason is not canonical for the executed count"));
+        }
+        if self.trace_event_count != self.decode_tokens_executed {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the trace event count is not the executed decode count"));
+        }
+        if self.output_token_ids.len() != self.decode_tokens_executed as usize {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the answer's token count is not the executed decode count"));
+        }
+        Ok(())
+    }
+
+    /// Assemble the consensus commitment from a validated result plus the pieces only the caller
+    /// holds: the trace DA obligation and the bundle's CU weights. The CU is DERIVED here — the
+    /// worker reports counts, never prices (invariant F7 starts at assembly, not at admission).
+    pub fn to_commitment(
+        &self,
+        weights: &PalwFpCuWeightsV3,
+        trace_manifest_root: Hash64,
+        trace_chunk_count: u32,
+        trace_retention_daa: u64,
+    ) -> PalwFreePromptCommitmentV3 {
+        PalwFreePromptCommitmentV3 {
+            job: self.job.clone(),
+            trace_root: self.trace_root,
+            output_root: self.output_root,
+            schedule_root: self.schedule_root,
+            decode_tokens_executed: self.decode_tokens_executed,
+            stop_reason: self.stop_reason,
+            cu: fp_cu_v3(self.job.prompt_tokens, self.decode_tokens_executed, weights),
+            trace_manifest_root,
+            trace_chunk_count,
+            trace_retention_daa,
+        }
     }
 }
 
@@ -962,6 +1141,87 @@ mod tests {
         all.sort();
         all.dedup();
         assert_eq!(all.len(), before, "an FP-V3 domain collides with a neighboring family's");
+    }
+
+    /// The worker wire's caller-side re-binding: an honest result validates and assembles a
+    /// commitment whose CU is derived (never copied), and every lie the worker could tell about
+    /// what it was asked is caught from the caller's own request.
+    #[test]
+    fn worker_result_rebinding_and_commitment_assembly() {
+        let base_job = job();
+        let ids: Vec<u32> = (0..base_job.prompt_tokens).collect();
+        let mut j = base_job.clone();
+        j.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        let request = PalwFpWorkerRequestV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: j.network_domain,
+            class_id: j.class_id,
+            executor_bond: j.executor_bond,
+            executor_pubkey: j.executor_pubkey.clone(),
+            operator_id: j.operator_id,
+            anchor_block: j.anchor_block,
+            anchor_daa: j.anchor_daa,
+            job_nonce: j.job_nonce,
+            decode_token_limit: j.decode_token_limit,
+            max_context_tokens: j.max_context_tokens,
+            privacy_mode: j.privacy_mode,
+            input: PalwFpWorkerInputV3::TokenIds(ids.clone()),
+            model_profile_id: Hash64::from_u64_word(0x1),
+            runtime_manifest_hash: Hash64::from_u64_word(0x2),
+            runtime_class_id: Hash64::from_u64_word(0x3),
+            shape_profile_id: Hash64::from_u64_word(0x4),
+            trace_scheme_id: Hash64::from_u64_word(0x5),
+        };
+        let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
+        let result = PalwFpWorkerResultV3 {
+            version: PALW_FP_V3_VERSION,
+            request_hash,
+            job: j.clone(),
+            prompt_token_ids: ids.clone(),
+            trace_root: Hash64::from_u64_word(0x7A),
+            output_root: Hash64::from_u64_word(0x0B),
+            schedule_root: Hash64::from_u64_word(0x5C),
+            trace_event_count: 77,
+            decode_tokens_executed: 77,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            output_token_ids: vec![9; 77],
+            rendered: b"an answer".to_vec(),
+            model_load_ms: 1,
+            execute_ms: 2,
+        };
+        result.validate_against_request(&request, request_hash).expect("the honest result binds");
+
+        let commitment = result.to_commitment(&weights(), Hash64::from_u64_word(0xD0), 8, 999_999);
+        assert_eq!(commitment.cu, fp_cu_v3(j.prompt_tokens, 77, &weights()), "CU is derived, never copied");
+        assert_eq!(commitment.job, j);
+
+        // Lies, each caught: a different request echoed; a job field swapped; ids the job hash
+        // does not bind; an ids-arm echo mismatch; an overrun; a non-canonical stop; a trace
+        // count that is not the executed count; an answer of the wrong length.
+        let wrong_echo = result.clone();
+        assert!(wrong_echo.validate_against_request(&request, Hash64::from_u64_word(0xEE)).is_err());
+        let mut swapped = result.clone();
+        swapped.job.job_nonce[0] ^= 1;
+        assert!(swapped.validate_against_request(&request, request_hash).is_err());
+        let mut unbound = result.clone();
+        unbound.prompt_token_ids.push(1);
+        assert!(unbound.validate_against_request(&request, request_hash).is_err());
+        let mut foreign_ids = result.clone();
+        foreign_ids.prompt_token_ids = (1..=base_job.prompt_tokens).collect();
+        foreign_ids.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&foreign_ids.prompt_token_ids);
+        assert!(foreign_ids.validate_against_request(&request, request_hash).is_err(), "the ids arm must echo its input");
+        let mut overrun = result.clone();
+        overrun.decode_tokens_executed = j.decode_token_limit + 1;
+        assert!(overrun.validate_against_request(&request, request_hash).is_err());
+        let mut wrong_stop = result.clone();
+        wrong_stop.stop_reason = PalwFpStopReasonV3::ExactBudgetReached;
+        assert!(wrong_stop.validate_against_request(&request, request_hash).is_err());
+        let mut ragged_trace = result.clone();
+        ragged_trace.trace_event_count += 1;
+        assert!(ragged_trace.validate_against_request(&request, request_hash).is_err());
+        let mut short_answer = result;
+        short_answer.output_token_ids.pop();
+        assert!(short_answer.validate_against_request(&request, request_hash).is_err());
     }
 
     /// Cross-family separation on equal preimages: the same borsh bytes under the FP job-id key,

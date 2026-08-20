@@ -48,10 +48,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::palw_v2::{
-    canonical_compute_units_v2, cu_ruleset_id_v2, decode_framed_borsh, expected_schedule_commitment_v2,
+    canonical_compute_units_v2, cu_ruleset_id_v2, decode_framed_borsh, expected_schedule_commitment_v2, full_logits_trace_root_v2,
     golden_vector_root_unpopulated_v2, job_request_hash_v2, logits_event_hash_v2, output_commitment_v2,
-    output_token_ids_hash_v2, read_framed, rendered_output_hash_v2, shape_profile_id_v2, tokenizer_id_v2_for_gguf,
-    trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2, PalwGoldenVectorSetV2, PalwJobContextV2,
+    output_token_ids_hash_v2, prompt_token_ids_hash_v2, read_framed, rendered_output_hash_v2, shape_profile_id_v2,
+    tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2,
+    PalwGoldenVectorSetV2, PalwJobContextV2,
     PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2,
     PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2,
     PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V3,
@@ -66,6 +67,10 @@ use kaspa_consensus_core::palw_legs::{
     PalwOpenedActivationLeafV1, PalwOpenedCheckpointLeafV1, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
     PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
     PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
+};
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    fp_job_id_v3, fp_worker_request_hash_v3, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
+    PalwFpWorkerResultV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
 };
 use kaspa_consensus_core::palw_schedule::{
     nearest_rank_percentile, replay_p99_fits_v1, PalwScheduleParamsV1, PALW_SCHEDULE_REPLAY_KAPPA,
@@ -1254,6 +1259,278 @@ fn run_v2_job() {
     write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v2 result frame: {e}")));
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0044 (FP-06): the free-prompt v3 job — one execution, an ANSWER and a commitment.
+// ---------------------------------------------------------------------------------------------
+
+/// The v3 execution shape. Differs from v2 in exactly the stop semantics — the decode budget is
+/// a CEILING and end-of-generation is a real stop (a chat answer that ends, ends) — and in
+/// admitting a text arm (the worker tokenizes under the pinned GGUF tokenizer; the template, if
+/// any, was the GATEWAY's frozen transform, never this process's). A different stop rule is a
+/// different shape profile, never an in-place edit of v2's.
+fn shape_string_v3() -> String {
+    let gpu_layers = if cfg!(misaka_palw_cpu) { "none" } else { "all" };
+    format!(
+        "n_ctx={N_CTX}/n_batch={N_BATCH}/n_ubatch={N_BATCH}/n_seq=1/n_threads={N_THREADS}/flash-attn=disabled/gpu-layers={gpu_layers}/greedy-argmax-first-index/text-or-token-ids-input/ceiling-decode/early-eog-stops/prefill-single-batch/v3"
+    )
+}
+
+/// Rejects a v3 request whose declared runtime identity is not THIS worker — the five pins
+/// (`tokenizer_id` is inside the manifest-pinned GGUF; the CU rule is the consensus bundle's,
+/// applied by the caller over returned counts — neither is a separate pin here).
+fn check_v3_identity(request: &PalwFpWorkerRequestV3, manifest: &PalwRuntimeManifestV2) {
+    let checks: [(&str, Hash64, Hash64); 5] = [
+        ("model_profile_id", model_profile_id(), request.model_profile_id),
+        ("runtime_manifest_hash", manifest.manifest_hash(), request.runtime_manifest_hash),
+        ("runtime_class_id", runtime_class_id(), request.runtime_class_id),
+        ("shape_profile_id", shape_profile_id_v2(&shape_string_v3()), request.shape_profile_id),
+        ("trace_scheme_id", trace_scheme_id_v2(), request.trace_scheme_id),
+    ];
+    for (field, ours, declared) in checks {
+        if ours != declared {
+            die(format!(
+                "v3-job rejected: {field} mismatch — the request declares a runtime this worker is not (ours {}, request {})",
+                hex(ours),
+                hex(declared)
+            ));
+        }
+    }
+}
+
+/// `--mode v3-manifest`: the machine-readable identity a gateway pins its requests with. JSON on
+/// stdout; the canonical identities are the hashes, this document is how a caller learns them.
+fn run_v3_manifest() {
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.fp-v3-manifest.v1",
+        "runtime_manifest_hash": hex(manifest.manifest_hash()),
+        "runtime_class_id": hex(runtime_class_id()),
+        "model_profile_id": hex(model_profile_id()),
+        "shape_profile_id": hex(shape_profile_id_v2(&shape_string_v3())),
+        "trace_scheme_id": hex(trace_scheme_id_v2()),
+        "tokenizer_id": hex(tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256)),
+        "n_ctx": N_CTX,
+        "prefill_single_batch_cap": N_BATCH,
+        "shape_string": shape_string_v3(),
+    });
+    println!("{doc}");
+}
+
+/// `--mode v3-job`: one framed Borsh [`PalwFpWorkerRequestV3`] on stdin, one framed Borsh
+/// [`PalwFpWorkerResultV3`] on stdout, nothing else. Fail-closed exactly as v2: any error path
+/// is `die` with NOTHING on stdout.
+///
+/// The trace is bound to [`fp_job_id_v3`] — a value a panel seat can rebuild from CHAIN data
+/// alone (the commitment carries the job and the token ids whole), which is what makes the
+/// `TokenIds` replay arm reach byte-identical roots. The v2 trace-layer summary records the
+/// EXECUTED count as its exact count with its one stop variant — at the trace layer that reads
+/// "this trace is complete at E events", which is true; the run's own stop reason
+/// (budget vs end-of-generation) is the v3 result's, checked canonical by every consumer.
+fn run_v3_job() {
+    let mut stdin = std::io::stdin().lock();
+    let payload = read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v3-job rejected: {e}")));
+    let request_hash = fp_worker_request_hash_v3(&payload);
+    let request: PalwFpWorkerRequestV3 = decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("v3-job rejected: {e}")));
+    if request.version != PALW_FP_V3_VERSION {
+        die(format!("v3-job rejected: request version {} is not {}", request.version, PALW_FP_V3_VERSION));
+    }
+    if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
+        die(format!("v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute", request.privacy_mode));
+    }
+    if request.decode_token_limit == 0 {
+        die("v3-job rejected: a zero decode ceiling is not a job".into());
+    }
+    if request.max_context_tokens == 0 || request.max_context_tokens > N_CTX as u32 {
+        die(format!("v3-job rejected: max_context_tokens {} is outside this runtime's 1..={N_CTX}", request.max_context_tokens));
+    }
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!(
+            "v3-job rejected: floating-point environment is not the canonical profile ({}; required {FP_ENVIRONMENT_PROFILE_V2})",
+            fp.canonical_string()
+        ));
+    }
+    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
+    check_v3_identity(&request, &manifest);
+    let model_path = pinned_model_path_v2();
+
+    let load_started = std::time::Instant::now();
+    let ctx = unsafe { shim_open(format!("{}\0", model_path.display()).as_ptr(), N_CTX, N_BATCH, N_THREADS) };
+    if ctx.is_null() {
+        die(format!("llama.cpp failed to load {}", model_path.display()));
+    }
+    let n_vocab_raw = unsafe { shim_n_vocab(ctx) };
+    if n_vocab_raw <= 0 {
+        die(format!("model reports a non-positive vocab size ({n_vocab_raw})"));
+    }
+    let n_vocab = n_vocab_raw as u32;
+    let model_load_ms = load_started.elapsed().as_millis() as u64;
+    eprintln!("[palw-worker] model loaded in {:?} (n_vocab={n_vocab})", load_started.elapsed());
+
+    // Re-probe AFTER model load, exactly as v2: a backend that flipped MXCSR/FPCR during init
+    // would change the arithmetic of every decode call.
+    let fp = fp_env::probe();
+    if !fp.is_canonical() {
+        die(format!("v3-job rejected: floating-point environment drifted after model load: {}", fp.canonical_string()));
+    }
+
+    // The two input arms converge on canonical token ids here; everything after this line is one
+    // code path, which is what makes text-in and ids-in root equality a testable property.
+    let prompt_ids: Vec<u32> = match &request.input {
+        PalwFpWorkerInputV3::Text(bytes) => {
+            if bytes.is_empty() {
+                die("v3-job rejected: the text arm carries no bytes".into());
+            }
+            if std::str::from_utf8(bytes).is_err() {
+                die("v3-job rejected: the text arm is not UTF-8 — a template renders text, not bytes".into());
+            }
+            let mut out = vec![0i32; N_CTX as usize];
+            let n = unsafe { shim_tokenize(ctx, bytes.as_ptr(), bytes.len() as i32, out.as_mut_ptr(), out.len() as i32) };
+            if n <= 0 {
+                die(format!("v3-job rejected: tokenization failed or produced nothing (rc={n})"));
+            }
+            out[..n as usize].iter().map(|t| *t as u32).collect()
+        }
+        PalwFpWorkerInputV3::TokenIds(ids) => {
+            if ids.is_empty() {
+                die("v3-job rejected: the ids arm carries no tokens".into());
+            }
+            ids.clone()
+        }
+    };
+    for &t in &prompt_ids {
+        if t >= n_vocab {
+            die(format!("v3-job rejected: token id {t} is outside the model's vocab ({n_vocab})"));
+        }
+    }
+    let prefill = prompt_ids.len() as u32;
+    if prefill > N_BATCH as u32 {
+        die(format!("v3-job rejected: prefill {prefill} exceeds the single-batch prefill schedule (n_batch={N_BATCH})"));
+    }
+    if prefill as u64 + request.decode_token_limit as u64 > request.max_context_tokens as u64 {
+        die(format!(
+            "v3-job rejected: prompt {prefill} + decode ceiling {} exceeds max_context_tokens {}",
+            request.decode_token_limit, request.max_context_tokens
+        ));
+    }
+
+    // The job identity the trace binds — rebuilt by every replayer from chain data alone.
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: request.network_domain,
+        class_id: request.class_id,
+        executor_bond: request.executor_bond,
+        executor_pubkey: request.executor_pubkey.clone(),
+        operator_id: request.operator_id,
+        anchor_block: request.anchor_block,
+        anchor_daa: request.anchor_daa,
+        job_nonce: request.job_nonce,
+        tokenizer_id: tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256),
+        prompt_token_ids_hash: prompt_token_ids_hash_v2(&prompt_ids),
+        prompt_tokens: prefill,
+        decode_token_limit: request.decode_token_limit,
+        max_context_tokens: request.max_context_tokens,
+        privacy_mode: request.privacy_mode,
+    };
+    let binding = fp_job_id_v3(&job);
+
+    let exec_started = std::time::Instant::now();
+    let limit = request.decode_token_limit;
+    let tokens: Vec<i32> = prompt_ids.iter().map(|t| *t as i32).collect();
+    let mut logits = vec![0f32; n_vocab as usize];
+    let mut scratch: Vec<u8> = Vec::with_capacity(n_vocab as usize * 4);
+    let mut events: Vec<Hash64> = Vec::with_capacity(limit as usize);
+    let mut schedule = PalwScheduleCommitmentBuilderV2::new(&binding);
+
+    step_v2(ctx, &tokens, PalwTracePhaseV2::Prefill, 0, 0, n_vocab, &binding, &mut logits, &mut scratch, &mut events, &mut schedule);
+
+    let mut outputs: Vec<u32> = Vec::with_capacity(limit as usize);
+    let mut rendered: Vec<u8> = Vec::new();
+    let mut piece = vec![0u8; 512];
+    let stop_reason = loop {
+        let tok = argmax(&logits);
+        outputs.push(tok as u32);
+        let n = unsafe { shim_token_to_piece(ctx, tok, piece.as_mut_ptr(), piece.len() as i32) };
+        if n > 0 {
+            rendered.extend_from_slice(&piece[..n as usize]);
+        }
+        // Canonical stop order: the budget edge FIRST (executed == limit is ExactBudgetReached
+        // even when the last token is EOG — one executed count, one encoding), then EOG.
+        if outputs.len() as u32 == limit {
+            break PalwFpStopReasonV3::ExactBudgetReached;
+        }
+        if unsafe { shim_is_eog(ctx, tok) } == 1 {
+            break PalwFpStopReasonV3::EndOfGeneration;
+        }
+        let event_index = outputs.len() as u32;
+        let fed = [tok];
+        step_v2(
+            ctx,
+            &fed,
+            PalwTracePhaseV2::Decode,
+            event_index - 1,
+            event_index,
+            n_vocab,
+            &binding,
+            &mut logits,
+            &mut scratch,
+            &mut events,
+            &mut schedule,
+        );
+    };
+    unsafe { shim_close(ctx) };
+
+    let executed = outputs.len() as u32;
+    // Defense in depth, as v2: the streamed schedule must equal the canonical schedule for the
+    // EXECUTED shape.
+    let (schedule_commitment, calls) = schedule.finalize();
+    let (expected_schedule, expected_calls) = expected_schedule_commitment_v2(&binding, prefill, executed);
+    if schedule_commitment != expected_schedule || calls != expected_calls {
+        die("internal error: the executed call schedule diverged from the canonical schedule".into());
+    }
+
+    // The trace-layer summary records the EXECUTED count as its exact count (see the fn doc).
+    let summary = PalwTraceSummaryV2 {
+        vocab_size: n_vocab,
+        logits_dtype: PalwLogitsDtypeV2::F32Le,
+        declared_prefill_tokens: prefill,
+        exact_decode_tokens: executed,
+        event_count: executed,
+        first_event_kind: PalwTracePhaseV2::Prefill,
+        last_event_kind: if executed == 1 { PalwTracePhaseV2::Prefill } else { PalwTracePhaseV2::Decode },
+        output_token_ids_hash: output_token_ids_hash_v2(&outputs),
+        stop_reason: PalwStopReasonV2::ExactBudgetReached,
+    };
+    let event_merkle = trace_event_merkle_root_v2(&events).unwrap_or_else(|e| die(format!("internal error: trace merkle failed: {e}")));
+    let trace_root = full_logits_trace_root_v2(&binding, &summary, &event_merkle);
+
+    eprintln!(
+        "[palw-worker] v3 executed: prefill={prefill} decode={executed}/{limit} stop={stop_reason:?} in {:?}; root={}…",
+        exec_started.elapsed(),
+        &hex(trace_root)[..16]
+    );
+
+    let result = PalwFpWorkerResultV3 {
+        version: PALW_FP_V3_VERSION,
+        request_hash,
+        job,
+        prompt_token_ids: prompt_ids,
+        trace_root,
+        output_root: output_commitment_v2(&binding, &outputs, &rendered_output_hash_v2(&rendered)),
+        schedule_root: schedule_commitment,
+        trace_event_count: executed,
+        decode_tokens_executed: executed,
+        stop_reason,
+        output_token_ids: outputs,
+        rendered,
+        model_load_ms,
+        execute_ms: exec_started.elapsed().as_millis() as u64,
+    };
+    let bytes = borsh::to_vec(&result).unwrap_or_else(|e| die(format!("cannot serialize the v3 result: {e}")));
+    let mut stdout = std::io::stdout().lock();
+    write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v3 result frame: {e}")));
+}
+
 /// `--mode v2-legs-job`: the v2 job with execution-commitment legs. Same envelope in; a
 /// `PalwLegsJobResultV1` frame out, carrying the v2 result **unchanged** plus the binding.
 fn run_v2_legs_job() {
@@ -2194,6 +2471,8 @@ fn main() {
             | "v2-legs-open-request"
             | "v2-legs-open-verify"
             | "v2-replay-bench"
+            | "v3-job"
+            | "v3-manifest"
             | "pow-agent")
     ) && n_predict.is_some()
     {
@@ -2204,6 +2483,8 @@ fn main() {
     match mode.as_deref() {
         Some("v2-job") => run_v2_job(),
         Some("v2-manifest") => run_v2_manifest(),
+        Some("v3-job") => run_v3_job(),
+        Some("v3-manifest") => run_v3_manifest(),
         Some("v2-golden-gen") => {
             let out = out_path.unwrap_or_else(|| die("--out <path> is required for v2-golden-gen".into()));
             run_v2_golden_gen(&out);
