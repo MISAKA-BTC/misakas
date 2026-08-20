@@ -194,28 +194,23 @@ pub fn verify_class_admission_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PalwBase0GeometryV1, base0_profile_v1};
+    use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use crate::palw_qwen25_profile::{QWEN25_1_5B, QWEN25_3B, PalwQwen25GeometryV1, qwen25_profile_v1};
     use crate::palw_mode_v2::{PalwCourtParamsV2, tests::conforming_bundle};
     use crate::palw_step::PALW_STEP_MAX_LEAVES;
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
-    /// A Qwen-2B-scale geometry BASE-0 can express. No GQA and no GatedDeltaNet (the class is a
-    /// plain decoder-only transformer), a vocabulary under `MAX_DOT_LEN`, and `tile_len` 2048
-    /// rather than the floor's 64 — measured, because at 64 this geometry's longest job is 24×
-    /// over `PALW_STEP_MAX_LEAVES` and the class is not adjudicable at any context worth having.
-    fn qwen_scale() -> PalwBase0GeometryV1 {
-        PalwBase0GeometryV1 {
-            layer_count: 28,
-            hidden_dim: 1536,
-            ffn_dim: 8960,
-            attn_heads: 12,
-            attn_head_dim: 128,
-            vocab_size: 128_256,
-            n_ctx: 4_096,
-            n_threads: 1,
-            rms_eps_q: 1 << 8,
-            tile_len: 2_048,
-        }
+    /// The measured Qwen2.5-1.5B graph, at the `tile_len` that actually admits its own declared
+    /// context.
+    ///
+    /// `palw_qwen25_profile` ships `tile_len` 128 with `n_ctx` 4096, and at that pair the class's
+    /// LONGEST job is 132,354,910 step leaves against a `PALW_STEP_MAX_LEAVES` of 4,194,304 — so
+    /// the class as declared cannot be registered at all. Coverage says nothing about this: the
+    /// graph reaches ten catalogued kernels and passes A4 either way. It is the leaf count that
+    /// refuses, and `the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context` below is
+    /// the tripwire for it.
+    fn qwen_admissible() -> PalwShapeProfileV3 {
+        qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 16_384, ..QWEN25_1_5B }).expect("the measured geometry is expressible")
     }
 
     fn context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
@@ -272,7 +267,7 @@ mod tests {
     /// counted one.
     #[test]
     fn a_qwen_scale_class_can_join_a_chain_provisioned_for_the_step_space() {
-        let profile = base0_profile_v1(qwen_scale()).expect("the geometry is expressible");
+        let profile = qwen_admissible();
         let canonical = context(&profile, 64, 64);
         let counted = step_leaf_count(&profile, &canonical).expect("the canonical job counts");
         let entry = verify_class_admission_v2(
@@ -281,12 +276,12 @@ mod tests {
             &canonical,
             &registration(profile.shape_profile_id(), counted),
         )
-        .expect("a Qwen-scale BASE-0 class is admissible");
+        .expect("the measured Qwen2.5-1.5B class is admissible at an admitting tile_len");
 
         assert_eq!(entry.class_id, profile.shape_profile_id(), "a class is its graph");
         assert_eq!(entry.canonical_step_leaf_count, counted);
         assert!(entry.max_step_leaf_count <= PALW_STEP_MAX_LEAVES, "the worst case is inside the step space");
-        assert_eq!(entry.reachable_kernels.len(), 9, "BASE-0's graph reaches nine of the catalog's kernels");
+        assert_eq!(entry.reachable_kernels.len(), 10, "the Qwen graph reaches ten of the catalog's kernels");
     }
 
     /// The floor is not disturbed by the second class existing — the property that makes "add it
@@ -295,7 +290,7 @@ mod tests {
     fn admitting_a_second_class_does_not_move_the_floors_id() {
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor geometry is expressible");
         let before = floor.shape_profile_id();
-        let big = base0_profile_v1(qwen_scale()).expect("the geometry is expressible");
+        let big = qwen_admissible();
         let canonical = context(&big, 64, 64);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
         verify_class_admission_v2(&bundle_with_full_ladder(), &big, &canonical, &registration(big.shape_profile_id(), counted))
@@ -313,7 +308,7 @@ mod tests {
         let mut bundle = conforming_bundle();
         bundle.court = PalwCourtParamsV2::new(floor_worst, 20, 2).expect("a floor-sized court is legal");
 
-        let big = base0_profile_v1(qwen_scale()).expect("expressible");
+        let big = qwen_admissible();
         let canonical = context(&big, 64, 64);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
         let err = verify_class_admission_v2(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
@@ -383,22 +378,36 @@ mod tests {
 
         // And it really is every class: the cap is what `worst_case_step_leaf_count_v1` enforces,
         // so a class the ladder cannot reach is a class that was already inadmissible.
-        let big = base0_profile_v1(qwen_scale()).expect("expressible");
+        let big = qwen_admissible();
         assert!(worst_case_step_leaf_count_v1(&big).expect("inside the cap") <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
     }
 
-    /// The measured reason `qwen_scale` carries `tile_len` 2048: at the floor's 64 the same
-    /// geometry's longest job is outside the step space entirely, so the class is not adjudicable
-    /// and the gate never reaches any economic question.
+    /// **The shipped Qwen geometries do not admit their own declared context**, and coverage
+    /// cannot see it.
+    ///
+    /// `worst_case_step_leaf_count_v1` is the whole context as prefill — the longest job a class
+    /// admits — and both shipped constants are far past `PALW_STEP_MAX_LEAVES` at `tile_len` 128:
+    /// 132.4 M leaves for 1.5B and 219.7 M for 3B. `tile_len` is the only knob that moves it, and
+    /// measured, 1.5B needs 16,384 to reach `n_ctx` 4096 while 3B needs 65,536 — which is
+    /// `PALW_STEP_MAX_TILE_LEN` exactly, so the 3B class at 4096 sits on the type's own ceiling
+    /// with no headroom.
+    ///
+    /// This test fails the moment either constant changes, which is the point: it is a tripwire on
+    /// a pair of numbers that pass every other gate.
     #[test]
-    fn tile_len_is_what_makes_the_bigger_class_adjudicable_at_all() {
-        let coarse = base0_profile_v1(qwen_scale()).expect("expressible");
-        assert!(worst_case_step_leaf_count_v1(&coarse).is_ok(), "at tile_len 2048 the longest job fits");
-
-        let fine = base0_profile_v1(PalwBase0GeometryV1 { tile_len: 64, ..qwen_scale() }).expect("expressible");
+    fn the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context() {
+        for shipped in [QWEN25_1_5B, QWEN25_3B] {
+            let as_shipped = qwen25_profile_v1(shipped).expect("expressible");
+            assert!(
+                worst_case_step_leaf_count_v1(&as_shipped).is_err(),
+                "a shipped Qwen geometry became admissible — update this tripwire and the sizing table with it"
+            );
+        }
         assert!(
-            worst_case_step_leaf_count_v1(&fine).is_err(),
-            "at tile_len 64 the same geometry's whole-context job is outside PALW_STEP_MAX_LEAVES"
+            worst_case_step_leaf_count_v1(&qwen_admissible()).is_ok(),
+            "1.5B at tile_len 16_384 admits its declared 4096 context"
         );
+        let three_b = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 65_536, ..QWEN25_3B }).expect("expressible");
+        assert!(worst_case_step_leaf_count_v1(&three_b).is_ok(), "3B needs the maximum legal tile to admit 4096");
     }
 }

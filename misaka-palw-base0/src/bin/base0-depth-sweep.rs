@@ -99,10 +99,10 @@ const MODES: &[(&str, Mode)] =
 
 fn apply_mode(artifact: &mut Base0ArtifactV1, mode: Mode) {
     match mode {
-        Mode::Halve => artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 1 },
-        Mode::Unity => artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0 },
+        Mode::Halve => artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 },
+        Mode::Unity => artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 },
         Mode::UnityAttenuated => {
-            artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0 };
+            artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
             for layer in artifact.layers.iter_mut() {
                 for slot in [3usize, 6] {
                     layer.requant[slot].shift += 1;
@@ -116,6 +116,9 @@ fn shape(w: &Width, n_layers: usize) -> Base0ShapeV1 {
     Base0ShapeV1 {
         n_layers,
         n_heads: w.n_heads,
+        // MHA: the sweep is about the residual stream's depth, and grouping the kv heads would
+        // change the attention arithmetic underneath it without changing what is being measured.
+        n_kv_heads: w.n_heads,
         d_head: w.d_head,
         d_ff: w.d_ff,
         vocab: 4_096,
@@ -215,7 +218,7 @@ fn main() {
     println!("| gain | decay of a maximal code, add by add | adds to 1 unit | floor |");
     println!("|---|---|---|---|");
     for shift in [0u8, 1, 2] {
-        let (trace, fixed) = residual_decay(QuantParams { multiplier: i32::MAX, shift });
+        let (trace, fixed) = residual_decay(QuantParams { multiplier: i32::MAX, shift, zero: 0 });
         let to_unit = trace.iter().position(|c| c.abs() <= 1).map(|i| i.to_string()).unwrap_or_else(|| ">24".into());
         let floor = if fixed { format!("±{} forever", trace.last().expect("non-empty")) } else { "0".to_string() };
         let seq: Vec<String> = trace.iter().map(|c| c.to_string()).collect();
@@ -280,7 +283,7 @@ fn minimum_write_attenuation(width: &Width, n_layers: usize) -> Option<(u8, i32)
     for extra in 0..=7u8 {
         let mut artifact =
             Base0ArtifactV1::derive_deterministic(shape(width, n_layers), SEED).expect("the swept shapes are valid");
-        artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0 };
+        artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
         for layer in artifact.layers.iter_mut() {
             for slot in [3usize, 6] {
                 layer.requant[slot].shift += extra;

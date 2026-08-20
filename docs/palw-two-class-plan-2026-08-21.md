@@ -90,29 +90,47 @@ its worst case.
 > rather than to the floor's own worst case. This is the only part of the plan that expires. Pinned
 > in code as `palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT`.
 
-## 5. What a Qwen-scale class will actually look like
+## 5. The second class exists now — and its declared context is not adjudicable
 
-Measured with `misaka-palw-base0/src/bin/base0-class-sizing.rs`. Three departures from the pinned
-Qwen are forced rather than chosen: no GQA (`wk`/`wv` are square), no GatedDeltaNet (BASE-0 is a
-plain decoder-only transformer, so the hybrid Qwen3.5 is out and a dense model is in), and a
-vocabulary under `MAX_DOT_LEN` — 128,256 fits, Qwen's 151,936 does not.
+`palw_qwen25_profile` landed on the integration branch the same day, with the geometries measured
+from Hugging Face's `config.json` and the real `safetensors` header: `QWEN25_1_5B` (28 layers,
+1536, 8960, 12 heads / 2 kv) and `QWEN25_3B` (36, 2048, 11008, 16 / 2). It is a second class over
+the same closed catalog, with GQA carried, the RMSNorm gain folded into the following linears, the
+QKV biases riding the requantize zero point (an ADR-0040 amendment), and coverage at **100 %**.
 
-At 28 layers / `d_model` 1536 / `d_ff` 8960 / vocab 128,256: **1.81 GB** of int8 weights, and the
-graph reaches **9 kernels, all catalogued — coverage PASSES.**
+Priced against the ladder — `misaka-palw-base0/src/bin/base0-class-sizing.rs` — one number does not
+work:
 
-The binding parameter is `tile_len`, which buys context and pays in court granularity:
+| class | reachable kernels | coverage | longest job (whole context as prefill) |
+|---|---|---|---|
+| the floor | 9 | PASS | 184,456 — **admissible** (18 rounds) |
+| Qwen2.5-1.5B as shipped | 10 | PASS | 132,354,910 — **inadmissible** (cap 4,194,304) |
+| Qwen2.5-3B as shipped | 10 | PASS | 219,703,654 — **inadmissible** |
 
-| `tile_len` | max adjudicable n_ctx — floor | — Qwen scale |
-|---|---|---|
-| 64 | 5977 | **175** |
-| 512 | 19,170 | 1,339 |
-| 2048 | 31,919 | **4,261** |
+**Coverage cannot see this.** A4 asks whether every kernel the graph reaches is adjudicable, and
+the answer is yes for both. What refuses is the leaf count: `worst_case_step_leaf_count_v1` counts
+the whole context as prefill, because the ladder must reach the longest job a class ADMITS rather
+than the one it typically runs.
 
-So a Qwen-scale class wants `tile_len ≈ 2048` for a 4096 context. One terminal adjudication then
-redoes 2048 output elements instead of 64 — at `d_ff` fan-in that is ~18 M int8 MACs, milliseconds
-on a CPU, which is the budget the court was always sized for. **Court cost stays independent of
-model size** because evidence is proof-carrying: `PalwProvenOperandsV1` verifies the refuter's
-weight rows against `artifact_root`, so an adjudicating node holds the root and never the 1.81 GB.
+`tile_len` is the only knob that moves it, and it buys context in exchange for court granularity
+(a dispute localises to a tile, so a tile is how much arithmetic one terminal adjudication redoes):
+
+| `tile_len` | floor | Qwen2.5-1.5B | Qwen2.5-3B |
+|---|---|---|---|
+| 128 (shipped for Qwen) | 9,229 | 244 | 155 |
+| 2048 | 31,919 | 2,179 | 1,574 |
+| 16,384 | 51,347 | **4,838** | 3,745 |
+| 65,536 (`PALW_STEP_MAX_TILE_LEN`) | 57,456 | 5,532 | **4,289** |
+
+At their declared `n_ctx` of 4096: **1.5B needs `tile_len` 16,384** and **3B needs 65,536**, which
+is the maximum the type allows — the 3B class at 4096 sits on the ceiling with no headroom. Either
+the tile grows or the context shrinks; `the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context`
+is the tripwire, and it fails the moment either constant moves.
+
+Court cost stays independent of model size regardless of which is chosen: `PalwProvenOperandsV1`
+verifies the refuter's weight rows against `artifact_root`, so an adjudicating node holds the root
+and never the weights. A larger tile costs one terminal adjudication more arithmetic, not every
+node more storage.
 
 ## 6. Remaining work, in order
 

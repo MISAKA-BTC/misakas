@@ -1,60 +1,28 @@
-//! **What a second BASE-0 class would cost the ruleset** — the numbers behind "add Qwen scale later".
+//! **What a second class costs the ruleset** — the numbers behind "add Qwen scale later".
 //!
-//! The plan is: ship the 4-layer liveness floor now, add a Qwen-scale BASE-0 class afterwards. The
-//! parts of that plan the tree already answers, measured rather than assumed:
+//! Two facts the tree already fixes, measured rather than assumed:
 //!
-//! * a class's `max_step_leaf_count` is a **bundle** field (`PalwCourtParamsV2`), and the bundle is
-//!   what `palw_ruleset_id_v2` hashes. A class deeper than the court's ladder therefore cannot join
-//!   a running chain at all — it needs a new ruleset, which is a flag day.
-//! * but the ladder is `ceil(log2(leaves)) + terminal` rounds, so provisioning it for a class that
-//!   does not exist yet costs **logarithmically**. This binary is how much.
+//! * a class's ladder depth is `PalwCourtParamsV2::max_step_leaf_count`, a **bundle** field, and
+//!   the bundle is what `palw_ruleset_id_v2` hashes. A class deeper than the ladder cannot join a
+//!   running chain at all — it needs a new ruleset, which is a flag day;
+//! * a class is admissible only if its **longest** job — the whole context as prefill, which is
+//!   what `worst_case_step_leaf_count_v1` counts — fits `PALW_STEP_MAX_LEAVES`. Checking the
+//!   typical job instead would admit a class an attacker picks the job length for.
 //!
-//! Everything else about the second class is derivable from its geometry, so it is checked here
-//! too: that the coverage gate passes (it must — the ops are the same ten), that every dimension
-//! fits `MAX_DOT_LEN`, and what the artifact would weigh.
+//! The Qwen geometries are the MEASURED ones from `palw_qwen25_profile`, not a sketch: the second
+//! class's graph is that module's and this binary only prices it.
 
 use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, PalwBase0GeometryV1, base0_profile_v1,
 };
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
-use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, QWEN25_3B, PalwQwen25GeometryV1, qwen25_profile_v1};
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1,
+};
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
 use kaspa_hashes::Hash64;
-
-/// A Qwen-2B-scale geometry that BASE-0 can actually express.
-///
-/// Three departures from the pinned Qwen, and each is forced rather than chosen:
-///
-/// * **no GQA** — `wk`/`wv` are square in the artifact, so `n_head_kv = n_heads`;
-/// * **no GatedDeltaNet** — BASE-0 is a plain decoder-only transformer, which rules out the
-///   hybrid Qwen3.5 and points at a dense model;
-/// * **vocab 128_256, not 151_936** — `Base0ShapeV1::validate` bounds every dimension by
-///   `MAX_DOT_LEN` (131_071), so a Qwen-family vocabulary is refused and a Llama-3-class one fits.
-///
-/// `tile_len` is 2048 rather than the floor's 64, and that is measured rather than chosen: the
-/// sweep at the end of this binary shows the same geometry is adjudicable only to `n_ctx` 175 at
-/// 64, because a class must fit `PALW_STEP_MAX_LEAVES` with its WHOLE context as prefill.
-///
-/// So this is "Qwen scale", not "Qwen". Named here so the second class's numbers are checked long
-/// before anyone can register it — the one thing that cannot be derived is `artifact_root`, and
-/// that is the weights.
-const QWEN_SCALE: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
-    layer_count: 28,
-    hidden_dim: 1536,
-    ffn_dim: 8960,
-    attn_heads: 12,
-    attn_head_dim: 128,
-    vocab_size: 128_256,
-    n_ctx: 4_096,
-    n_threads: 1,
-    rms_eps_q: 1 << 8,
-    tile_len: 2_048,
-};
-
-/// Prefill/decode pairs a Qwen-scale class might name as canonical and worst case. The worst case
-/// is what sets the ladder, so it is swept rather than guessed.
-const QWEN_WORST_CASES: &[(u32, u32)] = &[(64, 64), (512, 128), (2048, 512)];
 
 fn job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
     let mut ctx = PalwJobContextV2 {
@@ -80,50 +48,37 @@ fn job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJ
     ctx
 }
 
-/// `ceil(log2(n))` for `n >= 2`, by the same `next_power_of_two` identity `PalwCourtParamsV2` uses.
+/// `ceil(log2(n))` for `n >= 2`, by the `next_power_of_two` identity `PalwCourtParamsV2` uses.
 fn bisection_rounds(leaves: u64) -> u32 {
     leaves.max(2).next_power_of_two().trailing_zeros()
 }
 
-/// int8 weight bytes, from the shape alone: two `[vocab][d_model]` tables plus four square
-/// projections and three FFN matrices per layer.
-fn artifact_bytes(g: &PalwBase0GeometryV1) -> u128 {
-    let d = g.hidden_dim as u128;
-    let ff = g.ffn_dim as u128;
-    let per_layer = 4 * d * d + 2 * ff * d + d * ff;
-    2 * (g.vocab_size as u128) * d + (g.layer_count as u128) * per_layer
-}
-
-fn report(name: &str, g: PalwBase0GeometryV1, cases: &[(u32, u32)]) {
-    let profile = base0_profile_v1(g).expect("the geometry is expressible");
-    let reachable: std::collections::BTreeSet<Hash64> =
+fn report(name: &str, profile: &PalwShapeProfileV3, jobs: &[(u32, u32)]) {
+    let kernel_ids: std::collections::BTreeSet<Hash64> =
         [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
             .into_iter()
             .flatten()
             .map(|n| n.kernel_semantics_id)
             .collect();
-    let covered = verify_catalog_coverage_v1(&PalwReachableKernelSetV1 {
-        execution_class_id: profile.shape_profile_id(),
-        kernel_ids: reachable.clone(),
-    });
+    let covered =
+        verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: profile.shape_profile_id(), kernel_ids: kernel_ids.clone() });
 
     println!("### {name}");
     println!(
-        "- {} layers, d_model {}, d_ff {}, vocab {}, ctx {}",
-        g.layer_count, g.hidden_dim, g.ffn_dim, g.vocab_size, g.n_ctx
-    );
-    println!("- int8 artifact: **{:.2} GB**", artifact_bytes(&g) as f64 / 1e9);
-    println!(
-        "- reachable kernels: {} — coverage against this build's adjudication table ({} entries): **{}**",
-        reachable.len(),
+        "- reachable kernels {} — coverage against this build's adjudication table ({}): **{}**",
+        kernel_ids.len(),
         catalogued_kernel_ids_v1().len(),
         if covered.is_ok() { "PASS" } else { "FAIL" }
     );
+    match worst_case_step_leaf_count_v1(profile) {
+        Ok(w) => println!("- longest job (whole context as prefill): **{w}** leaves, {} rounds — ADMISSIBLE", bisection_rounds(w)),
+        Err(e) => println!("- longest job: **INADMISSIBLE** — {e:?}"),
+    }
     println!();
-    println!("| prefill/decode | step leaves | bisection rounds |");
+    println!("| job (prefill/decode) | step leaves | rounds |");
     println!("|---|---|---|");
-    for (prefill, decode) in cases {
-        match step_leaf_count(&profile, &job_context(&profile, *prefill, *decode)) {
+    for (prefill, decode) in jobs {
+        match step_leaf_count(profile, &job_context(profile, *prefill, *decode)) {
             Ok(leaves) => println!("| {prefill}/{decode} | {leaves} | {} |", bisection_rounds(leaves)),
             Err(e) => println!("| {prefill}/{decode} | refused: {e:?} | — |"),
         }
@@ -131,14 +86,10 @@ fn report(name: &str, g: PalwBase0GeometryV1, cases: &[(u32, u32)]) {
     println!();
 }
 
-/// The largest `n_ctx` at which a geometry is still ADJUDICABLE — `worst_case_step_leaf_count_v1`
-/// is the whole context as prefill plus one decode, and a class that fails it is one an attacker
-/// picks the job length for. Binary search, because the count is monotone in the context.
-fn max_adjudicable_ctx(base: PalwBase0GeometryV1, tile_len: u32) -> u32 {
-    let fits = |n_ctx: u32| -> bool {
-        let g = PalwBase0GeometryV1 { n_ctx, tile_len, ..base };
-        base0_profile_v1(g).ok().and_then(|p| worst_case_step_leaf_count_v1(&p).ok()).is_some()
-    };
+/// The largest `n_ctx` at which a geometry is still admissible, by binary search on the monotone
+/// whole-context count.
+fn max_adjudicable_ctx(build: &dyn Fn(u32, u32) -> Option<PalwShapeProfileV3>, tile_len: u32) -> u32 {
+    let fits = |n_ctx: u32| build(n_ctx, tile_len).and_then(|p| worst_case_step_leaf_count_v1(&p).ok()).is_some();
     if !fits(2) {
         return 0;
     }
@@ -151,54 +102,63 @@ fn max_adjudicable_ctx(base: PalwBase0GeometryV1, tile_len: u32) -> u32 {
 }
 
 fn main() {
-    println!("# What a second BASE-0 class costs the ruleset\n");
-    report("The RC liveness floor (`PALW_RC_BASE0_GEOMETRY`)", PALW_RC_BASE0_GEOMETRY, &[
-        PALW_RC_BASE0_CANONICAL,
-        PALW_RC_BASE0_WORST_CASE,
-    ]);
-    report("A Qwen-scale BASE-0 class (`QWEN_SCALE`)", QWEN_SCALE, QWEN_WORST_CASES);
+    println!("# What a second class costs the ruleset\n");
 
-    // The number the plan turns on: provisioning the court's ladder now for a class that does not
-    // exist yet. `max_step_leaf_count` is a bundle field and the bundle is the ruleset id, so this
-    // is the difference between "the second class joins" and "the second class is a flag day".
     let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor geometry is expressible");
-    let big = base0_profile_v1(QWEN_SCALE).expect("the Qwen-scale geometry is expressible");
-    let floor_worst = step_leaf_count(&floor, &job_context(&floor, PALW_RC_BASE0_WORST_CASE.0, PALW_RC_BASE0_WORST_CASE.1))
-        .expect("the floor's worst case counts");
-    println!("## True worst cases (whole context as prefill) — what the ladder must reach\n");
-    for (name, prof) in [("floor", &floor), ("qwen-scale", &big)] {
-        match worst_case_step_leaf_count_v1(prof) {
-            Ok(w) => println!("- {name}: **{w}** leaves, {} rounds", bisection_rounds(w)),
-            Err(e) => println!("- {name}: refused ({e:?})"),
-        }
-    }
-    println!();
+    report("PALW-BASE-0, the RC liveness floor", &floor, &[PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_WORST_CASE]);
+
+    let jobs = [(64u32, 64u32), (512, 128), (2048, 512)];
+    let q15 = qwen25_profile_v1(QWEN25_1_5B).expect("the measured 1.5B geometry is expressible");
+    report("Qwen2.5-1.5B (measured, as shipped in `palw_qwen25_profile`)", &q15, &jobs);
+    let q3 = qwen25_profile_v1(QWEN25_3B).expect("the measured 3B geometry is expressible");
+    report("Qwen2.5-3B (measured)", &q3, &jobs);
+
+    // The decision that expires at genesis: `max_step_leaf_count` is inside the ruleset id, so the
+    // ladder a network freezes is the deepest class it can ever admit.
     println!("## The provisioning question\n");
-    println!("| ladder provisioned for | max_step_leaf_count | rounds | extra rounds vs the floor |");
+    println!("| ladder provisioned for | max_step_leaf_count | rounds |");
+    println!("|---|---|---|");
+    let floor_worst = worst_case_step_leaf_count_v1(&floor).expect("the floor is admissible");
+    println!("| the floor alone | {floor_worst} | {} |", bisection_rounds(floor_worst));
+    println!("| the whole step space | {PALW_STEP_MAX_LEAVES} | {} |", bisection_rounds(PALW_STEP_MAX_LEAVES));
+    println!();
+
+    // `tile_len` is the only knob that moves a class's longest job, and it buys context in exchange
+    // for court granularity: a dispute localises to a tile, so a tile is how much arithmetic one
+    // terminal adjudication has to redo.
+    println!("## `tile_len` buys context, and pays in court granularity\n");
+    println!("(the cap is `PALW_STEP_MAX_LEAVES` = {PALW_STEP_MAX_LEAVES}; shipped `tile_len` is 64 for the floor, 128 for Qwen)\n");
+    println!("| tile_len | floor | Qwen2.5-1.5B | Qwen2.5-3B |");
     println!("|---|---|---|---|");
-    let floor_rounds = bisection_rounds(floor_worst);
-    println!("| the floor alone | {floor_worst} | {floor_rounds} | — |");
-    for (prefill, decode) in QWEN_WORST_CASES {
-        if let Ok(leaves) = step_leaf_count(&big, &job_context(&big, *prefill, *decode)) {
-            let rounds = bisection_rounds(leaves);
-            println!("| Qwen scale at {prefill}/{decode} | {leaves} | {rounds} | **+{}** |", rounds - floor_rounds);
-        }
+    let floor_build =
+        |n_ctx: u32, tile_len: u32| base0_profile_v1(PalwBase0GeometryV1 { n_ctx, tile_len, ..PALW_RC_BASE0_GEOMETRY }).ok();
+    let q15_build = |n_ctx: u32, tile_len: u32| qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len, ..QWEN25_1_5B }).ok();
+    let q3_build = |n_ctx: u32, tile_len: u32| qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len, ..QWEN25_3B }).ok();
+    for tile_len in [64u32, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536] {
+        println!(
+            "| {tile_len} | {} | {} | {} |",
+            max_adjudicable_ctx(&floor_build, tile_len),
+            max_adjudicable_ctx(&q15_build, tile_len),
+            max_adjudicable_ctx(&q3_build, tile_len),
+        );
     }
     println!();
 
-    // The constraint the sweep above ran into. A class is admissible only if its LONGEST job — the
-    // whole context as prefill — fits `PALW_STEP_MAX_LEAVES`, and `tile_len` is the only knob that
-    // moves it. Larger tiles buy context and cost the court granularity: a dispute localises to a
-    // tile, so a tile is how much arithmetic a single adjudication has to redo.
-    println!("## `tile_len` buys context, and pays in court granularity\n");
-    println!("(cap is `PALW_STEP_MAX_LEAVES` = {PALW_STEP_MAX_LEAVES})\n");
-    println!("| tile_len | max adjudicable n_ctx — floor geometry | — Qwen scale |");
-    println!("|---|---|---|");
-    for tile_len in [64u32, 128, 256, 512, 1024, 2048, 4096] {
+    // The question the table above is really being asked: the shipped geometries DECLARE n_ctx
+    // 4096 at tile_len 128, and at that tile they are not admissible at any context worth having.
+    println!("## The smallest `tile_len` that admits each class at its own declared `n_ctx`\n");
+    println!("| class | declared n_ctx | shipped tile_len | smallest admitting tile_len |");
+    println!("|---|---|---|---|");
+    for (name, ctx, shipped, build) in [
+        ("Qwen2.5-1.5B", QWEN25_1_5B.n_ctx, QWEN25_1_5B.tile_len, &q15_build as &dyn Fn(u32, u32) -> Option<PalwShapeProfileV3>),
+        ("Qwen2.5-3B", QWEN25_3B.n_ctx, QWEN25_3B.tile_len, &q3_build),
+    ] {
+        let found = [128u32, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536]
+            .into_iter()
+            .find(|tile| build(ctx, *tile).and_then(|p| worst_case_step_leaf_count_v1(&p).ok()).is_some());
         println!(
-            "| {tile_len} | {} | {} |",
-            max_adjudicable_ctx(PALW_RC_BASE0_GEOMETRY, tile_len),
-            max_adjudicable_ctx(QWEN_SCALE, tile_len),
+            "| {name} | {ctx} | {shipped} | {} |",
+            found.map(|t| t.to_string()).unwrap_or_else(|| "**none up to MAX_TILE_LEN**".into())
         );
     }
 }
