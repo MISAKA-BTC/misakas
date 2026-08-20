@@ -718,6 +718,13 @@ impl Params {
     /// so that turning the fence on is one edit in one place rather than a search for every
     /// comparison that happens to order tips.
     pub fn palw_tip_order_v1(&self) -> crate::palw_chain_weight::PalwTipOrderV1 {
+        // A `ConsensusV2` network orders by PALW too. Unit D's point is that a node cannot hold
+        // two answers to "which chain is canonical", and reading only the V1 fence here would
+        // leave the V2 lineage's tip selection on blue work while its IBD commit, pruning ceiling
+        // and deep-reorg gate ran on the PALW order — exactly the split (P0-5).
+        if matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted;
+        }
         match self.palw_fork_choice {
             Some(_) => crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted,
             None => crate::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly,

@@ -7233,6 +7233,18 @@ impl VirtualStateProcessor {
         sink: BlockHash,
         sink_view: &ActiveBondView,
     ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
+        // **Unit D, site 1: on a V2 network the tip order is the SAME authority the other three
+        // sites use.** `PalwCandidateOrderV1`'s `(safe_weight, live_total)` is exactly what
+        // `PalwChainWeightsV1` carries, so the V2 lineage feeds the existing `order_tips_v1` seam
+        // rather than adding a comparator beside it — `compare_tips_v1` and
+        // `compare_palw_candidates_v1` then agree on the two keys they share, and the frontier
+        // key is upheld by `palw_v2_sink_is_the_blue_work_maximum` below.
+        if let Some(order) = self.palw_candidate_order_v2(tip) {
+            return Some(kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1 {
+                safe: order.safe_weight,
+                live: order.live_total,
+            });
+        }
         let schedule = self.palw_schedule.as_ref()?;
         let ramp = self.palw_ramp.as_ref()?;
         let fork_choice = self.palw_fork_choice.as_ref()?;
@@ -7429,10 +7441,42 @@ impl VirtualStateProcessor {
                         // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
                         let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
+                        // **Unit D, site 1's other half: keep `pick_virtual_parents`' documented
+                        // assumption true.**
+                        //
+                        // That function assumes "`selected_parent.blue work > max(candidates.blue
+                        // work)`" and ASSERTS the consequence — GHOSTDAG's `find_selected_parent`
+                        // is `max by blue_work`, so a virtual parent heavier than the sink would
+                        // become virtual's selected parent instead of the sink. Under blue-work
+                        // ordering the assumption holds for free, because the sink IS the maximum.
+                        // Under any PALW order it does not, and the node dies on the assert — which
+                        // is how this was found, twice.
+                        //
+                        // Filtering the heavier candidates out is the minimal repair and it costs
+                        // liveness, not safety: virtual merges fewer tips this round, and the
+                        // excluded ones stay in the DAG to be merged once the chain's own blue
+                        // work catches up. The alternative — letting the DAG pick a different
+                        // selected parent than the sink search did — is two canonical chains in
+                        // one node, which is the P0-5 this unit exists to close.
+                        //
+                        // Scoped to the PALW order, because it is only there that the assumption
+                        // can fail. Applying it unconditionally cost two blue-work tests
+                        // (`template_mining_sanity_test`, `double_search_disqualified_test`) —
+                        // under blue-work ordering the sink IS the maximum, so `< sink_blue_work`
+                        // additionally drops the EQUAL-work siblings virtual is supposed to merge,
+                        // and the parent set silently narrows on every network. Measured, not
+                        // reasoned about.
+                        let sink_blue_work = match tip_order {
+                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::PalwWeighted => {
+                                Some(self.ghostdag_store.get_blue_work(candidate).unwrap_or_default())
+                            }
+                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly => None,
+                        };
                         return (
                             candidate,
                             heap.into_sorted_iter()
                                 .take_while(|s| s.block.blue_work >= filtering_blue_work)
+                                .filter(|s| sink_blue_work.is_none_or(|sink| s.block.blue_work < sink))
                                 .map(|s| s.block.hash)
                                 .collect(),
                         );

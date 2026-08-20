@@ -512,6 +512,68 @@ async fn the_palw_candidate_order_is_the_candidates_own() {
     assert!(plain_consensus.virtual_processor().palw_pruning_point_allowed_v2(plain_sink));
 }
 
+/// **Unit D, site 1: the tip order is the PALW authority, and the DAG agrees with it.**
+///
+/// Wiring tip selection is the site that fought back twice, and both fights were the same fact:
+/// GHOSTDAG's `find_selected_parent` is `max by blue_work`, and `pick_virtual_parents` ASSERTS
+/// that the sink the search chose is that maximum. A sink ordered by PALW weight and a DAG whose
+/// selected parent is ordered by blue work are two canonical chains inside one node — the P0-5
+/// this unit exists to close, arriving through the floor.
+///
+/// The repair is to keep that assumption TRUE rather than to weaken the assert: under the PALW
+/// order, virtual parent candidates heavier than the sink are filtered out. It costs liveness
+/// (virtual merges fewer tips this round; the excluded ones stay in the DAG) and not safety.
+///
+/// This pins the invariant on a real V2 chain, and pins the scoping too: applying the filter
+/// unconditionally broke two blue-work tests, because there the sink IS the maximum and `<` also
+/// drops the equal-work siblings virtual is supposed to merge.
+#[tokio::test]
+async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    // A V2 network orders tips by PALW — not by the V1 fence, which it does not and may not set.
+    assert_eq!(config.params.palw_tip_order_v1(), PalwTipOrderV1::PalwWeighted, "a ConsensusV2 network is PALW-ordered");
+    assert!(config.params.palw_fork_choice.is_none(), "and it reaches that without any V1 fence");
+
+    // Wide rows, so virtual really has competing parents to choose among — a single-tip chain
+    // would satisfy the invariant vacuously.
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..5 {
+        ctx.build_block_template_row(0..3).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let virtual_parents = vp.virtual_stores.read().state.get().unwrap().parents.clone();
+    assert!(virtual_parents.contains(&sink), "the sink is one of virtual's parents");
+    let sink_blue_work = vp.ghostdag_store.get_blue_work(sink).unwrap();
+    for parent in &virtual_parents {
+        if *parent == sink {
+            continue;
+        }
+        assert!(
+            vp.ghostdag_store.get_blue_work(*parent).unwrap() < sink_blue_work,
+            "virtual parent {parent} out-weighs the sink in blue work — GHOSTDAG would select IT, not the sink"
+        );
+    }
+
+    // The blue-work network keeps its own behaviour: the filter is scoped, so equal-work siblings
+    // are still merged there. Asserted as the rule rather than as a chain shape.
+    let plain = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {

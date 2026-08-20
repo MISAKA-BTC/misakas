@@ -143,7 +143,7 @@ ceiling and the deep-reorg gate **together**, with the header processor's store 
 download hint (ADR-0042 Decision 9). Wiring one site is P0-5: two canonical-chain views inside
 one node.
 
-**Three of the four landed 2026-08-20. The fourth is blocked, and the blocker is structural.**
+**All four landed 2026-08-20.**
 
 `VirtualStateProcessor::palw_candidate_order_v2` is the one constructor — a `PalwCandidateOrderV1`
 for a CANDIDATE, built by walking the stored state from the materialized tip to that candidate, so
@@ -163,22 +163,35 @@ it is candidate-scoped rather than a fact about the node's sink. Its consumers:
   the candidate-hash key decides, and roughly half of all ordinary forward progress is refused as
   a failed reorg.
 
-**Virtual tip selection cannot be wired here, and the measurement says why.** A version that
-compared `PalwCandidateOrderV1` first inside `RankedTip::cmp` died on
-`assert_eq!(virtual_ghostdag_data.selected_parent, new_sink)`: GHOSTDAG's `find_selected_parent`
-is `max by blue_work`, and `pick_virtual_parents` asserts the sink the search chose IS that
-maximum. A sink search ordered by PALW weight and a DAG whose selected parent is ordered by blue
-work are two chains inside one node — Unit D's own failure mode, arriving through the floor.
+* **Virtual tip selection** — through the seam ADR-0039 W4′ already built rather than beside it.
+  `Params::palw_tip_order_v1()` answers `PalwWeighted` for a `ConsensusV2` network (it read only
+  the V1 fence, which a V2 network does not and may not set), and `palw_tip_weights_v1` feeds
+  `PalwCandidateOrderV1`'s `(safe_weight, live_total)` into `PalwChainWeightsV1` — the same two
+  keys `compare_tips_v1` and `compare_palw_candidates_v1` share, so there is one comparator and
+  not two.
 
-The fix is not a comparator: ADR-0038 Decision B says fork choice "reads `weight(·)`", which means
-**GHOSTDAG's own selected-parent rule must**, and that moves blue score, the mergeset and every
-structural fact derived from them. That is its own unit of work — call it Unit E — and until it
-lands the honest state is three sites wired and the fourth documented rather than half-done.
+**That site fought back twice, and both fights were one fact.** GHOSTDAG's `find_selected_parent`
+is `max by blue_work`, and `pick_virtual_parents` ASSERTS that the sink the search chose is that
+maximum — its doc comment states the assumption ("`selected_parent.blue work > max(candidates.blue
+work)`") which blue-work ordering satisfies for free and any PALW order does not. A first attempt
+put the comparison inside `RankedTip::cmp` and the node died on that assert; the diagnosis
+"GHOSTDAG must read `weight(·)`, that is its own unit" was WRONG, and worth recording as wrong:
+it treated the assert as the obstacle instead of reading what it asserts.
 
-**What that costs, stated plainly:** a node can currently commit a staged chain by IBD, or refuse
-a deep reorg, on the PALW order while its virtual tip selection still runs on blue work. On a
-network with no V2 bundle none of the three consult anything (every shipped preset), so nothing
-is at risk today — but a V2 network must not be activated until Unit E closes the gap.
+The repair keeps the assumption TRUE rather than weakening the assert: under the PALW order,
+virtual parent candidates heavier than the sink are filtered out of the returned set. It costs
+liveness and not safety — virtual merges fewer tips this round, and the excluded ones stay in the
+DAG to be merged once the chain's own blue work catches up. The alternative, letting the DAG pick
+a different selected parent than the sink search did, is two canonical chains in one node.
+
+The filter is scoped to `PalwWeighted`, and that scoping is also measured: applied
+unconditionally it broke `template_mining_sanity_test` and `double_search_disqualified_test`,
+because under blue-work ordering the sink IS the maximum and `<` additionally drops the
+equal-work siblings virtual is supposed to merge.
+
+`palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents` pins the invariant on a real V2
+chain with wide rows (a single-tip chain would satisfy it vacuously), and pins the scoping beside
+it.
 
 ## What is safe to do before the units
 
