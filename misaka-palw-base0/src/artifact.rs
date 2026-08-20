@@ -138,24 +138,39 @@ impl Base0ShapeV1 {
         {
             return Err(ArtifactError::BadShape);
         }
-        // Bound every dimension BEFORE any product is formed. `d_model()` is `n_heads · d_head` and
-        // the weight lengths are `vocab · d_model` / `d_ff · d_model`; on a shape supplied as data
-        // those multiplications overflow `usize` and wrap to a small number, which would then pass
-        // the reduction bound below and mis-size every tensor check in `from_parts`. Refusing
-        // absurd dimensions outright is cheaper than auditing each product (audit 2.4). No real
-        // shape approaches this: MAX_DOT_LEN is 131_071 and every dimension must fit under it.
+        // **`MAX_DOT_LEN` bounds REDUCTIONS, and only reductions.**
+        //
+        // It is the length past which an `i32` accumulator can overflow, which is why ADR-0040
+        // Decision E's free reduction order is a premise rather than a gift. So it belongs on the
+        // dimensions that are summed over — `d_model` for every projection, `d_ff` for the
+        // down-projection, `d_head` for attention — and on nothing else.
+        //
+        // It used to bound every dimension including `vocab`, on the reasoning that refusing
+        // absurd numbers is cheaper than auditing each product. That reasoning was right about
+        // the products and wrong about the bound: **`vocab` is an OUTPUT width, never a reduction
+        // length**, and at 131_071 the rule excludes every real vocabulary — Qwen2.5's is
+        // 151_936, Llama-3's 128_256. The unembedding matmul reduces over `d_model` and produces
+        // `vocab` values; the vocabulary never enters an accumulator.
+        //
+        // The products are audited instead of proxied. Each weight tensor's length is formed with
+        // `checked_mul`, so a shape that would wrap is refused for wrapping rather than for being
+        // large.
         let bound = kaspa_consensus_core::palw_base0::MAX_DOT_LEN;
-        for got in [self.n_layers, self.n_heads, self.n_kv_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
+        for got in [self.d_head, self.d_ff] {
             if got > bound {
                 return Err(ArtifactError::DotTooLong { got });
             }
         }
-        // The longest reduction in the graph. `d_ff` feeds the down-projection, `d_model` feeds
-        // every other matmul, and attention reduces over `d_head`.
-        let longest = self.d_model().max(self.d_ff);
-        if longest > bound {
-            return Err(ArtifactError::DotTooLong { got: longest });
+        let d_model = self.n_heads.checked_mul(self.d_head).ok_or(ArtifactError::BadShape)?;
+        if d_model > bound {
+            return Err(ArtifactError::DotTooLong { got: d_model });
         }
+        // Every tensor length the artifact will form, checked here so `from_parts` compares
+        // against numbers that did not wrap on their way in.
+        for (a, b) in [(self.vocab, d_model), (self.d_ff, d_model), (d_model, self.d_ff), (self.n_layers, d_model)] {
+            a.checked_mul(b).ok_or(ArtifactError::BadShape)?;
+        }
+        self.max_position.checked_mul(self.d_head).ok_or(ArtifactError::BadShape)?;
         Ok(())
     }
 

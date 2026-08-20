@@ -430,3 +430,69 @@ has the largest norm, whatever the prompt — and that is expected rather than a
 property worth asserting is that the model reads its input at all, so the check is on a digest of
 each position's full logit row. **Top-k agreement against the float model (condition 7's
 neighbour) needs the real checkpoint and is not answerable from a derived fixture.**
+
+
+---
+
+## Phase 4 — the real checkpoint (2026-08-21)
+
+`Qwen2.5-1.5B` was downloaded and converted. The file matches Phase 0's readings exactly: 338
+tensors, every one BF16, `lm_head.weight` absent, `k_proj.bias` present at [256].
+
+```
+config: hidden 1536, heads 12/2 kv, d_head 128, ffn 8960, layers 28/28, vocab 151936
+converted in 3.4 s        int8 weights 1694 MiB      biased channels 51,328
+class id 3bdf60fa5586991c…886719f8
+forward 4 tokens in 4.0 s   alive true   railed layers 0/28   reproducible true
+```
+
+**Condition 8 is met**: the full 28-layer forward runs, completes, collapses nowhere, rails
+nowhere, and two runs agree bit for bit.
+
+### A structural bound that excluded every real vocabulary
+
+`Base0ShapeV1::validate` bounded EVERY dimension by `MAX_DOT_LEN` (131,071), including `vocab`.
+Qwen2.5's is 151,936, so the real checkpoint was refused with `DotTooLong { got: 151936 }`.
+
+`MAX_DOT_LEN` is the length past which an `i32` accumulator can overflow — which is why ADR-0040
+Decision E's free reduction order is a *premise* rather than a gift — so it belongs on the
+dimensions that are SUMMED OVER and on nothing else. **`vocab` is an output width, never a
+reduction length**: the unembedding matmul reduces over `d_model` and produces `vocab` values, and
+the vocabulary never enters an accumulator. The blanket bound was a proxy for "no product wraps",
+and at that value it excludes Llama-3 (128,256) as well.
+
+*Category:* **実装不足**, closed. The reduction dimensions keep the bound; the products are
+audited with `checked_mul` instead of proxied, so a shape that would wrap is refused for wrapping
+rather than for being large.
+
+### 量子化品質 — the depth sweep on the real model
+
+| layers | residual peak | gate peak | attention spread | argmax |
+| --- | --- | --- | --- | --- |
+| 1 | 24 | 113 | 111,401 | `[9707, 11, 1879, 0]` |
+| 4 | 15–37 | 78–113 | 63,616 | `[8834, 8834, 90176, 115922]` |
+| 8 | 15–37 | 78–127 | 47,204 | `[18574, 29685, 38230, 38230]` |
+| 16 | 11–37 | 56–127 | 26,576 | `[20434, 61092, 61092, 61092]` |
+| 28 | 11–38 | 54–127 | 2,855 | `[11, 11, 11, 11]` |
+
+The structural health is good at every depth — nothing collapses and nothing rails. **The output
+quality is not.** The argmax degenerates as layers accumulate: distinct at 4 and 8, mostly
+repeating by 16, and a single constant token at the full depth. Attention selectivity falls ~40×
+from depth 1 to depth 28.
+
+The diagnosis is in the residual column. A peak of **11 out of 127** means the stream occupies
+under a tenth of the int8 range, so its effective precision is around 3.5 bits and quantization
+noise dominates what the layers compute. The cause is `residual_requant`: one global
+`{shift: 1}`, applied twice per layer — the standard int8-residual halving — with nothing
+per-layer to hold the stream up as the projections' gains vary.
+
+*Category:* **量子化品質**, open. This is precisely the contingency Phase 3 named — "global
+`residual_requant` で破綻する場合は per-layer requant に拡張する" — and it is now triggered by
+measurement rather than anticipated. The remedy is a per-layer residual requantization whose
+shift is chosen from each layer's measured signal, which is a calibration loop: convert, measure,
+adjust, re-convert.
+
+**What this does and does not block.** Conditions 8, 9 and 10 stand — the model runs
+deterministically and a court adjudicates its steps from one opening. Condition 13 does not: a
+class whose argmax is a constant is not a *practical* weight-bearing class, and this is exactly
+what a soak is for. **The class must not be activated on these numbers.**
