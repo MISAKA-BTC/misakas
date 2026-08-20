@@ -1538,13 +1538,23 @@ impl SignedEpochStore {
     /// Persist `record` for its epoch and flush atomically (temp file + rename so a crash
     /// mid-write cannot truncate the log). Call only after a successful sign and after
     /// [`Self::check`] returned [`SignedEpochCheckOutcome::Allow`].
+    ///
+    /// **The in-memory index is a function of what is DURABLE.** The candidate is merged into a
+    /// local copy, written, fsynced and renamed; only then does `self.records` learn about it.
+    /// Inserting first (audit L2) made the index describe a file that does not exist: every
+    /// step below can fail, none of them rolled the insert back, and the store is cached for the
+    /// process lifetime so the lie is never re-read from disk. The next request for the same key
+    /// then matched a "record" nobody wrote, took the `AllowRebroadcast` arm, released a
+    /// signature and recorded nothing — and a restart forgot the commitment entirely. That is
+    /// precisely the equivocation this log exists to make impossible.
     pub fn record_and_flush(&mut self, record: SignedEpochRecord) -> Result<(), String> {
-        self.records.insert(record.epoch, record);
+        let mut records = self.records.clone();
+        records.insert(record.epoch, record);
         let file = SignedEpochFile {
             version: SIGNED_EPOCH_FILE_VERSION,
             validator_id: self.validator_id,
             bond_outpoint: self.bond_outpoint,
-            records: self.records.clone(),
+            records: records.clone(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(|e| format!("cannot serialize validator-state: {e}"))?;
         if let Some(parent) = self.path.parent() {
@@ -1569,6 +1579,8 @@ impl SignedEpochStore {
                 let _ = dir.sync_all();
             }
         }
+        // Durable. Only now may the index claim the record exists.
+        self.records = records;
         Ok(())
     }
 }
@@ -1628,12 +1640,17 @@ impl PalwAttemptJournalStore {
     /// [`SignedEpochStore::record_and_flush`]: temp file, fsync, rename, directory fsync —
     /// fail-closed on any error. Call only after a successful sign and after [`Self::check`]
     /// returned [`SignedEpochCheckOutcome::Allow`].
+    ///
+    /// Same durability discipline in the other direction too: `self.records` learns about the
+    /// record only after the rename succeeds (audit L2). See
+    /// [`SignedEpochStore::record_and_flush`] for why inserting first is the bug.
     pub fn record_and_flush(&mut self, record: PalwAttemptSignRecordV1) -> Result<(), String> {
-        self.records.insert(record.challenge, record);
+        let mut records = self.records.clone();
+        records.insert(record.challenge, record);
         let file = PalwAttemptJournalFile {
             version: PALW_ATTEMPT_JOURNAL_FILE_VERSION,
             validator_id: self.validator_id,
-            records: self.records.values().copied().collect(),
+            records: records.values().copied().collect(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(|e| format!("cannot serialize PALW attempt journal: {e}"))?;
         if let Some(parent) = self.path.parent() {
@@ -1653,6 +1670,8 @@ impl PalwAttemptJournalStore {
         {
             let _ = dir.sync_all();
         }
+        // Durable. Only now may the index claim the record exists.
+        self.records = records;
         Ok(())
     }
 }
@@ -2399,6 +2418,62 @@ mod tests {
         assert_eq!(reloaded.check(&signed_record(5, 0xbb)), SignedEpochCheckOutcome::Block);
         // A different epoch is unconstrained.
         assert_eq!(reloaded.check(&signed_record(6, 0xcc)), SignedEpochCheckOutcome::Allow);
+    }
+
+    /// Audit L2: a flush that FAILS must leave the in-memory index describing what is on disk.
+    ///
+    /// The regression: `records.insert` ran before the durable write and was never rolled back,
+    /// so after an IO error the store believed a record existed that disk did not have. Because
+    /// the store is cached for the process lifetime the lie was never re-read, and the next
+    /// request for the same key took the `AllowRebroadcast` arm — releasing a signature and
+    /// recording nothing. A restart then forgot the commitment entirely.
+    ///
+    /// A directory where the temp file goes makes `File::create` fail with EISDIR, which is the
+    /// cheapest deterministic way to fail the write on every platform we build for.
+    #[test]
+    fn a_failed_flush_leaves_the_index_agreeing_with_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("validator-state.json");
+        let vid = Hash64::from_bytes([0x01u8; 64]);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x02u8; 64]), 0);
+        // Block the temp path with a directory.
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+
+        let mut store = SignedEpochStore::load_or_empty(path.clone(), vid, outpoint).unwrap();
+        let a = signed_record(5, 0xaa);
+        assert_eq!(store.check(&a), SignedEpochCheckOutcome::Allow);
+        assert!(store.record_and_flush(a.clone()).is_err(), "the write must fail for this test to mean anything");
+
+        // The whole point: NOT AllowRebroadcast. Nothing was recorded, so nothing may be
+        // rebroadcast on the strength of a record that does not exist.
+        assert_eq!(store.check(&a), SignedEpochCheckOutcome::Allow, "a failed flush must not license a rebroadcast");
+        assert_eq!(store.record_count(), 0, "the index must not claim a record disk does not have");
+        assert!(!path.exists(), "no journal file was committed");
+
+        // And a conflicting target is still merely unconstrained rather than wrongly Blocked —
+        // the index is empty in both directions, which is what "agrees with disk" means.
+        assert_eq!(store.check(&signed_record(5, 0xbb)), SignedEpochCheckOutcome::Allow);
+    }
+
+    /// The same property for the PALW attempt journal (PR-05's twin store).
+    #[test]
+    fn a_failed_palw_journal_flush_leaves_the_index_agreeing_with_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("palw-attempt-journal.json");
+        let vid = Hash64::from_bytes([0x07u8; 64]);
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+
+        let mut store = PalwAttemptJournalStore::load_or_empty(path.clone(), vid).unwrap();
+        let rec = PalwAttemptSignRecordV1 {
+            challenge: Hash64::from_bytes([0x11u8; 64]),
+            attempt_id: Hash64::from_bytes([0x22u8; 64]),
+            signature_fingerprint: Hash64::from_bytes([0x33u8; 64]),
+        };
+        assert_eq!(store.check(&rec), SignedEpochCheckOutcome::Allow);
+        assert!(store.record_and_flush(rec).is_err(), "the write must fail for this test to mean anything");
+        assert_eq!(store.check(&rec), SignedEpochCheckOutcome::Allow, "a failed flush must not license a rebroadcast");
+        assert_eq!(store.record_count(), 0);
+        assert!(!path.exists());
     }
 
     #[test]
