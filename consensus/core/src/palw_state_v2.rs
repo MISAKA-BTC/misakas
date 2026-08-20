@@ -4033,9 +4033,12 @@ pub(crate) mod tests {
     /// every claim sat `Provisional` until `window_bind` lapsed and voided as `BindTimeout`,
     /// `safe_weight` never grew, and PALW weight — the whole fork choice — was permanently zero.
     ///
-    /// So this test refuses to build its own object list. Every object it folds comes out of
-    /// `palw_lifecycle_objects_from_accepted_txs_v2`, from transactions, which is the only way one
-    /// can arrive on a chain. If that path regresses, the claim stops finalizing here.
+    /// So this test refuses to invent the objects a block carries: the licensing comes out of
+    /// `palw_lifecycle_objects_from_accepted_txs_v2`, from a transaction, which is the only way a
+    /// carried object arrives on a chain. The panel binding is not carried at all — the CHAIN
+    /// derives it (`palw_v2_derived_panel_bindings`, audit C5's tail), so what stands in for it
+    /// here is the derivation's own output shape, and the assertion that a carried one is
+    /// refused.
     #[test]
     fn palw_v2_a_claim_finalizes_from_objects_a_block_can_actually_carry() {
         use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
@@ -4067,10 +4070,16 @@ pub(crate) mod tests {
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
 
+        // The binding the chain derives. It is NOT carried, and the carriage says so — the
+        // pipeline synthesizes exactly this shape from the anchor and the registry.
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
-        let (s3, _) =
-            apply(&s2, &p, &ctx(3, 102, 3), &via_block(PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }), None);
-        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "a block bound the panel");
+        let derived = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats };
+        assert!(
+            crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&derived).is_err(),
+            "a panel binding must not be carriable: the chain derives it, and one question gets one answer"
+        );
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[derived], None);
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the chain bound the panel");
 
         let (s4, _) = apply(
             &s3,

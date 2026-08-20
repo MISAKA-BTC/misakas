@@ -1181,7 +1181,7 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data);
+                                let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data, state, current);
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it.
                                 if let Err(obj_error) = self.palw_v2_validate_objects(state, state_params, &point, &objects) {
@@ -3802,9 +3802,60 @@ impl VirtualStateProcessor {
     /// `skipped` carriers are logged rather than dropped in silence — a transaction routed to the
     /// free-prompt subnetwork that produces no object is either a mistake someone should see or
     /// an attack someone should count, and a silent drop is how neither gets noticed.
+    /// **The panel bindings this block owes, derived — not published (audit C5's tail).**
+    ///
+    /// A panel is `derive_panel_v2` of the anchor block and the bond registry: a pure function of
+    /// chain state, with nothing for a publisher to choose. It was still an object someone had to
+    /// send, and nobody was PAID to send one for a claim that was not theirs — so in practice the
+    /// producer decided whether its own claim proceeded, which is the thing Decision 7's panel
+    /// exists to prevent.
+    ///
+    /// The answer is not to price the publishing; it is to remove the publisher. The CHAIN binds
+    /// the panel the moment a claim's anchor slot is reached, because the chain is the only party
+    /// that can walk to that anchor and it has no preference about which claims advance.
+    ///
+    /// Deterministic by construction: the anchor comes from `palw_v2_anchor_fact_of_candidate`,
+    /// which walks THIS candidate's chain, and the registry is the same candidate state every
+    /// node holds. Emitted in claim-id order so two nodes build one list.
+    fn palw_v2_derived_panel_bindings(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Vec::new() };
+        let mut out = Vec::new();
+        for (claim_id, claim) in state.claims_iter() {
+            if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
+                continue;
+            }
+            // The anchor is the first chain block at or past `accepted_daa + anchor_delay`. Until
+            // one exists the claim simply waits — that delay is what stops a producer from
+            // mining until it likes its own jury.
+            let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.accepted_daa, panel_params) else {
+                continue;
+            };
+            // A registry too small to seat a panel yields nothing rather than a short one: a
+            // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
+            let Ok(seats) =
+                kaspa_consensus_core::palw_panel_v2::derive_panel_v2(state, panel_params, claim_id, anchor.anchor_block)
+            else {
+                continue;
+            };
+            out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
+                claim: *claim_id,
+                anchor: anchor.anchor_block,
+                seats,
+            });
+        }
+        out
+    }
+
     fn palw_v2_objects_of_block(
         &self,
         acceptance: &AcceptanceData,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Vec::new();
@@ -3832,10 +3883,11 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &lifecycle.skipped {
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
         }
-        extraction
-            .objects
+        // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
+        // object the same block carries, which is the order a chain that is catching up needs.
+        self.palw_v2_derived_panel_bindings(state, block)
             .into_iter()
-            .map(|carried| carried.object)
+            .chain(extraction.objects.into_iter().map(|carried| carried.object))
             .chain(lifecycle.objects.into_iter().map(|carried| carried.object))
             .collect()
     }

@@ -27,6 +27,13 @@
 //! * **`FreePromptCommitted` may not.** It has its own subnetwork, its own codec and its own
 //!   pricing rules; accepting it here would be a second path into one object with one of them
 //!   unpriced.
+//! * **`PanelBound` may not, and this one is a later decision than the module.** A panel is
+//!   `derive_panel_v2` of the anchor block and the bond registry — a pure function of chain state
+//!   with nothing for a publisher to choose. Carrying it made someone send an object nobody was
+//!   paid to send for a claim that was not theirs, so in practice the producer decided whether
+//!   its own claim proceeded (audit C5's tail). The chain derives the binding itself now
+//!   (`palw_v2_derived_panel_bindings`), and a carried one would be a second answer to a question
+//!   that has one.
 //!
 //! Everything else advances a claim without minting or locking value, and each kind already has
 //! an acceptance check the pipeline runs before the transition folds it
@@ -80,8 +87,7 @@ pub struct PalwLifecycleExtractionV2 {
 /// each exclusion is an exclusion.
 pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
     match object {
-        PalwConsensusObjectV2::PanelBound { .. }
-        | PalwConsensusObjectV2::ReceiptLicensed { .. }
+        PalwConsensusObjectV2::ReceiptLicensed { .. }
         | PalwConsensusObjectV2::ProducerDefaulted { .. }
         | PalwConsensusObjectV2::CourtOpened { .. }
         | PalwConsensusObjectV2::CourtClosed { .. }
@@ -89,6 +95,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtVerdictPosted { .. }
         | PalwConsensusObjectV2::BondRetireRequested { .. }
         | PalwConsensusObjectV2::ClassFrozen { .. } => Ok(()),
+        PalwConsensusObjectV2::PanelBound { .. } => {
+            Err("the chain derives panel bindings; a carried one would be a second answer to a question with one")
+        }
         PalwConsensusObjectV2::BondRegistered { .. } => {
             Err("a bond registration declares collateral nothing on this path locks — bonds come from genesis")
         }
@@ -179,15 +188,19 @@ mod tests {
     /// **P0-11's fix, at this layer.** A `PanelBound` in a transaction becomes a `PanelBound` the
     /// transition can fold — which no block could do at all before this module existed.
     #[test]
-    fn a_panel_binding_rides_a_transaction_and_arrives_in_acceptance_order() {
-        let first = lifecycle_tx(panel_bound());
+    fn a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order() {
+        let first = lifecycle_tx(PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC1), receipts: Vec::new() });
         let second = lifecycle_tx(PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) });
         let unrelated = carrier(crate::subnets::SUBNETWORK_ID_NATIVE, Vec::new());
         let out = palw_lifecycle_objects_from_accepted_txs_v2(&[first.clone(), unrelated, second.clone()]);
 
         assert_eq!(out.objects.len(), 2, "two carriers, two objects; the native transaction is not one");
         assert!(out.skipped.is_empty());
-        assert_eq!(out.objects[0].object, panel_bound(), "and it is the object the payload carried");
+        assert_eq!(
+            out.objects[0].object,
+            PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC1), receipts: Vec::new() },
+            "and it is the object the payload carried"
+        );
         assert_eq!(out.objects[0].carrier, first.id(), "attributed to the transaction that carried it");
         // Acceptance ORDER is consensus: the transition folds them in this sequence.
         assert_eq!(out.objects[1].carrier, second.id());
@@ -196,7 +209,7 @@ mod tests {
     /// The three kinds that may not ride, each for its own reason, each skipped with that reason
     /// rather than silently dropped.
     #[test]
-    fn value_bearing_objects_cannot_enter_a_chain_through_a_transaction() {
+    fn objects_that_must_not_ride_are_skipped_with_their_own_reason() {
         let bond_registration = PalwConsensusObjectV2::BondRegistered {
             bond: bond(9),
             pubkey: vec![7; 4],
@@ -226,7 +239,11 @@ mod tests {
             trace_chunk_count: 4,
             trace_retention_daa: 99,
         };
-        for object in [bond_registration, class_registration, fp] {
+        // The panel binding: excluded for a different reason than the other three — not because
+        // it moves value, but because the chain already derives it and one question gets one
+        // answer.
+        let panel = panel_bound();
+        for object in [bond_registration, class_registration, fp, panel] {
             let out = palw_lifecycle_objects_from_accepted_txs_v2(&[lifecycle_tx(object.clone())]);
             assert!(out.objects.is_empty(), "{object:?} must not enter a chain here");
             assert_eq!(out.skipped.len(), 1, "and the drop is reported, not silent");
