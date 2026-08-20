@@ -166,6 +166,9 @@ mod tests {
             beacon_block: h64(0xBEAC),
             producer_bond: b,
             producer_pubkey: vec![7; 4],
+            // The walk never reads the parent-side root (validation does), but a fixture with a
+            // default there would be a shape no header could carry.
+            parent_state_root: h64(0x57A7E),
         }
     }
 

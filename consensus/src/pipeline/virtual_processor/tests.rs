@@ -4980,7 +4980,12 @@ mod palw_state_walk_wiring {
     /// genesis registered, the bond is the one genesis registered, the key is that bond's key,
     /// the challenge binds this header's position, and the signature verifies over the attempt id
     /// in its own context.
-    fn signed_attempt_carriage(network_domain: Hash64, bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2, header: &kaspa_consensus_core::header::Header) -> Vec<u8> {
+    fn signed_attempt_carriage(
+        network_domain: Hash64,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        header: &kaspa_consensus_core::header::Header,
+        parent_state_root: Hash64,
+    ) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
             challenge_v2,
@@ -5010,6 +5015,7 @@ mod palw_state_walk_wiring {
             trace_manifest_root: Hash64::from_u64_word(0xD0),
             trace_chunk_count: 1,
             trace_retention_daa: u64::MAX,
+            parent_state_root,
         };
         let id = attempt_id_v2(&attempt);
         let signature = mldsa::sign(&kp.signing_key, id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Au8; 32])
@@ -5025,7 +5031,9 @@ mod palw_state_walk_wiring {
         let network_domain =
             kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
         let mut tc = TestConsensus::new(config);
-        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header| signed_attempt_carriage(network_domain, &bundle, header)));
+        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header, parent_state_root| {
+            signed_attempt_carriage(network_domain, &bundle, header, parent_state_root)
+        }));
         tc
     }
 
@@ -5229,7 +5237,7 @@ mod palw_state_walk_wiring {
         // A provider that signs with a key the genesis did NOT register: well-formed, correctly
         // position-bound, and naming a bond that does not exist.
         let foreign = bundle.clone();
-        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header| {
+        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header, parent_state_root| {
             use kaspa_consensus_core::palw_attempt_v2::{
                 PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2,
                 attempt_id_v2, challenge_v2,
@@ -5253,6 +5261,7 @@ mod palw_state_walk_wiring {
                 trace_manifest_root: Hash64::from_u64_word(0xD0),
                 trace_chunk_count: 1,
                 trace_retention_daa: u64::MAX,
+                parent_state_root,
             };
             let id = attempt_id_v2(&attempt);
             let signature = mldsa::sign(&kp.signing_key, id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Au8; 32])
@@ -5274,6 +5283,50 @@ mod palw_state_walk_wiring {
         assert_eq!(tc.get_sink(), genesis, "…and the sink stays where it was");
         // The block is still in the DAG — disqualification is not rejection.
         assert!(tc.headers_store.get_header(block).is_ok());
+
+        tc.shutdown(handles);
+    }
+
+    /// **The carriage commits the parent-side state root, and a wrong one disqualifies**
+    /// (ADR-0043). This is what lets a peer — or a pruning proof — check a state root instead of
+    /// re-deriving it and hoping.
+    #[tokio::test]
+    async fn a_block_committing_the_wrong_parent_state_root_is_disqualified() {
+        use kaspa_consensus_core::blockstatus::BlockStatus;
+
+        let config = v2_config();
+        let bundle = v2_bundle();
+        let network_domain =
+            kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+
+        // First, prove the honest path works on this exact fixture, so the failure below is about
+        // the state root and nothing else.
+        {
+            let tc = v2_consensus(&config);
+            let handles = tc.init();
+            let block = Hash64::from_u64_word(0xF010);
+            tc.add_utxo_valid_block_with_parents(block, vec![config.genesis.hash], vec![]).await.unwrap();
+            assert_eq!(tc.get_sink(), block, "an honest carriage mines");
+            tc.shutdown(handles);
+        }
+
+        let mut tc = TestConsensus::new(&config);
+        let lying = bundle.clone();
+        tc.set_palw_carriage_provider(std::sync::Arc::new(move |header, parent_state_root| {
+            // Everything honest EXCEPT the committed state root, flipped by one word.
+            let mut wrong = parent_state_root.as_bytes();
+            wrong[0] ^= 1;
+            signed_attempt_carriage(network_domain, &lying, header, Hash64::from_bytes(wrong))
+        }));
+        let handles = tc.init();
+        let block = Hash64::from_u64_word(0xF011);
+        tc.add_utxo_valid_block_with_parents(block, vec![config.genesis.hash], vec![]).await.unwrap();
+        assert_eq!(
+            tc.block_status(block),
+            BlockStatus::StatusDisqualifiedFromChain,
+            "a block that disagrees about the chain it extends is disqualified"
+        );
+        assert_eq!(tc.get_sink(), config.genesis.hash);
 
         tc.shutdown(handles);
     }

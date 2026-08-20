@@ -307,6 +307,7 @@ mod tests {
                 beacon_block: h64(0xBEAC),
                 producer_bond: bond_op(1),
                 producer_pubkey: vec![7; 4],
+                parent_state_root: Hash64::from_u64_word(0x57A7E),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }

@@ -110,6 +110,19 @@ pub struct PalwAttemptUnsignedV2 {
     /// inside this window defaults the producer: claim void, bond slash (Decision 7) — silence
     /// can never pin a block at `Provisional` forever.
     pub trace_retention_daa: u64,
+    /// **The parent-side PALW state root** (ADR-0043): `state_root` of the state after applying
+    /// this block's SELECTED PARENT, and nothing of this block itself.
+    ///
+    /// Parent-side is what makes it cycle-free — it is fully determined before this attempt
+    /// exists, so the header carries both with neither hashing the other's output — and it is the
+    /// same shape the UTXO commitment already has. It rides the carriage rather than a new header
+    /// field because the carriage IS this block's PALW header extension, and is already inside
+    /// the block hash on a PALW header and absent from it everywhere else.
+    ///
+    /// It is deliberately NOT inside `commitment_root_v2`: the PoW prices the inference, and a
+    /// state root is not work. Identity covers it (that is what `attempt_id_v2` is for), so two
+    /// blocks committing different states are two blocks.
+    pub parent_state_root: Hash64,
 }
 
 /// The signed envelope. The signature is a **witness**, never part of identity.
@@ -323,6 +336,7 @@ mod tests {
             trace_manifest_root: Hash64::from_u64_word(0xD0),
             trace_chunk_count: 8,
             trace_retention_daa: 999_999,
+            parent_state_root: Hash64::from_u64_word(0x57A7E),
         }
     }
 
@@ -409,6 +423,9 @@ mod tests {
             |x: &mut PalwAttemptUnsignedV2| x.trace_manifest_root = Hash64::from_u64_word(0xD1),
             |x: &mut PalwAttemptUnsignedV2| x.trace_chunk_count += 1,
             |x: &mut PalwAttemptUnsignedV2| x.trace_retention_daa += 1,
+            // The state root is identity too: two blocks committing different parent states are
+            // two blocks, whatever else they share.
+            |x: &mut PalwAttemptUnsignedV2| x.parent_state_root = Hash64::from_u64_word(0x57A7F),
         ] {
             let mut m = a.clone();
             mutate(&mut m);

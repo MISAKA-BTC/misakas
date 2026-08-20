@@ -58,6 +58,7 @@ fn attempt_carriage(header: &Header) -> Vec<u8> {
         trace_manifest_root: Hash64::from_u64_word(0xD0),
         trace_chunk_count: 8,
         trace_retention_daa: 999_999,
+        parent_state_root: Hash64::from_u64_word(0x57A7E),
     };
     PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }.encode()
 }
@@ -75,6 +76,7 @@ fn spend_carriage(header: &Header, quantum_index: u32) -> Vec<u8> {
         beacon_block: Hash64::from_u64_word(0xBEAC),
         producer_bond: bond(),
         producer_pubkey: vec![7u8; 32],
+        parent_state_root: Hash64::from_u64_word(0x57A7E),
     };
     PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
         .encode()

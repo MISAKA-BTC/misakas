@@ -41,7 +41,7 @@ pub struct TestConsensus {
     /// Test-installed builder for a V2-lineage header's carriage (see
     /// `set_palw_carriage_provider`). `None` by default, which is why a V2 network cannot be
     /// mined on until a test says how its blocks are signed.
-    palw_carriage_provider: Option<Arc<dyn Fn(&Header) -> Vec<u8> + Send + Sync>>,
+    palw_carriage_provider: Option<Arc<dyn Fn(&Header, kaspa_hashes::Hash64) -> Vec<u8> + Send + Sync>>,
     params: Params,
     consensus: Arc<Consensus>,
     block_builder: TestBlockBuilder,
@@ -164,14 +164,21 @@ impl TestConsensus {
             return;
         }
         if let Some(provider) = self.palw_carriage_provider.as_ref() {
-            header.palw_commitment = provider(header);
+            // The parent-side state root the carriage must commit (ADR-0043). Derived from the
+            // node's OWN walk, which is the same derivation validation compares against — a
+            // harness that guessed it would build blocks this very node refuses.
+            let selected_parent = header.direct_parents().first().copied().unwrap_or(self.params.genesis.hash);
+            let Some(parent_state_root) = self.consensus.virtual_processor.palw_parent_state_root(selected_parent) else {
+                return;
+            };
+            header.palw_commitment = provider(header, parent_state_root);
         }
     }
 
     /// Install the carriage provider V2-lineage blocks are built with (see
     /// [`Self::attach_palw_carriage_for_tests`]). The closure receives the header with everything
     /// but the carriage filled in, so it can bind the position.
-    pub fn set_palw_carriage_provider(&mut self, provider: Arc<dyn Fn(&Header) -> Vec<u8> + Send + Sync>) {
+    pub fn set_palw_carriage_provider(&mut self, provider: Arc<dyn Fn(&Header, kaspa_hashes::Hash64) -> Vec<u8> + Send + Sync>) {
         self.palw_carriage_provider = Some(provider);
     }
 

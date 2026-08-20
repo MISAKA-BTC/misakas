@@ -384,6 +384,10 @@ pub struct PalwReceiptSpendUnsignedV3 {
     /// checkable statelessly first.
     pub producer_bond: TransactionOutpoint,
     pub producer_pubkey: Vec<u8>,
+    /// The parent-side PALW state root (ADR-0043) — see
+    /// [`crate::palw_attempt_v2::PalwAttemptUnsignedV2::parent_state_root`]. Both lanes carry it
+    /// because both lanes' blocks extend the same state.
+    pub parent_state_root: Hash64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1098,6 +1102,7 @@ mod tests {
             beacon_block: Hash64::from_u64_word(0xBEAC),
             producer_bond: bond,
             producer_pubkey: vec![7u8; 32],
+            parent_state_root: Hash64::from_u64_word(0x57A7E),
         }
     }
 
@@ -1113,13 +1118,13 @@ mod tests {
 
         assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "d1ef7bce23d0edcc1a409b111d865c2f");
         assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "a16aaed813fda6b2c6d991253c089d4c");
-        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "ee797c395a8615ffa434374f62a1ae33");
+        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "83c94f49fe9e810fe46e589d186719c5");
         assert_eq!(format!("{ticket:032x}"), "d9c4d8515a1466de666e87669235caec");
 
         let tag = fp_spend_l1_tag_v3(spend_id);
         assert_eq!(tag.len(), PALW_FP_V3_L1_TAG_BYTES);
         assert_ne!(&tag[..64], &[0u8; 64][..], "the expansion is not degenerate");
-        assert_eq!(&faster_hex::hex_string(&tag[..8]), "5d053787cdfe9503");
+        assert_eq!(&faster_hex::hex_string(&tag[..8]), "2cee7e9b8871e35c");
     }
 
     /// Every field of the JOB is identity (total binding). The submitted draft hand-picked its
@@ -1198,6 +1203,7 @@ mod tests {
             ("beacon_block", |s| s.beacon_block = Hash64::from_u64_word(0xBEAD)),
             ("producer_bond", |s| s.producer_bond.index += 1),
             ("producer_pubkey", |s| s.producer_pubkey = vec![9u8; 32]),
+            ("parent_state_root", |s| s.parent_state_root = Hash64::from_u64_word(0x57A7F)),
         ];
         for (field, mutate) in mutations {
             let mut m = base.clone();

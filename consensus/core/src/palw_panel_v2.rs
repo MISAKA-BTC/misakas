@@ -428,6 +428,7 @@ mod tests {
                 trace_manifest_root: h64(33),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                parent_state_root: Hash64::from_u64_word(0x57A7E),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }

@@ -1407,10 +1407,24 @@ impl VirtualStateProcessor {
         let verify = |key: &[u8], message: &[u8], signature: &[u8], context: &[u8]| {
             kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
         };
+        // ADR-0043: the carriage commits the PARENT-SIDE state root — the state after this
+        // block's selected parent, which is exactly what the walk holds right now. Checking it
+        // before anything else means a block that disagrees with this node about the chain it
+        // extends is refused for THAT reason, rather than for whichever downstream check its
+        // disagreement happens to trip.
+        let expected_state_root = state.state_root();
+        let carried_state_root = |carried: Hash64| -> Result<(), String> {
+            if carried == expected_state_root {
+                Ok(())
+            } else {
+                Err(format!("parent state root {carried} is not this chain's {expected_state_root}"))
+            }
+        };
         match header.pow_algo_id {
             POW_ALGO_ID_PALW_COMMITTED_V2 => {
                 let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(&header.palw_commitment)
                     .map_err(|e| format!("attempt carriage: {e}"))?;
+                carried_state_root(envelope.attempt.parent_state_root)?;
                 kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
                     state,
                     &bundle.state,
@@ -1429,6 +1443,7 @@ impl VirtualStateProcessor {
             POW_ALGO_ID_PALW_RECEIPT_V3 => {
                 let envelope = kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
                     .map_err(|e| format!("spend carriage: {e}"))?;
+                carried_state_root(envelope.spend.parent_state_root)?;
                 // The beacon is derived from THIS candidate's chain, never read from the block:
                 // a spending block asserting its own randomness is the whole attack the beacon
                 // construction exists to close (ADR-0044 Decision 4).
@@ -1494,6 +1509,27 @@ impl VirtualStateProcessor {
             }
         }
         derive_beacon_fact_to_genesis_v3(slot, bundle.algorithm_id, facts).map_err(|e| format!("beacon: {e}"))
+    }
+
+    /// The parent-side PALW state root a block extending `selected_parent` must commit
+    /// (ADR-0043) — what a miner puts in its carriage, and what validation compares against.
+    ///
+    /// One derivation, used by both sides: a template that computed this differently from the
+    /// validator would build blocks its own node refuses.
+    pub(crate) fn palw_parent_state_root(&self, selected_parent: BlockHash) -> Option<Hash64> {
+        let bundle = self.palw_consensus_v2.as_ref()?;
+        if !self.statuses_store.read().has(selected_parent).unwrap_or(false) {
+            return None;
+        }
+        let store = self.palw_state_v2_store.read();
+        let (anchor_block, anchor_state) = crate::processes::palw_state_walk::load_anchor(&store, &bundle.state).ok()?;
+        if anchor_block == selected_parent {
+            return Some(anchor_state.state_root());
+        }
+        let path = self.dag_traversal_manager.calculate_chain_path(anchor_block, selected_parent, None);
+        crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, anchor_state, &path.removed, &path.added)
+            .ok()
+            .map(|state| state.state_root())
     }
 
     /// The PALW fork-choice order of an ARBITRARY candidate (ADR-0042 Decision 9, Unit D's
