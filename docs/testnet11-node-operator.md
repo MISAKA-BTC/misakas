@@ -7,6 +7,14 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
+> **Relaunch 2 (2026-08-20) — wipe your datadir before joining.** The genesis changed: it now
+> carries the 347M MSK community allocation, and its coinbase marker moved `11,1` → `11,2`. A node
+> with Relaunch-1 state does not resume on the new chain; it stops at the startup genesis-mismatch
+> guard, which is the intended behaviour. `rm -rf` the appdir (or use a new one). The new identity
+> is genesis `3564ea39…`, `utxo_commitment` `80fad3c3…`, consensus fingerprint `49ff9628…` — see
+> [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md) for the allocation table and how
+> every constant is re-derived.
+
 Read §2 before you build anything. A node outside the determinism class does not sync slowly or
 mine badly; it computes different tags, rejects every honest block, and has its own rejected. It
 looks like a network fault and is not one.
@@ -83,6 +91,28 @@ into the worker. Treat `BUILD-MISMATCH` as "determinism untested", not as "hosts
 
 ## 3. Running the node
 
+### Build kaspad with the `evm` feature — this is not optional
+
+```bash
+cargo build --release -p kaspad --bin kaspad --features evm
+```
+
+testnet-11 inherits `evm_activation_daa_score: 0` from the testnet params, so the EVM lane is
+active from the first block. A kaspad built **without** `--features evm` starts fine and syncs
+fine, then **panics the moment it builds a block template**:
+
+```
+the EVM lane is active at DAA 0 but this kaspad was built without the `evm` feature
+ — cannot build a valid template (rebuild with --features evm)
+```
+
+That is a deliberate fail-loud (the alternative is producing templates missing the EVM
+commitments, i.e. invalid blocks) — but the failure lands on the *miner*, minutes after a start
+that looked healthy. Build with the feature and it never arises. The same flag is used by
+`contrib/local-desktop-join/scripts/misaka-desktop-node.sh` and by the PoW E2E harness.
+
+### Run
+
 ```bash
 PALW_WORKER=/opt/misaka/palw-worker \
 MISAKA_PALW_GGUF=/opt/misaka/Qwen3.5-2B-Q4_K_M.gguf \
@@ -96,6 +126,21 @@ the startup rail rather than syncing and then failing per-header — the message
 Discovery (seeder names for testnet-11) is an operator item that is **not settled yet**; until it
 is, join with `--addpeer=<host>:37711` against a published peer. `n11-seed*.misakascan.com` do not
 resolve today — do not configure them.
+
+### Mining
+
+The miner talks to your own node's RPC; it does **not** need its own worker (the node does the
+inference, one per attempted nonce, through the sequential PALW path):
+
+```bash
+cargo build --release -p misaminer --bin misaminer
+./misaminer --rpc=127.0.0.1:37710 --network-id=testnet-11 \
+            --wallet=<your misakatest: address> --worker=<rig name>
+```
+
+`--network-id` **must** be `testnet-11` — it is the Layer-0 domain separator, so a wrong value
+computes tags for another network and nothing you mine will be accepted. Expect one attempt to
+cost seconds, not microseconds; `--blocks=0` runs forever. Emission at launch is §8.
 
 ---
 
