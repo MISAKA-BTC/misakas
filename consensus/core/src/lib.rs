@@ -187,6 +187,7 @@ pub mod palw_credit;
 /// pipeline consumes any of it until the ADR-0038 change set wires and activates together.
 pub mod palw_block_commitment;
 pub mod palw_catalog_coverage;
+pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
 pub mod palw_credit_batch;
 pub mod palw_dispute;
