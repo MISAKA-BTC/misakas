@@ -2537,6 +2537,42 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// The bond set as **the candidate chain** has it, not as this node's sink has it.
+    ///
+    /// Audit P0-4, the half the carriage fold does not cover. The sink search builds its heap from
+    /// one mutable `ActiveBondView` positioned at the PREVIOUS sink, and every candidate was weighed
+    /// against it — so a node that had applied branch A and a node that had applied branch B
+    /// resolved different bond status, receipts, panels and weights for the same candidate on the
+    /// same DAG. Two nodes then hold different tips forever. That is W3 broken, and a bond view is
+    /// the input it breaks through most directly: bonds decide who may produce, who may be seated
+    /// and who may be paid.
+    ///
+    /// Derived by replaying the chain path — revert the blocks the candidate does not have, apply
+    /// the ones it adds — from the same `dns_bond_mutations_for_chain_block` both the apply and the
+    /// revert side of staging already use, so this cannot disagree with what the chain would
+    /// actually do. No UTXO walk: bond mutations are re-derived from retained acceptance data, which
+    /// is why this is affordable per candidate at all.
+    ///
+    /// The reverts run in reverse chain order and the applies in forward order, because a bond's
+    /// state machine is not commutative — an unbond request and its slash on one bond compose one
+    /// way only.
+    fn palw_bond_view_at_v1(&self, from_sink: BlockHash, from_view: &ActiveBondView, candidate: BlockHash) -> ActiveBondView {
+        if from_sink == candidate {
+            return from_view.clone();
+        }
+        let path = self.dag_traversal_manager.calculate_chain_path(from_sink, candidate, None);
+        let mut view = from_view.clone();
+        for removed in path.removed.iter() {
+            let muts = self.dns_bond_mutations_for_chain_block(*removed, &view);
+            view.revert(&muts);
+        }
+        for added in path.added.iter().rev() {
+            let muts = self.dns_bond_mutations_for_chain_block(*added, &view);
+            view.apply(&muts);
+        }
+        view
+    }
+
     /// The carriage `PalwResolverInputV1` asks for: rows accepted **on the chain that ends at
     /// `chain_tip`**, no further back than `daa_floor`.
     ///
@@ -2561,14 +2597,35 @@ impl VirtualStateProcessor {
     /// cannot drift.
     #[allow(dead_code)]
     fn palw_carriage_on_chain_v1(&self, chain_tip: BlockHash, daa_floor: u64) -> Vec<(u8, u64, Vec<u8>)> {
-        self.palw_carriage_store
-            .read()
-            .all()
-            .into_iter()
-            .filter(|(_, r)| r.accepted_daa_score >= daa_floor)
-            .filter(|(_, r)| r.accepted_block == chain_tip || self.reachability_service.is_chain_ancestor_of(r.accepted_block, chain_tip))
-            .map(|(_, r)| (r.kind, r.accepted_daa_score, r.body))
-            .collect()
+        // Audit P0-4: FOLDED from the candidate chain's own accepted transactions, not read from
+        // the store — and the store read is what had to go, not merely what could be improved.
+        //
+        // `stage_palw_carriages` inserts for `chain_path.added` and deletes for `.removed`, so the
+        // store holds rows for the chain this node HAS APPLIED. `accepted_block` (schema v2) lets a
+        // reader exclude a row from an abandoned branch, and that is real, but it cannot conjure a
+        // row for a candidate branch that was never applied. Fork choice weighs exactly those. So a
+        // node that had applied branch A and a node that had applied branch B computed different
+        // carriage — hence different receipts, convictions, panels and weights — for the SAME
+        // candidate on the same DAG, and picked different tips. That is W3 ("equal DAGs ⇒ equal
+        // weights") broken, which is a permanent partition rather than a slow path.
+        //
+        // The fold has none of that: the accepted transactions of a chain are a property of the
+        // chain. It costs a walk per candidate, bounded by `daa_floor`, and that cost is the price
+        // of the property — there is no cheaper source that is still a function of the DAG alone.
+        let mut out = Vec::new();
+        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
+            // A header this node cannot read ends the walk rather than being skipped: skipping
+            // shortens the window silently, and downstream that reads as "nobody filed" — a
+            // negative fact where there was a missing one.
+            let Ok(header) = self.headers_store.get_header(block) else { break };
+            if header.daa_score < daa_floor {
+                break;
+            }
+            for (_, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block) {
+                out.push((record.kind, record.accepted_daa_score, record.body));
+            }
+        }
+        out
     }
 
     /// The two chain weights of the chain ending at `chain_tip`, over the blocks at or above
@@ -6773,13 +6830,17 @@ impl VirtualStateProcessor {
         &self,
         tip: BlockHash,
         finality_point: BlockHash,
-        bond_view: &ActiveBondView,
+        sink: BlockHash,
+        sink_view: &ActiveBondView,
     ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
         let schedule = self.palw_schedule.as_ref()?;
         let ramp = self.palw_ramp.as_ref()?;
         let fork_choice = self.palw_fork_choice.as_ref()?;
         let floor = self.headers_store.get_daa_score(finality_point).unwrap_or_default();
-        self.palw_chain_weights_v1(tip, floor, bond_view, schedule, ramp, fork_choice)
+        // Audit P0-4: the bonds this candidate's own chain has, derived here rather than borrowed
+        // from wherever the sink search happens to have moved its view.
+        let bonds = self.palw_bond_view_at_v1(sink, sink_view, tip);
+        self.palw_chain_weights_v1(tip, floor, &bonds, schedule, ramp, fork_choice)
     }
 
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
@@ -6906,7 +6967,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|block| RankedTip {
                 block: SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() },
-                palw: self.palw_tip_weights_v1(block, finality_point, bond_view),
+                palw: self.palw_tip_weights_v1(block, finality_point, prev_sink, bond_view),
                 rule: tip_order,
             })
             .collect::<BinaryHeap<_>>();
@@ -6999,7 +7060,7 @@ impl VirtualStateProcessor {
                 {
                     heap.push(RankedTip {
                         block: SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() },
-                        palw: self.palw_tip_weights_v1(parent, finality_point, bond_view),
+                        palw: self.palw_tip_weights_v1(parent, finality_point, prev_sink, bond_view),
                         rule: tip_order,
                     });
                 }

@@ -31,7 +31,11 @@
 |---|---|
 | **P0-1** commitment が PoW に未束縛 | **CLOSED** — `bind_l1_tag_v1` で commitment root を L1 tag に混合。`one_pow_solution_cannot_carry_two_commitments` が trace/output/bond の 3 フィールドを個別に固定 |
 | **P0-2** commitment 署名が未検証 | **CLOSED** — admission が ticket より前に検証。`a_commitment_nobody_signed_is_refused_before_the_inference` |
-| P0-3〜P0-10 | 未着手 |
+| **P0-3** fresh tip が必ず未解決 | **CLOSED** — panel 未生成は空 panel（= `Provisional`）であって未解決ではない |
+| **P0-4** candidate weight が sink 依存 | **CLOSED** — carriage は candidate chain の fold、bond view は chain path 再生で candidate ごとに導出 |
+| **P0-6** 署名 context が誤り | **CLOSED** — 検証器が context を受け取り、各 family が自分のドメインを指定 |
+| **P0-7** executor 除外 ID / operator dedup / no-show 罰則 | **一部** — 除外 ID は bond record から解決（CLOSED）。operator dedup と no-show 罰則は未着手 |
+| P0-5, P0-8, P0-9, P0-10 | 未着手 |
 
 ### P0-1 で監査の推奨 remedy を採らなかった理由
 
