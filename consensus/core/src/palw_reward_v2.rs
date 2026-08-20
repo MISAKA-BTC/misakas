@@ -65,8 +65,14 @@ pub enum PalwRewardStatusV2 {
     /// The claim reached `Final`: spendable.
     Spendable,
     /// The claim was `Voided`: the reward is forfeit — a voided block's carve never enters
-    /// circulation. (Where it goes — burn vs redistribution — is a params question the bundle
-    /// answers; that it never reaches the producer is this rule.)
+    /// circulation.
+    ///
+    /// It is BURNED, like a slash (`palw_state_v2`'s `slash_bond`). This used to say the
+    /// destination was "a params question the bundle answers", which was not true of any field
+    /// the bundle had — an ADR claim with no implementation behind it, which the RC audit is
+    /// exactly the exercise of finding. Redistribution — to the panel, to the challenger, to the
+    /// next producer — is a live design question, and burning is the only destination that needs
+    /// no policy and cannot be gamed by whoever would have received it.
     Forfeited,
 }
 

@@ -335,9 +335,13 @@ pub struct PalwBondStateV2 {
     /// carry [`PalwStateParamsV2::min_collateral_sompi`] of its own, which is the cost the ADR's
     /// claim was always leaning on.
     pub operator_id: Hash64,
-    /// Slashable collateral in sompi. Value MOVEMENT (slash, withdrawal) is PR-07/PR-09; this
-    /// records what the exposure ceiling is measured against.
+    /// Slashable collateral in sompi, NET of everything this bond has lost. What the exposure
+    /// ceiling is measured against, and what a slash debits.
     pub collateral: u64,
+    /// Cumulative slashed sompi. Burned: it leaves `collateral` and enters circulation nowhere.
+    /// Recorded rather than merely subtracted so the loss is auditable from the state alone and
+    /// a reader can tell a bond that never staked much from one that was convicted.
+    pub slashed: u64,
     pub status: PalwBondStatusV2,
     pub registered_daa: u64,
 }
@@ -439,6 +443,13 @@ pub struct PalwClaimStateV2 {
     /// before any fault is read out of it (audit C3). Copied for the same reason `trace_root` is:
     /// the state IS the candidate-scoped source consumers read.
     pub execution_root: Hash64,
+    /// Number of chunks behind the attempt's trace manifest. An `Unavailable` receipt must name
+    /// one of them (audit C5): an accusation that cannot say WHAT was not served is not evidence.
+    pub trace_chunk_count: u32,
+    /// DAA score through which the producer owes openings and chunks. An `Unavailable` receipt
+    /// whose request falls outside it accuses the producer of breaking an obligation it did not
+    /// have.
+    pub trace_retention_daa: u64,
     /// Collateral value reserved at creation: `pwu × slash_value_per_pwu(class at creation)`.
     /// Snapshotted so release always returns exactly what reserve took, whatever happens to the
     /// class record afterwards.
@@ -446,6 +457,20 @@ pub struct PalwClaimStateV2 {
     /// `⌊β·pwu/1000⌋` at creation, for the same snapshot reason.
     pub immature_contribution: u128,
     pub phase: PalwClaimPhaseV2,
+}
+
+/// One seat's answer, as the state machine sees it: who said it, and which way.
+///
+/// The signature and the DA-obligation proof live in `palw_panel_v2`'s
+/// `PalwSeatReceiptV2` and are checked there. What crosses into the transition is the pair the
+/// accounting needs — a seat and its verdict — so that a minority which reported against the
+/// quorum can be charged for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwSeatVerdictV2 {
+    pub seat_bond: PalwBondKeyV2,
+    /// `true` = the seat said the trace was served and verified; `false` = it said the producer
+    /// withheld.
+    pub served: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -540,8 +565,14 @@ pub enum PalwConsensusObjectV2 {
         anchor: Hash64,
         seats: Vec<PalwPanelSeatV2>,
     },
+    /// Carries the receipt set the acceptance layer validated (audit C5). The transition does
+    /// not re-verify signatures — that is `palw_panel_v2`'s job and the module boundary is
+    /// deliberate — but it READS the verdicts, because a seat that reported the opposite of what
+    /// the panel concluded is contradicted by the panel's own quorum, and a contradiction with
+    /// no cost is an invitation.
     ReceiptLicensed {
         claim: Hash64,
+        receipts: Vec<PalwSeatVerdictV2>,
     },
     CourtOpened {
         session_id: Hash64,
@@ -555,6 +586,7 @@ pub enum PalwConsensusObjectV2 {
     /// Decision 7's producer default: a data obligation missed its deadline.
     ProducerDefaulted {
         claim: Hash64,
+        receipts: Vec<PalwSeatVerdictV2>,
     },
 }
 
@@ -1121,6 +1153,73 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// Debit `amount` from a bond's collateral and record it as slashed. **The only place value
+    /// leaves a bond in this ruleset.**
+    ///
+    /// Audit C5 found no slash primitive anywhere in the tree: `void_claim` released the
+    /// reservation and wrote a phase, so every "bond slash" in ADR-0042 — the court's
+    /// `ExecutorGuilty`, Decision 7's producer default, a seat that reports falsely — cost
+    /// exactly nothing. A ruleset whose every penalty is a state label is a ruleset with no
+    /// penalties.
+    ///
+    /// Saturating on the collateral side rather than erroring: a bond may owe more than it holds
+    /// (its exposure ceiling bounds work at risk, not the sum of every way it can be convicted),
+    /// and a conviction that cannot be recorded because the debtor is already empty must still
+    /// be recorded. What it cannot do is go negative.
+    ///
+    /// The slashed value is BURNED. Where it might otherwise go — redistribution to the panel,
+    /// to the challenger, to the next producer — is a live design question this deliberately does
+    /// not answer; burning is the only destination that needs no policy and cannot be gamed by
+    /// whoever would have received it.
+    fn slash_bond(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+        let record = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.clone();
+        let debit = u64::try_from(amount.min(record.collateral as u128)).expect("clamped to a u64 collateral");
+        if debit == 0 {
+            return Ok(());
+        }
+        let mut slashed = record;
+        slashed.collateral -= debit;
+        slashed.slashed = slashed.slashed.checked_add(debit).ok_or(PalwStateV2Error::Overflow("cumulative slash"))?;
+        self.write_bond(bond, Some(slashed));
+        Ok(())
+    }
+
+    /// Void a claim AND take the collateral it put at risk.
+    ///
+    /// `claim.reserved` is exactly `pwu × slash_value_per_pwu` — the number the exposure ceiling
+    /// exists to bound — so the penalty is the stake the claim itself named. No new parameter,
+    /// and the punishment scales with the work claimed rather than with a constant somebody
+    /// would have to pick.
+    fn void_and_slash(
+        &mut self,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+        voided_daa: u64,
+        reason: PalwVoidReasonV2,
+    ) -> Result<(), PalwStateV2Error> {
+        self.void_claim(id, claim, voided_daa, reason)?;
+        self.slash_bond(claim.bond, claim.reserved)
+    }
+
+    /// Charge every seat whose verdict the panel's own quorum refuted.
+    ///
+    /// `served_won` is what the quorum concluded; a seat that reported the other way is the one
+    /// contradicted. Iterated in the object's order, which is the order the acceptance layer
+    /// validated, so two nodes charge the same seats in the same sequence.
+    fn slash_dissenting_seats(
+        &mut self,
+        claim: &PalwClaimStateV2,
+        receipts: &[PalwSeatVerdictV2],
+        served_won: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        for receipt in receipts {
+            if receipt.served != served_won {
+                self.slash_bond(receipt.seat_bond, claim.reserved)?;
+            }
+        }
+        Ok(())
+    }
+
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
         self.release_for_claim(claim)?;
         self.state.safe_weight =
@@ -1472,6 +1571,7 @@ fn apply_object(
                     pubkey: pubkey.clone(),
                     operator_id: palw_operator_id_v2(operator_pubkey),
                     collateral: *collateral,
+                    slashed: 0,
                     status: PalwBondStatusV2::Active,
                     registered_daa: ctx.daa_score,
                 }),
@@ -1555,11 +1655,18 @@ fn apply_object(
                 ctx.daa_score.checked_add(builder.params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
         }
-        PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id } => {
+        PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptLicensed" });
             };
+            // The panel concluded the data WAS served. A seat that signed `Unavailable` accused
+            // the producer of withholding what a quorum of its own panel then verified — and the
+            // majority invariant (`2·quorum > seat_count`) is what makes that a contradiction
+            // rather than a disagreement: both verdicts cannot reach quorum, so exactly one of
+            // them is refuted by the record. It pays what it tried to take: the same `reserved`
+            // the producer would have lost.
+            builder.slash_dissenting_seats(&claim, receipts, true)?;
             let mut licensed = claim;
             licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
             builder.write_claim(*claim_id, Some(licensed));
@@ -1609,7 +1716,10 @@ fn apply_object(
                     // nothing else: a late verdict must not brick the block that carries it, and
                     // Final-vs-guilty contradictions are the deep-reorg surface PR-07/PR-08 own.
                     if !claim.phase.is_terminal() {
-                        builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                        // A proven arithmetic fault is the one conviction the ruleset can make
+                        // from evidence alone, so it is the one that most obviously must cost
+                        // the executor its stake (audit C5: it did not).
+                        builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
@@ -1617,12 +1727,19 @@ fn apply_object(
                 }
             }
         }
-        PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id } => {
+        PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ProducerDefaulted" });
             }
-            builder.void_claim(*claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
+            // Symmetric to the licensing arm: here the quorum says the producer withheld, so a
+            // seat that signed `Valid` is the contradicted one. Punishing only one direction
+            // would make the cheap lie obvious.
+            builder.slash_dissenting_seats(&claim, receipts, false)?;
+            // Decision 7's default is the producer's fault by construction — the panel answered
+            // and it did not — so this void takes the stake, unlike the two timeouts, which void
+            // a claim nobody was in a position to blame the producer for.
+            builder.void_and_slash(*claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
         }
     }
     Ok(())
@@ -1660,6 +1777,8 @@ fn apply_attempt(
         trace_root: attempt.trace_root,
         output_root: attempt.output_root,
         execution_root: attempt.execution_root,
+        trace_chunk_count: attempt.trace_chunk_count,
+        trace_retention_daa: attempt.trace_retention_daa,
         reserved,
         immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
         phase: PalwClaimPhaseV2::Provisional,
@@ -2148,7 +2267,7 @@ mod tests {
         assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }));
         assert_eq!((s3.safe_weight(), s3.bounded_immature()), (0, 4), "binding moves no weight");
 
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
         assert_eq!((s4.safe_weight(), s4.bounded_immature()), (0, 4), "licensing moves no weight");
 
@@ -2201,7 +2320,7 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
 
         let before = s4.candidate_order(h64(1000));
@@ -2261,7 +2380,7 @@ mod tests {
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
-        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id }], None);
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: Vec::new() }], None);
         match s3.claim(&claim_id).unwrap().phase {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. } => {}
             ref other => panic!("expected ProducerWithholding void, got {other:?}"),
@@ -2281,7 +2400,7 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         let (s5, _) = apply(
             &s4,
             &p,
@@ -2343,7 +2462,7 @@ mod tests {
             &ctx(3, 102, 3),
             &[
                 PalwConsensusObjectV2::CourtOpened { session_id: h64(600), claim: claim_id, challenger_bond: bond_key(1) },
-                PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id },
+                PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: Vec::new() },
             ],
             None,
         );
@@ -2376,7 +2495,7 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         let (s5, _) = apply(
             &s4,
             &p,
@@ -2424,7 +2543,7 @@ mod tests {
         ));
         // Receipt for a claim that does not exist.
         assert!(matches!(
-            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(1) }], None),
+            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(1), receipts: Vec::new() }], None),
             Err(PalwStateV2Error::MissingClaim(_))
         ));
         // Closing a session that does not exist.
@@ -2514,7 +2633,7 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (m2, _) =
             apply(&m1, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (m3, _) = apply(&m2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (m3, _) = apply(&m2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         let (matured, _) = apply(&m3, &p, &ctx(5, 124, 5), &[], None);
 
         // Chain P: three heavier claims, none ever bound — a pile. (Blocks close enough together
@@ -2568,7 +2687,7 @@ mod tests {
             }
             if accepted.len() >= 2 {
                 let (_, older) = accepted[accepted.len() - 2];
-                objects.push(PalwConsensusObjectV2::ReceiptLicensed { claim: older });
+                objects.push(PalwConsensusObjectV2::ReceiptLicensed { claim: older, receipts: Vec::new() });
             }
             let (next, _) = apply(&state, &p, &ctx(n, 100 + n, n), &objects, Some(&env));
             state = next;
@@ -2611,7 +2730,7 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(21) }];
         let (h2, _) =
             apply(&h1, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (h3, _) = apply(&h2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (h3, _) = apply(&h2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
         let (honest, _) = apply(&h3, &p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(honest.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 
@@ -2788,7 +2907,7 @@ mod tests {
             (1, 100, 1, register_class_and_bond(), None),
             (2, 101, 2, vec![], Some(env)),
             (3, 102, 3, vec![PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], Some(orphan)),
-            (4, 103, 4, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None),
+            (4, 103, 4, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None),
             (
                 5,
                 104,
@@ -3164,6 +3283,148 @@ mod tests {
         // this ruleset mints — an operator id must not collide with a class id or a claim id.
         assert_ne!(op_id(1), op_id(2));
         assert_ne!(op_id(1), h64(1), "the id is not the raw label it was derived from");
+    }
+
+    /// **Audit C5: a conviction has to cost something.**
+    ///
+    /// There was no slash primitive anywhere in the tree. `void_claim` released the reservation
+    /// and wrote a phase, so every penalty ADR-0042 describes — the court's `ExecutorGuilty`,
+    /// Decision 7's producer default — moved no value in either direction. A ruleset whose every
+    /// punishment is a state label has no punishments, and every game-theoretic argument built on
+    /// top of it is about a different system.
+    ///
+    /// The amount is `claim.reserved` — `pwu × slash_value_per_pwu`, the exact number the
+    /// exposure ceiling exists to bound — so the penalty is the stake the claim itself named,
+    /// with no new parameter to pick and no constant to get wrong.
+    #[test]
+    fn a_convicted_claim_costs_its_bond_the_stake_it_named() {
+        let p = params();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let collateral = base.bond(&bond_key(1)).unwrap().collateral;
+
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let reserved = s2.claim(&claim_id).unwrap().reserved;
+        assert_eq!(reserved, 40 * 5, "pwu x slash_value_per_pwu");
+        assert_eq!(s2.bond(&bond_key(1)).unwrap().collateral, collateral, "reserving is not taking");
+        assert_eq!(s2.bond(&bond_key(1)).unwrap().slashed, 0);
+
+        // Court conviction: the stake is taken, and recorded as taken.
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) = apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        );
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        );
+        let sid = h64(0xC0)             ;
+        let (s5, _) = apply(
+            &s4,
+            &p,
+            &ctx(5, 104, 5),
+            &[PalwConsensusObjectV2::CourtOpened { session_id: sid, claim: claim_id, challenger_bond: bond_key(1) }],
+            None,
+        );
+        let (s6, _) = apply(
+            &s5,
+            &p,
+            &ctx(6, 105, 6),
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+            None,
+        );
+        let bond = s6.bond(&bond_key(1)).unwrap();
+        assert_eq!(bond.collateral, collateral - reserved as u64, "a guilty verdict debits the stake");
+        assert_eq!(bond.slashed, reserved as u64, "and records it, so the loss is auditable from the state alone");
+        assert_eq!(s6.reserved_exposure(&bond_key(1)), 0, "the reservation is released as well as taken — exactly once");
+
+        // A bind timeout is NOT the producer's fault: nobody bound a panel, and binding is
+        // permissionless. It voids without taking.
+        let (b2, _) = apply(&base, &p, &ctx(20, 200, 20), &[], Some(&attempt(40, 2)));
+        let (b3, _) = apply(&b2, &p, &ctx(21, 400, 21), &[], None);
+        assert!(matches!(
+            b3.claim(&attempt_id_v2(&attempt(40, 2).attempt)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+        assert_eq!(b3.bond(&bond_key(1)).unwrap().slashed, 0, "a timeout nobody could blame the producer for takes nothing");
+    }
+
+    /// **Audit C5: reporting against your own panel's conclusion is not free.**
+    ///
+    /// An `Unavailable` verdict voids an honest producer's claim, and it cost its signers
+    /// nothing — so a minority could try it on every claim and lose only the gas. The majority
+    /// invariant (`2·quorum > seat_count`, enforced in `PalwPanelParamsV2`) is what turns a
+    /// dissent into a CONTRADICTION: both verdicts cannot reach quorum, so the record refutes
+    /// exactly one side. That side pays what it tried to take.
+    #[test]
+    fn a_seat_that_reports_against_the_quorum_pays_what_it_tried_to_take() {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(9),
+            pubkey: vec![9; 4],
+            operator_pubkey: op_key(0x99),
+            collateral: 1_000,
+        });
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let reserved = s2.claim(&claim_id).unwrap().reserved as u64;
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(9), operator_id: h64(0x99) }];
+        let (s3, _) = apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        );
+
+        // The quorum said the data WAS served; seat 9 said it was withheld.
+        let dissent = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: false }];
+        let (licensed, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: dissent }],
+            None,
+        );
+        assert_eq!(licensed.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays the stake it attacked");
+        assert_eq!(licensed.bond(&bond_key(1)).unwrap().slashed, 0, "the producer, vindicated, pays nothing");
+
+        // Symmetric: on a producer default, a seat that insisted the data was served is the
+        // contradicted one — and the producer is charged too, because Decision 7's default IS
+        // the producer's fault by construction.
+        let agreeing = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: true }];
+        let (defaulted, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: agreeing }],
+            None,
+        );
+        assert_eq!(defaulted.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays in this direction too");
+        assert_eq!(defaulted.bond(&bond_key(1)).unwrap().slashed, reserved, "and the producer pays for withholding");
+
+        // A seat that voted WITH the quorum is untouched, in both directions.
+        let concurring = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: true }];
+        let (clean, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: concurring }],
+            None,
+        );
+        assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
     }
 
     #[test]

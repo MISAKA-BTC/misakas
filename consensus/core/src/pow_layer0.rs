@@ -376,6 +376,20 @@ pub enum PowLayer0Error {
     /// ADR-0038 Decision A is installed and the header's commitment is not a commitment.
     #[error("PALW header (algo_id = {algo_id}) carries a palw_commitment that is not a well-formed PBC1 commitment: {reason}")]
     PalwCommitmentMalformed { algo_id: u8, reason: String },
+    /// ADR-0042 Decision 3a: an algo-6 header reached the finalizer without a decodable V2
+    /// attempt envelope in `palw_commitment`. The envelope IS what the committed-V2 PoW prices
+    /// — its absence means there is no work to check, so the header cannot be valid. Total
+    /// error, never a panic: the pruning-proof path computes PoW on peer-supplied headers
+    /// before any shape gate has run.
+    #[error("PALW-V2 header (algo_id = 6) carries no decodable attempt envelope; the PoW has nothing to price")]
+    PalwV2AttemptMissing,
+    /// ADR-0042 Decision 3a: the carried attempt's `challenge` is not the one this header
+    /// position derives — the envelope was mined for a different (pre_pow_hash, timestamp,
+    /// nonce, class, bond). Refused by the finalizer arm itself so that EVERY path that
+    /// computes PoW refuses a re-mounted attempt, including proof paths that never reach
+    /// stateful admission.
+    #[error("PALW-V2 attempt's carried challenge is not the one this header position derives")]
+    PalwV2ChallengeMismatch,
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
@@ -397,7 +411,11 @@ pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 /// * non-PALW `algo_id` → the field MUST be empty. It is hash-invisible there, and a
 ///   hash-invisible non-empty field is block-hash malleability (two serialized blocks, one
 ///   identity) — a relay/dedup poison, refused at the door.
-/// * PALW `algo_id` → the field MUST **also** be empty, for now. See below.
+/// * PALW V1 `algo_id` (4 / 5) → the field MUST **also** be empty, for now. See below.
+/// * `POW_ALGO_ID_PALW_COMMITTED_V2` (6) → the field is REQUIRED, and required to decode as a
+///   [`crate::palw_attempt_v2::PalwAttemptEnvelopeV2`]. V2's binding is intrinsic — the finalizer
+///   tag is `Expand(commitment_root_v2)` — so the empty-until-bound reasoning below does not
+///   apply to it, and neither does the `bound` fence (that fence is V1's rebinding decision).
 ///
 /// # Why the PALW side is empty-only until the PoW binds it
 ///
@@ -445,6 +463,19 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
     // binding rule — the two errors mean different things to an operator.
     if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
         return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
+    }
+    if algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 {
+        // ADR-0042 Decision 3a: on the committed-V2 id the binding is intrinsic — the finalizer's
+        // tag IS `Expand(commitment_root_v2)` — so `bound` (ADR-0038 Decision A's V1 rebinding
+        // fence) does not gate this arm in either direction. The field is REQUIRED and required
+        // to be a V2 envelope: an algo-6 header without one carries no work to price, and the
+        // finalizer refuses it as `PalwV2AttemptMissing` anyway; failing HERE names the shape
+        // defect (wrong magic, truncated body, zero pwu…) instead of a digest mismatch.
+        let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment)
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
+        return envelope
+            .validate_shape_v2()
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if !bound {
         // ADR-0038 Decision A is not installed on this network at this DAA, so the field stays
@@ -601,11 +632,13 @@ pub fn pow_short_circuits_as_parentless_root(header: &crate::header::Header) -> 
 /// never mandated, which is a cheaper PoW than the one its difficulty was set for.
 /// **This list is the set of ids `kaspa_pow::StateLayer0::calculate_l1_tag` implements.** It is
 /// not the set of ids that have a CONSTANT — those are two different things, and conflating them
-/// is audit C1: `POW_ALGO_ID_PALW_COMMITTED_V2` has a constant, four pipeline gates that can
+/// was audit C1: `POW_ALGO_ID_PALW_COMMITTED_V2` had a constant, four pipeline gates that could
 /// DEMAND it, and no arm in the finalizer, so a network in `ConsensusV2` mode booted happily,
 /// accepted its parentless genesis, and then rejected every block after it — its own miner's
 /// included — as `InvalidPoW`, with no fallback id accepted and no pruning proof importable.
-/// Listing 6 here said the binary could verify something it cannot.
+/// Listing 6 here said the binary could verify something it cannot; 6 was therefore delisted
+/// until the arm existed, and re-listed in the same commit that landed the arm and its carrier
+/// (`palw_v2_commitment_mutation_invalidates_pow` is the test that holds the three together).
 ///
 /// Adding an arm to the finalizer means adding its id here, and the mode gate
 /// (`PalwConsensusParamsV2::validate`) reads this function to refuse a ruleset whose algorithm
@@ -617,6 +650,7 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_BLAKE2B_SHA3
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
+        || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
     {
         Ok(())
     } else {
@@ -1025,8 +1059,8 @@ mod tests {
     }
 
     /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can FINALIZE —
-    /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), PALW LLM (4) and
-    /// PALW-Ollama (5) — and rejects the rest, the committed-V2 id (6) included.
+    /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), PALW LLM (4), PALW-Ollama
+    /// (5) and the committed-V2 id (6) — and rejects the rest.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
         for ok in [
@@ -1035,6 +1069,7 @@ mod tests {
             POW_ALGO_ID_BLAKE2B_SHA3,
             POW_ALGO_ID_PALW_LLM,
             POW_ALGO_ID_PALW_OLLAMA,
+            POW_ALGO_ID_PALW_COMMITTED_V2,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
@@ -1042,16 +1077,14 @@ mod tests {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 
-        // **Audit C1.** The V2 id has a constant and four gates that can demand it, but the
-        // finalizer has no arm for it: `calculate_l1_tag` falls to `UnknownAlgoId(6)`. Until that
-        // arm exists this function must SAY SO, because the mode gate reads it to decide whether a
-        // `ConsensusV2` ruleset is runnable at all. When the arm lands, this assertion is the one
-        // that flips — deliberately, in the same commit.
-        assert_eq!(
-            check_algo_id_known(POW_ALGO_ID_PALW_COMMITTED_V2),
-            Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_COMMITTED_V2)),
-            "the V2 id has no finalizer arm; claiming it is verifiable is what let a V2 network boot and then stall at block 1"
-        );
+        // **Audit C1, closed.** This assertion was `Err(UnknownAlgoId(6))` while the finalizer
+        // had no arm for the V2 id — the mode gate reads this function to decide whether a
+        // `ConsensusV2` ruleset is runnable, and claiming 6 verifiable without an arm is what let
+        // a V2 network boot and then stall at block 1. The arm landed together with its carrier
+        // (`StateLayer0::calculate_l1_tag`'s algo-6 arm over the header-carried
+        // `PalwAttemptEnvelopeV2`), so the id is listed again, and this flip happened in that
+        // same commit — exactly as the delisting comment said it must.
+        assert!(check_algo_id_known(POW_ALGO_ID_PALW_COMMITTED_V2).is_ok(), "the V2 arm exists; delisting 6 now would shut a bootable ruleset");
 
         // Knowing the V2 id is not accepting a V2 block. `required_algo_id` has no V2 arm until the
         // atomic bundle lands (ADR-0042 Decision 1), so no combination of today's fork flags demands

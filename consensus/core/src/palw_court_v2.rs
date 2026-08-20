@@ -344,7 +344,7 @@ mod tests {
         )
         .unwrap();
         let (s4, _) =
-            apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None)
+            apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None)
                 .unwrap();
         (s4, claim_id)
     }

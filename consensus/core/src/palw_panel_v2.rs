@@ -156,6 +156,10 @@ pub enum PalwPanelV2Error {
     SeatBondMissing(PalwBondKeyV2),
     #[error("receipt signature does not verify under the seat bond's key")]
     ReceiptSignatureInvalid,
+    #[error("receipt from seat {seat:?} is outside the receipt window: {why}")]
+    ReceiptOutsideWindow { seat: PalwBondKeyV2, why: &'static str },
+    #[error("an Unavailable receipt from seat {seat:?} does not name an obligation the producer had: {why}")]
+    UnmetObligationNotProven { seat: PalwBondKeyV2, why: &'static str },
     #[error("no quorum: {valid} valid and {unavailable} unavailable of {needed} needed")]
     NoQuorum { valid: u16, unavailable: u16, needed: u16 },
 }
@@ -285,7 +289,20 @@ pub enum PalwReceiptVerdictV2 {
     Valid,
     /// The producer failed to serve the committed data. NOT a no-show — the seat answered; it is
     /// the producer who defaulted.
-    Unavailable,
+    ///
+    /// It names the obligation it says went unmet (audit C5). On-chain nothing can prove that a
+    /// byte was not sent; what a rule CAN require is that the accusation be specific and fall
+    /// inside an obligation the producer actually had. A bare `Unavailable` was neither — it
+    /// accused nothing in particular, at no time in particular, and a quorum of them voided an
+    /// honest claim on an assertion with no content.
+    Unavailable {
+        /// Which chunk of the committed trace manifest was requested. Must be one the attempt
+        /// committed to (`< claim.trace_chunk_count`).
+        chunk_index: u32,
+        /// When it was requested. Must fall inside the producer's retention obligation and not
+        /// after the seat signed.
+        requested_daa: u64,
+    },
 }
 
 /// One seat's signed receipt.
@@ -294,20 +311,37 @@ pub struct PalwSeatReceiptV2 {
     pub claim: Hash64,
     pub verdict: PalwReceiptVerdictV2,
     pub seat_bond: PalwBondKeyV2,
+    /// When the seat answered. Inside the signed message, and checked against the receipt
+    /// window: a duty with no deadline is a duty a seat can discharge whenever it suits it, and
+    /// `Unavailable` with no deadline is an accusation that can be minted after the fact.
+    pub signed_daa: u64,
     pub signature: Vec<u8>,
 }
 
 /// `H(network_domain ‖ claim ‖ verdict)` — what a seat signs, in this family's own message
 /// domain (the signing CONTEXT is [`PALW_RECEIPT_V2_MLDSA87_CONTEXT`], applied by the verifier
 /// call, never caller-chosen).
-pub fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: PalwReceiptVerdictV2) -> Hash64 {
+pub fn palw_receipt_message_v2(
+    network_domain: Hash64,
+    claim: Hash64,
+    verdict: PalwReceiptVerdictV2,
+    signed_daa: u64,
+) -> Hash64 {
     let mut state = keyed(PALW_RECEIPT_V2_DOMAIN_MESSAGE);
     state.update(network_domain.as_byte_slice());
     state.update(claim.as_byte_slice());
-    state.update(&[match verdict {
-        PalwReceiptVerdictV2::Valid => 1u8,
-        PalwReceiptVerdictV2::Unavailable => 2u8,
-    }]);
+    // Every field the verdict carries is signed. A signature over the TAG alone would let a
+    // seat's `Unavailable` be replayed against a different chunk or a different request time —
+    // the accusation's whole content, swapped underneath a valid signature.
+    match verdict {
+        PalwReceiptVerdictV2::Valid => state.update(&[1u8]),
+        PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
+            state.update(&[2u8]);
+            state.update(&chunk_index.to_le_bytes());
+            state.update(&requested_daa.to_le_bytes())
+        }
+    };
+    state.update(&signed_daa.to_le_bytes());
     finish(state)
 }
 
@@ -327,6 +361,8 @@ pub enum PalwReceiptQuorumV2 {
 pub fn validate_receipt_quorum_v2<V>(
     state: &PalwChainStateV2,
     params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
     network_domain: Hash64,
     claim_id: &Hash64,
     receipts: &[PalwSeatReceiptV2],
@@ -336,9 +372,12 @@ where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
-    if !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. }) {
+    let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptQuorum" });
-    }
+    };
+    let receipt_deadline = bound_daa
+        .checked_add(state_params.window_receipt())
+        .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
     let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
 
     let mut answered: Vec<PalwBondKeyV2> = Vec::new();
@@ -359,14 +398,58 @@ where
         // entered retirement still serves its standing duties; only a bond that vanished
         // entirely is an error, and bonds never vanish in this ruleset's state.)
         let bond = state.bond(&receipt.seat_bond).ok_or(PalwPanelV2Error::SeatBondMissing(receipt.seat_bond))?;
-        let message = palw_receipt_message_v2(network_domain, *claim_id, receipt.verdict);
+        let message = palw_receipt_message_v2(network_domain, *claim_id, receipt.verdict, receipt.signed_daa);
         if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &receipt.signature, PALW_RECEIPT_V2_MLDSA87_CONTEXT) {
             return Err(PalwPanelV2Error::ReceiptSignatureInvalid);
         }
+        // The duty has a clock (audit C5). A receipt signed before the panel existed cannot be
+        // about this panel's duty, one signed after the deadline is not a discharge of it, and
+        // one signed in the future is not a signature about anything that has happened.
+        if receipt.signed_daa < bound_daa {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed before the panel was bound" });
+        }
+        if receipt.signed_daa > receipt_deadline {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed past the receipt deadline" });
+        }
+        if receipt.signed_daa > ctx.daa_score {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed after the block carrying it" });
+        }
+
         answered.push(receipt.seat_bond);
         match receipt.verdict {
             PalwReceiptVerdictV2::Valid => valid += 1,
-            PalwReceiptVerdictV2::Unavailable => unavailable += 1,
+            PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
+                // An accusation has to name an obligation the producer ACTUALLY HAD. None of
+                // this proves a byte went unsent — nothing on-chain can — but it removes the
+                // contentless accusation, which is what a quorum of `Unavailable` was built out
+                // of before: a chunk the attempt never committed to, or a request made after
+                // retention lapsed, is a demand the producer never owed.
+                if chunk_index >= claim.trace_chunk_count {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the named chunk is not one the attempt committed to",
+                    });
+                }
+                if requested_daa < bound_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request predates the panel that was owed the data",
+                    });
+                }
+                if requested_daa > receipt.signed_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request had not happened when the seat signed about it",
+                    });
+                }
+                if requested_daa > claim.trace_retention_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request falls past the producer's retention obligation",
+                    });
+                }
+                unavailable += 1
+            }
         }
     }
     if valid >= params.quorum {
@@ -585,6 +668,25 @@ mod tests {
         ));
     }
 
+    /// A claim with its panel bound at DAA 106 — the starting point for every receipt test.
+    #[allow(clippy::type_complexity)]
+    fn licensed_fixture() -> (PalwChainStateV2, Hash64, PalwStateParamsV2, PalwPanelParamsV2, Hash64, Vec<PalwPanelSeatV2>, u64) {
+        let (state, claim_id) = populated_state();
+        let p = panel_params();
+        let sp = state_params();
+        let anchor_block = BlockHash::from_u64_word(0xA0C0);
+        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block).unwrap();
+        let (bound, _) = apply_palw_transition_v2(
+            &state,
+            &sp,
+            &ctx(3, 106, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: anchor_block, seats: seats.clone() }],
+            None,
+        )
+        .unwrap();
+        (bound, claim_id, sp, p, h64(999), seats, 106)
+    }
+
     /// Receipts: the full path from a bound panel to both quorum outcomes, with every refusal
     /// shape on the way.
     #[test]
@@ -606,10 +708,17 @@ mod tests {
         let net = h64(999);
         // The "signature" fixture: sig = pubkey bytes; the verifier checks exactly that, plus the
         // context (the family's own) and the message (recomputed).
+        // The panel bound at daa 106, so the receipt window is [106, 106 + window_receipt].
+        const BOUND_DAA: u64 = 106;
+        const SIGNED_DAA: u64 = 108;
+        // An `Unavailable` names the obligation it says went unmet: a chunk the attempt committed
+        // to, requested inside the retention window and before the seat signed about it.
+        let unavailable = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 107 };
         let sign_as = |seat: &PalwPanelSeatV2, verdict: PalwReceiptVerdictV2| PalwSeatReceiptV2 {
             claim: claim_id,
             verdict,
             seat_bond: seat.bond,
+            signed_daa: SIGNED_DAA,
             signature: bound.bond(&seat.bond).unwrap().pubkey.clone(),
         };
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
@@ -617,26 +726,30 @@ mod tests {
             assert_eq!(message.len(), 64);
             key == sig
         };
+        let here = ctx(9, 110, 9);
+        let check = |st: &PalwChainStateV2, receipts: &[PalwSeatReceiptV2]| {
+            validate_receipt_quorum_v2(st, &p, &sp, &here, net, &claim_id, receipts, verify)
+        };
 
         // Two Valid receipts (quorum 2) license.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], PalwReceiptVerdictV2::Valid)];
         assert_eq!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &receipts, verify),
+            check(&bound, &receipts),
             Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
         );
 
         // Two Unavailable receipts justify the producer default — the seats answered.
         let receipts =
-            vec![sign_as(&seats[0], PalwReceiptVerdictV2::Unavailable), sign_as(&seats[1], PalwReceiptVerdictV2::Unavailable)];
+            vec![sign_as(&seats[0], unavailable), sign_as(&seats[1], unavailable)];
         assert_eq!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &receipts, verify),
+            check(&bound, &receipts),
             Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable: 2 })
         );
 
         // A split (1 Valid, 1 Unavailable) is no quorum for either transition.
-        let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], PalwReceiptVerdictV2::Unavailable)];
+        let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], unavailable)];
         assert!(matches!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &receipts, verify),
+            check(&bound, &receipts),
             Err(PalwPanelV2Error::NoQuorum { valid: 1, unavailable: 1, needed: 2 })
         ));
 
@@ -645,17 +758,18 @@ mod tests {
             claim: claim_id,
             verdict: PalwReceiptVerdictV2::Valid,
             seat_bond: PalwBondKeyV2(bond_outpoint(1)), // the executor, who is precisely not a seat
+            signed_daa: SIGNED_DAA,
             signature: vec![7; 4],
         };
         assert!(matches!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &[outsider], verify),
+            check(&bound, &[outsider]),
             Err(PalwPanelV2Error::NotASeat(_))
         ));
 
         // One seat cannot vote twice.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[0], PalwReceiptVerdictV2::Valid)];
         assert!(matches!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &receipts, verify),
+            check(&bound, &receipts),
             Err(PalwPanelV2Error::DuplicateSeat(_))
         ));
 
@@ -663,27 +777,129 @@ mod tests {
         let mut forged = sign_as(&seats[0], PalwReceiptVerdictV2::Valid);
         forged.signature = vec![0xFF; 4];
         assert!(matches!(
-            validate_receipt_quorum_v2(&bound, &p, net, &claim_id, &[forged], verify),
+            check(&bound, &[forged]),
             Err(PalwPanelV2Error::ReceiptSignatureInvalid)
         ));
 
         // Before a panel is bound, no quorum can form (wrong phase).
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid)];
         assert!(matches!(
-            validate_receipt_quorum_v2(&state, &p, net, &claim_id, &receipts, verify),
+            check(&state, &receipts),
             Err(PalwPanelV2Error::WrongPhase { .. })
         ));
     }
 
+    /// **Audit C5: an `Unavailable` must name an obligation the producer actually had, inside a
+    /// window it could have discharged.**
+    ///
+    /// A quorum of `Unavailable` voids an honest producer's claim. It used to be a bare tag: no
+    /// request, no chunk, no time — an accusation with no content, mintable whenever it suited
+    /// the accuser. Nothing on-chain can prove a byte went unsent, and this does not pretend to.
+    /// What it removes is the CONTENTLESS accusation: the receipt must name a chunk the attempt
+    /// committed to, a request made after the panel existed and before the seat signed about it,
+    /// and one inside the retention window the producer actually owed.
+    #[test]
+    fn an_unavailable_receipt_must_name_an_obligation_the_producer_had() {
+        let (state, claim_id, sp, p, net, seats, bound_daa) = licensed_fixture();
+        let verify = |key: &[u8], _m: &[u8], sig: &[u8], _c: &[u8]| key == sig;
+        let here = ctx(9, 130, 9);
+        let claim = state.claim(&claim_id).unwrap();
+        let retention = claim.trace_retention_daa;
+        let chunks = claim.trace_chunk_count;
+
+        let receipt = |verdict: PalwReceiptVerdictV2, signed_daa: u64| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict,
+            seat_bond: seats[0].bond,
+            signed_daa,
+            signature: state.bond(&seats[0].bond).unwrap().pubkey.clone(),
+        };
+        let check = |r: Vec<PalwSeatReceiptV2>| validate_receipt_quorum_v2(&state, &p, &sp, &here, net, &claim_id, &r, verify);
+
+        // The well-formed accusation is short of quorum here (one seat of a 3/2 panel), which is
+        // the shape we want: it reaches the counting stage rather than being refused.
+        let ok = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: bound_daa + 1 };
+        assert!(matches!(check(vec![receipt(ok, bound_daa + 2)]), Err(PalwPanelV2Error::NoQuorum { unavailable: 1, .. })));
+
+        // A chunk the attempt never committed to is a demand the producer never owed.
+        let bad_chunk = PalwReceiptVerdictV2::Unavailable { chunk_index: chunks, requested_daa: bound_daa + 1 };
+        assert!(matches!(
+            check(vec![receipt(bad_chunk, bound_daa + 2)]),
+            Err(PalwPanelV2Error::UnmetObligationNotProven { .. })
+        ));
+
+        // A request that predates the panel is not about this panel's duty.
+        let early = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: bound_daa - 1 };
+        assert!(matches!(check(vec![receipt(early, bound_daa + 2)]), Err(PalwPanelV2Error::UnmetObligationNotProven { .. })));
+
+        // A request the seat had not yet made when it signed about it.
+        let ahead = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: bound_daa + 3 };
+        assert!(matches!(check(vec![receipt(ahead, bound_daa + 2)]), Err(PalwPanelV2Error::UnmetObligationNotProven { .. })));
+
+        // A request past the retention deadline: the obligation had ended.
+        let late = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: retention + 1 };
+        assert!(matches!(
+            check(vec![receipt(late, retention + 2)]),
+            Err(PalwPanelV2Error::UnmetObligationNotProven { .. } | PalwPanelV2Error::ReceiptOutsideWindow { .. })
+        ));
+    }
+
+    /// **Audit C5: the receipt duty has a clock.**
+    ///
+    /// `validate_receipt_quorum_v2` took no block context at all, so nothing bounded WHEN a seat
+    /// could answer — a receipt could be signed before the panel existed, long after the window
+    /// closed, or dated into the future.
+    #[test]
+    fn a_receipt_outside_its_window_is_not_a_discharge_of_the_duty() {
+        let (state, claim_id, sp, p, net, seats, bound_daa) = licensed_fixture();
+        let verify = |key: &[u8], _m: &[u8], sig: &[u8], _c: &[u8]| key == sig;
+        let receipt = |signed_daa: u64| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: seats[0].bond,
+            signed_daa,
+            signature: state.bond(&seats[0].bond).unwrap().pubkey.clone(),
+        };
+        let at = |block_daa: u64, r: Vec<PalwSeatReceiptV2>| {
+            validate_receipt_quorum_v2(&state, &p, &sp, &ctx(9, block_daa, 9), net, &claim_id, &r, verify)
+        };
+
+        // Inside the window: reaches the counting stage.
+        assert!(matches!(at(bound_daa + 5, vec![receipt(bound_daa + 1)]), Err(PalwPanelV2Error::NoQuorum { valid: 1, .. })));
+        // Before the panel was bound.
+        assert!(matches!(at(bound_daa + 5, vec![receipt(bound_daa - 1)]), Err(PalwPanelV2Error::ReceiptOutsideWindow { .. })));
+        // Past the receipt deadline.
+        let past = bound_daa + sp.window_receipt() + 1;
+        assert!(matches!(at(past + 5, vec![receipt(past)]), Err(PalwPanelV2Error::ReceiptOutsideWindow { .. })));
+        // Dated after the block that carries it.
+        assert!(matches!(at(bound_daa + 1, vec![receipt(bound_daa + 2)]), Err(PalwPanelV2Error::ReceiptOutsideWindow { .. })));
+    }
+
     /// The verdicts sign DIFFERENT messages: an `Unavailable` signature cannot be replayed as a
     /// `Valid` one — the distinctness that lets a seat report withheld data safely.
+    ///
+    /// And every field an `Unavailable` carries is inside its message. Signing only the verdict
+    /// TAG would have let one signature stand behind any chunk index and any request time — the
+    /// whole content of the accusation swapped under a signature that stayed valid.
     #[test]
-    fn the_two_verdicts_are_two_messages() {
-        let m_valid = palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Valid);
-        let m_unavail = palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Unavailable);
+    fn the_two_verdicts_are_two_messages_and_every_field_is_signed() {
+        let unavail = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 107 };
+        let m_valid = palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Valid, 108);
+        let m_unavail = palw_receipt_message_v2(h64(999), h64(1), unavail, 108);
         assert_ne!(m_valid, m_unavail);
-        assert_ne!(palw_receipt_message_v2(h64(998), h64(1), PalwReceiptVerdictV2::Valid), m_valid, "network binds");
-        assert_ne!(palw_receipt_message_v2(h64(999), h64(2), PalwReceiptVerdictV2::Valid), m_valid, "claim binds");
+        assert_ne!(palw_receipt_message_v2(h64(998), h64(1), PalwReceiptVerdictV2::Valid, 108), m_valid, "network binds");
+        assert_ne!(palw_receipt_message_v2(h64(999), h64(2), PalwReceiptVerdictV2::Valid, 108), m_valid, "claim binds");
+        assert_ne!(palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Valid, 109), m_valid, "the signing time binds");
+        assert_ne!(
+            palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Unavailable { chunk_index: 1, requested_daa: 107 }, 108),
+            m_unavail,
+            "the accused chunk binds"
+        );
+        assert_ne!(
+            palw_receipt_message_v2(h64(999), h64(1), PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 106 }, 108),
+            m_unavail,
+            "the request time binds"
+        );
     }
 
     #[test]

@@ -253,7 +253,7 @@ mod tests {
         let branch_m: Vec<(u64, u64, u64, Vec<PalwConsensusObjectV2>, Option<PalwAttemptEnvelopeV2>)> = vec![
             (2, 101, 2, vec![], Some(env)),
             (3, 102, 3, vec![PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None),
-            (4, 103, 4, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None),
+            (4, 103, 4, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None),
             (5, 124, 5, vec![], None),
         ];
         let branch_p: Vec<(u64, u64, u64, Vec<PalwConsensusObjectV2>, Option<PalwAttemptEnvelopeV2>)> = vec![

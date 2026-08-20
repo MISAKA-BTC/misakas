@@ -59,6 +59,12 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
 
+/// 4-byte wire magic for the envelope as carried in `Header::palw_commitment` on an algo-6 header
+/// — `PalwBlockCommitmentV1`'s `PBC1` pattern, for the same reason: on the wire the field is a bag
+/// of bytes, and a decoder that can say "this is not a V2 envelope" beats one that reports a borsh
+/// offset. Distinct from `PBC1` so neither family's decoder can half-read the other's payload.
+pub const PALW_ATTEMPT_V2_WIRE_MAGIC: [u8; 4] = *b"PAV2";
+
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
 }
@@ -222,22 +228,45 @@ pub enum PalwAttemptV2Error {
     MissingPublicKey,
     #[error("the signature does not verify over the attempt id under the carried executor key")]
     SignatureInvalid,
+    #[error("the carrier bytes do not begin with the PAV2 wire magic")]
+    WireMagicMissing,
+    #[error("the carrier body does not decode as a V2 attempt envelope: {0}")]
+    WireBodyMalformed(String),
+    #[error("the carrier has {0} trailing bytes after the envelope — a payload is not a container")]
+    WireTrailingBytes(usize),
 }
 
 impl PalwAttemptEnvelopeV2 {
-    /// Stateless admission: everything checkable without chain state.
-    ///
-    /// The carried `challenge` is recomputed from the header position rather than trusted, which is
-    /// what stops an attempt mined at one position being announced at another — the PoW would fail
-    /// anyway, but failing HERE names the reason instead of leaving a peer to infer it from a
-    /// digest mismatch.
-    pub fn validate_stateless_v2(
-        &self,
-        network_domain: Hash64,
-        pre_pow_hash: Hash64,
-        timestamp: u64,
-        nonce: u64,
-    ) -> Result<(), PalwAttemptV2Error> {
+    /// Encode with the PAV2 magic — the `Header::palw_commitment` wire form on an algo-6 header.
+    pub fn encode_wire(&self) -> Vec<u8> {
+        let mut out = PALW_ATTEMPT_V2_WIRE_MAGIC.to_vec();
+        out.extend(borsh::to_vec(self).expect("borsh serialization of a plain struct cannot fail"));
+        out
+    }
+
+    /// Decode a header-extension payload: magic, then borsh, then an exact-length check (trailing
+    /// bytes are refused — a payload is not a container, and two encodings of one envelope would
+    /// be two block identities for one attempt).
+    pub fn decode_wire(bytes: &[u8]) -> Result<Self, PalwAttemptV2Error> {
+        let Some(body) = bytes.strip_prefix(&PALW_ATTEMPT_V2_WIRE_MAGIC) else {
+            return Err(PalwAttemptV2Error::WireMagicMissing);
+        };
+        let mut slice = body;
+        let decoded = <Self as borsh::BorshDeserialize>::deserialize(&mut slice)
+            .map_err(|e| PalwAttemptV2Error::WireBodyMalformed(e.to_string()))?;
+        if !slice.is_empty() {
+            return Err(PalwAttemptV2Error::WireTrailingBytes(slice.len()));
+        }
+        Ok(decoded)
+    }
+
+    /// The position-independent half of [`Self::validate_stateless_v2`]: everything checkable from
+    /// the envelope alone, with no header in hand. `check_palw_commitment_shape` runs THIS at
+    /// header-shape validation, where the only question is "is this field a well-formed V2
+    /// envelope" — the challenge equation needs the header position, and the algo-6 finalizer arm
+    /// asks it itself on every PoW computation, so no path exists where shape passes and the
+    /// position check is never reached.
+    pub fn validate_shape_v2(&self) -> Result<(), PalwAttemptV2Error> {
         let a = &self.attempt;
         if a.version != PALW_ATTEMPT_V2_VERSION {
             return Err(PalwAttemptV2Error::UnsupportedVersion { got: a.version, expected: PALW_ATTEMPT_V2_VERSION });
@@ -255,6 +284,24 @@ impl PalwAttemptEnvelopeV2 {
         if a.trace_chunk_count == 0 {
             return Err(PalwAttemptV2Error::ZeroTraceChunks);
         }
+        Ok(())
+    }
+
+    /// Stateless admission: everything checkable without chain state.
+    ///
+    /// The carried `challenge` is recomputed from the header position rather than trusted, which is
+    /// what stops an attempt mined at one position being announced at another — the PoW would fail
+    /// anyway, but failing HERE names the reason instead of leaving a peer to infer it from a
+    /// digest mismatch.
+    pub fn validate_stateless_v2(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+    ) -> Result<(), PalwAttemptV2Error> {
+        self.validate_shape_v2()?;
+        let a = &self.attempt;
         if a.network_domain != network_domain
             || a.challenge != challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, a.class_id, &a.executor_bond)
         {
@@ -496,5 +543,92 @@ mod tests {
         let before = seen.len();
         seen.dedup();
         assert_eq!(seen.len(), before, "two attempt-v2 domains collide");
+    }
+
+    /// The wire form is total and exact: round-trips, refuses the other family's magic, refuses a
+    /// container posing as a payload.
+    #[test]
+    fn the_wire_codec_round_trips_and_refuses_impostors() {
+        let env = envelope(attempt());
+        let bytes = env.encode_wire();
+        assert_eq!(PalwAttemptEnvelopeV2::decode_wire(&bytes), Ok(env.clone()), "round trip");
+
+        assert_eq!(PalwAttemptEnvelopeV2::decode_wire(&[]), Err(PalwAttemptV2Error::WireMagicMissing));
+        // A PBC1 payload must be named as the wrong family, not half-read as a V2 body.
+        let mut pbc1 = b"PBC1".to_vec();
+        pbc1.extend_from_slice(&bytes[4..]);
+        assert_eq!(PalwAttemptEnvelopeV2::decode_wire(&pbc1), Err(PalwAttemptV2Error::WireMagicMissing));
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(PalwAttemptEnvelopeV2::decode_wire(&trailing), Err(PalwAttemptV2Error::WireTrailingBytes(1)));
+
+        let mut truncated = bytes;
+        truncated.pop();
+        assert!(matches!(PalwAttemptEnvelopeV2::decode_wire(&truncated), Err(PalwAttemptV2Error::WireBodyMalformed(_))));
+    }
+
+    /// `check_palw_commitment_shape` on the committed-V2 id: the field is REQUIRED, must decode
+    /// as a V2 envelope, and V1's `bound` fence has no effect in either direction — the V2
+    /// binding is intrinsic (the finalizer tag is `Expand(commitment_root_v2)`), so there is no
+    /// fence to wait for and no fence that could shut it.
+    #[test]
+    fn the_shape_gate_demands_an_envelope_on_the_v2_id() {
+        use crate::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, PALW_COMMITMENT_MAX_BYTES, PowLayer0Error, check_palw_commitment_shape};
+
+        let wire = envelope(attempt()).encode_wire();
+        for bound in [false, true] {
+            assert_eq!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &wire, bound),
+                Ok(()),
+                "a well-formed envelope passes regardless of the V1 fence (bound = {bound})"
+            );
+            assert!(
+                matches!(
+                    check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &[], bound),
+                    Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+                ),
+                "an algo-6 header without an envelope carries no work to price (bound = {bound})"
+            );
+        }
+
+        // The other family's payload is named as the wrong family, not half-read as a V2 body.
+        let mut pbc1 = b"PBC1".to_vec();
+        pbc1.extend_from_slice(&wire[4..]);
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &pbc1, false),
+            Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+        ));
+
+        // A decodable envelope with a shape defect is refused with the defect named.
+        let mut zero = attempt();
+        zero.pwu = 0;
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &envelope(zero).encode_wire(), false),
+            Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+        ));
+
+        // Oversize reports the cap it broke, before any decoding.
+        let oversized = vec![0u8; PALW_COMMITMENT_MAX_BYTES + 1];
+        assert!(matches!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &oversized, false),
+            Err(PowLayer0Error::PalwCommitmentTooLong { .. })
+        ));
+    }
+
+    /// A real-lengths envelope fits `Header::palw_commitment`'s wire cap, with the exact size
+    /// pinned so a field added later moves THIS number instead of silently eating the headroom.
+    #[test]
+    fn a_real_envelope_fits_the_header_wire_cap() {
+        let mut a = attempt();
+        a.executor_pubkey = vec![7u8; crate::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN];
+        let bytes = envelope(a).encode_wire();
+        assert_eq!(bytes.len(), 7897, "4 magic + 3262 unsigned attempt + 4 + 4627 ML-DSA-87 signature");
+        assert!(
+            bytes.len() <= crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES,
+            "the envelope must fit the header field: {} > {}",
+            bytes.len(),
+            crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES
+        );
     }
 }
