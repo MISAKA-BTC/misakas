@@ -53,6 +53,35 @@ use crate::palw_step::{PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
+/// **The `max_step_leaf_count` a network must freeze at genesis to keep a second class possible.**
+///
+/// `PalwCourtParamsV2::max_step_leaf_count` is a `PalwConsensusParamsV2` field, and the bundle is
+/// what `palw_ruleset_id_v2` hashes. A class whose worst case is deeper than the ladder therefore
+/// cannot join a running chain at all — it needs a new ruleset, which is a flag day. Unlike every
+/// other obstacle to adding a class later, **this one cannot be repaired later**: by the time the
+/// second class exists, the number is already inside the network's identity.
+///
+/// Provisioning it at the step space's own cap costs almost nothing, because the ladder is
+/// `ceil(log2(leaves)) + terminal` ROUNDS. Measured on this tree
+/// (`misaka-palw-base0/src/bin/base0-class-sizing.rs`), and pinned by
+/// `provisioning_the_whole_step_space_costs_four_rounds`:
+///
+/// | provisioned for | leaves | bisection rounds |
+/// |---|---|---|
+/// | the RC floor alone | 184,456 | 18 |
+/// | the whole step space | 4,194,304 | 22 |
+///
+/// The floor's figure is its WHOLE CONTEXT as prefill (`worst_case_step_leaf_count_v1`), not the
+/// 47,020 of its declared 64/64 job — the ladder must reach the longest job a class admits, or it
+/// admits a class an attacker picks the job length for. An earlier draft of this table used the
+/// declared job and put the price at six rounds; the test below is what corrected it.
+///
+/// Four extra rounds of worst-case prosecution — paid only when a court actually runs to its worst
+/// case — buys every class that could ever be adjudicable, because nothing deeper than
+/// `PALW_STEP_MAX_LEAVES` is admissible in the first place (`worst_case_step_leaf_count_v1`
+/// refuses it).
+pub const PALW_RC_COURT_MAX_STEP_LEAF_COUNT: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
+
 /// Why a class may not join.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwClassAdmissionError {
@@ -329,6 +358,33 @@ mod tests {
         }
         let err = verify_class_admission_v2(&bundle, &profile, &canonical, &bounded).expect_err("bounded is not derived");
         assert!(matches!(err, PalwClassAdmissionError::ClassIsNotDerived), "got {err:?}");
+    }
+
+    /// **The genesis decision, as arithmetic.** Provisioning the ladder for the whole step space
+    /// rather than for the floor alone costs six rounds, and buys every admissible class — because
+    /// `worst_case_step_leaf_count_v1` refuses anything deeper than the cap, so there is no class
+    /// this ladder can fail to reach.
+    #[test]
+    fn provisioning_the_whole_step_space_costs_four_rounds() {
+        let rounds = |leaves: u64| leaves.max(2).next_power_of_two().trailing_zeros();
+
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        // The floor's LONGEST job — whole context as prefill — and not its declared 64/64 one,
+        // which is 47,020. The ladder is checked against the longest job a class admits, so using
+        // the declared one here understated the floor's own ladder by two rounds and the price of
+        // provisioning by the same.
+        let floor_worst = worst_case_step_leaf_count_v1(&floor).expect("the floor is inside the cap");
+        assert_eq!(floor_worst, 184_456, "the floor's longest job, measured");
+        assert_eq!(rounds(floor_worst), 18);
+
+        assert_eq!(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, PALW_STEP_MAX_LEAVES);
+        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT), 22);
+        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT) - rounds(floor_worst), 4, "the price of the whole step space");
+
+        // And it really is every class: the cap is what `worst_case_step_leaf_count_v1` enforces,
+        // so a class the ladder cannot reach is a class that was already inadmissible.
+        let big = base0_profile_v1(qwen_scale()).expect("expressible");
+        assert!(worst_case_step_leaf_count_v1(&big).expect("inside the cap") <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
     }
 
     /// The measured reason `qwen_scale` carries `tile_len` 2048: at the floor's 64 the same

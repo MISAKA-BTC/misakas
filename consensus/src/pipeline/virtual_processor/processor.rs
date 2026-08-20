@@ -3631,6 +3631,25 @@ impl VirtualStateProcessor {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
                 }
+                Obj::ClassRegistered { class_id, .. } => {
+                    // **Refused, and the refusal is the wiring.** A class registration is the one
+                    // object whose validity is an arithmetic fact about a GRAPH — that every
+                    // kernel it reaches is adjudicable (ADR-0038 A4), that its longest job fits
+                    // the ruleset's ladder, and that its declared `pwu_per_inference` is the
+                    // counted one rather than a number that multiplies its own fork-choice
+                    // weight. `palw_class_admission_v2::verify_class_admission_v2` performs all
+                    // three, and it needs the shape profile and the canonical job to do it.
+                    //
+                    // Neither rides this object. Until a carrier carries them, the honest answer
+                    // is no: the catch-all below used to let this through unchecked, which would
+                    // have installed a class whose disputes end `Unadjudicable` — rejected but
+                    // unslashed, the exact hole coverage exists to close. Genesis registrations
+                    // do not reach here; they are checked by `verify_palw_genesis_v2` against the
+                    // catalog the ruleset id commits to.
+                    return Err(format!(
+                        "class {class_id} cannot be registered on a running chain: the object carries no shape profile,                          so coverage, ladder depth and pwu cannot be checked (palw_class_admission_v2)"
+                    ));
+                }
                 _ => {}
             }
         }

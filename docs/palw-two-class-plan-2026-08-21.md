@@ -71,15 +71,24 @@ But the ladder is `ceil(log2(leaves)) + terminal` **rounds**:
 
 | ladder provisioned for | max_step_leaf_count | rounds |
 |---|---|---|
-| the floor alone | 47,020 | 16 |
+| the floor alone | 184,456 | 18 |
 | the whole step space (`PALW_STEP_MAX_LEAVES`) | 4,194,304 | **22** |
 
-**Six extra rounds buys every class that could ever be adjudicable.** `window_court` is
-`rounds × turn_deadline_daa`, so the cost is six turn deadlines of worst-case prosecution — paid
-only when a court actually runs to its worst case.
+**Four extra rounds buys every class that could ever be adjudicable** — every one, because nothing
+deeper than the cap is admissible at all (`worst_case_step_leaf_count_v1` refuses it), so this
+ladder cannot fail to reach a class that exists. `window_court` is `rounds × turn_deadline_daa`, so
+the cost is four turn deadlines of worst-case prosecution, paid only when a court actually runs to
+its worst case.
+
+> *Corrected 2026-08-21, by the test that pins it.* An earlier draft of this table read 47,020 / 16
+> rounds / six extra, taken from the floor's **declared** 64/64 job. The ladder is checked against
+> the longest job a class ADMITS — its whole context as prefill — which for the floor is 184,456.
+> Using the declared job understates a class's own ladder, which is the same mistake as admitting a
+> class an attacker picks the job length for.
 
 > **Decision needed at genesis:** set the RC's `court.max_step_leaf_count` to `PALW_STEP_MAX_LEAVES`
-> rather than to the floor's own worst case. This is the only part of the plan that expires.
+> rather than to the floor's own worst case. This is the only part of the plan that expires. Pinned
+> in code as `palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT`.
 
 ## 5. What a Qwen-scale class will actually look like
 
@@ -112,5 +121,8 @@ weight rows against `artifact_root`, so an adjudicating node holds the root and 
    `docs/palw-base0-ptq-pipeline-scope.md`, whose §5 engine gaps (norm gain via `MulElem`, GQA,
    per-channel requant) are what decide how faithful a dense-Qwen port can be.
 3. **A carrier for `ClassRegistered`**, calling §3's gate before the transition. Belongs with the
-   ADR-0046 carriage.
+   ADR-0046 carriage. Until it exists the pipeline **refuses** the object rather than passing it:
+   `palw_v2_validate_objects` had a catch-all that let an unlisted object through unchecked, which
+   would have installed a class with no coverage, ladder or pwu check — the A4 hole in the one place
+   A4 is decided. The refusal names what a carrier must add.
 4. The floor's `residual_requant`, settled with its weights and before its class id (§1).

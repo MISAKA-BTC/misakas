@@ -32,6 +32,10 @@ use kaspa_hashes::Hash64;
 /// * **vocab 128_256, not 151_936** — `Base0ShapeV1::validate` bounds every dimension by
 ///   `MAX_DOT_LEN` (131_071), so a Qwen-family vocabulary is refused and a Llama-3-class one fits.
 ///
+/// `tile_len` is 2048 rather than the floor's 64, and that is measured rather than chosen: the
+/// sweep at the end of this binary shows the same geometry is adjudicable only to `n_ctx` 175 at
+/// 64, because a class must fit `PALW_STEP_MAX_LEAVES` with its WHOLE context as prefill.
+///
 /// So this is "Qwen scale", not "Qwen". Named here so the second class's numbers are checked long
 /// before anyone can register it — the one thing that cannot be derived is `artifact_root`, and
 /// that is the weights.
@@ -45,7 +49,7 @@ const QWEN_SCALE: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
     n_ctx: 4_096,
     n_threads: 1,
     rms_eps_q: 1 << 8,
-    tile_len: 64,
+    tile_len: 2_048,
 };
 
 /// Prefill/decode pairs a Qwen-scale class might name as canonical and worst case. The worst case
@@ -161,6 +165,14 @@ fn main() {
     let big = base0_profile_v1(QWEN_SCALE).expect("the Qwen-scale geometry is expressible");
     let floor_worst = step_leaf_count(&floor, &job_context(&floor, PALW_RC_BASE0_WORST_CASE.0, PALW_RC_BASE0_WORST_CASE.1))
         .expect("the floor's worst case counts");
+    println!("## True worst cases (whole context as prefill) — what the ladder must reach\n");
+    for (name, prof) in [("floor", &floor), ("qwen-scale", &big)] {
+        match worst_case_step_leaf_count_v1(prof) {
+            Ok(w) => println!("- {name}: **{w}** leaves, {} rounds", bisection_rounds(w)),
+            Err(e) => println!("- {name}: refused ({e:?})"),
+        }
+    }
+    println!();
     println!("## The provisioning question\n");
     println!("| ladder provisioned for | max_step_leaf_count | rounds | extra rounds vs the floor |");
     println!("|---|---|---|---|");
