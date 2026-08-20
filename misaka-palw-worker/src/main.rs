@@ -2102,17 +2102,41 @@ fn run_v2_manifest() {
         "llama_static_library_sha256": faster_hex::hex_string(&manifest.llama_static_library_sha256),
         "golden_vector_root": hex(manifest.golden_vector_root),
         "golden_registered": std::env::var(PALW_GOLDEN_ENV).is_ok(),
+        // The DISPLAY document reports the flags that actually decided this binary's kernels.
+        //
+        // Measured 2026-08-20 on an M4 Pro: the cache really contains `GGML_AVX2:BOOL=ON` on an
+        // arm64 build, because those options are llama.cpp DEFAULTS that its arm64 kernel
+        // selection never consults. Printing them made this document claim AVX2 for a binary
+        // full of NEON — exactly the "measured from the real build, never declared" promise the
+        // build script makes, broken by CMake's defaults rather than by anyone's intent.
+        //
+        // The x86 word is emitted only on x86; on aarch64 the honest evidence is
+        // `host_cpu_features` (`neon=1,dotprod=1`), measured from the host. The
+        // arch-independent flags print everywhere because they mean the same thing everywhere.
+        //
+        // `runtime_manifest_hash_v2` is UNCHANGED: it still covers the full cache-derived set, so
+        // no consensus identity moves. This is a truthfulness fix to the human-facing document,
+        // and keeping the two apart is deliberate — a display that lies is a bug, and a
+        // fingerprint that changes is a fork.
         "ggml_flags": {
             "native": manifest.ggml_native,
             "openmp": manifest.ggml_openmp,
             "blas": manifest.ggml_blas,
             "accelerate": manifest.ggml_accelerate,
-            "sse42": manifest.ggml_sse42,
-            "avx": manifest.ggml_avx,
-            "avx2": manifest.ggml_avx2,
-            "fma": manifest.ggml_fma,
-            "f16c": manifest.ggml_f16c,
             "cpu_all_variants": manifest.ggml_cpu_all_variants,
+            "x86_isa": if cfg!(target_arch = "x86_64") {
+                serde_json::json!({
+                    "sse42": manifest.ggml_sse42,
+                    "avx": manifest.ggml_avx,
+                    "avx2": manifest.ggml_avx2,
+                    "fma": manifest.ggml_fma,
+                    "f16c": manifest.ggml_f16c,
+                })
+            } else {
+                // Not "false" — absent. Reporting `avx2: false` on arm64 would be a second
+                // untrue claim about a flag nothing read.
+                serde_json::json!("not applicable on this architecture; see host_cpu_features")
+            },
         },
         "fp_environment_probe": fp.canonical_string(),
         "fp_environment_canonical": fp.is_canonical(),

@@ -417,6 +417,16 @@ pub struct PalwJobEnvelopeV2 {
     pub trace_scheme_id: Hash64,
     pub cu_ruleset_id: Hash64,
 
+    /// **Audit H7's free field, and it is still free here.** Nothing in carriage inspects it, so
+    /// a supervisor may set any value and the entropy gate item 5 asks about would be measuring a
+    /// number the job's own author chose.
+    ///
+    /// Scope, corrected 2026-08-20: this is the SUPERVISOR's job object for the replay/legs
+    /// paths. The V2 attempt lane has no `execution_seed` — `PalwAttemptUnsignedV2` binds
+    /// `challenge_v2` over the header's own position instead, and the finalizer refuses a
+    /// mismatch — and the free-prompt lane derives its seed from the job's chain anchor
+    /// (`palw_fp_execution_seed_v3`). This envelope is the one place the hole remains, and it
+    /// reaches consensus through [`PalwJobContextV2::from_envelope`].
     pub execution_seed: [u8; 32],
     pub prompt_token_ids: Vec<u32>,
     pub exact_decode_tokens: u32,
