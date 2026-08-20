@@ -2275,6 +2275,17 @@ pub fn palw_rc_params(
     let mut params = TESTNET_PARAMS.clone();
     params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
     params.genesis = crate::config::genesis::PALW_RC_GENESIS;
+    // **Empty on purpose, and it cannot be filled from here.**
+    //
+    // Inheriting the test nets' seeders would be worse than empty: those records answer with
+    // testnet-10/11 nodes, which this network rejects at the handshake, so discovery would LOOK
+    // configured and find nobody. A new network's discovery names have to be names someone owns
+    // and delegates — an operational step, not a code one — and `dns_seeders` is deliberately
+    // outside `consensus_params_id` ("where to find peers is not a rule about blocks"), so adding
+    // them later is a plain edit and not a flag day.
+    //
+    // Until then a node bootstraps with `--addpeer`, and `kaspad` WARNS at startup when it has
+    // neither seeders nor explicit peers rather than sitting alone in silence.
     params.dns_seeders = &[];
     // A `ConsensusV2` network activates no V1 PALW proof-of-work and installs no V1 fence —
     // `validate_palw_v2` refuses both, and that refusal is why this is a new identity.

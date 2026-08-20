@@ -871,8 +871,21 @@ Do you confirm? (y/n)";
         );
     } else if args.disable_dns_seeding {
         info!("P2P bootstrap: DNS seed disabled (--nodnsseed) — using explicit peers + the address manager");
+    } else if args.add_peers.is_empty() {
+        // The dead case, and it deserves a WARN rather than the info line it used to share with
+        // the benign one: no seeders, no --connect, no --addpeer. On a network that has run
+        // before, the address manager still holds peers and this is merely noisy; on a NEW
+        // network — which is exactly when `dns_seeders` is empty — the address book is empty too,
+        // and the node will sit alone forever without ever saying why. A new network's discovery
+        // names are an operational step (someone must own and delegate them), so the software
+        // cannot fix this for the operator; it can refuse to be quiet about it.
+        warn!(
+            "P2P bootstrap: this network has NO DNS seeders and no --connect/--addpeer peers were given. \
+             If the address manager is empty (a fresh datadir on a new network) this node will not find \
+             anyone. Pass --addpeer=<host:port> with a peer you know, or configure seeders for the network."
+        );
     } else {
-        info!("P2P bootstrap: no DNS seeders configured for this network — using explicit peers + the address manager");
+        info!("P2P bootstrap: no DNS seeders configured for this network — using the explicit --addpeer peers + the address manager");
     }
 
     let grpc_server_addr = args.rpclisten.unwrap_or(ContextualNetAddress::loopback()).normalize(config.default_rpc_port());
