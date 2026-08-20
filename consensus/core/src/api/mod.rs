@@ -538,6 +538,20 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **Unit D, site 2's input: this consensus's own PALW order for its virtual sink.**
+    ///
+    /// `None` on a network with no `ConsensusV2` bundle (every shipped preset) and on a sink this
+    /// node could not weigh. The IBD staging gate compares two of these through
+    /// `palw_fork_authority_v2::decide_ibd_commit_v2`, which is the SAME comparator the virtual
+    /// tip and the deep-reorg gate use — the unit's whole point is that a node cannot hold two
+    /// answers to "which chain is canonical" (P0-5).
+    ///
+    /// Deliberately the sink's and not the header download hint's: the hint is a download
+    /// heuristic that says so in its own name, and a consensus decision reading it reopens P0-5.
+    fn get_palw_candidate_order_v2(&self) -> Option<crate::palw_fork_choice::PalwCandidateOrderV1> {
+        None
+    }
+
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.
     /// Since this might be an expensive operation for deep blocks, we allow the caller to specify a limit
     /// `max_traversal_allowed` on the maximum amount of blocks to traverse for obtaining the answer

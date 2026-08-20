@@ -2110,6 +2110,13 @@ impl ConsensusApi for Consensus {
         self.headers_selected_tip_store.read().get().unwrap().hash
     }
 
+    /// Unit D, site 2: the order of this consensus's own virtual sink — the chain it would
+    /// actually keep, not the chain it happened to download.
+    fn get_palw_candidate_order_v2(&self) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+        let sink = self.get_sink();
+        self.virtual_processor.palw_candidate_order_v2(sink)
+    }
+
     fn get_antipast_from_pov(
         &self,
         hash: BlockHash,

@@ -210,6 +210,22 @@ impl PruningProcessor {
         let new_pruning_points = self.pruning_point_manager.next_pruning_points(sink_ghostdag_data, current_pruning_point);
 
         if let Some(new_pruning_point) = new_pruning_points.last().copied() {
+            // **Unit D, site 3: the safe frontier is a pruning CEILING.**
+            //
+            // Everything at or below the frontier is resolved and travels summarized in the state
+            // carriage; everything above it may still be EVIDENCE — an unresolved claim's history,
+            // an open court's committed roots. Pruning those would make a live dispute
+            // unadjudicable by deletion, which is a way to win a court case that no rule mentions.
+            // The gate reads the same frontier the fork-choice authority orders by, so pruning
+            // cannot advance past what selection still considers unsettled.
+            //
+            // Trivially true (and skipped) on every network with no V2 bundle.
+            if !self.virtual_processor.palw_pruning_point_allowed_v2(new_pruning_point) {
+                info!(
+                    "Pruning point movement to {new_pruning_point} is above the PALW safe frontier — history under trial is not                      prunable; keeping {current_pruning_point}"
+                );
+                return;
+            }
             let retention_period_root = pruning_point_read.retention_period_root().unwrap();
 
             // Update past pruning points and pruning point stores

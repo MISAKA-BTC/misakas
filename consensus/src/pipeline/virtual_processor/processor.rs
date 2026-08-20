@@ -3365,6 +3365,50 @@ impl VirtualStateProcessor {
     /// reaches the pruning point). Returning empty is semantically correct — a block with no
     /// accountable acceptance data contributes no txs; a genuine inconsistency on a non-pruned block
     /// surfaces in the trace log instead of crashing the virtual processor.
+    /// **Unit D: the ONE fork-choice authority, as this node reads it for a candidate.**
+    ///
+    /// Every V2 selection site — virtual tip, IBD commit, the pruning ceiling, the deep-reorg gate
+    /// — orders candidates by `PalwCandidateOrderV1` and nothing else. The point of the unit is
+    /// that they order by the SAME thing: P0-5 is two canonical-chain views inside one node, and
+    /// wiring one site would create exactly that. So there is one constructor, here, and the four
+    /// consumers below take its output.
+    ///
+    /// `None` on a network with no V2 bundle, and every consumer falls through to blue work there
+    /// — which is every shipped preset. A candidate this node cannot weigh is also `None`, and
+    /// that is deliberately NOT "zero": a chain nobody could weigh must not outrank one that was
+    /// weighed and found small.
+    pub(crate) fn palw_candidate_order_v2(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let store = self.palw_state_v2_store.read();
+        let (tip_block, tip_state) = store.load_tip(state_params).ok().flatten()?;
+        // The order must be the CANDIDATE's, not the sink's, or every candidate would compare
+        // equal and the authority would be a constant (P0-4 in fork-choice clothing). The walk
+        // from the materialized tip to the candidate is what makes it candidate-scoped.
+        let path = self.dag_traversal_manager.calculate_chain_path(tip_block, candidate, None);
+        let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
+        let added: Vec<BlockHash> = path.added.iter().copied().collect();
+        drop(store);
+        let store = self.palw_state_v2_store.read();
+        let state =
+            crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()?;
+        let (frontier_blue_score, _) = state.safe_frontier();
+        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(frontier_blue_score, state.safe_weight(), state.bounded_immature(), candidate))
+    }
+
+    /// Unit D, site 3: whether a proposed pruning point respects the safe frontier.
+    ///
+    /// History under trial is not prunable — an unresolved claim's history and an open court's
+    /// committed roots are evidence, and pruning them would make a dispute unadjudicable by
+    /// deletion. `true` on a network with no V2 bundle: there is no frontier to respect.
+    pub(crate) fn palw_pruning_point_allowed_v2(&self, candidate_point: BlockHash) -> bool {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return true };
+        let store = self.palw_state_v2_store.read();
+        let Some((_, state)) = store.load_tip(state_params).ok().flatten() else { return true };
+        let Ok(header) = self.headers_store.get_header(candidate_point) else { return true };
+        let (frontier, _) = state.safe_frontier();
+        kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
+    }
+
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
     /// this node DERIVED from the candidate's chain rather than one the block asserted.
     ///
@@ -6825,6 +6869,30 @@ impl VirtualStateProcessor {
     /// data is committed by the time the gate runs (the candidate's by
     /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
     fn dns_reorg_outcome(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> DnsReorgOutcome {
+        // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
+        //
+        // A private fork can pile blue work without limit, but its frontier died at the fork
+        // point — piles do not mature, because nobody could collect receipts on a chain nobody
+        // saw — so frontier-first ordering refuses it here with the same three keys the virtual
+        // tip used. Consulting depth, raw blue work or the stake overlay INSTEAD would be the
+        // second authority coming back through the basement, which is P0-5.
+        //
+        // **Scoped to actual REORGS, and the scoping is load-bearing.** A first version ran the
+        // comparator on every sink-search candidate and the node wedged with "valid sink must
+        // exist": `compare_palw_candidates_v1` ties a child of the sink with the sink on frontier
+        // and both weights, so the candidate-hash key decided — and roughly half of all ordinary
+        // forward progress was refused as a failed reorg. A block that EXTENDS the sink is not
+        // abandoning anything, which is why the existing DNS gate scopes itself the same way (it
+        // asks whether the candidate still contains the confirmed anchor).
+        if !matches!(self.reachability_service.try_is_chain_ancestor_of(prev_sink, candidate), Ok(true))
+            && let (Some(incumbent), Some(challenger)) =
+                (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate))
+        {
+            return match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
+                kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => DnsReorgOutcome::GateInactive,
+                kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+            };
+        }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return DnsReorgOutcome::GateInactive;
         };
@@ -9007,6 +9075,22 @@ struct RankedTip {
 
 impl Ord for RankedTip {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // **Unit D's virtual-tip site is deliberately NOT here, and the reason is a measurement.**
+        //
+        // A version of this compared `PalwCandidateOrderV1` first, and the node died on
+        // `assert_eq!(virtual_ghostdag_data.selected_parent, new_sink)`. GHOSTDAG's
+        // `find_selected_parent` is `max by blue_work`, and `pick_virtual_parents` asserts that
+        // the sink the search chose IS that maximum. So a sink search ordered by PALW weight and a
+        // DAG whose selected parent is ordered by blue work are two different chains inside one
+        // node — the very thing Unit D exists to prevent, arriving through the floor rather than
+        // the basement.
+        //
+        // The fix is not in this comparator: ADR-0038 Decision B says fork choice "reads
+        // `weight(·)`", which means GHOSTDAG'S OWN selected-parent rule must, and that changes
+        // blue score, the mergeset and every structural fact derived from them. It is its own
+        // unit of work, not a line here. Until it lands, the three sites that can be wired without
+        // contradicting the DAG are wired (IBD commit, pruning ceiling, deep-reorg gate) and this
+        // one is documented rather than half-done.
         kaspa_consensus_core::palw_chain_weight::order_tips_v1(
             self.rule,
             (self.palw.as_ref(), &self.block),

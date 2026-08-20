@@ -1779,7 +1779,42 @@ impl IbdFlow {
         if self.active_recovery_permit.is_none() {
             self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
         }
+        self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
         Ok(())
+    }
+
+    /// **Unit D, site 2: on a V2 network the staging commit is the one comparator, and nothing
+    /// else.**
+    ///
+    /// The timestamp check above is a heuristic about a peer's honesty; this is a statement about
+    /// which chain is canonical, and it must be the SAME statement the virtual tip and the
+    /// deep-reorg gate make. A node that committed a staged chain its own fork choice would not
+    /// select would be holding two answers at once, which is P0-5 arriving by IBD.
+    ///
+    /// Ties keep the incumbent, deliberately: a re-derived byte-equal chain, or one equal in every
+    /// key, must never churn the sink between two nodes that happened to stage in different orders.
+    ///
+    /// Inert where either side has no V2 order — every shipped preset — so the existing IBD path
+    /// is unchanged there.
+    async fn validate_staging_palw_order(
+        &self,
+        consensus: &ConsensusProxy,
+        staging_consensus: &ConsensusProxy,
+    ) -> Result<(), ProtocolError> {
+        let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
+        let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
+        let (Some(incumbent), Some(challenger)) = (incumbent, challenger) else {
+            return Ok(());
+        };
+        match kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger) {
+            kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::Commit => Ok(()),
+            kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => {
+                Err(ProtocolError::OtherOwned(format!(
+                    "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
+                    challenger.safe_frontier_blue_score, challenger.safe_weight, incumbent.safe_frontier_blue_score, incumbent.safe_weight
+                )))
+            }
+        }
     }
 
     async fn sync_and_validate_pruning_proof(

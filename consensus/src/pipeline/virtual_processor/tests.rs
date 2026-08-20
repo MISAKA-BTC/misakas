@@ -458,6 +458,60 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
     );
 }
 
+/// **Unit D: one authority, and it is the candidate's — not the sink's.**
+///
+/// The order is what the IBD commit, the pruning ceiling and the deep-reorg gate all compare, so
+/// the property that matters is that it is a function of the CANDIDATE. An order that answered
+/// the same thing for every candidate would be a constant, and a constant authority is no
+/// authority — every contest would fall through to whatever ran next.
+#[tokio::test]
+async fn the_palw_candidate_order_is_the_candidates_own() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let parent = vp.headers_store.get_header(sink).unwrap().direct_parents()[0];
+
+    let sink_order = vp.palw_candidate_order_v2(sink).expect("a V2 network orders its own sink");
+    let parent_order = vp.palw_candidate_order_v2(parent).expect("and any candidate on its chain");
+    // Each order names the candidate it is about. Without this key the comparator would not be
+    // total, and two candidates equal in every weight would compare `Equal` — each node keeping
+    // whichever it happened to hold.
+    assert_eq!(sink_order.candidate, sink);
+    assert_eq!(parent_order.candidate, parent);
+    assert_ne!(sink_order, parent_order, "the order is the candidate's, not a constant");
+    // `live_total >= safe_weight` is a type-level invariant of the constructor, asserted here on
+    // real chain data rather than on a fixture.
+    assert!(sink_order.live_total >= sink_order.safe_weight);
+
+    // A network with no V2 bundle has no order at all — the three consumers fall through to what
+    // they did before, which is what keeps every shipped preset unchanged.
+    let plain = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let plain_consensus = TestConsensus::new(&plain);
+    let _lt = plain_consensus.init();
+    let plain_sink = plain_consensus.get_sink();
+    assert!(
+        plain_consensus.virtual_processor().palw_candidate_order_v2(plain_sink).is_none(),
+        "no bundle, no order — the authority is absent rather than defaulted"
+    );
+    // …and its pruning ceiling is trivially satisfied, so pruning is unchanged there.
+    assert!(plain_consensus.virtual_processor().palw_pruning_point_allowed_v2(plain_sink));
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {

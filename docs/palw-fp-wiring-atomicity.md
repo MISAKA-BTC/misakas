@@ -143,6 +143,43 @@ ceiling and the deep-reorg gate **together**, with the header processor's store 
 download hint (ADR-0042 Decision 9). Wiring one site is P0-5: two canonical-chain views inside
 one node.
 
+**Three of the four landed 2026-08-20. The fourth is blocked, and the blocker is structural.**
+
+`VirtualStateProcessor::palw_candidate_order_v2` is the one constructor — a `PalwCandidateOrderV1`
+for a CANDIDATE, built by walking the stored state from the materialized tip to that candidate, so
+it is candidate-scoped rather than a fact about the node's sink. Its consumers:
+
+* **IBD commit** — `validate_staging_palw_order` in `protocol/flows/src/ibd/flow.rs`, through a new
+  `ConsensusApi::get_palw_candidate_order_v2` that answers for the consensus's own SINK (never the
+  header download hint, which says in its own name that it is a heuristic). Ties keep the
+  incumbent.
+* **Pruning ceiling** — `palw_pruning_point_allowed_v2`, called from
+  `advance_pruning_point_if_possible`. History under trial is not prunable: an unresolved claim's
+  history and an open court's committed roots are evidence, and pruning them is a way to win a
+  court case that no rule mentions.
+* **Deep-reorg gate** — `dns_reorg_outcome`, scoped to candidates that do NOT extend the sink.
+  That scoping is load-bearing and was found by wedging the node: run on every sink-search
+  candidate, the comparator ties a child of the sink with the sink on frontier and both weights,
+  the candidate-hash key decides, and roughly half of all ordinary forward progress is refused as
+  a failed reorg.
+
+**Virtual tip selection cannot be wired here, and the measurement says why.** A version that
+compared `PalwCandidateOrderV1` first inside `RankedTip::cmp` died on
+`assert_eq!(virtual_ghostdag_data.selected_parent, new_sink)`: GHOSTDAG's `find_selected_parent`
+is `max by blue_work`, and `pick_virtual_parents` asserts the sink the search chose IS that
+maximum. A sink search ordered by PALW weight and a DAG whose selected parent is ordered by blue
+work are two chains inside one node — Unit D's own failure mode, arriving through the floor.
+
+The fix is not a comparator: ADR-0038 Decision B says fork choice "reads `weight(·)`", which means
+**GHOSTDAG's own selected-parent rule must**, and that moves blue score, the mergeset and every
+structural fact derived from them. That is its own unit of work — call it Unit E — and until it
+lands the honest state is three sites wired and the fourth documented rather than half-done.
+
+**What that costs, stated plainly:** a node can currently commit a staged chain by IBD, or refuse
+a deep reorg, on the PALW order while its virtual tip selection still runs on blue work. On a
+network with no V2 bundle none of the three consult anything (every shipped preset), so nothing
+is at risk today — but a V2 network must not be activated until Unit E closes the gap.
+
 ## What is safe to do before the units
 
 Everything landed so far, and this list is the reason each piece was chosen:
