@@ -221,7 +221,7 @@ mod tests {
     }
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap()
     }
 
     fn bond_op(v: u64) -> TransactionOutpoint {

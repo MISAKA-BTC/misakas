@@ -558,6 +558,32 @@ must independently carry `min_collateral_sompi`. Splitting X collateral therefor
 honest claim: **Sybil-bounded, not Sybil-proof.** Panel quorum math and slash sizing must assume
 an adversary holds every identity their collateral can fund.
 
+### A4 — the free panel re-roll is priced on BOTH lanes, and only one of them was
+
+Decision 7's panel is drawn from an anchor the claim cannot choose, so there is nothing to shop
+for at mining time. What remained was the *re-roll*: a producer that dislikes its drawn panel lets
+the bind window lapse and commits again. On the ATTEMPT lane that is already expensive, and
+measurably so (`abandoning_a_panel_costs_a_block_its_reward_and_its_epoch_budget`): the claim is a
+BLOCK, so a re-roll is another solved PoW, the abandoned block's reward is forfeit, and the
+class's epoch budget was spent at acceptance and is never refunded.
+
+**All three of those costs rest on the same fact, and the free-prompt lane does not have it.** An
+ADR-0044 commitment rides a transaction, not a block. Measured on the merged tree: after a
+`BindTimeout` the reservation was released in full, no counter moved, no bond was debited, and the
+next commitment was accepted in the very next block — a redraw priced at one transaction fee,
+indefinitely repeatable.
+
+The fix keeps an abandoned free-prompt claim's collateral RESERVED for
+`PalwStateParamsV2::fp_abandon_hold_daa` after the void. Nothing is confiscated — declining to
+bind is not an offence — the reservation is delayed, and every sompi returns when the span
+elapses. What that buys is a denominator: N concurrent redraws need N × the reservation, so the
+redraw rate is bounded by collateral. That is deliberately the same currency §A3's Sybil bound
+speaks, so the two compose — an adversary's identity count and its redraw rate are both bounded by
+the same X, and neither can be traded for the other.
+
+`fp_abandon_hold_daa = 0` is the pre-FP configuration and leaves the attempt lane exactly as it
+was, which is what every attempt-only fixture runs at.
+
 ---
 
 ## What this ADR does not decide

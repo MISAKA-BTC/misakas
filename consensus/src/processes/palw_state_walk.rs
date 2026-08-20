@@ -117,7 +117,7 @@ mod tests {
     fn params() -> PalwStateParamsV2 {
         // base = h64(1) at the whole 1000‰ (granted by the first registration, ADR-0045
         // Decision 3), max_factor 4, tolerance 1000‰, min collateral 100, fp split 800‰.
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap()
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {

@@ -630,7 +630,7 @@ pub(crate) mod tests {
     }
 
     fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800, 0).unwrap()
     }
 
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
@@ -658,7 +658,7 @@ pub(crate) mod tests {
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
             // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800).unwrap(),
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800, 0).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
@@ -706,7 +706,7 @@ pub(crate) mod tests {
                 // enforces another — the C5 disagreement shape, applied to the base id.
                 "base id disagreement",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800).unwrap();
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800, 0).unwrap();
                 }),
             ),
             (
@@ -716,7 +716,7 @@ pub(crate) mod tests {
                 // subject (shares are chain state now); the split is still a params fact.
                 "one-lane split (1000‰ has no receipts)",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000).unwrap();
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap();
                 }),
             ),
             (

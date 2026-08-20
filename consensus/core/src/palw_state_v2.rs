@@ -196,6 +196,27 @@ pub struct PalwStateParamsV2 {
     /// Decision 3 made them chain state (`PalwChainStateV2::class_shares`), granted by
     /// registration — the lane split composes with those granted shares at retarget.
     fp_attempt_share_permille: u16,
+    /// **Audit C5's free panel re-roll, priced (the free-prompt lane's half).**
+    ///
+    /// On the attempt lane, abandoning a claim at `BindTimeout` already costs three things and
+    /// `abandoning_a_panel_costs_a_block_its_reward_and_its_epoch_budget` measures all three. All
+    /// three rest on the same fact: an attempt CLAIM IS A BLOCK. A free-prompt commitment is not —
+    /// it rides a transaction — so on that lane every one of them evaporates, which the merge that
+    /// brought the two lanes together made measurable: after a `BindTimeout` the reservation was
+    /// released in full, no counter moved, no bond was debited, and the next commitment was
+    /// accepted in the very next block. A producer who disliked its drawn panel could redraw for
+    /// the price of a transaction fee, indefinitely.
+    ///
+    /// So an abandoned free-prompt claim keeps its collateral RESERVED for this many DAA after the
+    /// void. Nothing is confiscated — the producer is not guilty of anything, it declined to
+    /// proceed — but N concurrent redraws now need N × the reservation, which converts a
+    /// fee-priced attack into a collateral-priced one. That is the currency Decision 7's Sybil
+    /// bound is already denominated in, so the two compose: an attacker's redraw rate is bounded
+    /// by the same collateral that bounds its identity count.
+    ///
+    /// `0` disables the hold (the pre-FP configuration, and what every attempt-only fixture runs
+    /// at — on that lane the block cost already does this job).
+    fp_abandon_hold_daa: u64,
 }
 
 impl PalwStateParamsV2 {
@@ -212,6 +233,7 @@ impl PalwStateParamsV2 {
         budget_tolerance_permille: u32,
         min_collateral_sompi: u64,
         fp_attempt_share_permille: u16,
+        fp_abandon_hold_daa: u64,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
             return Err(PalwStateV2Error::InvalidParams("beta_permille exceeds 1000 (β ≤ 1)"));
@@ -252,6 +274,7 @@ impl PalwStateParamsV2 {
             budget_tolerance_permille,
             min_collateral_sompi,
             fp_attempt_share_permille,
+            fp_abandon_hold_daa,
         })
     }
 
@@ -308,6 +331,11 @@ impl PalwStateParamsV2 {
         self.fp_attempt_share_permille
     }
 
+    /// How long an abandoned free-prompt claim's collateral stays reserved (see the field's doc).
+    pub fn fp_abandon_hold_daa(&self) -> u64 {
+        self.fp_abandon_hold_daa
+    }
+
     /// ADR-0045's grant floor: the smallest share whose WORST-CASE epoch budget
     /// (denominator = the whole 1000‰) is still at least one block — `⌈10⁶ / (tol · E)⌉`.
     /// Enforced at every grant, which is what makes a mid-flight zero budget unrepresentable
@@ -324,6 +352,30 @@ impl PalwStateParamsV2 {
 /// `⌊β · pwu / 1000⌋` — THE definition of an immature claim's live contribution. Floor, so the
 /// immature side is never rounded up into weight nobody earned; every node computes the same
 /// integer or the chain forks on a rounding mode.
+/// Whether a claim record is a free-prompt commitment abandoned at `BindTimeout` whose
+/// collateral hold has not yet elapsed at `at_daa` (audit C5, free-prompt half).
+///
+/// A pure function of the RECORD and the params, which is what lets the deadline index and the
+/// exposure accumulator both be rebuilt from the claims alone — a hold that needed its own stored
+/// flag would be a fact two structures could disagree about.
+pub fn palw_claim_is_on_abandon_hold_v2(claim: &PalwClaimStateV2, params: &PalwStateParamsV2, at_daa: u64) -> bool {
+    if params.fp_abandon_hold_daa == 0 {
+        return false;
+    }
+    if !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) {
+        return false;
+    }
+    let PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout } = claim.phase else {
+        return false;
+    };
+    match voided_daa.checked_add(params.fp_abandon_hold_daa) {
+        // Strict: the block AT the release point is the one that releases, matching the sweep's
+        // `deadline < daa_score` boundary.
+        Some(release_at) => at_daa < release_at,
+        None => true,
+    }
+}
+
 pub fn immature_contribution_v2(params: &PalwStateParamsV2, pwu: u64) -> u128 {
     (pwu as u128) * (params.beta_permille as u128) / 1000
 }
@@ -1039,7 +1091,10 @@ impl PalwChainStateV2 {
     /// Recomputes every derivable fact from the primary data and cross-checks the maintained
     /// copies: the exposure accumulator, both weights, and all three indices. Carriage loading
     /// runs this unconditionally; the differential tests run it after every apply.
-    pub fn assert_internal_consistency(&self) -> Result<(), PalwStateV2Error> {
+    /// Takes `params` because one derivable fact needs them: audit C5's abandon hold is a
+    /// function of the claim record AND the configured hold span, so an accumulator that could be
+    /// recomputed without them would be one the hold is invisible to.
+    pub fn assert_internal_consistency(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         let mut immature: u128 = 0;
@@ -1079,7 +1134,19 @@ impl PalwChainStateV2 {
                         safe = safe.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                 },
-                PalwClaimPhaseV2::Voided { .. } => {}
+                // A voided claim weighs nothing and holds no place in the frontier queue. It may
+                // still hold COLLATERAL: audit C5's abandon hold keeps an abandoned free-prompt
+                // commitment's reservation for a span, so a panel redraw costs collateral rather
+                // than a transaction fee. Recomputed here from the record and the current point,
+                // never from a stored flag, so the accumulator and the record cannot disagree.
+                PalwClaimPhaseV2::Voided { .. } => {
+                    if let Some(point) = &self.last_point
+                        && palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
+                    {
+                        let entry = exposure.entry(claim.bond).or_insert(0);
+                        *entry = entry.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
+                    }
+                }
                 _ => {
                     immature =
                         immature.checked_add(claim.immature_contribution).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
@@ -1146,11 +1213,18 @@ impl PalwChainStateV2 {
         // `expected_deadline` needs params to compute the exact daa; consistency without params
         // checks membership shape only. See `assert_deadline_consistency` for the parameterized
         // check used everywhere a params handle exists.
-        if self.deadlines.len() != expected_deadlines.len() {
+        //
+        // Audit C5's abandon hold widens this into a RANGE rather than an equality: a
+        // `BindTimeout`-voided free-prompt claim owns a deadline while its hold runs and none
+        // afterwards, and without params this check cannot tell which. The exact count is the
+        // parameterized check's business; here the abandoned claims are the slack.
+        let holdable = self.claims.values().filter(|c| abandon_hold_may_hold_a_deadline(c)).count();
+        let low = expected_deadlines.len();
+        let high = low + holdable;
+        if self.deadlines.len() < low || self.deadlines.len() > high {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
-                "deadline index holds {} entries, the claims imply {}",
-                self.deadlines.len(),
-                expected_deadlines.len()
+                "deadline index holds {} entries, the claims imply {low}..={high}",
+                self.deadlines.len()
             )));
         }
         Ok(())
@@ -1197,6 +1271,20 @@ impl PalwChainStateV2 {
                     }
                     expected.insert(*stored);
                 }
+                // Audit C5's abandon hold: the ONE terminal phase that owes a deadline. It is
+                // `voided_daa + hold`, derived from the record exactly as `void_claim` armed it —
+                // which is what keeps the index rebuildable from the claims alone.
+                PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout }
+                    if params.fp_abandon_hold_daa > 0 && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) =>
+                {
+                    let release_at =
+                        voided_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+                    // Swept holds leave no entry: after the release block the claim is an ordinary
+                    // terminal record. `last_point` is what says whether the sweep has happened.
+                    if self.last_point.as_ref().is_none_or(|point| point.daa_score <= release_at) {
+                        expected.insert((release_at, *id));
+                    }
+                }
                 PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {}
             }
         }
@@ -1207,7 +1295,7 @@ impl PalwChainStateV2 {
     }
 }
 
-/// Shape-level helper for `assert_internal_consistency` (which runs without params): does this
+/// Shape-level helper for `assert_internal_consistency`: does this
 /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
 fn expected_deadline(claim: &PalwClaimStateV2, open_courts: u32) -> Option<u64> {
     match claim.phase {
@@ -1215,8 +1303,18 @@ fn expected_deadline(claim: &PalwClaimStateV2, open_courts: u32) -> Option<u64> 
         PalwClaimPhaseV2::PanelBound { bound_daa } => Some(bound_daa),
         PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => Some(licensed_daa),
+        // The shape-level check counts entries without params, so it cannot tell a live abandon
+        // hold from a swept one — see `abandon_hold_may_hold_a_deadline` below, which is the
+        // parameterless check's whole knowledge of the hold.
         PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => None,
     }
+}
+
+/// Whether a claim MAY own a deadline entry despite being terminal (audit C5's abandon hold).
+/// Params-free by necessity — the shape check has none — so it answers "possible", not "exact".
+fn abandon_hold_may_hold_a_deadline(claim: &PalwClaimStateV2) -> bool {
+    matches!(claim.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. })
+        && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
 }
 
 /// Placeholder anchor for the shape-level count (the parameterless check counts entries; the
@@ -1551,11 +1649,45 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
-        self.release_for_claim(claim)?;
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
+        // Audit C5, free-prompt half: an abandoned commitment holds its reservation for the
+        // configured span instead of releasing it here, so a redraw costs collateral rather than
+        // a transaction fee. The hold is a DELAY, never a confiscation — `release_abandon_hold`
+        // gives every sompi back when the span elapses, and the claim is terminal throughout, so
+        // it weighs nothing and can never resume.
+        //
+        // Immature weight is released either way and immediately: a voided claim contributes no
+        // live weight the instant it is voided, which is W5, and the hold is about admission
+        // headroom alone.
+        if palw_claim_is_on_abandon_hold_v2(&voided, self.params, voided_daa) {
+            self.state.bounded_immature = self
+                .state
+                .bounded_immature
+                .checked_sub(claim.immature_contribution)
+                .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
+            self.write_claim(id, Some(voided));
+            // The deadline is re-armed rather than disarmed: the sweep's terminal arm releases
+            // the hold when it fires. Deriving it from the record (`voided_daa + hold`) is what
+            // keeps the index rebuildable, which `assert_deadline_consistency` checks.
+            self.disarm_deadline(id);
+            let release_at =
+                voided_daa.checked_add(self.params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+            self.arm_deadline(release_at, id);
+            return Ok(());
+        }
+        self.release_for_claim(claim)?;
         self.write_claim(id, Some(voided));
         self.disarm_deadline(id);
+        Ok(())
+    }
+
+    /// Give back what [`Self::void_claim`] held. Exposure only — the immature contribution was
+    /// released at the void.
+    fn release_abandon_hold(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
+        let next = current.checked_sub(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
+        self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         Ok(())
     }
 }
@@ -1969,8 +2101,22 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 );
                 builder.finalize_claim(claim_id, &claim, ctx.daa_score)?;
             }
+            // The ONE terminal claim that legitimately owns a deadline: a free-prompt commitment
+            // abandoned at `BindTimeout`, whose collateral hold expires here (audit C5). The
+            // deadline fired, so the hold is over by construction — the predicate is asserted
+            // rather than re-tested, because a deadline armed by `void_claim` and a hold computed
+            // from the record are the same arithmetic.
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+                if matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) && builder.params.fp_abandon_hold_daa > 0 =>
+            {
+                debug_assert!(
+                    !palw_claim_is_on_abandon_hold_v2(&claim, builder.params, ctx.daa_score),
+                    "the hold's own deadline fired while the record still says it is held"
+                );
+                builder.release_abandon_hold(&claim)?;
+            }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-                // A terminal claim owns no deadline; finding one is index corruption.
+                // Any other terminal claim owns no deadline; finding one is index corruption.
                 return Err(PalwStateV2Error::CarriageInconsistent(format!("terminal claim {claim_id} held a deadline")));
             }
         }
@@ -2519,6 +2665,17 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
                     *id,
                 ));
             }
+            PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout }
+                if params.fp_abandon_hold_daa > 0 && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) =>
+            {
+                // Audit C5's abandon hold, rebuilt on the same rule `void_claim` armed and
+                // `assert_deadline_consistency` recomputes.
+                let release_at =
+                    voided_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+                if state.last_point.as_ref().is_none_or(|point| point.daa_score <= release_at) {
+                    deadlines.insert((release_at, *id));
+                }
+            }
             PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => {}
             PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
                 let floor =
@@ -2653,7 +2810,7 @@ impl PalwStateCarriageV2 {
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
-        state.assert_internal_consistency()?;
+        state.assert_internal_consistency(params)?;
         state.assert_deadline_consistency(params)?;
         if let Some(expected) = expected_root {
             let got = state.state_root();
@@ -2746,7 +2903,7 @@ mod tests {
     fn params() -> PalwStateParamsV2 {
         // base = h64(1), max_factor = 4, tolerance = 1000‰ (grant floor: 1‰ at E = 1000),
         // fp split = 1000 (pure-attempt: the receipt lane measures nothing — the V1 identity).
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
@@ -2845,7 +3002,7 @@ mod tests {
         att: Option<&PalwAttemptEnvelopeV2>,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let (state, delta) = apply_palw_transition_v2(parent, p, c, objects, att).expect("transition applies");
-        state.assert_internal_consistency().expect("internal consistency after apply");
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
     }
@@ -3570,7 +3727,7 @@ mod tests {
                 parent = block(b);
             }
             let state = node.state_of(&block(9)).unwrap();
-            state.assert_internal_consistency().unwrap();
+            state.assert_internal_consistency(&p).unwrap();
             state.assert_deadline_consistency(&p).unwrap();
             roots.push((last_root.unwrap(), state.candidate_order(block(9))));
         }
@@ -4042,6 +4199,81 @@ mod tests {
         assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
     }
 
+    /// **Audit C5's free re-roll, the free-prompt half — the cost the block-based costs cannot
+    /// provide.**
+    ///
+    /// The attempt lane's three costs all rest on one fact: a claim is a BLOCK. A free-prompt
+    /// commitment rides a transaction, so on that lane the merge that brought the two lanes
+    /// together left every one of them at zero, and this test was written by MEASURING that
+    /// first: after a `BindTimeout` the reservation came back in full, no counter moved, no bond
+    /// was debited, and the next commitment was accepted in the very next block. A producer who
+    /// disliked its drawn panel could redraw for a transaction fee, indefinitely.
+    ///
+    /// The hold does not confiscate — declining to bind is not an offence — it DELAYS. What that
+    /// buys is the denominator: N concurrent redraws need N × the reservation, so the redraw rate
+    /// is bounded by collateral, which is the same currency Decision 7's Sybil bound already
+    /// speaks. This pins both halves: the hold binds while it lasts, and every sompi comes back
+    /// when it elapses.
+    #[test]
+    fn an_abandoned_free_prompt_claim_holds_its_collateral() {
+        // 300 collateral-units of exposure per claim (pwu 60 x slash_value 5), a ceiling of
+        // 500%o of 100_000, and a hold of 50 DAA.
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50).unwrap();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let reserved = s2.reserved_exposure(&bond_key(1));
+        assert_eq!(reserved, 300, "the commitment reserves against its bond");
+
+        // The bind window lapses at 111; a block past it voids the claim.
+        let (voided, _) = apply(&s2, &p, &ctx(3, 200, 3), &[], None);
+        assert!(matches!(
+            voided.claim(&h64(0xFC)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+        // The claim is terminal: no weight, live or safe, from the moment it is voided.
+        assert_eq!((voided.safe_weight(), voided.bounded_immature()), (0, 0), "an abandoned claim weighs nothing");
+        // …and yet the collateral is still committed. THIS is the whole fix.
+        assert_eq!(
+            voided.reserved_exposure(&bond_key(1)),
+            reserved,
+            "the abandoned claim keeps its reservation — a redraw costs collateral, not a fee"
+        );
+        assert_eq!(voided.bond(&bond_key(1)).unwrap().slashed, 0, "a hold is a delay, never a confiscation");
+
+        // A redraw inside the hold competes with the held reservation for the same ceiling. Two
+        // more claims fit (3 x 300 = 900 <= 500%o x 100_000 / 1000 ... the ceiling is generous
+        // here), so the assertion that matters is the accumulation itself: each concurrent
+        // attempt adds its own reservation on top of the held one.
+        let (r1, _) = apply(&voided, &p, &ctx(4, 201, 4), &[fp_commit(0xFD, 60, 3)], None);
+        assert_eq!(r1.reserved_exposure(&bond_key(1)), reserved * 2, "the redraw stacks on the hold, it does not recycle it");
+        let (r2, _) = apply(&r1, &p, &ctx(5, 202, 5), &[fp_commit(0xFE, 60, 3)], None);
+        assert_eq!(r2.reserved_exposure(&bond_key(1)), reserved * 3);
+
+        // The hold elapses at 200 + 50 = 250, and the sweep gives every sompi back. The two live
+        // claims (0xFD, 0xFE) keep theirs — the release is per-claim, not a reset.
+        let (released, _) = apply(&r2, &p, &ctx(6, 260, 6), &[], None);
+        assert_eq!(
+            released.reserved_exposure(&bond_key(1)),
+            reserved * 2,
+            "the hold expires and returns exactly what it held, and nothing else"
+        );
+        // The abandoned claim is still terminal and still abandoned — releasing collateral is not
+        // resurrection.
+        assert!(matches!(
+            released.claim(&h64(0xFC)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+
+        // And the pre-FP configuration is untouched: at hold = 0 the reservation comes straight
+        // back, which is what every attempt-only fixture in this module runs at.
+        let no_hold = params();
+        assert_eq!(no_hold.fp_abandon_hold_daa(), 0);
+        let (b0, _) = apply(&PalwChainStateV2::genesis(), &no_hold, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (c0, _) = apply(&b0, &no_hold, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let (v0, _) = apply(&c0, &no_hold, &ctx(3, 200, 3), &[], None);
+        assert_eq!(v0.reserved_exposure(&bond_key(1)), 0, "hold = 0 releases at the void, as before");
+    }
+
     /// **Audit C5's "free panel re-roll", measured rather than assumed.**
     ///
     /// The finding was that a producer who dislikes its drawn panel abandons the claim at
@@ -4220,34 +4452,34 @@ mod tests {
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, h64(1), 4, 1000, 100, 1000).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, h64(1), 4, 1000, 100, 1000).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, h64(1), 4, 1000, 100, 1000).is_err(), "zero court window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, h64(1), 4, 1000, 100, 1000).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, Hash64::default(), 4, 1000, 100, 1000).is_err(), "zero base class id");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 1, 1000, 100, 1000).is_err(), "max_factor below 2");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 999, 100, 1000).is_err(), "tolerance below unity");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 4_001, 100, 1000).is_err(), "tolerance above the ceiling");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 0).is_err(), "zero attempt share");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1001).is_err(), "attempt share above 1000");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000, 0).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000, 0).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, h64(1), 4, 1000, 100, 1000, 0).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, h64(1), 4, 1000, 100, 1000, 0).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, h64(1), 4, 1000, 100, 1000, 0).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, h64(1), 4, 1000, 100, 1000, 0).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, Hash64::default(), 4, 1000, 100, 1000, 0).is_err(), "zero base class id");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 1, 1000, 100, 1000, 0).is_err(), "max_factor below 2");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 999, 100, 1000, 0).is_err(), "tolerance below unity");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 4_001, 100, 1000, 0).is_err(), "tolerance above the ceiling");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 0, 0).is_err(), "zero attempt share");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1001, 0).is_err(), "attempt share above 1000");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100, 1000, 0).is_ok(), "β = 1 exactly is the boundary");
         // The grant floor tracks the epoch geometry: at E = 1000 · tol = 1000 the floor is 1‰,
         // and shrinking the epoch to 100 raises it to 10‰ — the share too small to buy one
         // worst-case block per epoch is not grantable, which is what keeps a mid-flight zero
         // budget unrepresentable.
-        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000).unwrap().min_grantable_share_permille(), 1);
-        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000).unwrap().min_grantable_share_permille(), 10);
+        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(), 1);
+        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(), 10);
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 
@@ -4301,7 +4533,7 @@ mod tests {
         work: PalwBlockWorkV3<'_>,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let (state, delta) = apply_palw_transition_v3(parent, p, c, objects, work).expect("transition applies");
-        state.assert_internal_consistency().expect("internal consistency after apply");
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
     }
@@ -4480,7 +4712,7 @@ mod tests {
     fn two_lane_retarget_splits_one_census() {
         // Split 800‰: epoch_length 100, so daa 100..200 is epoch 1, closed when a block lands at
         // daa ≥ 200.
-        let split = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 800).unwrap();
+        let split = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 800, 0).unwrap();
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, &split, &ctx(1, 100, 1), &register_class_and_bond(), None);
 
@@ -4529,7 +4761,7 @@ mod tests {
 
         // And at split = 1000 (every pre-FP fixture), the receipt lane never moves: same walk,
         // attempt production only.
-        let pure = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 1000).unwrap();
+        let pure = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap();
         let (t1, _) = apply(&PalwChainStateV2::genesis(), &pure, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let (t2, _) = apply(&t1, &pure, &ctx(2, 110, 2), &[], Some(&attempt(40, 1)));
         let boot_pure = t2.receipt_target(&h64(1)).unwrap().target;
@@ -4677,7 +4909,7 @@ mod tests {
         // for root. A wiring layer that drifts here is P0-4.
         assert_eq!(reorged, b1, "reorg-by-delta reaches the freshly-built winning branch");
         assert_eq!(reorged.state_root(), b1.state_root());
-        reorged.assert_internal_consistency().unwrap();
+        reorged.assert_internal_consistency(&p).unwrap();
         reorged.assert_deadline_consistency(&p).unwrap();
 
         // Property 2: quantum 0 is spent on B (it was spent there), and quantum 1 — spent only on

@@ -119,6 +119,12 @@ const WITHDRAWAL_DELAY: u64 = 6_000;
 const CLASS_DAA_MAX_FACTOR: u32 = 4;
 const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 
+/// Audit C5's abandon hold, in DAA: how long a free-prompt commitment abandoned at `BindTimeout`
+/// keeps its collateral reserved. One bind window (600) — the span the producer had to bind and
+/// chose not to use, which is the natural price for declining it, and long enough that a redraw
+/// loop needs a fresh reservation per attempt rather than recycling one.
+const FP_ABANDON_HOLD: u64 = WINDOW_BIND;
+
 /// The worker share of the fixed subsidy (a carve, never an addition).
 const WORKER_CARVE_PERMILLE: u16 = 620;
 
@@ -149,6 +155,7 @@ pub fn palw_fp_devnet_bundle_v3(
         BUDGET_TOLERANCE_PERMILLE,
         MIN_COLLATERAL_SOMPI,
         ATTEMPT_SHARE_PERMILLE,
+        FP_ABANDON_HOLD,
     )?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
