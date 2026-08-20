@@ -59,6 +59,10 @@ pub const PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT: &[u8] = b"misaka-palw/fp-v3/com
 pub const PALW_FP_V3_MLDSA87_SPEND_CONTEXT: &[u8] = b"misaka-palw/fp-v3/spend-mldsa87/v1";
 /// Keyed hash over the raw worker-request frame — the wire-level echo the caller re-verifies.
 pub const PALW_FP_V3_DOMAIN_WORKER_REQUEST: &[u8] = b"misaka-palw/fp-v3/worker-request/v1";
+/// The spend's header-position binding (see [`spend_challenge_v3`]).
+pub const PALW_FP_V3_DOMAIN_SPEND_CHALLENGE: &[u8] = b"misaka-palw/fp-v3/spend-challenge/v1";
+/// The header-carriage wire magic for a spend envelope (see [`PalwReceiptSpendEnvelopeV3::encode`]).
+pub const PALW_FP_V3_SPEND_CARRIAGE_MAGIC: [u8; 4] = *b"PFS3";
 /// One retained-trace chunk's digest (see [`fp_trace_chunk_digest_v3`]).
 pub const PALW_FP_V3_DOMAIN_TRACE_CHUNK: &[u8] = b"misaka-palw/fp-v3/trace-chunk/v1";
 /// The retained-trace manifest root (see [`fp_trace_manifest_root_v3`]).
@@ -76,6 +80,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_WORKER_REQUEST,
     PALW_FP_V3_DOMAIN_TRACE_CHUNK,
     PALW_FP_V3_DOMAIN_TRACE_MANIFEST,
+    PALW_FP_V3_DOMAIN_SPEND_CHALLENGE,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -355,6 +360,19 @@ pub fn validate_beacon_fact_v3(slot: u64, fact: &PalwBeaconFactV3) -> Result<(),
 pub struct PalwReceiptSpendUnsignedV3 {
     pub version: u16,
     pub network_domain: Hash64,
+    /// = [`spend_challenge_v3`] over this spend's HEADER POSITION.
+    ///
+    /// Without it a spend is position-free: its id — and therefore the L1 tag the finalizer
+    /// consumes — is constant, while the header's `nonce` and `timestamp` still enter the block
+    /// hash. One signature would mint unlimited distinct valid block identities, which is audit
+    /// P0-1's shape arriving through the door that has no PoW at all. With it, every alternative
+    /// position is a different spend id, a different tag, and a different signature: identities
+    /// stop being free even though the lane's work is not a hash.
+    ///
+    /// (Re-signing at another position is still cheap, and deliberately so — those are CONFLICTING
+    /// spends of one quantum, resolved like a double spend by the branch-scoped spent set, not
+    /// extra weight. Relay in-flight limits, not a consensus rule, bound the flood.)
+    pub challenge: Hash64,
     /// The certified commitment being spent — [`fp_claim_id_v3`] of a claim in `Final`.
     pub claim_id: Hash64,
     pub quantum_index: u32,
@@ -372,6 +390,33 @@ pub struct PalwReceiptSpendUnsignedV3 {
 pub struct PalwReceiptSpendEnvelopeV3 {
     pub spend: PalwReceiptSpendUnsignedV3,
     pub signature: Vec<u8>,
+}
+
+/// `H(network_domain ‖ pre_pow_hash ‖ timestamp ‖ nonce ‖ claim_id ‖ quantum_index ‖ bond)` —
+/// the spend's header position, in the shape the attempt lane's `challenge_v2` established.
+///
+/// The claim and quantum are inside it, not merely beside it: without them one solved position
+/// could be re-announced for a different quantum of the same receipt at no extra cost, which is
+/// the same substitution the attempt lane's class/bond binding refuses.
+pub fn spend_challenge_v3(
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    claim_id: Hash64,
+    quantum_index: u32,
+    producer_bond: &TransactionOutpoint,
+) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_SPEND_CHALLENGE);
+    state.update(network_domain.as_byte_slice());
+    state.update(pre_pow_hash.as_byte_slice());
+    state.update(&timestamp.to_le_bytes());
+    state.update(&nonce.to_le_bytes());
+    state.update(claim_id.as_byte_slice());
+    state.update(&quantum_index.to_le_bytes());
+    state.update(producer_bond.transaction_id.as_byte_slice());
+    state.update(&producer_bond.index.to_le_bytes());
+    finish(state)
 }
 
 /// `H(canonical(spend))` — what the receipt block's PoW tag expands (the finalizer consumes
@@ -564,6 +609,10 @@ pub enum PalwFpV3Error {
     ZeroTraceChunks,
     #[error("the worker result does not bind the request: {0}")]
     WorkerResultMismatch(&'static str),
+    #[error("the spend's carried challenge is not the one its header position derives")]
+    SpendChallengeMismatch,
+    #[error("the header carriage does not decode: {0}")]
+    CarriageUndecodable(&'static str),
     #[error("beacon at daa {beacon_daa} sits before the draw slot {slot}")]
     BeaconBeforeSlot { beacon_daa: u64, slot: u64 },
     #[error("an attempt-class block at daa {prev_attempt_daa} already occupies the slot {slot} — the named beacon is not the first")]
@@ -654,8 +703,43 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
 }
 
 impl PalwReceiptSpendEnvelopeV3 {
+    /// The header-carriage wire form: magic, then borsh.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = PALW_FP_V3_SPEND_CARRIAGE_MAGIC.to_vec();
+        out.extend(borsh::to_vec(self).expect("borsh serialization of a plain struct cannot fail"));
+        out
+    }
+
+    /// Decode a header-extension payload: magic, then borsh, then an exact-length check —
+    /// trailing bytes are refused, because a payload is not a container. The magic differs from
+    /// the V1 PBC1 and the attempt lane's, so a carriage of one family can never decode as
+    /// another even before its fields are read.
+    pub fn decode(bytes: &[u8]) -> Result<Self, PalwFpV3Error> {
+        let Some(body) = bytes.strip_prefix(&PALW_FP_V3_SPEND_CARRIAGE_MAGIC) else {
+            return Err(PalwFpV3Error::CarriageUndecodable("payload does not start with the PFS3 magic"));
+        };
+        let mut slice = body;
+        let decoded = <Self as borsh::BorshDeserialize>::deserialize(&mut slice)
+            .map_err(|_| PalwFpV3Error::CarriageUndecodable("borsh body"))?;
+        if !slice.is_empty() {
+            return Err(PalwFpV3Error::CarriageUndecodable("trailing bytes"));
+        }
+        Ok(decoded)
+    }
+
     /// Stateless admission for the spend riding a receipt block's header extension.
-    pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
+    ///
+    /// The carried `challenge` is RECOMPUTED from the header position rather than trusted —
+    /// the same discipline `validate_stateless_v2` applies to an attempt, and for the same
+    /// reason: failing here NAMES the mismatch instead of leaving a peer to infer it from a
+    /// digest that did not match.
+    pub fn validate_stateless_v3(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+    ) -> Result<(), PalwFpV3Error> {
         let s = &self.spend;
         if s.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: s.version, expected: PALW_FP_V3_VERSION });
@@ -669,6 +753,11 @@ impl PalwReceiptSpendEnvelopeV3 {
         let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
         if self.signature.len() != expected {
             return Err(PalwFpV3Error::SignatureLength { got: self.signature.len(), expected });
+        }
+        if s.challenge
+            != spend_challenge_v3(network_domain, pre_pow_hash, timestamp, nonce, s.claim_id, s.quantum_index, &s.producer_bond)
+        {
+            return Err(PalwFpV3Error::SpendChallengeMismatch);
         }
         Ok(())
     }
@@ -992,14 +1081,22 @@ mod tests {
         vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN]
     }
 
+    /// The header position the spend fixture binds (see [`spend_challenge_v3`]).
+    const SPEND_PPH: u64 = 0xB0;
+    const SPEND_TS: u64 = 1_700_000_000;
+    const SPEND_NONCE: u64 = 7;
+
     fn spend() -> PalwReceiptSpendUnsignedV3 {
+        let claim_id = fp_claim_id_v3(&commitment());
+        let bond = op(1);
         PalwReceiptSpendUnsignedV3 {
             version: PALW_FP_V3_VERSION,
             network_domain: net(),
-            claim_id: fp_claim_id_v3(&commitment()),
+            challenge: spend_challenge_v3(net(), Hash64::from_u64_word(SPEND_PPH), SPEND_TS, SPEND_NONCE, claim_id, 2, &bond),
+            claim_id,
             quantum_index: 2,
             beacon_block: Hash64::from_u64_word(0xBEAC),
-            producer_bond: op(1),
+            producer_bond: bond,
             producer_pubkey: vec![7u8; 32],
         }
     }
@@ -1016,13 +1113,13 @@ mod tests {
 
         assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "d1ef7bce23d0edcc1a409b111d865c2f");
         assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "a16aaed813fda6b2c6d991253c089d4c");
-        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "dd0ab435ff1a3354fb3ddb96d3b878d0");
+        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "ee797c395a8615ffa434374f62a1ae33");
         assert_eq!(format!("{ticket:032x}"), "d9c4d8515a1466de666e87669235caec");
 
         let tag = fp_spend_l1_tag_v3(spend_id);
         assert_eq!(tag.len(), PALW_FP_V3_L1_TAG_BYTES);
         assert_ne!(&tag[..64], &[0u8; 64][..], "the expansion is not degenerate");
-        assert_eq!(&faster_hex::hex_string(&tag[..8]), "50ee7499628c2709");
+        assert_eq!(&faster_hex::hex_string(&tag[..8]), "5d053787cdfe9503");
     }
 
     /// Every field of the JOB is identity (total binding). The submitted draft hand-picked its
@@ -1197,12 +1294,19 @@ mod tests {
         short.signature.pop();
         assert!(matches!(short.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::SignatureLength { .. })));
 
+        let pph = Hash64::from_u64_word(SPEND_PPH);
         let spend_ok = PalwReceiptSpendEnvelopeV3 { spend: spend(), signature: sig() };
-        assert_eq!(spend_ok.validate_stateless_v3(net()), Ok(()));
+        assert_eq!(spend_ok.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE), Ok(()));
+        // The position binding is RECOMPUTED, not trusted: the same spend announced at another
+        // nonce is named — which is what stops one signature minting many block identities.
+        assert_eq!(
+            spend_ok.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE + 1),
+            Err(PalwFpV3Error::SpendChallengeMismatch)
+        );
         let mut foreign = spend();
         foreign.network_domain = Hash64::from_u64_word(0x99);
         let e = PalwReceiptSpendEnvelopeV3 { spend: foreign, signature: sig() };
-        assert_eq!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::NetworkDomainMismatch));
+        assert_eq!(e.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE), Err(PalwFpV3Error::NetworkDomainMismatch));
     }
 
     /// Quantization: floor + cap, and the degenerate-config arm mints nothing.

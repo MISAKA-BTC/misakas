@@ -34,8 +34,27 @@ use crate::palw_state_v2::{PalwStateParamsV2, PalwStateV2Error};
 use blake2b_simd::Params as Blake2bParams;
 
 pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
+/// Keyed domain for [`palw_network_domain_v2`].
+pub const PALW_NETWORK_DOMAIN_V2: &[u8] = b"misaka-palw/network-domain-v2/v1";
 
-pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
+pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN, PALW_NETWORK_DOMAIN_V2];
+
+/// `H(network_id_bytes)` — the value every V2-lineage object binds as its `network_domain`
+/// (ADR-0042 Decision 3a, ADR-0044).
+///
+/// The ONE derivation of that fact. The ruleset id deliberately excludes network identity so RC
+/// and mainnet can share a ruleset; this is where the networks are told apart instead, and it is
+/// a function rather than a params field precisely so two networks cannot be configured with the
+/// same domain by hand. `network_id` is the same byte form the Layer-0 finalizer already binds
+/// (`NetworkId::to_string`), so a header's PoW and its carriage separate on the same fact.
+pub fn palw_network_domain_v2(network_id: &[u8]) -> Hash64 {
+    let mut state = Blake2bParams::new().hash_length(64).key(PALW_NETWORK_DOMAIN_V2).to_state();
+    state.update(&(network_id.len() as u64).to_le_bytes());
+    state.update(network_id);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -552,6 +571,20 @@ mod tests {
         let mut v2b = DEVNET_PARAMS.clone();
         v2b.palw_consensus_mode = PalwConsensusMode::ConsensusV2(other);
         assert_ne!(v2_id, v2b.consensus_params_id(), "a different ruleset is a different handshake");
+    }
+
+    /// The network domain is a pure function of the network id bytes, and different networks get
+    /// different domains — which is what keeps a testnet object off mainnet even when the two
+    /// share a ruleset id (Decision 11's deliberate omission).
+    #[test]
+    fn the_network_domain_separates_networks() {
+        let mainnet = palw_network_domain_v2(b"mainnet");
+        assert_eq!(mainnet, palw_network_domain_v2(b"mainnet"), "a pure function of the bytes");
+        for other in [&b"testnet-11"[..], b"testnet-1", b"devnet", b"simnet", b""] {
+            assert_ne!(mainnet, palw_network_domain_v2(other), "{other:?} must not share mainnet's domain");
+        }
+        // Length-prefixed, so no two ids concatenate into one another's preimage.
+        assert_ne!(palw_network_domain_v2(b"testnet-1"), palw_network_domain_v2(b"testnet-11"));
     }
 
     /// Decision 11's property: any consensus-deciding byte moves the id, and network identity is

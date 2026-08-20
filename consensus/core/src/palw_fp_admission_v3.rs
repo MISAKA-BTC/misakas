@@ -180,10 +180,14 @@ pub fn check_palw_receipt_spend_admission_v3(
 
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
 /// the stateful list, in that order, one entry point.
+#[allow(clippy::too_many_arguments)]
 pub fn check_palw_receipt_spend_admission_full_v3<V>(
     state: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
     network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
     receipt_maturity_daa: u64,
     receipt_use_window_daa: u64,
     beacon: &PalwBeaconFactV3,
@@ -193,7 +197,7 @@ pub fn check_palw_receipt_spend_admission_full_v3<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
-    envelope.validate_stateless_v3(network_domain)?;
+    envelope.validate_stateless_v3(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v3(verify_mldsa87)?;
     check_palw_receipt_spend_admission_v3(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope)
 }
@@ -279,11 +283,25 @@ mod tests {
         PalwBeaconFactV3 { beacon_block: h64(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 }
     }
 
+    /// The header position the spend fixtures bind.
+    const SPEND_PPH: u64 = 0xB0;
+    const SPEND_TS: u64 = 1_700;
+    const SPEND_NONCE: u64 = 9;
+
     fn spend(quantum_index: u32) -> PalwReceiptSpendEnvelopeV3 {
         PalwReceiptSpendEnvelopeV3 {
             spend: PalwReceiptSpendUnsignedV3 {
                 version: PALW_FP_V3_VERSION,
                 network_domain: h64(999),
+                challenge: crate::palw_freeprompt_v3::spend_challenge_v3(
+                    h64(999),
+                    h64(SPEND_PPH),
+                    SPEND_TS,
+                    SPEND_NONCE,
+                    h64(0xFC),
+                    quantum_index,
+                    &bond_op(1),
+                ),
                 claim_id: h64(0xFC),
                 quantum_index,
                 beacon_block: h64(0xBEAC),
@@ -455,6 +473,9 @@ mod tests {
             &state,
             &ctx(6, 135, 6),
             h64(999),
+            h64(SPEND_PPH),
+            SPEND_TS,
+            SPEND_NONCE,
             MATURITY,
             USE_WINDOW,
             &beacon(),
@@ -468,6 +489,9 @@ mod tests {
             &state,
             &ctx(6, 135, 6),
             h64(999),
+            h64(SPEND_PPH),
+            SPEND_TS,
+            SPEND_NONCE,
             MATURITY,
             USE_WINDOW,
             &beacon(),
@@ -480,6 +504,9 @@ mod tests {
             &state,
             &ctx(6, 135, 6),
             h64(999),
+            h64(SPEND_PPH),
+            SPEND_TS,
+            SPEND_NONCE,
             MATURITY,
             USE_WINDOW,
             &beacon(),

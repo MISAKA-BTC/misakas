@@ -15,8 +15,8 @@ use kaspa_consensus_core::{
     BlockLevel, hashing,
     header::Header,
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA,
-        POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2,
+        POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA, POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES,
         PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
@@ -117,6 +117,12 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
 
     let state = StateLayer0::new(header, network_id);
     match state.check_pow_layer0(header.nonce) {
+        // ADR-0044 Decision 6: a receipt header's digest is free to re-roll, so deriving a BLOCK
+        // LEVEL from it would sell hierarchy position — the pruning-proof structure — for the
+        // price of one signature. Receipt blocks sit at the base level; the level hierarchy is
+        // built by the attempt lane, whose digests are inference-priced. (This is the same
+        // reasoning as the `passed` arm above, applied to the other thing a digest buys.)
+        Ok((passed, _)) if header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 => (0, passed),
         Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
         // `PalwWorkerFailed` is a statement about THIS node: it has a registered model runtime
         // and the runtime broke, persistently — the driver's bounded retries absorb the transient
@@ -215,6 +221,14 @@ pub struct StateLayer0 {
     /// EMPTY `palw_commitment` on every network whose fence is shut, so this is `None` everywhere
     /// today and the tag path below is byte-identical to before it existed.
     pub(crate) palw_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1>,
+    /// ADR-0042 Decision 3 (Unit A): the V2 attempt envelope, decoded once, on an algo-6 header.
+    /// The finalizer consumes `Expand(commitment_root)` from it INSTEAD of an inference — which
+    /// is sound only because the same header's stateless admission recomputes the carried
+    /// challenge from the header position and its stateful admission caps the bond's immature
+    /// exposure. Neither check lives here; both are why the arm could not land alone.
+    pub(crate) palw_attempt_v2: Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>,
+    /// ADR-0044 Decision 6 (Unit B): the free-prompt spend envelope on an algo-7 header.
+    pub(crate) palw_spend_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
@@ -253,6 +267,15 @@ impl StateLayer0 {
             // bind to, and admission refuses it separately. Silently binding nothing would be the
             // dangerous reading, so the tag only changes when a commitment is actually present.
             palw_commitment: kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::decode(&header.palw_commitment).ok(),
+            // Decoded per lane, by the header's own declared algorithm: the three carriage magics
+            // are disjoint, so at most one of these could ever succeed anyway — decoding only the
+            // declared one says which lane the header claims to be in rather than discovering it.
+            palw_attempt_v2: (header.pow_algo_id == POW_ALGO_ID_PALW_COMMITTED_V2)
+                .then(|| kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(&header.palw_commitment).ok())
+                .flatten(),
+            palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3)
+                .then(|| kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok())
+                .flatten(),
             pre_pow_hash_64,
             network_id: network_id.to_vec(),
             timestamp: header.timestamp,
@@ -309,6 +332,33 @@ impl StateLayer0 {
                         Ok(POW_L1_PALW_OUT_BYTES)
                     }
                 }
+            }
+            // ADR-0042 Decision 3a (algo_id = 6, Unit A): the finalizer consumes an EXPANSION of
+            // the attempt's commitment root instead of an inference. One new ticket still costs
+            // one new inference, but that is enforced by the pieces around this arm, not by it:
+            // the commitment root binds the challenge, the challenge binds the header position,
+            // and stateless admission recomputes it — so a miner cannot re-announce one solved
+            // position, and per-bond exposure (stateful) is what prices a FAKE trace root.
+            //
+            // A carriage that does not decode is not a failed tag, it is an unverifiable header:
+            // the shape gate refuses it up-stack, and here it maps to `PalwCarriageMissing` rather
+            // than silently tagging something else.
+            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+                let envelope = self.palw_attempt_v2.as_ref().ok_or(PowLayer0Error::PalwCarriageMissing(self.pow_algo_id))?;
+                let root = kaspa_consensus_core::palw_attempt_v2::commitment_root_v2(&envelope.attempt);
+                let tag = kaspa_consensus_core::palw_attempt_v2::l1_tag_v2(root);
+                buf[..tag.len()].copy_from_slice(&tag);
+                Ok(tag.len())
+            }
+            // ADR-0044 Decision 6 (algo_id = 7, Unit B): `Expand(spend_id)`. The tag is IDENTITY
+            // binding, not a lottery — see `check_pow_layer0`, which is where the difference is
+            // load-bearing.
+            POW_ALGO_ID_PALW_RECEIPT_V3 => {
+                let envelope = self.palw_spend_v3.as_ref().ok_or(PowLayer0Error::PalwCarriageMissing(self.pow_algo_id))?;
+                let id = kaspa_consensus_core::palw_freeprompt_v3::fp_spend_id_v3(&envelope.spend);
+                let tag = kaspa_consensus_core::palw_freeprompt_v3::fp_spend_l1_tag_v3(id);
+                buf[..tag.len()].copy_from_slice(&tag);
+                Ok(tag.len())
             }
             // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
             POW_ALGO_ID_BLAKE2B_SHA3 => {
@@ -374,6 +424,18 @@ impl StateLayer0 {
     pub fn check_pow_layer0(&self, nonce: u64) -> Result<(bool, Uint512), PowLayer0Error> {
         let digest = self.calculate_pow_layer0(nonce)?;
         let pow_512 = Uint512::from_le_bytes(digest);
+        if self.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
+            // ADR-0044 Decision 6: a receipt block's work is a CERTIFIED QUANTUM, already audited
+            // and already paid for; this digest exists to bind the header to that spend, not to
+            // price it. Comparing it to `bits` would be a filter its producer walks through for
+            // free — nothing in a receipt header costs anything to re-roll — while honest
+            // software stalled on it. The lottery is the quantum ticket against the class's
+            // receipt target, in `check_palw_receipt_spend_admission_v3` item 5, and only there.
+            //
+            // Returning the digest unchanged keeps the caller's shape; what the caller must NOT
+            // do with it is derive a block level (see `calc_block_level_check_pow_layer0`).
+            return Ok((true, pow_512));
+        }
         Ok((pow_512 <= self.target_512, pow_512))
     }
 }
@@ -625,8 +687,14 @@ mod tests_pq {
     /// only safe shape is a returned error the consensus wrapper maps to a failed PoW.
     #[test]
     fn layer0_unknown_algo_id_is_error_not_panic() {
-        // 0 and everything outside {1,2,3,4,5} is unknown; include the type extremes.
-        for bad in [0u8, 6, 7, 42, 128, 200, 255] {
+        // 0 and everything outside the implemented set is unknown; include the type extremes.
+        //
+        // 6 and 7 LEFT this list when Units A/B landed their tag arms (ADR-0042 Decision 3a,
+        // ADR-0044 Decision 6). They are covered below by
+        // `a_v2_lineage_header_without_its_carriage_is_a_failed_pow_not_a_panic`, which pins the
+        // property this test actually exists for: a peer-controlled header must never panic the
+        // finalizer, whatever it declares.
+        for bad in [0u8, 8, 42, 128, 200, 255] {
             let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
             // Build the verifier on a hash-only network to prove no PALW machinery is needed to
             // trigger (or to survive) the crash.

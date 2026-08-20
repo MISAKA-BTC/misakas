@@ -33,6 +33,13 @@ pub const PALW_ATTEMPT_V2_VERSION: u16 = 2;
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;
 
+/// The header-carriage wire magic for a V2 attempt envelope.
+///
+/// Distinct from the V1 `PBC1` and the free-prompt `PFS3`: a carriage of one family can never
+/// decode as another even before its fields are read, so a header cannot smuggle one lane's
+/// object into the other lane's validator.
+pub const PALW_ATTEMPT_V2_CARRIAGE_MAGIC: [u8; 4] = *b"PAT2";
+
 pub const PALW_ATTEMPT_V2_DOMAIN_CHALLENGE: &[u8] = b"misaka-palw/attempt-v2/challenge/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT: &[u8] = b"misaka-palw/attempt-v2/commitment-root/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID: &[u8] = b"misaka-palw/attempt-v2/attempt-id/v1";
@@ -194,9 +201,33 @@ pub enum PalwAttemptV2Error {
     MissingPublicKey,
     #[error("the signature does not verify over the attempt id under the carried executor key")]
     SignatureInvalid,
+    #[error("the header carriage does not decode: {0}")]
+    CarriageUndecodable(&'static str),
 }
 
 impl PalwAttemptEnvelopeV2 {
+    /// The header-carriage wire form: magic, then borsh.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = PALW_ATTEMPT_V2_CARRIAGE_MAGIC.to_vec();
+        out.extend(borsh::to_vec(self).expect("borsh serialization of a plain struct cannot fail"));
+        out
+    }
+
+    /// Decode a header-extension payload: magic, then borsh, then an exact-length check —
+    /// trailing bytes are refused, because a payload is not a container.
+    pub fn decode(bytes: &[u8]) -> Result<Self, PalwAttemptV2Error> {
+        let Some(body) = bytes.strip_prefix(&PALW_ATTEMPT_V2_CARRIAGE_MAGIC) else {
+            return Err(PalwAttemptV2Error::CarriageUndecodable("payload does not start with the PAT2 magic"));
+        };
+        let mut slice = body;
+        let decoded = <Self as borsh::BorshDeserialize>::deserialize(&mut slice)
+            .map_err(|_| PalwAttemptV2Error::CarriageUndecodable("borsh body"))?;
+        if !slice.is_empty() {
+            return Err(PalwAttemptV2Error::CarriageUndecodable("trailing bytes"));
+        }
+        Ok(decoded)
+    }
+
     /// Stateless admission: everything checkable without chain state.
     ///
     /// The carried `challenge` is recomputed from the header position rather than trusted, which is
@@ -407,6 +438,28 @@ mod tests {
         let mut short = envelope(a);
         short.signature.pop();
         assert!(matches!(short.validate_stateless_v2(net(), pph(), TS, NONCE), Err(PalwAttemptV2Error::SignatureLength { .. })));
+    }
+
+    /// The header carriage round-trips, refuses a foreign family's magic, and refuses trailing
+    /// bytes — a payload is not a container.
+    #[test]
+    fn the_attempt_carriage_round_trips_and_refuses_foreign_shapes() {
+        let envelope = envelope(attempt());
+        let bytes = envelope.encode();
+        assert_eq!(&bytes[..4], &PALW_ATTEMPT_V2_CARRIAGE_MAGIC);
+        assert_eq!(PalwAttemptEnvelopeV2::decode(&bytes).unwrap(), envelope);
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(matches!(PalwAttemptEnvelopeV2::decode(&trailing), Err(PalwAttemptV2Error::CarriageUndecodable("trailing bytes"))));
+
+        // The V1 and free-prompt magics are refused BEFORE any field is read.
+        for foreign in [crate::palw_block_commitment::PALW_BLOCK_COMMITMENT_MAGIC, crate::palw_freeprompt_v3::PALW_FP_V3_SPEND_CARRIAGE_MAGIC] {
+            let mut relabeled = bytes.clone();
+            relabeled[..4].copy_from_slice(&foreign);
+            assert!(PalwAttemptEnvelopeV2::decode(&relabeled).is_err(), "a foreign family's magic never decodes here");
+        }
+        assert!(PalwAttemptEnvelopeV2::decode(&[]).is_err(), "an empty carriage is not an attempt");
     }
 
     /// The module's domains are distinct — a shared key would let one preimage serve two meanings.

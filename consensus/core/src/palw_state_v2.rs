@@ -3075,13 +3075,25 @@ mod tests {
     }
 
     fn fp_spend(claim_word: u64, quantum_index: u32) -> PalwReceiptSpendUnsignedV3 {
+        // The state machine never reads the position binding (that is the header's business), but
+        // a fixture carrying a default there would be a shape the wire cannot carry.
+        let bond = bond_key(1).0;
         PalwReceiptSpendUnsignedV3 {
             version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
             network_domain: h64(999),
+            challenge: crate::palw_freeprompt_v3::spend_challenge_v3(
+                h64(999),
+                h64(0xB0),
+                1_700,
+                7,
+                h64(claim_word),
+                quantum_index,
+                &bond,
+            ),
             claim_id: h64(claim_word),
             quantum_index,
             beacon_block: h64(0xBEAC),
-            producer_bond: bond_key(1).0,
+            producer_bond: bond,
             producer_pubkey: vec![7; 4],
         }
     }

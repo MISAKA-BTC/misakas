@@ -394,6 +394,11 @@ pub enum PowLayer0Error {
     /// ADR-0038 Decision A is installed and the header's commitment is not a commitment.
     #[error("PALW header (algo_id = {algo_id}) carries a palw_commitment that is not a well-formed PBC1 commitment: {reason}")]
     PalwCommitmentMalformed { algo_id: u8, reason: String },
+    /// A V2/V3-lineage header reached the finalizer without the carriage its tag expands. The
+    /// shape gate refuses such a header up-stack; reaching here means a caller skipped it, so
+    /// this is a returned error (a failed PoW) and never an `expect` on absent data.
+    #[error("PALW header (algo_id = {0}) carries no decodable carriage for its lane's tag")]
+    PalwCarriageMissing(u8),
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
@@ -467,6 +472,22 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
     if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
         return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
     }
+    // The V2-lineage lanes carry their OWN objects under their own magics, and they carry them
+    // ALWAYS — not behind the V1 fence (ADR-0042 Decision 1 removed that machine, and ADR-0044
+    // kept its lesson). No fence parameter is consulted here because none is needed: an algo-6
+    // or algo-7 header only exists on a network whose mode demands that id, which
+    // `check_algo_id_for_mode` decided up-stack. What the finalizer expands is exactly what this
+    // gate insists is present and well-formed, so "tagged but unvalidated" is unrepresentable.
+    if algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 {
+        return crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(palw_commitment)
+            .map(|_| ())
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+    }
+    if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
+        return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
+            .map(|_| ())
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+    }
     if !bound {
         // ADR-0038 Decision A is not installed on this network at this DAA, so the field stays
         // shut. That refusal was never a placeholder: the field IS hash-visible on a PALW header,
@@ -476,16 +497,7 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
         }
         return Ok(());
     }
-    if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
-        // The V3 receipt-spend carriage never rides the V1 PBC1 fence: its payload is a
-        // different codec bound by a different PoW expansion, and it opens only with the FP
-        // bundle's own wiring (ADR-0044). Decoding it as PBC1 here would "validate" the wrong
-        // object — refuse instead, exactly as the unbound arm does.
-        if !palw_commitment.is_empty() {
-            return Err(PowLayer0Error::PalwCommitmentNotYetBound { algo_id, got: palw_commitment.len() });
-        }
-        return Ok(());
-    }
+    // Bound: the commitment is required, and must be a commitment rather than arbitrary bytes.
     // Bound: the commitment is required, and must be a commitment rather than arbitrary bytes.
     // Emptiness falls out of the decoder (no PBC1 magic), which is the right error to report —
     // "this is not a commitment", not "this is the wrong length".
@@ -638,6 +650,11 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
         || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+        // ADR-0044 Unit B: 7 joins the set the moment its finalizer arm exists. "Known" here
+        // means "this binary can derive its tag", and the pruning-proof path is the caller that
+        // needs the distinction — a proof header whose tag we cannot derive must be refused, and
+        // one whose tag we CAN derive must not be.
+        || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
     {
         Ok(())
     } else {
@@ -1057,10 +1074,13 @@ mod tests {
             POW_ALGO_ID_PALW_LLM,
             POW_ALGO_ID_PALW_OLLAMA,
             POW_ALGO_ID_PALW_COMMITTED_V2,
+            // 7 joined when its finalizer arm landed (ADR-0044 Unit B): this set means "this
+            // binary can derive the tag", and it now can.
+            POW_ALGO_ID_PALW_RECEIPT_V3,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 7, 8, 0xff] {
+        for bad in [0u8, 8, 9, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 
@@ -1118,10 +1138,9 @@ mod tests {
     #[test]
     fn the_receipt_v3_id_is_known_to_the_family_and_demanded_by_nothing() {
         assert!(is_palw_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3), "a receipt header carries (and hashes) its spend carriage");
-        assert_eq!(
-            check_algo_id_known(POW_ALGO_ID_PALW_RECEIPT_V3),
-            Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_RECEIPT_V3)),
-            "the pruning-proof gate must refuse an id whose tag this binary cannot derive yet"
+        assert!(
+            check_algo_id_known(POW_ALGO_ID_PALW_RECEIPT_V3).is_ok(),
+            "since Unit B the pruning-proof gate can derive this tag, so it must not refuse the id"
         );
         for (ollama, llm, sha3) in
             [(false, false, false), (false, false, true), (false, true, false), (false, true, true), (true, true, true)]
@@ -1141,23 +1160,32 @@ mod tests {
             }
         }
 
-        // The header-shape gate: a receipt header's carriage field is shut — empty passes, bytes
-        // are refused — and the V1 PBC1 fence can never open it (the V3 payload is a different
-        // codec bound by a different PoW expansion; decoding it as PBC1 would validate the wrong
-        // object).
-        assert!(check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[], false).is_ok());
-        assert!(check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[], true).is_ok());
+        // The header-shape gate, since Unit B: a receipt header MUST carry a well-formed spend
+        // envelope — empty is refused, junk is refused, and the V1 fence flag is not consulted
+        // at all (the lane's id already means the network demanded it).
         for bound in [false, true] {
-            assert_eq!(
-                check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[1, 2, 3], bound),
-                Err(PowLayer0Error::PalwCommitmentNotYetBound { algo_id: POW_ALGO_ID_PALW_RECEIPT_V3, got: 3 }),
-                "bound = {bound}: the V1 fence must not open the V3 carriage"
+            assert!(
+                matches!(
+                    check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[], bound),
+                    Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+                ),
+                "bound = {bound}: an empty carriage is not a spend"
             );
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[1, 2, 3], bound),
+                Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+            ));
+            // …and the attempt lane's rule is the mirror image: its own envelope or nothing.
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &[], bound),
+                Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+            ));
         }
         let oversized = vec![0u8; PALW_COMMITMENT_MAX_BYTES + 1];
         assert_eq!(
             check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &oversized, false),
-            Err(PowLayer0Error::PalwCommitmentTooLong { got: oversized.len(), cap: PALW_COMMITMENT_MAX_BYTES })
+            Err(PowLayer0Error::PalwCommitmentTooLong { got: oversized.len(), cap: PALW_COMMITMENT_MAX_BYTES }),
+            "the cap still reports the cap it broke, before any codec runs"
         );
     }
 
