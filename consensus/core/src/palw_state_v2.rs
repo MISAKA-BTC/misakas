@@ -125,7 +125,7 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 /// through [`PalwClassDaaV2Params::new`]. The startup gate (Decision 1, PR-10) additionally
 /// demands the table sum to exactly 1000‰ with BASE-0 non-zero; here each entry is validated to
 /// be a real share and the sum not to exceed the denominator.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassDaaV2Params {
     shares_permille: BTreeMap<Hash64, u16>,
     max_factor: u32,
@@ -156,12 +156,23 @@ impl PalwClassDaaV2Params {
     pub fn max_factor(&self) -> u32 {
         self.max_factor
     }
+
+    /// Total allocation, for the startup gate's exactly-1000 rule (the constructor allows
+    /// partial tables so tests can isolate one class; a live bundle does not get that latitude).
+    pub fn shares_sum_permille(&self) -> u32 {
+        self.shares_permille.values().map(|s| *s as u32).sum()
+    }
+
+    /// Every share-bearing class, in canonical order.
+    pub fn class_ids(&self) -> Vec<Hash64> {
+        self.shares_permille.keys().copied().collect()
+    }
 }
 
 /// The state machine's network constants. Constructed only through [`PalwStateParamsV2::new`],
 /// which refuses out-of-range values — there is no `Default`, because a defaulted consensus
 /// parameter is a flipped fence wearing a convenience API.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwStateParamsV2 {
     /// Immature live-weight fraction in permille, `β ≤ 1000` (ADR-0042 Decision 2).
     beta_permille: u16,
@@ -222,6 +233,11 @@ impl PalwStateParamsV2 {
     /// when a claim's panel may still legally bind.
     pub fn window_bind(&self) -> u64 {
         self.window_bind
+    }
+
+    /// The receipt window, exposed for the startup gate's liability-period arithmetic.
+    pub fn window_receipt(&self) -> u64 {
+        self.window_receipt
     }
 
     /// The challenge window, exposed so court acceptance can agree with the Final sweep about

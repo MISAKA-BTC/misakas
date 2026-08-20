@@ -51,7 +51,7 @@ use std::collections::BTreeMap;
 /// Admission's own network constants. Constructed only through [`PalwAdmissionParamsV2::new`];
 /// like the state params, they are part of the atomic ruleset bundle (ADR-0042 Decision 1) and
 /// the fingerprint commits to them (Decision 11).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwAdmissionParamsV2 {
     /// Decision 6's `max_exposure_ratio`, in permille of the bond's slashable collateral. The
     /// ceiling is `collateral × ratio / 1000`, floored — conservative, and identical everywhere.
@@ -83,6 +83,11 @@ impl PalwAdmissionParamsV2 {
 
     pub fn class_epoch_budget_pwu(&self, class_id: &Hash64) -> Option<u128> {
         self.class_epoch_budget_pwu.get(class_id).copied()
+    }
+
+    /// Every budgeted class, in canonical order (the startup gate's table-coherence check).
+    pub fn budgeted_class_ids(&self) -> Vec<Hash64> {
+        self.class_epoch_budget_pwu.keys().copied().collect()
     }
 }
 

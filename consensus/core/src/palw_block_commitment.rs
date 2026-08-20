@@ -485,6 +485,7 @@ mod tests {
         all.extend(crate::palw_state_v2::PALW_STATE_V2_ALL_DOMAINS);
         all.extend(crate::palw_panel_v2::PALW_PANEL_V2_ALL_DOMAINS);
         all.extend(crate::palw_court_v2::PALW_COURT_V2_ALL_DOMAINS);
+        all.extend(crate::palw_mode_v2::PALW_MODE_V2_ALL_DOMAINS);
         for (i, a) in all.iter().enumerate() {
             for b in all.iter().skip(i + 1) {
                 assert_ne!(a, b, "domain collision: {:?}", String::from_utf8_lossy(a));

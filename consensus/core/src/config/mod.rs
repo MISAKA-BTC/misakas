@@ -281,6 +281,16 @@ impl ConfigBuilder {
                 self.config.params.net
             );
         }
+        // ADR-0042 Decision 1: the V2 mode's startup invariants, before a peer is dialed. The
+        // same fail-loud stance as the V1 gate above — a node that cannot hold the whole atomic
+        // ruleset does not get to hold part of it.
+        if let Err(e) = self.config.params.validate_palw_v2() {
+            panic!(
+                "network {} declares a PALW V2 mode that does not validate: {e}. \
+                 Refusing to start rather than run half a ruleset.",
+                self.config.params.net
+            );
+        }
         self.config
     }
 }

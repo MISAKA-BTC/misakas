@@ -65,7 +65,7 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 /// Panel-side network constants (ADR-0042 Decision 7), constructed only through
 /// [`PalwPanelParamsV2::new`] and cross-checked against the state windows by
 /// [`PalwPanelParamsV2::validate_against_state_params`] — both feed the Decision 1 startup gate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwPanelParamsV2 {
     /// Seats per panel.
     seat_count: u16,

@@ -21,7 +21,7 @@
 use crate::palw_state_v2::{PalwClaimPhaseV2, PalwStateV2Error};
 
 /// Reward-side network constants (part of the atomic bundle; the fingerprint commits to them).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwRewardParamsV2 {
     /// The worker's carve of the block subsidy, in permille (the ADR-0035 §5 62 % shape lands
     /// here as a measured value at PR-10; any value ≤ 1000 is structurally sound).

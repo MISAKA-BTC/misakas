@@ -230,7 +230,6 @@ mod tests {
     /// books, and every answer must be the SAME chain — one authority, wherever you stand.
     #[test]
     fn palw_v2_all_selection_sites_agree() {
-        let p = params();
         let genesis_block = BlockHash::from_u64_word(0);
 
         // The DAG, described once. Branch M: one 40-pwu claim walked to Final (frontier reaches

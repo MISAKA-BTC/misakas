@@ -465,6 +465,15 @@ pub struct Params {
     pub palw_ramp: Option<crate::palw_weight::PalwWeightParamsV1>,
     pub palw_block_commitment: Option<crate::palw_block_commitment::PalwBlockCommitmentParamsV1>,
 
+    /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
+    /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
+    /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
+    /// rule that a V2 network may not set ANY of the five V1 fences above and may not activate
+    /// any V1 PALW PoW: there is no path that runs half of two lineages. The five `Option`
+    /// fences above remain for the V1/legacy lineage only and stay `None` forever on V2
+    /// networks; they retire with the V1 substrate, not before.
+    pub palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode,
+
     /// kaspa-pq Phase 3 PoW (ADR-0007): activation of the compute-only **BLAKE2b-512 ∥ SHA3-512**
     /// Layer-1 (`POW_ALGO_ID_BLAKE2B_SHA3 = 3`), which supersedes the Phase-2 Argon2id to make header
     /// verification ~10^4× cheaper (the IBD/catch-up bottleneck). Past this DAA score every block
@@ -564,6 +573,34 @@ impl Params {
     ///
     /// `Ok(())` when the fence is `None`: a network with no PALW credit params has nothing to
     /// check, which is every shipped preset today.
+    /// ADR-0042 Decision 1's config gate (PR-10): the mode is atomic, or the network cannot be
+    /// built.
+    ///
+    /// * `Disabled` / `LegacyTn11`: nothing new — the V1 gate below judges the V1 fences.
+    /// * `ConsensusV2`: the bundle's startup invariants must hold, AND the params set must be
+    ///   pure V2 — every V1 fence `None`, every V1 PALW PoW activation `never()`. A node that
+    ///   accepted a mixed set would run half of two rulesets, which is the five-fences defect
+    ///   reborn with an enum in front of it.
+    pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+            return Ok(());
+        };
+        bundle.validate()?;
+        if self.palw_credit.is_some()
+            || self.palw_fork_choice.is_some()
+            || self.palw_schedule.is_some()
+            || self.palw_ramp.is_some()
+            || self.palw_block_commitment.is_some()
+        {
+            return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not set any V1 PALW fence"));
+        }
+        if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
+            return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
+        }
+        Ok(())
+    }
+
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
         // ADR-0039 W4′: the fork-choice fence. It can now be set, and setting it does something.
         //
@@ -735,6 +772,7 @@ impl Params {
             palw_schedule,
             palw_ramp,
             palw_block_commitment,
+            palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
             pow_palw_ollama_activation,
@@ -846,6 +884,22 @@ impl Params {
             let bytes = borsh::to_vec(commitment).expect("PalwBlockCommitmentParamsV1 is borsh-serializable");
             h.write((bytes.len() as u64).to_le_bytes());
             h.write(&bytes);
+        }
+        // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
+        // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
+        // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
+        // derived from the other). Non-Disabled-only, so every shipped preset fingerprints
+        // byte-identically to before the field existed. `LegacyTn11` is a tagged byte: the mode
+        // marks the lineage while the legacy knobs (already hashed above) carry the values.
+        match palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::Disabled => {}
+            crate::palw_mode_v2::PalwConsensusMode::LegacyTn11 => {
+                h.write([1u8]);
+            }
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                h.write([2u8]);
+                h.write(crate::palw_mode_v2::palw_ruleset_id_v2(bundle).as_byte_slice());
+            }
         }
 
         h.finalize()
@@ -1077,6 +1131,7 @@ impl Params {
             palw_schedule: self.palw_schedule,
             palw_ramp: self.palw_ramp,
             palw_block_commitment: self.palw_block_commitment,
+            palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
             pow_palw_activation: self.pow_palw_activation,
@@ -1868,6 +1923,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_schedule: None,
     palw_ramp: None,
     palw_block_commitment: None,
+    palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
     pow_palw_activation: ForkActivation::never(),
@@ -1992,6 +2048,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_schedule: None,
     palw_ramp: None,
     palw_block_commitment: None,
+    palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
     // that shipped here is FORGEABLE WITHOUT RUNNING THE MODEL and must not be on a public
@@ -2098,6 +2155,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_schedule: None,
     palw_ramp: None,
     palw_block_commitment: None,
+    palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
     pow_palw_activation: ForkActivation::never(),
@@ -2242,6 +2300,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_schedule: None,
     palw_ramp: None,
     palw_block_commitment: None,
+    palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
     // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic

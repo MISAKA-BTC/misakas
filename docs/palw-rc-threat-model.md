@@ -196,15 +196,27 @@ honest "red (integration), lands in PR-N."
 - **Evidence:** `pow/src/palw_admission.rs:134-136`; `pow/src/lib.rs:256-275`;
   `pow/tests/palw_admission_fixture.rs:82-85`.
 - **Guard:** `palw_v2_consensus_has_no_runtime_dependency` — a CI test over the crate dependency
-  graph asserting `consensus`/`misakad` have **no** edge to any model-runtime crate. **Greens in:**
-  PR-02. **ADR-0042:** Decision 4.
+  graph asserting `consensus`/`misakad` have **no** edge to any model-runtime crate.
+- **Status:** **green** (PR-02, `955422d7`): the driver code moved to `misaka-palw-pow-driver`,
+  kaspa-pow keeps only a set-once runtime slot, and `no_model_runtime_edge.rs` fails on any
+  declared edge — normal, build, dev, optional included — from the consensus crates to a
+  runtime-reaching crate (mutation-checked red on both paths). `PalwUnavailable` is a failed PoW,
+  not a panic. **ADR-0042:** Decision 4.
 
 ### Per-class DAA / lifecycle unwired
 - **Evidence:** `virtual_processor/utxo_validation.rs:1576-1613`;
   `palw_class_daa.rs:300-306,1261-1284`. One registered class; retarget vector fixed empty; epoch
   budget derivation-only.
 - **Red test:** `palw_v2_class_freeze_redistributes_share_deterministically`.
-- **Status:** red (integration). **Greens in:** PR-09. **ADR-0042:** Decisions 1, 5.
+- **Status:** **substrate green** (PR-09): the retarget runs inside `apply_palw_transition_v2` at
+  every global epoch boundary — V1's `retarget_over_span_v1` reused whole (share of REALIZED
+  production, one-class no-op preserved), frozen classes skipped deterministically (the target
+  freezes with the class), idle classes measured as zero, empty epochs measuring nothing. The
+  shared differential scenario crosses a boundary, so restart / IBD-cut / prior-sink / reorg
+  invariance all exercise it. Redistribution ON freeze (the named red test's live-share shift)
+  is a params-table question the atomic bundle answers at PR-10's startup gate: shares are
+  params, exactly-1000 enforced, and a frozen class's share is a bundle change — never a silent
+  runtime shift. **ADR-0042:** Decisions 1, 5.
 
 ---
 
