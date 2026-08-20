@@ -96,7 +96,10 @@ use blake2b_simd::Params;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PALW_STATE_V2_VERSION: u16 = 1;
+/// Version 2 (ADR-0045): the root preimage gained `class_shares` and `epoch_budgets` in their
+/// declared field positions — ADR-0043's rule for a consensus change to the root: a new
+/// version, never a silent re-reading of old bytes.
+pub const PALW_STATE_V2_VERSION: u16 = 2;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -134,54 +137,10 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 // Parameters
 // ---------------------------------------------------------------------------------------------
 
-/// Per-class DAA constants for the V2 retarget (ADR-0042 release-gate item 11, PR-09): the
-/// share table ADR-0039 D5's expectation derives from, and the clamp factor. Constructed only
-/// through [`PalwClassDaaV2Params::new`]. The startup gate (Decision 1, PR-10) additionally
-/// demands the table sum to exactly 1000‰ with BASE-0 non-zero; here each entry is validated to
-/// be a real share and the sum not to exceed the denominator.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PalwClassDaaV2Params {
-    shares_permille: BTreeMap<Hash64, u16>,
-    max_factor: u32,
-}
-
-impl PalwClassDaaV2Params {
-    pub fn new(shares_permille: BTreeMap<Hash64, u16>, max_factor: u32) -> Result<Self, PalwStateV2Error> {
-        if max_factor < 2 {
-            return Err(PalwStateV2Error::InvalidParams("max_factor below 2 freezes the retarget"));
-        }
-        let mut sum: u32 = 0;
-        for share in shares_permille.values() {
-            if *share == 0 || *share > 1000 {
-                return Err(PalwStateV2Error::InvalidParams("a class share must be 1..=1000 permille"));
-            }
-            sum += *share as u32;
-        }
-        if sum > 1000 {
-            return Err(PalwStateV2Error::InvalidParams("class shares exceed the denominator"));
-        }
-        Ok(Self { shares_permille, max_factor })
-    }
-
-    pub fn share_permille(&self, class_id: &Hash64) -> Option<u16> {
-        self.shares_permille.get(class_id).copied()
-    }
-
-    pub fn max_factor(&self) -> u32 {
-        self.max_factor
-    }
-
-    /// Total allocation, for the startup gate's exactly-1000 rule (the constructor allows
-    /// partial tables so tests can isolate one class; a live bundle does not get that latitude).
-    pub fn shares_sum_permille(&self) -> u32 {
-        self.shares_permille.values().map(|s| *s as u32).sum()
-    }
-
-    /// Every share-bearing class, in canonical order.
-    pub fn class_ids(&self) -> Vec<Hash64> {
-        self.shares_permille.keys().copied().collect()
-    }
-}
+// ADR-0045 Decision 3 deleted `PalwClassDaaV2Params` here: the share table it carried is chain
+// state now (`PalwChainStateV2::class_shares`, granted by `ClassRegistered`, conserved to 1000‰
+// at every mutation), and what actually was a network constant — the base class's identity, the
+// retarget clamp, the budget tolerance — lives directly on [`PalwStateParamsV2`].
 
 /// The state machine's network constants. Constructed only through [`PalwStateParamsV2::new`],
 /// which refuses out-of-range values — there is no `Default`, because a defaulted consensus
@@ -207,8 +166,17 @@ pub struct PalwStateParamsV2 {
     /// retarget span: each global epoch boundary the chain crosses closes one span and retargets
     /// every share-bearing, unfrozen class against it.
     epoch_length: u64,
-    /// The per-class DAA constants (see [`PalwClassDaaV2Params`]).
-    class_daa: PalwClassDaaV2Params,
+    /// The permanently-Active liveness floor's class id (ADR-0039 W6′). The first registration
+    /// on a chain must be this class, at the whole 1000‰ — the transition enforces it — and the
+    /// atomic bundle carries the same id, cross-checked at the startup gate (the C5 pattern:
+    /// the value the ruleset id commits to must be the value the machine enforces).
+    base_class_id: Hash64,
+    /// Per-adjustment retarget clamp (≥ 2), passed to `retarget_over_span_v1`.
+    class_daa_max_factor: u32,
+    /// ADR-0045 Decision 2: the epoch-budget tolerance, in permille of a class's cadence share.
+    /// Fenced `[1000‰, PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE]` — below unity a budget starves
+    /// its own class, above the ceiling a cap no epoch can approach is a cap in name only.
+    budget_tolerance_permille: u32,
     /// Minimum slashable collateral a bond must register with. It lives here, where
     /// registrations are applied, because that is the only place the rule can bite; the atomic
     /// bundle carries the same value in `PalwBondParamsV2` and the startup gate requires the two
@@ -217,6 +185,7 @@ pub struct PalwStateParamsV2 {
 }
 
 impl PalwStateParamsV2 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         beta_permille: u16,
         window_bind: u64,
@@ -224,7 +193,9 @@ impl PalwStateParamsV2 {
         window_challenge: u64,
         window_court: u64,
         epoch_length: u64,
-        class_daa: PalwClassDaaV2Params,
+        base_class_id: Hash64,
+        class_daa_max_factor: u32,
+        budget_tolerance_permille: u32,
         min_collateral_sompi: u64,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
@@ -236,10 +207,33 @@ impl PalwStateParamsV2 {
         if epoch_length == 0 {
             return Err(PalwStateV2Error::InvalidParams("epoch_length must be at least one DAA unit"));
         }
+        if base_class_id == Hash64::default() {
+            return Err(PalwStateV2Error::InvalidParams("a zero base class id names no liveness floor"));
+        }
+        if class_daa_max_factor < 2 {
+            return Err(PalwStateV2Error::InvalidParams("max_factor below 2 freezes the retarget"));
+        }
+        if budget_tolerance_permille < 1000 {
+            return Err(PalwStateV2Error::InvalidParams("a budget tolerance below unity starves every class of its own cadence"));
+        }
+        if budget_tolerance_permille > crate::palw_class_daa::PALW_CLASS_BUDGET_MAX_TOLERANCE_PERMILLE {
+            return Err(PalwStateV2Error::InvalidParams("a budget tolerance above the ceiling is a cap no epoch can approach"));
+        }
         if min_collateral_sompi == 0 {
             return Err(PalwStateV2Error::InvalidParams("a zero minimum collateral bonds nothing — panel dedup would be free to defeat"));
         }
-        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length, class_daa, min_collateral_sompi })
+        Ok(Self {
+            beta_permille,
+            window_bind,
+            window_receipt,
+            window_challenge,
+            window_court,
+            epoch_length,
+            base_class_id,
+            class_daa_max_factor,
+            budget_tolerance_permille,
+            min_collateral_sompi,
+        })
     }
 
     pub fn min_collateral_sompi(&self) -> u64 {
@@ -278,8 +272,28 @@ impl PalwStateParamsV2 {
         self.window_court
     }
 
-    pub fn class_daa(&self) -> &PalwClassDaaV2Params {
-        &self.class_daa
+    pub fn base_class_id(&self) -> Hash64 {
+        self.base_class_id
+    }
+
+    pub fn class_daa_max_factor(&self) -> u32 {
+        self.class_daa_max_factor
+    }
+
+    pub fn budget_tolerance_permille(&self) -> u32 {
+        self.budget_tolerance_permille
+    }
+
+    /// ADR-0045's grant floor: the smallest share whose WORST-CASE epoch budget
+    /// (denominator = the whole 1000‰) is still at least one block — `⌈10⁶ / (tol · E)⌉`.
+    /// Enforced at every grant, which is what makes a mid-flight zero budget unrepresentable
+    /// instead of an epoch-time cliff (the V1 derivation's `ZeroBudget`, moved to where the
+    /// share is chosen).
+    pub fn min_grantable_share_permille(&self) -> u16 {
+        let denom = (self.budget_tolerance_permille as u128) * (self.epoch_length as u128);
+        // denom ≥ 1000 (tolerance floor × epoch ≥ 1), so the ceiling division is ≤ 1000 and a
+        // whole-table base grant is always fundable.
+        (1_000_000u128.div_ceil(denom)).max(1) as u16
     }
 }
 
@@ -523,6 +537,20 @@ pub struct PalwEpochCounterV2 {
     pub produced_blocks: u64,
 }
 
+/// ADR-0045 Decision 2: one epoch's per-class production budgets, in **blocks** — never in pwu
+/// (whose currency cancels the share out of its own inequality, amendment defect (e)) and never
+/// in ramped weight (defect (a)). Derived once, at the boundary that opens `epoch_index`, from
+/// the boundary's own facts; constant for the epoch whatever registrations land mid-flight.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwEpochBudgetsV2 {
+    /// The epoch these budgets bound. A budget is only ever comparable within its own epoch.
+    pub epoch_index: u64,
+    /// Ceiling on each class's `produced_blocks` for the epoch. A class absent here — frozen at
+    /// the boundary, or registered mid-epoch — admits nothing until the next boundary; a missing
+    /// budget is a missing fact, never a permissive zero.
+    pub budget_blocks: BTreeMap<Hash64, u64>,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Objects and context
 // ---------------------------------------------------------------------------------------------
@@ -560,6 +588,12 @@ pub enum PalwConsensusObjectV2 {
         slash_value_per_pwu: u64,
         pwu_rule: PalwPwuRuleV2,
         initial_target: u128,
+        /// ADR-0045 Decision 3: the entrant's cadence share, in permille — funded by
+        /// largest-remainder donation from every incumbent, so the table stays at exactly
+        /// 1000‰ through every registration. The FIRST class on a chain must be the base class
+        /// at the whole 1000‰. The share rides the same authorized object the class does:
+        /// whoever may register a class may fund it, and nobody else may move a permille.
+        share_permille: u16,
     },
     ClassFrozen {
         class_id: Hash64,
@@ -659,6 +693,20 @@ pub enum PalwStateV2Error {
     ZeroPwuCeiling(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
     Retarget(String),
+    #[error("the first class on a chain must be the base class {base}, not {class_id} — the liveness floor exists before anything else does (ADR-0039 W6′)")]
+    FirstClassMustBeTheBase { class_id: Hash64, base: Hash64 },
+    #[error("the first class must take the whole 1000‰, got {got}‰ — an unallocated permille is a half-funded floor")]
+    FirstShareMustBeWhole { got: u16 },
+    #[error("share {got}‰ is outside the table's denominator")]
+    ShareOutOfRange { got: u16 },
+    #[error(
+        "class {class_id} was granted {share}‰, below the grant floor {floor}‰ — a share whose worst-case epoch budget is zero blocks is a class that cannot exist (ADR-0045 Decision 2)"
+    )]
+    ShareBelowGrantFloor { class_id: Hash64, share: u16, floor: u16 },
+    #[error(
+        "the grant would leave donor {donor} holding {would_hold}‰, below the grant floor {floor}‰ — a registration may not starve an incumbent to fund itself"
+    )]
+    DonationBreaksGrantFloor { donor: Hash64, would_hold: u16, floor: u16 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -678,6 +726,21 @@ pub struct PalwChainStateV2 {
     reserved_exposure: BTreeMap<PalwBondKeyV2, u128>,
     classes: BTreeMap<Hash64, PalwClassStateV2>,
     class_targets: BTreeMap<Hash64, PalwClassTargetV2>,
+    /// ADR-0045 Decision 3: the difficulty-domain share table, in permille. Granted by
+    /// `ClassRegistered` (the first must be the base class at 1000‰; every later entrant is
+    /// funded by largest-remainder donation), conserved to exactly 1000‰ at every mutation, and
+    /// keyed identically to `classes` — a registered class holds a share, a share names a
+    /// registered class, and `assert_internal_consistency` refuses a state where either
+    /// direction fails. Freeze and unfreeze move NOTHING here: absence is answered by the H1
+    /// census at the two places absence is measured (the retarget's expectation and the epoch
+    /// budget's denominator), never by mutating the allocation of record.
+    class_shares: BTreeMap<Hash64, u16>,
+    /// ADR-0045 Decision 2: the current epoch's block-denominated budgets, frozen at the
+    /// boundary that opened the epoch. Rooted now, in this field position, so the Decision 2
+    /// wiring (the boundary derivation and the admission predicate reading it) lands without
+    /// changing the root derivation of every earlier state — the same reasoning `capabilities`
+    /// used. Written by nothing until that wiring; `None` from genesis.
+    epoch_budgets: Option<PalwEpochBudgetsV2>,
     capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
@@ -710,6 +773,8 @@ impl PalwChainStateV2 {
             reserved_exposure: BTreeMap::new(),
             classes: BTreeMap::new(),
             class_targets: BTreeMap::new(),
+            class_shares: BTreeMap::new(),
+            epoch_budgets: None,
             capabilities: BTreeMap::new(),
             claims: BTreeMap::new(),
             panels: BTreeMap::new(),
@@ -739,6 +804,22 @@ impl PalwChainStateV2 {
 
     pub fn class_target(&self, id: &Hash64) -> Option<&PalwClassTargetV2> {
         self.class_targets.get(id)
+    }
+
+    /// The class's share of cadence, in permille (ADR-0045 Decision 3). `None` for a class this
+    /// chain never registered — and only for those: registration grants, nothing revokes.
+    pub fn class_share_permille(&self, id: &Hash64) -> Option<u16> {
+        self.class_shares.get(id).copied()
+    }
+
+    /// The whole share table, in canonical order — what the boundary derivations fold over.
+    pub fn class_shares_iter(&self) -> impl Iterator<Item = (&Hash64, &u16)> {
+        self.class_shares.iter()
+    }
+
+    /// The current epoch's frozen budgets, if a boundary has written them (ADR-0045 Decision 2).
+    pub fn epoch_budgets(&self) -> Option<&PalwEpochBudgetsV2> {
+        self.epoch_budgets.as_ref()
     }
 
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
@@ -802,6 +883,16 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"reserved_exposure", &self.reserved_exposure).as_byte_slice());
         state.update(collection_root(b"classes", &self.classes).as_byte_slice());
         state.update(collection_root(b"class_targets", &self.class_targets).as_byte_slice());
+        state.update(collection_root(b"class_shares", &self.class_shares).as_byte_slice());
+        match &self.epoch_budgets {
+            None => {
+                state.update(&[0u8]);
+            }
+            Some(budgets) => {
+                state.update(&[1u8]);
+                state.update(&borsh::to_vec(budgets).expect("PalwEpochBudgetsV2 is borsh-serializable"));
+            }
+        }
         state.update(collection_root(b"capabilities", &self.capabilities).as_byte_slice());
         state.update(collection_root(b"claims", &self.claims).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
@@ -851,6 +942,23 @@ impl PalwChainStateV2 {
         let mut open_courts: BTreeMap<Hash64, u32> = BTreeMap::new();
         for session in self.court_sessions.values() {
             *open_courts.entry(session.claim).or_insert(0) += 1;
+        }
+        // ADR-0045 Decision 3: the share table's invariants hold at EVERY state, not once at
+        // boot. Registration grants and nothing revokes, so classes and shares are the same key
+        // set; the donation arithmetic conserves the denominator, so a populated table sums to
+        // exactly 1000‰. A state failing either was not built by the transition.
+        if !self.classes.keys().eq(self.class_shares.keys()) {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "the class set and the share table disagree — a registered class holds a share, a share names a registered class".into(),
+            ));
+        }
+        if !self.class_shares.is_empty() {
+            let sum: u32 = self.class_shares.values().map(|s| *s as u32).sum();
+            if sum != 1000 {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "the share table sums to {sum}‰ — the donation arithmetic conserves exactly 1000‰"
+                )));
+            }
         }
         if exposure != self.reserved_exposure {
             return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the claims it summarizes".into()));
@@ -999,6 +1107,8 @@ pub enum PalwDeltaEntryV2 {
     Exposure { key: PalwBondKeyV2, old: Option<u128>, new: Option<u128> },
     Class { key: Hash64, old: Option<PalwClassStateV2>, new: Option<PalwClassStateV2> },
     Target { key: Hash64, old: Option<PalwClassTargetV2>, new: Option<PalwClassTargetV2> },
+    Share { key: Hash64, old: Option<u16>, new: Option<u16> },
+    EpochBudgets { old: Option<PalwEpochBudgetsV2>, new: Option<PalwEpochBudgetsV2> },
     Capability { key: Hash64, old: Option<PalwCapabilityStateV2>, new: Option<PalwCapabilityStateV2> },
     Claim { key: Hash64, old: Option<PalwClaimStateV2>, new: Option<PalwClaimStateV2> },
     Panel { key: Hash64, old: Option<PalwPanelStateV2>, new: Option<PalwPanelStateV2> },
@@ -1066,6 +1176,20 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.class_targets.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Target { key, old, new });
+    }
+
+    fn write_share(&mut self, key: Hash64, new: Option<u16>) {
+        let old = match new {
+            Some(value) => self.state.class_shares.insert(key, value),
+            None => self.state.class_shares.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::Share { key, old, new });
+    }
+
+    #[allow(dead_code)] // ADR-0045 Decision 2's boundary derivation is the writer; it lands next.
+    fn write_epoch_budgets(&mut self, new: Option<PalwEpochBudgetsV2>) {
+        let old = std::mem::replace(&mut self.state.epoch_budgets, new.clone());
+        self.entries.push(PalwDeltaEntryV2::EpochBudgets { old, new });
     }
 
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
@@ -1409,6 +1533,65 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
     Ok(())
 }
 
+/// ADR-0045 Decision 3: the share table after granting `entrant` its `share` — the ONLY
+/// arithmetic that ever moves a permille.
+///
+/// The first grant must be the base class at the whole 1000‰ (the liveness floor exists before
+/// anything else does). Every later grant is funded by every incumbent proportionally:
+/// incumbents are scaled to `1000 − share` and the truncation residue is returned by largest
+/// remainder — remainder descending, class id ascending on ties — so the table sums to exactly
+/// 1000‰ by construction, deterministically, on every node. Refused: a share outside the
+/// denominator, a share below the grant floor (whose worst-case epoch budget would be zero
+/// blocks — the V1 derivation's `ZeroBudget`, moved to where the share is chosen), and a grant
+/// that would push any donor below that same floor — a registration may not starve an incumbent
+/// (the base class included) to fund itself.
+fn granted_share_table_v2(
+    params: &PalwStateParamsV2,
+    current: &BTreeMap<Hash64, u16>,
+    entrant: Hash64,
+    share: u16,
+) -> Result<BTreeMap<Hash64, u16>, PalwStateV2Error> {
+    let floor = params.min_grantable_share_permille();
+    if current.is_empty() {
+        if entrant != params.base_class_id {
+            return Err(PalwStateV2Error::FirstClassMustBeTheBase { class_id: entrant, base: params.base_class_id });
+        }
+        if share != 1000 {
+            return Err(PalwStateV2Error::FirstShareMustBeWhole { got: share });
+        }
+        return Ok([(entrant, 1000u16)].into_iter().collect());
+    }
+    if share > 1000 {
+        return Err(PalwStateV2Error::ShareOutOfRange { got: share });
+    }
+    if share < floor {
+        return Err(PalwStateV2Error::ShareBelowGrantFloor { class_id: entrant, share, floor });
+    }
+    let keep = 1000u32 - share as u32;
+    // Scale every incumbent to the kept permille, undivided residues first: `s_k · keep` is at
+    // most 10⁶, so the arithmetic is exact in u32 and the residue distribution is what makes
+    // Σ = 1000 a construction rather than an assertion.
+    let mut scaled: Vec<(Hash64, u32, u32)> =
+        current.iter().map(|(id, s)| (*id, (*s as u32) * keep / 1000, (*s as u32) * keep % 1000)).collect();
+    let distributed: u32 = scaled.iter().map(|(_, base, _)| *base).sum();
+    let deficit = keep - distributed;
+    // Largest remainder, class-id order on ties. The sort is total (remainder, then id), so two
+    // nodes cannot hand the same residue permille to different classes.
+    scaled.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+    let mut table: BTreeMap<Hash64, u16> = BTreeMap::new();
+    for (index, (id, base, _)) in scaled.iter().enumerate() {
+        let granted = base + u32::from((index as u32) < deficit);
+        let granted = u16::try_from(granted).expect("a scaled share is at most 1000");
+        if granted < floor {
+            return Err(PalwStateV2Error::DonationBreaksGrantFloor { donor: *id, would_hold: granted, floor });
+        }
+        table.insert(*id, granted);
+    }
+    table.insert(entrant, share);
+    debug_assert_eq!(table.values().map(|s| *s as u32).sum::<u32>(), 1000, "the donation arithmetic conserves the denominator");
+    Ok(table)
+}
+
 /// The V2 face of ADR-0039 D5's per-class retarget, driven by the state's own counters and the
 /// chain's own epochs — no clock, no store, no second timeline.
 ///
@@ -1482,7 +1665,8 @@ fn apply_class_retargets(
         .iter()
         .filter(|id| !matches!(builder.state.classes.get(id).map(|c| &c.status), Some(PalwClassStatusV2::Frozen { .. })))
         .filter(|id| produced_in_span.get(id).copied().unwrap_or(0) > 0)
-        .filter_map(|id| builder.params.class_daa.share_permille(id))
+        // ADR-0045 Decision 3: shares are chain state now — the same fold, one lookup key over.
+        .filter_map(|id| builder.state.class_shares.get(id).copied())
         .map(u64::from)
         .sum();
     if competing_permille == 0 {
@@ -1496,7 +1680,7 @@ fn apply_class_retargets(
         if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
             continue;
         }
-        let Some(share) = builder.params.class_daa.share_permille(&class_id) else { continue };
+        let Some(share) = builder.state.class_shares.get(&class_id).copied() else { continue };
         let observed = produced_in_span.get(&class_id).copied().unwrap_or(0);
         if observed == 0 {
             // It was not in this span. Measuring it as an under-producer would ease its target on
@@ -1514,7 +1698,7 @@ fn apply_class_retargets(
             .ok_or_else(|| PalwStateV2Error::Retarget(format!("class {class_id} has no target slot")))?
             .target;
         let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: observed, total_daa_blocks: total };
-        let next = crate::palw_class_daa::retarget_over_span_v1(current, &census, share, builder.params.class_daa.max_factor())
+        let next = crate::palw_class_daa::retarget_over_span_v1(current, &census, share, builder.params.class_daa_max_factor())
             .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?
             // A target of zero is not "impossibly hard", it is unrecoverable: the next retarget
             // returns `ZeroPreviousTarget` and every block after it is rejected, deterministically,
@@ -1601,7 +1785,7 @@ fn apply_object(
                 }
             }
         }
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target } => {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille } => {
             if builder.state.classes.contains_key(class_id) {
                 return Err(PalwStateV2Error::DuplicateClass(*class_id));
             }
@@ -1627,6 +1811,15 @@ fn apply_object(
                     return Err(PalwStateV2Error::ZeroPwuPerInference(*class_id));
                 }
                 _ => {}
+            }
+            // ADR-0045 Decision 3: the share table mutates HERE and nowhere else. The first
+            // class funds the liveness floor whole; every later entrant is funded by donation,
+            // and the writes below are the only way a permille moves.
+            let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
+            for (id, share) in table {
+                if builder.state.class_shares.get(&id).copied() != Some(share) {
+                    builder.write_share(id, Some(share));
+                }
             }
             builder.write_class(
                 *class_id,
@@ -1891,6 +2084,14 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::Exposure { key, old, new } => swap_write!(state.reserved_exposure, key, old, new),
         PalwDeltaEntryV2::Class { key, old, new } => swap_write!(state.classes, key, old, new),
         PalwDeltaEntryV2::Target { key, old, new } => swap_write!(state.class_targets, key, old, new),
+        PalwDeltaEntryV2::Share { key, old, new } => swap_write!(state.class_shares, key, old, new),
+        PalwDeltaEntryV2::EpochBudgets { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.epoch_budgets != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("epoch budgets do not match the delta's expectation"));
+            }
+            state.epoch_budgets = install.clone();
+        }
         PalwDeltaEntryV2::Capability { key, old, new } => swap_write!(state.capabilities, key, old, new),
         PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
@@ -2004,6 +2205,8 @@ pub struct PalwStateCarriageV2 {
     pub reserved_exposure: BTreeMap<PalwBondKeyV2, u128>,
     pub classes: BTreeMap<Hash64, PalwClassStateV2>,
     pub class_targets: BTreeMap<Hash64, PalwClassTargetV2>,
+    pub class_shares: BTreeMap<Hash64, u16>,
+    pub epoch_budgets: Option<PalwEpochBudgetsV2>,
     pub capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     pub claims: BTreeMap<Hash64, PalwClaimStateV2>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
@@ -2024,6 +2227,8 @@ impl PalwStateCarriageV2 {
             reserved_exposure: state.reserved_exposure.clone(),
             classes: state.classes.clone(),
             class_targets: state.class_targets.clone(),
+            class_shares: state.class_shares.clone(),
+            epoch_budgets: state.epoch_budgets.clone(),
             capabilities: state.capabilities.clone(),
             claims: state.claims.clone(),
             panels: state.panels.clone(),
@@ -2069,6 +2274,8 @@ impl PalwStateCarriageV2 {
             reserved_exposure: self.reserved_exposure,
             classes: self.classes,
             class_targets: self.class_targets,
+            class_shares: self.class_shares,
+            epoch_budgets: self.epoch_budgets,
             capabilities: self.capabilities,
             claims: self.claims,
             panels: self.panels,
@@ -2161,11 +2368,8 @@ mod tests {
     use crate::tx::TransactionId;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa(), 100).unwrap()
-    }
-
-    fn class_daa() -> PalwClassDaaV2Params {
-        PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap()
+        // base = h64(1), max_factor = 4, tolerance = 1000‰ (grant floor: 1‰ at E = 1000).
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100).unwrap()
     }
 
     /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
@@ -2202,6 +2406,7 @@ mod tests {
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000 },
         ]
@@ -2846,6 +3051,7 @@ mod tests {
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
+                share_permille: 500,
             }],
             None,
         );
@@ -3086,9 +3292,9 @@ mod tests {
         assert_eq!(s3.class_target(&h64(1)).unwrap().target, boot, "1000‰ with every block: observed == expected, no move");
 
         // Case 2: class 1 at 500‰ produces everything; class 2 (500‰) is frozen before the
-        // boundary. Class 1 hardens; class 2 does not move.
-        let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
-        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
+        // boundary. Class 1 hardens; class 2 does not move. The 500/500 table arrives the
+        // ADR-0045 way: class 2's grant is donated out of class 1's whole.
+        let p_half = params();
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
@@ -3096,9 +3302,14 @@ mod tests {
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
+            share_permille: 500,
         });
         objects.push(PalwConsensusObjectV2::ClassFrozen { class_id: h64(2) });
         let (s1, _) = apply(&genesis, &p_half, &ctx(1, 100, 1), &objects, None);
+        // ADR-0045 Decision 3: freeze moves NO share — the table is the allocation of record,
+        // and absence is the census's business, not a mutation's.
+        assert_eq!(s1.class_share_permille(&h64(1)), Some(500), "the working class's share is untouched by a sibling's freeze");
+        assert_eq!(s1.class_share_permille(&h64(2)), Some(500), "the frozen class keeps its permille for its unfreeze");
         let (s2, _) = apply(&s1, &p_half, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
         let (s3, _) = apply(&s2, &p_half, &ctx(3, 102, 3), &[], Some(&attempt(40, 2)));
         let (s4, _) = apply(&s3, &p_half, &ctx(4, 1_001, 4), &[], None);
@@ -3136,9 +3347,9 @@ mod tests {
     #[test]
     fn an_idle_co_class_does_not_ratchet_the_working_class_toward_zero() {
         let boot = u128::MAX / 2;
-        let shares = PalwClassDaaV2Params::new([(h64(1), 600u16), (h64(2), 400u16)].into_iter().collect(), 4).unwrap();
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
+        let p = params();
 
+        // 600/400 by donation: class 2's 400‰ grant leaves class 1 holding 600‰.
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
@@ -3146,8 +3357,11 @@ mod tests {
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
+            share_permille: 400,
         });
         let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(state.class_share_permille(&h64(1)), Some(600), "the grant is funded by donation");
+        assert_eq!(state.class_share_permille(&h64(2)), Some(400));
 
         // Twelve epoch boundaries, class 1 producing throughout.
         let mut nonce = 0u64;
@@ -3174,8 +3388,7 @@ mod tests {
     #[test]
     fn two_producing_classes_keep_their_table_shares_and_still_retarget() {
         let boot = u128::MAX / 2;
-        let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
+        let p = params();
 
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
@@ -3184,6 +3397,7 @@ mod tests {
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
+            share_permille: 500,
         });
         objects.push(PalwConsensusObjectV2::BondRegistered {
             bond: bond_key(2),
@@ -3532,13 +3746,54 @@ mod tests {
 
     #[test]
     fn class_daa_params_refuse_broken_tables() {
-        assert!(PalwClassDaaV2Params::new([(h64(1), 0u16)].into_iter().collect(), 4).is_err(), "zero share");
-        assert!(PalwClassDaaV2Params::new([(h64(1), 1001u16)].into_iter().collect(), 4).is_err(), "share above 1000");
-        assert!(
-            PalwClassDaaV2Params::new([(h64(1), 600u16), (h64(2), 600u16)].into_iter().collect(), 4).is_err(),
-            "shares exceeding the denominator"
+        // ADR-0045 Decision 3: the table's validity is the TRANSITION's job now. The grant
+        // refusals stand where the old params constructor's checks stood.
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let register = |class_id: u64, share: u16| PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(class_id),
+            artifact_root: h64(19),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
+            initial_target: u128::MAX / 2,
+            share_permille: share,
+        };
+
+        // The first class must be the base, at the whole 1000‰.
+        let err = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &[register(9, 1000)], None);
+        assert!(matches!(err, Err(PalwStateV2Error::FirstClassMustBeTheBase { .. })), "got {err:?}");
+        let err = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &[register(1, 900)], None);
+        assert!(matches!(err, Err(PalwStateV2Error::FirstShareMustBeWhole { got: 900 })), "got {err:?}");
+
+        let (funded, _) = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &[register(1, 1000)], None).unwrap();
+        assert_eq!(funded.class_share_permille(&h64(1)), Some(1000));
+
+        // A later grant outside the denominator, or below the grant floor, refuses.
+        let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 1001)], None);
+        assert!(matches!(err, Err(PalwStateV2Error::ShareOutOfRange { got: 1001 })), "got {err:?}");
+        let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 0)], None);
+        assert!(matches!(err, Err(PalwStateV2Error::ShareBelowGrantFloor { .. })), "got {err:?}");
+
+        // A grant that would starve every donor to zero refuses too — the base class may never
+        // be pushed below the floor, and 1000‰ for an entrant leaves it exactly nothing.
+        let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 1000)], None);
+        assert!(matches!(err, Err(PalwStateV2Error::DonationBreaksGrantFloor { .. })), "got {err:?}");
+
+        // Donation conserves the denominator with largest-remainder exactness: 333‰ granted out
+        // of 1000 leaves the base 667‰ (666 by truncation, +1 by remainder), and a third class
+        // splits the residue deterministically.
+        let (two, _) = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 333)], None).unwrap();
+        assert_eq!(two.class_share_permille(&h64(1)), Some(667));
+        assert_eq!(two.class_share_permille(&h64(2)), Some(333));
+        let (three, _) = apply_palw_transition_v2(&two, &p, &ctx(3, 102, 3), &[register(3, 100)], None).unwrap();
+        let (s1, s2, s3) = (
+            three.class_share_permille(&h64(1)).unwrap(),
+            three.class_share_permille(&h64(2)).unwrap(),
+            three.class_share_permille(&h64(3)).unwrap(),
         );
-        assert!(PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 1).is_err(), "max_factor below 2");
+        assert_eq!(s1 as u32 + s2 as u32 + s3 as u32, 1000, "the table sums to the denominator at every mutation");
+        assert_eq!(s3, 100);
+        assert_eq!((s1, s2), (600, 300), "667→600.3 and 333→299.7: one residue permille, to the larger remainder");
         // Registration refuses a zero boot target — an unmeetable difficulty is a dead class.
         let p = params();
         let err = apply_palw_transition_v2(
@@ -3551,6 +3806,7 @@ mod tests {
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
                 initial_target: 0,
+                share_permille: 1000,
             }],
             None,
         );
@@ -3572,6 +3828,7 @@ mod tests {
                     slash_value_per_pwu: 1,
                     pwu_rule: rule,
                     initial_target: u128::MAX / 2,
+                    share_permille: 1000,
                 }],
                 None,
             );
@@ -3586,22 +3843,32 @@ mod tests {
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, class_daa(), 100).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, class_daa(), 100).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, class_daa(), 100).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, class_daa(), 100).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, class_daa(), 100).is_err(), "zero court window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, class_daa(), 100).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, class_daa(), 100).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, h64(1), 4, 1000, 100).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, h64(1), 4, 1000, 100).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, h64(1), 4, 1000, 100).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, h64(1), 4, 1000, 100).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, h64(1), 4, 1000, 100).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, Hash64::default(), 4, 1000, 100).is_err(), "zero base class id");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 1, 1000, 100).is_err(), "max_factor below 2");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 999, 100).is_err(), "tolerance below unity");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1, h64(1), 4, 4_001, 100).is_err(), "tolerance above the ceiling");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, h64(1), 4, 1000, 100).is_ok(), "β = 1 exactly is the boundary");
+        // The grant floor tracks the epoch geometry: at E = 1000 · tol = 1000 the floor is 1‰,
+        // and shrinking the epoch to 100 raises it to 10‰ — the share too small to buy one
+        // worst-case block per epoch is not grantable, which is what keeps a mid-flight zero
+        // budget unrepresentable.
+        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100).unwrap().min_grantable_share_permille(), 1);
+        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100).unwrap().min_grantable_share_permille(), 10);
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, class_daa(), 100).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, class_daa(), 100).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 }

@@ -313,7 +313,9 @@ mod tests {
             20,
             500,
             1000,
-            crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            h64(1),
+            4,
+            1000,
             100,
         )
         .unwrap()
@@ -342,6 +344,7 @@ mod tests {
                 // Every ticket passes, so the OTHER nine items are what these tests measure.
                 // The class lottery has its own test below, where the target is the variable.
                 initial_target: u128::MAX,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -488,6 +491,7 @@ mod tests {
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                     initial_target: target,
+                    share_permille: 1000,
                 },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -561,6 +565,7 @@ mod tests {
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
             initial_target,
+            share_permille: 100,
         }];
         let (state, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
         state

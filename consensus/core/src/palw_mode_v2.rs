@@ -286,19 +286,18 @@ impl PalwConsensusParamsV2 {
             return Err(PalwModeV2Error::Invalid("a zero catalog root commits to nothing adjudicable"));
         }
 
-        // BASE-0 exists and holds non-zero target share, and the share table sums to EXACTLY the
-        // denominator here (the constructor allows partial tables for tests; a live bundle does
-        // not get that latitude — an unallocated permille is a half-flip of the emission).
-        let base_share = self
-            .state
-            .class_daa()
-            .share_permille(&self.base_class_id)
-            .ok_or(PalwModeV2Error::Invalid("BASE-0 carries no share — the liveness floor is unfunded"))?;
-        if base_share == 0 {
-            return Err(PalwModeV2Error::Invalid("BASE-0's share is zero"));
-        }
-        if self.state.class_daa().shares_sum_permille() != 1000 {
-            return Err(PalwModeV2Error::Invalid("the class share table must allocate exactly 1000 permille"));
+        // ADR-0045 Decision 3: the share table is chain state now, so the old boot-time checks
+        // (BASE-0 funded, exactly-1000 allocation, share↔budget coherence) have no params-side
+        // subject left to check. What replaced them is stronger, not absent: the transition
+        // refuses any first registration that is not the base class at the whole 1000‰, the
+        // donation arithmetic conserves the denominator at every mutation, and
+        // `assert_internal_consistency` re-derives both facts on every carriage load. What the
+        // BUNDLE must still guarantee is that the id the ruleset commits to and the id the
+        // machine enforces are the same id (the C5 pattern, applied to the liveness floor).
+        if self.state.base_class_id() != self.base_class_id {
+            return Err(PalwModeV2Error::Invalid(
+                "the liveness floor the bundle names is not the one the state machine enforces registrations against",
+            ));
         }
 
         // The bundle's minimum collateral and the state machine's must be the same number: the
@@ -307,20 +306,6 @@ impl PalwConsensusParamsV2 {
         // audited (audit C5).
         if self.state.min_collateral_sompi() != self.bond.min_collateral_sompi() {
             return Err(PalwModeV2Error::Invalid("the bond floor the bundle commits to is not the one registrations are checked against"));
-        }
-
-        // Table coherence: every share-bearing class has an epoch budget and every budgeted
-        // class has a share — a class present in one table and absent from the other is exactly
-        // the between-tables gap audits kept finding.
-        for class_id in self.state.class_daa().class_ids() {
-            if self.admission.class_epoch_budget_pwu(&class_id).is_none() {
-                return Err(PalwModeV2Error::Invalid("a share-bearing class has no epoch budget"));
-            }
-        }
-        for class_id in self.admission.budgeted_class_ids() {
-            if self.state.class_daa().share_permille(&class_id).is_none() {
-                return Err(PalwModeV2Error::Invalid("a budgeted class has no share"));
-            }
         }
 
         // The anchor slot sits strictly inside the bind window (PR-06's cross-check).
@@ -480,12 +465,11 @@ impl PalwConsensusParamsV2 {
         if !catalog.entries().iter().any(|e| e.class_id == self.base_class_id) {
             return Err(PalwModeV2Error::Invalid("PALW-BASE-0 is not in the class catalog — the liveness floor is unregistered"));
         }
-        // Every class the share table funds must exist, or the emission points at nothing.
-        for class_id in self.state.class_daa().class_ids() {
-            if !catalog.entries().iter().any(|e| e.class_id == class_id) {
-                return Err(PalwModeV2Error::Invalid("a share-bearing class is not in the class catalog"));
-            }
-        }
+        // ADR-0045 Decision 3: shares are granted by `ClassRegistered` and conserved by the
+        // transition, so "every share-bearing class exists" is a per-registration fact now —
+        // the genesis loader checks each registration object against this same catalog, and a
+        // class cannot hold a share without having been registered. No params-side table is
+        // left to sweep here.
         for entry in catalog.entries() {
             let reachable = crate::palw_catalog_coverage::PalwReachableKernelSetV1 {
                 execution_class_id: entry.class_id,
@@ -543,27 +527,24 @@ pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_state_v2::PalwClassDaaV2Params;
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }
 
     fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
-        let class_daa = PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap();
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa, min_collateral).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral).unwrap()
     }
 
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
         let base = h64(1);
-        let class_daa = PalwClassDaaV2Params::new([(base, 1000u16)].into_iter().collect(), 4).unwrap();
         PalwConsensusParamsV2 {
             protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
             algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa, 100).unwrap(),
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
@@ -598,34 +579,19 @@ mod tests {
             ("algorithm", Box::new(|b| b.algorithm_id = 4)),
             ("class root", Box::new(|b| b.class_catalog_root = Hash64::default())),
             ("court root", Box::new(|b| b.court_catalog_root = Hash64::default())),
-            ("unfunded base", Box::new(|b| b.base_class_id = h64(9))),
+            ("bundle names a floor the machine does not enforce", Box::new(|b| b.base_class_id = h64(9))),
             (
-                "partial share table",
+                // ADR-0045 Decision 3: the bundle names one liveness floor and the state machine
+                // enforces another — the C5 disagreement shape, applied to the base id.
+                "base id disagreement",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(
-                        100,
-                        10,
-                        10,
-                        20,
-                        500,
-                        1000,
-                        PalwClassDaaV2Params::new([(h64(1), 900u16)].into_iter().collect(), 4).unwrap(),
-            100,
-                    )
-                    .unwrap()
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100).unwrap();
                 }),
             ),
-            (
-                "budgetless share",
-                Box::new(|b| b.admission = PalwAdmissionParamsV2::new(500, std::collections::BTreeMap::new()).unwrap()),
-            ),
-            (
-                "shareless budget",
-                Box::new(|b| {
-                    b.admission =
-                        PalwAdmissionParamsV2::new(500, [(h64(1), 10_000u128), (h64(2), 5u128)].into_iter().collect()).unwrap()
-                }),
-            ),
+            // The two table-coherence cases ("budgetless share", "shareless budget") retired
+            // with their subject: shares are chain state (ADR-0045 Decision 3) and the epoch
+            // budget is derived at each boundary from them (Decision 2), so there are no two
+            // params tables left to drift apart.
             ("anchor outside bind window", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 2, 10).unwrap())),
             // A deeper ladder needs more rounds than the backstop window can hold…
             ("ladder deeper than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1 << 40, 20, 2).unwrap())),
@@ -920,12 +886,10 @@ mod tests {
             "asserting a shallower ladder than the catalog needs is the understatement this gate exists to catch"
         );
 
-        // A share-bearing class missing from the catalog points the emission at nothing.
-        let two_shares = PalwClassDaaV2Params::new([(base, 600u16), (h64(2), 400u16)].into_iter().collect(), 4).unwrap();
-        let mut b5 = conforming_bundle();
-        b5.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, two_shares, 100).unwrap();
-        b5.class_catalog_root = catalog.root();
-        assert!(b5.verify_against_catalog(&catalog).is_err(), "a funded class must exist");
+        // "A share-bearing class missing from the catalog" is no longer a params-side case:
+        // shares are granted by `ClassRegistered` (ADR-0045 Decision 3), so a class cannot hold
+        // a share without having been registered, and the genesis loader checks each
+        // registration object against this same catalog.
 
         // Catalog shapes that cannot be a catalog.
         assert!(PalwClassCatalogV2::new(Vec::new()).is_err(), "an empty catalog registers nothing");

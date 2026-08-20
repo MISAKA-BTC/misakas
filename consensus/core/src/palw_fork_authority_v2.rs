@@ -178,7 +178,9 @@ mod tests {
             20,
             500,
             1000,
-            crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            h64(1),
+            4,
+            1000,
             100,
         )
         .unwrap()
@@ -224,6 +226,7 @@ mod tests {
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(1),
