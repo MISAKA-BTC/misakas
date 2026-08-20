@@ -3348,4 +3348,169 @@ mod tests {
         spent.clear();
         assert!(tampered.into_state(&p, Some(root)).is_err(), "an erased spend ledger cannot reload");
     }
+
+    // ---- FP-08: the reorg-equivalence gate — the walk a real reorg executes, on FP state ----
+    //
+    // The audit register is unanimous that P0-3/4/5 were born in the virtual processor's
+    // reorg walk (`calculate_utxo_state_relatively`): revert the deltas from the old sink down
+    // to the fork point, apply the new branch's deltas up. These tests drive THAT exact
+    // primitive pair (`revert_delta_v2`/`apply_delta_v2`) over free-prompt commitments and
+    // quantum spends, and pin the three properties a wiring layer must not break:
+    //
+    //   1. reorg-by-delta reaches the SAME state as building the winning branch fresh
+    //      (`apply_delta` is the true inverse of the transition — P0-4's sink-independence);
+    //   2. a quantum spent on the losing branch is UNSPENT after the reorg, and free to spend
+    //      on the winning branch (spends are candidate-scoped, the UTXO double-spend analogy);
+    //   3. a certified receipt from BEFORE the fork survives the reorg with its ledger intact.
+
+    /// Build [prefix → branch] by delta, then reorg to a sibling branch by reverting the first
+    /// branch's deltas (newest-first) and applying the sibling's — and assert the result is
+    /// bit-identical to building `prefix → sibling` from scratch. This is the exact access
+    /// pattern `calculate_utxo_state_relatively` runs, on FP-bearing blocks.
+    #[test]
+    fn fp_reorg_by_delta_equals_building_the_winning_branch_fresh() {
+        let p = params();
+        // Shared prefix: register, commit an FP claim, certify it to Final (so both branches
+        // inherit a spendable receipt), reaching daa 124 with the claim at Final.
+        let g = PalwChainStateV2::genesis();
+        let (s1, d1) = apply(&g, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
+        let (s4, d4) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC) }], None);
+        let (fork, d5) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(fork.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+
+        // Losing branch A: spends quanta 0 and 1 at daa 130/131.
+        let spend_a0 = fp_spend(0xFC, 0);
+        let spend_a1 = fp_spend(0xFC, 1);
+        let (a1, da1) = apply_work(&fork, &p, &ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend_a0));
+        let (a2, da2) = apply_work(&a1, &p, &ctx(0xA2, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&spend_a1));
+        assert_eq!(a2.safe_weight(), 40, "branch A weighed two 20-pwu quanta");
+
+        // Winning branch B off the SAME fork: spends quantum 0 only, but at a heavier blue score.
+        let spend_b0 = fp_spend(0xFC, 0);
+        let (b1, db1) = apply_work(&fork, &p, &ctx(0xB1, 130, 20), &[], PalwBlockWorkV3::ReceiptSpend(&spend_b0));
+
+        // The reorg: from sink A2, revert da2 then da1 (newest-first) to reach the fork, then
+        // apply db1 up branch B — the literal loop of `calculate_utxo_state_relatively`.
+        let back_to_a1 = revert_delta_v2(&a2, &da2, &p).unwrap();
+        assert_eq!(back_to_a1, a1, "revert of the last delta restores its parent exactly");
+        let back_to_fork = revert_delta_v2(&back_to_a1, &da1, &p).unwrap();
+        assert_eq!(back_to_fork, fork, "reverting down to the fork reproduces the fork state");
+        let reorged = apply_delta_v2(&back_to_fork, &db1, &p).unwrap();
+
+        // The gate: the delta-walked state equals branch B built fresh, byte for byte and root
+        // for root. A wiring layer that drifts here is P0-4.
+        assert_eq!(reorged, b1, "reorg-by-delta reaches the freshly-built winning branch");
+        assert_eq!(reorged.state_root(), b1.state_root());
+        reorged.assert_internal_consistency().unwrap();
+        reorged.assert_deadline_consistency(&p).unwrap();
+
+        // Property 2: quantum 0 is spent on B (it was spent there), and quantum 1 — spent only on
+        // the abandoned branch A — is UNSPENT after the reorg, free to spend again on B.
+        let PalwClaimSourceV2::FreePrompt { spent, .. } = &reorged.claim(&h64(0xFC)).unwrap().source else { panic!("fp") };
+        assert!(spent.contains(&0) && !spent.contains(&1), "the reorg carries B's spends, not A's");
+        assert_eq!(reorged.safe_weight(), 20, "only B's single spend weighs after the reorg");
+        let spend_b1 = fp_spend(0xFC, 1);
+        apply_palw_transition_v3(&reorged, &p, &ctx(0xB2, 131, 21), &[], PalwBlockWorkV3::ReceiptSpend(&spend_b1))
+            .expect("a quantum spent only on the abandoned branch is free on the winning one");
+
+        // Silence a warning without weakening the test: the prefix deltas are the branch both
+        // sides share, exercised by construction.
+        let _ = (&d1, &d2, &d3, &d4, &d5, &da1, &db1);
+    }
+
+    /// Property 3, and the UTXO analogy stated as a test: the SAME spend envelope is valid on
+    /// BOTH branches of a fork (a producer legally follows whichever wins), yet each branch's
+    /// spent-set is its own — there is no node-global "already spent" cache, and reverting one
+    /// branch never leaks its ledger into the other.
+    #[test]
+    fn fp_same_quantum_spends_on_both_forks_and_the_sets_stay_scoped() {
+        let p = params();
+        let certified = certify_fp_claim(&p, 40, 2);
+        let spend = fp_spend(0xFC, 0);
+
+        // Two sibling branches off the certified fork, each spending quantum 0.
+        let (branch_a, _) = apply_work(&certified, &p, &ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+        let (branch_b, delta_b) = apply_work(&certified, &p, &ctx(0xB1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+
+        for branch in [&branch_a, &branch_b] {
+            let PalwClaimSourceV2::FreePrompt { spent, .. } = &branch.claim(&h64(0xFC)).unwrap().source else { panic!("fp") };
+            assert_eq!(spent.iter().copied().collect::<Vec<_>>(), vec![0], "each branch spent quantum 0 on its own chain");
+            assert_eq!(branch.safe_weight(), 20);
+        }
+        // The branches differ only in their accepting block, so their roots differ — the spend is
+        // the same fact on two chains, not one shared mutable cell.
+        assert_ne!(branch_a.state_root(), branch_b.state_root(), "same spend, two candidate chains, two roots");
+
+        // Reverting branch B restores the certified fork with quantum 0 UNSPENT — B's ledger did
+        // not persist into the shared parent, which is what makes A's identical spend sound.
+        let reverted = revert_delta_v2(&branch_b, &delta_b, &p).unwrap();
+        assert_eq!(reverted, certified, "revert restores the pre-spend fork");
+        let PalwClaimSourceV2::FreePrompt { spent, .. } = &reverted.claim(&h64(0xFC)).unwrap().source else { panic!("fp") };
+        assert!(spent.is_empty(), "the reverted fork has no spends — the ledger is branch-scoped");
+    }
+
+    /// Sink-independence for FP state, the P0-4 property in the `PalwStateBookV2` access pattern:
+    /// apply BOTH branches into ONE book (as a real node holds many branches in one store), then
+    /// ask each candidate for its standing — and get an answer that is a function of that
+    /// candidate's chain alone, whatever order the branches were inserted.
+    #[test]
+    fn fp_book_answers_each_candidate_from_its_own_chain_regardless_of_insert_order() {
+        let p = params();
+        let genesis_block = block(0);
+
+        // Build a reference: the certified fork's standing, and each branch's own weight, computed
+        // in isolation.
+        let certified = certify_fp_claim(&p, 60, 3);
+        let (iso_a, _) = apply_work(&certified, &p, &ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0)));
+        let (iso_b0, _) = apply_work(&certified, &p, &ctx(0xB1, 130, 20), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0)));
+        let (iso_b, _) = apply_work(&iso_b0, &p, &ctx(0xB2, 131, 21), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1)));
+
+        // Now drive the SAME blocks through one book, inserting branch B before branch A (the
+        // reverse of the isolated order) to prove the answer does not depend on it.
+        let build_book = |insert_a_first: bool| -> PalwStateBookV2 {
+            let mut book = PalwStateBookV2::new(p.clone());
+            book.insert_genesis(genesis_block);
+            book.apply_block(genesis_block, ctx(1, 100, 1), &register_class_and_bond(), None).unwrap();
+            book.apply_block(block(1), ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None).unwrap();
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            book.apply_block(block(2), ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None).unwrap();
+            book.apply_block(block(3), ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC) }], None).unwrap();
+            book.apply_block(block(4), ctx(5, 124, 5), &[], None).unwrap();
+            let mut do_a = |book: &mut PalwStateBookV2| {
+                book.apply_block_with_work(block(5), ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
+            };
+            let mut do_b = |book: &mut PalwStateBookV2| {
+                book.apply_block_with_work(block(5), ctx(0xB1, 130, 20), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
+                book.apply_block_with_work(block(0xB1), ctx(0xB2, 131, 21), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1))).unwrap();
+            };
+            if insert_a_first {
+                do_a(&mut book);
+                do_b(&mut book);
+            } else {
+                do_b(&mut book);
+                do_a(&mut book);
+            }
+            book
+        };
+
+        for insert_a_first in [true, false] {
+            let book = build_book(insert_a_first);
+            // Each candidate's stored state equals the one built in isolation — insert order does
+            // not move it (P0-4).
+            assert_eq!(book.state_of(&block(0xA1)).unwrap(), &iso_a, "branch A standing is chain-local (a_first={insert_a_first})");
+            assert_eq!(book.state_of(&block(0xB2)).unwrap(), &iso_b, "branch B standing is chain-local (a_first={insert_a_first})");
+            // And fork choice reads them through the one comparator: B (blue score 21, one Final
+            // spend) outranks A (blue score 6) on the safe frontier.
+            let order_a = book.state_of(&block(0xA1)).unwrap().candidate_order(block(0xA1));
+            let order_b = book.state_of(&block(0xB2)).unwrap().candidate_order(block(0xB2));
+            assert_eq!(
+                compare_palw_candidates_v1(&order_b, &order_a),
+                std::cmp::Ordering::Greater,
+                "the heavier-frontier branch wins, whatever the insert order"
+            );
+        }
+    }
 }
