@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# ADR-0044 Unit C: the PALW state store carries canonical borsh bytes as its rows, so borsh is
+# a normal dependency now — it used to be dev-only (the DNS-overlay harness).
+borsh.workspace = true
 arc-swap.workspace = true
 async-channel.workspace = true
 bincode.workspace = true
@@ -57,7 +60,6 @@ flate2.workspace = true
 rand_distr.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-addresses.workspace = true
-borsh.workspace = true
 # kaspa-pq (ADR-0018 §G): ML-DSA-87 signing for the DNS-overlay DAG test harness
 # (the verification side, kaspa-txscript, is already a normal dependency).
 libcrux-ml-dsa.workspace = true

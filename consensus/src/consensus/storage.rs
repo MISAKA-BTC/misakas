@@ -21,6 +21,7 @@ use crate::{
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
         palw_carriage::DbPalwCarriageStore,
+        palw_state_v2::DbPalwStateV2Store,
         palw_class_state::DbPalwClassStateStore,
         past_pruning_points::DbPastPruningPointsStore,
         pruning::DbPruningStore,
@@ -80,6 +81,10 @@ pub struct ConsensusStorage {
     /// MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
     /// carrying tx. An index with no consensus reader yet — Stage 2 is the reader.
     pub palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
+    /// ADR-0044 Unit C: per-chain-block PALW state deltas and the materialized anchor. Empty on
+    /// every shipped network — the writer is gated on a `ConsensusV2` bundle, which no preset
+    /// carries.
+    pub palw_state_v2_store: Arc<RwLock<DbPalwStateV2Store>>,
     /// Per-class difficulty, ladder status and last-credit DAA (ADR-0028/0033). Read through a
     /// chain-scoped `PalwClassStateView`, never directly — a class fact that depends on where this
     /// node's virtual tip points is the shape of blocker 6(b).
@@ -342,6 +347,16 @@ impl ConsensusStorage {
             }
             Arc::new(RwLock::new(store))
         };
+        // ADR-0044 Unit C. `untracked` like its neighbours: the row's own `estimate_mem_bytes`
+        // exists for readers, but a tracked-bytes policy on a store whose rows vary by orders of
+        // magnitude is how the validator-attestation crash happened.
+        let palw_state_v2_store = {
+            let mut store = DbPalwStateV2Store::new(db.clone(), PolicyBuilder::new().max_items(4096).untracked().build());
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!("[palw-state-v2-store] could not check the record layout version: {err}; leaving existing rows");
+            }
+            Arc::new(RwLock::new(store))
+        };
         let palw_class_state_store = {
             let mut store = DbPalwClassStateStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build());
             if let Err(err) = store.reindex_if_stale() {
@@ -513,6 +528,7 @@ impl ConsensusStorage {
             palw_class_state_store,
             compute_capability_store,
             palw_carriage_store,
+            palw_state_v2_store,
             evm_header_store,
             evm_state_store,
             evm_payload_store,

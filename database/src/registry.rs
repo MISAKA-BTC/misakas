@@ -353,6 +353,17 @@ pub enum DatabaseStorePrefixes {
     /// lottery runs against, which is one of the two factors `palw_pwu` needs and the only one
     /// that is not frozen at registration.
     PalwClassState = 215,
+
+    // ---- MISAKA free-prompt PALW candidate-scoped state (ADR-0044 Unit C) ----
+    /// Per-chain-block `PalwStateDeltaV2` — the reorg record. Written in the same batch as the
+    /// block's UTXO data, reverted newest-first when the block leaves the selected chain.
+    PalwStateDeltas = 223,
+    /// Singleton: the materialized `PalwStateCarriageV2` and the chain block it stands at, so a
+    /// walk is O(depth from the anchor) rather than O(chain).
+    PalwStateAnchor = 224,
+    /// Singleton `u32`: the layout the two above were written under. Same reason as every other
+    /// schema marker here — a delta that reads as absent is a reorg that silently does nothing.
+    PalwStateV2Schema = 225,
     /// Singleton `u32`: the layout [`Self::PalwClassState`] rows were written under. Same reason
     /// as [`Self::PalwCarriagesSchema`] — a class whose target reads as absent is a class whose
     /// blocks weigh nothing, which is a wrong answer that looks like a valid one.

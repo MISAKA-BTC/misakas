@@ -1048,7 +1048,10 @@ fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[
 /// One entry of a block's state delta: which key changed, from what, to what. `old` is carried so
 /// application can verify it is being applied to the state it was computed from, and so a reorg
 /// can revert without recomputing the branch.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Borsh-serializable because Unit C persists deltas per chain block: the reorg walk reverts
+/// them newest-first from disk, so a delta that could not round-trip would be a reorg that
+/// silently did nothing.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwDeltaEntryV2 {
     Bond { key: PalwBondKeyV2, old: Option<PalwBondStateV2>, new: Option<PalwBondStateV2> },
     Exposure { key: PalwBondKeyV2, old: Option<u128>, new: Option<u128> },
@@ -1070,7 +1073,7 @@ pub enum PalwDeltaEntryV2 {
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
 /// from the child reproduces the parent ([`revert_delta_v2`]). Both are tested equal, which is
 /// what makes a store layer built on deltas unable to drift from the transition.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwStateDeltaV2 {
     pub point: PalwBlockContextV2,
     pub entries: Vec<PalwDeltaEntryV2>,
@@ -3359,6 +3362,62 @@ mod tests {
         let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut claim.source else { panic!("fp claim") };
         spent.clear();
         assert!(tampered.into_state(&p, Some(root)).is_err(), "an erased spend ledger cannot reload");
+    }
+
+    /// The delta is the store's row (Unit C): every entry kind round-trips through borsh, so a
+    /// reorg reading from disk reverts exactly what the transition wrote.
+    #[test]
+    fn every_delta_entry_kind_round_trips_through_borsh() {
+        let p = params();
+        // One walk that touches every entry kind: registrations (Bond/Class/Target/ReceiptTarget),
+        // an attempt (Claim/Exposure/Epoch/Weights/Frontier/LastPoint), a panel (Panel), a court
+        // (Court), and an FP spend (ReceiptEpoch).
+        let g = PalwChainStateV2::genesis();
+        let (s1, d1) = apply(&g, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, d3) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, d4) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (_, d5) = apply(
+            &s4,
+            &p,
+            &ctx(5, 104, 5),
+            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(0x5E), claim: claim_id, challenger_bond: bond_key(1) }],
+            None,
+        );
+        let certified = certify_fp_claim(&p, 60, 3);
+        let spend = fp_spend(0xFC, 0);
+        let (_, d6) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+
+        let mut kinds: BTreeSet<&'static str> = BTreeSet::new();
+        for delta in [&d1, &d2, &d3, &d4, &d5, &d6] {
+            let bytes = borsh::to_vec(delta).expect("a delta serializes");
+            let decoded: PalwStateDeltaV2 = borsh::from_slice(&bytes).expect("and decodes");
+            assert_eq!(&decoded, delta, "the row is the delta, byte for byte");
+            for entry in &delta.entries {
+                kinds.insert(match entry {
+                    PalwDeltaEntryV2::Bond { .. } => "bond",
+                    PalwDeltaEntryV2::Exposure { .. } => "exposure",
+                    PalwDeltaEntryV2::Class { .. } => "class",
+                    PalwDeltaEntryV2::Target { .. } => "target",
+                    PalwDeltaEntryV2::ReceiptTarget { .. } => "receipt_target",
+                    PalwDeltaEntryV2::Capability { .. } => "capability",
+                    PalwDeltaEntryV2::Claim { .. } => "claim",
+                    PalwDeltaEntryV2::Panel { .. } => "panel",
+                    PalwDeltaEntryV2::Court { .. } => "court",
+                    PalwDeltaEntryV2::Epoch { .. } => "epoch",
+                    PalwDeltaEntryV2::ReceiptEpoch { .. } => "receipt_epoch",
+                    PalwDeltaEntryV2::Weights { .. } => "weights",
+                    PalwDeltaEntryV2::Frontier { .. } => "frontier",
+                    PalwDeltaEntryV2::LastPoint { .. } => "last_point",
+                });
+            }
+        }
+        // The walk above is only worth trusting if it actually exercised the variety it claims.
+        assert!(kinds.len() >= 10, "the fixture walk covered {} entry kinds, expected at least 10", kinds.len());
     }
 
     // ---- FP-08: the reorg-equivalence gate — the walk a real reorg executes, on FP state ----
