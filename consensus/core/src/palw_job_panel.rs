@@ -82,6 +82,10 @@ pub struct PalwPanelSeatV3 {
 /// value as a bond fact. Named at both sites rather than at one, because a reader arrives at
 /// whichever they were sent to.
 ///
+/// `operator_root` used to be a second, unintended divergence — `None` here against the owner hash
+/// there — and that one was a defect (audit P0-7), now fixed. The `bond_status` split stays because
+/// it carries something the type cannot express; the operator one carried nothing.
+///
 /// `class_frozen` is carried per candidate rather than filtered here: a frozen class is a fact the
 /// draw weighs (ADR-0038 I10 froze it for a coverage gap, which is not the candidate's fault), and
 /// dropping those candidates here would silently shrink the eligible set for a reason the lottery
