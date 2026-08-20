@@ -2591,7 +2591,7 @@ mod consensus_params_id_tests {
         // registration's own rule, which is the audit's H13 constraint doing its job rather than
         // a fixture problem.
         let mut fenced = TESTNET_PARAMS;
-        fenced.palw_fork_choice = Some(crate::palw_chain_weight::PalwChainWeightParamsV1 { immature_bound_permille: 100 });
+        fenced.palw_fork_choice = Some(crate::palw_chain_weight::PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 100 });
         assert_ne!(fenced.consensus_params_id(), TESTNET_PARAMS.consensus_params_id());
         assert_eq!(fenced.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted);
 

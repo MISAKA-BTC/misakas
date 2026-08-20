@@ -2659,10 +2659,15 @@ impl VirtualStateProcessor {
         schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
         ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
         params: &kaspa_consensus_core::palw_chain_weight::PalwChainWeightParamsV1,
+        exposure_params: &kaspa_consensus_core::palw_exposure::PalwExposureParamsV1,
     ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
+        use kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1;
         use kaspa_consensus_core::palw_chain_weight::chain_weights_v1;
+        use kaspa_consensus_core::palw_exposure::PalwImmatureWorkV1;
+        use kaspa_consensus_core::palw_weight::PalwWorkRampStageV1;
 
         let mut facts = Vec::new();
+        let mut immature: Vec<Option<PalwImmatureWorkV1>> = Vec::new();
         for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
             let Ok(header) = self.headers_store.get_header(block) else { break };
             if header.daa_score < daa_floor {
@@ -2671,7 +2676,47 @@ impl VirtualStateProcessor {
             if header.palw_commitment.is_empty() {
                 continue; // no PALW claim on this block — nothing to weigh, not a hole
             }
-            facts.push(self.palw_block_weight_v1(chain_tip, block, bonds, schedule, ramp));
+            let weight = self.palw_block_weight_v1(chain_tip, block, bonds, schedule, ramp);
+            // Audit P0-10: what the block would expose its bond to, gathered beside the weight so
+            // the two cannot be assembled from different walks. `None` for a block whose bond or
+            // commitment this node could not resolve — the weight is `None` there too, and
+            // `chain_weights_v1` refuses on it, so no exposure decision is taken on a block nobody
+            // could weigh.
+            let exposure = weight.as_ref().filter(|w| !matches!(w.stage, PalwWorkRampStageV1::Final)).and_then(|w| {
+                let header = self.headers_store.get_header(block).ok()?;
+                let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
+                let bond = bonds.active_bond_at(&commitment.executor_bond_outpoint, header.daa_score)?;
+                Some(PalwImmatureWorkV1 { bond_outpoint: commitment.executor_bond_outpoint, collateral_sompi: bond.amount, pwu: w.pwu })
+            });
+            facts.push(weight);
+            immature.push(exposure);
+        }
+
+        // The walk collected newest-first; exposure is prefix-mandatory in CHAIN order, so the
+        // prefix has to start where the chain does. Reversing here rather than walking forward
+        // keeps one traversal: the fold above must stop at the floor, which only a backward walk
+        // can do without knowing the floor's block in advance.
+        immature.reverse();
+        let admitted = kaspa_consensus_core::palw_exposure::admit_within_exposure_v1(
+            &immature.iter().flatten().copied().collect::<Vec<_>>(),
+            exposure_params,
+        )
+        .ok()?;
+        // Over-exposed work carries no live weight: the block keeps its spam-hash backbone and its
+        // place in the DAG, and loses the ramped pwu its bond could not stand behind. Refusing the
+        // BLOCK instead would let anyone grief a producer by racing cheap commitments onto its bond.
+        let mut admitted = admitted.into_iter();
+        let mut over_exposed = 0usize;
+        for (fact, exposure) in facts.iter_mut().rev().zip(immature.iter()) {
+            if exposure.is_some() && !admitted.next().unwrap_or(false) {
+                if let Some(w) = fact.as_mut() {
+                    w.stage = PalwWorkRampStageV1::Voided;
+                    over_exposed += 1;
+                }
+            }
+        }
+        if over_exposed > 0 {
+            debug!("[palw-exposure] {over_exposed} immature block(s) on {chain_tip} exceed their bond's collateral and carry no live weight");
         }
         chain_weights_v1(&facts, params).ok()
     }
@@ -6840,7 +6885,7 @@ impl VirtualStateProcessor {
         // Audit P0-4: the bonds this candidate's own chain has, derived here rather than borrowed
         // from wherever the sink search happens to have moved its view.
         let bonds = self.palw_bond_view_at_v1(sink, sink_view, tip);
-        self.palw_chain_weights_v1(tip, floor, &bonds, schedule, ramp, fork_choice)
+        self.palw_chain_weights_v1(tip, floor, &bonds, schedule, ramp, fork_choice, &fork_choice.exposure_params_v1())
     }
 
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {

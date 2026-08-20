@@ -69,6 +69,13 @@ pub struct PalwBlockWeightV1 {
 /// The registration-time bound on how much immature work may count toward live weight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwChainWeightParamsV1 {
+    /// Audit P0-10: how much collateral one pwu of UNPROVEN work must have behind it, in sompi.
+    ///
+    /// Lives in the fork-choice fence rather than a sixth one because it decides the same thing β
+    /// does — how much an immature block is worth to tip selection — and the two are meaningless
+    /// apart: β prices unproven work and this bounds how much of it one bond may hold. A network
+    /// that set one without the other would have a ramp with no ceiling or a ceiling on nothing.
+    pub penalty_sompi_per_pwu: u64,
     /// β — the fraction of an immature block's pwu that counts toward LIVE weight, in permille.
     ///
     /// Deliberately a registration constant and not a tunable: two nodes that disagree about
@@ -79,6 +86,11 @@ pub struct PalwChainWeightParamsV1 {
 }
 
 impl PalwChainWeightParamsV1 {
+    /// The exposure rule these params imply, for [`crate::palw_exposure`].
+    pub fn exposure_params_v1(&self) -> crate::palw_exposure::PalwExposureParamsV1 {
+        crate::palw_exposure::PalwExposureParamsV1 { penalty_sompi_per_pwu: self.penalty_sompi_per_pwu }
+    }
+
     pub fn validate(&self) -> Result<(), PalwChainWeightError> {
         if self.immature_bound_permille as u128 > PALW_CHAIN_WEIGHT_PERMILLE_DENOMINATOR {
             return Err(PalwChainWeightError::BoundOutOfRange { got: self.immature_bound_permille });
@@ -207,7 +219,7 @@ mod tests {
     use super::*;
     use PalwWorkRampStageV1 as S;
 
-    const PARAMS: PalwChainWeightParamsV1 = PalwChainWeightParamsV1 { immature_bound_permille: 100 };
+    const PARAMS: PalwChainWeightParamsV1 = PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 100 };
 
     fn b(pwu: u64, stage: S) -> Option<PalwBlockWeightV1> {
         Some(PalwBlockWeightV1 { pwu, stage })
@@ -281,10 +293,10 @@ mod tests {
         // And the bound is what makes the `live` half true, not an accident of the fixture's
         // numbers: at the largest bound `validate` admits, maturing is exactly weight-neutral for
         // live — the boundary case, and the one a larger bound would push negative.
-        let flat = PalwChainWeightParamsV1 { immature_bound_permille: 1_000 };
+        let flat = PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_000 };
         let at = |stage: S| chain_weights_v1(&[b(4_242, stage)], &flat).expect("resolves").live;
         assert_eq!(at(S::ReceiptLicensed), at(S::Final), "β = 1000‰ is the neutral boundary");
-        assert!(PalwChainWeightParamsV1 { immature_bound_permille: 1_001 }.validate().is_err(), "and nothing past it is admissible");
+        assert!(PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }.validate().is_err(), "and nothing past it is admissible");
     }
 
     /// A deterministic permutation generator — no `rand`, so the suite is reproducible and the
@@ -408,7 +420,7 @@ mod tests {
         assert_eq!(w.live, w.safe, "no immature work ⇒ live == safe");
 
         // Immature at full β, at the same magnitude, still cannot exceed the accumulator.
-        let full = PalwChainWeightParamsV1 { immature_bound_permille: 1_000 };
+        let full = PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_000 };
         let all_immature: Vec<_> = (0..1_000).map(|_| b(u64::MAX, S::Provisional)).collect();
         let w2 = chain_weights_v1(&all_immature, &full).unwrap();
         assert_eq!(w2.safe, 0);
@@ -420,14 +432,14 @@ mod tests {
     #[test]
     fn the_immature_bound_is_validated() {
         assert!(PARAMS.validate().is_ok());
-        assert!(PalwChainWeightParamsV1 { immature_bound_permille: 1_000 }.validate().is_ok());
+        assert!(PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_000 }.validate().is_ok());
         assert_eq!(
-            PalwChainWeightParamsV1 { immature_bound_permille: 1_001 }.validate(),
+            PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }.validate(),
             Err(PalwChainWeightError::BoundOutOfRange { got: 1_001 })
         );
         // And the bound is enforced by the weight function, not only by an explicit validate call.
         assert_eq!(
-            chain_weights_v1(&[b(1, S::Final)], &PalwChainWeightParamsV1 { immature_bound_permille: 1_001 }),
+            chain_weights_v1(&[b(1, S::Final)], &PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }),
             Err(PalwChainWeightError::BoundOutOfRange { got: 1_001 })
         );
     }
@@ -499,7 +511,7 @@ mod adversarial_suite {
     use super::*;
     use PalwWorkRampStageV1 as S;
 
-    const PARAMS: PalwChainWeightParamsV1 = PalwChainWeightParamsV1 { immature_bound_permille: 100 };
+    const PARAMS: PalwChainWeightParamsV1 = PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 100 };
 
     fn b(pwu: u64, stage: S) -> Option<PalwBlockWeightV1> {
         Some(PalwBlockWeightV1 { pwu, stage })
