@@ -664,7 +664,7 @@ impl IbdFlow {
         // The incumbent's TIP work, not its pruning point: the trigger asks whether the challenger
         // claims to beat the chain actually held, and pruning-point work cannot tell two branches of
         // comparable depth apart.
-        let provisional_tip = session.async_get_headers_selected_tip().await;
+        let provisional_tip = session.async_get_header_download_hint().await;
         let provisional_blue_work = session.async_get_header(provisional_tip).await.ok().map(|h| h.blue_work)?;
         let descends_from_checkpoint = match self.ctx.config.trusted_checkpoint {
             Some(cp) => Some(
@@ -832,7 +832,7 @@ impl IbdFlow {
         let Some(claimed_tip_work) = claimed_tip_work else { return };
 
         let session = self.ctx.consensus().session().await;
-        let our_tip = session.async_get_headers_selected_tip().await;
+        let our_tip = session.async_get_header_download_hint().await;
         let ours = session.async_get_header(our_tip).await.ok().map(|h| h.blue_work);
         drop(session);
 
@@ -1102,7 +1102,7 @@ impl IbdFlow {
     /// - a valid candidate exists that nobody could compare. Deciding between them by which peer
     ///   relayed first is the bug; quarantine and let an operator decide.
     async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
-        let tip = staging.async_get_headers_selected_tip().await;
+        let tip = staging.async_get_header_download_hint().await;
         let staged_blue_work = staging.async_get_header(tip).await?.blue_work;
 
         // Gather the facts; `decide_commit` applies the policy. Split so the security-critical part
@@ -1146,7 +1146,7 @@ impl IbdFlow {
             // is not the one that matters now.
             let incumbent = {
                 let session = self.ctx.consensus().session().await;
-                let tip = session.async_get_headers_selected_tip().await;
+                let tip = session.async_get_header_download_hint().await;
                 session.async_get_header(tip).await.ok().map(|h| ChainTip { tip, blue_work: h.blue_work })
             };
             let Some(incumbent) = incumbent else {
@@ -1512,7 +1512,7 @@ impl IbdFlow {
                                 // Blocking session: this runs inside spawn_blocking, under the
                                 // manager's write lock, so it must not await.
                                 let session = active.unguarded_session_blocking();
-                                let tip = session.get_headers_selected_tip();
+                                let tip = session.get_header_download_hint();
                                 match session.get_header(tip) {
                                     Ok(h) => permit.still_applies(&state_now, &ChainTip { tip, blue_work: h.blue_work }),
                                     // Unreadable defender: refuse. Committing on a reading that
@@ -1701,7 +1701,7 @@ impl IbdFlow {
             return Err(ProtocolError::Other("peer is in a finality conflict with the local pruning point"));
         }
 
-        let hst_header = consensus.async_get_header(consensus.async_get_headers_selected_tip().await).await.unwrap();
+        let hst_header = consensus.async_get_header(consensus.async_get_header_download_hint().await).await.unwrap();
         let pruning_depth = self.ctx.config.pruning_depth();
         if relay_header.blue_score >= hst_header.blue_score + pruning_depth && relay_header.blue_work > hst_header.blue_work {
             let finality_duration_in_milliseconds = self.ctx.config.finality_duration_in_milliseconds();
@@ -2115,8 +2115,8 @@ impl IbdFlow {
     ) -> Result<(), ProtocolError> {
         // The purpose of this check is to prevent the potential abuse explained here:
         // https://github.com/kaspanet/research/issues/3#issuecomment-895243792
-        let staging_hst = staging_consensus.async_get_header(staging_consensus.async_get_headers_selected_tip().await).await.unwrap();
-        let current_hst = consensus.async_get_header(consensus.async_get_headers_selected_tip().await).await.unwrap();
+        let staging_hst = staging_consensus.async_get_header(staging_consensus.async_get_header_download_hint().await).await.unwrap();
+        let current_hst = consensus.async_get_header(consensus.async_get_header_download_hint().await).await.unwrap();
         // If staging is behind current or within 10 minutes ahead of it, then something is wrong and we reject the IBD
         if staging_hst.timestamp < current_hst.timestamp || staging_hst.timestamp - current_hst.timestamp < 600_000 {
             Err(ProtocolError::OtherOwned(format!(

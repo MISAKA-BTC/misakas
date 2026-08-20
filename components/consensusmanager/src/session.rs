@@ -417,8 +417,8 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.get_header(hash)).await
     }
 
-    pub async fn async_get_headers_selected_tip(&self) -> BlockHash {
-        self.clone().spawn_blocking(|c| c.get_headers_selected_tip()).await
+    pub async fn async_get_header_download_hint(&self) -> BlockHash {
+        self.clone().spawn_blocking(|c| c.get_header_download_hint()).await
     }
 
     pub async fn async_get_chain_block_samples(&self) -> Vec<DaaScoreTimestamp> {

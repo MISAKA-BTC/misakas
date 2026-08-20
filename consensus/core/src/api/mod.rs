@@ -518,7 +518,23 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn get_headers_selected_tip(&self) -> BlockHash {
+    /// The heaviest header chain by BLUE WORK — a **download-ordering hint, never chain authority**
+    /// (ADR-0042 Decision 9, external audit P0-5).
+    ///
+    /// Renamed from `get_headers_selected_tip`, and the rename is the point. PALW weight is a
+    /// function of ACCEPTED TRANSACTIONS, and the header processor is upstream of bodies by
+    /// construction — header-first sync exists to order headers whose bodies have not arrived. So
+    /// this value cannot be PALW-ordered, and a header-only approximation would be a SECOND
+    /// fork-choice rule disagreeing with the first, which is the defect rather than a fix for it.
+    ///
+    /// A node may therefore sync toward a header chain PALW would not select, and then decline to
+    /// accept it: the cost is wasted download, never a divergent chain. What must never happen is a
+    /// consensus decision reading this — pruning, finality and acceptance take the virtual sink,
+    /// which is ordered by `palw_fork_choice::compare_palw_candidates_v1`.
+    ///
+    /// The old name read like an authority and was used like a hint. Anything that starts reading
+    /// this to decide chain state reopens P0-5, and now has to type "download hint" to do it.
+    fn get_header_download_hint(&self) -> BlockHash {
         unimplemented!()
     }
 

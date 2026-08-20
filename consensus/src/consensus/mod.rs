@@ -1706,7 +1706,7 @@ impl ConsensusApi for Consensus {
         // TODO(relaxed): change virtual's 0 daa initialization, and revert to normal subtraction
         let header_count = self
             .headers_store
-            .get_daa_score(self.get_headers_selected_tip())
+            .get_daa_score(self.get_header_download_hint())
             .optional()
             .unwrap()
             .unwrap_or(virtual_score)
@@ -2106,7 +2106,7 @@ impl ConsensusApi for Consensus {
         self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::HeaderNotFound(hash))
     }
 
-    fn get_headers_selected_tip(&self) -> BlockHash {
+    fn get_header_download_hint(&self) -> BlockHash {
         self.headers_selected_tip_store.read().get().unwrap().hash
     }
 

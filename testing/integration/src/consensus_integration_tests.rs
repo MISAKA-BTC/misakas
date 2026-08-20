@@ -894,7 +894,7 @@ async fn json_test(file_path: &str, concurrency: bool) {
         // TODO: Add consensus validation that the pruning point is actually the right block according to the rules (in pruning depth etc).
     }
 
-    let missing_bodies = tc.get_missing_block_body_hashes(tc.get_headers_selected_tip()).unwrap();
+    let missing_bodies = tc.get_missing_block_body_hashes(tc.get_header_download_hint()).unwrap();
 
     info!("Processing {} block bodies...", missing_bodies.len());
 
