@@ -210,6 +210,7 @@ pub mod palw_reward_v2;
 pub mod palw_mode_v2;
 pub mod palw_freeprompt_v3;
 pub mod palw_fp_admission_v3;
+pub mod palw_fp_devnet_v3;
 pub mod palw_facts;
 pub mod palw_pwu;
 pub mod palw_receipt;

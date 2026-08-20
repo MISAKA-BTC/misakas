@@ -78,6 +78,8 @@ pub enum PalwModeV2Error {
     Admission(#[from] PalwAdmissionV2Error),
     #[error("invalid V2 bundle: {0}")]
     FreePrompt(#[from] PalwFpV3Error),
+    #[error("invalid V2 bundle: {0}")]
+    Panel(#[from] crate::palw_panel_v2::PalwPanelV2Error),
 }
 
 /// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —
