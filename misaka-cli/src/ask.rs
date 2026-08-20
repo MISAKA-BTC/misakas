@@ -7,15 +7,17 @@
 //! same answer byte-for-byte or find out they did not.
 //!
 //! What makes that possible is that the request is pinned, not merely repeated: greedy decoding,
-//! CPU backend, fixed context — the same options consensus uses, held in one place
-//! (`kaspa_pow::palw::palw_generate`) so this command and block validation cannot drift apart.
+//! CPU backend, fixed context — the same options the legacy tag path uses, held in one place
+//! (`misaka_palw_pow_driver::palw_generate`, the crate that owns every model-reaching call after
+//! ADR-0042 Decision 4 moved them out of kaspa-pow) so this command and block validation cannot
+//! drift apart.
 //!
 //! The one knob that changes the answer and therefore lives in the receipt is `--tokens`
 //! (`num_predict`): a longer budget is a different computation, not merely more of the same one.
 
 use crate::{CliError, CliResult, exit};
 use kaspa_consensus_core::pow_layer0::PowLayer0Error;
-use kaspa_pow::palw::{DEFAULT_OLLAMA_URL, PALW_OLLAMA_MODEL_ENV, PALW_OLLAMA_URL_ENV, palw_generate};
+use misaka_palw_pow_driver::{DEFAULT_OLLAMA_URL, PALW_OLLAMA_MODEL_ENV, PALW_OLLAMA_URL_ENV, palw_generate};
 use std::io::Read;
 
 /// Receipt format tag. Bump if any field or the digest derivation changes.
@@ -166,21 +168,13 @@ fn strip_thinking(text: &str) -> &str {
 }
 
 pub fn run(args: AskArgs) -> CliResult {
-    let model = args
-        .model
-        .clone()
-        .or_else(|| std::env::var(PALW_OLLAMA_MODEL_ENV).ok())
-        .ok_or_else(|| {
-            CliError::generic(format!(
-                "no model: pass --model, or set {PALW_OLLAMA_MODEL_ENV} to the one this host \
+    let model = args.model.clone().or_else(|| std::env::var(PALW_OLLAMA_MODEL_ENV).ok()).ok_or_else(|| {
+        CliError::generic(format!(
+            "no model: pass --model, or set {PALW_OLLAMA_MODEL_ENV} to the one this host \
                  validates with (that is the point — you are asking the network's model)"
-            ))
-        })?;
-    let url = args
-        .url
-        .clone()
-        .or_else(|| std::env::var(PALW_OLLAMA_URL_ENV).ok())
-        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+        ))
+    })?;
+    let url = args.url.clone().or_else(|| std::env::var(PALW_OLLAMA_URL_ENV).ok()).unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
 
     // Prompt: argument, file, or stdin. stdin is the one that handles multi-line text and any
     // language without shell quoting getting in the way.
@@ -232,15 +226,8 @@ pub fn run(args: AskArgs) -> CliResult {
     let elapsed = started.elapsed();
     let answer_digest = digest(b"answer", answer.as_bytes());
 
-    let receipt = Receipt {
-        model,
-        tokens,
-        templated,
-        think,
-        prompt: prompt_digest,
-        answer: answer_digest.clone(),
-        counts: (prompt_eval, eval),
-    };
+    let receipt =
+        Receipt { model, tokens, templated, think, prompt: prompt_digest, answer: answer_digest.clone(), counts: (prompt_eval, eval) };
 
     if let Some(want) = want_answer {
         let matched = answer_digest.starts_with(want.as_str());

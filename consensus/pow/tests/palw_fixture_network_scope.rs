@@ -61,19 +61,17 @@ fn one_process_can_hold_a_fixture_network_and_a_real_one() {
     let expected = palw_fixture_l1_tag_v1(&palw_pow_seed_v1(hash(), TS, NONCE, b"devnet"));
     assert_eq!(devnet, expected, "devnet must compute the fixture tag for its own seed");
 
-    // A worker in the developer's environment would answer the simnet call for real, which is a
-    // different (also correct) outcome; the assertion that survives either way is the one that
-    // matters — whatever simnet computed, it was not the fixture.
+    // kaspa-pow carries no model runtime and registers none in its own tests (ADR-0042
+    // Decision 4) — a worker in the developer's environment CANNOT answer this call, because the
+    // crate that could reach one is not linked here. So the simnet outcome is exact: whatever
+    // simnet was going to compute, it was not the fixture, and the refusal names what a real
+    // consumer would have to wire in next.
     let simnet = palw_l1_tag(hash(), TS, NONCE, b"simnet");
     match simnet {
         Err(PowLayer0Error::PalwUnavailable(msg)) => {
-            assert!(msg.contains("PALW_WORKER"), "the refusal must name the knob, got: {msg}")
+            assert!(msg.contains("no PALW model runtime"), "the refusal must name the missing runtime, got: {msg}")
         }
-        Ok(tag) => {
-            let simnet_fixture = palw_fixture_l1_tag_v1(&palw_pow_seed_v1(hash(), TS, NONCE, b"simnet"));
-            assert_ne!(tag, simnet_fixture, "a real worker answered, but simnet must never be given fixture rules");
-        }
-        Err(other) => panic!("unexpected simnet outcome: {other:?}"),
+        other => panic!("simnet must refuse rather than compute fixture rules: {other:?}"),
     }
 }
 

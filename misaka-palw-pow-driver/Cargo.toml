@@ -1,0 +1,28 @@
+[package]
+name = "misaka-palw-pow-driver"
+description = "MISAKA legacy (algo 4/5) PALW PoW tag driver: the impure half of the V1 tag path — pinned palw-worker subprocesses, the resident pow-agent pool, and the host-local Ollama runner — registered into kaspa-pow's PalwPowRuntime slot by composition roots (kaspad, misaminer). ADR-0042 Decision 4 keeps this out of the consensus build: a node that registers nothing prices inference tags as failed PoW"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pow.workspace = true
+
+faster-hex.workspace = true
+log.workspace = true
+serde_json.workspace = true
+
+# Host-wide inference slots (ADR-0041 Decision 2): `flock`, because the kernel releases it when the
+# holder dies. A PID file or a named semaphore both leak a slot when a node crashes.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[lints]
+workspace = true

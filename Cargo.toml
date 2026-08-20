@@ -30,6 +30,7 @@ members = [
     "misaka-endpoints",
     "misaka-palw",
     "misaka-palw-shadow",
+    "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-worker",
     "misaka-palw-base0",
@@ -168,6 +169,7 @@ kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }
 misaka-palw-shadow = { version = "1.1.0", path = "misaka-palw-shadow" }
+misaka-palw-pow-driver = { version = "1.1.0", path = "misaka-palw-pow-driver" }
 
 # external
 aes = "0.8.3"

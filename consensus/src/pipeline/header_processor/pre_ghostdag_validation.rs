@@ -183,29 +183,27 @@ impl HeaderProcessor {
         // finalizer; the block level is derived from the 512-bit pow value
         // (ADR-0007 / ADR-0008).
         let state = kaspa_pow::StateLayer0::new(header, &self.network_id);
-        // An ENVIRONMENTAL PALW failure is not a statement about this header.
+        // The PALW split here mirrors `kaspa_pow::calc_block_level_check_pow_layer0` exactly, so
+        // the two cannot drift (ADR-0042 Decision 4, PR-02):
         //
-        // `map_err(|_| RuleError::InvalidPoW)` collapsed every error into "this header's PoW is
-        // invalid", including `PalwUnavailable` and `PalwWorkerFailed` — a missing worker, an
-        // unusable runtime, a GGUF this node cannot load. Those are facts about the NODE: they apply
-        // to every header equally, so a node in that state rejected every honest block and banned
-        // every honest peer, exactly the outcome `kaspa_pow::calc_block_level_check_pow_layer0`
-        // panics to prevent and documents at length. This path did the thing that function's comment
-        // calls the wrong answer.
-        //
-        // Same discipline as that function, so the two cannot drift: fail LOUD. Reaching here is a
-        // persistent fault — the transient half is already absorbed by
-        // `palw::native::run_worker_with_retry`'s bounded attempts — and a visible halt is the
-        // designed response on every network, mainnet included (ADR-0036 Decision 4 as superseded by
-        // ADR-0039 W6′: the liveness floor is a portable integer-only PALW class, not a hash lane).
+        // * `PalwWorkerFailed` — this node HAS a registered model runtime and it broke,
+        //   persistently (the driver's bounded retries absorb the transient half). That is a fact
+        //   about the NODE, applying to every header equally; mapping it to `InvalidPoW` would
+        //   reject every honest block and ban every honest peer, so the one deployment that opted
+        //   into a model still fails LOUD.
+        // * `PalwUnavailable` — no runtime is registered in this process (or one configured off
+        //   this network's class). A full node without a model is the NORMAL case, and a header
+        //   priced by an inference this node never promised to run is simply a failed PoW. A
+        //   network whose rules demand such headers refuses to boot a kaspad without a verified
+        //   runtime at the startup rail, so this arm is not reachable as a silent-fork state
+        //   there; everywhere else it is junk pricing, working as designed.
         let (passed, pow_512) = match state.check_pow_layer0(header.nonce) {
             Ok(ok) => ok,
-            Err(
-                e @ (kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwUnavailable(_)
-                | kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwWorkerFailed(_)),
-            ) => panic!("PALW PoW validation cannot run on this node: {e}"),
-            // The rest are finalizer-internal misuse, impossible for a well-formed header, and a
-            // failed PoW is the fail-closed reading of them.
+            Err(e @ kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwWorkerFailed(_)) => {
+                panic!("PALW PoW validation cannot run on this node: {e}")
+            }
+            // `PalwUnavailable`, and the rest — finalizer-internal misuse, impossible for a
+            // well-formed header. A failed PoW is the fail-closed reading of them all.
             Err(_) => return Err(RuleError::InvalidPoW),
         };
         if passed || self.skip_proof_of_work {

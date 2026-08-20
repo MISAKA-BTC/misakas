@@ -16,9 +16,8 @@ use kaspa_consensus_core::{
     header::Header,
     pow_layer0::{
         POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA,
-        POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES,
-        POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
-        blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
+        POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES,
+        PowLayer0Error, argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};
@@ -119,29 +118,34 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
     let state = StateLayer0::new(header, network_id);
     match state.check_pow_layer0(header.nonce) {
         Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
-        // PALW (algo_id = 4) errors are ENVIRONMENTAL, never header-dependent (the prompt is a
-        // fixed frame around the seed, far under the ceiling): a missing/broken worker means this
-        // node cannot judge ANY header on a PALW network. Returning `false` here would silently
-        // reject every valid block — stall the node, ban honest peers — so fail loud instead,
-        // exactly like the VLT devnet fence panics a kaspad missing its runtime.
+        // `PalwWorkerFailed` is a statement about THIS node: it has a registered model runtime
+        // and the runtime broke, persistently — the driver's bounded retries absorb the transient
+        // half (spawn failure, OOM kill, timeout under validation load; mainnet-readiness audit
+        // B7, ADR-0036 Decision 4), so what reaches here is a runtime this node genuinely cannot
+        // use. These errors are ENVIRONMENTAL, never header-dependent (the prompt is a fixed
+        // frame around the seed, far under the ceiling): on a legacy PALW network, returning
+        // `false` would silently reject every valid block — stall the node, ban honest peers,
+        // fork it off alone — so a node that OPTED INTO the legacy lane still fails loud.
         //
-        // Reaching here is now a statement about a PERSISTENT fault, not a momentary one: the
-        // transient half of `PalwWorkerFailed` (spawn failure, OOM kill, timeout under validation
-        // load) is absorbed by `palw::native::run_worker_with_retry`'s bounded attempts, so a node
-        // is no longer killed because one subprocess lost a race (mainnet-readiness audit B7,
-        // ADR-0036 Decision 4). What survives retry is a runtime this node genuinely cannot use.
-        //
-        // Stopping loudly IS the designed answer on every network, mainnet included. ADR-0036
-        // Decision 4 once made a permanent HASH floor the mainnet precondition; ADR-0039 W6′
-        // supersedes that — the liveness floor is a portable integer-only PALW class
-        // (`PALW-BASE-0`), held permanently Active, not a hash lane. Block production is PALW work
-        // by design and stays that way, so with no class able to certify work the honest response is
-        // a visible halt rather than a silent fork onto cheap hashes. There is no lane to add here.
-        Err(e @ (PowLayer0Error::PalwUnavailable(_) | PowLayer0Error::PalwWorkerFailed(_))) => {
+        // A node that never registers a runtime — every V2 node and every hash-network node, per
+        // ADR-0042 Decision 4 — cannot reach this arm: with nothing registered, the tag path
+        // answers `PalwUnavailable` below before any runtime exists to fail. The panic is scoped
+        // to the one deployment that asked for a model, precisely because it asked.
+        Err(e @ PowLayer0Error::PalwWorkerFailed(_)) => {
             panic!("PALW PoW validation cannot run on this node: {e}")
         }
+        // `PalwUnavailable` — no runtime registered in this process, or one that is configured
+        // off this network's class — prices the header as failed PoW (ADR-0042 Decision 4, PR-02:
+        // a full node without a model is the NORMAL case, not a fault). That verdict is correct
+        // everywhere it can be reached: a network whose required-algo rule demands an
+        // inference-priced id refuses to boot a kaspad without a verified runtime (the startup
+        // rail), the algo gates reject such headers up-stack on every other network — including
+        // the pruning-proof path, whose shape gate runs `check_algo_id` BEFORE this function —
+        // and a library consumer that grinds without configuring a runtime mints nothing rather
+        // than minting tags no peer accepts.
+        //
         // Remaining variants are finalizer-internal misuse, which cannot happen for a well-formed
-        // header; treat as a failed PoW.
+        // header; also a failed PoW.
         Err(_) => (0, false),
     }
 }
@@ -308,8 +312,11 @@ impl StateLayer0 {
             }
             // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
             POW_ALGO_ID_BLAKE2B_SHA3 => {
-                buf[..POW_L1_BLAKE2B_SHA3_OUT_BYTES]
-                    .copy_from_slice(&blake2b_sha3_l1_tag_v1(self.pre_pow_hash_64, nonce, &self.network_id));
+                buf[..POW_L1_BLAKE2B_SHA3_OUT_BYTES].copy_from_slice(&blake2b_sha3_l1_tag_v1(
+                    self.pre_pow_hash_64,
+                    nonce,
+                    &self.network_id,
+                ));
                 Ok(POW_L1_BLAKE2B_SHA3_OUT_BYTES)
             }
             // Phase 2 (algo_id = 2): memory-hard Argon2id over (pre_pow_hash, nonce). 32 bytes.
@@ -581,30 +588,30 @@ mod tests_pq {
         }
     }
 
-    /// Without the fixture env and without a worker configured, judging a PALW header is a node
-    /// configuration error: `check_pow_layer0` reports `PalwUnavailable` (and the consensus-side
-    /// `calc_block_level_check_pow_layer0` escalates that to a panic rather than mis-labelling
-    /// valid blocks as bad PoW).
+    /// Without the fixture env and without a registered model runtime, judging a PALW header is
+    /// `PalwUnavailable` — and `calc_block_level_check_pow_layer0` prices that as a failed PoW
+    /// rather than a panic (ADR-0042 Decision 4: a full node without a model is the normal case).
+    ///
+    /// kaspa-pow cannot even LINK the crate that would answer (`no_model_runtime_edge.rs` pins
+    /// the dependency graph), so unlike the pre-PR-02 version of this test, no developer
+    /// environment — a stray `PALW_WORKER`, a live Ollama — can make a real runtime answer here.
+    /// The outcome is exact, not conditional on the machine.
     #[test]
     fn layer0_palw_without_worker_is_unavailable_not_a_failed_pow() {
         use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM;
         let _env = PALW_ENV_LOCK.lock().unwrap();
-        // A configured WORKER would answer, so this stays conditional on that. The fixture
-        // variable no longer is: the network below is one the fixture is not permitted on, so the
-        // property under test holds whether or not the surrounding environment exports it. It used
-        // to bail out when it was set, which is exactly the environment CI now runs in — the test
-        // would have gone quiet in the run that needs it most.
-        if std::env::var("PALW_WORKER").is_ok() {
-            return;
-        }
         let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_PALW_LLM);
         let s = StateLayer0::new(&h, b"simnet");
         match s.check_pow_layer0(0) {
             Err(PowLayer0Error::PalwUnavailable(msg)) => {
-                assert!(msg.contains("PALW_WORKER"), "the error must tell the operator which knob to set: {msg}")
+                assert!(msg.contains("no PALW model runtime"), "the error must name the missing runtime: {msg}")
             }
             other => panic!("expected PalwUnavailable, got {other:?}"),
         }
+        // And the consensus wrapper's verdict on the same header: failed PoW, level 0 — never a
+        // panic, never an accept.
+        let (level, passed) = calc_block_level_check_pow_layer0(&h, b"simnet", 64);
+        assert_eq!((level, passed), (0, false), "an unregistered runtime must price the header as failed PoW");
     }
 
     /// Mainnet-readiness audit **P0-1**: a header with an unrecognised `pow_algo_id` must never

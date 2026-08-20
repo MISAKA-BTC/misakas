@@ -430,9 +430,10 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     };
 
     // MISAKA Phase 4 (PALW LLM PoW, ADR-0021) startup rails. Header validation on a PALW-active
-    // network replays a pinned-LLM inference per header; discovering a missing runtime at the
-    // first relayed header means a panic mid-pipeline. Check the operator's intent HERE, at
-    // startup, with actionable messages instead.
+    // network replays a pinned-LLM inference per header; a node whose runtime is missing there
+    // would price every honest header as failed PoW and follow nothing (ADR-0042 Decision 4 —
+    // the panic is reserved for a runtime that registers and then breaks). Check the operator's
+    // intent HERE, at startup, with actionable messages, before a peer is dialed.
     {
         // "Ever active on this network": is_active at the largest checkable score — false only
         // for `ForkActivation::never()`.
@@ -477,8 +478,16 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         // Below, "fixture" must mean "the fixture is what this node validates", not "somebody
         // exported the variable" — on a non-devnet network the runtime checks still apply.
         let fixture = fixture && devnet;
+        // ADR-0042 Decision 4 (PR-02): the consensus build carries no model runtime — kaspad is
+        // the composition root that wires one in, and only where this network's rules can ever
+        // demand an inference-priced tag. Everywhere else NOTHING is registered, so no
+        // validation path can reach a model, or a model's failure modes: an algo-4/5 header on
+        // such a network simply fails PoW.
+        if (palw_ever_active || palw_ollama_ever_active) && !fixture {
+            misaka_palw_pow_driver::install();
+        }
         if palw_ollama_ever_active && !fixture {
-            let model = match std::env::var(kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV) {
+            let model = match std::env::var(misaka_palw_pow_driver::PALW_OLLAMA_MODEL_ENV) {
                 Ok(m) => m,
                 Err(_) => {
                     println!(
@@ -486,8 +495,8 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                          qwen3.5:2b> (and optionally {}=http://127.0.0.1:11434), with `ollama serve` running and the \
                          model pulled — see docs/testnet10-palw-rollout-runbook.md.{}",
                         network,
-                        kaspa_pow::palw::PALW_OLLAMA_MODEL_ENV,
-                        kaspa_pow::palw::PALW_OLLAMA_URL_ENV,
+                        misaka_palw_pow_driver::PALW_OLLAMA_MODEL_ENV,
+                        misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV,
                         if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
                             "\nOr export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
                         } else {
@@ -497,17 +506,17 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                     exit(1);
                 }
             };
-            let url = std::env::var(kaspa_pow::palw::PALW_OLLAMA_URL_ENV)
-                .unwrap_or_else(|_| kaspa_pow::palw::DEFAULT_OLLAMA_URL.to_string());
+            let url = std::env::var(misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV)
+                .unwrap_or_else(|_| misaka_palw_pow_driver::DEFAULT_OLLAMA_URL.to_string());
             let hostport = url.strip_prefix("http://").unwrap_or(&url).trim_end_matches('/').to_string();
             match std::net::TcpStream::connect_timeout(
                 &hostport.parse().unwrap_or_else(|_| {
-                    println!("{} must be http://host:port, got {url}", kaspa_pow::palw::PALW_OLLAMA_URL_ENV);
+                    println!("{} must be http://host:port, got {url}", misaka_palw_pow_driver::PALW_OLLAMA_URL_ENV);
                     exit(1);
                 }),
                 Duration::from_secs(3),
             ) {
-                Ok(_) => match kaspa_pow::palw::verify_ollama_model_pin(&url, &model) {
+                Ok(_) => match misaka_palw_pow_driver::verify_ollama_model_pin(&url, &model) {
                     Ok(()) => info!("PALW-Ollama runtime: {url} serving the pinned model blob as {model}"),
                     Err(e) => {
                         println!("{e}");
@@ -798,7 +807,9 @@ Do you confirm? (y/n)";
         // across a layout bump must be told to delete and resync, not shown a backtrace.
         let version = mcms.version().unwrap();
         if version != LATEST_DB_VERSION {
-            info!("Node database is version {version}; this build requires version {LATEST_DB_VERSION}, whose on-disk block-header layout is different and is not migrated.");
+            info!(
+                "Node database is version {version}; this build requires version {LATEST_DB_VERSION}, whose on-disk block-header layout is different and is not migrated."
+            );
             is_db_reset_needed = request_database_deletion_approval(args.yes);
             continue 'db_upgrade;
         }

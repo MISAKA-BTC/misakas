@@ -6,7 +6,7 @@
 //! ```text
 //! PALW_WORKER=$PWD/target/release/palw-worker \
 //! MISAKA_PALW_GGUF=/path/to/Qwen3.5-2B-Q4_K_M.gguf \
-//!   cargo test -p kaspa-pow --release --test palw_agent_equivalence -- --ignored --nocapture
+//!   cargo test -p misaka-palw-pow-driver --release --test palw_agent_equivalence -- --ignored --nocapture
 //! ```
 //!
 //! Three DISTINCT seeds, because identical ones would only prove idempotence — not that
@@ -72,6 +72,7 @@ fn tag_of(doc: &serde_json::Value) -> [u8; POW_L1_PALW_OUT_BYTES] {
 fn the_resident_agent_and_a_fresh_process_compute_the_same_tag() {
     let worker = std::env::var("PALW_WORKER").expect("set PALW_WORKER to the palw-worker binary");
     std::env::var("MISAKA_PALW_GGUF").expect("set MISAKA_PALW_GGUF to the pinned model");
+    misaka_palw_pow_driver::install();
     // SAFETY: this integration test is its own binary and holds exactly one test, so nothing else
     // in the process reads or writes the environment while this runs.
     unsafe { std::env::remove_var("MISAKA_PALW_POW_FIXTURE") };

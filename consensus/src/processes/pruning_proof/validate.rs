@@ -265,9 +265,12 @@ impl ProofContext {
             for (i, header) in level_headers.iter().enumerate() {
                 // Gate the peer-supplied proof header BEFORE its PoW is computed (audit P0-1 / P0-2).
                 // The order matters: `calc_block_level_check_pow_layer0` runs the Layer-1 finalizer,
-                // whose PALW arm escalates a missing worker into a node-wide panic and whose unknown-id
-                // path was a remote panic before it was made total — so a peer-chosen `pow_algo_id`
-                // must be rejected here, not after. `check_algo_id` enforces the SAME per-DAA
+                // whose PALW arm escalates a REGISTERED runtime's persistent failure into a node-wide
+                // panic (a missing runtime is a failed PoW since ADR-0042 Decision 4) and whose
+                // unknown-id path was a remote panic before it was made total — so a peer-chosen
+                // `pow_algo_id` must be rejected here, not after: an inference-priced id this network
+                // never demands must not be able to spend this node's inference budget either.
+                // `check_algo_id` enforces the SAME per-DAA
                 // required-algo rule the main pipeline applies (not the looser `check_algo_id_known`),
                 // because proof-only headers below the pruning point are never re-processed by the
                 // main pipeline; parentless roots are exempt from that rule exactly as the pipeline

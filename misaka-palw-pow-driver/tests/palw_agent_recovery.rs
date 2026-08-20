@@ -12,7 +12,7 @@
 //! ```text
 //! PALW_WORKER=$PWD/target/release/palw-worker \
 //! MISAKA_PALW_GGUF=/path/to/Qwen3.5-2B-Q4_K_M.gguf \
-//!   cargo test -p kaspa-pow --release --test palw_agent_recovery -- --ignored --nocapture
+//!   cargo test -p misaka-palw-pow-driver --release --test palw_agent_recovery -- --ignored --nocapture
 //! ```
 
 use std::io::Write;
@@ -60,6 +60,7 @@ fn one_shot_tag(worker: &str, seed: &[u8; 32]) -> [u8; POW_L1_PALW_OUT_BYTES] {
 fn a_dead_agent_costs_a_delay_and_not_a_tag() {
     let worker = std::env::var("PALW_WORKER").expect("set PALW_WORKER to the palw-worker binary");
     std::env::var("MISAKA_PALW_GGUF").expect("set MISAKA_PALW_GGUF to the pinned model");
+    misaka_palw_pow_driver::install();
     // SAFETY: this integration test is its own binary and holds exactly one test.
     unsafe {
         std::env::remove_var("MISAKA_PALW_POW_FIXTURE");

@@ -14,6 +14,9 @@ use kaspa_pow::palw::palw_l1_tag;
 #[test]
 fn an_unspawnable_agent_falls_back_to_the_one_shot_error() {
     const MISSING: &str = "/nonexistent/palw-worker-that-is-not-here";
+    // The full path, registry included: what a composition root wires in at startup is what a
+    // caller of `palw_l1_tag` reaches (ADR-0042 Decision 4).
+    misaka_palw_pow_driver::install();
     // SAFETY: this integration test is its own binary and holds exactly one test, so nothing else
     // in the process reads or writes the environment while this runs.
     unsafe {

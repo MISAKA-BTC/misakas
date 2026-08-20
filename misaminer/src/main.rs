@@ -103,6 +103,12 @@ async fn main() {
     // rejected PALW attempt) without touching the default rig output.
     kaspa_core::log::try_init_logger(&std::env::var("MISAMINER_LOG").unwrap_or_else(|_| "INFO".into()));
 
+    // ADR-0042 Decision 4: the consensus build carries no model runtime, so whoever wants
+    // inference-priced tags (algo 4/5) registers the driver. Inert until a PALW template
+    // arrives; without it every PALW attempt would refuse as "no runtime registered" even
+    // with PALW_WORKER correctly set.
+    misaka_palw_pow_driver::install();
+
     if args.threads > 0
         && let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global()
     {

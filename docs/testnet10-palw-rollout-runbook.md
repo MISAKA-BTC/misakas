@@ -327,7 +327,8 @@ nothing.
 **Rule: do not raise `MISAKA_PALW_CONCURRENCY` on a host you have not measured.** Assume a new host
 behaves like `misaka-ibm` until shown otherwise. `CPU_THREADS = 4` is pinned by the determinism
 class, so trading worker count against threads per worker is not available either. Reproducer:
-`cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture`.
+`cargo test -p misaka-palw-pow-driver --release --test palw_agent_concurrency -- --ignored --nocapture`
+(the driver tests moved out of `kaspa-pow` with the runtime code — ADR-0042 Decision 4, PR-02).
 
 **The knob is per PROCESS, so co-locating two PALW nodes bypasses it.** Two node processes are two
 concurrent inferences whatever the setting says — the harmful configuration, entered without anyone

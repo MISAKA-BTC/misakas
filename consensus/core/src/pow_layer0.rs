@@ -285,8 +285,10 @@ pub const POW_L1_PALW_OLLAMA_CALIBRATION_V1: &str = "85afd857dcb8f71ac8a0fdc98f8
 /// hence different tags, hence a node that rejects every honest block and whose own blocks are
 /// rejected — a silent one-host fork that looks like a network problem. So the digest is pinned
 /// in consensus source and verified against the live server before any PoW work is done
-/// (`kaspa_pow::palw::verify_ollama_model_pin`, called eagerly by the kaspad startup rail and
-/// lazily, once per process, by the tag runner). Same stance as the worker's GGUF size+sha check.
+/// (`misaka_palw_pow_driver::verify_ollama_model_pin`, called eagerly by the kaspad startup rail
+/// and lazily, once per process, by the driver's tag runner — the pin CONSTANT stays here in
+/// consensus, the code that reaches a server does not, per ADR-0042 Decision 4). Same stance as
+/// the worker's GGUF size+sha check.
 ///
 /// The **F16 profile** of Qwen3.5-2B — `misaka-palw-2b-f16`, created via `ollama create` from
 /// the canonical F16 GGUF (sha256 `575eddc35774…`, requantized from unsloth's BF16 export of

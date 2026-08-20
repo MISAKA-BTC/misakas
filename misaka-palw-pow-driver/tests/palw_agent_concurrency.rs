@@ -10,7 +10,7 @@
 //! ```text
 //! PALW_WORKER=$PWD/target/release/palw-worker \
 //! MISAKA_PALW_GGUF=/path/to/Qwen3.5-2B-Q4_K_M.gguf \
-//!   cargo test -p kaspa-pow --release --test palw_agent_concurrency -- --ignored --nocapture
+//!   cargo test -p misaka-palw-pow-driver --release --test palw_agent_concurrency -- --ignored --nocapture
 //! ```
 
 use std::io::Write;
@@ -77,6 +77,7 @@ fn concurrently(attempts: &[(Hash64, u64, u64)]) -> (Vec<[u8; POW_L1_PALW_OUT_BY
 fn concurrent_seeds_are_faster_and_are_the_same_tags() {
     let worker = std::env::var("PALW_WORKER").expect("set PALW_WORKER to the palw-worker binary");
     std::env::var("MISAKA_PALW_GGUF").expect("set MISAKA_PALW_GGUF to the pinned model");
+    misaka_palw_pow_driver::install();
     // SAFETY: this integration test is its own binary and holds exactly one test, and both reads
     // below happen after these writes.
     unsafe {

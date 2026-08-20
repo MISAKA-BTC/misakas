@@ -24,9 +24,10 @@ kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
 
 faster-hex.workspace = true
-# `misaka ask`: one shared deterministic client with the PoW path, so the CLI and block
-# validation cannot drift apart on what "the same request" means.
-kaspa-pow.workspace = true
+# `misaka ask`: one shared deterministic client with the legacy PoW tag path, so the CLI and
+# block validation cannot drift apart on what "the same request" means. The driver crate, not
+# kaspa-pow: ADR-0042 Decision 4 moved every model-reaching call out of the consensus build.
+misaka-palw-pow-driver.workspace = true
 blake2b_simd.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }

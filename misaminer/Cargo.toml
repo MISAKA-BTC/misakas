@@ -23,6 +23,7 @@ kaspa-wallet-keys.workspace = true
 kaspa-notify.workspace = true
 kaspa-pow.workspace = true
 kaspa-rpc-core.workspace = true
+misaka-palw-pow-driver.workspace = true
 
 clap.workspace = true
 log.workspace = true
