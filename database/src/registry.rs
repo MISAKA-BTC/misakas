@@ -364,6 +364,12 @@ pub enum DatabaseStorePrefixes {
     /// Singleton `u32`: the layout the two above were written under. Same reason as every other
     /// schema marker here — a delta that reads as absent is a reorg that silently does nothing.
     PalwStateV2Schema = 225,
+    /// Singleton: the `PalwStateCarriageV2` as-of the CURRENT pruning point, kept so this node
+    /// can serve a pruned peer (ADR-0042 Decision 5, ADR-0044 Unit E). Distinct from
+    /// [`Self::PalwStateAnchor`], which tracks the sink and moves every pass: this one moves only
+    /// when the pruning point does, and it is the only PALW state that survives having its
+    /// history deleted.
+    PalwPruningCarriage = 226,
     /// Singleton `u32`: the layout [`Self::PalwClassState`] rows were written under. Same reason
     /// as [`Self::PalwCarriagesSchema`] — a class whose target reads as absent is a class whose
     /// blocks weigh nothing, which is a wrong answer that looks like a valid one.

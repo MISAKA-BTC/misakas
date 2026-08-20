@@ -506,6 +506,24 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    // MISAKA PALW V2 pruning carriage (ADR-0042 Decision 5, ADR-0044 Unit E).
+    /// Serve: the PALW state as-of this node's current pruning point, or `None` when PALW V2 is
+    /// dormant on this network or nothing has been captured yet.
+    fn pruning_point_palw_carriage(&self) -> Option<crate::palw_fp_carriage_v3::PalwPruningCarriageWire> {
+        unimplemented!()
+    }
+
+    /// Import: verify a peer-supplied PALW carriage against the state root a child header
+    /// committed, then persist it. Refuses when no such header is available — see the impl.
+    fn import_palw_pruning_point_carriage(
+        &self,
+        pruning_point: BlockHash,
+        wire: crate::palw_fp_carriage_v3::PalwPruningCarriageWire,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, wire);
+        unimplemented!()
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }

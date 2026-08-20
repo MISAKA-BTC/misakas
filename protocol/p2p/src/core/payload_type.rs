@@ -65,6 +65,11 @@ pub enum KaspadMessagePayloadType {
     // kaspa-pq: chain-candidate summaries (protocol >= 103).
     RequestIbdCandidateSummary,
     IbdCandidateSummary,
+    // MISAKA PALW V2 (ADR-0044 Unit E): the pruning point's PALW state carriage. Appended at the
+    // end because this enum is `#[repr(u8)]` with implicit discriminants — inserting in the
+    // middle would renumber every type after it.
+    RequestPalwPruningCarriage,
+    PalwPruningCarriage,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -137,6 +142,8 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::EvmDepositClaimNotFound(_) => KaspadMessagePayloadType::EvmDepositClaimNotFound,
             KaspadMessagePayload::RequestIbdCandidateSummary(_) => KaspadMessagePayloadType::RequestIbdCandidateSummary,
             KaspadMessagePayload::IbdCandidateSummary(_) => KaspadMessagePayloadType::IbdCandidateSummary,
+            KaspadMessagePayload::RequestPalwPruningCarriage(_) => KaspadMessagePayloadType::RequestPalwPruningCarriage,
+            KaspadMessagePayload::PalwPruningCarriage(_) => KaspadMessagePayloadType::PalwPruningCarriage,
         }
     }
 }

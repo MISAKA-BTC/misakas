@@ -285,6 +285,10 @@ impl PruningProcessor {
             // node serving this snapshot matches a pruned-IBD importer's first post-pruning
             // block `c == v`. No-op when the overlay is dormant.
             self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point);
+            // ADR-0044 Unit E: and the PALW carriage, for the same reason and with the same
+            // timing — `prune` deletes the delta rows the walk to the pruning point reads, and
+            // after that the state there is not reconstructible. No-op when V2 is dormant.
+            self.virtual_processor.capture_pruning_point_palw_carriage(new_pruning_point);
 
             self.prune(new_pruning_point, adjusted_retention_period_root);
         }

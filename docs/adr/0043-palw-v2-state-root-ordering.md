@@ -53,8 +53,9 @@ Implemented in `PalwChainStateV2::state_root` (domain
 ```
 H( version_le
  ‖ root("bonds")  ‖ root("reserved_exposure") ‖ root("classes") ‖ root("class_targets")
+ ‖ root("receipt_targets")
  ‖ root("capabilities") ‖ root("claims") ‖ root("panels") ‖ root("court_sessions")
- ‖ root("epoch_counters")
+ ‖ root("epoch_counters") ‖ root("receipt_epoch_counters")
  ‖ safe_weight_le(16) ‖ bounded_immature_le(16)
  ‖ safe_frontier_blue_score_le(8) ‖ safe_frontier(64)
  ‖ last_point_tag(1) [‖ borsh(last_point)] )
@@ -79,6 +80,13 @@ over the collection's key order — `BTreeMap` order, which for every key type i
 comparison of fixed-width byte arrays and integers, identical on every ISA. Length prefixes keep
 adjacent entries from bleeding into one another; the label keeps two same-shaped collections
 from colliding.
+
+The two receipt-lane collections (`receipt_targets`, `receipt_epoch_counters`) were added with
+ADR-0044's second lane and are inside the preimage above **at the positions the code hashes
+them**. This paragraph exists because this document once listed the preimage without them while
+`state_root` already covered both — a written record that disagrees with the implementation is
+the more dangerous half of the pair, since it is what a second implementation would be built
+from. `palw_fp_carriage_v3` pins it with a tamper test.
 
 **Change rule:** adding, removing, or reordering a field or collection — or changing any
 record's Borsh shape — is a consensus change and takes a new version constant AND new domain

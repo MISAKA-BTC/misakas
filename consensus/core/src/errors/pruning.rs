@@ -116,6 +116,16 @@ pub enum PruningImportError {
 
     #[error("imported overlay bond {0} references an outpoint absent from the imported UTXO set")]
     ImportedOverlayBondMissingUtxo(BlockHash),
+
+    // ---- MISAKA PALW V2 pruning carriage (ADR-0042 Decision 5, ADR-0044 Unit E) ----
+    #[error("imported PALW carriage for pruning point {0} is not the one the chain committed: {1}")]
+    ImportedPalwCarriageMismatch(BlockHash, String),
+
+    #[error(
+        "no header whose selected parent is the pruning point {0} is available, so the imported PALW carriage cannot be \
+         checked against a committed state root"
+    )]
+    ImportedPalwCarriageUnverifiable(BlockHash),
 }
 
 #[derive(Error, Debug, Clone)]

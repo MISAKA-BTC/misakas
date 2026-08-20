@@ -28,7 +28,7 @@ use crate::ibd::IbdFlow;
 use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, convert::header::HeaderFormat};
 use kaspa_utils::channel;
 use request_block_bodies::HandleBlockBodyRequests;
-use request_pruning_point_snapshots::{RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow};
+use request_pruning_point_snapshots::{RequestPalwPruningCarriageFlow, RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow};
 use std::sync::Arc;
 
 pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) -> Vec<Box<dyn Flow>> {
@@ -60,6 +60,10 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot responses.
                 KaspadMessagePayloadType::PruningPointEvmState,
                 KaspadMessagePayloadType::PruningPointOverlaySnapshot,
+                // MISAKA PALW V2 (ADR-0044 Unit E). The RESPONSE must be subscribed here or the
+                // reply is unroutable and the peer is dropped — the request half below is not
+                // enough on its own.
+                KaspadMessagePayloadType::PalwPruningCarriage,
             ]),
             relay_receiver,
             body_only_ibd_permitted,
@@ -125,6 +129,12 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointOverlaySnapshot]),
+        )),
+        // MISAKA PALW V2 (ADR-0044 Unit E): serve the pruning point's PALW state carriage.
+        Box::new(RequestPalwPruningCarriageFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestPalwPruningCarriage]),
         )),
         Box::new(HandleIbdBlockRequests::new(
             ctx.clone(),

@@ -74,6 +74,9 @@ message KaspadMessage {
     // exists to prevent, and it is why competing chains used to be discarded unseen.
     RequestIbdCandidateSummaryMessage requestIbdCandidateSummary = 71;
     IbdCandidateSummaryMessage ibdCandidateSummary = 72;
+    // MISAKA PALW V2 (ADR-0044 Unit E): the pruning point's PALW state carriage.
+    RequestPalwPruningCarriageMessage requestPalwPruningCarriage = 73;
+    PalwPruningCarriageMessage palwPruningCarriage = 74;
   }
 }
 

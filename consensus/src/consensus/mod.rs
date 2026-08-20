@@ -2070,6 +2070,18 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.import_pruning_point_overlay_snapshot(pruning_point, snapshot)
     }
 
+    fn pruning_point_palw_carriage(&self) -> Option<kaspa_consensus_core::palw_fp_carriage_v3::PalwPruningCarriageWire> {
+        self.virtual_processor.palw_pruning_point_carriage()
+    }
+
+    fn import_palw_pruning_point_carriage(
+        &self,
+        pruning_point: BlockHash,
+        wire: kaspa_consensus_core::palw_fp_carriage_v3::PalwPruningCarriageWire,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.import_palw_pruning_point_carriage(pruning_point, wire)
+    }
+
     fn validate_pruning_points(&self, syncer_virtual_selected_parent: BlockHash) -> ConsensusResult<()> {
         let hst = self.storage.headers_selected_tip_store.read().get().unwrap().hash;
         let (synced_pruning_point, synced_pp_index) = self.pruning_point_store.read().pruning_point_and_index().unwrap();

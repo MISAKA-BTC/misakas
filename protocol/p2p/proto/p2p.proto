@@ -432,3 +432,18 @@ message PruningPointOverlaySnapshotMessage{
   bool found = 1;
   bytes overlaySnapshot = 2; // borsh(OverlaySnapshot)
 }
+
+// MISAKA PALW V2 (ADR-0042 Decision 5, ADR-0044 Unit E): the PALW state as-of the
+// pruning point, so a pruned-IBD node can continue the candidate-scoped state it will
+// never be able to rebuild from history it does not have. Borsh blob, same reasoning as
+// the two above. `found = false` ⇒ the peer has no carriage (PALW V2 dormant on this
+// network, or nothing captured yet); the requester treats that as fatal only on a
+// network that actually runs V2.
+message RequestPalwPruningCarriageMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PalwPruningCarriageMessage{
+  bool found = 1;
+  bytes palwCarriage = 2; // borsh(PalwPruningCarriageWire)
+}

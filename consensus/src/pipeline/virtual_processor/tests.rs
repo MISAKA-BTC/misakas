@@ -5405,6 +5405,132 @@ mod palw_state_walk_wiring {
         tc.shutdown(handles);
     }
 
+    /// **Unit E: the carriage a node captures is the state at that point, and it round-trips.**
+    ///
+    /// Capture is what makes a pruned node servable at all — the anchor tracks the SINK, and a
+    /// peer that is missing everything below the pruning point cannot walk down to it. So the
+    /// captured row must stand at the point it names, reproduce that point's root, and load back
+    /// through the same gate a peer's copy goes through.
+    #[tokio::test]
+    async fn the_pruning_carriage_is_the_state_at_the_point_it_names() {
+        let config = v2_config();
+        let bundle = v2_bundle();
+        let tc = v2_consensus(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        let mut chain = vec![genesis];
+        for i in 1..=3u64 {
+            let hash = Hash64::from_u64_word(0xE100 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*chain.last().unwrap()], vec![]).await.unwrap();
+            chain.push(hash);
+        }
+        let (b1, b2) = (chain[1], chain[2]);
+
+        // The state at b2, as the node's own walk knows it — read by rewinding the anchor one
+        // block, which is the only honest independent source for "what the state at b2 is".
+        let expected_root_at_b2 = {
+            let store = tc.palw_state_v2_store.read();
+            let anchor = store.anchor().unwrap().unwrap();
+            assert_eq!(anchor.block, chain[3], "the anchor tracks the sink");
+            let state = anchor.decode().unwrap().into_state(&bundle.state, Some(anchor.state_root)).unwrap();
+            crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, state, &[chain[3]], &[]).unwrap().state_root()
+        };
+
+        // Capture from GENESIS (no previous carriage exists yet).
+        tc.virtual_processor().capture_pruning_point_palw_carriage(b2);
+        let captured = tc.palw_state_v2_store.read().pruning_carriage().unwrap().expect("a carriage was captured");
+        assert_eq!(captured.pruning_point, b2);
+        assert_eq!(captured.state_root, expected_root_at_b2, "the captured root IS the state at b2");
+
+        // Capture again, now walking FORWARD from the previous carriage rather than from genesis.
+        // Same answer, different path — which is the property that keeps capture cheap as the
+        // pruning point advances.
+        tc.virtual_processor().capture_pruning_point_palw_carriage(chain[3]);
+        let onward = tc.palw_state_v2_store.read().pruning_carriage().unwrap().unwrap();
+        assert_eq!(onward.pruning_point, chain[3]);
+        assert_eq!(
+            onward.state_root,
+            tc.palw_state_v2_store.read().anchor().unwrap().unwrap().state_root,
+            "walking forward from b2's carriage reaches the same state the anchor holds at the sink"
+        );
+
+        // A point that is NOT a chain descendant of the stored carriage is refused, leaving the
+        // previous row in place rather than writing a state nobody walked to.
+        tc.virtual_processor().capture_pruning_point_palw_carriage(b1);
+        assert_eq!(
+            tc.palw_state_v2_store.read().pruning_carriage().unwrap().unwrap().pruning_point,
+            chain[3],
+            "a backward capture does not overwrite the carriage"
+        );
+
+        tc.shutdown(handles);
+    }
+
+    /// **Unit E's gate: a carriage is believed only against the root a child header committed.**
+    ///
+    /// This is the security half. The import writes bonds, class targets and the claim book into
+    /// the live store with no rollback, so a forged snapshot is minted voting weight and free
+    /// blocks. Three things are pinned here: the honest carriage loads, a coherent tamper does
+    /// not, and a pruning point with no committing child is REFUSED rather than trusted.
+    #[tokio::test]
+    async fn an_imported_carriage_is_checked_against_a_committed_state_root() {
+        use kaspa_consensus_core::api::ConsensusApi;
+
+        let config = v2_config();
+        let bundle = v2_bundle();
+        let tc = v2_consensus(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        let mut chain = vec![genesis];
+        for i in 1..=3u64 {
+            let hash = Hash64::from_u64_word(0xE200 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*chain.last().unwrap()], vec![]).await.unwrap();
+            chain.push(hash);
+        }
+        let (b2, tip) = (chain[2], chain[3]);
+
+        tc.virtual_processor().capture_pruning_point_palw_carriage(b2);
+        let wire = ConsensusApi::pruning_point_palw_carriage(tc.consensus_clone().as_ref()).expect("the captured carriage is servable");
+        assert_eq!(wire.pruning_point, b2);
+
+        // The honest one loads: b3's header commits `parent_state_root` = the state at b2.
+        ConsensusApi::import_palw_pruning_point_carriage(tc.consensus_clone().as_ref(), b2, wire.clone()).expect("the honest carriage imports");
+
+        // A coherent tamper does not. Raising the bond's collateral is exactly the lie that pays:
+        // collateral is slashable value, which is the ceiling on how much fraud a bond may carry.
+        let mut forged = wire.clone();
+        for bond in forged.carriage.bonds.values_mut() {
+            bond.collateral = bond.collateral.saturating_mul(1000);
+        }
+        let err = ConsensusApi::import_palw_pruning_point_carriage(tc.consensus_clone().as_ref(), b2, forged).expect_err("a forged carriage must not import");
+        assert!(
+            matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwCarriageMismatch(..)),
+            "a forged carriage is a mismatch, got {err:?}"
+        );
+
+        // A snapshot of a DIFFERENT pruning point than the one asked for is refused before any
+        // root is even looked up — the server may have moved on between request and reply.
+        let err = ConsensusApi::import_palw_pruning_point_carriage(tc.consensus_clone().as_ref(), chain[1], wire.clone())
+            .expect_err("a carriage of another point must not import under this name");
+        assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwCarriageMismatch(..)), "got {err:?}");
+
+        // And the tip has no child, so nothing commits to its state: REFUSED, not trusted. This
+        // is the arm that keeps "I could not check it" from meaning "it is fine".
+        tc.virtual_processor().capture_pruning_point_palw_carriage(tip);
+        let tip_wire = ConsensusApi::pruning_point_palw_carriage(tc.consensus_clone().as_ref()).expect("the tip's carriage is captured");
+        assert_eq!(tip_wire.pruning_point, tip);
+        let err = ConsensusApi::import_palw_pruning_point_carriage(tc.consensus_clone().as_ref(), tip, tip_wire)
+            .expect_err("an unverifiable carriage must be refused");
+        assert!(
+            matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwCarriageUnverifiable(h) if h == tip),
+            "got {err:?}"
+        );
+
+        tc.shutdown(handles);
+    }
+
     /// **Every shipped network is untouched.** A `Disabled` preset writes no anchor and no
     /// deltas, and mines exactly as it did before Unit C existed — the gate is one `is_some()`.
     #[tokio::test]

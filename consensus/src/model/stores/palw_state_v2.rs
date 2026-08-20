@@ -100,11 +100,42 @@ impl PalwStateAnchorRecord {
     }
 }
 
+/// The PALW state as-of the CURRENT pruning point, kept for serving a pruned peer (ADR-0042
+/// Decision 5, ADR-0044 Unit E).
+///
+/// Why this is not the anchor: the anchor tracks the SINK and moves every virtual pass, so by the
+/// time a peer asks, it stands far above the pruning point — and the peer has no blocks between
+/// the two to walk down through. This row is the one PALW state that is meaningful to a node
+/// which has deleted its history, so it is captured before pruning runs and moves only when the
+/// pruning point does.
+///
+/// `state_root` is stored beside the snapshot for the same reason the anchor stores one: it is
+/// what a receiver checks against the root a child header committed, and what this node checks on
+/// its own reload.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct PalwPruningCarriageRecord {
+    /// The pruning point whose state this carriage IS.
+    pub pruning_point: BlockHash,
+    pub carriage_borsh: Vec<u8>,
+    pub state_root: kaspa_hashes::Hash64,
+}
+
+impl PalwPruningCarriageRecord {
+    pub fn encode(pruning_point: BlockHash, carriage: &PalwStateCarriageV2, state_root: kaspa_hashes::Hash64) -> Self {
+        Self { pruning_point, carriage_borsh: borsh::to_vec(carriage).expect("a carriage is borsh-serializable"), state_root }
+    }
+
+    pub fn decode(&self) -> Result<PalwStateCarriageV2, std::io::Error> {
+        borsh::from_slice(&self.carriage_borsh)
+    }
+}
+
 #[derive(Clone)]
 pub struct DbPalwStateV2Store {
     db: Arc<DB>,
     deltas: CachedDbAccess<BlockHash, Arc<PalwStateDeltaRow>>,
     anchor: CachedDbItem<PalwStateAnchorRecord>,
+    pruning_carriage: CachedDbItem<PalwPruningCarriageRecord>,
     schema: CachedDbItem<u32>,
 }
 
@@ -114,6 +145,7 @@ impl DbPalwStateV2Store {
             db: Arc::clone(&db),
             deltas: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::PalwStateDeltas.into()),
             anchor: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwStateAnchor.into()),
+            pruning_carriage: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningCarriage.into()),
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
         }
     }
@@ -157,6 +189,22 @@ impl DbPalwStateV2Store {
         }
     }
 
+    /// Record the pruning point's carriage. Called BEFORE the pruning traversal deletes the
+    /// delta rows it was derived from — after, the state is no longer reconstructible.
+    pub fn set_pruning_carriage_batch(&mut self, batch: &mut WriteBatch, record: PalwPruningCarriageRecord) -> StoreResult<()> {
+        self.pruning_carriage.write(BatchDbWriter::new(batch), &record)
+    }
+
+    /// The pruning point's carriage, or `None` when this node has never captured one (a node that
+    /// has not pruned yet, or one on which V2 is dormant).
+    pub fn pruning_carriage(&self) -> StoreResult<Option<PalwPruningCarriageRecord>> {
+        match self.pruning_carriage.read() {
+            Ok(record) => Ok(Some(record)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Discard rows written under a superseded layout. Called before any read: an undecodable
     /// delta reads as absent, and absent means "this block changed nothing", which is a
     /// live-looking answer that is simply wrong.
@@ -169,7 +217,7 @@ impl DbPalwStateV2Store {
         if stored == Some(PALW_STATE_V2_STORE_SCHEMA_VERSION) {
             return Ok(());
         }
-        if self.deltas.iterator().next().is_some() || self.anchor.read().is_ok() {
+        if self.deltas.iterator().next().is_some() || self.anchor.read().is_ok() || self.pruning_carriage.read().is_ok() {
             kaspa_core::info!(
                 "[palw-state-v2-store] rows were written under layout v{} and this build reads \
                  v{PALW_STATE_V2_STORE_SCHEMA_VERSION}; discarding them",
@@ -178,6 +226,10 @@ impl DbPalwStateV2Store {
             let mut batch = WriteBatch::default();
             self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
             self.anchor.remove(BatchDbWriter::new(&mut batch))?;
+            // The pruning carriage goes too. It is the row a PEER would be handed, so a stale one
+            // is not merely a slow local reload — it is this node serving a snapshot under a
+            // layout the receiver does not read the same way.
+            self.pruning_carriage.remove(BatchDbWriter::new(&mut batch))?;
             self.db.write(batch)?;
         }
         self.schema.write(kaspa_database::prelude::DirectDbWriter::new(&self.db), &PALW_STATE_V2_STORE_SCHEMA_VERSION)

@@ -10,7 +10,7 @@ use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
     dequeue, make_message,
-    pb::{PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, kaspad_message::Payload},
+    pb::{PalwPruningCarriageMessage, PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, kaspad_message::Payload},
 };
 use std::sync::Arc;
 
@@ -97,6 +97,52 @@ impl RequestPruningPointOverlaySnapshotFlow {
                 _ => PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] },
             };
             self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, reply)).await?;
+        }
+    }
+}
+
+/// MISAKA PALW V2 (ADR-0044 Unit E): serve the pruning point's PALW state carriage.
+///
+/// The reply is a snapshot of consensus state, so what makes it safe is on the RECEIVING side:
+/// the importer checks it against the state root a child header committed and refuses when no
+/// such header exists. This side therefore has one job it must not get wrong — never answer with
+/// a carriage of a DIFFERENT pruning point than the one asked for. A snapshot of the wrong point
+/// would be checked against the wrong root; saying `found = false` costs the requester one peer.
+pub struct RequestPalwPruningCarriageFlow {
+    ctx: FlowContext,
+    router: Arc<Router>,
+    incoming_route: IncomingRoute,
+}
+
+#[async_trait::async_trait]
+impl Flow for RequestPalwPruningCarriageFlow {
+    fn router(&self) -> Option<Arc<Router>> {
+        Some(self.router.clone())
+    }
+    async fn start(&mut self) -> Result<(), ProtocolError> {
+        self.start_impl().await
+    }
+}
+
+impl RequestPalwPruningCarriageFlow {
+    pub fn new(ctx: FlowContext, router: Arc<Router>, incoming_route: IncomingRoute) -> Self {
+        Self { ctx, router, incoming_route }
+    }
+
+    async fn start_impl(&mut self) -> Result<(), ProtocolError> {
+        loop {
+            let msg = dequeue!(self.incoming_route, Payload::RequestPalwPruningCarriage)?;
+            let pp = req_pruning_point(msg.pruning_point_hash)?;
+            let session = self.ctx.consensus().unguarded_session();
+            let carriage = session.spawn_blocking(move |c| c.pruning_point_palw_carriage()).await;
+            let reply = match carriage {
+                Some(wire) if wire.pruning_point == pp => PalwPruningCarriageMessage {
+                    found: true,
+                    palw_carriage: borsh::to_vec(&wire).expect("PalwPruningCarriageWire borsh is infallible"),
+                },
+                _ => PalwPruningCarriageMessage { found: false, palw_carriage: vec![] },
+            };
+            self.router.enqueue(make_message!(Payload::PalwPruningCarriage, reply)).await?;
         }
     }
 }

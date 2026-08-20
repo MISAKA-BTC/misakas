@@ -1397,7 +1397,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
     ) -> Result<PalwBlockWork, String> {
-        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+        use kaspa_consensus_core::palw_fp_carriage_v3::{PalwCarriedRootV3Error, PalwCarriedWorkV3, palw_decode_carried_work_v3};
         let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
             block: current,
             daa_score: header.daa_score,
@@ -1420,11 +1420,21 @@ impl VirtualStateProcessor {
                 Err(format!("parent state root {carried} is not this chain's {expected_state_root}"))
             }
         };
-        match header.pow_algo_id {
-            POW_ALGO_ID_PALW_COMMITTED_V2 => {
-                let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode(&header.palw_commitment)
-                    .map_err(|e| format!("attempt carriage: {e}"))?;
-                carried_state_root(envelope.attempt.parent_state_root)?;
+        // ONE decoder for the carriage (ADR-0044 Unit E). The pruning-carriage import gate reads
+        // `parent_state_root` out of the same function, so a lane added later cannot reach only
+        // one of the two readers — and the lane ids come from the BUNDLE, which is also what the
+        // header-level algorithm gate consults, rather than from constants beside it.
+        let work = match palw_decode_carried_work_v3(bundle, header.pow_algo_id, &header.palw_commitment) {
+            Ok(work) => work,
+            // Not a work algorithm at all. A V2 network accepts no such header, so this is
+            // unreachable through block validation; answering "no work" rather than admitting
+            // anything is the safe reading if it ever becomes reachable.
+            Err(PalwCarriedRootV3Error::NotAWorkAlgorithm(_)) => return Ok(PalwBlockWork::None),
+            Err(e) => return Err(e.to_string()),
+        };
+        carried_state_root(work.parent_state_root())?;
+        match work {
+            PalwCarriedWorkV3::Attempt(envelope) => {
                 kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
                     state,
                     &bundle.state,
@@ -1440,10 +1450,7 @@ impl VirtualStateProcessor {
                 .map_err(|e| format!("attempt: {e}"))?;
                 Ok(PalwBlockWork::Attempt(envelope))
             }
-            POW_ALGO_ID_PALW_RECEIPT_V3 => {
-                let envelope = kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
-                    .map_err(|e| format!("spend carriage: {e}"))?;
-                carried_state_root(envelope.spend.parent_state_root)?;
+            PalwCarriedWorkV3::Spend(envelope) => {
                 // The beacon is derived from THIS candidate's chain, never read from the block:
                 // a spending block asserting its own randomness is the whole attack the beacon
                 // construction exists to close (ADR-0044 Decision 4).
@@ -1464,7 +1471,6 @@ impl VirtualStateProcessor {
                 .map_err(|e| format!("spend: {e}"))?;
                 Ok(PalwBlockWork::Spend(envelope))
             }
-            _ => Ok(PalwBlockWork::None),
         }
     }
 
@@ -8989,6 +8995,235 @@ impl VirtualStateProcessor {
     /// dormant or no snapshot has been captured yet (captured at pruning-advance).
     pub fn pruning_point_overlay_snapshot(&self) -> Option<PruningPointOverlaySnapshot> {
         self.pruning_overlay_snapshot_store.read().get().ok()
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // ADR-0044 Unit E — the pruning-point PALW carriage
+    // -----------------------------------------------------------------------------------------
+
+    /// Capture the PALW state as-of `pruning_point`, so this node can hand it to a peer that will
+    /// never see the blocks below it (ADR-0042 Decision 5).
+    ///
+    /// **Must run before the pruning traversal deletes the delta rows**, which is where it is
+    /// called from — after, the state at the pruning point is not reconstructible from anything
+    /// this node still holds.
+    ///
+    /// Where the walk starts, and why not from the anchor: the anchor tracks the SINK, which is a
+    /// full pruning depth ABOVE the pruning point, so reaching the pruning point from it means
+    /// reverting the whole depth. The PREVIOUS pruning carriage is a chain ancestor of this one
+    /// and is only as far away as the pruning point moved, so that is the start when it exists.
+    /// Genesis is the fallback, taken once in a node's life (its deltas are still present the
+    /// first time this runs, because nothing has been pruned yet).
+    ///
+    /// A failure here costs this node the ability to SERVE, never the ability to validate: the
+    /// live walk is a different row. So every failure warns and returns rather than panicking.
+    pub fn capture_pruning_point_palw_carriage(&self, pruning_point: BlockHash) {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else {
+            return; // V2 dormant — nothing to capture, and nothing reads the row.
+        };
+        let Some((start_state, start_at)) = self.palw_pruning_carriage_start(bundle) else {
+            warn!("[palw-carriage] no usable starting state for the pruning-point carriage at {pruning_point}");
+            return;
+        };
+        let state = if start_at == pruning_point {
+            start_state // already captured this exact point (a re-run, or the pruning point held)
+        } else {
+            if !self.reachability_service.is_chain_ancestor_of(start_at, pruning_point) {
+                // The start is not below the new pruning point. Walking down from the pruning
+                // point would then run to ORIGIN looking for a block it will never meet, so this
+                // refuses instead. It leaves the previous carriage in place, which is a stale
+                // row a peer will reject on its own pruning-point check — visibly nothing, rather
+                // than quietly wrong.
+                warn!("[palw-carriage] {start_at} is not a chain ancestor of the pruning point {pruning_point}; not capturing");
+                return;
+            }
+            // `default_backward_chain_iterator` YIELDS its starting block (its `inclusive` flag
+            // is about the ancestor end, not this one), so the pruning point must not be
+            // prepended — doing so would apply its delta twice and the walk would refuse.
+            let mut path: Vec<BlockHash> = self
+                .reachability_service
+                .default_backward_chain_iterator(pruning_point)
+                .take_while(|b| *b != start_at)
+                .collect();
+            path.reverse();
+            let store = self.palw_state_v2_store.read();
+            match crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, start_state, &[], &path) {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!("[palw-carriage] cannot walk {start_at} -> {pruning_point} ({} blocks): {e}", path.len());
+                    return;
+                }
+            }
+        };
+        // The walk must actually STAND at the pruning point. A state that stops short would be
+        // captured under the pruning point's name and would then fail a receiver's root check —
+        // this catches it here, where the reason is still legible.
+        if state.last_point().map(|p| p.block) != Some(pruning_point) {
+            warn!(
+                "[palw-carriage] the walk ended at {:?}, not at the pruning point {pruning_point}; not capturing",
+                state.last_point().map(|p| p.block)
+            );
+            return;
+        }
+        let root = state.state_root();
+        let carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        // Reload it under its own root before it becomes the thing a peer is handed. A snapshot
+        // this node cannot load is one no peer can either, and finding that out here costs a log
+        // line rather than a failed IBD on somebody else's machine.
+        if let Err(e) = carriage.clone().into_state(&bundle.state, Some(root)) {
+            warn!("[palw-carriage] the captured carriage for {pruning_point} does not reload under its own root: {e}");
+            return;
+        }
+        let record = crate::model::stores::palw_state_v2::PalwPruningCarriageRecord::encode(pruning_point, &carriage, root);
+        let mut batch = WriteBatch::default();
+        if let Err(e) = self.palw_state_v2_store.write().set_pruning_carriage_batch(&mut batch, record) {
+            warn!("[palw-carriage] cannot stage the pruning-point carriage for {pruning_point}: {e}");
+            return;
+        }
+        if let Err(e) = self.db.write(batch) {
+            warn!("[palw-carriage] cannot commit the pruning-point carriage for {pruning_point}: {e}");
+            return;
+        }
+        info!("[palw-carriage] captured the PALW state as-of the pruning point {pruning_point} (root {root})");
+    }
+
+    /// The state the pruning-point walk starts from: the previous pruning carriage if this node
+    /// has one that loads, else the genesis state with the genesis registrations applied.
+    fn palw_pruning_carriage_start(
+        &self,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    ) -> Option<(kaspa_consensus_core::palw_state_v2::PalwChainStateV2, BlockHash)> {
+        match self.palw_state_v2_store.read().pruning_carriage() {
+            Ok(Some(record)) => match record.decode() {
+                Ok(carriage) => match carriage.into_state(&bundle.state, Some(record.state_root)) {
+                    Ok(state) => return Some((state, record.pruning_point)),
+                    Err(e) => warn!("[palw-carriage] the stored pruning carriage does not reload: {e}; falling back to genesis"),
+                },
+                Err(e) => warn!("[palw-carriage] the stored pruning carriage does not decode: {e}; falling back to genesis"),
+            },
+            Ok(None) => {}
+            Err(e) => warn!("[palw-carriage] cannot read the stored pruning carriage: {e}; falling back to genesis"),
+        }
+        // Genesis, rebuilt exactly as `seed_palw_genesis_anchor` builds it.
+        let objects = kaspa_consensus_core::palw_mode_v2::palw_genesis_objects_v2(&bundle.genesis);
+        let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: self.genesis.hash,
+            daa_score: self.genesis.daa_score,
+            blue_score: 0,
+        };
+        let (state, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
+            &bundle.state,
+            &ctx,
+            &objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+        )
+        .ok()?;
+        Some((state, self.genesis.hash))
+    }
+
+    /// Import a peer-supplied PALW carriage for `pruning_point`, or refuse it.
+    ///
+    /// # The gate, and why it runs before the write
+    ///
+    /// The write is to the LIVE store, and what it writes is the state every later PALW decision
+    /// on this node starts from: bonds (voting weight and reward eligibility), class targets (the
+    /// lottery's difficulty), reserved exposure (how much fraud a bond may be carrying), and the
+    /// claim book. A forged snapshot is minted weight and free blocks. There is no rollback, so
+    /// "the first post-pruning block would catch it" is not a defence — the same lesson the
+    /// DNS-overlay import records above its own gate.
+    ///
+    /// What makes it checkable: both V2 lanes carry `parent_state_root`, the PALW state root
+    /// **after the block's selected parent** (ADR-0043). So any header whose selected parent is
+    /// the pruning point commits to exactly this snapshot's root — and headers arrive before the
+    /// sidecars in every IBD path, under proof of work and the headers proof.
+    ///
+    /// No such header ⇒ refusal, not trust. The IBD can be retried once the child header is in
+    /// hand; loading an unverifiable snapshot cannot be undone.
+    pub fn import_palw_pruning_point_carriage(
+        &self,
+        pruning_point: BlockHash,
+        wire: kaspa_consensus_core::palw_fp_carriage_v3::PalwPruningCarriageWire,
+    ) -> PruningImportResult<()> {
+        let Some(bundle) = self.palw_consensus_v2.as_ref() else {
+            return Ok(()); // V2 dormant — nothing reads this store, so there is nothing to import.
+        };
+        if wire.pruning_point != pruning_point {
+            return Err(PruningImportError::ImportedPalwCarriageMismatch(
+                pruning_point,
+                format!("the snapshot is of pruning point {}", wire.pruning_point),
+            ));
+        }
+        // Find a child header that commits to this pruning point's state.
+        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
+            .map(|c| c.read().iter().copied().collect())
+            .unwrap_or_default();
+        let mut committed_root = None;
+        for child in children {
+            if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
+                continue; // commits to a different parent's state — not this one
+            }
+            let Ok(header) = self.headers_store.get_header(child) else { continue };
+            match kaspa_consensus_core::palw_fp_carriage_v3::palw_carried_parent_state_root_v3(
+                bundle,
+                header.pow_algo_id,
+                &header.palw_commitment,
+            ) {
+                Ok(root) => {
+                    committed_root = Some(root);
+                    break;
+                }
+                // A child that carries no readable commitment is not a witness. Keep looking
+                // rather than treating its silence as agreement.
+                Err(e) => {
+                    debug!("[palw-carriage] child {child} of {pruning_point} commits no readable state root: {e}");
+                }
+            }
+        }
+        let Some(committed_root) = committed_root else {
+            warn!(
+                "[palw-carriage] refusing the PALW carriage for {pruning_point}: no header whose selected parent is the \
+                 pruning point is available to check its state root against"
+            );
+            return Err(PruningImportError::ImportedPalwCarriageUnverifiable(pruning_point));
+        };
+        let state = kaspa_consensus_core::palw_fp_carriage_v3::verify_pruning_point_carriage_v3(
+            bundle,
+            pruning_point,
+            committed_root,
+            wire.carriage.clone(),
+        )
+        .map_err(|e| PruningImportError::ImportedPalwCarriageMismatch(pruning_point, e.to_string()))?;
+        let root = state.state_root();
+        info!(
+            "[palw-carriage] importing the PALW state as-of the pruning point {pruning_point} (root {root}, {} bonds, {} classes)",
+            wire.carriage.bonds.len(),
+            wire.carriage.classes.len()
+        );
+        // Both rows, in ONE batch. The retained row is what this node will later serve; the anchor
+        // is where its own walk starts. Writing one without the other would leave a node that can
+        // either serve a state it cannot use or use a state it cannot serve.
+        let mut batch = WriteBatch::default();
+        let mut store = self.palw_state_v2_store.write();
+        let retained = crate::model::stores::palw_state_v2::PalwPruningCarriageRecord::encode(pruning_point, &wire.carriage, root);
+        store
+            .set_pruning_carriage_batch(&mut batch, retained)
+            .map_err(|e| PruningImportError::ImportedPalwCarriageMismatch(pruning_point, e.to_string()))?;
+        let anchor = crate::model::stores::palw_state_v2::PalwStateAnchorRecord::encode(pruning_point, &wire.carriage, root);
+        store
+            .set_anchor_batch(&mut batch, anchor)
+            .map_err(|e| PruningImportError::ImportedPalwCarriageMismatch(pruning_point, e.to_string()))?;
+        drop(store);
+        self.db.write(batch).map_err(|e| PruningImportError::ImportedPalwCarriageMismatch(pruning_point, e.to_string()))?;
+        Ok(())
+    }
+
+    /// Serving side: the PALW carriage as-of this node's current pruning point, or `None` when V2
+    /// is dormant or nothing has been captured yet.
+    pub fn palw_pruning_point_carriage(&self) -> Option<kaspa_consensus_core::palw_fp_carriage_v3::PalwPruningCarriageWire> {
+        let record = self.palw_state_v2_store.read().pruning_carriage().ok().flatten()?;
+        let carriage = record.decode().ok()?;
+        Some(kaspa_consensus_core::palw_fp_carriage_v3::PalwPruningCarriageWire { pruning_point: record.pruning_point, carriage })
     }
 
     /// kaspa-pq ADR-0022: reconstruct the bond set as-of `pp_daa` from the never-pruned
