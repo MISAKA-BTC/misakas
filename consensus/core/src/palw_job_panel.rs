@@ -108,11 +108,16 @@ where
                 runtime_class_id,
                 bond_status: crate::dns_finality::effective_bond_status(&record, anchor_daa),
                 class_frozen: class_is_frozen(&runtime_class_id),
-                // Best-effort by design, and this assembly knows no operator grouping: the chain
-                // learns one from a shared registration root, which is a registry question rather
-                // than a bond one. `None` costs a weaker dedup, never a wrong seat — dedup by bond
-                // outpoint is the one that must hold, and it does.
-                operator_root: None,
+                // Audit P0-7: the bond's OWNER, not `None`.
+                //
+                // This said the chain knows no operator grouping here and that `None` merely cost a
+                // weaker dedup. Both halves were wrong. The chain does know one — `owner_pubkey_hash`
+                // — and `palw_credit::panel_seats_at_anchor_v3` has been using exactly it all along,
+                // so the two assemblers disagreed about the same panel. And the cost is not weaker
+                // dedup: with `None` an operator splits its stake across k bonds and collects k
+                // seats on one panel, which is the quorum the receipt count is supposed to measure,
+                // bought rather than drawn.
+                operator_root: Some(record.owner_pubkey_hash),
             })
         })
         .collect();
@@ -340,6 +345,53 @@ mod tests {
             slashed_at_daa_score: None,
             status: BondStatus::Active,
         }
+    }
+
+    /// **Audit P0-7**: one operator gets one seat, however many bonds it splits into.
+    ///
+    /// The draw dedups by operator root, and this assembler used to supply `None` for it — so an
+    /// operator that split its stake across k bonds collected k seats on one panel. The receipt
+    /// count is meant to measure independent replay; k seats from one operator make it measure
+    /// nothing, and buying quorum costs no more than the bond floor times k.
+    ///
+    /// Dedup by bond outpoint is unaffected and remains the one that must hold: it is exact, while
+    /// operator dedup is only as good as what the chain knows about ownership.
+    #[test]
+    fn one_operator_takes_one_seat_however_many_bonds_it_holds() {
+        let owner = Hash64::from_u64_word(0xAA);
+        let mut a = bond_record(1, None);
+        let mut b = bond_record(2, None);
+        a.owner_pubkey_hash = owner;
+        b.owner_pubkey_hash = owner;
+        let outsider = bond_record(3, None);
+        let bonds = crate::dns_finality::ActiveBondView::from_records([
+            (a.bond_outpoint, a.clone()),
+            (b.bond_outpoint, b.clone()),
+            (outsider.bond_outpoint, outsider.clone()),
+        ]);
+
+        let candidates = palw_panel_candidates_v1(&bonds, 1_000, |_| Some(class()), |_| false);
+        assert_eq!(candidates.len(), 3, "all three are candidates; the dedup happens in the draw");
+
+        let seats = select_job_panel_at_anchor_v3(
+            NET,
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(2),
+            Hash64::from_u64_word(3),
+            1_000,
+            &Hash64::from_u64_word(0xEE),
+            &class(),
+            &candidates,
+            3,
+        );
+        let owners: Vec<_> = seats
+            .iter()
+            .map(|s| candidates.iter().find(|c| c.bond_outpoint == s.bond_outpoint).unwrap().operator_root.unwrap())
+            .collect();
+        let mut distinct = owners.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(owners.len(), distinct.len(), "one operator took more than one seat: {owners:?}");
     }
 
     /// The candidate set is assembled from the chain, and the two exclusions are the point.
