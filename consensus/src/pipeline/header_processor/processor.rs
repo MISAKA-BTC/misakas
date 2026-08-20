@@ -437,8 +437,25 @@ impl HeaderProcessor {
         let prev_hst = hst_write.get().unwrap();
         // ADR-0039 W4′: tip order goes through the ONE seam. With no fork-choice fence — every
         // shipped preset — `BlueWorkOnly` compares `SortableBlock`s, so this is byte-identical to
-        // the `>` it replaces, hash tie-break included. The PALW weights are `None` because
-        // nothing resolves them yet; when they are resolved this line does not change.
+        // the `>` it replaces, hash tie-break included.
+        //
+        // **The weights are `None` here permanently, and that is a design fact rather than
+        // unfinished wiring** (external audit P0-5). PALW weight is a function of ACCEPTED
+        // TRANSACTIONS — receipts, convictions, bonds — and the header processor is upstream of
+        // bodies by construction: header-first sync exists precisely so a node can order headers it
+        // has no bodies for. There is no header-only approximation to reach for either; one would
+        // be a second fork-choice rule that disagrees with the first, which is the defect P0-5
+        // names rather than a fix for it.
+        //
+        // What makes that safe is a boundary, not a value: **the headers-selected tip is a SYNC
+        // HINT and never a chain authority.** Its consumers were audited at this commit — the IBD
+        // flow (choosing what to request) and `estimate_block_count` (an RPC estimate). Pruning,
+        // finality and acceptance read the virtual sink, which is ordered by
+        // `order_tips_v1`. A node may therefore sync toward a header chain PALW would not select,
+        // and then decline to accept it: the cost is wasted download, never a divergent chain.
+        //
+        // Anything that later reads this tip to decide chain state reopens P0-5, and it will not
+        // look like a fork-choice change when it does — it will look like reading a tip.
         let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
         let heavier =
             kaspa_consensus_core::palw_chain_weight::order_tips_v1(self.palw_tip_order, (None, &candidate_tip), (None, &prev_hst))

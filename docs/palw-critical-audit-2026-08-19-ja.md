@@ -35,7 +35,9 @@
 | **P0-4** candidate weight が sink 依存 | **CLOSED** — carriage は candidate chain の fold、bond view は chain path 再生で candidate ごとに導出 |
 | **P0-6** 署名 context が誤り | **CLOSED** — 検証器が context を受け取り、各 family が自分のドメインを指定 |
 | **P0-7** executor 除外 ID / operator dedup / no-show 罰則 | **一部** — 除外 ID は bond record から解決（CLOSED）。operator dedup と no-show 罰則は未着手 |
-| P0-5, P0-8, P0-9, P0-10 | 未着手 |
+| **P0-5** header tip と virtual tip が別ルール | **境界で決着** — 配線ではない。PALW weight は accepted tx の関数で、header processor は body より上流なので header-only 近似は「2 つ目の fork choice」になり defect そのもの。**headers-selected tip は sync hint であって chain authority ではない**ことを言明し、消費者を監査（IBD の要求先選択と RPC 推定のみ。pruning/finality/acceptance は virtual sink を読む）|
+| **P0-10** bond exposure 上限なし | **算術層 CLOSED** — `palw_exposure` (`Σ immature_pwu ≤ collateral / penalty_per_pwu`、prefix-mandatory、bond ごと、overflow は拒否)。weight 経路への配線は未 |
+| P0-7 後半（operator dedup / no-show 罰則）, P0-8, P0-9 | 未着手 |
 
 ### P0-1 で監査の推奨 remedy を採らなかった理由
 
