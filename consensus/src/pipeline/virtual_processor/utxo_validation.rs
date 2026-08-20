@@ -131,6 +131,14 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// when non-zero. The finalizing coinbase reads the selected parent's value for the drip. `0`
     /// (never persisted) below the v2 fence.
     pub reserve_balance_after: u64,
+    /// **MISAKA ADR-0042 Decision 10: the PALW escrows this block's coinbase must pay.**
+    ///
+    /// Set by the virtual walk from the SELECTED PARENT's V2 state, before this block's own
+    /// transition runs — which is what makes it available here at all: the parent's queue is a
+    /// committed fact, and the block that finalizes a claim cannot pay it, because its coinbase
+    /// is fixed before its transition. Empty on every network without a V2 bundle, and on most
+    /// blocks of one.
+    pub palw_v2_payout_outputs: Vec<TransactionOutput>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -148,6 +156,7 @@ impl<'a> UtxoProcessingContext<'a> {
             validator_quality_subpool: 0,
             reserve_accrual: 0,
             reserve_balance_after: 0,
+            palw_v2_payout_outputs: Vec::new(),
         }
     }
 
@@ -823,6 +832,11 @@ impl VirtualStateProcessor {
             );
             validator_reward_outputs.extend(credit_outputs);
         }
+        // ADR-0042 Decision 10: the V2 escrow releases, appended LAST so both paths build the
+        // identical list. Computed by the walk from the selected parent's committed queue — not
+        // recomputed here — because the queue is exactly the set the parent's `state_root`
+        // already commits to, and recomputing it from claims would be a second answer.
+        validator_reward_outputs.extend(ctx.palw_v2_payout_outputs.iter().cloned());
 
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         self.verify_coinbase_transaction(

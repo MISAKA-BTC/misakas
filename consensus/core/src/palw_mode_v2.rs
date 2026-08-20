@@ -343,6 +343,13 @@ impl PalwConsensusParamsV2 {
             return Err(PalwModeV2Error::Invalid("the bond floor the bundle commits to is not the one registrations are checked against"));
         }
 
+        // Same rule, same reason, for the producer carve: `reward` is what the ruleset id commits
+        // to and what a reader audits, `state.worker_carve_permille` is what actually lands in
+        // every claim's escrow. A network where they differ pays the number nobody read.
+        if self.state.worker_carve_permille() != self.reward.worker_carve_permille() {
+            return Err(PalwModeV2Error::Invalid("the producer carve the bundle commits to is not the one claims actually escrow"));
+        }
+
         // The anchor slot sits strictly inside the bind window (PR-06's cross-check).
         self.panel
             .validate_against_state_params(&self.state)
@@ -643,7 +650,13 @@ pub(crate) mod tests {
     }
 
     fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800, 0).unwrap()
+        // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
+        // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
+        // check instead of testing the thing the caller named.
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800, 0)
+            .unwrap()
+            .with_worker_carve_permille(620)
+            .unwrap()
     }
 
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
@@ -671,7 +684,12 @@ pub(crate) mod tests {
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
             // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800, 0).unwrap(),
+            // The carve is set on BOTH, because `validate` requires them equal — the fixture has
+            // to be a bundle a node would actually start on, or the tests below prove nothing.
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800, 0)
+                .unwrap()
+                .with_worker_carve_permille(620)
+                .unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
@@ -702,6 +720,7 @@ pub(crate) mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: vec![21; 8],
                     collateral: 100_000,
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
                 },
             ],
         }
@@ -913,6 +932,7 @@ pub(crate) mod tests {
         // And two V2 networks with different bundles separate too, through the ruleset id.
         let mut other = conforming_bundle();
         other.reward = crate::palw_reward_v2::PalwRewardParamsV2::new(621).unwrap();
+        other.state = other.state.clone().with_worker_carve_permille(621).unwrap();
         let mut v2b = DEVNET_PARAMS.clone();
         v2b.palw_consensus_mode = PalwConsensusMode::ConsensusV2(other);
         assert_ne!(v2_id, v2b.consensus_params_id(), "a different ruleset is a different handshake");
@@ -1156,7 +1176,16 @@ pub(crate) mod tests {
     fn every_bundle_byte_moves_the_ruleset_id() {
         let base_id = palw_ruleset_id_v2(&conforming_bundle());
         let mutations: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
-            ("reward carve", Box::new(|b| b.reward = PalwRewardParamsV2::new(621).unwrap())),
+            // Both halves move together: this row asks "does the carve reach the ruleset id",
+            // and moving only `reward` would be refused by the coherence check before the
+            // fingerprint is ever computed — a different question with the same name.
+            (
+                "reward carve",
+                Box::new(|b| {
+                    b.reward = PalwRewardParamsV2::new(621).unwrap();
+                    b.state = b.state.clone().with_worker_carve_permille(621).unwrap();
+                }),
+            ),
             ("panel quorum", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 3, 4).unwrap())),
             // A different floor is a different ruleset — and the state params must follow it, or
             // the coherence clause refuses the bundle.

@@ -332,7 +332,7 @@ mod tests {
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     /// Class 1 (rule: ≤ 500 pwu, 5 sompi/pwu) and bond 1 (key 0x07…, operator 0x21, 1000 sompi).
@@ -353,6 +353,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
         ];
         let (state, _) =
@@ -500,6 +501,7 @@ mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000_000,
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
                 },
             ];
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap().0
@@ -720,6 +722,7 @@ mod tests {
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 200_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             }];
             let (s, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
             s

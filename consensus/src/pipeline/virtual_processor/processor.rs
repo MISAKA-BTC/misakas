@@ -356,9 +356,11 @@ pub struct VirtualStateProcessor {
     pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
     /// ADR-0042 Decision 6's params, `Some` on the same networks as `palw_state_params_v2`.
     pub(super) palw_admission_params_v2: Option<kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2>,
-    /// Decision 7's panel constants, and Decision 10's reward split.
+    /// Decision 7's panel constants. Decision 10's producer carve is NOT here: it moved into
+    /// `palw_state_params_v2`, because the escrow it decides is written into claim state at
+    /// acceptance, and a number two structs can disagree about is a number the chain enforces
+    /// twice. `PalwConsensusParamsV2::validate` holds the bundle's declared carve equal to it.
     pub(super) palw_panel_params_v2: Option<kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2>,
-    pub(super) palw_reward_params_v2: Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
     /// Decision 8's court shape — the ladder depth a challenge is opened over.
     pub(super) palw_court_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2>,
     /// The bundle's genesis registration list — what the genesis block applies (Decision 11: the
@@ -666,10 +668,6 @@ impl VirtualStateProcessor {
             },
             palw_panel_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.panel),
-                _ => None,
-            },
-            palw_reward_params_v2: match &params.palw_consensus_mode {
-                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.reward),
                 _ => None,
             },
             palw_court_params_v2: match &params.palw_consensus_mode {
@@ -1097,6 +1095,11 @@ impl VirtualStateProcessor {
                     // (the verify point's selected-parent view — Addendum B §B.3),
                     // so it is the same view both `calculate_utxo_state` (slashing
                     // side-effect, PR-16.4-b2) and `verify_expected_utxo_state` read.
+                    // ADR-0042 Decision 10: the escrows this block owes, read from the state the
+                    // walk currently holds — which IS this block's selected parent, since the
+                    // transition below has not run yet. Set before `calculate_utxo_state` because
+                    // that is where the coinbase is verified against it.
+                    ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).unwrap_or_default();
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
@@ -1168,6 +1171,10 @@ impl VirtualStateProcessor {
                                     block: current,
                                     daa_score: header.daa_score,
                                     blue_score: header.blue_score,
+                                    // The pool this block's claims escrow from (ADR-0042
+                                    // Decision 10), taken from the ONE emission schedule rather
+                                    // than a second copy of it.
+                                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                                 };
                                 // Unit C step 3: the block's own objects, in its own acceptance
                                 // order. Read from the acceptance data this validation just
@@ -3472,18 +3479,33 @@ impl VirtualStateProcessor {
     /// `owner_reward_spk_payload` gives a validator bond — and that is a registration-object
     /// change, not a line here. Until it lands, this is the eligibility and the amount, computed
     /// and testable, with the missing half named.
-    fn palw_v2_matured_carves(
+    /// **The escrows a block's coinbase must pay, from its parent's committed queue.**
+    ///
+    /// `state` is the SELECTED PARENT's state, not this block's: a claim that reaches `Final` is
+    /// enqueued by the transition that finalized it and paid by the NEXT block. That one-block
+    /// lag is what makes the payout computable at all — a coinbase is fixed before its own
+    /// block's PALW transition runs, so a block cannot pay what it is about to decide.
+    ///
+    /// Everything the amount depends on was decided when the claim was accepted (its escrow is a
+    /// snapshot of THAT block's subsidy) and everything the payee depends on was decided when it
+    /// finalized (the payload is copied out of the bond at release). So this function has no
+    /// policy left in it: it renders a committed list, in `BTreeMap` key order, and two nodes
+    /// holding the same parent state cannot produce different bytes.
+    ///
+    /// Scripts are DERIVED from the payload, never carried — see `PalwBondStateV2::payout_payload`
+    /// for why a registrant may not write a coinbase script.
+    fn palw_v2_payout_outputs(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        subsidy: u64,
-    ) -> Vec<(kaspa_hashes::Hash64, u64)> {
-        use kaspa_consensus_core::palw_reward_v2::{PalwRewardStatusV2, palw_reward_carve_v2, palw_reward_status_v2};
-        let Some(reward) = self.palw_reward_params_v2.as_ref() else { return Vec::new() };
-        let split = palw_reward_carve_v2(subsidy, reward);
+    ) -> Vec<TransactionOutput> {
         state
-            .claims_iter()
-            .filter(|(_, claim)| palw_reward_status_v2(&claim.phase) == PalwRewardStatusV2::Spendable)
-            .map(|(id, _)| (*id, split.worker))
+            .pending_payouts_iter()
+            .map(|(_, payout)| {
+                TransactionOutput::new(
+                    payout.amount,
+                    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+                )
+            })
             .collect()
     }
 
@@ -8570,6 +8592,21 @@ impl VirtualStateProcessor {
             );
             validator_reward_outputs.extend(credit_outputs);
         }
+        // ADR-0042 Decision 10, construction side. The tip IS the block being built on, so its
+        // queue is the same one the validating walk will read; appended last, matching
+        // `verify_expected_utxo_state`'s order exactly. A template that got this wrong would mine
+        // blocks its own node rejects.
+        if self.palw_state_params_v2.is_some() {
+            let payouts = self
+                .palw_state_v2_store
+                .read()
+                .load_tip(self.palw_state_params_v2.as_ref().expect("checked above"))
+                .ok()
+                .flatten()
+                .map(|(_, state)| self.palw_v2_payout_outputs(&state))
+                .unwrap_or_default();
+            validator_reward_outputs.extend(payouts);
+        }
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -8661,6 +8698,7 @@ impl VirtualStateProcessor {
                     block: header.hash,
                     daa_score: header.daa_score,
                     blue_score: header.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                 };
                 // The template's own transactions are not accepted yet — acceptance is a
                 // chain-context fact this block's own validation produces — so the objects are
@@ -8743,6 +8781,9 @@ impl VirtualStateProcessor {
                 block: self.genesis.hash,
                 daa_score: self.genesis.daa_score,
                 blue_score: 0,
+                // Genesis funds no escrow: its coinbase pays the premine, and its object list
+                // registers — it creates no claim, so there is nothing for a carve to attach to.
+                subsidy: 0,
             };
             let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),

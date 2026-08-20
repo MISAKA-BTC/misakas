@@ -194,6 +194,7 @@ mod tests {
             pubkey: vec![7; 4],
             operator_pubkey: vec![21; 8],
             collateral: 100_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
         }
     }
 

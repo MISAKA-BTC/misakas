@@ -681,6 +681,7 @@ fn palw_v2_test_bundle(
         )),
         vec![7u8; 32],
         vec![21u8; 8],
+        kaspa_hashes::Hash64::from_u64_word(0x9A11),
     )
     .expect("the devnet bundle validates");
     b.class_catalog_root = catalog.root();

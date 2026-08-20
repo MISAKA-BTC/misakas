@@ -121,7 +121,7 @@ mod tests {
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: h64(block), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: h64(block), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     fn registrations() -> Vec<PalwConsensusObjectV2> {
@@ -139,6 +139,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: vec![21; 8],
                 collateral: 100_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
         ]
     }

@@ -292,7 +292,7 @@ mod tests {
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
@@ -332,8 +332,8 @@ mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(0x21), collateral: 1_000 },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_pubkey: op_key(0x22), collateral: 1_000 },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(0x21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_pubkey: op_key(0x22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let env = attempt(40, 1);

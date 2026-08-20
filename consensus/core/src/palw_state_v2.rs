@@ -104,7 +104,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// preimage carries BOTH collection sets, so it differs from both parents' version-2 roots —
 /// ADR-0043's rule for a consensus change to the root: a new version, never a silent
 /// re-reading of old bytes. Nothing has persisted any earlier root on a shipped preset.
-pub const PALW_STATE_V2_VERSION: u16 = 3;
+///
+/// Version 4: ADR-0042 Decision 10's escrow. The root preimage gains `pending_payouts` and every
+/// claim gains `escrowed_reward`; the carriage carries the queue because the root hashes it, and
+/// `PalwBlockContextV2` — serialized into the root through `last_point` — gains the block's
+/// subsidy. Three separate reasons the version had to move, all of them the same rule: a
+/// consensus change to the root gets a new version rather than a silent re-reading of old bytes.
+pub const PALW_STATE_V2_VERSION: u16 = 4;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -196,6 +202,21 @@ pub struct PalwStateParamsV2 {
     /// Decision 3 made them chain state (`PalwChainStateV2::class_shares`), granted by
     /// registration — the lane split composes with those granted shares at retarget.
     fp_attempt_share_permille: u16,
+    /// **The producer's carve of a block's subsidy, in permille — what a claim ESCROWS.**
+    ///
+    /// It lives here, in the state machine's own parameters, because it decides STATE: the
+    /// escrowed amount is snapshotted into the claim at creation and is what the chain later
+    /// pays. Deriving it at payout time instead — from whatever subsidy the maturing block
+    /// happens to have — is what `palw_v2_matured_carves` did before this field existed, and it
+    /// breaks ADR-0042 Decision 10's "never an addition to the schedule": two claims maturing in
+    /// one block would each draw a full carve of that block's subsidy, minting up to N × the
+    /// carve out of one subsidy.
+    ///
+    /// **Zero is the honest default and means "this network pays no PALW reward".** Every
+    /// pre-reward fixture leaves it zero and keeps its exact prior meaning; a network that
+    /// carries value sets it through [`PalwStateParamsV2::with_worker_carve_permille`], and
+    /// Decision 1's startup gate is where a live network's non-zero requirement belongs.
+    worker_carve_permille: u16,
     /// **Audit C5's free panel re-roll, priced (the free-prompt lane's half).**
     ///
     /// On the attempt lane, abandoning a claim at `BindTimeout` already costs three things and
@@ -275,7 +296,27 @@ impl PalwStateParamsV2 {
             min_collateral_sompi,
             fp_attempt_share_permille,
             fp_abandon_hold_daa,
+            // Zero: `new` builds a network that pays no PALW reward, which is what every caller
+            // predating the reward wiring meant and still means. See
+            // `with_worker_carve_permille`.
+            worker_carve_permille: 0,
         })
+    }
+
+    /// Set the producer carve (ADR-0042 Decision 10). Consuming-builder rather than a `new`
+    /// argument so that adding reward to this machine could not silently change what an existing
+    /// caller's params mean — a thirteenth positional `u16` next to `fp_attempt_share_permille`
+    /// and `beta_permille` is exactly the argument a reader mis-binds.
+    pub fn with_worker_carve_permille(mut self, worker_carve_permille: u16) -> Result<Self, PalwStateV2Error> {
+        if worker_carve_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("the worker carve cannot exceed the whole subsidy"));
+        }
+        self.worker_carve_permille = worker_carve_permille;
+        Ok(self)
+    }
+
+    pub fn worker_carve_permille(&self) -> u16 {
+        self.worker_carve_permille
     }
 
     pub fn min_collateral_sompi(&self) -> u64 {
@@ -479,6 +520,16 @@ pub struct PalwBondStateV2 {
     pub slashed: u64,
     pub status: PalwBondStatusV2,
     pub registered_daa: u64,
+    /// **Where this bond's matured rewards are paid — a 64-byte owner payload, not a script.**
+    ///
+    /// The chain DERIVES the output script from it
+    /// ([`crate::dns_finality::p2pkh_mldsa87_spk`]), exactly as the validator-reward path and
+    /// [`crate::palw_credit_batch`] do. Carrying a payload instead of a `ScriptPublicKey` is the
+    /// difference between "the registrant names an address" and "the registrant writes an
+    /// arbitrary script into a coinbase output": the second is a way to mint UTXOs whose spend
+    /// conditions consensus never classified, on a chain whose whole input policy is PQ-only.
+    /// With a payload there is exactly one script it can become.
+    pub payout_payload: Hash64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -593,6 +644,24 @@ pub enum PalwClaimSourceV2 {
     FreePrompt { quanta: u32, spent: BTreeSet<u32> },
 }
 
+/// **One released escrow, waiting for the next block's coinbase to mint it.**
+///
+/// The queue exists because a payout has to be edge-triggered. A claim that reached `Final` STAYS
+/// `Final`, so "pay every Final claim" pays the same claim in every block forever; and the block
+/// that finalizes a claim cannot pay it, because its coinbase is fixed before its own PALW
+/// transition runs. So finalization ENQUEUES here, and the next block's coinbase drains the queue
+/// its parent state carries — a set that is already committed when that coinbase is built, which
+/// is what lets construction and validation agree byte-for-byte.
+///
+/// The payload is snapshotted at release rather than looked up at payment: the bond can retire
+/// between the two blocks, and a reward must not become unpayable because its earner left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwPayoutV2 {
+    /// The 64-byte P2PKH-ML-DSA-87 owner payload, copied from the bond at release.
+    pub payload: Hash64,
+    pub amount: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClaimStateV2 {
     pub source: PalwClaimSourceV2,
@@ -627,6 +696,14 @@ pub struct PalwClaimStateV2 {
     pub reserved: u128,
     /// `⌊β·pwu/1000⌋` at creation, for the same snapshot reason.
     pub immature_contribution: u128,
+    /// **The producer's carve of the accepting block's subsidy, snapshotted (ADR-0042
+    /// Decision 10).**
+    ///
+    /// Escrowed here at creation and paid out only when the claim reaches `Final`; a `Voided`
+    /// claim's escrow is never minted at all. Snapshotting rather than recomputing at payout is
+    /// what makes "never an addition to the schedule" true: the carve is taken from the subsidy
+    /// that existed when the work was accepted, so no later block's subsidy can be drawn twice.
+    pub escrowed_reward: u64,
     pub phase: PalwClaimPhaseV2,
 }
 
@@ -712,6 +789,17 @@ pub struct PalwBlockContextV2 {
     pub block: BlockHash,
     pub daa_score: u64,
     pub blue_score: u64,
+    /// **The block's own coinbase subsidy, in sompi — the pool a claim's escrow is carved FROM.**
+    ///
+    /// A fact about this block, like `daa_score`, and it must be this block's rather than the
+    /// paying block's: ADR-0042 Decision 10 escrows the reward at acceptance and releases it at
+    /// `Final`, and "PALW reward is a carve of the fixed subsidy, never an addition to it" is only
+    /// true if the carve is taken from the subsidy that actually existed when the work was
+    /// accepted. The emission schedule lives in `kaspa-consensus`' coinbase manager, so the value
+    /// crosses in rather than being recomputed here — one schedule, not two.
+    ///
+    /// Zero is legal and means the block funds no escrow.
+    pub subsidy: u64,
 }
 
 /// The consensus objects a block can carry into the state, in the block's deterministic
@@ -728,6 +816,10 @@ pub enum PalwConsensusObjectV2 {
         pubkey: Vec<u8>,
         operator_pubkey: Vec<u8>,
         collateral: u64,
+        /// The 64-byte P2PKH-ML-DSA-87 owner payload matured rewards are paid to. Zero is
+        /// refused: a bond that names no payee is a bond whose every reward would be minted to a
+        /// script nobody can open, and the place to find that out is registration.
+        payout_payload: Hash64,
     },
     BondRetireRequested {
         bond: PalwBondKeyV2,
@@ -889,6 +981,8 @@ pub enum PalwStateV2Error {
     CollateralBelowMinimum { bond: PalwBondKeyV2, got: u64 },
     #[error("bond {0:?} registered an empty operator key — an operator identity must name a key someone holds")]
     EmptyOperatorKey(PalwBondKeyV2),
+    #[error("bond {0:?} registered a zero payout payload — every reward it matured would be minted to a script nobody can open")]
+    EmptyPayoutPayload(PalwBondKeyV2),
     #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
     ZeroSlashValue(Hash64),
     #[error(
@@ -977,6 +1071,11 @@ pub struct PalwChainStateV2 {
     /// Receipt-lane production census per class (spent quanta as blocks/pwu), feeding the
     /// receipt-lane retarget exactly as `epoch_counters` feeds the attempt lane's.
     receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
+    /// Escrows released by the LAST applied block, keyed by claim — the exact set the next
+    /// block's coinbase must pay, and nothing else. Cleared at the head of every transition (the
+    /// block being applied is the one that paid them), then refilled by whatever that block
+    /// finalizes. Hashed into `state_root`, so a miner cannot pay a queue nobody else has.
+    pending_payouts: BTreeMap<Hash64, PalwPayoutV2>,
     safe_weight: u128,
     bounded_immature: u128,
     safe_frontier_blue_score: u64,
@@ -1008,6 +1107,7 @@ impl PalwChainStateV2 {
             epoch_budgets: None,
             receipt_targets: BTreeMap::new(),
             capabilities: BTreeMap::new(),
+            pending_payouts: BTreeMap::new(),
             claims: BTreeMap::new(),
             panels: BTreeMap::new(),
             court_sessions: BTreeMap::new(),
@@ -1073,6 +1173,12 @@ impl PalwChainStateV2 {
 
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
         self.claims.get(id)
+    }
+
+    /// The escrows this state released — what the NEXT block's coinbase must pay, in claim-id
+    /// order. Empty on every state whose last block finalized nothing, which is most of them.
+    pub fn pending_payouts_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPayoutV2)> {
+        self.pending_payouts.iter()
     }
 
     pub fn panel(&self, claim: &Hash64) -> Option<&PalwPanelStateV2> {
@@ -1149,6 +1255,7 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"receipt_targets", &self.receipt_targets).as_byte_slice());
         state.update(collection_root(b"capabilities", &self.capabilities).as_byte_slice());
         state.update(collection_root(b"claims", &self.claims).as_byte_slice());
+        state.update(collection_root(b"pending_payouts", &self.pending_payouts).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
@@ -1446,6 +1553,7 @@ pub enum PalwDeltaEntryV2 {
     ReceiptTarget { key: Hash64, old: Option<PalwClassTargetV2>, new: Option<PalwClassTargetV2> },
     Capability { key: Hash64, old: Option<PalwCapabilityStateV2>, new: Option<PalwCapabilityStateV2> },
     Claim { key: Hash64, old: Option<PalwClaimStateV2>, new: Option<PalwClaimStateV2> },
+    Payout { key: Hash64, old: Option<PalwPayoutV2>, new: Option<PalwPayoutV2> },
     Panel { key: Hash64, old: Option<PalwPanelStateV2>, new: Option<PalwPanelStateV2> },
     Court { key: Hash64, old: Option<PalwCourtSessionStateV2>, new: Option<PalwCourtSessionStateV2> },
     Epoch { key: Hash64, old: Option<PalwEpochCounterV2>, new: Option<PalwEpochCounterV2> },
@@ -1553,6 +1661,14 @@ impl<'a> TransitionBuilder<'a> {
             self.state.unresolved.insert((record.accepted_blue_score, key));
         }
         self.entries.push(PalwDeltaEntryV2::Claim { key, old, new });
+    }
+
+    fn write_payout(&mut self, key: Hash64, new: Option<PalwPayoutV2>) {
+        let old = match new {
+            Some(record) => self.state.pending_payouts.insert(key, record),
+            None => self.state.pending_payouts.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::Payout { key, old, new });
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
@@ -1718,6 +1834,17 @@ impl<'a> TransitionBuilder<'a> {
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
+        // ADR-0042 Decision 10: `Final` is where escrow becomes payable, so it is where the
+        // release is recorded. Nothing is minted here — this only names an amount and a payee for
+        // the next block's coinbase, which is the block that can actually carry an output.
+        if claim.escrowed_reward > 0 {
+            // The bond must still be there to name a payee. It is, unless the registry dropped a
+            // bond that still had live claims — an invariant break, not a payout policy — so this
+            // errors rather than skipping: a silently unpaid producer is worse than a refused
+            // block, and the refusal names the claim.
+            let bond = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
+            self.write_payout(id, Some(PalwPayoutV2 { payload: bond.payout_payload, amount: claim.escrowed_reward }));
+        }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized));
@@ -1816,6 +1943,15 @@ pub fn apply_palw_transition_v3(
     }
 
     let mut builder = TransitionBuilder::new(parent, params);
+
+    // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
+    //     because the sweeps are what refill it: a claim finalized by this block is paid by the
+    //     NEXT one, and clearing after would erase it. Every node applying this block clears the
+    //     same set, because the set is the parent state's — already committed, already hashed
+    //     into the root this block's header names.
+    for claim_id in builder.state.pending_payouts.keys().copied().collect::<Vec<_>>() {
+        builder.write_payout(claim_id, None);
+    }
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
@@ -2213,7 +2349,7 @@ fn apply_object(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     match object {
-        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral } => {
+        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload } => {
             if builder.state.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::DuplicateBond(*bond));
             }
@@ -2225,6 +2361,14 @@ fn apply_object(
             if operator_pubkey.is_empty() {
                 return Err(PalwStateV2Error::EmptyOperatorKey(*bond));
             }
+            // A zero payload is the P2PKH template over an all-zero address hash — a perfectly
+            // well-formed script that nobody holds the preimage to. Every reward this bond ever
+            // matured would be minted straight into an unspendable output, and the producer would
+            // find out block by block. Registration is where that is knowable, so it is where it
+            // is refused.
+            if *payout_payload == Hash64::default() {
+                return Err(PalwStateV2Error::EmptyPayoutPayload(*bond));
+            }
             builder.write_bond(
                 *bond,
                 Some(PalwBondStateV2 {
@@ -2234,6 +2378,7 @@ fn apply_object(
                     slashed: 0,
                     status: PalwBondStatusV2::Active,
                     registered_daa: ctx.daa_score,
+                    payout_payload: *payout_payload,
                 }),
             );
         }
@@ -2482,6 +2627,12 @@ fn apply_object(
                 // block's work — β credit here would let commitment-stuffing pump a chain's live
                 // weight without producing anything.
                 immature_contribution: 0,
+                // Zero for the SAME reason, and it is what keeps the subsidy bound structural: a
+                // block may carry many commitments but only one attempt, so letting a commitment
+                // draw the producer carve would let N of them mint N carves out of one subsidy —
+                // precisely the "addition to the schedule" ADR-0042 Decision 10 forbids. The
+                // receipt lane is paid by the spends it serves, not by the block that carried it.
+                escrowed_reward: 0,
                 phase: PalwClaimPhaseV2::Provisional,
             };
             builder.reserve_for_claim(&claim)?;
@@ -2550,6 +2701,23 @@ fn apply_receipt_spend(
     Ok(())
 }
 
+/// `⌊subsidy · worker_carve / 1000⌋` — the producer's escrow, floored.
+///
+/// Floor on the producer side for the reason [`crate::palw_reward_v2::palw_reward_carve_v2`]
+/// floors: rounding must never mint a sompi the emission schedule does not contain. The two agree
+/// by construction because this IS that function, called with the state's own carve — a second
+/// arithmetic here is a second answer waiting to disagree.
+fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64) -> u64 {
+    crate::palw_reward_v2::palw_reward_carve_v2(
+        subsidy,
+        // Infallible: the field is fenced at `with_worker_carve_permille`, which is the only way
+        // to set it, so it is always a legal permille.
+        &crate::palw_reward_v2::PalwRewardParamsV2::new(params.worker_carve_permille)
+            .expect("worker_carve_permille is fenced at construction"),
+    )
+    .worker
+}
+
 fn apply_attempt(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -2587,6 +2755,9 @@ fn apply_attempt(
         trace_retention_daa: attempt.trace_retention_daa,
         reserved,
         immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
+        // An attempt claim IS this block, so the block's carve funds exactly one claim and the
+        // "never exceeds the subsidy" bound is structural rather than arithmetic.
+        escrowed_reward: worker_carve_v2(builder.params, ctx.subsidy),
         phase: PalwClaimPhaseV2::Provisional,
     };
     builder.reserve_for_claim(&claim)?;
@@ -2684,6 +2855,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ReceiptTarget { key, old, new } => swap_write!(state.receipt_targets, key, old, new),
         PalwDeltaEntryV2::Capability { key, old, new } => swap_write!(state.capabilities, key, old, new),
         PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
+        PalwDeltaEntryV2::Payout { key, old, new } => swap_write!(state.pending_payouts, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
         PalwDeltaEntryV2::Court { key, old, new } => swap_write!(state.court_sessions, key, old, new),
         PalwDeltaEntryV2::Epoch { key, old, new } => swap_write!(state.epoch_counters, key, old, new),
@@ -2812,6 +2984,10 @@ pub struct PalwStateCarriageV2 {
     pub receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     pub capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     pub claims: BTreeMap<Hash64, PalwClaimStateV2>,
+    /// Carried because `state_root` hashes it: a snapshot that dropped the queue would restore a
+    /// state whose root does not match the chain's, and a node loading it would find every
+    /// subsequent block's coinbase wrong.
+    pub pending_payouts: BTreeMap<Hash64, PalwPayoutV2>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
     pub court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     pub epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -2836,6 +3012,7 @@ impl PalwStateCarriageV2 {
             receipt_targets: state.receipt_targets.clone(),
             capabilities: state.capabilities.clone(),
             claims: state.claims.clone(),
+            pending_payouts: state.pending_payouts.clone(),
             panels: state.panels.clone(),
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
@@ -2885,6 +3062,7 @@ impl PalwStateCarriageV2 {
             receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
             claims: self.claims,
+            pending_payouts: self.pending_payouts,
             panels: self.panels,
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
@@ -3048,7 +3226,7 @@ pub(crate) mod tests {
     }
 
     fn ctx(block_word: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: block(block_word), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: block(block_word), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     fn register_class_and_bond() -> Vec<PalwConsensusObjectV2> {
@@ -3061,7 +3239,7 @@ pub(crate) mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000 },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
         ]
     }
 
@@ -3164,6 +3342,134 @@ pub(crate) mod tests {
         // is Final" is the definition `palw_fork_choice` states, and it is what makes the key
         // unforgeable: a fork can produce blocks freely, but it cannot produce a matured claim.
         assert_eq!(s5.safe_frontier(), (2, block(2)), "the frontier is the block whose work reached Final");
+    }
+
+    /// **ADR-0042 Decision 10, end to end: escrow at acceptance, release at `Final`, paid ONCE.**
+    ///
+    /// The lattice walk is the same one `palw_v2_claim_lifecycle` walks; what this measures is the
+    /// money. Four separate claims, each of which the earlier "pay every Spendable claim" shape
+    /// got wrong:
+    ///
+    /// 1. the escrow is the ACCEPTING block's carve, snapshotted — not the paying block's;
+    /// 2. nothing is payable before `Final`;
+    /// 3. the release lands in the queue for exactly one block, then is gone;
+    /// 4. the payee is the bond's registered payload.
+    #[test]
+    fn palw_v2_escrow_is_carved_once_and_paid_once() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let payout_payload = kaspa_hashes::Hash64::from_u64_word(0x9A11);
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // The accepting block's subsidy is 1_000; 62% of it is 620.
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let accept = PalwBlockContextV2 { subsidy: 1_000, ..ctx(2, 101, 2) };
+        let (s2, _) = apply(&s1, &p, &accept, &[], Some(&env));
+        assert_eq!(s2.claim(&claim_id).unwrap().escrowed_reward, 620, "escrow is the accepting block's carve");
+        assert!(s2.pending_payouts_iter().next().is_none(), "a Provisional claim is not payable");
+
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
+        assert!(s4.pending_payouts_iter().next().is_none(), "still nothing payable while the claim is refutable");
+
+        // The sweep that makes it Final. Note the subsidy here is 9_999_999 and DIFFERENT from the
+        // accepting block's — if the payout were recomputed at maturity it would show up here.
+        let mature = PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(5, 124, 5) };
+        let (s5, _) = apply(&s4, &p, &mature, &[], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        let released: Vec<_> = s5.pending_payouts_iter().map(|(id, pay)| (*id, *pay)).collect();
+        assert_eq!(
+            released,
+            vec![(claim_id, PalwPayoutV2 { payload: payout_payload, amount: 620 })],
+            "the release is the ACCEPTING block's carve, paid to the bond's registered payload"
+        );
+
+        // The very next block pays it, and the queue empties. Any block after that pays nothing —
+        // the claim is still `Final` forever, which is exactly why the queue exists.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 125, 6), &[], None);
+        assert!(s6.pending_payouts_iter().next().is_none(), "the queue drains in the block that pays it");
+        let (s7, _) = apply(&s6, &p, &ctx(7, 126, 7), &[], None);
+        assert!(s7.pending_payouts_iter().next().is_none(), "and a Final claim is never paid a second time");
+        assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "still Final, still unpaid again");
+    }
+
+    /// A zero carve — the default every pre-reward network keeps — escrows nothing and enqueues
+    /// nothing, so the whole payout path stays invisible on a network that does not pay.
+    #[test]
+    fn palw_v2_a_zero_carve_never_enqueues_anything() {
+        let p = params();
+        assert_eq!(p.worker_carve_permille(), 0, "zero is the default");
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &PalwBlockContextV2 { subsidy: 1_000_000, ..ctx(2, 101, 2) }, &[], Some(&env));
+        assert_eq!(s2.claim(&claim_id).unwrap().escrowed_reward, 0, "no carve, no escrow, whatever the subsidy");
+
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
+        let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the lattice still runs");
+        assert!(s5.pending_payouts_iter().next().is_none(), "and nothing was ever payable");
+    }
+
+    /// **A voided claim's escrow is never minted** — the property Decision 10 exists for.
+    ///
+    /// The `Provisional → Voided` path is the one a reward-at-acceptance design pays out on and
+    /// then cannot claw back. Here the escrow is carved, sits in the claim, and dies with it.
+    #[test]
+    fn palw_v2_a_voided_claim_pays_nothing() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(2, 101, 2) }, &[], Some(&env));
+        assert_eq!(s2.claim(&claim_id).unwrap().escrowed_reward, 620, "the escrow exists");
+
+        // Never bound: the bind window (10) from daa 101 closes at 111, and the first block past
+        // it sweeps the claim to Voided.
+        let (s3, _) = apply(&s2, &p, &ctx(3, 112, 3), &[], None);
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "swept to Voided");
+        assert!(s3.pending_payouts_iter().next().is_none(), "a voided claim releases nothing");
+        let (s4, _) = apply(&s3, &p, &ctx(4, 113, 4), &[], None);
+        assert!(s4.pending_payouts_iter().next().is_none(), "and never will");
+    }
+
+    /// **The bound the earlier implementation broke.** Two claims maturing in one block must not
+    /// mint two carves of one subsidy.
+    ///
+    /// A free-prompt commitment rides a transaction, so a block may carry many; only the attempt
+    /// is the block's own work. `escrowed_reward: 0` on the commitment lane is what makes the
+    /// bound structural — at most one attempt per block, so at most one carve per subsidy.
+    ///
+    /// So the block here carries BOTH lanes at once — three commitments and an attempt — because
+    /// a test that measured only the attempt would pass no matter what the commitment lane
+    /// escrowed, and the commitment lane is the half that can be repeated.
+    #[test]
+    fn palw_v2_only_the_block_s_own_work_draws_the_carve() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let subsidy = 1_000u64;
+        let env = attempt(40, 1);
+        let commitments = [fp_commit(0xF01, 8, 2), fp_commit(0xF02, 8, 2), fp_commit(0xF03, 8, 2)];
+        let (s2, _) = apply(&s1, &p, &PalwBlockContextV2 { subsidy, ..ctx(2, 101, 2) }, &commitments, Some(&env));
+
+        assert_eq!(s2.claims_iter().count(), 4, "three commitments and one attempt are all in state");
+        let escrowed: u64 = s2.claims_iter().map(|(_, c)| c.escrowed_reward).sum();
+        assert_eq!(escrowed, 620, "one attempt, one carve — the three commitments escrow nothing");
+        assert!(escrowed <= subsidy, "so the block's escrow never exceeds the subsidy it came from");
+        for word in [0xF01u64, 0xF02, 0xF03] {
+            assert_eq!(s2.claim(&h64(word)).unwrap().escrowed_reward, 0, "commitment {word:#x} draws no carve");
+        }
     }
 
     /// **The audit register's P0-3 red test.** A candidate tip whose claim has no descendants —
@@ -3691,7 +3997,7 @@ pub(crate) mod tests {
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000 }],
+            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) }],
             None,
         );
         let (with_class, _) = apply(
@@ -4057,6 +4363,7 @@ pub(crate) mod tests {
             pubkey: vec![8; 4],
             operator_pubkey: op_key(22),
             collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
         });
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
@@ -4094,12 +4401,14 @@ pub(crate) mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
         ];
         let (state, _) = apply(&genesis, &p, &ctx(1, 100, 1), &shared, None);
@@ -4121,6 +4430,7 @@ pub(crate) mod tests {
                 pubkey: vec![9; 4],
                 operator_pubkey: op_key(0xBB),
                 collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             }],
             None,
         );
@@ -4136,6 +4446,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi() - 1,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             }],
             None,
         );
@@ -4151,6 +4462,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi(),
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             }],
             None,
         );
@@ -4165,6 +4477,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: Vec::new(),
                 collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             }],
             None,
         );
@@ -4264,6 +4577,7 @@ pub(crate) mod tests {
             pubkey: vec![9; 4],
             operator_pubkey: op_key(0x99),
             collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
@@ -5077,6 +5391,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ReceiptTarget { .. } => "receipt_target",
                     PalwDeltaEntryV2::Capability { .. } => "capability",
                     PalwDeltaEntryV2::Claim { .. } => "claim",
+                    PalwDeltaEntryV2::Payout { .. } => "payout",
                     PalwDeltaEntryV2::Panel { .. } => "panel",
                     PalwDeltaEntryV2::Court { .. } => "court",
                     PalwDeltaEntryV2::Epoch { .. } => "epoch",

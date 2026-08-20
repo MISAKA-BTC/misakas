@@ -509,7 +509,7 @@ mod tests {
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     fn register(bond: u64, pubkey: u8, operator: u64) -> PalwConsensusObjectV2 {
@@ -518,6 +518,7 @@ mod tests {
             pubkey: vec![pubkey; 4],
             operator_pubkey: op_key(operator),
             collateral: 1_000_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
         }
     }
 

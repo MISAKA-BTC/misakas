@@ -50,6 +50,14 @@ pub enum RuleError {
     #[error("PALW header (algo_id = {algo_id}) failed stateless admission: {reason}")]
     BadPalwCarriageAdmission { algo_id: u8, reason: String },
 
+    /// ADR-0042 Decision 10: a claim matured into a spendable reward, but the bond it names is
+    /// no longer in the registry, so there is no payee to derive an output script from. The
+    /// block is refused rather than paid short: dropping the claim would make the coinbase
+    /// depend on which claims happened to resolve, and two nodes disagreeing about a coinbase is
+    /// a fork. (The `palw_credit_batch` I7 rule, on the V2 lattice: missing is never empty.)
+    #[error("PALW claim {0} matured with a spendable reward but its bond is not in the registry — no payee to derive")]
+    PalwV2UnpayableClaim(kaspa_hashes::Hash64),
+
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020). The EVM state-root / receipts
     // / commitment mismatch variants are added in the executor phase (P2) when
     // they are actually produced.

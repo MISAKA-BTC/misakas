@@ -165,12 +165,13 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: vec![21; 8],
                 collateral: 100_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
         ]
     }
 
     fn ctx() -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: h64(0x6E), daa_score: 0, blue_score: 0 }
+        PalwBlockContextV2 { block: h64(0x6E), daa_score: 0, blue_score: 0, subsidy: 0 }
     }
 
     /// A base at the frozen cadence and a proportionate depth — the network identity ADR-0036
@@ -275,6 +276,7 @@ mod tests {
             bond,
             vec![7; 32],
             vec![21; 8],
+            h64(0x9A11),
         )
         .expect("the RC network is a runnable ruleset");
 
@@ -300,7 +302,7 @@ mod tests {
         // The artifact loads against its catalog, and the genesis block's registrations apply —
         // a network whose genesis registers nothing boots and then cannot produce.
         verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects).expect("the genesis artifact loads");
-        let point = PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0 };
+        let point = PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
         let (state, _) = crate::palw_state_v2::apply_palw_transition_v2(
             &PalwChainStateV2::genesis(),
             &bundle.state,

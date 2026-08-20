@@ -161,6 +161,11 @@ pub fn palw_fp_devnet_bundle_v3(
     genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
     genesis_bond_pubkey: Vec<u8>,
     genesis_operator_pubkey: Vec<u8>,
+    // Where the genesis bond's matured rewards are paid — the 64-byte P2PKH-ML-DSA-87 owner
+    // payload. An argument rather than a value derived from `genesis_operator_pubkey`, because
+    // paying rewards to a different key than the one that signs is an ordinary operational
+    // choice (a cold payout address), and deriving it would quietly forbid it.
+    genesis_payout_payload: Hash64,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
     // ADR-0045 Decision 3: no share table here. The chain grants shares at registration — the
     // first registration on the chain must be `base_class_id` at the whole 1000‰, which is the
@@ -178,7 +183,10 @@ pub fn palw_fp_devnet_bundle_v3(
         MIN_COLLATERAL_SOMPI,
         ATTEMPT_SHARE_PERMILLE,
         FP_ABANDON_HOLD,
-    )?;
+    )?
+    // The SAME constant the `reward` field below declares — `validate()` requires the two to
+    // agree, so this is not a second source, it is the one source reaching both readers.
+    .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.
@@ -237,6 +245,7 @@ pub fn palw_fp_devnet_bundle_v3(
                 pubkey: genesis_bond_pubkey,
                 operator_pubkey: genesis_operator_pubkey,
                 collateral: MIN_COLLATERAL_SOMPI,
+                payout_payload: genesis_payout_payload,
             },
         ],
     };
@@ -268,6 +277,7 @@ pub(crate) fn palw_fp_devnet_bundle_for_tests(
         }),
         vec![7; 4],
         vec![21; 8],
+        Hash64::from_u64_word(0x9A11),
     )
 }
 
@@ -293,6 +303,7 @@ mod tests {
             }),
             vec![7; 4],
             vec![21; 8],
+            h64(0x9A11),
         ).expect("the devnet bundle validates")
     }
 

@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
-        PalwBlockContextV2 { block: BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue }
+        PalwBlockContextV2 { block: BlockHash::from_u64_word(block), daa_score: daa, blue_score: blue, subsidy: 0 }
     }
 
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
@@ -235,6 +235,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 100_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
             },
         ]
     }

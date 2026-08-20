@@ -2259,6 +2259,7 @@ pub fn palw_rc_params(
     genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
     genesis_bond_pubkey: Vec<u8>,
     genesis_operator_pubkey: Vec<u8>,
+    genesis_payout_payload: crate::Hash64,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base_class_id,
@@ -2269,6 +2270,7 @@ pub fn palw_rc_params(
         genesis_bond,
         genesis_bond_pubkey,
         genesis_operator_pubkey,
+        genesis_payout_payload,
     )?;
     let mut params = TESTNET_PARAMS.clone();
     params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
