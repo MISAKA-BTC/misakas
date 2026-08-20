@@ -4021,48 +4021,71 @@ pub(crate) mod tests {
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the freeze ended with the challenge");
     }
 
-    // ---- the lifecycle objects have no way onto a chain (found 2026-08-20) ----
+    // ---- P0-11: the lifecycle objects reach a chain through transactions ----
 
-    /// **A V2 network cannot advance a single claim, because no block can carry a `PanelBound`.**
+    /// **The liveness this network did not have.** A claim finalizes because a BLOCK can carry
+    /// the objects that advance it.
     ///
-    /// The lattice is complete and every edge is tested — but every one of those tests hands the
-    /// transition an object list it built in-process. On a real chain the only objects that exist
-    /// are the ones something EXTRACTS from a block, and
-    /// `palw_fp_objects_from_accepted_txs_v3` produces exactly one kind: `FreePromptCommitted`.
-    /// Grep the tree: every construction of `PanelBound`, `ReceiptLicensed`, `CourtOpened`,
-    /// `CourtClosed` and a non-genesis `BondRegistered` is inside a `mod tests`.
+    /// The lattice was complete and every edge tested, but every one of those tests handed the
+    /// transition an object list it built in-process — the one thing a chain cannot do. On a real
+    /// chain the objects are whatever an extractor produces from accepted transactions, and the
+    /// only extractor produced `FreePromptCommitted`. So no block could carry a `PanelBound`,
+    /// every claim sat `Provisional` until `window_bind` lapsed and voided as `BindTimeout`,
+    /// `safe_weight` never grew, and PALW weight — the whole fork choice — was permanently zero.
     ///
-    /// So this test does what a running network can do and nothing more: accept an attempt, then
-    /// let blocks pass. The claim reaches `BindTimeout` and voids, `safe_weight` never moves, and
-    /// the safe frontier never leaves the zero point — which is PALW weight permanently zero on a
-    /// network whose whole fork choice is PALW weight.
-    ///
-    /// It is written as an assertion of the CURRENT behaviour on purpose. When the lifecycle
-    /// carriage lands, this test fails, and the thing to do is rewrite it as the liveness test it
-    /// was always describing — not to delete it.
+    /// So this test refuses to build its own object list. Every object it folds comes out of
+    /// `palw_lifecycle_objects_from_accepted_txs_v2`, from transactions, which is the only way one
+    /// can arrive on a chain. If that path regresses, the claim stops finalizing here.
     #[test]
-    fn palw_v2_without_a_lifecycle_carriage_no_claim_can_ever_finalize() {
+    fn palw_v2_a_claim_finalizes_from_objects_a_block_can_actually_carry() {
+        use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        use crate::tx::{ScriptPublicKey, Transaction, TransactionOutput};
+
+        // The ONLY way an object enters this test: through a transaction, through the extractor.
+        let via_block = |object: PalwConsensusObjectV2| -> Vec<PalwConsensusObjectV2> {
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+                .expect("borsh-serializable");
+            let tx = Transaction::new(
+                0,
+                Vec::new(),
+                vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            let out = crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&[tx]);
+            assert!(out.skipped.is_empty(), "the carrier must produce an object: {:?}", out.skipped);
+            out.objects.into_iter().map(|c| c.object).collect()
+        };
+
         let p = params();
         let genesis = PalwChainStateV2::genesis();
-        // Genesis registrations are the ONE object list a real network gets for free.
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
-        assert!(matches!(s2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "the attempt was admitted");
 
-        // Now let the chain run with the object list a block can actually produce: empty.
-        let mut state = s2;
-        for (block, daa) in [(3u64, 105u64), (4, 110), (5, 115), (6, 130), (7, 200)] {
-            let (next, _) = apply(&state, &p, &ctx(block, daa, block), &[], None);
-            state = next;
-        }
-        match state.claim(&claim_id).unwrap().phase {
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. } => {}
-            ref other => panic!("with no way to bind a panel the claim can only time out, got {other:?}"),
-        }
-        assert_eq!(state.safe_weight(), 0, "no claim finalized, so no work is certified");
-        assert_eq!(state.safe_frontier(), (0, BlockHash::default()), "and the frontier never left the zero point");
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &via_block(PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }), None);
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "a block bound the panel");
+
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &via_block(PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }),
+            None,
+        );
+        assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+
+        // The challenge window lapses with no court, and the claim certifies its work.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the claim finalized");
+        assert_eq!(s5.safe_weight(), 40, "and its work is certified — the number that was permanently zero");
+        assert_eq!(s5.safe_frontier(), (2, block(2)), "the frontier names the block whose work matured");
     }
 
     // ---- P0-7: an assigned seat that answers nothing pays for it ----

@@ -189,7 +189,7 @@ honest "red (integration), lands in PR-N."
   `receipts: Vec::new()`, a panel concluding without a word from the seat it had bound.
   **ADR-0042:** Decision 7.
 
-### P0-11 — the lifecycle objects have no way onto a chain (found 2026-08-20)
+### P0-11 — the lifecycle objects had no way onto a chain (found and closed 2026-08-20)
 
 - **Invariant:** a claim that does honest work reaches `Final`, so PALW weight is a measure of
   work rather than a constant.
@@ -209,17 +209,34 @@ honest "red (integration), lands in PR-N."
   see this: each one hands the transition an object list it built in-process, which is the one
   thing a chain cannot do. The gap is between "the state machine accepts this object" and
   "something puts this object in a block", and nothing tested the second half.
-- **Red test:** `palw_v2_without_a_lifecycle_carriage_no_claim_can_ever_finalize` — accept an
-  attempt, then run blocks carrying only what a real block can carry (nothing), and assert the
-  claim voids at `BindTimeout` with `safe_weight` still zero. It asserts today's behaviour
-  deliberately; when the carriage lands it fails, and the fix is to rewrite it as the liveness
-  test it was always describing.
-- **What closing it needs:** a transaction carriage for the lifecycle objects, the same shape
-  `FreePromptCommitted` already has — a wire form, an extractor, and an acceptance check per kind
-  (several of which now exist: `validate_panel_bound_v2`, `check_court_open_acceptance_v2`,
-  `adjudicate_court_close_v2`, the two rung checks). This also subsumes the C5 tail: "nobody has
-  an incentive to bind someone else's claim" is a question about who WOULD; today nobody CAN.
-- Release-blocker for any network that carries weight. **ADR-0042:** Decisions 7 and 8.
+- **Status: the claim-lifecycle half is CLOSED (2026-08-20); the value-bearing half is open by
+  decision.** `palw_lifecycle_objects_v2` gives the lattice objects the carriage
+  `FreePromptCommitted` already had — subnetwork `0x4b`, a versioned Borsh payload of one object
+  per transaction, and an extractor the virtual processor runs beside the free-prompt one.
+  `palw_v2_a_claim_finalizes_from_objects_a_block_can_actually_carry` walks a claim to `Final`
+  while refusing to build a single object itself: every one comes out of the extractor, from a
+  transaction, which is the only way one arrives on a chain. `safe_weight` reaches 40 — the
+  number that was permanently zero. Verified non-vacuous by making the extractor drop
+  `PanelBound`.
+- **What still may not ride, and why each is a decision rather than an omission.**
+  - `BondRegistered` — the object DECLARES `collateral` and nothing on this path locks a UTXO
+    behind it, so a transaction saying "I staked a million" would stake a million. Every exposure
+    ceiling, every slash and Decision 7's Sybil bound are denominated in that number. Bonds come
+    from the genesis registration list until a collateral lock exists; that is the coinbase/UTXO
+    gate, not this seam. **Consequence for the RC: the genesis artifact must register the initial
+    bond set**, and at least three of them — `derive_panel_v2` excludes the executor's own bond,
+    so a one-bond registry can never form a panel.
+  - `ClassRegistered` — a class entering a live chain moves the share table (ADR-0045 Decision 3
+    funds an entrant by donation from every incumbent) and brings its own `pwu_rule`.
+    `verify_palw_genesis_v2` refuses `MaxPerAttempt` at genesis precisely because a ceiling makes
+    weight a measure of collateral rather than of work, and letting a class in through a
+    transaction would route around that check. Keeping classes to genesis closes the **H3 tail**
+    structurally instead of with a second copy of the same rule.
+  - `FreePromptCommitted` — its own subnetwork, where its price is checked.
+- **The C5 tail is now a real question rather than a hypothetical one.** "Nobody has an incentive
+  to bind someone else's claim" was unanswerable while nobody *could*; with the carriage in place
+  it is a fee/reward question about who publishes a `PanelBound`, and it is still open.
+- **ADR-0042:** Decisions 7 and 8.
 
 ### P0-8 — the arithmetic court is unadjudicable on a normal full node
 - **Invariant:** W1 (full node adjudicates every dispute with no LLM).

@@ -3820,7 +3820,24 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &extraction.skipped {
             info!("[palw-fp] carrier {carrier} produced no object: {reason}");
         }
-        extraction.objects.into_iter().map(|carried| carried.object).collect()
+        // P0-11: the claim-lifecycle objects. Without this walk no block could carry a
+        // `PanelBound`, so every claim on a V2 network voided at `BindTimeout` and PALW weight —
+        // the network's whole fork choice — was permanently zero.
+        //
+        // Appended after the free-prompt objects rather than interleaved by transaction order:
+        // the two walks are independent pure functions of the same accepted set, so a fixed
+        // concatenation is a deterministic order every node reproduces, and it keeps a change to
+        // one walk from reordering the other's objects.
+        let lifecycle = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&txs);
+        for (carrier, reason) in &lifecycle.skipped {
+            info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
+        }
+        extraction
+            .objects
+            .into_iter()
+            .map(|carried| carried.object)
+            .chain(lifecycle.objects.into_iter().map(|carried| carried.object))
+            .collect()
     }
 
     pub(super) fn accepted_txs_of_chain_block(&self, chain_block: BlockHash) -> Vec<Transaction> {

@@ -307,6 +307,19 @@ pub const SUBNETWORK_ID_PALW_RECEIPT: SubnetworkId = SubnetworkId::from_byte(0x4
 /// Phase 1 of the receipt lane: published BEFORE the beacon that draws its audit panel exists.
 pub const SUBNETWORK_ID_PALW_FP_COMMITMENT: SubnetworkId = SubnetworkId::from_byte(0x4a);
 
+/// **The V2 claim-lifecycle carriage (ADR-0042 Decisions 7 and 8) — P0-11.**
+///
+/// A `PalwConsensusObjectV2` that advances a claim: a panel binding, a licensing, a producer
+/// default, and the four court moves. Its own id inside the PALW band for the same reason the FP
+/// commitment has one — these objects have a different codec and different acceptance rules from
+/// every other band, and routing them through one id would let a relay hand one band's payload to
+/// another band's validator.
+///
+/// Before this id existed there was no way to put ANY of these objects in a block, so no claim on
+/// a V2 network could leave `Provisional`: every one voided at `BindTimeout` and PALW weight was
+/// permanently zero (`palw_v2_without_a_lifecycle_carriage_no_claim_can_ever_finalize`).
+pub const SUBNETWORK_ID_PALW_LIFECYCLE: SubnetworkId = SubnetworkId::from_byte(0x4b);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +386,6 @@ mod tests {
         assert_eq!(SUBNETWORK_ID_PALW_BISECT_MOVE, SubnetworkId::from_byte(0x48));
         assert_eq!(SUBNETWORK_ID_PALW_RECEIPT, SubnetworkId::from_byte(0x49));
         assert_eq!(SUBNETWORK_ID_PALW_FP_COMMITMENT, SubnetworkId::from_byte(0x4a));
+        assert_eq!(SUBNETWORK_ID_PALW_LIFECYCLE, SubnetworkId::from_byte(0x4b));
     }
 }
