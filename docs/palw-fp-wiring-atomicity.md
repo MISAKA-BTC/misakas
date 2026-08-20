@@ -1,31 +1,47 @@
 # The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
 
-Status: the substrate is landed and tested; the pipeline wiring below is **not** started. This
-document exists because the wiring is where every P0 in this project's audit history was born,
-and because the safest thing to write before wiring is the list of things that must not be
-wired one at a time.
+Status, updated: **Units A, B and C are landed and wired. Unit D is not, and its prerequisite
+is.** This document was written before any of it, because the wiring is where every P0 in this
+project's audit history was born; it now records what each unit turned out to be.
 
-## The finding this document records
+## What the units cost, in defects found
 
-Both lanes' PoW arms are absent from the finalizer today. `StateLayer0::calculate_l1_tag`
-(`consensus/pow/src/lib.rs`) has arms for algo 1/2/3/4/5 and falls to
-`Err(UnknownAlgoId(other))` for **6 (attempt) and 7 (receipt)** alike. A `ConsensusV2` network
-therefore demands algo 6 at the header gate and then rejects every algo-6 header as
-`InvalidPoW` — *including* under `skip_proof_of_work`, because the error returns before the skip
-is consulted. This is deliberate ("the arm … lands with it in PR-10") and it is also why a V2
-network cannot currently mine or accept a single block.
+Writing them under this discipline surfaced three defects *before* they could ship, all of the
+same family — an object that was not bound to its position or its state:
 
-The temptation is to add a small tag arm and move on. That would be the mistake: an algo id with
-a tag but no admission is a *half-defined consensus semantics*, and half-defined semantics is
-what produced P0-1 (a solved PoW minting unlimited identities), P0-3 (fresh tips unweighable),
-P0-4 (sink-dependent weights) and P0-5 (two canonical-chain views in one node).
+1. **The spend envelope had no header-position binding** (found while designing Unit B): one
+   signature would have minted unlimited block identities, P0-1's shape arriving through the lane
+   with no PoW at all. Fixed by the `challenge` field, recomputed at admission.
+2. **The walk tracked its position beside the state** (found by Unit C's own integration test):
+   an `at` field set to the block just processed is right after an apply and WRONG after a
+   revert, where the walk stands at that block's parent. The anchor written from such a walk
+   claimed a position the state did not hold. Fixed by deriving the position from the state's own
+   `last_point`, which makes the drift unrepresentable.
+3. **`palw_candidate_order` panicked on an unknown hash** (found by Unit D's prerequisite test):
+   "no opinion" delivered as a panic, on a path whose callers see peer-supplied hashes.
+
+None of the three would have been caught by reading the code; each was caught by a test written
+to state a property the unit had to hold.
+
+## The original finding (resolved by Units A and B)
+
+Both lanes' PoW arms were absent from the finalizer: `calculate_l1_tag` had arms for algo 1/2/3/4/5
+and fell to `Err(UnknownAlgoId)` for **6 (attempt) and 7 (receipt)** alike, so a `ConsensusV2`
+network demanded algo 6 and then rejected every algo-6 header — *including* under
+`skip_proof_of_work`, because the error returns before the skip is consulted.
+
+The temptation was to add a small tag arm and move on. That would have been the mistake: an algo
+id with a tag but no admission is a *half-defined consensus semantics*, which is what produced
+P0-1 (a solved PoW minting unlimited identities), P0-3 (fresh tips unweighable), P0-4
+(sink-dependent weights) and P0-5 (two canonical-chain views in one node). Both arms landed with
+their carriage codecs, their shape gates and their stateless admission, in one commit.
 
 ## The atomic units
 
 Nothing inside a unit may ship without the rest of that unit on the same branch, behind the same
 mode.
 
-### Unit A — the attempt lane's PoW (ADR-0042 PR-10's remainder)
+### Unit A — the attempt lane's PoW (ADR-0042 PR-10's remainder) — **LANDED**
 
 1. `calculate_l1_tag` arm for algo 6: `Expand(commitment_root)` from the header's carried
    attempt envelope (`l1_tag_v2`), **and** the decode of that envelope from
@@ -40,7 +56,7 @@ mode.
 Without (1) no V2 block validates; without (2)+(3) a V2 block validates with an unchecked
 envelope, which is P0-1 restated.
 
-### Unit B — the receipt lane's PoW and admission
+### Unit B — the receipt lane's PoW and admission — **LANDED**
 
 1. `calculate_l1_tag` arm for algo 7: `Expand(fp_spend_id_v3)` from the header's carried spend
    envelope, and the decode of that envelope (a V3 codec, distinct from both V1 PBC1 and the
@@ -58,7 +74,7 @@ envelope, which is P0-1 restated.
    all eight items, with the beacon fact supplied by the pipeline (below).
 4. Block weight: `pwu_per_quantum` at `Final` stage on acceptance — no ramp, no revision.
 
-### Unit C — candidate-scoped state in the pipeline
+### Unit C — candidate-scoped state in the pipeline — **LANDED (with two carve-outs, below)**
 
 1. A store for `PalwStateDeltaV2` keyed by chain block, written in the same `WriteBatch` as the
    block's UTXO data, plus a materialized anchor and a carriage row at the pruning point.
@@ -80,12 +96,36 @@ The reorg-equivalence gate for this unit is already committed
 siblings): the wiring is written against tests that are red on regression, rather than
 discovered to have forked in the field.
 
-### Unit D — one fork-choice authority
+### Unit D — one fork-choice authority — **NOT STARTED; its prerequisite is landed**
 
 `palw_fork_authority_v2`'s four functions wired into virtual tip selection, IBD commit, pruning
 ceiling and the deep-reorg gate **together**, with the header processor's store renamed to a
 download hint (ADR-0042 Decision 9). Wiring one site is P0-5: two canonical-chain views inside
 one node.
+
+What was missing until now was the *capability* every one of the four needs: a candidate's
+standing under the one comparator, derived from that candidate's own chain.
+`VirtualStateProcessor::palw_candidate_order` is that, landed and tested (including the losing
+branch of a fork, which a sink-scoped read gets wrong). Unit D is therefore now a single coherent
+change — call it from four places — rather than a research problem.
+
+### Unit C's two carve-outs, stated precisely
+
+The walk runs, stores its deltas, survives reorgs, and seeds its anchor at genesis. Two things
+inside Unit C are deliberately still absent:
+
+1. **The block's own attempt/spend work is not applied.** `palw_apply_block` folds the block's
+   accepted free-prompt commitments and passes `PalwBlockWorkV3::None`. Applying the work
+   requires admitting it against this very state — the stateful admission call sites — and
+   admitting-then-applying must be one step.
+2. **The state root is not in the header.** `palw_state_root` beside `overlay_commitment_root`
+   (ADR-0043 owns the hash ordering) is what makes a peer's state checkable rather than
+   recomputed-and-hoped.
+
+Folding objects before admitting work is safe **in that order**: the transition refuses an object
+naming an absent bond or a frozen class, so the derived state can only ever be a SUBSET of what a
+complete wiring holds, never a superset. The reverse order — applying work before it is admitted —
+would not be.
 
 ## What is safe to do before the units
 
@@ -105,7 +145,9 @@ failures predate the free-prompt work and are not caused by it:
 
 | Suite | Result on `palw-freeprompt-v3` | Result on `palw-v2` (base) |
 |---|---|---|
-| `kaspa-consensus-core --lib` | 1063 passed, 0 failed | — (1046 before FP) |
+| `kaspa-consensus-core --lib` | 1074 passed, 0 failed | — (1046 before FP) |
+| `kaspa-consensus --lib` | 217 passed, 0 failed | 207 passed |
+| `cargo clippy -p kaspa-consensus --lib` | byte-identical warning list | (the baseline) |
 | every other workspace crate | passed | passed |
 | `kaspa-testing-integration --lib consensus_` | 18 passed, **2 failed** (`bounded_merge_depth_test`, `indirect_parents_test`) | 18 passed, **the same 2 failed** |
 | `kaspa-testing-integration --lib` (full, parallel) | aborts in the daemon tests | aborts likewise (different signal, same suite) |
