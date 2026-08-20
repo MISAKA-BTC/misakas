@@ -15,6 +15,10 @@ point, and it is what makes the rest of this document necessary.
 > [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md) for the allocation table and how
 > every constant is re-derived.
 
+Operators bringing the network up (rather than joining it) run
+[testnet11-launch-rehearsal.md](testnet11-launch-rehearsal.md) first — two hosts, ten written exit
+criteria, and four deliberate failure drills.
+
 Read §2 before you build anything. A node outside the determinism class does not sync slowly or
 mine badly; it computes different tags, rejects every honest block, and has its own rejected. It
 looks like a network fault and is not one.
