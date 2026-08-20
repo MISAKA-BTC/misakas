@@ -88,6 +88,7 @@ pub const BASE0_TENSOR_NAMES: &[&str] = &[
     "blk.{layer}.attn_k.weight",
     "blk.{layer}.attn_v.weight",
     "blk.{layer}.attn_output.weight",
+    "blk.{layer}.attn_output.requant",
     "blk.{layer}.rope_table",
     "blk.{layer}.ffn_norm.weight",
     "blk.{layer}.ffn_gate.weight",
@@ -209,11 +210,15 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
             vec![1],
         ),
         // 5: attention scores — one per cached key, so the width scales with the TRUE kv length
-        // of the position (never the padded cache length).
+        // of the position (never the padded cache length). Its second operand is the K SERIES,
+        // not a registered weight: the rotated query row multiplies the cached keys. That shape
+        // was unadjudicable until G5 was closed, and `kernel_can_serve_node_v1` is what now says
+        // so at registration rather than at the first dispute.
         plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, 0, vec![4, PALW_STEP_INPUT_KV_K]),
         // 6: the softmax over those scores, same width.
         plain(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, 0, vec![5]),
-        // 7: the weighted sum of values.
+        // 7: the weighted sum of values — probabilities against the V series, same two-operand
+        // shape.
         plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, kv_dim, vec![6, PALW_STEP_INPUT_KV_V]),
         // 8: output projection, 9: back to int8, 10: the residual add.
         weighted(
@@ -225,7 +230,15 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
             PalwStepOutLenV1::Fixed { elements: hidden },
             vec![7],
         ),
-        plain(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, hidden, vec![8]),
+        weighted(
+            PalwStepOpKindV1::MulElem,
+            KDESC_BASE0_REQUANTIZE,
+            "blk.{layer}.attn_output.requant",
+            &i8_per_layer,
+            PalwStepNodeRoleV1::Plain,
+            PalwStepOutLenV1::Fixed { elements: hidden },
+            vec![8],
+        ),
         plain(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, hidden, vec![9, PALW_STEP_INPUT_LAYER_IN]),
         // 11: the FFN norm, 12/13: gate and up, 14: SiLU, 15: the gating multiply,
         // 16: down projection, 17: the second residual.
@@ -668,48 +681,69 @@ mod tests {
         assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
 
-    /// **G5: two nodes of this profile can never be recomputed, and the coverage gate cannot see
-    /// it.**
+    /// **G5, measured: three nodes of this graph are still unadjudicable, and now they say so.**
     ///
-    /// `base0_profile_names_only_adjudicable_kernels` passes because the gate compares kernel
-    /// IDs. It never asks whether the kernel can serve the NODE's operand shape — and BASE-0's
-    /// `MatMulQuant` resolves its second operand only through the weight oracle, so a node with
-    /// no `weight_name` has nothing to multiply by, and it refuses `KvScaled` widths outright.
-    /// Attention is exactly those two shapes: Q·Kᵀ multiplies an activation by the K cache and
-    /// P·V by the V cache, neither of which is a registered weight.
+    /// The id gate certified this profile at "100% coverage" while several nodes could never be
+    /// recomputed, because it compares kernel IDs and never asks what a kernel can SERVE. Asking
+    /// properly — `kernel_can_serve_node_v1`, which lives next to the code that does the serving
+    /// — turns each of those into a registration-time refusal with a reason.
     ///
-    /// So a class can be certified "100% covered" while two of its eighteen per-layer nodes are
-    /// structurally unadjudicable. This test states which nodes those are, so the claim is
-    /// measured rather than argued, and it will have to be rewritten when G5 is closed.
+    /// Two of the four it found are now closed: the attention matmuls multiply an activation by
+    /// an opened row instead of demanding a registered weight, and `KvScaled` widths are derived
+    /// from the kv length the caller already holds. Three remain, and each is a blocker recorded
+    /// in `docs/palw-qwen25-class-phase0.md` rather than something to route around:
+    ///
+    /// * **pre/0, the embedding gather** — `Base0Op::Embed` needs one input row and the pre table
+    ///   has no upstream to name. Adjudicating a real gather needs the TOKEN ID, which is not a
+    ///   step input and is not in the job context (only `prompt_token_ids_hash` is).
+    /// * **attn/5 and attn/7, the attention matmuls** — their second operand is the K or V cache
+    ///   series, and `canonical_input_leaves` answers `None` for those sentinels: "KV /
+    ///   checkpoint arms: registration-opaque today". A `None` there is `Unadjudicable` at the
+    ///   first dispute whatever the kernel can compute, so the kernel fix alone does not reach
+    ///   them.
+    ///
+    /// This test asserts the CURRENT truth so the state is measured rather than believed. When
+    /// the resolver learns the KV series it must be rewritten to expect zero refusals — the
+    /// number is the point, not the list.
     #[test]
-    fn g5_the_attention_matmuls_are_not_adjudicable_and_coverage_does_not_notice() {
+    fn the_servability_gate_names_exactly_what_is_still_unadjudicable() {
+        use crate::palw_catalog_coverage::verify_profile_coverage_v1;
+        use crate::palw_step_refute::kernel_can_serve_node_v1;
         let p = base0_profile_v1(geometry()).unwrap();
-        let catalogued = crate::palw_step_refute::catalogued_kernel_ids_v1();
 
-        let matmul = kernel_semantics_id_v1(KDESC_BASE0_MATMUL);
-        let unservable: Vec<usize> = p
-            .attn_nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.kernel_semantics_id == matmul)
-            .filter(|(_, n)| {
-                // Either shape the BASE-0 matmul refuses: no registered weight to multiply by,
-                // or a width it will not derive.
-                n.weight_name.is_empty() || matches!(n.out_len, PalwStepOutLenV1::KvScaled { .. })
-            })
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(unservable, vec![5, 7], "the scores matmul and the P.V matmul, and only those");
-
-        // Both name a CATALOGUED kernel, which is why the gate is happy.
-        for slot in &unservable {
-            assert!(catalogued.contains(&p.attn_nodes[*slot].kernel_semantics_id));
+        let mut refused: Vec<(&str, usize)> = Vec::new();
+        for (name, nodes) in [("pre", &p.pre_nodes), ("gdn", &p.gdn_nodes), ("attn", &p.attn_nodes), ("post", &p.post_nodes)] {
+            for (slot, node) in nodes.iter().enumerate() {
+                if kernel_can_serve_node_v1(node, name == "pre").is_err() {
+                    refused.push((name, slot));
+                }
+            }
         }
-        assert!(
-            p.attn_nodes[5].weight_name.is_empty() && matches!(p.attn_nodes[5].out_len, PalwStepOutLenV1::KvScaled { .. }),
-            "the scores node hits both refusals at once"
+        assert_eq!(
+            refused,
+            vec![("pre", 0), ("attn", 5), ("attn", 7)],
+            "the embedding gather and the two attention matmuls — and nothing else, so the other 18 nodes really are servable"
         );
-        assert!(p.attn_nodes[7].weight_name.is_empty(), "and P.V hits the operand one");
+        // Which means the profile as a whole is refused, and the refusal names a node.
+        assert!(matches!(
+            verify_profile_coverage_v1(&p),
+            Err(crate::palw_catalog_coverage::PalwCoverageError::NodeNotServable { .. })
+        ));
+
+        // The two closed halves, asserted directly so a regression in either is visible here:
+        // a weightless matmul with a second row is servable, and a kv-scaled one is too.
+        let mut activation_matmul = p.attn_nodes[5].clone();
+        activation_matmul.input_refs = vec![4, 3];
+        kernel_can_serve_node_v1(&activation_matmul, false).expect("an activation x activation matmul is servable now");
+        assert!(matches!(activation_matmul.out_len, PalwStepOutLenV1::KvScaled { .. }), "and at a kv-scaled width");
+
+        // And the shapes it refuses, each for its own stated reason.
+        let mut orphan = activation_matmul.clone();
+        orphan.input_refs = vec![4];
+        assert!(kernel_can_serve_node_v1(&orphan, false).is_err(), "a weightless matmul with one input has nothing to multiply");
+        let mut oracle_kv = p.attn_nodes[8].clone();
+        oracle_kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 1 };
+        assert!(kernel_can_serve_node_v1(&oracle_kv, false).is_err(), "a kv-scaled weight matmul names no matrix the oracle holds");
     }
 
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0

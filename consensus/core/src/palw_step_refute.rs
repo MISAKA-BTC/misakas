@@ -193,6 +193,95 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_BASE0_EMBED, KernelProgram::Base0(Base0Op::Embed)),
 ];
 
+/// **Whether this build's adjudicator can serve THIS node's operand shape (G5).**
+///
+/// The coverage gate compared kernel ids: "is this id in the catalog". That is a weaker question
+/// than the one it promises to answer, because a kernel serves a SHAPE — a matmul needs something
+/// to multiply by, a two-operand elementwise op needs two rows — and a node can name a
+/// catalogued id while asking for a shape nothing can produce. A class was certifiable at "100%
+/// coverage" with steps that could never be recomputed, which is the failure the gate exists to
+/// prevent.
+///
+/// So the adjudicator states, next to the code that does the serving, which node shapes it can
+/// serve. Anything it cannot is a registration-time refusal rather than a dispute-time
+/// `Unadjudicable`.
+pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_is_pre: bool) -> Result<(), &'static str> {
+    use crate::palw_step::PalwStepOutLenV1;
+    let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {
+        return Err("no program in this build resolves the node's kernel id");
+    };
+
+    // **Can the canonical INPUT SET be built for this node at all?**
+    //
+    // Serving a shape is half the question. The other half is whether
+    // `canonical_input_leaves` can name the leaves a challenger must open — and it answers
+    // `None` for every KV and checkpoint sentinel ("registration-opaque today"), and for
+    // `LAYER_IN` in the pre table, which has no upstream. A `None` there is `Unadjudicable` at
+    // the first dispute no matter what the kernel can compute, so a node that asks for one is a
+    // node no court can reach.
+    for r in &node.input_refs {
+        if *r >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+            if *r != crate::palw_step::PALW_STEP_INPUT_LAYER_IN {
+                return Err("the KV and checkpoint input sentinels are registration-opaque: canonical_input_leaves cannot name their leaves");
+            }
+            if table_is_pre {
+                return Err("the pre table has no upstream, so LAYER_IN names nothing there");
+            }
+        }
+    }
+    let inputs = node.input_refs.len();
+    match program {
+        // Two operand sources, and exactly two: a registered weight, or a second opened row.
+        // A node with neither has nothing to multiply by; one with both would have two answers.
+        KernelProgram::Base0(Base0Op::MatMul) => {
+            if node.weight_name.is_empty() {
+                if inputs < 2 {
+                    return Err("a weightless matmul must name a second input row to multiply by");
+                }
+            } else if matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }) {
+                return Err("a registered weight has a fixed width; a kv-scaled one names no matrix the oracle holds");
+            }
+            Ok(())
+        }
+        // The ops whose second operand is a registration artifact: they need a name, and the
+        // oracle serves a fixed width.
+        KernelProgram::Base0(Base0Op::Requantize | Base0Op::Rope | Base0Op::Rescale) | KernelProgram::RmsNormFused => {
+            if node.weight_name.is_empty() {
+                return Err("this kernel resolves its parameters through the weight oracle and the node names none");
+            }
+            Ok(())
+        }
+        // Two opened rows, no weight.
+        KernelProgram::Base0(Base0Op::MulElem | Base0Op::AddElem) | KernelProgram::Swiglu => {
+            if inputs < 2 {
+                return Err("a two-operand elementwise kernel needs two input rows");
+            }
+            Ok(())
+        }
+        // One opened row.
+        KernelProgram::Base0(
+            Base0Op::RmsNorm | Base0Op::Softmax | Base0Op::Silu | Base0Op::Embed,
+        )
+        | KernelProgram::L2Norm
+        | KernelProgram::SigmoidGlibcFma
+        | KernelProgram::SoftplusGlibcFma => {
+            if inputs < 1 {
+                return Err("a unary kernel needs one input row");
+            }
+            Ok(())
+        }
+        // The GDN core reads its five wiring rows per prior position; the profile's own
+        // `canonical_input_leaves` builds that set, so the only thing to check here is that the
+        // node declares wiring at all.
+        KernelProgram::GdnCore { .. } => {
+            if inputs < 5 {
+                return Err("the gated-delta-net core needs its five wiring inputs");
+            }
+            Ok(())
+        }
+    }
+}
+
 fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
     KERNEL_CATALOG.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
 }
@@ -214,6 +303,7 @@ fn base0_row(
     profile: &PalwShapeProfileV3,
     inputs: &[Vec<u32>],
     weights: &dyn PalwWeightOracleV1,
+    kv_len: u64,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_ops as ops;
     let need = |n: usize| -> Result<(), PalwStepRefuteError> {
@@ -300,27 +390,59 @@ fn base0_row(
             if x.is_empty() {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul input row is empty"));
             }
+            // The width. A `KvScaled` node is `multiplier x kv_len(position)` — the caller
+            // derives that length from the coordinate and passes it, so the old refusal ("the
+            // adjudicator does not hold it here") no longer describes anything.
             let out_dim = match node.out_len {
                 crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as usize,
-                // The kv-scaled width needs the true kv length of THIS step, which the adjudicator
-                // does not hold here. Refusing to guess is the fail-closed answer.
-                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return Err(PalwStepRefuteError::Unadjudicable),
+                crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => {
+                    let n = (multiplier as u64).checked_mul(kv_len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                    usize::try_from(n).map_err(|_| PalwStepRefuteError::Unadjudicable)?
+                }
             };
-            let wanted = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
-            let row = weights
-                .weight_row(
-                    node.weight_name.as_str(),
-                    layer,
-                    0,
-                    u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
-                )
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
-            // The oracle served a different amount than the declared shape needs: the class's
-            // registration and its weights disagree, which this court cannot resolve either.
-            if row.len() != wanted {
-                return Err(PalwStepRefuteError::Unadjudicable);
+            if out_dim == 0 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul output width is zero"));
             }
-            let w: Vec<i8> = row.iter().map(|b| *b as i8).collect();
+            let wanted = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+
+            // **The second operand: a registered weight, or a second opened row (G5).**
+            //
+            // ADR-0040 Decision D defines `MatMulQuant` as `i32 acc = Sum(int8 x int8)`, exact,
+            // and says nothing about one side being a weight. The adjudicator required one, so
+            // attention — where Q.K^T multiplies an activation by the K cache and P.V multiplies
+            // probabilities by the V cache — was structurally unadjudicable, and a profile
+            // declaring those nodes passed the coverage gate anyway because that gate compares
+            // kernel ids and never asks what a kernel can serve.
+            //
+            // A node that names a weight reads the oracle; a node that names none reads its
+            // SECOND canonical input, which the leg has already opened and the Merkle path has
+            // already bound. There is no third case: `kernel_can_serve_node_v1` refuses one at
+            // registration, so an unadjudicable class cannot be certified.
+            let w: Vec<i8> = if node.weight_name.is_empty() {
+                need(2)?;
+                let operand = as_i8(&inputs[1])?;
+                // The opened row must be exactly the matrix the declared shape needs. A shorter
+                // one is a producer that committed a different graph, not a challenger's fault.
+                if operand.len() != wanted {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul operand row is not out_dim x in_dim"));
+                }
+                operand
+            } else {
+                let row = weights
+                    .weight_row(
+                        node.weight_name.as_str(),
+                        layer,
+                        0,
+                        u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
+                    )
+                    .ok_or(PalwStepRefuteError::Unadjudicable)?;
+                // The oracle served a different amount than the declared shape needs: the class's
+                // registration and its weights disagree, which this court cannot resolve either.
+                if row.len() != wanted {
+                    return Err(PalwStepRefuteError::Unadjudicable);
+                }
+                row.iter().map(|b| *b as i8).collect()
+            };
             Ok(out(ops::matmul_quant(&w, &x, out_dim).map_err(shape)?))
         }
         Base0Op::Requantize | Base0Op::Rope => {
@@ -621,7 +743,16 @@ pub fn check_execution_step_refutation_v1(
         }
         inputs.push(row);
     }
-    let recomputed_row = run_program(program, node, layer, &binding.shape_profile, &inputs, weights)?;
+    // The TRUE kv length of the challenged position — never the padded cache length (ADR-0030
+    // Fact 17). Prefill position `p` sees `p + 1` keys; decode call `c` sees `P + c`. The same
+    // derivation `canonical_tile_values` uses, so the width the adjudicator recomputes at is the
+    // width the leg committed at.
+    let kv_len = if out_coord.call_index == 0 {
+        out_coord.position as u64 + 1
+    } else {
+        binding.job_context.declared_prefill_tokens as u64 + out_coord.call_index as u64
+    };
+    let recomputed_row = run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len)?;
 
     // 4) Compare the challenged tile's slice, exact bits.
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
@@ -660,9 +791,13 @@ fn run_program(
     profile: &PalwShapeProfileV3,
     inputs: &[Vec<u32>],
     weights: &dyn PalwWeightOracleV1,
+    // The TRUE kv length of the challenged position (G5). The adjudicator used to refuse every
+    // `KvScaled` node for not holding this, while its own caller derives it from the coordinate
+    // it already has — so attention was unadjudicable for want of a value one frame up.
+    kv_len: u64,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     match program {
-        KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights),
+        KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
             Ok(l2_norm_row(x, profile.l2_eps_bits))
@@ -956,7 +1091,7 @@ pub(crate) mod tests {
         // A class registered with a large epsilon must be adjudicated with THAT epsilon.
         let mut big = profile();
         big.base0_rms_eps_q = 1 << 30;
-        let got = base0_row(Base0Op::RmsNorm, &node, Some(0), &big, &input, &NoWeights).expect("adjudicable");
+        let got = base0_row(Base0Op::RmsNorm, &node, Some(0), &big, &input, &NoWeights, 1).expect("adjudicable");
         let want: Vec<u32> = crate::palw_base0_ops::rms_norm(&x, 1 << 30).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got, want, "the registered epsilon must be the one used");
 
@@ -986,7 +1121,7 @@ pub(crate) mod tests {
         // One per-tensor (multiplier, shift): a gain of 2^8 at shift 23.
         let mut row = i32::MAX.to_le_bytes().to_vec();
         row.push(23);
-        let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row)).expect("adjudicable");
+        let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1).expect("adjudicable");
         let want: Vec<u32> =
             crate::palw_base0_ops::rescale_row(&acc, crate::palw_base0_ops::ScaleParams { multiplier: i32::MAX, shift: 23 })
                 .into_iter()
@@ -1001,7 +1136,7 @@ pub(crate) mod tests {
             row.push(bad);
             assert!(
                 matches!(
-                    base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row)),
+                    base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1),
                     Err(PalwStepRefuteError::InputSetNotCanonical(_))
                 ),
                 "shift {bad} is outside the 0..=62 domain and must be refused"
@@ -1029,7 +1164,7 @@ pub(crate) mod tests {
         // 3 output rows × 4 inputs = 12 weight bytes.
         let w: Vec<i8> = (1..=12i8).collect();
         let row: Vec<u8> = w.iter().map(|v| *v as u8).collect();
-        let got = base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(row)).expect("adjudicable");
+        let got = base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(row), 1).expect("adjudicable");
         let want: Vec<u32> = crate::palw_base0_ops::matmul_quant(&w, &x, 3).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got.len(), 3, "the full declared output row is recomputed, not one element");
         assert_eq!(got, want);
@@ -1038,7 +1173,7 @@ pub(crate) mod tests {
         // valid block: it is a class/registration disagreement this court cannot resolve.
         let short: Vec<u8> = w[..4].iter().map(|v| *v as u8).collect();
         assert_eq!(
-            base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(short)),
+            base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(short), 1),
             Err(PalwStepRefuteError::Unadjudicable),
             "a short weight block is unadjudicable, never the challenger's fault"
         );
@@ -1048,7 +1183,7 @@ pub(crate) mod tests {
         kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 2 };
         let full: Vec<u8> = w.iter().map(|v| *v as u8).collect();
         assert_eq!(
-            base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full)),
+            base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full), 1),
             Err(PalwStepRefuteError::Unadjudicable)
         );
     }
@@ -1073,7 +1208,7 @@ pub(crate) mod tests {
             ok_row.extend_from_slice(&i32::MAX.to_le_bytes());
             ok_row.push(10);
         }
-        let got = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(ok_row));
+        let got = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(ok_row), 1);
         assert!(got.is_ok(), "an in-domain shift must still be recomputed: {got:?}");
 
         // Out-of-domain shifts are refused as non-canonical — including 32, the first one past the
@@ -1086,7 +1221,7 @@ pub(crate) mod tests {
                 // first, or a malformed shift hides behind three well-formed neighbours.
                 row.push(if channel == 3 { bad } else { 10 });
             }
-            let refused = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(row));
+            let refused = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(row), 1);
             assert!(
                 matches!(refused, Err(PalwStepRefuteError::InputSetNotCanonical(_))),
                 "shift {bad} in the last channel must be refused as non-canonical, got {refused:?}"

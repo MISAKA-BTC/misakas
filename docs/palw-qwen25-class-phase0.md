@@ -162,10 +162,48 @@ restriction is the adjudicator's. The information the refusal claims to lack is 
 frame up: the caller holds the coordinate, and `canonical_tile_values` already derives the kv
 length from it.
 
-*What closing it needs:* (a) `MatMul` takes its second operand from `inputs[1]` when the node
-names no weight, (b) the kv length reaches `base0_row`, and (c) a profile-level check that a
-`MatMulQuant` node is one of those two shapes and not a third, so an unadjudicable profile is
-refused at registration instead of at the first dispute.
+*What closing it needs, and what turned out to be underneath.* (a) and (b) landed: `MatMul`
+takes its second operand from `inputs[1]` when the node names no weight, and the kv length
+reaches `base0_row` from the coordinate the caller already holds. (c) landed as
+`kernel_can_serve_node_v1` + `verify_profile_coverage_v1` — coverage now asks the adjudicator,
+node by node, whether it can serve that node's shape.
+
+**And that gate immediately found that (a) and (b) do not reach attention.**
+`canonical_input_leaves` answers `None` for `PALW_STEP_INPUT_KV_K` and `_KV_V` — its own comment
+says "KV / checkpoint arms: registration-opaque today" — and a `None` there is `Unadjudicable`
+before any kernel runs. So the attention nodes are unadjudicable for a second, independent
+reason: the court cannot NAME the leaves a challenger would have to open.
+
+Measured on the shipped BASE-0 profile, the gate refuses four of its twenty-one nodes:
+
+| node | reason | status |
+| --- | --- | --- |
+| `attn/9` | a `Requantize` kernel with no registered parameters | **authoring bug, fixed** |
+| `attn/5` (Q·Kᵀ) | KV sentinel is registration-opaque | **open — G5c** |
+| `attn/7` (P·V) | KV sentinel is registration-opaque | **open — G5c** |
+| `pre/0` (embedding) | `Embed` needs one input row; the pre table has no upstream | **open — G5d** |
+
+### G5c — `canonical_input_leaves` cannot name the KV series
+
+*Category:* **実装不足**. The leg already commits a KV aux series (`push_kv_chunk`,
+`kv_aux_leaf_count`, `PalwKvChunkLeafV1`), so the leaves exist; the resolver just does not map
+the sentinels onto them. Closing it means defining, for a given `(call, position, node)`, exactly
+which cache leaves that step reads — and getting it wrong in the permissive direction convicts
+honest producers, so it is not a place to guess.
+
+### G5d — the embedding gather has no adjudicable input
+
+*Category:* **BASE-0 semantics の拡張が必要**. `Base0Op::Embed` recomputes the identity of its
+input, which is an admission that a real gather cannot be checked: doing so needs the TOKEN ID,
+which is not a step input and is not in the job context (only `prompt_token_ids_hash` is). Either
+the token ids become part of the adjudicable context, or the embedding output is defined as a
+given that no dispute may address — and that second option must be stated, because a step nobody
+can challenge is a step a producer may write freely.
+
+**Consequence for the RC floor:** the BASE-0 profile shipped 2026-08-20 is **not adjudicable as
+written**, and `verify_profile_coverage_v1` refuses it. That supersedes the previous day's status
+line. The floor needs G5c and G5d closed — or a graph that avoids both — before it can carry
+weight.
 
 ### G4 — GQA is not a gap
 
