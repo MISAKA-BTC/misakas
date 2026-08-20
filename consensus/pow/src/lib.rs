@@ -217,6 +217,12 @@ pub struct StateLayer0 {
     /// EMPTY `palw_commitment` on every network whose fence is shut, so this is `None` everywhere
     /// today and the tag path below is byte-identical to before it existed.
     pub(crate) palw_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1>,
+    /// The block's V2 attempt envelope, decoded once, when the header declares the committed-V2
+    /// algo id (ADR-0042 Decision 3a). This IS the wire carrier: `Header::palw_commitment` bytes
+    /// on an algo-6 header are a `PAV2` envelope, and the algo-6 tag arm consumes it. Decode
+    /// failure is deferred to that arm (`PalwV2AttemptMissing`) so `new()` stays total — the
+    /// pruning-proof path constructs states for peer-supplied headers before any shape gate ran.
+    pub(crate) palw_attempt_v2: Option<PalwAttemptEnvelopeV2>,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
@@ -255,6 +261,15 @@ impl StateLayer0 {
             // bind to, and admission refuses it separately. Silently binding nothing would be the
             // dangerous reading, so the tag only changes when a commitment is actually present.
             palw_commitment: kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::decode(&header.palw_commitment).ok(),
+            // Same trust posture, other family: on the committed-V2 id the field is a PAV2
+            // envelope. Decoded here once; the algo-6 arm REQUIRES it (an algo-6 header without
+            // one has no work to check) and errors rather than expects, because peer-supplied
+            // proof headers reach the finalizer before shape validation.
+            palw_attempt_v2: if header.pow_algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 {
+                PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok()
+            } else {
+                None
+            },
             pre_pow_hash_64,
             network_id: network_id.to_vec(),
             timestamp: header.timestamp,
@@ -275,6 +290,43 @@ impl StateLayer0 {
     #[inline]
     fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_TAG_MAX_BYTES]) -> Result<usize, PowLayer0Error> {
         match self.pow_algo_id {
+            // ADR-0042 Decision 3a (algo_id = 6): the tag is `Expand(commitment_root_v2)` — a
+            // cheap, total expansion of the carried attempt's identity, never an inference. The
+            // work is priced by the attempt's life-cycle (bond, admission, panel, court), not by
+            // this hash; what THIS arm guarantees is that a solved header attests exactly one
+            // attempt at exactly this position:
+            //
+            // * the envelope must be present — an algo-6 header without one has no work to check;
+            // * the carried `challenge` must equal the one this (pre_pow_hash, timestamp, nonce,
+            //   class, bond) derives. The challenge is INSIDE the identity the root expands, so
+            //   this equation is what forces a nonce move to be a new attempt (W2: one ticket,
+            //   one inference). It is asked HERE and not only in `validate_stateless_v2` so that
+            //   every path that computes PoW — the pruning-proof path included, which never
+            //   reaches stateful admission — refuses an attempt re-mounted at another position.
+            //
+            // The recompute uses the CARRIED `network_domain`: the equation pins position/class/
+            // bond to the attempt either way, cross-network replay is already refused by the
+            // Layer-0 digest's own `network_id` binding, and domain-vs-network equality is
+            // admission's stateless list (it needs the network's expected domain, which this
+            // pure finalizer deliberately does not hold).
+            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+                let envelope = self.palw_attempt_v2.as_ref().ok_or(PowLayer0Error::PalwV2AttemptMissing)?;
+                let attempt = &envelope.attempt;
+                let expected = challenge_v2(
+                    attempt.network_domain,
+                    self.pre_pow_hash_64,
+                    self.timestamp,
+                    nonce,
+                    attempt.class_id,
+                    &attempt.executor_bond,
+                );
+                if attempt.challenge != expected {
+                    return Err(PowLayer0Error::PalwV2ChallengeMismatch);
+                }
+                let tag = l1_tag_v2(commitment_root_v2(attempt));
+                buf[..PALW_ATTEMPT_V2_L1_TAG_BYTES].copy_from_slice(&tag);
+                Ok(PALW_ATTEMPT_V2_L1_TAG_BYTES)
+            }
             // Phase 4b (algo_id = 5): one deterministic Ollama inference over the same seed;
             // the tag commits to the greedy response bytes + counts. 72 bytes.
             POW_ALGO_ID_PALW_OLLAMA => {
@@ -627,8 +679,10 @@ mod tests_pq {
     /// only safe shape is a returned error the consensus wrapper maps to a failed PoW.
     #[test]
     fn layer0_unknown_algo_id_is_error_not_panic() {
-        // 0 and everything outside {1,2,3,4,5} is unknown; include the type extremes.
-        for bad in [0u8, 6, 7, 42, 128, 200, 255] {
+        // 0 and everything outside {1,2,3,4,5,6} is unknown; include the type extremes. (6 left
+        // this list when its finalizer arm landed — an algo-6 header without an envelope is the
+        // NAMED error `PalwV2AttemptMissing`, covered by `palw_v2_commitment_mutation_invalidates_pow`.)
+        for bad in [0u8, 7, 42, 128, 200, 255] {
             let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
             // Build the verifier on a hash-only network to prove no PALW machinery is needed to
             // trigger (or to survive) the crash.
@@ -723,5 +777,194 @@ mod tests_pq {
             (100, true),
             "the true parentless root short-circuits to max level without running the finalizer"
         );
+    }
+
+    /// A V2 attempt whose challenge matches `(header position, nonce, class, bond)`, carried the
+    /// way a real block carries it: in `Header::palw_commitment`, PAV2 wire form.
+    fn v2_envelope_for(header: &Header, nonce: u64) -> PalwAttemptEnvelopeV2 {
+        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        let net = Hash64::from_u64_word(0x7E57_00D0);
+        let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([3u8; 64]), 1);
+        let class = Hash64::from_u64_word(0xC1A55);
+        let pph = hashing::header::pre_pow_hash_64(header);
+        let attempt = kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2 {
+            version: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
+            network_domain: net,
+            challenge: challenge_v2(net, pph, header.timestamp, nonce, class, &bond),
+            class_id: class,
+            executor_bond: bond,
+            executor_pubkey: vec![7u8; STAKE_VALIDATOR_PUBKEY_LEN],
+            operator_id: Hash64::from_u64_word(0x0E0),
+            artifact_root: Hash64::from_u64_word(0xA7),
+            trace_root: Hash64::from_u64_word(0x7A),
+            output_root: Hash64::from_u64_word(0x07),
+            pwu: 4_242,
+            trace_manifest_root: Hash64::from_u64_word(0xD0),
+            trace_chunk_count: 8,
+            trace_retention_daa: 1_000_000,
+            execution_root: Hash64::from_u64_word(0x41),
+        };
+        PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }
+    }
+
+    /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/palw-rc-threat-model.md`):
+    /// the finalizer arm, the wire carrier and this test land together, and together they make
+    /// "mutating any one bit of the commitment fails the PoW" (ADR-0042 Decision 3a) a checked
+    /// property instead of an intention.
+    ///
+    /// What "fails the PoW" means per bucket, deterministically:
+    /// * **content fields** — the Layer-0 digest MOVES (the found solution attests only the found
+    ///   attempt; at any real target a moved digest is a failed PoW with overwhelming probability,
+    ///   and asserting movement instead of a target miss keeps the test flake-free);
+    /// * **position/challenge fields, and the position itself** — the arm REFUSES outright
+    ///   (`PalwV2ChallengeMismatch`): re-mounting an attempt at another (nonce, timestamp) or
+    ///   under another class/bond is not a different digest, it is not a PoW at all;
+    /// * **a missing or undecodable envelope** — `PalwV2AttemptMissing`, never a panic, because
+    ///   the pruning-proof path reaches this code on peer input before any shape gate;
+    /// * **the signature** — the digest does NOT move. The witness is deliberately outside the
+    ///   priced identity (ADR-0042 Decision 3c); the raw-bytes block-identity rule for the field
+    ///   is retained for now, so a third party who flips a signature bit produces a DIFFERENT
+    ///   block id that dies alone at admission instead of poisoning the honest block's id — see
+    ///   the threat-model register's Decision-3c note for why 3c-as-written must not land naively.
+    #[test]
+    fn palw_v2_commitment_mutation_invalidates_pow() {
+        use kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2;
+
+        const TS: u64 = 1_700_000_000;
+        const NONCE: u64 = 7;
+        const BITS: u32 = 0x207fffff;
+        let network_id: &[u8] = b"simnet";
+
+        let mut header = dummy_header_algo(BITS, NONCE, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+        let base = v2_envelope_for(&header, NONCE);
+        header.palw_commitment = base.encode_wire();
+
+        let state = StateLayer0::new(&header, network_id);
+        let digest0 = state.calculate_pow_layer0(NONCE).expect("a carried, position-consistent envelope computes a digest");
+        assert!(state.check_pow_layer0(NONCE).unwrap().0, "the solved header passes at its target");
+
+        let digest_for = |envelope: &PalwAttemptEnvelopeV2| {
+            let mut h = dummy_header_algo(BITS, NONCE, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+            h.palw_commitment = envelope.encode_wire();
+            StateLayer0::new(&h, network_id).calculate_pow_layer0(NONCE)
+        };
+
+        // Exhaustive destructuring: adding a field to the attempt breaks THIS LINE until the new
+        // field is placed in one of the two buckets below — the drift that re-opened P0-1 in
+        // PR-06 (identity-visible, PoW-invisible fields) cannot recur silently.
+        let PalwAttemptUnsignedV2 {
+            version: _,
+            network_domain: _,
+            challenge: _,
+            class_id: _,
+            executor_bond: _,
+            executor_pubkey: _,
+            operator_id: _,
+            artifact_root: _,
+            trace_root: _,
+            output_root: _,
+            pwu: _,
+            trace_manifest_root: _,
+            trace_chunk_count: _,
+            trace_retention_daa: _,
+            execution_root: _,
+        } = base.attempt.clone();
+
+        // Bucket 1 — content fields: every one moves the digest, so the found solution does not
+        // transfer to any sibling attempt.
+        let content: Vec<(&str, Box<dyn Fn(&mut PalwAttemptUnsignedV2)>)> = vec![
+            ("version", Box::new(|a| a.version = a.version.wrapping_add(1))),
+            ("executor_pubkey", Box::new(|a| a.executor_pubkey[0] ^= 0xFF)),
+            ("operator_id", Box::new(|a| a.operator_id = Hash64::from_u64_word(0x0FF1CE))),
+            ("artifact_root", Box::new(|a| a.artifact_root = Hash64::from_u64_word(0xA27))),
+            ("trace_root", Box::new(|a| a.trace_root = Hash64::from_u64_word(0xDEAD))),
+            ("output_root", Box::new(|a| a.output_root = Hash64::from_u64_word(0xBEEF))),
+            ("pwu", Box::new(|a| a.pwu += 1)),
+            ("trace_manifest_root", Box::new(|a| a.trace_manifest_root = Hash64::from_u64_word(0x1AA1))),
+            ("trace_chunk_count", Box::new(|a| a.trace_chunk_count += 1)),
+            ("trace_retention_daa", Box::new(|a| a.trace_retention_daa += 1)),
+            ("execution_root", Box::new(|a| a.execution_root = Hash64::from_u64_word(0xE7))),
+        ];
+        for (field, mutate) in content {
+            let mut env = base.clone();
+            mutate(&mut env.attempt);
+            assert_ne!(env.attempt, base.attempt, "the {field} mutation must actually change the attempt");
+            let digest = digest_for(&env).unwrap_or_else(|e| panic!("content field {field} must still compute, got {e}"));
+            assert_ne!(digest, digest0, "mutating {field} left the Layer-0 digest unchanged — the solution transferred");
+        }
+
+        // Bucket 2 — challenge-equation fields: the arm itself refuses, on every path that
+        // computes PoW, stateful admission reached or not.
+        let positional: Vec<(&str, Box<dyn Fn(&mut PalwAttemptUnsignedV2)>)> = vec![
+            ("network_domain", Box::new(|a| a.network_domain = Hash64::from_u64_word(0x9999))),
+            ("challenge", Box::new(|a| a.challenge = Hash64::from_u64_word(0x1234))),
+            ("class_id", Box::new(|a| a.class_id = Hash64::from_u64_word(0xC2))),
+            ("executor_bond", Box::new(|a| a.executor_bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([9u8; 64]), 2))),
+        ];
+        for (field, mutate) in positional {
+            let mut env = base.clone();
+            mutate(&mut env.attempt);
+            assert_eq!(
+                digest_for(&env),
+                Err(PowLayer0Error::PalwV2ChallengeMismatch),
+                "mutating {field} must be refused by the challenge equation, not left to a digest mismatch"
+            );
+        }
+
+        // The position itself: the same envelope re-mounted at another nonce or timestamp is not
+        // a cheaper try, it is not a PoW at all. (One envelope = one ticket, W2.)
+        assert_eq!(state.calculate_pow_layer0(NONCE + 1), Err(PowLayer0Error::PalwV2ChallengeMismatch));
+        let mut moved = dummy_header_algo(BITS, NONCE, TS + 1, POW_ALGO_ID_PALW_COMMITTED_V2);
+        moved.palw_commitment = base.encode_wire();
+        assert_eq!(
+            StateLayer0::new(&moved, network_id).calculate_pow_layer0(NONCE),
+            Err(PowLayer0Error::PalwV2ChallengeMismatch)
+        );
+
+        // Presence: an algo-6 header with an empty, garbage or wrong-family carrier has no work
+        // to check — a named error and a failed proof header, never a panic.
+        for (what, bytes) in [
+            ("empty", Vec::new()),
+            ("garbage", vec![0xAB; 64]),
+            ("wrong family (PBC1 magic)", {
+                let mut b = b"PBC1".to_vec();
+                b.extend_from_slice(&base.encode_wire()[4..]);
+                b
+            }),
+        ] {
+            let mut h = dummy_header_algo(BITS, NONCE, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+            h.palw_commitment = bytes;
+            assert_eq!(
+                StateLayer0::new(&h, network_id).calculate_pow_layer0(NONCE),
+                Err(PowLayer0Error::PalwV2AttemptMissing),
+                "carrier case: {what}"
+            );
+            assert_eq!(
+                calc_block_level_check_pow_layer0(&h, network_id, 100),
+                (0, false),
+                "carrier case {what} must be a failed PoW at level 0, never a panic"
+            );
+        }
+
+        // The signature is a witness, not identity: flipping it moves NEITHER the digest (it is
+        // outside `attempt_id`, Decision 3c) — so one inference cannot be re-priced by re-signing —
+        // nor the PoW verdict. Its block-identity handling is the register's Decision-3c note.
+        let mut resigned = base.clone();
+        resigned.signature[0] ^= 0xFF;
+        assert_eq!(
+            digest_for(&resigned).expect("a re-signed envelope still computes"),
+            digest0,
+            "the signature must stay outside the priced identity"
+        );
+
+        // And the honest move: a NEW nonce with a re-derived envelope is a new ticket with a new
+        // digest — the W2 cost model in one assertion.
+        let mut fresh_header = dummy_header_algo(BITS, NONCE + 1, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+        let fresh = v2_envelope_for(&fresh_header, NONCE + 1);
+        fresh_header.palw_commitment = fresh.encode_wire();
+        let fresh_digest = StateLayer0::new(&fresh_header, network_id)
+            .calculate_pow_layer0(NONCE + 1)
+            .expect("a re-derived envelope at the new position computes");
+        assert_ne!(fresh_digest, digest0, "a new ticket is a new digest");
     }
 }

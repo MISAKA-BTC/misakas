@@ -56,6 +56,7 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT,
     PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID,
     PALW_ATTEMPT_V2_DOMAIN_L1_TAG,
+    PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET,
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
 
@@ -193,6 +194,28 @@ pub fn attempt_id_v2(attempt: &PalwAttemptUnsignedV2) -> Hash64 {
     state.update(&(bytes.len() as u64).to_le_bytes());
     state.update(&bytes);
     finish(state)
+}
+
+pub const PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET: &[u8] = b"misaka-palw/attempt-v2/class-ticket/v1";
+
+/// The attempt's ticket in its CLASS's lottery (ADR-0039's per-class DAA: "ticket, not hash").
+///
+/// The network-wide Layer-0 target decides whether a header is a block at all; this decides
+/// whether it is a block of THIS class, against the target the per-class retarget maintains. The
+/// two are separate difficulties on purpose — that is the whole of what "per-class DAA" means —
+/// and until this existed the retarget computed a target every epoch that nothing ever compared
+/// anything to (audit H1's second half).
+///
+/// Derived from the commitment root, which is `H(attempt_id)`, so the ticket is a function of the
+/// whole attempt and cannot be ground without a new attempt — which is a new nonce, which is new
+/// proof of work. Domain-separated so it is not the L1 tag wearing another name.
+pub fn class_ticket_v2(attempt: &PalwAttemptUnsignedV2) -> u128 {
+    let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET);
+    state.update(commitment_root_v2(attempt).as_byte_slice());
+    let digest = finish(state);
+    let mut le = [0u8; 16];
+    le.copy_from_slice(&digest.as_byte_slice()[..16]);
+    u128::from_le_bytes(le)
 }
 
 /// `Expand(commitment_root)` — the 200 tag bytes the Layer-0 finalizer consumes **in place of** an

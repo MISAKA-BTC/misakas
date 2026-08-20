@@ -105,6 +105,10 @@ pub enum PalwAdmissionV2Error {
     BondKeyMismatch,
     #[error("the carried operator id is not the bond registration's operator id")]
     OperatorMismatch,
+    #[error("class {0} has no target at this chain point — a class with no difficulty admits everything or nothing")]
+    ClassTargetMissing(Hash64),
+    #[error("the attempt's class ticket {ticket} is above class {class_id}'s target {target}")]
+    ClassTicketAboveTarget { class_id: Hash64, ticket: u128, target: u128 },
     #[error("class {0} does not exist at the candidate chain point")]
     ClassMissing(Hash64),
     #[error("class {0} is frozen and admits no new work")]
@@ -192,6 +196,17 @@ pub fn check_palw_attempt_admission_v2(
     let would_produce = produced.checked_add(claimed).ok_or(PalwAdmissionV2Error::Overflow("epoch production"))?;
     if would_produce > budget {
         return Err(PalwAdmissionV2Error::EpochBudgetExceeded { class_id: attempt.class_id, produced, claimed, budget });
+    }
+
+    // 6b. The CLASS lottery (ADR-0039's per-class DAA). The network target decided this header
+    //     is a block; this decides it is a block of this class, against the target the retarget
+    //     maintains. Without it the per-class retarget was arithmetic nothing consumed — it ran
+    //     every epoch, moved a number, and no admission, weight or selection ever read it (audit
+    //     H1's second half). A class target with no reader is a difficulty that does not exist.
+    let target = state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
+    let ticket = crate::palw_attempt_v2::class_ticket_v2(attempt);
+    if ticket > target.target {
+        return Err(PalwAdmissionV2Error::ClassTicketAboveTarget { class_id: attempt.class_id, ticket, target: target.target });
     }
 
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim
@@ -309,7 +324,9 @@ mod tests {
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
-                initial_target: u128::MAX / 2,
+                // Every ticket passes, so the OTHER nine items are what these tests measure.
+                // The class lottery has its own test below, where the target is the variable.
+                initial_target: u128::MAX,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -431,6 +448,64 @@ mod tests {
     /// **P0-10.** Claims reserve `pwu × slash_value` against `collateral × ratio`; the claim that
     /// would cross the ceiling is refused, and a claim RESOLVING re-opens exactly the headroom it
     /// held. Ceiling here: 1000 sompi × 500‰ = 500; each 50-pwu claim reserves 250.
+    /// **Audit H1's second half: the per-class target has a reader now.**
+    ///
+    /// The retarget ran at every epoch boundary, moved a number, and nothing on the V2 lane ever
+    /// compared anything to it — so "per-class DAA" was arithmetic with no lottery behind it, and
+    /// a strangled target produced no symptom until it hit zero. Admission draws the class ticket
+    /// from the attempt's own commitment root, so it is a function of the whole attempt and
+    /// cannot be ground without new proof of work.
+    #[test]
+    fn the_class_target_is_what_admits_a_block_of_that_class() {
+        let sp = state_params();
+        let ap = admission_params();
+
+        // A target of MAX admits every ticket; one below the attempt's ticket admits none.
+        let env = attempt(10, 1);
+        let ticket = crate::palw_attempt_v2::class_ticket_v2(&env.attempt);
+        assert!(ticket > 0, "a zero ticket would make the check vacuous");
+
+        let state_with = |target: u128| {
+            let objects = vec![
+                PalwConsensusObjectV2::ClassRegistered {
+                    class_id: h64(1),
+                    artifact_root: h64(11),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                    initial_target: target,
+                },
+                PalwConsensusObjectV2::BondRegistered {
+                    bond: PalwBondKeyV2(bond_outpoint(1)),
+                    pubkey: vec![7; 4],
+                    operator_pubkey: op_key(0x21),
+                    collateral: 1_000_000,
+                },
+            ];
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap().0
+        };
+
+        // Exactly at the target admits — the comparison is inclusive, so a target is reachable
+        // rather than asymptotic.
+        let at = state_with(ticket);
+        check_palw_attempt_admission_v2(&at, &sp, &ap, &ctx(2, 101, 2), &env).expect("a ticket equal to the target admits");
+
+        // One below refuses.
+        let under = state_with(ticket - 1);
+        let err = check_palw_attempt_admission_v2(&under, &sp, &ap, &ctx(2, 101, 2), &env)
+            .expect_err("a ticket above the target is not a block of this class");
+        assert!(matches!(err, PalwAdmissionV2Error::ClassTicketAboveTarget { .. }), "got {err:?}");
+
+        // The ticket is a function of the WHOLE attempt: a different nonce is a different ticket,
+        // which is why re-rolling it costs a new proof of work rather than a re-hash.
+        let other = attempt(10, 2);
+        assert_ne!(crate::palw_attempt_v2::class_ticket_v2(&other.attempt), ticket, "the ticket follows the attempt");
+        // …and it is not the L1 tag under another name.
+        let tag = crate::palw_attempt_v2::l1_tag_v2(crate::palw_attempt_v2::commitment_root_v2(&env.attempt));
+        let mut tag_le = [0u8; 16];
+        tag_le.copy_from_slice(&tag[..16]);
+        assert_ne!(u128::from_le_bytes(tag_le), ticket, "the class lottery is domain-separated from the PoW tag");
+    }
+
     #[test]
     fn palw_v2_bond_exposure_ceiling_enforced() {
         let state = base_state();

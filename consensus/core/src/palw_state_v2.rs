@@ -3427,6 +3427,85 @@ mod tests {
         assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
     }
 
+    /// **Audit C5's "free panel re-roll", measured rather than assumed.**
+    ///
+    /// The finding was that a producer who dislikes its drawn panel abandons the claim at
+    /// `BindTimeout` and re-attempts, "for free". Three costs say otherwise, and this pins all
+    /// three so nobody has to re-derive them from the finding's wording:
+    ///
+    /// 1. **A claim is one block.** `accepted_block` is the carrying block and a duplicate
+    ///    `attempt_id` is refused, so a re-roll is another block — another solved PoW. It is the
+    ///    most expensive thing on the network.
+    /// 2. **The abandoned block earns nothing.** The void takes its pwu out of both weights
+    ///    permanently, and every void reason forfeits the reward escrow
+    ///    (`palw_reward_v2::palw_reward_status_v2`).
+    /// 3. **The class's epoch budget is spent anyway.** Production is counted at acceptance and
+    ///    a void never gives it back, so re-rolling burns the class's own admission headroom.
+    ///
+    /// And there is nothing to shop for at mining time: the panel needs an anchor that does not
+    /// exist yet (`anchor_delay > 0` is enforced precisely so "the attempt's own block cannot
+    /// seed its panel"). What remains is a CHOICE WITH A PRICE — decline to bind and forfeit a
+    /// block — not a free re-roll. What is genuinely open, and stated in the register rather than
+    /// papered over here: binding is permissionless but nobody is paid to bind someone else's
+    /// claim, so in practice the producer decides.
+    #[test]
+    fn abandoning_a_panel_costs_a_block_its_reward_and_its_epoch_budget() {
+        let p = params();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let produced_after_first = s2.epoch_counter(&h64(1)).unwrap().produced_blocks;
+        assert_eq!(produced_after_first, 1);
+
+        // (1) The same attempt cannot be re-submitted: one claim, one block.
+        let again = apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[], Some(&env));
+        assert!(matches!(again, Err(PalwStateV2Error::DuplicateClaim(_))), "got {again:?}");
+
+        // Let the bind window lapse — the producer declining to bind a panel it dislikes.
+        let (voided, _) = apply(&s2, &p, &ctx(3, 200, 3), &[], None);
+        assert!(matches!(
+            voided.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+
+        // (2) The block earns nothing, in either weight, and its reward is forfeit.
+        assert_eq!(voided.safe_weight(), 0);
+        assert_eq!(voided.bounded_immature(), 0);
+        assert_eq!(
+            crate::palw_reward_v2::palw_reward_status_v2(&voided.claim(&claim_id).unwrap().phase),
+            crate::palw_reward_v2::PalwRewardStatusV2::Forfeited,
+            "an abandoned claim's carve never enters circulation"
+        );
+
+        // (3) The epoch budget was spent at acceptance and the void does not refund it, so the
+        // re-roll competes with the producer's own future claims in the same epoch.
+        assert_eq!(
+            voided.epoch_counter(&h64(1)).unwrap().produced_blocks,
+            produced_after_first,
+            "voiding releases exposure, never production"
+        );
+
+        // (4) A claim cannot be re-bound: one panel per claim, so the only re-roll is a new block.
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (bound, _) = apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: seats.clone() }],
+            None,
+        );
+        let rebind = apply_palw_transition_v2(
+            &bound,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(78), seats }],
+            None,
+        );
+        assert!(matches!(rebind, Err(PalwStateV2Error::WrongPhase { .. })), "got {rebind:?}");
+    }
+
     #[test]
     fn class_daa_params_refuse_broken_tables() {
         assert!(PalwClassDaaV2Params::new([(h64(1), 0u16)].into_iter().collect(), 4).is_err(), "zero share");

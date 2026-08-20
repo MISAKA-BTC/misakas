@@ -31,6 +31,7 @@ use crate::palw_panel_v2::PalwPanelParamsV2;
 use crate::palw_reward_v2::PalwRewardParamsV2;
 use crate::palw_state_v2::{PalwStateParamsV2, PalwStateV2Error};
 use blake2b_simd::Params as Blake2bParams;
+use std::collections::BTreeSet;
 
 pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
 
@@ -257,7 +258,10 @@ impl PalwConsensusParamsV2 {
         // `check_algo_id_known` is the list of ids `kaspa_pow::StateLayer0::calculate_l1_tag`
         // actually implements. Reading it here means the mode can only demand what the binary can
         // compute: the day the V2 finalizer arm lands, this gate opens in the same commit, and
-        // until then a V2 ruleset refuses to boot instead of stalling silently.
+        // until then a V2 ruleset refuses to boot instead of stalling silently. (That day came —
+        // the algo-6 arm and its carrier landed with `palw_v2_commitment_mutation_invalidates_pow`
+        // — so this clause now passes a well-formed V2 bundle; it stays as the same tripwire for
+        // any future id a ruleset names before its arm exists.)
         crate::pow_layer0::check_algo_id_known(self.algorithm_id).map_err(|_| {
             PalwModeV2Error::Invalid(
                 "this binary has no Layer-0 finalizer for the ruleset's algorithm_id — it would accept genesis and reject every block after it",
@@ -376,6 +380,124 @@ impl PalwConsensusParamsV2 {
             .ok_or(PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
         if self.bond.withdrawal_delay_daa() <= liability {
             return Err(PalwModeV2Error::Invalid("the withdrawal delay does not outlast the liability period"));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The class catalog: the preimage behind `class_catalog_root`
+// ---------------------------------------------------------------------------------------------
+
+/// One registered execution class, as the catalog describes it.
+///
+/// The bundle commits to a ROOT over these; the entries themselves are a network artifact that
+/// travels with the RC genesis. Keeping them out of `PalwConsensusParamsV2` is deliberate — the
+/// ruleset id must be the same value on the RC and on mainnet, and the catalog is exactly the
+/// kind of thing that would otherwise tempt someone to differ.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassCatalogEntryV2 {
+    pub class_id: Hash64,
+    /// What `palw_artifact` openings prove against, and what an attempt's `artifact_root` must
+    /// equal (admission item 5).
+    pub artifact_root: Hash64,
+    /// Worst-case step-tree leaf count for this class — the depth the bisection ladder has to
+    /// walk. This is the quantity `PalwCourtParamsV2::max_step_leaf_count` ASSERTS; the catalog
+    /// is where it is a fact.
+    pub max_step_leaf_count: u64,
+    /// Every `kernel_semantics_id` this class's shape profile can reach at adjudication time.
+    /// `verify_catalog_coverage_v1` compares it against THIS BUILD's adjudicable catalog.
+    pub reachable_kernels: BTreeSet<Hash64>,
+}
+
+/// The registered class set, ordered and unique by class id.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassCatalogV2 {
+    entries: Vec<PalwClassCatalogEntryV2>,
+}
+
+pub const PALW_CLASS_CATALOG_V2_DOMAIN: &[u8] = b"misaka-palw/class-catalog-v2/root/v1";
+
+impl PalwClassCatalogV2 {
+    /// Ascending by class id, no duplicates, non-empty. The order is part of the root, so a
+    /// catalog that could be reordered would be a catalog with two roots.
+    pub fn new(entries: Vec<PalwClassCatalogEntryV2>) -> Result<Self, PalwModeV2Error> {
+        if entries.is_empty() {
+            return Err(PalwModeV2Error::Invalid("an empty class catalog registers nothing"));
+        }
+        if entries.windows(2).any(|w| w[0].class_id >= w[1].class_id) {
+            return Err(PalwModeV2Error::Invalid("the class catalog must be ascending and unique by class id"));
+        }
+        if entries.iter().any(|e| e.max_step_leaf_count < 2) {
+            return Err(PalwModeV2Error::Invalid("a class whose trace has fewer than two step leaves cannot be bisected"));
+        }
+        Ok(Self { entries })
+    }
+
+    pub fn entries(&self) -> &[PalwClassCatalogEntryV2] {
+        &self.entries
+    }
+
+    /// `H(count ‖ borsh(entries))` — what `PalwConsensusParamsV2::class_catalog_root` commits to.
+    pub fn root(&self) -> Hash64 {
+        let bytes = borsh::to_vec(&self.entries).expect("catalog entries are borsh-serializable");
+        let mut state = Blake2bParams::new().hash_length(64).key(PALW_CLASS_CATALOG_V2_DOMAIN).to_state();
+        state.update(&(self.entries.len() as u64).to_le_bytes());
+        state.update(&(bytes.len() as u64).to_le_bytes());
+        state.update(&bytes);
+        let mut out = [0u8; 64];
+        out.copy_from_slice(state.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+
+    /// The deepest trace any registered class can produce.
+    pub fn max_step_leaf_count(&self) -> u64 {
+        self.entries.iter().map(|e| e.max_step_leaf_count).max().expect("a catalog is non-empty by construction")
+    }
+}
+
+impl PalwConsensusParamsV2 {
+    /// **The half of Decision 1 that needs the catalog PREIMAGE**, which is why it is a separate
+    /// entry point: `validate` runs on the bundle alone and boots the node, while this runs where
+    /// the genesis artifact is loaded and the class set is actually in hand.
+    ///
+    /// Three invariants the ADR lists as boot conditions and the bundle alone cannot check
+    /// (audit H2/C1):
+    ///
+    /// * the catalog is the one the ruleset committed to — its root recomputes to
+    ///   `class_catalog_root`, so "we registered these classes" is a hash rather than a claim;
+    /// * **court coverage is 100%** for every registered class — every kernel a class can reach
+    ///   at adjudication time is one this build can actually adjudicate. Without it a class
+    ///   activates whose disputes end `Unadjudicable`, which is a class that cannot be policed;
+    /// * the court's asserted `max_step_leaf_count` covers the catalog's real worst case. This is
+    ///   what turns the last self-certified number in the bundle into a checked one: an operator
+    ///   who understates it to shrink `window_court` now contradicts the catalog its own genesis
+    ///   committed to.
+    pub fn verify_against_catalog(&self, catalog: &PalwClassCatalogV2) -> Result<(), PalwModeV2Error> {
+        if catalog.root() != self.class_catalog_root {
+            return Err(PalwModeV2Error::Invalid("the class catalog is not the one this ruleset's root commits to"));
+        }
+        if !catalog.entries().iter().any(|e| e.class_id == self.base_class_id) {
+            return Err(PalwModeV2Error::Invalid("PALW-BASE-0 is not in the class catalog — the liveness floor is unregistered"));
+        }
+        // Every class the share table funds must exist, or the emission points at nothing.
+        for class_id in self.state.class_daa().class_ids() {
+            if !catalog.entries().iter().any(|e| e.class_id == class_id) {
+                return Err(PalwModeV2Error::Invalid("a share-bearing class is not in the class catalog"));
+            }
+        }
+        for entry in catalog.entries() {
+            let reachable = crate::palw_catalog_coverage::PalwReachableKernelSetV1 {
+                execution_class_id: entry.class_id,
+                kernel_ids: entry.reachable_kernels.clone(),
+            };
+            crate::palw_catalog_coverage::verify_catalog_coverage_v1(&reachable)
+                .map_err(|_| PalwModeV2Error::Invalid("a registered class reaches kernels this build cannot adjudicate"))?;
+        }
+        if self.court.max_step_leaf_count() < catalog.max_step_leaf_count() {
+            return Err(PalwModeV2Error::Invalid(
+                "the court's worst-case trace depth is shallower than the catalog's — the ladder cannot reach the deepest class",
+            ));
         }
         Ok(())
     }
@@ -628,33 +750,37 @@ mod tests {
         assert_ne!(v2_id, v2b.consensus_params_id(), "a different ruleset is a different handshake");
     }
 
-    /// **Audit C1: a ruleset this binary cannot compute must refuse to boot, not stall at block 1.**
+    /// **Audit C1: a ruleset this binary cannot compute must refuse to boot, not stall at block 1
+    /// — and the gate must OPEN in the commit that lands the arm.**
     ///
     /// `a460cdd7` wired `required_algo_id_for_mode` into the header processor, the virtual
     /// processor's template stamp and the pruning-proof gate, so a `ConsensusV2` network demands
-    /// `pow_algo_id == 6` and refuses every other id. `kaspa_pow::StateLayer0::calculate_l1_tag`
-    /// has no arm for 6. Nothing connected those two facts, so the node started — every invariant
-    /// in the list above holds — accepted its parentless genesis, and then rejected every block
-    /// after it, its own miner's included, as `InvalidPoW`; the pruning-proof path failed the same
-    /// way, so IBD could not recover either.
+    /// `pow_algo_id == 6` and refuses every other id. While
+    /// `kaspa_pow::StateLayer0::calculate_l1_tag` had no arm for 6, nothing connected those two
+    /// facts, so the node started, accepted its parentless genesis, and then rejected every block
+    /// after it — its own miner's included — as `InvalidPoW`. This test then asserted that
+    /// `validate()` REFUSES a well-formed V2 ruleset, and its doc promised the assertion would
+    /// flip in the same commit as the arm.
     ///
-    /// The gate is the last clause of `validate`, and it is deliberately expressed against
-    /// `check_algo_id_known` — the list of ids the finalizer implements — so that landing the V2
-    /// arm opens this gate in the same commit rather than requiring someone to remember.
+    /// That commit is this one. The algo-6 arm and its wire carrier landed
+    /// (`palw_v2_commitment_mutation_invalidates_pow` is the test that holds them together), the
+    /// finalizer's own list (`check_algo_id_known`) names 6 again, and the gate — still the last
+    /// clause of `validate`, still reading that list — now passes the same bundle it refused. It
+    /// stays in place as the tripwire for any FUTURE id a ruleset might name before its arm exists.
     #[test]
-    fn a_ruleset_this_binary_cannot_finalize_refuses_to_boot() {
+    fn the_runnability_gate_opened_with_the_finalizer_arm() {
         let bundle = conforming_bundle();
         // Well-formed as a ruleset…
         bundle.validate_ruleset_shape().expect("the fixture is a well-formed ruleset");
-        // …and still refused, with a message that says which half is missing.
-        let err = bundle.validate().expect_err("a ruleset whose algorithm has no finalizer must not boot");
-        match err {
-            PalwModeV2Error::Invalid(msg) => assert!(msg.contains("finalizer"), "the refusal must name the missing half: {msg}"),
-            other => panic!("expected the finalizer refusal, got {other:?}"),
-        }
-        // The gate is not a hardcoded "V2 is off": it reads the finalizer's own list, so an
-        // algorithm this binary DOES implement passes it — only the ruleset-shape clause above
-        // stops such a bundle, which is a different failure with a different fix.
+        // …and runnable by this binary: the arm exists, so the ruleset boots.
+        bundle.validate().expect("a well-formed V2 ruleset whose algorithm this binary finalizes must boot");
+        assert!(
+            crate::pow_layer0::check_algo_id_known(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2).is_ok(),
+            "the gate reads the finalizer's list, and that list now carries the V2 arm"
+        );
+        // The gate is not a hardcoded "V2 is on": shape still comes first, so a bundle naming an
+        // algorithm this binary implements for OTHER lanes fails the ruleset clause — a different
+        // failure with a different fix.
         let mut legacy_algo = conforming_bundle();
         legacy_algo.algorithm_id = crate::pow_layer0::POW_ALGO_ID_PALW_LLM;
         assert!(crate::pow_layer0::check_algo_id_known(legacy_algo.algorithm_id).is_ok(), "algo 4 has a finalizer arm");
@@ -736,6 +862,78 @@ mod tests {
         assert!(PalwCourtParamsV2::new(1, 20, 2).is_err(), "one leaf cannot be bisected");
         assert!(PalwCourtParamsV2::new(1_024, 0, 2).is_err(), "a zero turn deadline defaults by block order");
         assert!(PalwCourtParamsV2::new(1_024, 20, 0).is_err(), "zero terminal rounds never reaches a verdict");
+    }
+
+    fn catalog_entry(class_id: Hash64, leaves: u64) -> PalwClassCatalogEntryV2 {
+        PalwClassCatalogEntryV2 {
+            class_id,
+            artifact_root: h64(11),
+            max_step_leaf_count: leaves,
+            // The BASE-0 kernels this build adjudicates — the honest reachable set for a class
+            // whose shape profile is BASE-0's.
+            reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+        }
+    }
+
+    /// **Audit C1/H2: the invariants that need the catalog PREIMAGE, not just its root.**
+    ///
+    /// Decision 1 lists "BASE-0 court coverage == 100%" and the catalog-root preimage check as
+    /// boot conditions, and `validate` implemented neither — it could not: the bundle carries the
+    /// ROOT, and only a genesis artifact carries the classes. `verify_against_catalog` is the
+    /// entry point for the place that does hold them, and it is also what finally checks the last
+    /// self-certified number in the bundle: an operator who understates
+    /// `court.max_step_leaf_count` to shrink `window_court` now contradicts the catalog its own
+    /// genesis committed to.
+    #[test]
+    fn the_catalog_gate_checks_what_the_bundle_alone_cannot() {
+        let base = h64(1);
+        let catalog = PalwClassCatalogV2::new(vec![catalog_entry(base, 1_048_576)]).unwrap();
+        let mut bundle = conforming_bundle();
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("the committed catalog verifies");
+
+        // A catalog that is not the one the ruleset committed to.
+        let other = PalwClassCatalogV2::new(vec![catalog_entry(base, 1_048_575)]).unwrap();
+        assert!(bundle.verify_against_catalog(&other).is_err(), "the root is a commitment, not a label");
+
+        // BASE-0 absent: the liveness floor is unregistered.
+        let without_base = PalwClassCatalogV2::new(vec![catalog_entry(h64(7), 1_024)]).unwrap();
+        let mut b2 = conforming_bundle();
+        b2.class_catalog_root = without_base.root();
+        assert!(b2.verify_against_catalog(&without_base).is_err(), "BASE-0 must be registered");
+
+        // A class that reaches a kernel this build cannot adjudicate: coverage is not 100%, so
+        // its disputes would end `Unadjudicable` — a class that cannot be policed.
+        let mut uncovered = catalog_entry(base, 1_024);
+        uncovered.reachable_kernels.insert(h64(0xDEAD));
+        let gapped = PalwClassCatalogV2::new(vec![uncovered]).unwrap();
+        let mut b3 = conforming_bundle();
+        b3.class_catalog_root = gapped.root();
+        assert!(b3.verify_against_catalog(&gapped).is_err(), "a coverage gap must refuse the class set");
+
+        // The court's asserted depth must cover the catalog's real one.
+        let deeper = PalwClassCatalogV2::new(vec![catalog_entry(base, 1 << 30)]).unwrap();
+        let mut b4 = conforming_bundle();
+        b4.class_catalog_root = deeper.root();
+        assert!(
+            b4.verify_against_catalog(&deeper).is_err(),
+            "asserting a shallower ladder than the catalog needs is the understatement this gate exists to catch"
+        );
+
+        // A share-bearing class missing from the catalog points the emission at nothing.
+        let two_shares = PalwClassDaaV2Params::new([(base, 600u16), (h64(2), 400u16)].into_iter().collect(), 4).unwrap();
+        let mut b5 = conforming_bundle();
+        b5.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, two_shares, 100).unwrap();
+        b5.class_catalog_root = catalog.root();
+        assert!(b5.verify_against_catalog(&catalog).is_err(), "a funded class must exist");
+
+        // Catalog shapes that cannot be a catalog.
+        assert!(PalwClassCatalogV2::new(Vec::new()).is_err(), "an empty catalog registers nothing");
+        assert!(
+            PalwClassCatalogV2::new(vec![catalog_entry(h64(2), 1_024), catalog_entry(base, 1_024)]).is_err(),
+            "unordered entries would give one catalog two roots"
+        );
+        assert!(PalwClassCatalogV2::new(vec![catalog_entry(base, 1)]).is_err(), "one leaf cannot be bisected");
     }
 
     /// **Audit H2: the frozen cadence is outside the ruleset id, so it is refused at the params.**
