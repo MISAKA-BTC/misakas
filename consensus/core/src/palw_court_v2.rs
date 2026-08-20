@@ -744,6 +744,129 @@ mod tests {
         assert!(closed.court_session(&sid).is_none(), "the session is closed");
     }
 
+    /// **Condition 11: an honest producer is not slashed, end to end.**
+    ///
+    /// The mirror of the conviction test above, and the harder half: a court that convicted on
+    /// every challenge would pass every fraud test ever written. This walks the SAME path with an
+    /// honest execution and asserts the four things that must happen — the proof adjudicates
+    /// `ChallengerDefeated` rather than refusing, the claim survives instead of being voided, the
+    /// producer's bond is untouched, and the claim goes on to reach `Final` and certify its work.
+    ///
+    /// The last one matters on its own: a claim left alive but frozen would satisfy "not slashed"
+    /// while still costing an honest producer everything it had earned.
+    ///
+    /// Verified non-vacuous by injection: mapping `NoFaultFound` to `ExecutorGuilty` — a court
+    /// that convicts on everything — reddens it at the verdict.
+    #[test]
+    fn palw_v2_an_honest_producer_survives_a_challenge_and_keeps_its_stake() {
+        let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_honest_case();
+        let trace_root = refutation.binding.step_merkle_root;
+        let execution_root = refutation.binding.committed_execution_root;
+        let p = params();
+
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(0x21),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(0x22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
+        let mut env = attempt(40, 1);
+        env.attempt.artifact_root = artifact_root;
+        env.attempt.trace_root = trace_root;
+        env.attempt.execution_root = execution_root;
+        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
+        let (s3, _) = apply_palw_transition_v2(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        )
+        .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed {
+                claim: claim_id,
+                receipts: vec![crate::palw_state_v2::PalwSeatVerdictV2 { seat_bond: bond_key(2), served: true }],
+            }],
+            None,
+        )
+        .unwrap();
+
+        let sid = court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64);
+        let (in_court, _) = apply_palw_transition_v2(
+            &s4,
+            &p,
+            &ctx(5, 110, 5),
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 64,
+            }],
+            None,
+        )
+        .unwrap();
+
+        // The challenge is answered on the MERITS: the court recomputed the step and found it
+        // correct. `ChallengerDefeated`, not a refusal — a refusal would mean the court could not
+        // check, which is a different and much weaker kind of safety.
+        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
+        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof).expect("an honest step adjudicates");
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
+
+        let (closed, _) = apply_palw_transition_v2(
+            &in_court,
+            &p,
+            &ctx(6, 111, 6),
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }],
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            matches!(closed.claim(&claim_id).unwrap().phase, crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "the claim survives the challenge"
+        );
+        assert_eq!(closed.bond(&bond_key(1)).unwrap().slashed, 0, "the producer's stake is untouched");
+        assert!(closed.court_session(&sid).is_none());
+
+        // …and it goes on to certify its work. A claim left alive but frozen would satisfy "not
+        // slashed" while costing an honest producer everything it had earned.
+        let (finalized, _) = apply_palw_transition_v2(&closed, &p, &ctx(7, 140, 7), &[], None).unwrap();
+        assert!(
+            matches!(finalized.claim(&claim_id).unwrap().phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }),
+            "the challenge cost the producer nothing, including time"
+        );
+        assert_eq!(finalized.safe_weight(), 40, "and its work is certified");
+        assert_eq!(finalized.bond(&bond_key(1)).unwrap().slashed, 0);
+    }
+
     /// **The close carries its proof, and the verdict is derived from it — not believed.**
     ///
     /// Before this, `CourtClosed` carried a bare verdict, so the pipeline had nothing to check and

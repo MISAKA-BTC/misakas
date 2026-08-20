@@ -1749,6 +1749,62 @@ pub(crate) mod tests {
         (binding, material, rows)
     }
 
+    /// An HONEST BASE-0 execution and the artifact openings a challenger would carry against it.
+    ///
+    /// The mirror of [`base0_matmul_fraud`]: same profile, same weights, same coordinate — and
+    /// nothing corrupted. What a court does with this is the whole false-slash question.
+    pub(crate) fn base0_honest_case() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64)
+    {
+        use crate::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1};
+        let (binding, material, rows) = base0_honest_execution();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 1 };
+        let refutation = build_refutation(&binding, &material, &rows, coord);
+        let operands = vec![
+            PalwArtifactOperandV1 {
+                tensor_name: "blk.{layer}.w".to_string(),
+                layer: Some(0),
+                row_start: 0,
+                bytes: base0_matmul_weights().iter().map(|v| *v as u8).collect(),
+            },
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
+        ];
+        let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+        let artifact_root = artifact_root_v1(&leaves).unwrap();
+        let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
+            operand: operands[0].clone(),
+            leaf_index: 0,
+            leaf_count: leaves.len() as u32,
+            path: vec![leaves[1]],
+        }];
+        (refutation, openings, artifact_root)
+    }
+
+    /// **Condition 11, at the arithmetic layer: an honest step is NoFault, not a conviction.**
+    ///
+    /// The conviction test says the court can catch fraud. This says it does not catch anything
+    /// else — which is the harder half, because a court that convicts on every challenge would
+    /// pass every fraud test ever written.
+    #[test]
+    fn palw_v2_an_honest_matmul_is_not_a_fault() {
+        use crate::palw_artifact::PalwProvenOperandsV1;
+        let (refutation, openings, artifact_root) = base0_honest_case();
+        let operands = PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root).expect("the openings prove");
+        assert_eq!(
+            check_execution_step_refutation_v1(&refutation, &operands),
+            Err(PalwStepRefuteError::NoFaultFound),
+            "an honest step must be NoFaultFound — recomputed and found correct, not merely unchecked"
+        );
+
+        // And it is NoFault because the court RECOMPUTED it: with no weights the same refutation
+        // is `Unadjudicable`, a different answer entirely. Without this, "not convicted" could
+        // mean "never checked".
+        assert_eq!(
+            check_execution_step_refutation_v1(&refutation, &NoWeights),
+            Err(PalwStepRefuteError::Unadjudicable),
+            "not-convicted and not-checked must be distinguishable"
+        );
+    }
+
     /// The same execution with ONE committed MatMul value corrupted, plus the artifact openings a
     /// challenger carries. Returns everything a `CourtClosed` proof needs.
     pub(crate) fn base0_matmul_fraud() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64)
