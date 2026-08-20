@@ -122,13 +122,22 @@ mod tests {
     const LEAVES: u64 = 1 << 16;
     const CANONICAL: u64 = 4_096;
 
+    /// BASE-0's OWN reachable kernel set (ADR-0040 D/H's ten), not
+    /// `catalogued_kernel_ids_v1()`. Building the fixture from the build's own table would make
+    /// the coverage gate certify itself, which is the shape the 2026-08-17 re-audit found in the
+    /// gate's own signature — and the RC's floor is exactly the class whose adjudicability must
+    /// not be assumed. `base0_reaches_only_kernels_this_build_adjudicates` measures that the two
+    /// sets really do agree today.
     fn catalog() -> PalwClassCatalogV2 {
         PalwClassCatalogV2::new(vec![PalwClassCatalogEntryV2 {
             class_id: h64(1),
             artifact_root: h64(0xA7),
             max_step_leaf_count: LEAVES,
             canonical_step_leaf_count: CANONICAL,
-            reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+            reachable_kernels: crate::palw_step_refute::KDESC_BASE0_ALL
+                .iter()
+                .map(|d| crate::palw_step::kernel_semantics_id_v1(d))
+                .collect(),
         }])
         .expect("a well-formed catalog")
     }

@@ -177,6 +177,59 @@ fn coverage_digest_v1(reachable: &PalwReachableKernelSetV1) -> Hash64 {
 mod tests {
     use super::*;
 
+
+    /// **PALW-BASE-0 is adjudicable, measured against THIS BUILD's table (ADR-0039 1a, A-6).**
+    ///
+    /// ADR-0039 makes BASE-0 the permanently-Active liveness floor and mainnet ships no hash
+    /// floor beside it, so if this class's disputes cannot be decided the network has no
+    /// prosecutable work at all — and `Params::validate_palw_v1` refuses a fence whose class is
+    /// not `ArithmeticCatalogued` precisely to stop that shipping. What nothing asserted is the
+    /// premise: that the ten kernels BASE-0 can reach are ten this build can re-execute.
+    ///
+    /// The fixtures could not say it, because every catalog fixture in this crate builds its
+    /// reachable set FROM `catalogued_kernel_ids_v1()` — which certifies trivially, and would go
+    /// on certifying if a BASE-0 kernel were dropped from the adjudication table tomorrow. This
+    /// walks the class's own declared kernel list instead.
+    #[test]
+    fn base0_reaches_only_kernels_this_build_adjudicates() {
+        use crate::palw_step::kernel_semantics_id_v1;
+        use crate::palw_step_refute::{KDESC_BASE0_ALL, catalogued_kernel_ids_v1};
+
+        let catalogued = catalogued_kernel_ids_v1();
+        assert_eq!(KDESC_BASE0_ALL.len(), 10, "ADR-0040 D/H: BASE-0 is ten kernels");
+        for descriptor in KDESC_BASE0_ALL {
+            let id = kernel_semantics_id_v1(descriptor);
+            assert!(
+                catalogued.contains(&id),
+                "BASE-0 reaches {descriptor}, which this build cannot adjudicate — the liveness floor would carry unprosecutable work"
+            );
+        }
+
+        // …and the coverage gate agrees, through the interface a registration actually goes
+        // through, so this is not a second opinion about the same table.
+        let certificate = verify_catalog_coverage_v1(&PalwReachableKernelSetV1 {
+            execution_class_id: Hash64::from_u64_word(0xBA5E),
+            kernel_ids: KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect(),
+        })
+        .expect("BASE-0's reachable set is fully catalogued");
+        assert_eq!(certificate.reachable_count, 10);
+
+        // The gate is not vacuous: one kernel this build does not adjudicate, and the same set is
+        // refused with that kernel named. Without this the test above would pass against a
+        // `verify_catalog_coverage_v1` that certified anything.
+        let stranger = kernel_semantics_id_v1("base0/not-a-kernel-this-build-has/v1");
+        assert!(!catalogued.contains(&stranger));
+        let mut with_stranger: std::collections::BTreeSet<Hash64> =
+            KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect();
+        with_stranger.insert(stranger);
+        let err = verify_catalog_coverage_v1(&PalwReachableKernelSetV1 {
+            execution_class_id: Hash64::from_u64_word(0xBA5E),
+            kernel_ids: with_stranger,
+        })
+        .unwrap_err();
+        assert!(matches!(err, PalwCoverageError::CoverageGap { ref missing } if missing == &vec![stranger]), "got {err:?}");
+    }
+
     fn h64(word: u64) -> Hash64 {
         Hash64::from_u64_word(word)
     }
