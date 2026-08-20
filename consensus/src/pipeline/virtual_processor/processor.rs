@@ -3615,12 +3615,21 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                Obj::CourtClosed { session_id, verdict } => {
-                    // Without a carried proof there is nothing to adjudicate, and a close that
-                    // adjudicates nothing must not move a claim. The proof rides its own carriage
-                    // kind; until that lands, a close is refused rather than trusted.
-                    let _ = (session_id, verdict);
-                    return Err("a court close with no proof carriage cannot be adjudicated".to_string());
+                Obj::CourtClosed { session_id, verdict, proof } => {
+                    // The close carries its proof now, so there is something to adjudicate. The
+                    // node re-derives the verdict from the proof and compares: a declared verdict
+                    // that its own proof does not produce is refused, in EITHER direction — an
+                    // asserted conviction and an asserted acquittal are the same lie.
+                    //
+                    // `adjudicate_court_close_v2` refuses outright when the proof does not
+                    // adjudicate (an out-of-catalog kernel, a non-canonical operand set, a
+                    // binding naming another execution), so an unadjudicable object convicts
+                    // nobody AND acquits nobody — P0-8's rule, on both sides.
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof)
+                        .map_err(|e| e.to_string())?;
+                    if derived != *verdict {
+                        return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
+                    }
                 }
                 _ => {}
             }

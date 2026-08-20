@@ -945,7 +945,18 @@ pub enum PalwConsensusObjectV2 {
     },
     CourtClosed {
         session_id: Hash64,
+        /// The verdict this close asserts. DECLARED, and therefore checked: the acceptance layer
+        /// re-derives it from `proof` and refuses the object if the two disagree. It stays on the
+        /// object because the transition acts on it, and the transition does not run arithmetic.
         verdict: PalwCourtVerdictV2,
+        /// **What makes the verdict checkable (ADR-0042 Decision 8).**
+        ///
+        /// A close used to carry a verdict and nothing else, so a validating node had no way to
+        /// tell a proven fault from an assertion — and refused every close rather than trust one.
+        /// The proof rides here: operand openings against the CLASS's registered artifact root,
+        /// and a refutation bound to the CLAIM's committed roots. A proof that does not
+        /// adjudicate mints neither verdict; it refuses the close.
+        proof: crate::palw_court_v2::PalwCourtVerdictProofV2,
     },
     /// The responder's rung: "my execution's state at the disputed midpoint is `mid_state`".
     ///
@@ -2705,7 +2716,7 @@ fn apply_object(
                 builder.disarm_deadline(*claim_id);
             }
         }
-        PalwConsensusObjectV2::CourtClosed { session_id, verdict } => {
+        PalwConsensusObjectV2::CourtClosed { session_id, verdict, proof: _ } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
             builder.write_court(*session_id, None);
             let claim_id = session.claim;
@@ -3850,7 +3861,7 @@ pub(crate) mod tests {
             &s6,
             &p,
             &ctx(7, 210, 7),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
+            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
             None,
         );
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
@@ -3877,7 +3888,7 @@ pub(crate) mod tests {
             &s3,
             &p,
             &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
             None,
         );
         match s4.claim(&claim_id).unwrap().phase {
@@ -3903,6 +3914,10 @@ pub(crate) mod tests {
             &[PalwConsensusObjectV2::CourtClosed {
                 session_id: second_court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
                 verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
             }],
             None,
         );
@@ -4136,7 +4151,7 @@ pub(crate) mod tests {
                 &genesis,
                 &p,
                 &c,
-                &[PalwConsensusObjectV2::CourtClosed { session_id: h64(1), verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+                &[PalwConsensusObjectV2::CourtClosed { session_id: h64(1), verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
                 None
             ),
             Err(PalwStateV2Error::MissingSession(_))
@@ -4504,7 +4519,7 @@ pub(crate) mod tests {
                 6,
                 150,
                 6,
-                vec![PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
+                vec![PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
                 None,
             ),
             (7, 151, 7, vec![], None),
@@ -4938,7 +4953,7 @@ pub(crate) mod tests {
             &s5,
             &p,
             &ctx(6, 105, 6),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
             None,
         );
         let bond = s6.bond(&bond_key(1)).unwrap();

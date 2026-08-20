@@ -181,8 +181,13 @@ pub fn validate_court_opened_v2(
 }
 
 /// The proof classes a `CourtClosed` may carry on the V2 lineage today. See the module doc for
-/// why ladder defaults are absent.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// why ladder defaults are absent — they are not a proof class at all now, they are a sweep.
+///
+/// Borsh-serializable because it RIDES the object: a `CourtClosed` carries its proof, and the
+/// acceptance layer re-derives the verdict from it rather than believing the one declared beside
+/// it. Before that, a close carried a bare verdict, so the pipeline had nothing to check and
+/// refused every close outright — the court existed and could not be used.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwCourtVerdictProofV2 {
     /// Terminal arithmetic adjudication from carried proofs (Decision 8 / P0-8): every operand
     /// the recomputation touches arrives as an opening against the class's registered artifact
@@ -290,7 +295,7 @@ pub fn check_execution_root_binding(claim_execution_root: Hash64, binding_root: 
 
 /// Adjudicate a proposed close against the candidate state, returning the ONLY verdict that
 /// proof supports. The caller (the acceptance pipeline) then applies the state machine's
-/// `CourtClosed { verdict }` — with the verdict this function returned, never one the object
+/// `CourtClosed { verdict, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }` — with the verdict this function returned, never one the object
 /// merely announced.
 pub fn adjudicate_court_close_v2(
     state: &PalwChainStateV2,
@@ -625,6 +630,61 @@ mod tests {
             ),
             "an accuser-authored binding must be refused before any fault is read from it"
         );
+    }
+
+    /// **The close carries its proof, and the verdict is derived from it — not believed.**
+    ///
+    /// Before this, `CourtClosed` carried a bare verdict, so the pipeline had nothing to check and
+    /// refused every close outright: "a court close with no proof carriage cannot be
+    /// adjudicated". The court existed and could not be used. What that refusal was protecting
+    /// against is exactly what this measures: an ASSERTED verdict.
+    ///
+    /// Both directions matter. An asserted conviction voids an honest claim and slashes its bond;
+    /// an asserted acquittal lets a proven fraud walk. `adjudicate_court_close_v2` mints neither
+    /// from a proof that does not adjudicate.
+    #[test]
+    fn a_close_is_adjudicated_from_its_carried_proof_not_from_its_claim() {
+        let (state, claim_id) = licensed_state();
+        let p = params();
+        let claim_root = state.claim(&claim_id).unwrap().trace_root;
+        let sid = court_session_id_v2(&claim_id, &claim_root, &bond_key(1), &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64);
+        let (in_court, _) = apply_palw_transition_v2(
+            &state,
+            &p,
+            &ctx(5, 110, 5),
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 64,
+            }],
+            None,
+        )
+        .unwrap();
+
+        // A skeleton refutation binds some other execution entirely, so it adjudicates NOTHING —
+        // the close is refused rather than resolved either way.
+        let bogus = PalwCourtVerdictProofV2::Arithmetic {
+            refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+            operand_openings: Vec::new(),
+        };
+        let outcome = adjudicate_court_close_v2(&in_court, &sid, &bogus);
+        assert!(
+            matches!(outcome, Err(PalwCourtV2Error::TraceRootMismatch)),
+            "a proof about another execution must not produce a verdict at all, got {outcome:?}"
+        );
+
+        // Which is what a declared verdict runs into: `palw_v2_validate_objects` compares the
+        // object's `verdict` against this function's answer, and there is no answer here to
+        // agree with. (That comparison lives in the pipeline because that is where the object
+        // and the candidate state meet; what this file owns is the refusal it rests on.)
+
+        // A close naming a session that does not exist never reaches arithmetic either.
+        assert!(matches!(
+            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus),
+            Err(PalwCourtV2Error::MissingSession(_))
+        ));
     }
 
     #[test]
