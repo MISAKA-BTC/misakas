@@ -374,6 +374,20 @@ pub enum PalwBisectMoveBodyV1 {
         committed_root: Hash64,
         challenger_id: Hash64,
         responder_id: Hash64,
+        /// **The responder's BOND**, and the reason it sits beside `responder_id` rather than
+        /// replacing it (external audit P0-9).
+        ///
+        /// `responder_id` is a validator key hash, which `dns_finality` states is not unique to a
+        /// bond. So no ladder outcome could name an executor bond to slash: a conviction reached
+        /// through the ladder had no unambiguous target, and the whole dispute could only ever end
+        /// in nobody being charged. The outpoint is unique by construction and is the key the
+        /// panel, the receipts, the credit walk and the direct conviction route all already use.
+        ///
+        /// Both are kept because they answer different questions and a consumer that conflates them
+        /// is the bug this closes: the outpoint says WHICH STAKE answers for the move, the key hash
+        /// says WHOSE SIGNATURE must cover it, and a bond re-delegated to another key moves one
+        /// without the other.
+        responder_bond_outpoint: crate::tx::TransactionOutpoint,
         space: crate::palw_bisect::PalwBisectSpaceV1,
         space_size: u64,
     },
@@ -2062,6 +2076,7 @@ mod tests {
                 committed_root: h64(0x22),
                 challenger_id: h64(0x33),
                 responder_id: h64(0x44),
+                responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
                 space: crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
                 space_size: 16,
             },
@@ -2792,6 +2807,7 @@ mod bisect_move_tests {
             committed_root: h(0x22),
             challenger_id: h(0x33),
             responder_id: h(0x44),
+            responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
             space: PalwBisectSpaceV1::StepLeaves,
             space_size,
         }

@@ -873,7 +873,15 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
         .collect();
 
     for (open_daa, challenger_bond, body) in &moves {
-        let PalwBisectMoveBodyV1::Open { job_context_hash, committed_root, challenger_id, responder_id, space, space_size } = body
+        let PalwBisectMoveBodyV1::Open {
+            job_context_hash,
+            committed_root,
+            challenger_id,
+            responder_id,
+            responder_bond_outpoint,
+            space,
+            space_size,
+        } = body
         else {
             continue;
         };
@@ -899,6 +907,14 @@ fn dispute_is_open_v1(input: &PalwResolverInputV1<'_>) -> bool {
         // bond is what makes a baseless dispute chargeable; `PalwBisectMoveCarriageV1` carries the
         // outpoint precisely so this check has something to resolve.
         if input.bonds.active_bond_at(challenger_bond, *open_daa).is_none() {
+            continue;
+        }
+        // The RESPONDER's bond must be resolvable and active too (audit P0-9). A ladder whose
+        // accused stake cannot be named can only ever end with nobody charged, so opening one is a
+        // free maturity veto: the dispute holds the block at `Provisional` and the terminal has no
+        // slash target. The key hash beside it cannot serve — `dns_finality` states a validator key
+        // hash is not unique to a bond — and this check is where that stops being a note.
+        if input.bonds.active_bond_at(responder_bond_outpoint, *open_daa).is_none() {
             continue;
         }
         let Ok(mut ladder) = PalwBisectLadderV1::open(
@@ -1086,6 +1102,7 @@ mod resolver_tests {
                 committed_root: h(0xC0),
                 challenger_id: h(0x33),
                 responder_id: h(0x44),
+                responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
                 space: PalwBisectSpaceV1::StepLeaves,
                 space_size: 4,
             },
@@ -1881,6 +1898,35 @@ mod resolver_tests {
 
     /// An open ladder blocks maturity; a terminated one does not. Derived from the moves
     /// themselves, so no session store can disagree with the chain.
+    /// **Audit P0-9**: a ladder whose accused stake cannot be named opens nothing.
+    ///
+    /// `Open` used to carry `responder_id` alone, and `dns_finality` states a validator key hash is
+    /// not unique to a bond — so no ladder outcome could name an executor bond to slash. That made
+    /// opening one a FREE maturity veto: the dispute holds the block at `Provisional` for the whole
+    /// horizon and the terminal has nobody to charge, so the challenger risks nothing.
+    ///
+    /// The positive case is the test below, which uses a responder bond the view holds. This is the
+    /// negative: same move, a bond nobody can resolve, and the dispute does not open.
+    #[test]
+    fn a_ladder_naming_an_unresolvable_responder_bond_opens_nothing() {
+        let unresolvable = crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0x99; 64]), 0);
+        let open = PalwBisectMoveBodyV1::Open {
+            job_context_hash: h(0x11),
+            committed_root: h(0xC0),
+            challenger_id: h(0x33),
+            responder_id: h(0x44),
+            responder_bond_outpoint: unresolvable,
+            space: PalwBisectSpaceV1::StepLeaves,
+            space_size: 4,
+        };
+        let bonds = bonds();
+        let weights = NoStepWeights;
+        let panel = vec![seat(1)];
+        let carriage = vec![bisect_row(open, 1_100)];
+        let inp = input(&carriage, &panel, 2_000, &bonds, &weights);
+        assert!(!dispute_is_open_v1(&inp), "an Open whose responder bond cannot be resolved must not hold the block");
+    }
+
     #[test]
     fn an_open_ladder_is_an_open_dispute() {
         let open = PalwBisectMoveBodyV1::Open {
@@ -1888,6 +1934,7 @@ mod resolver_tests {
             committed_root: h(0xC0),
             challenger_id: h(0x33),
             responder_id: h(0x44),
+            responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
             space: PalwBisectSpaceV1::StepLeaves,
             space_size: 4,
         };
@@ -1993,6 +2040,7 @@ mod resolver_tests {
             committed_root: h(0xDEAD),
             challenger_id: h(0x33),
             responder_id: h(0x44),
+            responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
             space: PalwBisectSpaceV1::StepLeaves,
             space_size: 4,
         };
@@ -2148,6 +2196,7 @@ mod resolver_tests {
             committed_root: h(0xC0),
             challenger_id: h(0x33),
             responder_id: h(0x44),
+            responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
             space: PalwBisectSpaceV1::StepLeaves,
             space_size: 4,
         };
@@ -2244,6 +2293,7 @@ mod resolver_tests {
                     committed_root: root,
                     challenger_id: h(0xC2),
                     responder_id: h(0xE1),
+                    responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
                     space: crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
                     space_size: 16,
                 },
@@ -2643,6 +2693,7 @@ mod resolver_tests {
             committed_root: h(0xC0),
             challenger_id: h(0x33),
             responder_id: h(0x44),
+            responder_bond_outpoint: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([0xB1; 64]), 0),
             space: PalwBisectSpaceV1::StepLeaves,
             space_size: 8,
         };
