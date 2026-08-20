@@ -463,21 +463,29 @@ fn base0_row(
             let row = weights.weight_row(name, layer, 0, inputs[0].len() as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
             match op {
                 Base0Op::Requantize => {
-                    // The oracle row carries (multiplier LE, shift) per channel: 5 bytes each.
-                    if row.len() != 5 * inputs[0].len() {
-                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize params are not 5 bytes per channel"));
+                    // The oracle row carries (multiplier LE, shift, zero LE) per channel: 9 bytes
+                    // each. The zero point is the ADR-0040 amendment (G2) — the class's only
+                    // additive registered term, and what makes a projection bias expressible.
+                    // Widened from 5 rather than made optional: a length that could mean either
+                    // layout is a length two implementations can read differently.
+                    if row.len() != 9 * inputs[0].len() {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize params are not 9 bytes per channel"));
                     }
                     // Reject a shift outside the C1 domain (0..=31) as non-canonical rather than
                     // recomputing with it. `rounding_shift_right` now clamps such a shift so it can
                     // never panic, but a step that COMMITTED an out-of-domain shift is malformed by
                     // construction — an honest producer never emits one — so the court must refuse
                     // the step, not silently clamp-and-compare it (mainnet-readiness audit 2.3).
-                    if row.chunks_exact(5).any(|c| c[4] > 31) {
+                    if row.chunks_exact(9).any(|c| c[4] > 31) {
                         return Err(PalwStepRefuteError::InputSetNotCanonical("base0 requantize shift exceeds the 0..=31 domain"));
                     }
                     let params: Vec<ops::QuantParams> = row
-                        .chunks_exact(5)
-                        .map(|c| ops::QuantParams { multiplier: i32::from_le_bytes([c[0], c[1], c[2], c[3]]), shift: c[4] })
+                        .chunks_exact(9)
+                        .map(|c| ops::QuantParams {
+                            multiplier: i32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                            shift: c[4],
+                            zero: i32::from_le_bytes([c[5], c[6], c[7], c[8]]),
+                        })
                         .collect();
                     let q = ops::requantize_row(&as_i32(&inputs[0]), &params).map_err(shape)?;
                     Ok(q.into_iter().map(|v| v as i32 as u32).collect())
@@ -1282,11 +1290,13 @@ pub(crate) mod tests {
         let node = requantize_node();
         let input: Vec<Vec<u32>> = vec![vec![1_000i32 as u32, 2_000, 3_000, 4_000]];
 
-        // 5 bytes per channel: multiplier LE, then shift. In-domain shift (=10) must adjudicate.
+        // 9 bytes per channel: multiplier LE, shift, zero LE (the ADR-0040 amendment's additive
+        // term). In-domain shift (=10) must adjudicate.
         let mut ok_row = Vec::new();
         for _ in 0..4 {
             ok_row.extend_from_slice(&i32::MAX.to_le_bytes());
             ok_row.push(10);
+            ok_row.extend_from_slice(&0i32.to_le_bytes());
         }
         let got = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(ok_row), 1);
         assert!(got.is_ok(), "an in-domain shift must still be recomputed: {got:?}");
@@ -1300,6 +1310,7 @@ pub(crate) mod tests {
                 // Only ONE channel is out of domain: the check must scan every chunk, not just the
                 // first, or a malformed shift hides behind three well-formed neighbours.
                 row.push(if channel == 3 { bad } else { 10 });
+                row.extend_from_slice(&0i32.to_le_bytes());
             }
             let refused = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(row), 1);
             assert!(

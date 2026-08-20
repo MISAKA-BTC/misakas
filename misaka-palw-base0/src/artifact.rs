@@ -271,13 +271,13 @@ impl Base0ArtifactV1 {
                 w_up: fill(shape.d_ff * d),
                 w_down: fill(d * shape.d_ff),
                 requant: [
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(shape.d_ff) },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(shape.d_ff), zero: 0 },
                 ],
                 attn_logit_scale: amplify_for(shape.d_head),
                 ffn_gate_scale: amplify_for(d),
@@ -289,10 +289,10 @@ impl Base0ArtifactV1 {
             unembed,
             layers,
             // Qk → an activation code: 1.0 must land on 127, not on 1.
-            QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7 },
+            QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 },
             // Halve on each residual add, so two `int8` codes summed into `i32` come back to
             // `int8` without saturating — the standard int8-residual convention.
-            QuantParams { multiplier: i32::MAX, shift: 1 },
+            QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 },
         )?;
         artifact.derived_seed = Some(seed);
         Ok(artifact)

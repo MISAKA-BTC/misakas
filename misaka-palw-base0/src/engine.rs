@@ -45,15 +45,15 @@ pub const ACTIVATION_BITS: u8 = 7;
 
 /// Narrowing from Qk back to an activation code — used for the softmax probabilities and the
 /// SiLU output, the two places a Qk value has to become an `int8` operand.
-const QK_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: (K as u8) - ACTIVATION_BITS };
+const QK_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: (K as u8) - ACTIVATION_BITS, zero: 0 };
 
 /// Narrowing of a `DotI8` whose left operand is a Q7 code and whose right operand is an activation
 /// code: the product carries `ACTIVATION_BITS` extra fractional bits.
-const CODE_PRODUCT_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: ACTIVATION_BITS };
+const CODE_PRODUCT_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: ACTIVATION_BITS, zero: 0 };
 
 /// Identity narrowing: `SRDHM(x, i32::MAX)` is `x` to within a unit, then a zero shift and the
 /// `int8` clamp. Used after `RopeTable`, which returns the same scale it was given.
-const CODE_CLAMP: QuantParams = QuantParams { multiplier: i32::MAX, shift: 0 };
+const CODE_CLAMP: QuantParams = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
 
 /// Why a forward pass can be refused.
 #[derive(Clone, Debug, PartialEq, Eq)]

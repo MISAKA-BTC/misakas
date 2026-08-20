@@ -196,7 +196,35 @@ fn nudge_for(product: i64) -> i64 {
 /// this class wraps.
 #[inline]
 pub fn requantize(acc: i32, multiplier: i32, shift: u8) -> i8 {
-    rounding_shift_right(srdhm(acc, multiplier), shift).clamp(-128, 127) as i8
+    requantize_with_zero(acc, multiplier, shift, 0)
+}
+
+/// [`requantize`] with the ZERO POINT the standard int8 form carries (ADR-0040 amendment, G2).
+///
+/// `Saturate8(RoundingShiftRight(SRDHM(acc, mult), shift) + zero)`.
+///
+/// **Why the class needed an additive term at all.** BASE-0's ten ops had none: `QuantParams` was
+/// `{ multiplier, shift }`, `ScaleParams` likewise, and `MulElem`/`AddElem` both take two OPENED
+/// rows, so nothing could add a registered vector. That makes a real transformer's projection
+/// biases inexpressible — Qwen2.5 carries one on each of q, k and v — and the usual workaround
+/// (a constant lane in the activation row, a bias column in the weight) needs a row with that
+/// lane in it, which no BASE-0 op produces: `rms_norm` returns exactly its input width, and a
+/// constant prepended before the norm would be summed into the scale.
+///
+/// A zero point is the smaller of the two available amendments: it changes one op instead of
+/// adding an eleventh to a set whose closedness is the class's selling point, and it is what
+/// asymmetric int8 quantization normally carries anyway — its absence was the anomaly.
+///
+/// **The saturation order is the specification, not an implementation detail.** The zero is added
+/// BEFORE the clamp, in `i32`, so a bias that would push a value past the int8 range saturates
+/// exactly as any other overflow does. Adding after the clamp would let the sum leave the range,
+/// and a value outside `[-128, 127]` is not an int8 activation.
+///
+/// `zero = 0` reproduces [`requantize`] bit for bit, which is what keeps every existing BASE-0
+/// class — the RC's liveness floor included — byte-identical across this amendment.
+#[inline]
+pub fn requantize_with_zero(acc: i32, multiplier: i32, shift: u8, zero: i32) -> i8 {
+    rounding_shift_right(srdhm(acc, multiplier), shift).saturating_add(zero).clamp(-128, 127) as i8
 }
 
 /// [`rounding_shift_right`] at 64 bits — the same round-half-away-from-zero rule, one rule at two
@@ -345,6 +373,51 @@ pub fn int_recip(v: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    /// **The zero point carries a projection bias, and `zero = 0` changes nothing (G2).**
+    ///
+    /// BASE-0 had no additive registered term in any of its ten ops, which makes a real
+    /// transformer's q/k/v biases inexpressible — and the usual workaround needs an activation row
+    /// with a constant lane, which no BASE-0 op produces. So `Requantize` gained the term the
+    /// standard int8 form always had.
+    ///
+    /// Two properties matter and both are asserted here: the amendment is INERT at zero, so every
+    /// class registered before it — the RC's liveness floor included — is byte-identical across
+    /// it; and the addition happens before the int8 saturation, so a bias that would push a value
+    /// out of range saturates like any other overflow instead of escaping it.
+    #[test]
+    fn the_zero_point_is_a_bias_and_is_inert_at_zero() {
+        // Inert at zero, across the interesting corners of the accumulator space.
+        for acc in [0i32, 1, -1, 1_000, -1_000, i32::MAX, i32::MIN, i32::MAX / 3, i32::MIN / 3] {
+            for (m, s) in [(i32::MAX, 0u8), (i32::MAX, 10), (1 << 30, 5), (1, 31)] {
+                assert_eq!(
+                    requantize_with_zero(acc, m, s, 0),
+                    requantize(acc, m, s),
+                    "zero = 0 must reproduce the pre-amendment result at acc={acc}, m={m}, s={s}"
+                );
+            }
+        }
+
+        // It really adds. A value that requantizes to 0 lands on the bias.
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, 7), 7);
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, -7), -7);
+        // …and it composes with the value rather than replacing it. The accumulator is chosen so
+        // the sum stays inside the range: `(base + 5) as i8` would WRAP where the function
+        // saturates, which is the difference this test is about and not a place to be sloppy.
+        let base = requantize(100_000, i32::MAX, 10) as i32;
+        assert!((-120..120).contains(&base), "the fixture must leave headroom, got {base}");
+        assert_eq!(requantize_with_zero(100_000, i32::MAX, 10, 5) as i32, base + 5);
+
+        // **Before the clamp, not after.** A bias past the int8 range saturates; it does not
+        // wrap, and it does not leave the range. An i8 that is not in [-128, 127] is not an i8.
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, 10_000), 127);
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, -10_000), -128);
+        assert_eq!(requantize_with_zero(i32::MAX, i32::MAX, 0, 127), 127, "already at the ceiling, and it stays");
+        assert_eq!(requantize_with_zero(i32::MIN, i32::MAX, 0, -127), -128);
+        // The additive step itself cannot overflow into a wrap either.
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, i32::MAX), 127);
+        assert_eq!(requantize_with_zero(0, i32::MAX, 0, i32::MIN), -128);
+    }
+
     use super::*;
 
     /// Qk → a rational check without floats: assert `value` is within `tol_num/tol_den` of

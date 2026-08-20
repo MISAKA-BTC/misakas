@@ -22,7 +22,7 @@
 //! caller never sees these errors; they exist so a non-conforming one is refused rather than
 //! crashing the node that refuses it.
 
-use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize, rescale_q};
+use crate::palw_base0::{K, MAX_DOT_LEN, ONE, int_exp, int_recip, int_rsqrt, requantize_with_zero, rescale_q};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,10 @@ pub enum PalwBase0OpError {
 pub struct QuantParams {
     pub multiplier: i32,
     pub shift: u8,
+    /// **The additive term (ADR-0040 amendment, G2).** Added in `i32` after the shift and BEFORE
+    /// the int8 saturation, which is what makes a projection bias expressible in a class that had
+    /// no additive registered term anywhere. `0` is the pre-amendment behaviour, bit for bit.
+    pub zero: i32,
 }
 
 /// Scale-change parameters for [`rescale_row`], frozen at registration.
@@ -138,12 +142,12 @@ pub fn requantize_row(acc: &[i32], params: &[QuantParams]) -> Result<Vec<i8>, Pa
     if acc.len() != params.len() {
         return Err(PalwBase0OpError::LengthMismatch { a: acc.len(), b: params.len() });
     }
-    Ok(acc.iter().zip(params).map(|(a, q)| requantize(*a, q.multiplier, q.shift)).collect())
+    Ok(acc.iter().zip(params).map(|(a, q)| requantize_with_zero(*a, q.multiplier, q.shift, q.zero)).collect())
 }
 
 /// Op 2, per-tensor: one `QuantParams` for the whole row.
 pub fn requantize_row_uniform(acc: &[i32], params: QuantParams) -> Vec<i8> {
-    acc.iter().map(|a| requantize(*a, params.multiplier, params.shift)).collect()
+    acc.iter().map(|a| requantize_with_zero(*a, params.multiplier, params.shift, params.zero)).collect()
 }
 
 // -------------------------------------------------------------------------------------------
@@ -535,9 +539,9 @@ mod tests {
     fn requantize_saturates_per_channel() {
         let acc = vec![i32::MAX, i32::MIN, 0];
         let params = vec![
-            QuantParams { multiplier: i32::MAX, shift: 0 },
-            QuantParams { multiplier: i32::MAX, shift: 0 },
-            QuantParams { multiplier: i32::MAX, shift: 0 },
+            QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 },
+            QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 },
+            QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 },
         ];
         assert_eq!(requantize_row(&acc, &params).unwrap(), vec![127i8, -128, 0]);
         assert_eq!(requantize_row_uniform(&acc, params[0]), vec![127i8, -128, 0]);
@@ -560,7 +564,7 @@ mod tests {
         let rotated = rope_table(&normed, &cos, &sin).unwrap();
         assert_eq!(rotated.len(), dim);
 
-        let q = requantize_row_uniform(&rotated, QuantParams { multiplier: i32::MAX, shift: 8 });
+        let q = requantize_row_uniform(&rotated, QuantParams { multiplier: i32::MAX, shift: 8, zero: 0 });
         let weights: Vec<i8> = (0..(dim * dim)).map(|i| ((i % 7) as i32 - 3) as i8).collect();
         let projected = matmul_quant(&weights, &q, dim).unwrap();
         assert_eq!(projected.len(), dim);
