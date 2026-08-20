@@ -855,6 +855,10 @@ pub enum PalwStateV2Error {
     ZeroQuanta,
     #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
     NonUniformQuanta { pwu: u64, quanta: u32 },
+    #[error(
+        "free-prompt claim {0} carries a null execution root — the court would have nothing to bind a refutation to,          so this claim could never be convicted of arithmetic fraud (audit C3, free-prompt lane)"
+    )]
+    UnadjudicableCommitment(Hash64),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2370,6 +2374,22 @@ fn apply_object(
             }
             if *pwu % (*quanta as u64) != 0 || *pwu / (*quanta as u64) == 0 {
                 return Err(PalwStateV2Error::NonUniformQuanta { pwu: *pwu, quanta: *quanta });
+            }
+            // **Fail-closed on the one field the court cannot do without (audit C3).**
+            // `adjudicate_court_close_v2` binds a refutation to the CLAIM's `execution_root`; a
+            // claim carrying none has nothing to bind against, so every dispute about it dies at
+            // `ExecutionRootMismatch` and its producer can commit arithmetic fraud with impunity.
+            // Refusing the claim is the only safe reading — admitting it and hoping no fraud
+            // occurs is precisely the fail-open shape the consumer-layer audit found ten of.
+            //
+            // Today this refuses every commitment the free-prompt worker can build: its v3
+            // execution path emits a schedule commitment and a trace root but captures no legs,
+            // so it has no `PalwStepBindingV2` to recompute a root from and deliberately emits
+            // the null one rather than a fabricated value. That is the honest state of the lane —
+            // the remaining work is legs capture on the free-prompt execution path, and until it
+            // lands the chain says so at admission instead of at a dispute nobody can win.
+            if *execution_root == Hash64::default() {
+                return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
             let reserved =
                 (*pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
@@ -4197,6 +4217,43 @@ mod tests {
             None,
         );
         assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
+    }
+
+    /// **A free-prompt claim the court could never bind a refutation to is refused (audit C3,
+    /// free-prompt lane).**
+    ///
+    /// The integration found the attempt lane's C3 fix — the claim carries the executor's
+    /// `committed_execution_root`, and `adjudicate_court_close_v2` pins a refutation's binding to
+    /// it — with no counterpart on the free-prompt lane. A free-prompt claim built without one
+    /// had to borrow some other field, and the nearest (`schedule_root`) is a different quantity
+    /// no honest binding can recompute to, so EVERY dispute about a free-prompt claim would have
+    /// died at `ExecutionRootMismatch`. Fail-closed, and useless: a producer no court can convict
+    /// is a producer that can commit arithmetic fraud with impunity.
+    ///
+    /// The commitment carries the real root now, and a null one is refused at admission rather
+    /// than admitted and discovered at a dispute nobody could win. That refusal currently rejects
+    /// every commitment the free-prompt worker can build — its v3 execution path captures no legs
+    /// — which is the honest state of the lane stated where it can be acted on.
+    #[test]
+    fn a_free_prompt_claim_without_an_execution_root_is_refused() {
+        let p = params();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let mut null_root = fp_commit(0xFC, 60, 3);
+        if let PalwConsensusObjectV2::FreePromptCommitted { execution_root, .. } = &mut null_root {
+            *execution_root = Hash64::default();
+        }
+        let refused = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[null_root], None);
+        assert!(
+            matches!(refused, Err(PalwStateV2Error::UnadjudicableCommitment(id)) if id == h64(0xFC)),
+            "got {refused:?}"
+        );
+
+        // The same claim with a real root is admitted — so the refusal is about the root and not
+        // about free-prompt claims in general.
+        let (ok, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert!(matches!(ok.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Provisional));
+        assert_ne!(ok.claim(&h64(0xFC)).unwrap().execution_root, Hash64::default(), "the record carries what the court will bind");
     }
 
     /// **Audit C5's free re-roll, the free-prompt half — the cost the block-based costs cannot

@@ -1920,6 +1920,7 @@ mod tests {
             trace_root: Hash64::from_bytes([0x7A; 64]),
             output_root: Hash64::from_bytes([0x0B; 64]),
             schedule_root: Hash64::from_bytes([0x5C; 64]),
+            execution_root: Hash64::from_bytes([0x4E; 64]),
             decode_tokens_executed: 256,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
             cu: fp_cu_v3(job.prompt_tokens, 256, weights),

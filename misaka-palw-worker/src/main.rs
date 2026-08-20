@@ -1546,6 +1546,18 @@ fn run_v3_job(trace_out: &Path) {
         trace_root,
         output_root: output_commitment_v2(&binding, &outputs, &rendered_output_hash_v2(&rendered)),
         schedule_root: schedule_commitment,
+        // **Deliberately null, and consensus refuses it.** The court binds a refutation to the
+        // claim's `committed_execution_root` (`PalwStepBindingV2`), which recomputes from the job
+        // context, both profiles, the leaf/checkpoint counts and their roots. This v3 path
+        // captures none of that — it runs the model and commits a schedule and a trace root — so
+        // there is no honest value to put here, and a fabricated one would be worse than none: it
+        // would make disputes fail in a way that looks like the producer winning them.
+        //
+        // `apply_palw_transition_v3` refuses a free-prompt commitment with a null execution root
+        // (`UnadjudicableCommitment`), so this is fail-closed end to end rather than a hole. The
+        // remaining work is legs capture on this path; the v2-legs path already produces the
+        // binding this field wants.
+        execution_root: Hash64::default(),
         trace_manifest_root,
         trace_chunk_count,
         trace_event_count: executed,

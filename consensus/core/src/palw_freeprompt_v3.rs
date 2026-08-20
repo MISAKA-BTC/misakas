@@ -47,7 +47,13 @@ pub const PALW_FP_V3_L1_TAG_BYTES: usize = PALW_ATTEMPT_V2_L1_TAG_BYTES;
 pub const PALW_FP_PRIVACY_PUBLIC_DA: u8 = 1;
 
 pub const PALW_FP_V3_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v3/job-id/v1";
-pub const PALW_FP_V3_DOMAIN_CLAIM_ID: &[u8] = b"misaka-palw/fp-v3/claim-id/v1";
+/// **v2, because the commitment gained `execution_root`.** The golden-vector rule this module
+/// states — "a field addition moves these bytes, and moving them is a NEW object family (a new
+/// domain suffix), never an in-place edit" — is followed rather than waived: a v1 claim id and a
+/// v2 claim id are now different values for different objects, and no reader can mistake one
+/// layout for the other. Nothing had persisted a v1 id (the whole lane is consensus-inert on
+/// every shipped preset), so this costs nothing and keeps the rule intact for the time it will.
+pub const PALW_FP_V3_DOMAIN_CLAIM_ID: &[u8] = b"misaka-palw/fp-v3/claim-id/v2";
 pub const PALW_FP_V3_DOMAIN_QUANTUM_TICKET: &[u8] = b"misaka-palw/fp-v3/quantum-ticket/v1";
 pub const PALW_FP_V3_DOMAIN_SPEND_ID: &[u8] = b"misaka-palw/fp-v3/spend-id/v1";
 pub const PALW_FP_V3_DOMAIN_SPEND_L1_TAG: &[u8] = b"misaka-palw/fp-v3/spend-l1-tag/v1";
@@ -226,6 +232,22 @@ pub struct PalwFreePromptCommitmentV3 {
     pub trace_root: Hash64,
     pub output_root: Hash64,
     pub schedule_root: Hash64,
+    /// The executor's `committed_execution_root` (ADR-0030's `PalwStepBindingV2`) — the single
+    /// value that fixes the SHAPE of the execution being claimed: the job context, both profiles,
+    /// the leaf and checkpoint counts and their roots all recompute into it.
+    ///
+    /// **The free-prompt lane needs it for exactly the reason the attempt lane does (audit C3),
+    /// and the integration found it missing.** `adjudicate_court_close_v2` tests a refutation's
+    /// binding against the CLAIM's `execution_root`; a free-prompt claim built without one had to
+    /// borrow some other field, and the nearest — `schedule_root` — is a different quantity that
+    /// no honest binding can ever recompute to. Every free-prompt dispute would therefore have
+    /// died at `ExecutionRootMismatch`: fail-closed, and useless, because a producer no court can
+    /// convict is a producer that can commit arithmetic fraud with impunity. Carrying the real
+    /// root is what makes the free-prompt lane adjudicable at all, and it is a distinct field
+    /// rather than a reuse for the same reason it is on the attempt: `verify_binding` recomputes
+    /// it from every component, so pinning the root pins the whole shape to the EXECUTOR'S claim
+    /// instead of the accuser's.
+    pub execution_root: Hash64,
     /// What actually ran (≤ the job's ceiling). CU prices this, not the ceiling.
     pub decode_tokens_executed: u32,
     pub stop_reason: PalwFpStopReasonV3,
@@ -859,6 +881,9 @@ pub struct PalwFpWorkerResultV3 {
     pub trace_root: Hash64,
     pub output_root: Hash64,
     pub schedule_root: Hash64,
+    /// The run's `committed_execution_root` — what the court binds a refutation to. See the
+    /// commitment field of the same name: without it the free-prompt lane is unadjudicable.
+    pub execution_root: Hash64,
     /// The retained-trace manifest ([`fp_trace_manifest_v3`] over the event list the worker
     /// wrote to its `--trace-out` directory). Retention is NOT optional on this path: a
     /// commitment whose producer kept nothing cannot serve an opening and would default in
@@ -951,6 +976,7 @@ impl PalwFpWorkerResultV3 {
             trace_root: self.trace_root,
             output_root: self.output_root,
             schedule_root: self.schedule_root,
+            execution_root: self.execution_root,
             decode_tokens_executed: self.decode_tokens_executed,
             stop_reason: self.stop_reason,
             cu: fp_cu_v3(self.job.prompt_tokens, self.decode_tokens_executed, weights),
@@ -1068,6 +1094,7 @@ mod tests {
             trace_root: Hash64::from_u64_word(0x7A),
             output_root: Hash64::from_u64_word(0x00),
             schedule_root: Hash64::from_u64_word(0x5C),
+            execution_root: Hash64::from_u64_word(0x4E),
             decode_tokens_executed: 77,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
             cu,
@@ -1104,6 +1131,15 @@ mod tests {
     /// **Golden vectors** — the canonical layouts, frozen. A borsh reordering, a domain edit or a
     /// field addition moves these bytes, and moving them is a NEW object family (a new domain
     /// suffix), never an in-place edit.
+    ///
+    /// **Re-taken once, 2026-08-20**, under exactly that rule: the commitment gained
+    /// `execution_root` (without it the free-prompt lane had nothing for
+    /// `adjudicate_court_close_v2` to bind a refutation against, so every dispute died at
+    /// `ExecutionRootMismatch` and no fraud on that lane could ever be convicted), so
+    /// `PALW_FP_V3_DOMAIN_CLAIM_ID` moved to `/v2` and the claim id, the spend id, the quantum
+    /// ticket and the L1 tag all moved with it — they are derived from it, which is the property
+    /// worth seeing in the diff. The job id did NOT move: the job is unchanged, and a vector that
+    /// moved anyway would mean something drifted that should not have.
     #[test]
     fn golden_vector_ids_are_frozen() {
         let job_id = fp_job_id_v3(&job());
@@ -1112,14 +1148,14 @@ mod tests {
         let ticket = fp_quantum_ticket_v3(net(), Hash64::from_u64_word(0xBEAC), claim_id, 2);
 
         assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "d1ef7bce23d0edcc1a409b111d865c2f");
-        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "a16aaed813fda6b2c6d991253c089d4c");
-        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "ee797c395a8615ffa434374f62a1ae33");
-        assert_eq!(format!("{ticket:032x}"), "d9c4d8515a1466de666e87669235caec");
+        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "056161157ed31114052a6df6a021ff84");
+        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "f3310411b0d910075dc625617dc90c7d");
+        assert_eq!(format!("{ticket:032x}"), "bf1ad833e20d6ff1a390b28c7bc45931");
 
         let tag = fp_spend_l1_tag_v3(spend_id);
         assert_eq!(tag.len(), PALW_FP_V3_L1_TAG_BYTES);
         assert_ne!(&tag[..64], &[0u8; 64][..], "the expansion is not degenerate");
-        assert_eq!(&faster_hex::hex_string(&tag[..8]), "5d053787cdfe9503");
+        assert_eq!(&faster_hex::hex_string(&tag[..8]), "30f21abe1ea9e23f");
     }
 
     /// Every field of the JOB is identity (total binding). The submitted draft hand-picked its
@@ -1164,6 +1200,7 @@ mod tests {
             ("trace_root", |c| c.trace_root = Hash64::from_u64_word(0xDEAD)),
             ("output_root", |c| c.output_root = Hash64::from_u64_word(0xBEEF)),
             ("schedule_root", |c| c.schedule_root = Hash64::from_u64_word(0x5D)),
+            ("execution_root", |c| c.execution_root = Hash64::from_u64_word(0x4F)),
             ("decode_tokens_executed", |c| c.decode_tokens_executed += 1),
             ("stop_reason", |c| c.stop_reason = PalwFpStopReasonV3::ExactBudgetReached),
             ("cu", |c| c.cu += 1),
@@ -1420,6 +1457,7 @@ mod tests {
             trace_root: Hash64::from_u64_word(0x7A),
             output_root: Hash64::from_u64_word(0x0B),
             schedule_root: Hash64::from_u64_word(0x5C),
+            execution_root: Hash64::from_u64_word(0x4E),
             trace_manifest_root: Hash64::from_u64_word(0xDA),
             trace_chunk_count: 1,
             trace_event_count: 77,

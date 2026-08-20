@@ -106,7 +106,7 @@ pub fn palw_fp_objects_from_accepted_txs_v3(
                 output_root: commitment.output_root,
                 // The DA trio and the court binding travel WITH the claim: they are the
                 // producer's obligations, and the panel/court read them off the state record.
-                execution_root: commitment.schedule_root,
+                execution_root: commitment.execution_root,
                 trace_chunk_count: commitment.trace_chunk_count,
                 trace_retention_daa: commitment.trace_retention_daa,
             },
@@ -165,6 +165,7 @@ mod tests {
         let commitment = PalwFreePromptCommitmentV3 {
             trace_root: h64(0x7A),
             output_root: h64(0x0B),
+            execution_root: h64(0x4E),
             schedule_root: h64(0x5C),
             decode_tokens_executed: decode,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,

@@ -115,6 +115,29 @@ tests are the *existing* baseline, and the daemon-suite abort is an environment/
 the same binary. A wiring PR is clean when it leaves this table unchanged, not when the suite is
 green.
 
+## The free-prompt lane is not adjudicable yet, and says so (found at the 2026-08-20 integration)
+
+The attempt lane's audit-C3 fix gives a claim the executor's `committed_execution_root`, and
+`adjudicate_court_close_v2` pins a refutation's binding to it — which is what stops an accuser
+from writing the whole binding and harvesting a shape conviction against an honest producer.
+
+The free-prompt lane had no counterpart. A free-prompt claim built without that root has nothing
+for the court to bind against, so every dispute about it dies at `ExecutionRootMismatch`: a
+producer no court can convict, which is arithmetic fraud with impunity on the lane that carries
+user work.
+
+`PalwFreePromptCommitmentV3` carries `execution_root` now, and `apply_palw_transition_v3` refuses
+a commitment whose root is null (`UnadjudicableCommitment`). **That refusal currently rejects
+every commitment the worker can build**: the v3 execution path runs the model and commits a
+schedule and a trace root, but captures no legs, so it has no `PalwStepBindingV2` to recompute a
+root from. It emits the null root deliberately rather than a fabricated one — a fabricated value
+would make disputes fail in a way that looks like the producer winning them.
+
+**The remaining work is legs capture on the free-prompt execution path.** The v2-legs path already
+produces the binding this field wants (`misaka-palw-worker` builds `PalwStepBindingV2` on its
+legs and open paths); the free-prompt path needs the same capture. Until then the chain refuses
+the claim at admission instead of at a dispute nobody can win, which is where a gap belongs.
+
 ## Sequencing note for the fleet drill (FP-09 stage 2)
 
 The drill needs Units A–D on a devnet preset carrying
