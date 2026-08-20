@@ -40,7 +40,7 @@
 | **P0-7** executor 除外 ID / operator dedup | **CLOSED** — 除外 ID は bond record から解決、`operator_root` は owner hash（`None` だと 1 operator が k bond で k 席、quorum の購入価格が bond 下限 × k）|
 | **P0-7** no-show 罰則 | **意図的に未実装** — 現状の consequence は「share の没収」（credit は receipt から payee を作るので既に発生している）。それを超える罰則は `BondMutation` に `Slash`（**全額 burn**）しか無く、no-show に配線すると liveness 障害を equivocation と同罰にし、**seated な validator を 1 duty window だけ eclipse すれば担保全額を焼ける**というより安い攻撃を作る。必要なのは partial-forfeit mutation と罰則の大きさ（後者は ADR-0038 が「決めない」と明記する数値パラメータ）|
 | **P0-8** 法廷が通常ノードで判決不能 | **機構 CLOSED / 母集団は前提待ち** — `palw_artifact` で証明付き operand（leaf は位置も束縛、奇数ノードは promote、tail 付き path は拒否、1 件でも偽なら全体を拒否）。法廷の算術は不変で、oracle だけが「持っているファイル」から「証明された証拠」に変わる。**残るのは inventory の登録**（どの tensor をどの順で行に切るか）で、これは実モデルの shape profile が無いという既知の前提に依存する |
-| **P0-9** bisection court 未完成 | **一部** — 項目 5（`Open` が slash 対象 bond を一意に定められない）を CLOSED：`responder_bond_outpoint` を追加し、解決不能な bond を名指す Open は dispute を開かない（開けると「担保 0 で block を永久 Provisional に留める無料の veto」になる）。項目 1〜4（`mid_state` 未検証、terminal opening、withheld execution の authorship、ladder 深さ）は未着手 |
+| **P0-9** bisection court 未完成 | **一部** — 項目 5（`Open` が slash 対象 bond を一意に定められない）を CLOSED：`responder_bond_outpoint` を追加し、解決不能な bond を名指す Open は dispute を開かない（開けると「担保 0 で block を永久 Provisional に留める無料の veto」になる）。項目 1（`mid_state` が何も束縛しない）を **部分 CLOSED**：endpoint 状態 (`lo_state`/`hi_state`) を維持し、そのどちらかを繰り返す開示を拒否。開示を「真」にはしない（full node には決定不能）が、responder を**自分の主張の連鎖に拘束**し、端点が等しい＝分岐が無い区間へ誘導できなくする。この pair は terminal check の anchor pair そのものなので、**その不在はもう terminal を塞いでいない**。残るのは terminal opening 自体（項目 2）、withheld execution の authorship（項目 3）、ladder 深さ（項目 4）|
 
 ### P0-1 で監査の推奨 remedy を採らなかった理由
 

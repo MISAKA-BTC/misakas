@@ -87,6 +87,8 @@ pub fn bisect_session_id_v1(
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwBisectError {
+    #[error("the disclosed midpoint state repeats an endpoint's own state — the interval would contain no divergence")]
+    MidStateRepeatsAnEndpoint,
     #[error("w_round is zero — every move would be instantly overdue, so no ladder can be played")]
     ZeroRungWindow,
     #[error("unsupported bisect object version {got} (expected {expected})")]
@@ -198,20 +200,36 @@ pub struct PalwBisectLadderV1 {
     round: u32,
     turn: PalwBisectTurnV1,
     last_deadline_daa: u64,
+    /// The state commitments the interval's endpoints currently carry — the **anchor pair**.
+    ///
+    /// `lo_state` starts at the job context (the execution's agreed starting point) and `hi_state`
+    /// at the announced `committed_root`; every accepted verdict replaces one of them with the
+    /// midpoint state the responder disclosed. So the responder is bound to a chain of its own
+    /// claims rather than to nothing, and whichever index the interval collapses on arrives with
+    /// two pinned states — which is exactly the pair a terminal check needs, and the reason its
+    /// absence made this field's predecessor inert.
+    lo_state: Hash64,
+    hi_state: Hash64,
     /// Disclosed midpoint states, rung-ordered.
     ///
-    /// **Recorded and never verified, and nothing reads them.** The intent is that a terminal check's
-    /// anchor pair comes from here — the states bracketing the final index — but that check does not
-    /// exist, and `apply_disclosure` accepts any `mid_state` whatsoever: only the MIDPOINT is checked
-    /// against `bisect_midpoint_v1`. So the rungs of this ladder currently bind nothing about the
-    /// execution, and the located index is a function of what the responder chose to disclose.
+    /// Recorded, and now **partly binding** (external audit P0-9 item 1).
     ///
-    /// That is harmless only because no move can convert `Terminal` into a verdict yet. The moment a
-    /// terminal-opening move exists, a guilty responder can disclose junk at every rung to steer the
-    /// interval onto an index it can open honestly, and a challenger no-show then settles in its
-    /// favour. Closing it needs a definition of "state commitment at index i" per
-    /// [`PalwBisectSpaceV1`], checked in `apply_disclosure` — see the prerequisite note in
-    /// `palw_facts`'s `an_open_ladder_is_an_open_dispute`.
+    /// `apply_disclosure` used to accept any `mid_state` whatsoever — only the MIDPOINT was checked
+    /// — so the rungs bound nothing and the located index was a function of what the responder chose
+    /// to say. It now refuses a state that repeats either endpoint of the current interval, and the
+    /// endpoints are maintained as [`Self::lo_state`] / [`Self::hi_state`]: the seeds are the job
+    /// context and the announced root, and every verdict replaces one with the state just disclosed.
+    ///
+    /// **What that does and does not buy.** It does not make a disclosure TRUE — no full node can
+    /// decide that without the execution, which is what the terminal opening and the proof-carrying
+    /// operands of `palw_artifact` are for. It makes the responder accountable to its own chain of
+    /// claims: it can no longer answer with a state it has already committed to, and it can no
+    /// longer drive the interval onto endpoints that are equal — an interval whose ends agree
+    /// contains no divergence, so a ladder that reached one has disproved its own dispute.
+    ///
+    /// The pair also IS the terminal check's anchor pair, so its absence is no longer what blocks
+    /// that check; the remaining blockers are the terminal-opening move itself and the authorship
+    /// half for a withheld execution (items 2-4).
     pub disclosures: Vec<(u64, Hash64)>,
 }
 
@@ -242,6 +260,10 @@ impl PalwBisectLadderV1 {
             round: 0,
             turn: PalwBisectTurnV1::AwaitDisclosure,
             last_deadline_daa: first_deadline_daa,
+            // The execution's agreed start and the root the block announced: the two states the
+            // dispute claims differ. Everything the ladder narrows lies strictly between them.
+            lo_state: *job_context_hash,
+            hi_state: *committed_root,
             disclosures: Vec::new(),
         })
     }
@@ -324,6 +346,23 @@ impl PalwBisectLadderV1 {
             return Err(PalwBisectError::TurnMismatch { expected: "the pinned midpoint", got: "another index" });
         }
         let deadline = Self::rung_deadline(accepted_daa, w_round)?;
+        // Audit P0-9 item 1: a disclosure that repeats an endpoint's own state is refused.
+        //
+        // The rungs used to bind nothing — only the MIDPOINT was checked, so a guilty responder
+        // could disclose junk at every rung, an honest challenger would disagree every time, and
+        // the interval would collapse on an index the RESPONDER steered onto an honestly-openable
+        // leaf. This does not make a disclosure true, which no full node can check; it makes the
+        // responder ACCOUNTABLE to its own claims.
+        //
+        // Repeating an endpoint is the move that has to go: the dispute asserts the interval's
+        // endpoints diverge, so a midpoint state equal to one of them says the divergence lies
+        // wholly in the other half — a claim the responder is free to make by choosing that half,
+        // but not by asserting a state it has already committed to. Accepting it lets a verdict
+        // collapse the interval onto endpoints that are EQUAL, which is an interval containing no
+        // divergence, and a ladder that has proved its own dispute empty cannot then convict.
+        if msg.mid_state == self.lo_state || msg.mid_state == self.hi_state {
+            return Err(PalwBisectError::MidStateRepeatsAnEndpoint);
+        }
         self.disclosures.push((mid, msg.mid_state));
         self.last_deadline_daa = deadline;
         self.turn = PalwBisectTurnV1::AwaitVerdict;
@@ -358,10 +397,22 @@ impl PalwBisectLadderV1 {
             return Err(PalwBisectError::RoundBudgetExceeded);
         }
         let mid = bisect_midpoint_v1(self.lo, self.hi);
+        // The state this rung's responder disclosed for `mid`. `apply_disclosure` pushed it and the
+        // turn machine guarantees exactly one disclosure precedes each verdict, so the last entry is
+        // this rung's — read rather than re-derived, because a second derivation is a second chance
+        // to disagree with what was actually accepted.
+        let Some(&(_, disclosed)) = self.disclosures.last() else {
+            return Err(PalwBisectError::TurnMismatch { expected: "a disclosure before the verdict", got: "none" });
+        };
         if msg.agree {
+            // Agreeing means the divergence is PAST the midpoint, so the midpoint's disclosed
+            // state becomes the interval's new low anchor. Recording it is what makes the next
+            // rung's endpoint-repeat check bite against this rung's claim.
             self.lo = mid;
+            self.lo_state = disclosed;
         } else {
             self.hi = mid;
+            self.hi_state = disclosed;
         }
         self.round = next_round;
         self.last_deadline_daa = deadline;
@@ -436,7 +487,7 @@ mod tests {
             let mid = ladder.expected_midpoint().expect("a non-terminal ladder has a midpoint");
             ladder
                 .apply_disclosure(
-                    &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round, midpoint: mid, mid_state: h64(1) },
+                    &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round, midpoint: mid, mid_state: h64(0x40u8.wrapping_add(round as u8)) },
                     100,
                     10,
                 )
@@ -495,7 +546,11 @@ mod tests {
                                 session_id: ladder.session_id(),
                                 round: ladder.round(),
                                 midpoint: mid,
-                                mid_state: h64((mid % 251) as u8),
+                                // An honest responder's state at `mid` is a function of `mid` and distinct from
+                                // every other index's. `h64(mid % 251)` was neither once the ladder
+                                // narrowed — it repeats every 251 indices and collides with the
+                                // all-one-byte seeds — and the endpoint-repeat check refuses exactly that.
+                                mid_state: Hash64::from_u64_word(0x5A5A_0000 + mid),
                             },
                             daa,
                             W_ROUND,
@@ -668,6 +723,40 @@ mod tests {
         let verdict = PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true };
         assert_eq!(ladder.apply_verdict(&verdict, 510, 0), Err(PalwBisectError::ZeroRungWindow));
         assert_eq!(ladder, before, "a refused verdict must leave the ladder untouched");
+    }
+
+    /// **Audit P0-9 item 1**: the rungs bind the responder to its own claims.
+    ///
+    /// Before this, only the MIDPOINT was checked and `mid_state` was recorded unread — so a guilty
+    /// responder could disclose the same junk at every rung, an honest challenger would disagree
+    /// every time, and the interval would collapse on an index the RESPONDER steered onto a leaf it
+    /// could open honestly. The check does not make a disclosure true (no full node can decide
+    /// that); it makes repeating a state the responder has already committed to inadmissible.
+    ///
+    /// Both endpoints are covered, and the second is the one that matters: the dispute asserts the
+    /// endpoints differ, so a midpoint equal to either says the interval it would create contains
+    /// no divergence at all.
+    #[test]
+    fn a_disclosure_may_not_repeat_an_endpoint_state() {
+        let ctx = h64(0x11);
+        let root = h64(0x22);
+        let mut ladder = PalwBisectLadderV1::open(&ctx, &root, &h64(0x33), &h64(0x44), PalwBisectSpaceV1::StepLeaves, 16, 100, 110)
+            .expect("a 16-wide space opens");
+        let mid = ladder.expected_midpoint().unwrap();
+        let disclose = |state| PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 0, midpoint: mid, mid_state: state };
+
+        assert_eq!(ladder.clone().apply_disclosure(&disclose(ctx), 120, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
+        assert_eq!(ladder.clone().apply_disclosure(&disclose(root), 120, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
+        // Anything else is admissible — this is accountability, not verification.
+        assert!(ladder.apply_disclosure(&disclose(h64(0x77)), 120, 10).is_ok());
+
+        // And the anchor moves: after agreeing, the disclosed state IS the low endpoint, so the next
+        // rung may not repeat it either. That is what makes the binding cumulative rather than a
+        // one-off check against the seeds.
+        ladder.apply_verdict(&PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true }, 130, 10).unwrap();
+        let next = ladder.expected_midpoint().unwrap();
+        let repeat = PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 1, midpoint: next, mid_state: h64(0x77) };
+        assert_eq!(ladder.apply_disclosure(&repeat, 140, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
     }
 
     #[test]
