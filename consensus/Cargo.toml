@@ -13,6 +13,9 @@ repository.workspace = true
 arc-swap.workspace = true
 async-channel.workspace = true
 bincode.workspace = true
+# kaspa-pq ADR-0042 (PR-08 store shape): the PALW V2 state store persists the consensus types'
+# canonical Borsh bytes verbatim, so the store crate needs the encoder itself.
+borsh.workspace = true
 crossbeam-channel.workspace = true
 faster-hex.workspace = true
 futures-util.workspace = true

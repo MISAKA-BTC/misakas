@@ -357,6 +357,19 @@ pub enum DatabaseStorePrefixes {
     /// as [`Self::PalwCarriagesSchema`] — a class whose target reads as absent is a class whose
     /// blocks weigh nothing, which is a wrong answer that looks like a valid one.
     PalwClassStateSchema = 214,
+    /// ADR-0042 Decision 5 / PR-08: per-chain-block `PalwStateDeltaV2` (Borsh bytes, verbatim) +
+    /// the resulting `state_root` — the reorg primitive on disk. A candidate's V2 standing is a
+    /// fold of these deltas along ITS chain, never a read of the node's sink.
+    PalwStateV2Deltas = 216,
+    /// Singleton: the materialized V2 state at the selected sink — `PalwStateCarriageV2` Borsh
+    /// bytes plus the chain block they stand at. Loading verifies the committed `state_root`, so
+    /// a corrupted or hand-edited snapshot refuses to become a sink instead of becoming one
+    /// quietly.
+    PalwStateV2Tip = 223,
+    /// Singleton `u32`: the layout the two stores above were written under. Same reason as
+    /// [`Self::PalwCarriagesSchema`] — undecodable rows read as absent, and an absent V2 state
+    /// looks exactly like "no PALW work matured", which fork choice would act on.
+    PalwStateV2Schema = 224,
 
     // ---- Separator ----
     /// Reserved as a separator

@@ -980,7 +980,7 @@ fn collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[
 /// One entry of a block's state delta: which key changed, from what, to what. `old` is carried so
 /// application can verify it is being applied to the state it was computed from, and so a reorg
 /// can revert without recomputing the branch.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwDeltaEntryV2 {
     Bond { key: PalwBondKeyV2, old: Option<PalwBondStateV2>, new: Option<PalwBondStateV2> },
     Exposure { key: PalwBondKeyV2, old: Option<u128>, new: Option<u128> },
@@ -1000,7 +1000,7 @@ pub enum PalwDeltaEntryV2 {
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
 /// from the child reproduces the parent ([`revert_delta_v2`]). Both are tested equal, which is
 /// what makes a store layer built on deltas unable to drift from the transition.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwStateDeltaV2 {
     pub point: PalwBlockContextV2,
     pub entries: Vec<PalwDeltaEntryV2>,
