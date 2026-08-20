@@ -632,6 +632,25 @@ pub enum PalwPanelDutyV1 {
 /// The consequence is deliberately NOT here. This answers "who defaulted"; what that costs is a
 /// slash-path decision, and the two are separated so the accounting can be tested against cases no
 /// live slash path exists to exercise yet.
+///
+/// **What the consequence is today, and why it stops there (external audit P0-7).** A seat that
+/// files nothing earns nothing: `palw_credit` pays `paid_attesters`, which is built from receipts,
+/// so forfeiture of the attester share is already a real consensus consequence. What does not
+/// exist is a penalty BEYOND forfeiture, and that gap must not be closed with the mutation that
+/// happens to exist.
+///
+/// `BondMutation` offers `Insert`, `Slash` and `Unbond`, and `Slash` burns the WHOLE bond. Wiring
+/// a no-show to it would punish a liveness fault exactly as hard as equivocation, and hand an
+/// attacker a cheaper attack than the one it closes: get a validator seated, eclipse it for one
+/// duty window, and its entire collateral is gone. Being a verifier would then be irrational, and
+/// the panel this design leans on would not be filled at all.
+///
+/// So the honest remainder is two things this tree does not have: a **partial-forfeit mutation**,
+/// and a **penalty size** — and the size is one of the numeric parameters ADR-0038 states it does
+/// not decide, because it prices downtime against griefing and only a soak can measure that.
+/// Forfeiture also does not deter the attack the audit names — a verifier withholding receipts to
+/// stall an honest block's maturity is not chasing the fee — and the answer to THAT is a quorum
+/// reachable without the withholder or a re-draw, which is a design change rather than a penalty.
 pub fn panel_duty_v1<F>(input: &PalwResolverInputV1<'_>, verify_signature: F) -> PalwPanelDutyV1
 where
     F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
