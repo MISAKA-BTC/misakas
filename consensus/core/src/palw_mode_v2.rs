@@ -236,7 +236,7 @@ mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa).unwrap(),
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 1000, class_daa).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
@@ -275,6 +275,7 @@ mod tests {
                         10,
                         20,
                         500,
+                        1000,
                         1000,
                         PalwClassDaaV2Params::new([(h64(1), 900u16)].into_iter().collect(), 4).unwrap(),
                     )

@@ -383,6 +383,7 @@ mod tests {
             20,
             500,
             1000,
+            1000,
             crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
         )
         .unwrap()

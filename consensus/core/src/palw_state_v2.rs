@@ -91,12 +91,18 @@
 use crate::BlockHash;
 use crate::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2};
 use crate::palw_fork_choice::PalwCandidateOrderV1;
+use crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3;
 use crate::tx::TransactionOutpoint;
 use blake2b_simd::Params;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PALW_STATE_V2_VERSION: u16 = 1;
+/// Version 2: ADR-0044 (FP-03) added the free-prompt claim source, the per-quantum spend ledger,
+/// and the receipt lane's target/census collections. Bumped BECAUSE the root's collection list
+/// and the claim record's encoding both moved — nothing had persisted a version-1 root anywhere
+/// (the module was consensus-inert), and the version sits inside both the root and the carriage
+/// digest, so a v1 and a v2 state can never be mistaken for one another.
+pub const PALW_STATE_V2_VERSION: u16 = 2;
 
 pub const PALW_STATE_V2_DOMAIN_STATE_ROOT: &[u8] = b"misaka-palw/state-v2/state-root/v1";
 pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collection/v1";
@@ -193,11 +199,19 @@ pub struct PalwStateParamsV2 {
     /// retarget span: each global epoch boundary the chain crosses closes one span and retargets
     /// every share-bearing, unfrozen class against it.
     epoch_length: u64,
+    /// ADR-0044 Decision 1's source split, as the retarget consumes it: the attempt lane's
+    /// permille of combined production; the receipt lane gets the remainder. **1000 = no receipt
+    /// lane** — the pure-attempt configuration, under which the two-lane retarget is byte-for-byte
+    /// the single-lane rule (every pre-FP fixture passes 1000 and changes nothing). The FP
+    /// bundle's startup gate additionally demands `0 < split < 1000` on a live FP network
+    /// (a zero floor has no beacons; 1000 has no receipts).
+    fp_attempt_share_permille: u16,
     /// The per-class DAA constants (see [`PalwClassDaaV2Params`]).
     class_daa: PalwClassDaaV2Params,
 }
 
 impl PalwStateParamsV2 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         beta_permille: u16,
         window_bind: u64,
@@ -205,6 +219,7 @@ impl PalwStateParamsV2 {
         window_challenge: u64,
         window_court: u64,
         epoch_length: u64,
+        fp_attempt_share_permille: u16,
         class_daa: PalwClassDaaV2Params,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
@@ -216,7 +231,19 @@ impl PalwStateParamsV2 {
         if epoch_length == 0 {
             return Err(PalwStateV2Error::InvalidParams("epoch_length must be at least one DAA unit"));
         }
-        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length, class_daa })
+        if fp_attempt_share_permille == 0 || fp_attempt_share_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("the attempt share must be 1..=1000 permille — a zero floor has no beacons"));
+        }
+        Ok(Self {
+            beta_permille,
+            window_bind,
+            window_receipt,
+            window_challenge,
+            window_court,
+            epoch_length,
+            fp_attempt_share_permille,
+            class_daa,
+        })
     }
 
     pub fn beta_permille(&self) -> u16 {
@@ -249,6 +276,11 @@ impl PalwStateParamsV2 {
     /// The per-session court budget (see the field's doc).
     pub fn window_court(&self) -> u64 {
         self.window_court
+    }
+
+    /// The attempt lane's permille of combined production (see the field's doc).
+    pub fn fp_attempt_share_permille(&self) -> u16 {
+        self.fp_attempt_share_permille
     }
 
     pub fn class_daa(&self) -> &PalwClassDaaV2Params {
@@ -387,8 +419,33 @@ impl PalwClaimPhaseV2 {
     }
 }
 
+/// What kind of work a claim stands for — and, for a free-prompt claim, its spend ledger.
+///
+/// ADR-0044 (FP-03): a free-prompt claim IS a claim in this lattice — same phases, same windows,
+/// same exposure accounting, same court — with two deliberate divergences the variant carries the
+/// data for:
+///
+/// * **No weight of its own.** An attempt claim's `Final` adds its `pwu` to `safe_weight`
+///   (the attempt IS a block's work). A free-prompt claim's `Final` adds nothing — it *licenses*:
+///   weight arrives only when a certified quantum is spent into a receipt block, `pwu/quanta` per
+///   spend. Its `immature_contribution` is likewise zero, so commitment-stuffing cannot pump a
+///   chain's live weight without blocks.
+/// * **A per-quantum spend ledger.** `spent` records which quanta this candidate chain has
+///   converted into blocks — branch-scoped by construction, because the claim lives in the
+///   branch-scoped state (the UTXO double-spend analogy: a fork may spend the same quantum, and
+///   fork choice, never a node-global cache, resolves it).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwClaimSourceV2 {
+    /// The block's own chain-challenge attempt (algo 6) — the V2 lane, unchanged.
+    Attempt,
+    /// A free-prompt execution commitment (ADR-0044). `quanta ≥ 1` always: sub-quantum work is
+    /// refused at acceptance rather than parked in state it can never act from.
+    FreePrompt { quanta: u32, spent: BTreeSet<u32> },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClaimStateV2 {
+    pub source: PalwClaimSourceV2,
     pub class_id: Hash64,
     pub bond: PalwBondKeyV2,
     pub pwu: u64,
@@ -516,6 +573,32 @@ pub enum PalwConsensusObjectV2 {
     ProducerDefaulted {
         claim: Hash64,
     },
+    /// ADR-0044 (FP-03): a free-prompt execution commitment, accepted on chain. Creates a claim
+    /// at `Provisional` with `source: FreePrompt` — from there the lattice runs unmodified
+    /// (panel from a beacon anchor, quorum, court, sweeps). `pwu` is the claim's TOTAL potential
+    /// block weight (`quanta × per-quantum weight`, enforced uniform here); the acceptance layer
+    /// derived it and `quanta` from the commitment's CU under the bundle's rule and is the layer
+    /// that checked them — this transition enforces referential integrity, uniformity, and the
+    /// accounting, exactly as it trusts an attempt's admission-checked `pwu`.
+    FreePromptCommitted {
+        claim: Hash64,
+        class_id: Hash64,
+        bond: PalwBondKeyV2,
+        pwu: u64,
+        quanta: u32,
+        trace_root: Hash64,
+        output_root: Hash64,
+    },
+}
+
+/// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
+/// attempt (algo 6), a certified-receipt quantum spend (algo 7), or none (a hash-lane or
+/// object-only application). Exactly one per block — a block IS one unit of work.
+#[derive(Clone, Copy, Debug)]
+pub enum PalwBlockWorkV3<'a> {
+    None,
+    Attempt(&'a PalwAttemptEnvelopeV2),
+    ReceiptSpend(&'a PalwReceiptSpendUnsignedV3),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -568,6 +651,16 @@ pub enum PalwStateV2Error {
     ZeroClassTarget(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
     Retarget(String),
+    #[error("claim {0} is not a free-prompt claim — an attempt's work was already weighed at its own block")]
+    NotFreePromptClaim(Hash64),
+    #[error("free-prompt claim {claim} has {quanta} quanta; index {index} does not exist")]
+    QuantumOutOfRange { claim: Hash64, index: u32, quanta: u32 },
+    #[error("free-prompt claim {claim} quantum {index} is already spent on this chain")]
+    QuantumAlreadySpent { claim: Hash64, index: u32 },
+    #[error("a free-prompt commitment with zero quanta licenses nothing and does not enter the state")]
+    ZeroQuanta,
+    #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
+    NonUniformQuanta { pwu: u64, quanta: u32 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -587,11 +680,18 @@ pub struct PalwChainStateV2 {
     reserved_exposure: BTreeMap<PalwBondKeyV2, u128>,
     classes: BTreeMap<Hash64, PalwClassStateV2>,
     class_targets: BTreeMap<Hash64, PalwClassTargetV2>,
+    /// The receipt lane's per-class difficulty (ADR-0044 Decision 5's `receipt_target[class]`).
+    /// Seeded at class registration from the same initial target as the attempt lane; the
+    /// per-lane retargets separate them from there.
+    receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
     court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
+    /// Receipt-lane production census per class (spent quanta as blocks/pwu), feeding the
+    /// receipt-lane retarget exactly as `epoch_counters` feeds the attempt lane's.
+    receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
     safe_weight: u128,
     bounded_immature: u128,
     safe_frontier_blue_score: u64,
@@ -619,11 +719,13 @@ impl PalwChainStateV2 {
             reserved_exposure: BTreeMap::new(),
             classes: BTreeMap::new(),
             class_targets: BTreeMap::new(),
+            receipt_targets: BTreeMap::new(),
             capabilities: BTreeMap::new(),
             claims: BTreeMap::new(),
             panels: BTreeMap::new(),
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
+            receipt_epoch_counters: BTreeMap::new(),
             safe_weight: 0,
             bounded_immature: 0,
             safe_frontier_blue_score: 0,
@@ -648,6 +750,15 @@ impl PalwChainStateV2 {
 
     pub fn class_target(&self, id: &Hash64) -> Option<&PalwClassTargetV2> {
         self.class_targets.get(id)
+    }
+
+    /// The receipt lane's per-class target — what a quantum ticket is admitted against (FP-04).
+    pub fn receipt_target(&self, id: &Hash64) -> Option<&PalwClassTargetV2> {
+        self.receipt_targets.get(id)
+    }
+
+    pub fn receipt_epoch_counter(&self, class_id: &Hash64) -> Option<&PalwEpochCounterV2> {
+        self.receipt_epoch_counters.get(class_id)
     }
 
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
@@ -702,8 +813,11 @@ impl PalwChainStateV2 {
     // ---- the root ----
 
     /// The state root: version, then every collection root in the struct's declared order, then
-    /// the scalars. The exact ordering is frozen in ADR-0043; changing it — or what any
-    /// collection's entry encoding covers — is a consensus change and needs a new domain string.
+    /// the scalars. The exact ordering is frozen in ADR-0043 — extended in place (still pre-wire,
+    /// nothing had committed a root) by ADR-0044 with the two receipt-lane collections, each
+    /// placed directly after its attempt-lane counterpart, under the version bump to 2. Changing
+    /// it again — or what any collection's entry encoding covers — is a consensus change and
+    /// needs a new domain string or version.
     pub fn state_root(&self) -> Hash64 {
         let mut state = keyed(PALW_STATE_V2_DOMAIN_STATE_ROOT);
         state.update(&PALW_STATE_V2_VERSION.to_le_bytes());
@@ -711,11 +825,13 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"reserved_exposure", &self.reserved_exposure).as_byte_slice());
         state.update(collection_root(b"classes", &self.classes).as_byte_slice());
         state.update(collection_root(b"class_targets", &self.class_targets).as_byte_slice());
+        state.update(collection_root(b"receipt_targets", &self.receipt_targets).as_byte_slice());
         state.update(collection_root(b"capabilities", &self.capabilities).as_byte_slice());
         state.update(collection_root(b"claims", &self.claims).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
+        state.update(collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters).as_byte_slice());
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -743,10 +859,40 @@ impl PalwChainStateV2 {
         let mut immature: u128 = 0;
         let mut unresolved: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            match claim.phase {
-                PalwClaimPhaseV2::Final { .. } => {
-                    safe = safe.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+            // Free-prompt structural facts hold in EVERY phase: quanta ≥ 1, uniform quanta, the
+            // ledger inside range, spends only on a certified (Final) claim, and zero immature
+            // contribution (a commitment is not a block's work).
+            if let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source {
+                if *quanta == 0 || claim.pwu % (*quanta as u64) != 0 || claim.pwu / (*quanta as u64) == 0 {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} has non-uniform quanta")));
                 }
+                if spent.iter().any(|q| *q >= *quanta) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} spent an absent quantum")));
+                }
+                if !spent.is_empty() && !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!("free-prompt claim {id} spent before Final")));
+                }
+                if claim.immature_contribution != 0 {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "free-prompt claim {id} carries immature contribution — commitments must not pump live weight"
+                    )));
+                }
+            }
+            match claim.phase {
+                PalwClaimPhaseV2::Final { .. } => match &claim.source {
+                    // An attempt's Final IS its block's certified work.
+                    PalwClaimSourceV2::Attempt => {
+                        safe = safe.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                    }
+                    // A free-prompt Final licenses; only SPENT quanta weighed blocks.
+                    PalwClaimSourceV2::FreePrompt { quanta, spent } => {
+                        let per_quantum = (claim.pwu / (*quanta as u64)) as u128;
+                        let spent_weight = per_quantum
+                            .checked_mul(spent.len() as u128)
+                            .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
+                        safe = safe.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                    }
+                },
                 PalwClaimPhaseV2::Voided { .. } => {}
                 _ => {
                     immature =
@@ -908,11 +1054,13 @@ pub enum PalwDeltaEntryV2 {
     Exposure { key: PalwBondKeyV2, old: Option<u128>, new: Option<u128> },
     Class { key: Hash64, old: Option<PalwClassStateV2>, new: Option<PalwClassStateV2> },
     Target { key: Hash64, old: Option<PalwClassTargetV2>, new: Option<PalwClassTargetV2> },
+    ReceiptTarget { key: Hash64, old: Option<PalwClassTargetV2>, new: Option<PalwClassTargetV2> },
     Capability { key: Hash64, old: Option<PalwCapabilityStateV2>, new: Option<PalwCapabilityStateV2> },
     Claim { key: Hash64, old: Option<PalwClaimStateV2>, new: Option<PalwClaimStateV2> },
     Panel { key: Hash64, old: Option<PalwPanelStateV2>, new: Option<PalwPanelStateV2> },
     Court { key: Hash64, old: Option<PalwCourtSessionStateV2>, new: Option<PalwCourtSessionStateV2> },
     Epoch { key: Hash64, old: Option<PalwEpochCounterV2>, new: Option<PalwEpochCounterV2> },
+    ReceiptEpoch { key: Hash64, old: Option<PalwEpochCounterV2>, new: Option<PalwEpochCounterV2> },
     Weights { old: (u128, u128), new: (u128, u128) },
     Frontier { old: (u64, BlockHash), new: (u64, BlockHash) },
     LastPoint { old: Option<PalwBlockContextV2>, new: Option<PalwBlockContextV2> },
@@ -977,6 +1125,14 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::Target { key, old, new });
     }
 
+    fn write_receipt_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) {
+        let old = match &new {
+            Some(record) => self.state.receipt_targets.insert(key, record.clone()),
+            None => self.state.receipt_targets.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ReceiptTarget { key, old, new });
+    }
+
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
@@ -1032,6 +1188,14 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::Epoch { key, old, new });
     }
 
+    fn write_receipt_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) {
+        let old = match &new {
+            Some(record) => self.state.receipt_epoch_counters.insert(key, record.clone()),
+            None => self.state.receipt_epoch_counters.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ReceiptEpoch { key, old, new });
+    }
+
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     fn arm_deadline(&mut self, deadline: u64, claim: Hash64) {
@@ -1077,8 +1241,13 @@ impl<'a> TransitionBuilder<'a> {
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
         self.release_for_claim(claim)?;
-        self.state.safe_weight =
-            self.state.safe_weight.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+        // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
+        // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
+        // quantum, at the receipt block that spends it.
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            self.state.safe_weight =
+                self.state.safe_weight.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+        }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized));
@@ -1106,15 +1275,31 @@ impl<'a> TransitionBuilder<'a> {
 // The transition
 // ---------------------------------------------------------------------------------------------
 
-/// Apply one chain block's PALW content to its parent state. Pure: `(parent, params, ctx,
-/// objects, attempt) → (child, delta)`, or an error that rejects the block's PALW content
-/// wholesale — a partial application is a state nobody else can recompute.
+/// The attempt-only face of [`apply_palw_transition_v3`], kept so every pre-FP caller and test
+/// reads exactly as before: an `Option<attempt>` is the two work shapes a V2-only network has.
 pub fn apply_palw_transition_v2(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     ctx: &PalwBlockContextV2,
     accepted_objects: &[PalwConsensusObjectV2],
     current_attempt: Option<&PalwAttemptEnvelopeV2>,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    let work = match current_attempt {
+        Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+        None => PalwBlockWorkV3::None,
+    };
+    apply_palw_transition_v3(parent, params, ctx, accepted_objects, work)
+}
+
+/// Apply one chain block's PALW content to its parent state. Pure: `(parent, params, ctx,
+/// objects, work) → (child, delta)`, or an error that rejects the block's PALW content
+/// wholesale — a partial application is a state nobody else can recompute.
+pub fn apply_palw_transition_v3(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
@@ -1144,9 +1329,11 @@ pub fn apply_palw_transition_v2(
         apply_object(&mut builder, ctx, object)?;
     }
 
-    // 4. The block's own attempt.
-    if let Some(envelope) = current_attempt {
-        apply_attempt(&mut builder, ctx, envelope)?;
+    // 4. The block's own work — an attempt, a certified-quantum spend, or none.
+    match block_work {
+        PalwBlockWorkV3::None => {}
+        PalwBlockWorkV3::Attempt(envelope) => apply_attempt(&mut builder, ctx, envelope)?,
+        PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
     }
 
     // 5. Frontier observation: if the whole past is resolved at this point, the frontier is here.
@@ -1237,17 +1424,28 @@ fn apply_class_retargets(
     if ctx.daa_score / epoch_length <= closed_epoch {
         return Ok(());
     }
-    let total: u64 = builder
-        .state
-        .epoch_counters
-        .values()
-        .filter(|counter| counter.epoch_index == closed_epoch)
-        .map(|counter| counter.produced_blocks)
-        .sum();
-    if total == 0 {
+    let lane_total = |counters: &BTreeMap<Hash64, PalwEpochCounterV2>| -> u64 {
+        counters.values().filter(|counter| counter.epoch_index == closed_epoch).map(|counter| counter.produced_blocks).sum()
+    };
+    let attempt_total = lane_total(&builder.state.epoch_counters);
+    let receipt_total = lane_total(&builder.state.receipt_epoch_counters);
+    let combined = attempt_total.checked_add(receipt_total).ok_or(PalwStateV2Error::Overflow("combined census"))?;
+    if combined == 0 {
         return Ok(());
     }
-    // Snapshot the iteration set: the writes below mutate `class_targets`, never `classes`, but
+    // ADR-0044 Decision 5/9: ONE combined census, and per-lane expectations formed by COMPOSING
+    // the class share with the source split — `share × split / 1000` for the attempt lane,
+    // `share × (1000 − split) / 1000` for the receipt lane, half-up. The census total stays the
+    // REAL combined count for both lanes, so the rule's own invariant (a class cannot exceed its
+    // span) holds even when one lane over-produces its split — an over-producing lane simply
+    // measures above its composed expectation and tightens. (Scaling the TOTAL instead was the
+    // first draft, and it broke exactly there: a lane's observed blocks exceeded its synthetic
+    // span.) At split = 1000 the attempt lane's composed share is the class share and the receipt
+    // lane's is zero — the pure-attempt configuration is the old single-lane rule, byte for byte.
+    let split = builder.params.fp_attempt_share_permille as u32;
+    let compose = |share: u16, lane_permille: u32| -> u16 { ((share as u32 * lane_permille + 500) / 1000) as u16 };
+
+    // Snapshot the iteration set: the writes below mutate the target maps, never `classes`, but
     // borrowing rules want the plan separated from the writes anyway.
     let class_ids: Vec<Hash64> = builder.state.classes.keys().copied().collect();
     for class_id in class_ids {
@@ -1256,24 +1454,38 @@ fn apply_class_retargets(
             continue;
         }
         let Some(share) = builder.params.class_daa.share_permille(&class_id) else { continue };
-        let observed = builder
-            .state
-            .epoch_counters
-            .get(&class_id)
-            .filter(|counter| counter.epoch_index == closed_epoch)
-            .map(|counter| counter.produced_blocks)
-            .unwrap_or(0);
-        let current = builder
-            .state
-            .class_targets
-            .get(&class_id)
-            .ok_or_else(|| PalwStateV2Error::Retarget(format!("class {class_id} has no target slot")))?
-            .target;
-        let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: observed, total_daa_blocks: total };
-        let next = crate::palw_class_daa::retarget_over_span_v1(current, &census, share, builder.params.class_daa.max_factor())
-            .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?;
-        if next != current {
-            builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+        for (lane_permille, counters_are_receipts) in [(split, false), (1000 - split, true)] {
+            let composed_share = compose(share, lane_permille);
+            if composed_share == 0 {
+                // A lane whose composed share rounds to nothing measures nothing — the split
+                // itself said so. The FP bundle's startup gate refuses splits that zero a
+                // share-bearing class's lane (FP-05), so on a live network this arm is the
+                // split = 1000 receipt lane and nothing else.
+                continue;
+            }
+            let counters = if counters_are_receipts { &builder.state.receipt_epoch_counters } else { &builder.state.epoch_counters };
+            let observed = counters
+                .get(&class_id)
+                .filter(|counter| counter.epoch_index == closed_epoch)
+                .map(|counter| counter.produced_blocks)
+                .unwrap_or(0);
+            let targets = if counters_are_receipts { &builder.state.receipt_targets } else { &builder.state.class_targets };
+            let lane = if counters_are_receipts { "receipt" } else { "attempt" };
+            let current = targets
+                .get(&class_id)
+                .ok_or_else(|| PalwStateV2Error::Retarget(format!("class {class_id} has no {lane} target slot")))?
+                .target;
+            let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: observed, total_daa_blocks: combined };
+            let next =
+                crate::palw_class_daa::retarget_over_span_v1(current, &census, composed_share, builder.params.class_daa.max_factor())
+                    .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?;
+            if next != current {
+                if counters_are_receipts {
+                    builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                } else {
+                    builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                }
+            }
         }
     }
     Ok(())
@@ -1361,6 +1573,10 @@ fn apply_object(
                 }),
             );
             builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
+            // The receipt lane seeds from the same initial target (ADR-0044): the two lanes'
+            // retargets separate them from here, against their own censuses. One registration
+            // field, two slots — a second declared number would be a second fact to drift.
+            builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
         }
         PalwConsensusObjectV2::ClassFrozen { class_id } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
@@ -1470,7 +1686,106 @@ fn apply_object(
             }
             builder.void_claim(*claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
         }
+        PalwConsensusObjectV2::FreePromptCommitted { claim: claim_id, class_id, bond, pwu, quanta, trace_root, output_root } => {
+            if builder.state.claims.contains_key(claim_id) {
+                return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
+            }
+            let bond_record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+            if let PalwBondStatusV2::Retiring { .. } = bond_record.status {
+                return Err(PalwStateV2Error::RetiringBond(*bond));
+            }
+            let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+            if let PalwClassStatusV2::Frozen { .. } = class.status {
+                return Err(PalwStateV2Error::FrozenClass(*class_id));
+            }
+            if *quanta == 0 {
+                return Err(PalwStateV2Error::ZeroQuanta);
+            }
+            if *pwu % (*quanta as u64) != 0 || *pwu / (*quanta as u64) == 0 {
+                return Err(PalwStateV2Error::NonUniformQuanta { pwu: *pwu, quanta: *quanta });
+            }
+            let reserved =
+                (*pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+            let claim = PalwClaimStateV2 {
+                source: PalwClaimSourceV2::FreePrompt { quanta: *quanta, spent: BTreeSet::new() },
+                class_id: *class_id,
+                bond: *bond,
+                pwu: *pwu,
+                accepted_daa: ctx.daa_score,
+                accepted_blue_score: ctx.blue_score,
+                accepted_block: ctx.block,
+                trace_root: *trace_root,
+                output_root: *output_root,
+                reserved,
+                // Zero, deliberately (ADR-0044): a commitment riding a transaction is not a
+                // block's work — β credit here would let commitment-stuffing pump a chain's live
+                // weight without producing anything.
+                immature_contribution: 0,
+                phase: PalwClaimPhaseV2::Provisional,
+            };
+            builder.reserve_for_claim(&claim)?;
+            builder.write_claim(*claim_id, Some(claim));
+            let deadline =
+                ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
+            builder.arm_deadline(deadline, *claim_id);
+            // No production census here: commitments are not blocks. The receipt lane's counters
+            // move when a quantum is SPENT.
+        }
     }
+    Ok(())
+}
+
+/// Apply a receipt block's own work: spend one certified quantum (ADR-0044 Decision 6 as the
+/// state sees it). Admission (FP-04) already checked the beacon fact, the ticket, the use
+/// window, the producer bond identity and the signature — this transition enforces what the
+/// STATE alone can know: the claim exists, is free-prompt, is certified, and this quantum is
+/// unspent on this chain. The weight a spend adds is the claim's uniform per-quantum weight,
+/// re-derived — never carried.
+fn apply_receipt_spend(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    spend: &PalwReceiptSpendUnsignedV3,
+) -> Result<(), PalwStateV2Error> {
+    let claim_id = spend.claim_id;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {
+        return Err(PalwStateV2Error::NotFreePromptClaim(claim_id));
+    };
+    if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
+        return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ReceiptSpend" });
+    }
+    if spend.quantum_index >= *quanta {
+        return Err(PalwStateV2Error::QuantumOutOfRange { claim: claim_id, index: spend.quantum_index, quanta: *quanta });
+    }
+    if spent.contains(&spend.quantum_index) {
+        return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
+    }
+    let per_quantum = claim.pwu / (*quanta as u64);
+    builder.state.safe_weight =
+        builder.state.safe_weight.checked_add(per_quantum as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+    let mut updated = claim.clone();
+    let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
+    ledger.insert(spend.quantum_index);
+    builder.write_claim(claim_id, Some(updated));
+
+    // Receipt-lane production census — what the receipt retarget measures.
+    let epoch_index = ctx.daa_score / builder.params.epoch_length;
+    let previous = builder.state.receipt_epoch_counters.get(&claim.class_id).cloned();
+    let counter = match previous {
+        Some(counter) if counter.epoch_index == epoch_index => PalwEpochCounterV2 {
+            epoch_index,
+            produced_pwu: counter
+                .produced_pwu
+                .checked_add(per_quantum as u128)
+                .ok_or(PalwStateV2Error::Overflow("receipt epoch produced_pwu"))?,
+            produced_blocks: counter
+                .produced_blocks
+                .checked_add(1)
+                .ok_or(PalwStateV2Error::Overflow("receipt epoch produced_blocks"))?,
+        },
+        _ => PalwEpochCounterV2 { epoch_index, produced_pwu: per_quantum as u128, produced_blocks: 1 },
+    };
+    builder.write_receipt_epoch(claim.class_id, Some(counter));
     Ok(())
 }
 
@@ -1497,6 +1812,7 @@ fn apply_attempt(
         (attempt.pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
 
     let claim = PalwClaimStateV2 {
+        source: PalwClaimSourceV2::Attempt,
         class_id: attempt.class_id,
         bond: bond_key,
         pwu: attempt.pwu,
@@ -1593,11 +1909,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::Exposure { key, old, new } => swap_write!(state.reserved_exposure, key, old, new),
         PalwDeltaEntryV2::Class { key, old, new } => swap_write!(state.classes, key, old, new),
         PalwDeltaEntryV2::Target { key, old, new } => swap_write!(state.class_targets, key, old, new),
+        PalwDeltaEntryV2::ReceiptTarget { key, old, new } => swap_write!(state.receipt_targets, key, old, new),
         PalwDeltaEntryV2::Capability { key, old, new } => swap_write!(state.capabilities, key, old, new),
         PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
         PalwDeltaEntryV2::Court { key, old, new } => swap_write!(state.court_sessions, key, old, new),
         PalwDeltaEntryV2::Epoch { key, old, new } => swap_write!(state.epoch_counters, key, old, new),
+        PalwDeltaEntryV2::ReceiptEpoch { key, old, new } => swap_write!(state.receipt_epoch_counters, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -1706,11 +2024,13 @@ pub struct PalwStateCarriageV2 {
     pub reserved_exposure: BTreeMap<PalwBondKeyV2, u128>,
     pub classes: BTreeMap<Hash64, PalwClassStateV2>,
     pub class_targets: BTreeMap<Hash64, PalwClassTargetV2>,
+    pub receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     pub capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     pub claims: BTreeMap<Hash64, PalwClaimStateV2>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
     pub court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     pub epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
+    pub receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
     pub safe_weight: u128,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
@@ -1726,11 +2046,13 @@ impl PalwStateCarriageV2 {
             reserved_exposure: state.reserved_exposure.clone(),
             classes: state.classes.clone(),
             class_targets: state.class_targets.clone(),
+            receipt_targets: state.receipt_targets.clone(),
             capabilities: state.capabilities.clone(),
             claims: state.claims.clone(),
             panels: state.panels.clone(),
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
+            receipt_epoch_counters: state.receipt_epoch_counters.clone(),
             safe_weight: state.safe_weight,
             bounded_immature: state.bounded_immature,
             safe_frontier_blue_score: state.safe_frontier_blue_score,
@@ -1771,11 +2093,13 @@ impl PalwStateCarriageV2 {
             reserved_exposure: self.reserved_exposure,
             classes: self.classes,
             class_targets: self.class_targets,
+            receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
             claims: self.claims,
             panels: self.panels,
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
+            receipt_epoch_counters: self.receipt_epoch_counters,
             safe_weight: self.safe_weight,
             bounded_immature: self.bounded_immature,
             safe_frontier_blue_score: self.safe_frontier_blue_score,
@@ -1834,8 +2158,24 @@ impl PalwStateBookV2 {
         objects: &[PalwConsensusObjectV2],
         attempt: Option<&PalwAttemptEnvelopeV2>,
     ) -> Result<Hash64, PalwStateV2Error> {
+        let work = match attempt {
+            Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+            None => PalwBlockWorkV3::None,
+        };
+        self.apply_block_with_work(parent_block, ctx, objects, work)
+    }
+
+    /// [`Self::apply_block`], with the full V3 work slot (ADR-0044) — the shape the FP wiring
+    /// persists.
+    pub fn apply_block_with_work(
+        &mut self,
+        parent_block: BlockHash,
+        ctx: PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+    ) -> Result<Hash64, PalwStateV2Error> {
         let parent = self.states.get(&parent_block).ok_or(PalwStateV2Error::MissingParentState(parent_block))?;
-        let (child, delta) = apply_palw_transition_v2(parent, &self.params, &ctx, objects, attempt)?;
+        let (child, delta) = apply_palw_transition_v3(parent, &self.params, &ctx, objects, work)?;
         let root = child.state_root();
         self.states.insert(ctx.block, child);
         self.deltas.insert(ctx.block, delta);
@@ -1863,7 +2203,7 @@ mod tests {
     use crate::tx::TransactionId;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa()).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 1000, class_daa()).unwrap()
     }
 
     fn class_daa() -> PalwClassDaaV2Params {
@@ -2646,7 +2986,7 @@ mod tests {
         // Case 2: class 1 at 500‰ produces everything; class 2 (500‰) is frozen before the
         // boundary. Class 1 hardens; class 2 does not move.
         let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
-        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 1000, shares).unwrap();
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
@@ -2701,22 +3041,311 @@ mod tests {
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, class_daa()).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, class_daa()).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, class_daa()).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, class_daa()).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, class_daa()).is_err(), "zero court window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, class_daa()).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, class_daa()).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, 1000, class_daa()).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, 1000, class_daa()).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, 1000, class_daa()).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, 1000, class_daa()).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, 1000, class_daa()).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, 1000, class_daa()).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, 1000, class_daa()).is_ok(), "β = 1 exactly is the boundary");
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, class_daa()).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, 1000, class_daa()).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, class_daa()).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, 1000, class_daa()).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
+    }
+
+    // ---- ADR-0044 (FP-03): free-prompt claims, certification, and quantum spends ----
+
+    fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::FreePromptCommitted {
+            claim: h64(claim_word),
+            class_id: h64(1),
+            bond: bond_key(1),
+            pwu,
+            quanta,
+            trace_root: h64(41),
+            output_root: h64(42),
+        }
+    }
+
+    fn fp_spend(claim_word: u64, quantum_index: u32) -> PalwReceiptSpendUnsignedV3 {
+        PalwReceiptSpendUnsignedV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: h64(999),
+            claim_id: h64(claim_word),
+            quantum_index,
+            beacon_block: h64(0xBEAC),
+            producer_bond: bond_key(1).0,
+            producer_pubkey: vec![7; 4],
+        }
+    }
+
+    /// [`apply`] for the V3 work slot, with both consistency checkers.
+    fn apply_work(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let (state, delta) = apply_palw_transition_v3(parent, p, c, objects, work).expect("transition applies");
+        state.assert_internal_consistency().expect("internal consistency after apply");
+        state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        (state, delta)
+    }
+
+    /// Drive one committed FP claim through the lattice to `Final`: commit at daa 101, bind at
+    /// 102, license at 103, sweep past the challenge window at 124. Returns the certified state.
+    fn certify_fp_claim(p: &PalwStateParamsV2, pwu: u64, quanta: u32) -> PalwChainStateV2 {
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&s1, p, &ctx(2, 101, 2), &[fp_commit(0xFC, pwu, quanta)], None);
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
+        let (s4, _) = apply(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC) }], None);
+        let (s5, _) = apply(&s4, p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(s5.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the fixture certifies");
+        s5
+    }
+
+    /// **ADR-0044's weight divergence, end to end.** A free-prompt claim walks the SAME lattice
+    /// as an attempt, but: it carries zero immature weight while pending, its `Final` adds
+    /// NOTHING to safe weight (certification licenses, it does not weigh), an unspent certified
+    /// receipt does not hold the frontier back — and each spent quantum adds exactly the uniform
+    /// per-quantum weight, once, on this chain.
+    #[test]
+    fn fp_claim_certifies_without_weight_and_spends_add_it_per_quantum() {
+        let p = params();
+        let certified = certify_fp_claim(&p, 60, 3);
+
+        // Certification moved NO weight, released the exposure, and freed the frontier.
+        assert_eq!((certified.safe_weight(), certified.bounded_immature()), (0, 0), "Final licenses; it does not weigh");
+        assert_eq!(certified.reserved_exposure(&bond_key(1)), 0, "exposure released at Final");
+        assert_eq!(certified.safe_frontier(), (5, block(5)), "an unspent certified receipt does not block the frontier");
+
+        // Spend quantum 0: exactly pwu/quanta = 20 safe weight, and the receipt census counts it.
+        let spend0 = fp_spend(0xFC, 0);
+        let (s6, _) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+        assert_eq!(s6.safe_weight(), 20, "one quantum = pwu/quanta, re-derived, never carried");
+        let census = s6.receipt_epoch_counter(&h64(1)).expect("the spend is counted");
+        assert_eq!((census.produced_blocks, census.produced_pwu), (1, 20));
+        assert!(s6.epoch_counter(&h64(1)).is_none(), "a spend is receipt-lane production, not attempt-lane");
+
+        // Spend quantum 2 on top: weight accumulates linearly.
+        let spend2 = fp_spend(0xFC, 2);
+        let (s7, _) = apply_work(&s6, &p, &ctx(7, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&spend2));
+        assert_eq!(s7.safe_weight(), 40);
+
+        // The same quantum cannot be spent twice on this chain…
+        let again = apply_palw_transition_v3(&s7, &p, &ctx(8, 132, 8), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+        assert_eq!(again.unwrap_err(), PalwStateV2Error::QuantumAlreadySpent { claim: h64(0xFC), index: 0 });
+        // …and a quantum that never existed is named, not modulo-wrapped.
+        let ghost = fp_spend(0xFC, 3);
+        let out_of_range = apply_palw_transition_v3(&s7, &p, &ctx(8, 132, 8), &[], PalwBlockWorkV3::ReceiptSpend(&ghost));
+        assert_eq!(out_of_range.unwrap_err(), PalwStateV2Error::QuantumOutOfRange { claim: h64(0xFC), index: 3, quanta: 3 });
+    }
+
+    /// The two lanes share ONE exposure ceiling (invariant F13): an FP commitment reserves
+    /// against the same bond accumulator an attempt does — and contributes zero immature weight,
+    /// so commitment-stuffing cannot pump a chain's live total without blocks.
+    #[test]
+    fn fp_commitments_share_the_bond_exposure_and_carry_no_immature_weight() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let env = attempt(40, 1);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        assert_eq!(s2.reserved_exposure(&bond_key(1)), 200, "the attempt reserves 40 × 5");
+        assert_eq!(s2.bounded_immature(), 4);
+
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(s3.reserved_exposure(&bond_key(1)), 500, "the FP commitment adds 60 × 5 to the SAME ceiling");
+        assert_eq!(s3.bounded_immature(), 4, "the FP commitment adds NO immature weight");
+        assert_eq!(s3.safe_weight(), 0);
+
+        // Keep the attempt claim alive past the FP claim's bind deadline (bind its panel: its
+        // receipt window re-arms to 105 + 10), so the sweep at 113 voids ONLY the FP claim…
+        let attempt_claim = attempt_id_v2(&attempt(40, 1).attempt);
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 105, 4),
+            &[PalwConsensusObjectV2::PanelBound { claim: attempt_claim, anchor: h64(77), seats }],
+            None,
+        );
+        // …the FP bind deadline is 102 + 10 = 112; the attempt's receipt deadline is 115.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 113, 5), &[], None);
+        assert!(matches!(
+            s5.claim(&h64(0xFC)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+        assert!(!s5.claim(&attempt_claim).unwrap().phase.is_terminal(), "the attempt claim is still pending");
+        assert_eq!(s5.reserved_exposure(&bond_key(1)), 200, "the void releases the FP reserve, byte for byte");
+    }
+
+    /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
+    /// refusal is named.
+    #[test]
+    fn fp_spends_require_a_final_free_prompt_claim() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // Absent claim.
+        let spend = fp_spend(0xFC, 0);
+        let missing = apply_palw_transition_v3(&s1, &p, &ctx(2, 101, 2), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+        assert_eq!(missing.unwrap_err(), PalwStateV2Error::MissingClaim(h64(0xFC)));
+
+        // Provisional (committed, not yet certified).
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let premature = apply_palw_transition_v3(&s2, &p, &ctx(3, 102, 3), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+        assert_eq!(premature.unwrap_err(), PalwStateV2Error::WrongPhase { claim: h64(0xFC), edge: "ReceiptSpend" });
+
+        // An attempt claim, even Final, is not spendable — its work was weighed at its own block.
+        let env = attempt(40, 1);
+        let attempt_claim = attempt_id_v2(&env.attempt);
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[], Some(&env));
+        let wrong_source = fp_spend(0, 0);
+        let mut wrong = wrong_source.clone();
+        wrong.claim_id = attempt_claim;
+        let refused = apply_palw_transition_v3(&s3, &p, &ctx(4, 103, 4), &[], PalwBlockWorkV3::ReceiptSpend(&wrong));
+        assert_eq!(refused.unwrap_err(), PalwStateV2Error::NotFreePromptClaim(attempt_claim));
+    }
+
+    /// Malformed commitments are refused at the door: zero quanta parks nothing in state, and a
+    /// pwu that does not divide into uniform non-zero quanta is not a commitment.
+    #[test]
+    fn fp_commitments_with_broken_quantization_are_refused() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let zero = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 0)], None);
+        assert_eq!(zero.unwrap_err(), PalwStateV2Error::ZeroQuanta);
+
+        let ragged = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
+        assert_eq!(ragged.unwrap_err(), PalwStateV2Error::NonUniformQuanta { pwu: 61, quanta: 3 });
+
+        let hollow = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 0, 3)], None);
+        assert_eq!(hollow.unwrap_err(), PalwStateV2Error::NonUniformQuanta { pwu: 0, quanta: 3 });
+    }
+
+    /// The spend's delta replays and reverts bit-for-bit — the reorg primitive holds for the new
+    /// entry kinds (Claim ledger mutation, Weights, ReceiptEpoch).
+    #[test]
+    fn fp_spend_delta_replays_and_reverts_exactly() {
+        let p = params();
+        let certified = certify_fp_claim(&p, 60, 3);
+        let spend0 = fp_spend(0xFC, 0);
+        let (child, delta) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+
+        let replayed = apply_delta_v2(&certified, &delta, &p).expect("the delta applies to its own parent");
+        assert_eq!(replayed, child, "replay reproduces the transition bit-for-bit");
+        let reverted = revert_delta_v2(&child, &delta, &p).expect("the delta reverts from its own child");
+        assert_eq!(reverted, certified, "revert restores the parent bit-for-bit");
+        assert!(
+            apply_delta_v2(&child, &delta, &p).is_err(),
+            "the spend delta cannot double-apply — the ledger's old value no longer matches"
+        );
+    }
+
+    /// **The two-lane retarget (ADR-0044 Decision 5/9).** One combined census, split once by the
+    /// attempt share, each lane retargeted by the SAME rule against its scaled expectation — and
+    /// at split = 1000 the receipt lane measures nothing and its target never moves.
+    #[test]
+    fn two_lane_retarget_splits_one_census() {
+        // Split 800‰: epoch_length 100, so daa 100..200 is epoch 1, closed when a block lands at
+        // daa ≥ 200.
+        let split = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, 800, class_daa()).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &split, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // Epoch 1 production: 1 attempt block…
+        let env = attempt(40, 1);
+        let (s2, _) = apply(&s1, &split, &ctx(2, 110, 2), &[], Some(&env));
+        // …and 2 receipt blocks, from a claim committed and certified inside the epoch (bind at
+        // 112, license at 113, challenge window ends 133, swept Final at 140).
+        let (s3, _) = apply(&s2, &split, &ctx(3, 111, 3), &[fp_commit(0xFC, 60, 3)], None);
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s4, _) =
+            apply(&s3, &split, &ctx(4, 112, 4), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
+        let (s5, _) = apply(&s4, &split, &ctx(5, 113, 5), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC) }], None);
+        let (s6, _) = apply(&s5, &split, &ctx(6, 140, 6), &[], None);
+        let spend0 = fp_spend(0xFC, 0);
+        let spend1 = fp_spend(0xFC, 1);
+        let (s7, _) = apply_work(&s6, &split, &ctx(7, 141, 7), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+        let (s8, _) = apply_work(&s7, &split, &ctx(8, 142, 8), &[], PalwBlockWorkV3::ReceiptSpend(&spend1));
+
+        let boot = s8.class_target(&h64(1)).unwrap().target;
+        assert_eq!(s8.receipt_target(&h64(1)).unwrap().target, boot, "both lanes still sit at the registration seed");
+
+        // Cross the epoch boundary: ONE combined census of 3 blocks; the attempt lane retargets
+        // its 1 observed block against composed share 1000 × 800‰ = 800‰, the receipt lane its 2
+        // observed against 200‰ — the receipt lane over-produced its split (2 of 3 ≫ 200‰) and
+        // the rule simply measures it, which is exactly the case that broke the scaled-total
+        // draft (a synthetic span smaller than a lane's real production is not a census).
+        let (s9, _) = apply(&s8, &split, &ctx(9, 205, 9), &[], None);
+        let expected_attempt = crate::palw_class_daa::retarget_over_span_v1(
+            boot,
+            &crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: 1, total_daa_blocks: 3 },
+            800,
+            4,
+        )
+        .unwrap();
+        let expected_receipt = crate::palw_class_daa::retarget_over_span_v1(
+            boot,
+            &crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: 2, total_daa_blocks: 3 },
+            200,
+            4,
+        )
+        .unwrap();
+        assert_eq!(s9.class_target(&h64(1)).unwrap().target, expected_attempt, "the attempt lane retargets against its split");
+        assert_eq!(s9.receipt_target(&h64(1)).unwrap().target, expected_receipt, "the receipt lane retargets against the remainder");
+        assert_ne!(expected_attempt, expected_receipt, "the fixture actually separates the lanes");
+
+        // And at split = 1000 (every pre-FP fixture), the receipt lane never moves: same walk,
+        // attempt production only.
+        let pure = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, 1000, class_daa()).unwrap();
+        let (t1, _) = apply(&PalwChainStateV2::genesis(), &pure, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (t2, _) = apply(&t1, &pure, &ctx(2, 110, 2), &[], Some(&attempt(40, 1)));
+        let boot_pure = t2.receipt_target(&h64(1)).unwrap().target;
+        let (t3, _) = apply(&t2, &pure, &ctx(3, 205, 3), &[], None);
+        assert_eq!(t3.receipt_target(&h64(1)).unwrap().target, boot_pure, "split = 1000: the receipt lane measures nothing");
+        // …and the attempt lane runs the old rule exactly: one class holding 1000‰ producing the
+        // whole span is the V1 rule's deliberate no-op, so the target holds still here too.
+        assert_eq!(t3.class_target(&h64(1)).unwrap().target, boot_pure, "one class at its exact share: the old rule's no-op");
+    }
+
+    /// The carriage round-trips the FP additions: a certified-and-partly-spent state serializes,
+    /// reloads under its committed root, and refuses a tampered spend ledger.
+    #[test]
+    fn fp_state_carriage_roundtrips_and_refuses_a_tampered_ledger() {
+        let p = params();
+        let certified = certify_fp_claim(&p, 60, 3);
+        let spend0 = fp_spend(0xFC, 0);
+        let (state, _) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+
+        let root = state.state_root();
+        let carriage = PalwStateCarriageV2::from_state(&state);
+        let reloaded = carriage.clone().into_state(&p, Some(root)).expect("the honest carriage reloads under its root");
+        assert_eq!(reloaded.state_root(), root);
+        assert_eq!(reloaded, state);
+
+        // A tampered ledger (the spend quietly erased, weight kept) is caught by the
+        // self-consistency check — safe weight no longer equals what the claims imply.
+        let mut tampered = carriage;
+        let claim = tampered.claims.get_mut(&h64(0xFC)).unwrap();
+        let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut claim.source else { panic!("fp claim") };
+        spent.clear();
+        assert!(tampered.into_state(&p, Some(root)).is_err(), "an erased spend ledger cannot reload");
     }
 }
