@@ -1321,6 +1321,50 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// The PALW fork-choice order of an ARBITRARY candidate (ADR-0042 Decision 9, Unit D's
+    /// prerequisite).
+    ///
+    /// Every one of the four selection sites — virtual tip, IBD commit, pruning ceiling,
+    /// deep-reorg gate — needs the same thing: a candidate's standing under the ONE comparator.
+    /// Standing is a function of that candidate's own chain (P0-4), so it is derived by walking
+    /// the chain path from the anchor to the candidate, exactly as a reorg would. That the four
+    /// sites then share this one function is what stops them growing four answers.
+    ///
+    /// `None` on a network with no V2 ruleset, and on a candidate whose state cannot be derived —
+    /// which a caller must treat as "no PALW opinion", never as "zero weight". A candidate that
+    /// looks weightless because its history could not be read is exactly the fabrication the
+    /// frontier-first ordering exists to refuse.
+    // Unused on purpose until Unit D wires all four selection sites at once. Wiring one while
+    // the others order by blue work is P0-5, so the capability waits for its callers rather than
+    // acquiring them one at a time.
+    #[allow(dead_code)]
+    pub(super) fn palw_candidate_order(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+        let bundle = self.palw_consensus_v2.as_ref()?;
+        // A candidate this node has never seen has no chain to derive from, and asking the
+        // reachability service about it PANICS. "No opinion" must be returned, not raised —
+        // these callers include ones that see peer-supplied hashes.
+        if !self.statuses_store.read().has(candidate).unwrap_or(false) {
+            return None;
+        }
+        let store = self.palw_state_v2_store.read();
+        let (anchor_block, anchor_state) = crate::processes::palw_state_walk::load_anchor(&store, &bundle.state)
+            .map_err(|e| {
+                warn!("[palw-state] cannot load the anchor while ordering candidate {candidate}: {e}");
+            })
+            .ok()?;
+        let state = if anchor_block == candidate {
+            anchor_state
+        } else {
+            let path = self.dag_traversal_manager.calculate_chain_path(anchor_block, candidate, None);
+            crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, anchor_state, &path.removed, &path.added)
+                .map_err(|e| {
+                    warn!("[palw-state] cannot derive the PALW state of candidate {candidate}: {e}");
+                })
+                .ok()?
+        };
+        Some(state.candidate_order(candidate))
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
     /// selected-chain candidate. Gated on `evm_activation_daa_score` (a single
     /// u64 compare on every current network); no-replay and the commitment

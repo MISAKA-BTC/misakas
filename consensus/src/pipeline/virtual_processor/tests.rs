@@ -5032,6 +5032,54 @@ mod palw_state_walk_wiring {
         tc.shutdown(handles);
     }
 
+    /// **Unit D's prerequisite**: any candidate can be ordered from its OWN chain, and the one
+    /// comparator ranks them — the capability all four selection sites will share, so they cannot
+    /// grow four answers (P0-5).
+    #[tokio::test]
+    async fn any_candidate_is_ordered_from_its_own_chain() {
+        use kaspa_consensus_core::palw_fork_choice::compare_palw_candidates_v1;
+
+        let config = v2_config();
+        let tc = TestConsensus::new(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        // Two branches off genesis, one longer.
+        let mut short = vec![genesis];
+        for i in 1..=2u64 {
+            let hash = Hash64::from_u64_word(0xD000 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*short.last().unwrap()], vec![]).await.unwrap();
+            short.push(hash);
+        }
+        let mut long = vec![genesis];
+        for i in 1..=4u64 {
+            let hash = Hash64::from_u64_word(0xE000 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*long.last().unwrap()], vec![]).await.unwrap();
+            long.push(hash);
+        }
+
+        // Both branches can be ordered, each from its own chain — including the one that LOST,
+        // which is the case a sink-scoped read would get wrong.
+        let winner = tc.virtual_processor().palw_candidate_order(*long.last().unwrap()).expect("the winner orders");
+        let loser = tc.virtual_processor().palw_candidate_order(*short.last().unwrap()).expect("the loser orders too");
+        let at_genesis = tc.virtual_processor().palw_candidate_order(genesis).expect("genesis orders");
+
+        // These blocks carry no PALW content, so weights are zero everywhere and the frontier is
+        // what separates them: it advances with a resolved past, so the longer branch's frontier
+        // sits higher.
+        assert_eq!(compare_palw_candidates_v1(&winner, &loser), std::cmp::Ordering::Greater, "the longer branch outranks the shorter");
+        assert_eq!(compare_palw_candidates_v1(&loser, &at_genesis), std::cmp::Ordering::Greater, "and both outrank genesis");
+        assert_eq!(compare_palw_candidates_v1(&winner, &winner), std::cmp::Ordering::Equal, "the comparator is reflexive");
+
+        // A candidate that is not a block at all yields no opinion — never a zero-weight one.
+        assert!(
+            tc.virtual_processor().palw_candidate_order(Hash64::from_u64_word(0xDEAD)).is_none(),
+            "an underivable candidate is no opinion, not zero weight"
+        );
+
+        tc.shutdown(handles);
+    }
+
     /// **Every shipped network is untouched.** A `Disabled` preset writes no anchor and no
     /// deltas, and mines exactly as it did before Unit C existed — the gate is one `is_some()`.
     #[tokio::test]
