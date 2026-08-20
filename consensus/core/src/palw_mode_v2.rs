@@ -27,6 +27,7 @@
 
 use crate::Hash64;
 use crate::palw_admission_v2::{PalwAdmissionParamsV2, PalwAdmissionV2Error};
+use crate::palw_freeprompt_v3::{PalwFpV3Error, PalwFreePromptParamsV3};
 use crate::palw_panel_v2::PalwPanelParamsV2;
 use crate::palw_reward_v2::PalwRewardParamsV2;
 use crate::palw_state_v2::{PalwStateParamsV2, PalwStateV2Error};
@@ -75,6 +76,8 @@ pub enum PalwModeV2Error {
     State(#[from] PalwStateV2Error),
     #[error("invalid V2 bundle: {0}")]
     Admission(#[from] PalwAdmissionV2Error),
+    #[error("invalid V2 bundle: {0}")]
+    FreePrompt(#[from] PalwFpV3Error),
 }
 
 /// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —
@@ -99,6 +102,10 @@ pub struct PalwConsensusParamsV2 {
     pub panel: PalwPanelParamsV2,
     pub reward: PalwRewardParamsV2,
     pub bond: PalwBondParamsV2,
+    /// ADR-0044: the free-prompt receipt lane — a REQUIRED part of the bundle, not a fence. A
+    /// ruleset without it is a different ruleset (a different `palw_ruleset_id_v2`), never this
+    /// one with a switch off.
+    pub freeprompt: PalwFreePromptParamsV3,
     /// Reorg safety margin added to the liability period in the withdrawal-delay invariant.
     pub reorg_margin_daa: u64,
     /// Measured worst-case honest prosecution time (the ladder-gap measurement's output); the
@@ -177,7 +184,54 @@ impl PalwConsensusParamsV2 {
         if self.bond.withdrawal_delay_daa() <= liability {
             return Err(PalwModeV2Error::Invalid("the withdrawal delay does not outlast the liability period"));
         }
+
+        // ---- ADR-0044: the free-prompt lane's startup invariants ----
+
+        // The source split holds BOTH lanes open: a zero attempt share has no beacons (F16), a
+        // full one has no receipts. The split lives in the state params (the retarget consumes
+        // it); this gate is where its live range is enforced.
+        let split = self.state.fp_attempt_share_permille();
+        if !(1..=999).contains(&split) {
+            return Err(PalwModeV2Error::Invalid("a live FP network needs 1..=999‰ attempt share — both lanes must exist"));
+        }
+
+        // Every share-bearing class must hold a non-zero COMPOSED share in both lanes, or the
+        // retarget's skip arm silently freezes that lane's price for that class.
+        for class_id in self.state.class_daa().class_ids() {
+            let share = self.state.class_daa().share_permille(&class_id).expect("iterating the table's own keys");
+            for lane_permille in [split as u32, 1000 - split as u32] {
+                if (share as u32 * lane_permille + 500) / 1000 == 0 {
+                    return Err(PalwModeV2Error::Invalid("a class's composed share rounds to zero in one lane — its price would freeze"));
+                }
+            }
+        }
+
+        // A late beacon must still bind inside the bind window: the panel's anchor is the FIRST
+        // attempt-class block at the slot, and the declared worst-case gap to one is part of the
+        // ruleset. Without this a thin floor quietly turns every FP claim into a BindTimeout.
+        let worst_anchor = self
+            .panel
+            .anchor_delay()
+            .checked_add(self.freeprompt.max_beacon_gap_daa())
+            .ok_or(PalwModeV2Error::Invalid("the anchor slot plus the beacon gap overflows the DAA score"))?;
+        if worst_anchor >= self.state.window_bind() {
+            return Err(PalwModeV2Error::Invalid("anchor_delay + max_beacon_gap must sit inside the bind window"));
+        }
+
+        // The draw beacon sits past the reorgable fringe of the certification it draws for.
+        if self.freeprompt.receipt_maturity_daa() < self.reorg_margin_daa {
+            return Err(PalwModeV2Error::Invalid("receipt maturity must cover the reorg margin"));
+        }
         Ok(())
+    }
+
+    /// Does this bundle accept the given header algorithm? A V2+FP network runs exactly two
+    /// block kinds: the attempt id and the receipt id (ADR-0044 Decision 1). This is the
+    /// two-id acceptance the FP-08 seam swap wires into the header/pruning gates; until then
+    /// the wired seam still demands the attempt id exclusively, and no live network carries a
+    /// bundle at all.
+    pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
+        algo_id == self.algorithm_id || algo_id == self.freeprompt.receipt_algorithm_id()
     }
 }
 
@@ -227,6 +281,22 @@ mod tests {
         Hash64::from_u64_word(v)
     }
 
+    pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
+        PalwFreePromptParamsV3::new(
+            crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+            1_000,
+            10,
+            crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+            64,
+            4_096,
+            512,
+            150,
+            200,
+            5,
+        )
+        .unwrap()
+    }
+
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
         let base = h64(1);
         let class_daa = PalwClassDaaV2Params::new([(base, 1000u16)].into_iter().collect(), 4).unwrap();
@@ -236,11 +306,13 @@ mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 1000, class_daa).unwrap(),
+            // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 800, class_daa).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
             bond: PalwBondParamsV2::new(20_000, 2_000).unwrap(),
+            freeprompt: conforming_freeprompt(),
             reorg_margin_daa: 100,
             worst_case_court_duration_daa: 400,
         }
@@ -252,6 +324,12 @@ mod tests {
         bundle.validate().expect("the fixture bundle holds every startup invariant");
         let id = palw_ruleset_id_v2(&bundle);
         assert_eq!(id, palw_ruleset_id_v2(&bundle.clone()), "the fingerprint is a pure function of the bundle");
+        // The bundle accepts exactly its two block kinds (ADR-0044 Decision 1) — and nothing else.
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
+        for other in [0u8, 1, 2, 3, 4, 5, 8, 0xff] {
+            assert!(!bundle.accepts_algo_id(other), "algo {other} is neither lane");
+        }
         assert_eq!(PalwConsensusMode::ConsensusV2(bundle).required_algo_id(), Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert_eq!(PalwConsensusMode::Disabled.required_algo_id(), None);
         assert_eq!(PalwConsensusMode::LegacyTn11.required_algo_id(), None);
@@ -276,8 +354,76 @@ mod tests {
                         20,
                         500,
                         1000,
-                        1000,
+                        800,
                         PalwClassDaaV2Params::new([(h64(1), 900u16)].into_iter().collect(), 4).unwrap(),
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "one-lane split (1000‰ has no receipts)",
+                Box::new(|b| {
+                    b.state = PalwStateParamsV2::new(
+                        100,
+                        10,
+                        10,
+                        20,
+                        500,
+                        1000,
+                        1000,
+                        PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "composed share rounds to zero in the receipt lane",
+                Box::new(|b| {
+                    // A 1‰ class under an 800/200 split: receipt-lane composed share is
+                    // (1 × 200 + 500) / 1000 = 0 — its receipt price would silently freeze.
+                    let table = [(h64(1), 999u16), (h64(2), 1u16)].into_iter().collect();
+                    b.state =
+                        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, 800, PalwClassDaaV2Params::new(table, 4).unwrap())
+                            .unwrap();
+                    b.admission = PalwAdmissionParamsV2::new(
+                        500,
+                        [(h64(1), 10_000u128), (h64(2), 10u128)].into_iter().collect(),
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                "beacon gap outside the bind window",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        6, // anchor_delay 4 + gap 6 = 10 ≥ window_bind 10
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "receipt maturity inside the reorg margin",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        99, // reorg_margin_daa is 100
+                        200,
+                        5,
                     )
                     .unwrap()
                 }),
@@ -421,6 +567,42 @@ mod tests {
             (
                 "exposure ratio",
                 Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()),
+            ),
+            (
+                "free-prompt quantum",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_001,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        5,
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "free-prompt cu price",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 2, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        5,
+                    )
+                    .unwrap()
+                }),
             ),
         ];
         for (name, mutate) in mutations {

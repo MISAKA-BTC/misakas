@@ -332,8 +332,144 @@ pub fn fp_spend_l1_tag_v3(spend_id: Hash64) -> [u8; PALW_FP_V3_L1_TAG_BYTES] {
     out
 }
 
+/// The free-prompt lane's network constants — a REQUIRED part of the `ConsensusV2` bundle
+/// (ADR-0044 Decision 9): there is no fence that enables the receipt lane, only a ruleset that
+/// includes it, hashed into `palw_ruleset_id_v2`. Constructed only through
+/// [`PalwFreePromptParamsV3::new`]; no `Default`. The source split is deliberately NOT here —
+/// it lives in the state params ([`crate::palw_state_v2::PalwStateParamsV2`]), because the
+/// transition's retarget consumes it, and one fact in two places is two facts.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFreePromptParamsV3 {
+    /// == [`crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3`]; a bundle claiming another id is
+    /// another ruleset.
+    receipt_algorithm_id: u8,
+    /// One quantum's CU — the uniform slice a certified job divides into (Decision 5).
+    quantum_cu: u128,
+    /// The chain weight one spent quantum contributes.
+    pwu_per_quantum: u64,
+    /// The CU pricing rule (Decision 7).
+    cu_weights: PalwFpCuWeightsV3,
+    /// The per-receipt jackpot bound.
+    max_quanta_per_receipt: u32,
+    /// ≤ [`crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS`] — the wire frame is the outer bound.
+    max_prompt_tokens: u32,
+    /// ≤ [`crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS`] — one decode step is one trace event.
+    max_decode_tokens: u32,
+    /// DAA delay from a claim's `Final` to its draw slot; the startup gate demands it exceed the
+    /// reorg margin, so the draw beacon is never inside the reorgable fringe of the very
+    /// certification it draws for.
+    receipt_maturity_daa: u64,
+    /// How long a win stays usable past its beacon (invariant F14).
+    receipt_use_window_daa: u64,
+    /// The declared worst-case gap to the next attempt-class chain block. Enforced against the
+    /// panel windows at startup: a late beacon must still bind inside `window_bind`.
+    max_beacon_gap_daa: u64,
+}
+
+impl PalwFreePromptParamsV3 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        receipt_algorithm_id: u8,
+        quantum_cu: u128,
+        pwu_per_quantum: u64,
+        cu_weights: PalwFpCuWeightsV3,
+        max_quanta_per_receipt: u32,
+        max_prompt_tokens: u32,
+        max_decode_tokens: u32,
+        receipt_maturity_daa: u64,
+        receipt_use_window_daa: u64,
+        max_beacon_gap_daa: u64,
+    ) -> Result<Self, PalwFpV3Error> {
+        if receipt_algorithm_id != crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
+            return Err(PalwFpV3Error::InvalidParams("receipt_algorithm_id is not the receipt-V3 id"));
+        }
+        if quantum_cu == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero quantum divides everything and prices nothing"));
+        }
+        if pwu_per_quantum == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero per-quantum weight makes receipt blocks weightless"));
+        }
+        if cu_weights.decode_weight == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero decode weight prices the reference shape at nothing"));
+        }
+        if max_quanta_per_receipt == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero quanta cap certifies receipts that can never draw"));
+        }
+        if max_prompt_tokens == 0 || max_prompt_tokens as usize > crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS {
+            return Err(PalwFpV3Error::InvalidParams("max_prompt_tokens must be 1..=the wire frame's prompt cap"));
+        }
+        if max_decode_tokens == 0 || max_decode_tokens as usize > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS {
+            return Err(PalwFpV3Error::InvalidParams("max_decode_tokens must be 1..=the trace event cap"));
+        }
+        if receipt_use_window_daa == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero use window makes every win stale at birth"));
+        }
+        if max_beacon_gap_daa == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero beacon gap claims the next attempt block is always instant"));
+        }
+        Ok(Self {
+            receipt_algorithm_id,
+            quantum_cu,
+            pwu_per_quantum,
+            cu_weights,
+            max_quanta_per_receipt,
+            max_prompt_tokens,
+            max_decode_tokens,
+            receipt_maturity_daa,
+            receipt_use_window_daa,
+            max_beacon_gap_daa,
+        })
+    }
+
+    pub fn receipt_algorithm_id(&self) -> u8 {
+        self.receipt_algorithm_id
+    }
+    pub fn quantum_cu(&self) -> u128 {
+        self.quantum_cu
+    }
+    pub fn pwu_per_quantum(&self) -> u64 {
+        self.pwu_per_quantum
+    }
+    pub fn cu_weights(&self) -> &PalwFpCuWeightsV3 {
+        &self.cu_weights
+    }
+    pub fn max_quanta_per_receipt(&self) -> u32 {
+        self.max_quanta_per_receipt
+    }
+    pub fn max_prompt_tokens(&self) -> u32 {
+        self.max_prompt_tokens
+    }
+    pub fn max_decode_tokens(&self) -> u32 {
+        self.max_decode_tokens
+    }
+    pub fn receipt_maturity_daa(&self) -> u64 {
+        self.receipt_maturity_daa
+    }
+    pub fn receipt_use_window_daa(&self) -> u64 {
+        self.receipt_use_window_daa
+    }
+    pub fn max_beacon_gap_daa(&self) -> u64 {
+        self.max_beacon_gap_daa
+    }
+
+    /// The claim-level derivation the acceptance layer runs before folding a
+    /// `FreePromptCommitted` object: quanta from certified CU, total pwu from quanta. `None`
+    /// when the job is sub-quantum — such a commitment never enters the state (ADR-0044
+    /// Decision 5: it certifies nothing the chain can act on, so it is not carried).
+    pub fn derive_quanta_and_pwu(&self, cu: u128) -> Option<(u32, u64)> {
+        let quanta = fp_quanta_v3(cu, self.quantum_cu, self.max_quanta_per_receipt);
+        if quanta == 0 {
+            return None;
+        }
+        let pwu = (quanta as u64).checked_mul(self.pwu_per_quantum)?;
+        Some((quanta, pwu))
+    }
+}
+
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwFpV3Error {
+    #[error("invalid free-prompt params: {0}")]
+    InvalidParams(&'static str),
     #[error("unsupported FP-V3 object version {got} (expected {expected})")]
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("the object's network domain is not this network's")]
