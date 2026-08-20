@@ -365,11 +365,23 @@ honest "red (integration), lands in PR-N."
   catalog problem this class exists to escape." The RC's permanently-Active liveness floor is
   BASE-0, so **the profile the RC genesis needs is BASE-0's, not the pinned float model's** — and
   BASE-0's is authorable today, because every op in it already has an adjudicator.
+- **BASE-0's profile landed 2026-08-20** (`palw_base0_profile`): ADR-0040 Decision D's plain
+  decoder-only transformer as the four node tables — 18 nodes per layer plus an embedding gather
+  and a norm-then-logits tail — derived from a `PalwBase0GeometryV1` the registering network
+  chooses. Geometry is an ARGUMENT here rather than a measurement, because BASE-0 has no file: it
+  is a specification, and the dimensions are the network's choice; `the_geometry_is_inside_the_identity`
+  holds every one of them inside `shape_profile_id`. `base0_profile_names_only_adjudicable_kernels`
+  checks every node against `catalogued_kernel_ids_v1()` — the adjudication table itself, not a
+  restated list — which is precisely the check a faithful Qwen3.5-2B profile fails. Its float
+  fields are all zero and its transcendental and contraction tables are empty, and each is a
+  property rather than an unfilled field: the rotary is a pinned integer table, the norm epsilon
+  is `base0_rms_eps_q`, and integer addition is exactly associative so there is no contraction to
+  pin.
 - **Still open, split by which class it belongs to.**
-  - *BASE-0 (blocks the RC genesis):* its shape profile — node table, tile lengths, `input_refs`,
-    the `kernel_semantics_id` per node — plus the catalog entry built from it
-    (`canonical_step_leaf_count` is counted from the profile, not chosen) and the artifact root.
-    Every instance in the tree today is still a fixture.
+  - *BASE-0 (blocks the RC genesis):* the ARTIFACT, not the graph — the int8 weight rows, the
+    per-tensor requantization parameters and the pinned sin/cos table, hashed into
+    `artifact_root`, plus the catalog entry whose `canonical_step_leaf_count` is COUNTED from the
+    profile. Code cannot mint weights; this is a registration artifact somebody produces.
   - *The pinned float model (blocks the FP lane, not the RC floor):* adjudicators for quantized
     float matmul, IMRoPE and float softmax must exist BEFORE its profile can be written, and the
     node tables, the per-node tile capture in the shim, and the leg after that. The GDN half is
