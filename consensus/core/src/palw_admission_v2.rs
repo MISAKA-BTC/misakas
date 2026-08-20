@@ -261,6 +261,16 @@ mod tests {
     const PPH: u64 = 5;
     const TS: u64 = 1_700;
 
+    /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
+    /// state machine mint the id — the same path a real registration takes.
+    fn op_key(v: u64) -> Vec<u8> {
+        vec![v as u8; 8]
+    }
+
+    fn op_id(v: u64) -> Hash64 {
+        crate::palw_state_v2::palw_operator_id_v2(&op_key(v))
+    }
+
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }
@@ -274,6 +284,7 @@ mod tests {
             500,
             1000,
             crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            100,
         )
         .unwrap()
     }
@@ -303,7 +314,7 @@ mod tests {
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
                 pubkey: vec![7; 4],
-                operator_id: h64(0x21),
+                operator_pubkey: op_key(0x21),
                 collateral: 1_000,
             },
         ];
@@ -313,7 +324,7 @@ mod tests {
     }
 
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
-        attempt_for_bond(pwu, nonce, bond_outpoint(1), vec![7; 4], h64(0x21))
+        attempt_for_bond(pwu, nonce, bond_outpoint(1), vec![7; 4], op_id(0x21))
     }
 
     fn attempt_for_bond(
@@ -516,13 +527,13 @@ mod tests {
             let objects = vec![PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(2)),
                 pubkey: vec![8; 4],
-                operator_id: h64(0x22),
+                operator_pubkey: op_key(0x22),
                 collateral: 200_000,
             }];
             let (s, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
             s
         };
-        let rich_attempt = |pwu: u64, nonce: u64| attempt_for_bond(pwu, nonce, bond_outpoint(2), vec![8; 4], h64(0x22));
+        let rich_attempt = |pwu: u64, nonce: u64| attempt_for_bond(pwu, nonce, bond_outpoint(2), vec![8; 4], op_id(0x22));
         // 20 × 500 pwu = exactly the budget, inside epoch 0. (Bind-timeout voids along the way
         // release EXPOSURE but never production — the budget counts what was produced.)
         for i in 0..20u64 {

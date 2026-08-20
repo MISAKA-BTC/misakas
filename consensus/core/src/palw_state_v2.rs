@@ -98,6 +98,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const PALW_STATE_V2_VERSION: u16 = 1;
 
+pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
+
+/// `H(operator_pubkey)` — the operator identity panel dedup runs on.
+///
+/// Domain-separated so an operator id can never collide with a class id, a claim id or any other
+/// `Hash64` this ruleset mints, and derived rather than carried so two bonds share an operator
+/// exactly when they name the same key.
+pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_OPERATOR_ID);
+    state.update(&(operator_pubkey.len() as u64).to_le_bytes());
+    state.update(operator_pubkey);
+    finish(state)
+}
+
 pub const PALW_STATE_V2_DOMAIN_STATE_ROOT: &[u8] = b"misaka-palw/state-v2/state-root/v1";
 pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collection/v1";
 pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage/v1";
@@ -195,6 +209,11 @@ pub struct PalwStateParamsV2 {
     epoch_length: u64,
     /// The per-class DAA constants (see [`PalwClassDaaV2Params`]).
     class_daa: PalwClassDaaV2Params,
+    /// Minimum slashable collateral a bond must register with. It lives here, where
+    /// registrations are applied, because that is the only place the rule can bite; the atomic
+    /// bundle carries the same value in `PalwBondParamsV2` and the startup gate requires the two
+    /// to agree.
+    min_collateral_sompi: u64,
 }
 
 impl PalwStateParamsV2 {
@@ -206,6 +225,7 @@ impl PalwStateParamsV2 {
         window_court: u64,
         epoch_length: u64,
         class_daa: PalwClassDaaV2Params,
+        min_collateral_sompi: u64,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
             return Err(PalwStateV2Error::InvalidParams("beta_permille exceeds 1000 (β ≤ 1)"));
@@ -216,7 +236,14 @@ impl PalwStateParamsV2 {
         if epoch_length == 0 {
             return Err(PalwStateV2Error::InvalidParams("epoch_length must be at least one DAA unit"));
         }
-        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length, class_daa })
+        if min_collateral_sompi == 0 {
+            return Err(PalwStateV2Error::InvalidParams("a zero minimum collateral bonds nothing — panel dedup would be free to defeat"));
+        }
+        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length, class_daa, min_collateral_sompi })
+    }
+
+    pub fn min_collateral_sompi(&self) -> u64 {
+        self.min_collateral_sompi
     }
 
     pub fn beta_permille(&self) -> u16 {
@@ -300,8 +327,13 @@ pub enum PalwBondStatusV2 {
 pub struct PalwBondStateV2 {
     /// The key admission verifies commitment signatures under (Decision 6 item 2).
     pub pubkey: Vec<u8>,
-    /// Required at registration (Decision 7): splitting collateral across bonds must not
-    /// manufacture extra panel seats.
+    /// Derived from the operator's key at registration ([`palw_operator_id_v2`]), never
+    /// declared. Decision 7 rests panel dedup on it: splitting collateral across bonds must not
+    /// manufacture extra panel seats. A self-declared label made that false for free — one
+    /// registrant writes N different ids and takes N seats (audit C5). A key commitment does not
+    /// make Sybil impossible, but it makes each extra identity a distinct key that must ALSO
+    /// carry [`PalwStateParamsV2::min_collateral_sompi`] of its own, which is the cost the ADR's
+    /// claim was always leaning on.
     pub operator_id: Hash64,
     /// Slashable collateral in sompi. Value MOVEMENT (slash, withdrawal) is PR-07/PR-09; this
     /// records what the exposure ceiling is measured against.
@@ -477,10 +509,14 @@ pub struct PalwBlockContextV2 {
 /// transition enforces referential integrity and the lattice.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwConsensusObjectV2 {
+    /// Carries the operator's KEY, not an operator id: the id is derived
+    /// ([`palw_operator_id_v2`]) so it names something someone must hold rather than a label
+    /// anyone can invent. The acceptance layer additionally verifies the registration under that
+    /// key; the transition derives the identity so the two cannot disagree about who registered.
     BondRegistered {
         bond: PalwBondKeyV2,
         pubkey: Vec<u8>,
-        operator_id: Hash64,
+        operator_pubkey: Vec<u8>,
         collateral: u64,
     },
     BondRetireRequested {
@@ -570,6 +606,10 @@ pub enum PalwStateV2Error {
     MissingParentState(BlockHash),
     #[error("class {0} registered with a zero target — an unmeetable difficulty is a dead class in costume")]
     ZeroClassTarget(Hash64),
+    #[error("bond {bond:?} registered {got} sompi, below the network's minimum collateral")]
+    CollateralBelowMinimum { bond: PalwBondKeyV2, got: u64 },
+    #[error("bond {0:?} registered an empty operator key — an operator identity must name a key someone holds")]
+    EmptyOperatorKey(PalwBondKeyV2),
     #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
     ZeroSlashValue(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
@@ -1414,15 +1454,23 @@ fn apply_object(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     match object {
-        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_id, collateral } => {
+        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral } => {
             if builder.state.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::DuplicateBond(*bond));
+            }
+            // Audit C5: a bond identity has to cost something, or panel dedup is a formality.
+            // `min_collateral_sompi` existed in the atomic bundle and was read by nobody.
+            if *collateral < builder.params.min_collateral_sompi {
+                return Err(PalwStateV2Error::CollateralBelowMinimum { bond: *bond, got: *collateral });
+            }
+            if operator_pubkey.is_empty() {
+                return Err(PalwStateV2Error::EmptyOperatorKey(*bond));
             }
             builder.write_bond(
                 *bond,
                 Some(PalwBondStateV2 {
                     pubkey: pubkey.clone(),
-                    operator_id: *operator_id,
+                    operator_id: palw_operator_id_v2(operator_pubkey),
                     collateral: *collateral,
                     status: PalwBondStatusV2::Active,
                     registered_daa: ctx.daa_score,
@@ -1970,11 +2018,21 @@ mod tests {
     use crate::tx::TransactionId;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa()).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa(), 100).unwrap()
     }
 
     fn class_daa() -> PalwClassDaaV2Params {
         PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap()
+    }
+
+    /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
+    /// state machine mint the id — the same path a real registration takes.
+    fn op_key(v: u64) -> Vec<u8> {
+        vec![v as u8; 8]
+    }
+
+    fn op_id(v: u64) -> Hash64 {
+        palw_operator_id_v2(&op_key(v))
     }
 
     fn h64(v: u64) -> Hash64 {
@@ -2002,7 +2060,7 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_id: h64(21), collateral: 1_000 },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000 },
         ]
     }
 
@@ -2038,7 +2096,7 @@ mod tests {
                 class_id: h64(1),
                 executor_bond: bond,
                 executor_pubkey: vec![7; 4],
-                operator_id: h64(21),
+                operator_id: op_id(21),
                 artifact_root: h64(11),
                 trace_root: h64(31),
                 output_root: h64(32),
@@ -2632,7 +2690,7 @@ mod tests {
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_id: h64(22), collateral: 5 }],
+            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000 }],
             None,
         );
         let (with_class, _) = apply(
@@ -2887,7 +2945,7 @@ mod tests {
         // Case 2: class 1 at 500‰ produces everything; class 2 (500‰) is frozen before the
         // boundary. Class 1 hardens; class 2 does not move.
         let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
-        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+        let p_half = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
@@ -2936,7 +2994,7 @@ mod tests {
     fn an_idle_co_class_does_not_ratchet_the_working_class_toward_zero() {
         let boot = u128::MAX / 2;
         let shares = PalwClassDaaV2Params::new([(h64(1), 600u16), (h64(2), 400u16)].into_iter().collect(), 4).unwrap();
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
 
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
@@ -2974,7 +3032,7 @@ mod tests {
     fn two_producing_classes_keep_their_table_shares_and_still_retarget() {
         let boot = u128::MAX / 2;
         let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares, 100).unwrap();
 
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
@@ -2987,7 +3045,7 @@ mod tests {
         objects.push(PalwConsensusObjectV2::BondRegistered {
             bond: bond_key(2),
             pubkey: vec![8; 4],
-            operator_id: h64(22),
+            operator_pubkey: op_key(22),
             collateral: 1_000,
         });
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
@@ -3002,6 +3060,110 @@ mod tests {
 
         assert!(s6.class_target(&h64(1)).unwrap().target < boot, "the over-producing class hardens");
         assert!(s6.class_target(&h64(2)).unwrap().target > boot, "the under-producing class eases");
+    }
+
+    /// **Audit C5: an operator identity names a key, and costs collateral.**
+    ///
+    /// Decision 7 rests panel dedup on `operator_id` — "splitting collateral across bonds does
+    /// not manufacture extra panel seats". It was a self-declared label, so the claim was false
+    /// for free: one registrant writes N different ids and takes N seats. Two things changed.
+    /// The id is derived from a KEY, so two bonds share an operator exactly when they name the
+    /// same key and cannot pretend otherwise; and `min_collateral_sompi` — which the atomic
+    /// bundle already carried and nobody read — is enforced where registrations are applied, so
+    /// each extra identity costs a real bond floor.
+    #[test]
+    fn an_operator_identity_is_a_key_and_a_bond_floor() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+
+        // Same key, two bonds: ONE operator. This is the case dedup exists for, and it is now a
+        // property of the key rather than of what the registrant chose to write down.
+        let shared = vec![
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(0xAA),
+                collateral: 1_000,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(0xAA),
+                collateral: 1_000,
+            },
+        ];
+        let (state, _) = apply(&genesis, &p, &ctx(1, 100, 1), &shared, None);
+        assert_eq!(
+            state.bond(&bond_key(1)).unwrap().operator_id,
+            state.bond(&bond_key(2)).unwrap().operator_id,
+            "two bonds under one key are one operator"
+        );
+        assert_eq!(state.bond(&bond_key(1)).unwrap().operator_id, op_id(0xAA), "and the id is the key's, not a label");
+
+        // Different keys are different operators — Sybil is still possible, as it must be; what
+        // it now costs is one full bond floor per identity.
+        let (state2, _) = apply(
+            &state,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(3),
+                pubkey: vec![9; 4],
+                operator_pubkey: op_key(0xBB),
+                collateral: 1_000,
+            }],
+            None,
+        );
+        assert_ne!(state2.bond(&bond_key(3)).unwrap().operator_id, op_id(0xAA));
+
+        // A bond below the floor is refused, so collateral cannot be split into dust identities.
+        let dust = apply_palw_transition_v2(
+            &state2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(4),
+                pubkey: vec![1; 4],
+                operator_pubkey: op_key(0xCC),
+                collateral: p.min_collateral_sompi() - 1,
+            }],
+            None,
+        );
+        assert!(matches!(dust, Err(PalwStateV2Error::CollateralBelowMinimum { .. })), "got {dust:?}");
+
+        // Exactly the floor is fine — the rule is a floor, not a margin.
+        let (_, _) = apply(
+            &state2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(4),
+                pubkey: vec![1; 4],
+                operator_pubkey: op_key(0xCC),
+                collateral: p.min_collateral_sompi(),
+            }],
+            None,
+        );
+
+        // An operator identity has to name SOMETHING.
+        let empty = apply_palw_transition_v2(
+            &state2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(5),
+                pubkey: vec![1; 4],
+                operator_pubkey: Vec::new(),
+                collateral: 1_000,
+            }],
+            None,
+        );
+        assert!(matches!(empty, Err(PalwStateV2Error::EmptyOperatorKey(_))), "got {empty:?}");
+
+        // The derivation is injective in the key and domain-separated from every other Hash64
+        // this ruleset mints — an operator id must not collide with a class id or a claim id.
+        assert_ne!(op_id(1), op_id(2));
+        assert_ne!(op_id(1), h64(1), "the id is not the raw label it was derived from");
     }
 
     #[test]
@@ -3035,22 +3197,22 @@ mod tests {
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, class_daa()).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, class_daa()).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, class_daa()).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, class_daa()).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, class_daa()).is_err(), "zero court window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, class_daa()).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, class_daa()).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1, class_daa(), 100).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1, class_daa(), 100).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1, class_daa(), 100).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1, class_daa(), 100).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1, class_daa(), 100).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0, class_daa(), 100).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1, class_daa(), 100).is_ok(), "β = 1 exactly is the boundary");
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, class_daa()).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, class_daa(), 100).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, class_daa()).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, class_daa(), 100).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 }

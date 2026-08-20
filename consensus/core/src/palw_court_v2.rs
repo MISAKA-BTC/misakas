@@ -255,6 +255,16 @@ mod tests {
     use crate::palw_step_leg::PalwStepLegError;
     use crate::tx::{TransactionId, TransactionOutpoint};
 
+    /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
+    /// state machine mint the id — the same path a real registration takes.
+    fn op_key(v: u64) -> Vec<u8> {
+        vec![v as u8; 8]
+    }
+
+    fn op_id(v: u64) -> Hash64 {
+        crate::palw_state_v2::palw_operator_id_v2(&op_key(v))
+    }
+
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }
@@ -268,6 +278,7 @@ mod tests {
             500,
             1000,
             crate::palw_state_v2::PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            100,
         )
         .unwrap()
     }
@@ -290,7 +301,7 @@ mod tests {
                 class_id: h64(1),
                 executor_bond: bond,
                 executor_pubkey: vec![7; 4],
-                operator_id: h64(0x21),
+                operator_id: op_id(0x21),
                 artifact_root: h64(11),
                 trace_root: h64(31),
                 output_root: h64(32),
@@ -316,8 +327,8 @@ mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_id: h64(0x21), collateral: 1_000 },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_id: h64(0x22), collateral: 1_000 },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(0x21), collateral: 1_000 },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_pubkey: op_key(0x22), collateral: 1_000 },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let env = attempt(40, 1);

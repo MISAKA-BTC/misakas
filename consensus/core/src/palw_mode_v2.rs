@@ -297,6 +297,14 @@ impl PalwConsensusParamsV2 {
             return Err(PalwModeV2Error::Invalid("the class share table must allocate exactly 1000 permille"));
         }
 
+        // The bundle's minimum collateral and the state machine's must be the same number: the
+        // bundle is what the ruleset id commits to, the state params are what registrations are
+        // actually checked against, and a network where they disagree enforces the one nobody
+        // audited (audit C5).
+        if self.state.min_collateral_sompi() != self.bond.min_collateral_sompi() {
+            return Err(PalwModeV2Error::Invalid("the bond floor the bundle commits to is not the one registrations are checked against"));
+        }
+
         // Table coherence: every share-bearing class has an epoch budget and every budgeted
         // class has a share — a class present in one table and absent from the other is exactly
         // the between-tables gap audits kept finding.
@@ -419,6 +427,11 @@ mod tests {
         Hash64::from_u64_word(v)
     }
 
+    fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
+        let class_daa = PalwClassDaaV2Params::new([(h64(1), 1000u16)].into_iter().collect(), 4).unwrap();
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa, min_collateral).unwrap()
+    }
+
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
         let base = h64(1);
         let class_daa = PalwClassDaaV2Params::new([(base, 1000u16)].into_iter().collect(), 4).unwrap();
@@ -428,11 +441,11 @@ mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa).unwrap(),
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_daa, 100).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
-            bond: PalwBondParamsV2::new(20_000, 2_000).unwrap(),
+            bond: PalwBondParamsV2::new(100, 2_000).unwrap(),
             reorg_margin_daa: 100,
             // 2^20 step leaves -> 20 bisection rounds, +2 terminal, x20 DAA per turn = 440,
             // which must fit strictly inside the fixture's `window_court` of 500.
@@ -475,6 +488,7 @@ mod tests {
                         500,
                         1000,
                         PalwClassDaaV2Params::new([(h64(1), 900u16)].into_iter().collect(), 4).unwrap(),
+            100,
                     )
                     .unwrap()
                 }),
@@ -763,7 +777,15 @@ mod tests {
         let mutations: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
             ("reward carve", Box::new(|b| b.reward = PalwRewardParamsV2::new(621).unwrap())),
             ("panel quorum", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 3, 4).unwrap())),
-            ("bond floor", Box::new(|b| b.bond = PalwBondParamsV2::new(20_001, 2_000).unwrap())),
+            // A different floor is a different ruleset — and the state params must follow it, or
+            // the coherence clause refuses the bundle.
+            (
+                "bond floor",
+                Box::new(|b| {
+                    b.bond = PalwBondParamsV2::new(101, 2_000).unwrap();
+                    b.state = state_params_with_min_collateral(101);
+                }),
+            ),
             ("reorg margin", Box::new(|b| b.reorg_margin_daa += 1)),
             // Still a valid bundle (22 rounds x 19 = 418 < 500), and a different one.
             ("court shape", Box::new(|b| b.court = PalwCourtParamsV2::new(1_048_576, 19, 2).unwrap())),
