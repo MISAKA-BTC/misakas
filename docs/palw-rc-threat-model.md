@@ -173,10 +173,20 @@ honest "red (integration), lands in PR-N."
 - **Status:** **exclusion green** (PR-06): `palw_v2_executor_excluded_from_own_panel` passes —
   `derive_panel_v2` reads bond, operator and key from the one registry (no second namespace to
   diverge in), dedups operators, and `validate_panel_bound_v2` accepts only the exact derived
-  panel at the exact anchor slot. The no-show COLLATERAL penalty
-  (`palw_v2_panel_noshow_is_slashed`) stays red for PR-07: the chain-scoped fact exists (a
-  `ReceiptTimeout`-voided claim beside its panel record names who owed a verdict), and the
-  `Unavailable` verdict keeps a seat reporting withheld data from ever being that no-show.
+  panel at the exact anchor slot. **The no-show COLLATERAL penalty went green 2026-08-20**
+  (`palw_v2_panel_noshow_is_slashed`). `slash_dissenting_seats` charged a seat that answered the
+  wrong way; `slash_silent_seats` now charges the one that answered nothing, on all three paths
+  that end a panel's duty — the panel licenses without it, the panel defaults the producer
+  without it, or the receipt window closes with no concluding object at all. Before this a bond
+  could take seats forever, file nothing and pay nothing, so the exposure a seat is supposed to
+  put behind its verdict was only at risk if it chose to speak. The charge is exactly what a
+  refuted answer costs (`claim.reserved`): pricing silence below a lie makes silence the better
+  play. A seat with something to say is never a no-show — `Valid` and `Unavailable` are both
+  answers, and reporting withheld data is what the `Unavailable` verdict is for. `BindTimeout` is
+  deliberately untouched: no panel was assigned, so nobody owed an answer
+  (`palw_v2_a_claim_that_never_bound_a_panel_slashes_no_seats`). Verified non-vacuous by making
+  the charge a no-op. It also caught a fixture habit — twelve tests licensed a claim with
+  `receipts: Vec::new()`, a panel concluding without a word from the seat it had bound.
   **ADR-0042:** Decision 7.
 
 ### P0-8 — the arithmetic court is unadjudicable on a normal full node
