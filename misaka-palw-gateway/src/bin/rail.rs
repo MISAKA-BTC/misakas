@@ -73,6 +73,7 @@ fn main() {
     let mut funding_amount: u64 = 0;
     let mut fee: u64 = 250_000;
     let mut print_claim = false;
+    let mut verify_tx: Option<PathBuf> = None;
     let mut print_pubkey = false;
     let mut class_id: Option<String> = None;
     while let Some(arg) = args.pop_front() {
@@ -85,6 +86,7 @@ fn main() {
             "--fee" => fee = value("--fee").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--class-id" => class_id = Some(value("--class-id")),
             "--print-claim" => print_claim = true,
+            "--verify-tx" => verify_tx = Some(PathBuf::from(value("--verify-tx"))),
             // The public key a `--bond-key-seed` file yields, so an operator can put the SAME key
             // in the gateway's identity file before any inference runs. Without this the two
             // halves of the rail can only be matched by a failed signing attempt.
@@ -92,10 +94,98 @@ fn main() {
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-fp-rail --artifact <outbox/fp-job-XXXX> [--print-claim] \
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
-                 [--fee <sompi>]] [--class-id <128hex>]"
+                 [--fee <sompi>]] [--class-id <128hex>] [--verify-tx <file.commitment-tx.borsh>]"
             )),
         }
     }
+    // The seam drill (ADR-0044 FP-09): take a transaction this rail actually built and run it
+    // through the CONSENSUS side of the boundary — the same extractor a block runs over its
+    // accepted transactions, then the same state transition. Nothing else in the tree crosses
+    // that line: the rail's tests end at "the bytes were written", and the consensus tests build
+    // their own fixtures. A drill that never carries one side's real output into the other's real
+    // reader is two halves that agree only by construction.
+    if let Some(path) = verify_tx {
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| die(format!("cannot read {}: {e}", path.display())));
+        let tx: kaspa_consensus_core::tx::Transaction =
+            borsh::from_slice(&bytes).unwrap_or_else(|e| die(format!("{} does not decode as a transaction: {e}", path.display())));
+        let class = class_id
+            .as_deref()
+            .map(|id| {
+                let mut out = [0u8; 64];
+                if id.len() != 128 || faster_hex::hex_decode(id.as_bytes(), &mut out).is_err() {
+                    die("--class-id is not 128 hex chars".into());
+                }
+                Hash64::from_bytes(out)
+            })
+            .unwrap_or_else(|| die("--verify-tx needs the --class-id the network registered".into()));
+        // The network domain and the executor's bond come from the TRANSACTION, never from a
+        // default here — a domain mismatch is exactly what the extractor must catch, and a
+        // commitment whose bond the chain never registered must be refused by the transition.
+        let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+            borsh::from_slice(&tx.payload).unwrap_or_else(|e| die(format!("the transaction payload does not decode: {e}")));
+        let domain = payload.commitment.job.network_domain;
+        // The drill STAGES the commitment's own bond as a genesis registration, and says so in
+        // its output. What is under test here is the boundary — that a transaction this rail
+        // really built is read by the consensus extractor and accepted by the state machine —
+        // not which bond some devnet happens to register. Staging it is therefore the honest
+        // setup, and pretending otherwise would make the drill pass for the wrong reason.
+        let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_derived_root_v3(
+            class,
+            Hash64::from_u64_word(0xC0757),
+            payload.commitment.job.executor_bond,
+            payload.commitment.job.executor_pubkey.clone(),
+            payload.commitment.job.operator_id,
+        )
+        .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
+        let block = Hash64::from_u64_word(0xD411);
+        let extracted = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+            std::slice::from_ref(&tx),
+            domain,
+            &bundle.freeprompt,
+            block,
+        );
+        for (carrier, why) in &extracted.skipped {
+            die(format!("the consensus extractor SKIPPED this rail's transaction {carrier}: {why}"));
+        }
+        if extracted.objects.len() != 1 {
+            die(format!("the extractor produced {} objects from one commitment transaction", extracted.objects.len()));
+        }
+        let ctx = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block, daa_score: 10_000, blue_score: 10_000 };
+        let mut objects = kaspa_consensus_core::palw_mode_v2::palw_genesis_objects_v2(&bundle.genesis);
+        objects.extend(extracted.objects.into_iter().map(|c| c.object));
+        let (state, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
+            &bundle.state,
+            &ctx,
+            &objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+        )
+        .unwrap_or_else(|e| die(format!("the state transition refused this rail's commitment: {e}")));
+        let claim_id = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
+        let claim = state
+            .claim(&claim_id)
+            .unwrap_or_else(|| die("the transition accepted the object but no claim exists under its id".into()));
+        let (quanta, spent) = match &claim.source {
+            kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, spent } => (*quanta, spent.len()),
+            other => die(format!("the claim is not a free-prompt claim: {other:?}")),
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "misaka.palw.fp-rail-seam.v1",
+                "fp_claim_id": hex(claim_id),
+                "network_domain": hex(domain),
+                "quanta": quanta,
+                "pwu": claim.pwu,
+                "spent_quanta": spent,
+                "immature_contribution": claim.immature_contribution.to_string(),
+                "staged": "the commitment's own bond and operator, registered at genesis for this drill",
+                "verdict": "the consensus extractor and state machine accept this rail's transaction",
+            })
+        );
+        return;
+    }
+
     if print_pubkey {
         let seed = read_seed(&seed_path.unwrap_or_else(|| die("--print-bond-pubkey needs --bond-key-seed <file>".into())));
         let key = ValidatorKey::from_seed(seed);
@@ -191,10 +281,17 @@ fn main() {
     // The bundle the network runs decides the price table and the quantization — the rail reads
     // the devnet bundle here because that is the only bundle that exists; an RC rail takes the
     // network's own. The builder re-applies every stateless rule before spending a fee.
-    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    //
+    // The DERIVED-root form, because the bundle's own construction gate checks the catalog root
+    // against the class list it builds and a stated placeholder does not open. (It used to be a
+    // stated placeholder here; the gate landed later and nothing re-ran this path until the
+    // drill did.)
+    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_derived_root_v3(
         commitment.job.class_id,
-        Hash64::from_u64_word(0xCA7),
         Hash64::from_u64_word(0xC0757),
+        kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0),
+        vec![0x11; 32],
+        Hash64::from_u64_word(0xE0),
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
     let weights = *bundle.freeprompt.cu_weights();

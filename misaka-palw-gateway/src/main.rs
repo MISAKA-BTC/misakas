@@ -274,10 +274,20 @@ fn run_worker_v3(worker: &Path, trace_out: &Path, request: &PalwFpWorkerRequestV
     // Drain stderr concurrently — a filled pipe buffer wedges the child (the live incident the
     // worker's own docs record); the log lines go to our stderr prefixed.
     let stderr = child.stderr.take().expect("piped");
+    // …and keep the last REJECTION line, so a failure reports the worker's own reason rather than
+    // only its exit status. This is not cosmetic: on a Metal-backed build the worker's clean
+    // `exit(1)` runs a ggml atexit destructor that asserts, so a correct fail-closed refusal is
+    // reported to the caller as "signal: 6 (SIGABRT)" and the reason is lost. The refusal itself
+    // is intact either way — the worker prints it before exiting, and no result frame is written.
     let drain = std::thread::spawn(move || {
+        let mut last_rejection: Option<String> = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line.contains("rejected:") {
+                last_rejection = Some(line.clone());
+            }
             eprintln!("[palw-worker] {line}");
         }
+        last_rejection
     });
 
     {
@@ -288,9 +298,12 @@ fn run_worker_v3(worker: &Path, trace_out: &Path, request: &PalwFpWorkerRequestV
     let mut stdout = child.stdout.take().expect("piped");
     let result_bytes = read_framed(&mut stdout, PALW_V2_MAX_FRAME_BYTES).map_err(|e| format!("worker produced no result frame: {e}"));
     let status = child.wait().map_err(|e| format!("cannot reap the worker: {e}"))?;
-    let _ = drain.join();
+    let last_rejection = drain.join().ok().flatten();
     if !status.success() {
-        return Err(format!("the worker refused the job (exit {status}) — see its log lines above"));
+        return Err(match last_rejection {
+            Some(reason) => format!("the worker refused the job (exit {status}): {reason}"),
+            None => format!("the worker refused the job (exit {status}) — see its log lines above"),
+        });
     }
     let result: PalwFpWorkerResultV3 =
         borsh::from_slice(&result_bytes?).map_err(|e| format!("the worker result frame does not decode: {e}"))?;

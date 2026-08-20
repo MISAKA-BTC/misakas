@@ -61,20 +61,57 @@ const REORG_MARGIN: u64 = 300;
 const RECEIPT_MATURITY: u64 = 400;
 const RECEIPT_USE_WINDOW: u64 = 600;
 
-/// Measured worst-case honest prosecution time — a PLACEHOLDER shaped like the real thing: the
-/// gate demands `window_court > this`, so the constant is what a fleet measurement replaces, and
-/// until it does, the ratio here (2400 vs 1200) is the safety factor.
+/// Worst-case honest prosecution time. **Still declared, not measured** — and deliberately named
+/// as such rather than quietly presented beside the numbers that now are.
+///
+/// Measuring it needs an end-to-end court: a real refutation opened against a real receipt,
+/// bisected to a step, adjudicated. The CU calibration above could be measured because the
+/// gateway and worker are the whole of that path; this one cannot until the court runs on a
+/// fleet. Until then the gate (`window_court > this`) treats the ratio here — 2400 vs 1200 — as
+/// the safety factor, and the constant is the thing a fleet drill replaces first.
 const WORST_CASE_COURT: u64 = 1_200;
 
-/// CU pricing (ADR-0044 Decision 7). Prefill is batched and roughly an order of magnitude cheaper
-/// per token than decode, and the invariant is that mispricing may only ever UNDER-pay — so the
-/// prefill weight starts at the conservative end (1 : 64).
+/// CU pricing (ADR-0044 Decision 7), **measured** — see `scripts/misaka-palw-fp-cu-calibrate.py`.
+///
+/// The safety direction is one-sided. CU per second of real work is `weight / cost` per phase, so
+/// prefill becomes a grinding lever exactly when `prefill_weight / b > decode_weight / c`, where
+/// `b` and `c` are the measured seconds per prompt token and per decode token. Rearranged, the
+/// rule the table must satisfy is
+///
+/// ```text
+/// CU_DECODE_WEIGHT / CU_PREFILL_WEIGHT  >=  c / b     for every producer's hardware
+/// ```
+///
+/// — and since it must hold for EVERY producer, the binding number is the LARGEST `c/b` anyone
+/// can bring, not the average. Measured on the reference model (Qwen3.5-2B-Q4_K_M) by fitting
+/// `T(p, d) = a + b·p + c·d` over a 24-run grid, 2026-08-20, Apple M-series:
+///
+/// ```text
+///   CPU build (the registered class):  b = 3.35 ms/tok, c = 26.81 ms/tok  ->  c/b =  8.0
+///   Metal build (not a valid class):   b = 0.92 ms/tok, c = 10.95 ms/tok  ->  c/b = 11.9
+/// ```
+///
+/// So 1 : 64 stands, with ~5× headroom over the class's own measurement and ~5× over the fastest
+/// backend measured. The headroom is not slack: prefill parallelises across cores while decode is
+/// memory-bandwidth bound, so a wide server CPU inside the same class has a materially higher
+/// `c/b` than the laptop this was measured on, and that node is the one that would find the
+/// lever. Raising the prefill weight toward exact pricing is a consensus change and needs the
+/// measurement re-run on the widest CPU in the class — the script exists for that.
 const CU_PREFILL_WEIGHT: u32 = 1;
 const CU_DECODE_WEIGHT: u32 = 64;
 
-/// One quantum of certified work. At 1:64 pricing a ~100-token prompt with a 256-token answer is
-/// ~16.5k CU ≈ 16 quanta, so an ordinary chat job earns a handful of draws rather than one
-/// all-or-nothing ticket — which is the variance the quantization exists to smooth.
+/// One quantum of certified work. Measured against real jobs on the reference model (same run as
+/// the weights above), this is what an ordinary chat actually earns:
+///
+/// ```text
+///   p= 33  d= 24  ->  cu =  1_569  ->  1 quantum    (a short question)
+///   p=100  d= 16  ->  cu =  1_124  ->  1 quantum
+///   p=100  d=128  ->  cu =  8_292  ->  8 quanta     (a paragraph of answer)
+///   p=360  d=128  ->  cu =  8_552  ->  8 quanta
+/// ```
+///
+/// A handful of draws rather than one all-or-nothing ticket, which is the variance the
+/// quantization exists to smooth — and never so many that one job dominates a window.
 const QUANTUM_CU: u128 = 1_000;
 /// Chain weight one spent quantum contributes.
 const PWU_PER_QUANTUM: u64 = 100;
