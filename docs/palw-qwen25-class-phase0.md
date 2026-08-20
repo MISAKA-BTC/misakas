@@ -210,14 +210,39 @@ layer with **two** makes "the K cache" ambiguous — a court that had to choose 
 its own evidence. `palw_v2_the_kv_sentinels_resolve_to_the_cache_nodes_over_the_history` asserts
 which node is named and which positions are spanned, not merely that a function returned `Some`.
 
-### G5d — the embedding gather has no adjudicable input
+### G5d — the embedding gather has no adjudicable input (**open**)
 
-*Category:* **BASE-0 semantics の拡張が必要**. `Base0Op::Embed` recomputes the identity of its
-input, which is an admission that a real gather cannot be checked: doing so needs the TOKEN ID,
-which is not a step input and is not in the job context (only `prompt_token_ids_hash` is). Either
-the token ids become part of the adjudicable context, or the embedding output is defined as a
-given that no dispute may address — and that second option must be stated, because a step nobody
-can challenge is a step a producer may write freely.
+*Category:* **BASE-0 semantics の拡張が必要**, and deliberately not closed in a hurry.
+
+`Base0Op::Embed` recomputes the identity of its input, which is an admission that a real gather
+cannot be checked. Checking one needs the TOKEN ID: the fault a court adjudicates is "the
+committed tile differs from the correct computation", and for a gather the correct computation is
+`token_embd[t]`. A challenger can open any row it likes; that proves fraud only if `t` is the
+right token. The id is not a step input and is not in the job context — only
+`prompt_token_ids_hash` is. **The requirement is irreducible**, so this cannot be closed by making
+the kernel cleverer.
+
+Three closures, with what each costs:
+
+1. **Carry the ids in the refutation, hash-checked.** The court verifies
+   `hash(ids) == prompt_token_ids_hash` and then gathers. Exact for PREFILL positions and in the
+   spirit of the rest of the court (proof-carrying evidence, checked against a chain commitment).
+   It adds a field to `PalwExecutionStepRefutationV1`, a consensus object.
+2. **Derive decode-position tokens from the trace.** A decode token is the argmax of the previous
+   position's logits, which is a committed tile — so it is derivable from opened leaves. Elegant,
+   and it makes the embedding chain self-checking, but it introduces an argmax into the
+   adjudicator and a dependency between positions that the step space does not otherwise have.
+3. **Define the embedding output as a given no dispute may address.** Cheapest, and it must be
+   *stated in the ADR* rather than left implicit, because **a step nobody can challenge is a step
+   a producer may write freely** — an attacker would emit arbitrary embeddings and every
+   downstream step would then be honest arithmetic over them, so no dispute anywhere in the graph
+   could reach the lie.
+
+(1) covers prefill and (2) covers decode; taken together they close the gather completely, and
+(3) alone does not close it at all — it renames the hole. **The choice belongs in an ADR
+amendment, not in a patch.** Until then `verify_profile_coverage_v1` refuses any profile with an
+embedding node, which is the fail-closed answer: a class that cannot adjudicate its own first step
+does not carry weight.
 
 **Consequence for the RC floor:** 20 of the BASE-0 profile's 21 nodes are servable now;
 `verify_profile_coverage_v1` still refuses the profile as a whole, on the embedding gather alone.
@@ -238,6 +263,22 @@ is missing. (BASE-0's own profile sets `attn_kv_heads = attn_heads`; Qwen's will
 3. G1, G2 and G3 are **exact PTQ-time transformations** — they need no new consensus op, and each
    must be recorded in the artifact's quantization semantics so a verifier reproduces it. G2's
    exactness is conditional on a measurement Phase 2 owes.
-4. **G5 blocks both classes and is the first thing to fix.** Until BASE-0's `MatMulQuant` can
-   multiply two activations and the coverage gate can see operand shapes, neither the RC floor nor
-   Qwen has an adjudicable attention layer.
+4. **G5a/b/c are closed.** Attention is adjudicable now: `MatMulQuant` multiplies two activations,
+   `KvScaled` widths are derived, and the KV sentinels name the cache-role nodes over the position
+   history. The coverage gate asks what a kernel can SERVE rather than whether its id is listed,
+   so an unadjudicable class is refused at registration.
+5. **G5d is open and is a decision, not a patch.** Adjudicating the embedding gather needs the
+   token id, which is irreducible; the three closures and their costs are above. Until one is
+   chosen in an ADR amendment, no profile with an embedding node passes coverage — which blocks
+   BOTH the RC floor and Qwen, and is the correct fail-closed answer.
+
+## What Phase 1 needs before it can start
+
+Phase 1 ("1-layer Qwen2.5 deterministic reference execution") is not blocked by G5d — a reference
+executor can run without a court — so it can begin. What it cannot do is *register* the class.
+The ordering that follows from this phase:
+
+* G5d's ADR decision is on the critical path for both classes and should be made first, because
+  it may change the step space (closure 2 adds a cross-position dependency).
+* The size question (1.5B or 3B) gates the artifact but nothing before it.
+* G2's bias-column exactness is a measurement Phase 2 owes before the artifact format freezes.
