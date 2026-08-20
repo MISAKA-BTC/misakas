@@ -340,13 +340,43 @@ fn tag_for_seed(seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer
 /// still reaches the panic.
 const WORKER_ATTEMPTS: u32 = 3;
 
+/// Classify a `Command::spawn` failure by its errno, not by the call site it happened at.
+///
+/// The audit finding this closes: every fork/exec errno used to become
+/// [`PowLayer0Error::PalwUnavailable`], which [`run_worker_with_retry`] treats as permanent and
+/// returns without spending a single attempt — and which the consensus wrapper prices as a
+/// FAILED PoW (`pre_ghostdag_validation.rs`: `Err(_) => RuleError::InvalidPoW`). So a node that
+/// momentarily could not `fork(2)` — EAGAIN under an RLIMIT_NPROC brush, ENOMEM under memory
+/// pressure, EMFILE on fd exhaustion — rejected an HONEST block and never retried. Those are
+/// exactly the transient faults `WORKER_ATTEMPTS` exists for, and this module's own doc already
+/// said so ("`PalwWorkerFailed` covers a *transient* fault (a spawn failure, …)").
+///
+/// Only the errnos that describe a *configuration* fact stay permanent: a path that is not
+/// there ([`io::ErrorKind::NotFound`]) or that this user may not execute
+/// ([`io::ErrorKind::PermissionDenied`]). Retrying those cannot fix them and would only delay
+/// the operator's error message. Everything else — known-transient or merely unrecognized — is
+/// transient, because the failure mode of guessing wrong is asymmetric: calling a permanent
+/// fault transient costs three attempts and 750 ms once, while calling a transient fault
+/// permanent rejects a valid block.
+fn classify_spawn_error(what: &str, worker: &str, e: std::io::Error) -> PowLayer0Error {
+    match e.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            PowLayer0Error::PalwUnavailable(format!("cannot spawn {what} at {worker}: {e}"))
+        }
+        _ => PowLayer0Error::PalwWorkerFailed(format!("cannot spawn {what} at {worker}: {e}")),
+    }
+}
+
 fn run_worker_with_retry(worker: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTES], PowLayer0Error> {
     let mut last = None;
     for attempt in 1..=WORKER_ATTEMPTS {
         match run_worker(worker, seed) {
             Ok(tag) => return Ok(tag),
-            // A missing/unspawnable worker is a configuration fault: retrying cannot fix it
-            // and would only delay the operator's error message.
+            // A worker that is absent or not executable is a CONFIGURATION fault: retrying
+            // cannot fix it and would only delay the operator's error message. Note the
+            // classification is by errno now (`classify_spawn_error`), not by call site — a
+            // spawn that failed on EAGAIN/ENOMEM/EMFILE arrives here as `PalwWorkerFailed`
+            // and takes the retry arm below, which is the whole point of the attempts.
             Err(e @ PowLayer0Error::PalwUnavailable(_)) => return Err(e),
             Err(e) => {
                 if attempt < WORKER_ATTEMPTS {
@@ -374,7 +404,7 @@ fn run_worker(worker: &str, seed: &[u8; 32]) -> Result<[u8; POW_L1_PALW_OUT_BYTE
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| PowLayer0Error::PalwUnavailable(format!("cannot spawn PALW worker at {worker}: {e}")))?;
+        .map_err(|e| classify_spawn_error("PALW worker", worker, e))?;
 
     // Feed the prompt and close stdin so the worker sees EOF.
     {
@@ -581,7 +611,7 @@ mod resident {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| PowLayer0Error::PalwUnavailable(format!("cannot spawn the PALW agent at {worker}: {e}")))?;
+                .map_err(|e| super::classify_spawn_error("the PALW agent", worker, e))?;
             let stdin = child.stdin.take().expect("stdin was piped above");
             let stdout = child.stdout.take().expect("stdout was piped above");
             let stderr = child.stderr.take().expect("stderr was piped above");
@@ -1060,4 +1090,57 @@ fn tag_from_doc(doc: &serde_json::Value) -> Result<[u8; POW_L1_PALW_OUT_BYTES], 
         count_field("prefill_tokens")?,
         count_field("decode_tokens")?,
     ))
+}
+
+#[cfg(test)]
+mod spawn_classification_tests {
+    use super::{PowLayer0Error, classify_spawn_error, run_worker_with_retry};
+    use std::io::{Error, ErrorKind};
+
+    /// The audit's L1: a transient fork/exec failure must be RETRYABLE, not a failed PoW.
+    ///
+    /// The old code classified by call site — every `spawn` errno became `PalwUnavailable`,
+    /// which `run_worker_with_retry` returns without spending an attempt and which both
+    /// consumers price as a failed PoW. A node under memory or fd pressure therefore rejected
+    /// an honest block. These are the errnos that must NOT do that.
+    #[test]
+    fn transient_spawn_errnos_are_retryable_not_a_failed_pow() {
+        for kind in [ErrorKind::WouldBlock, ErrorKind::OutOfMemory, ErrorKind::Interrupted, ErrorKind::ResourceBusy] {
+            let e = classify_spawn_error("PALW worker", "/nonexistent/palw-worker", Error::from(kind));
+            assert!(
+                matches!(e, PowLayer0Error::PalwWorkerFailed(_)),
+                "{kind:?} is transient — classifying it PalwUnavailable rejects an honest block: got {e:?}"
+            );
+        }
+    }
+
+    /// An UNRECOGNIZED errno is transient too, on purpose. The two mistakes are not symmetric:
+    /// calling a permanent fault transient costs three attempts and 750 ms once; calling a
+    /// transient fault permanent rejects a valid block.
+    #[test]
+    fn an_unrecognized_spawn_errno_defaults_to_transient() {
+        let e = classify_spawn_error("PALW worker", "/x", Error::from(ErrorKind::Other));
+        assert!(matches!(e, PowLayer0Error::PalwWorkerFailed(_)), "the default must be the retryable side: {e:?}");
+    }
+
+    /// The configuration facts stay permanent — retrying cannot fix them, and delaying the
+    /// operator's error message helps nobody.
+    #[test]
+    fn absent_or_unexecutable_worker_stays_permanent() {
+        for kind in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
+            let e = classify_spawn_error("PALW worker", "/x", Error::from(kind));
+            assert!(matches!(e, PowLayer0Error::PalwUnavailable(_)), "{kind:?} is a configuration fault: {e:?}");
+        }
+    }
+
+    /// End to end through the retry loop: a path that does not exist is ENOENT, so it must
+    /// still short-circuit as `PalwUnavailable` rather than burning three attempts.
+    #[test]
+    fn a_missing_worker_path_short_circuits_the_retry_loop() {
+        let started = std::time::Instant::now();
+        let err = run_worker_with_retry("/nonexistent/definitely-not-a-palw-worker", &[0u8; 32])
+            .expect_err("a missing worker cannot produce a tag");
+        assert!(matches!(err, PowLayer0Error::PalwUnavailable(_)), "ENOENT is permanent: {err:?}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(200), "no backoff should have been spent");
+    }
 }
