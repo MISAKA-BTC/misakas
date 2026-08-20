@@ -1109,6 +1109,7 @@ pub(crate) mod tests {
         };
         PalwShapeProfileV3 {
             version: PALW_STEP_OBJECT_VERSION_V1,
+            lane: crate::palw_step::PalwStepLaneV1::Float32,
             layer_count: 1,
             full_attention_interval: 0, // pure recurrent
             hidden_dim: 32,
@@ -1318,6 +1319,225 @@ pub(crate) mod tests {
             })
             .collect();
         gdn_core_genesis_replay(p, &narrowed, DotStructure::Step16Epr4)
+    }
+
+    // ---- P0-8's end-to-end fixture: a BASE-0 MatMul execution, real weights, no model ----
+
+    /// A BASE-0 profile whose layer is one `MatMulQuant` node over a registered weight tensor.
+    ///
+    /// BASE-0 rather than the float `profile()` above, and that is the point of the fixture: the
+    /// float classes' matmuls are `Q4_K`/`Q5_K`/`Q6_K` and `KERNEL_CATALOG` has no adjudicator
+    /// for any of them, so a float matmul conviction cannot be built at all today. BASE-0's
+    /// `i8 x i8 -> i32` matmul is exact and IS in the catalog, which is the whole reason that
+    /// class exists.
+    pub(crate) fn base0_matmul_profile() -> PalwShapeProfileV3 {
+        let mut p = profile();
+        // The lane that made this fixture possible at all: BASE-0 commits int32 codes, and the
+        // float finiteness rule rejects every integer in `[-8_388_608, -1]`.
+        p.lane = crate::palw_step::PalwStepLaneV1::Int32;
+        p.gdn_nodes = vec![PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::MatMulQuant,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: "blk.{layer}.w".to_string(),
+            // One byte, because this profile's GDN table covers its one layer.
+            weight_dtypes: vec![24],
+            out_len: crate::palw_step::PalwStepOutLenV1::Fixed { elements: 32 },
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(KDESC_BASE0_MATMUL),
+            input_refs: vec![crate::palw_step::PALW_STEP_INPUT_LAYER_IN],
+        }];
+        p.post_nodes = vec![PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::Silu,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: String::new(),
+            weight_dtypes: Vec::new(),
+            out_len: crate::palw_step::PalwStepOutLenV1::Fixed { elements: 32 },
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(KDESC_BASE0_SILU),
+            input_refs: vec![crate::palw_step::PALW_STEP_INPUT_LAYER_IN],
+        }];
+        p.pre_nodes = vec![PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::EmbedLookup,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: String::new(),
+            weight_dtypes: Vec::new(),
+            out_len: crate::palw_step::PalwStepOutLenV1::Fixed { elements: 32 },
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(KDESC_BASE0_EMBED),
+            input_refs: vec![],
+        }];
+        p
+    }
+
+    /// The weight block the class registered: `32 out x 32 in` int8 codes, deterministic.
+    pub(crate) fn base0_matmul_weights() -> Vec<i8> {
+        (0..32 * 32).map(|i| (((i * 7) % 13) as i32 - 6) as i8).collect()
+    }
+
+    /// An honest BASE-0 execution over [`base0_matmul_profile`], plus its leg material.
+    ///
+    /// Same three position ordinals the GDN fixture uses. Every value stays inside the int8 lane,
+    /// because BASE-0 activations are int8 codes riding i32 lanes and an out-of-range lane is
+    /// `InputSetNotCanonical` rather than arithmetic.
+    pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>)
+    {
+        let p = base0_matmul_profile();
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
+        let w = base0_matmul_weights();
+        let slots = p.global_node_count();
+        let mut rows: Vec<Vec<Vec<u32>>> = vec![vec![Vec::new(); slots as usize]; 3];
+        for ord in 0..3usize {
+            // pre (slot 0): the embedding row, int8 codes.
+            rows[ord][0] = (0..32).map(|i| (((ord * 5 + i) % 11) as i32 - 5) as u32).collect();
+            let x: Vec<i8> = rows[ord][0].iter().map(|v| *v as i32 as i8).collect();
+            // gdn (slot 1): the matmul, by the SAME function the court will recompute with.
+            rows[ord][1] =
+                crate::palw_base0_ops::matmul_quant(&w, &x, 32).unwrap().into_iter().map(|v| v as u32).collect();
+            // post (slot 2): silu over the layer output.
+            rows[ord][2] = crate::palw_base0_ops::silu(&rows[ord][1].iter().map(|v| *v as i32).collect::<Vec<_>>())
+                .into_iter()
+                .map(|v| v as u32)
+                .collect();
+        }
+        let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+        for i in 0..b.expected_main_leaves() {
+            let coord = canonical_step_coordinates(&p, &ctx, i).unwrap();
+            let ord = match (coord.call_index, coord.position) {
+                (0, 0) => 0usize,
+                (0, 1) => 1,
+                (1, 0) => 2,
+                _ => unreachable!(),
+            };
+            let row = &rows[ord][coord.node_slot as usize];
+            let start = coord.tile_index as usize * 16;
+            let end = (start + 16).min(row.len());
+            b.push_step_tile(coord, &row[start..end]).unwrap();
+        }
+        let material = b.finish().unwrap();
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = p.shape_profile_id();
+        let ckpt_profile = PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 8,
+            state_layout_id: h64(0x55),
+        };
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
+        let ckpt_root =
+            checkpoint_leg_root_v2(&ctx_hash, &ckpt_profile.profile_hash(), &h64(0x44), 1, 0, &checkpoint_empty_root_v2(&ctx_hash));
+        let committed = execution_commitment_root_v2(&ctx_hash, &h64(0xAA), &h64(0xBB), &ckpt_root, &step_root);
+        let binding = PalwStepBindingV2 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            job_context: ctx,
+            shape_profile: p,
+            checkpoint_profile: ckpt_profile,
+            state_chunk_map_id: h64(0x44),
+            full_logits_trace_root: h64(0xAA),
+            activation_leg_root: h64(0xBB),
+            step_leaf_count: material.leaf_count,
+            step_merkle_root: material.merkle_root,
+            checkpoint_count: 0,
+            checkpoint_merkle_root: checkpoint_empty_root_v2(&ctx_hash),
+            committed_execution_root: committed,
+        };
+        (binding, material, rows)
+    }
+
+    /// The same execution with ONE committed MatMul value corrupted, plus the artifact openings a
+    /// challenger carries. Returns everything a `CourtClosed` proof needs.
+    pub(crate) fn base0_matmul_fraud() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64)
+    {
+        use crate::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1};
+        let (mut binding, mut material, rows) = base0_honest_execution();
+        let p = binding.shape_profile.clone();
+        let ctx = binding.job_context.clone();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 1 };
+        let idx = canonical_step_leaf_index(&p, &ctx, &coord).unwrap();
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = p.shape_profile_id();
+
+        // The miner's world: the committed matmul output is off by one at value 3 of tile 1.
+        let mut row = rows[2][1].clone();
+        row[16 + 3] = (row[16 + 3] as i32).wrapping_add(1) as u32;
+        let leaf = PalwStepTileLeafV1 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            coord,
+            value_count: 16,
+            values_le: row[16..32].iter().flat_map(|v| v.to_le_bytes()).collect(),
+        };
+        material.leaf_hashes[idx as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf);
+        let merkle = crate::palw_step_leg::step_merkle_root_v1(&material.leaf_hashes).unwrap();
+        material.merkle_root = merkle;
+        binding.step_merkle_root = merkle;
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, binding.step_leaf_count, &merkle);
+        let ckpt_root = checkpoint_leg_root_v2(
+            &ctx_hash,
+            &binding.checkpoint_profile.profile_hash(),
+            &binding.state_chunk_map_id,
+            1,
+            0,
+            &binding.checkpoint_merkle_root,
+        );
+        binding.committed_execution_root = execution_commitment_root_v2(
+            &ctx_hash,
+            &binding.full_logits_trace_root,
+            &binding.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+
+        let mut refutation = build_refutation(&binding, &material, &rows, coord);
+        refutation.output_preimage = leaf;
+        refutation.output_opening = step_opening_v1(&material.leaf_hashes, idx).unwrap();
+
+        // The class's registered artifact inventory, and the opening that proves this weight
+        // block belongs to it. This is the whole "no model" mechanism: the court never reads a
+        // GGUF, it reads bytes a Merkle path binds to the root the class registered.
+        let operands = vec![
+            PalwArtifactOperandV1 {
+                tensor_name: "blk.{layer}.w".to_string(),
+                layer: Some(0),
+                row_start: 0,
+                bytes: base0_matmul_weights().iter().map(|v| *v as u8).collect(),
+            },
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
+        ];
+        let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+        let artifact_root = artifact_root_v1(&leaves).unwrap();
+        let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
+            operand: operands[0].clone(),
+            leaf_index: 0,
+            leaf_count: leaves.len() as u32,
+            path: vec![leaves[1]],
+        }];
+        (refutation, openings, artifact_root)
+    }
+
+    /// **P0-8's owed end-to-end conviction, at this layer.** A node holding NO model recomputes a
+    /// BASE-0 matmul from proof-carried weights and convicts.
+    #[test]
+    fn palw_v2_matmul_fraud_convicts_without_model() {
+        use crate::palw_artifact::PalwProvenOperandsV1;
+        let (refutation, openings, artifact_root) = base0_matmul_fraud();
+
+        // The oracle IS the openings, verified against the class's registered root. Nothing here
+        // opens a file, and `NoWeights` — the "a full node has no model" stand-in — is what the
+        // court would otherwise be stuck with.
+        let operands = PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root).expect("the openings prove");
+        let verdict = check_execution_step_refutation_v1(&refutation, &operands).expect("a recomputable step");
+        assert_eq!(verdict.fault, PalwStepFaultV1::ComputationMismatch { value_index: 3 });
+
+        // And the same refutation WITHOUT the weights is `Unadjudicable`, never a conviction:
+        // not being able to check is nobody's fault. This is the half that makes the assertion
+        // above mean something — otherwise it would pass on a court that convicts blindly.
+        assert_eq!(
+            check_execution_step_refutation_v1(&refutation, &NoWeights),
+            Err(PalwStepRefuteError::Unadjudicable),
+            "with no weights the court must refuse, not convict"
+        );
+
+        // An opening against a DIFFERENT root proves nothing, so it never becomes an oracle.
+        assert!(PalwProvenOperandsV1::from_openings_v1(&openings, h64(0xBD)).is_err());
     }
 
     #[test]

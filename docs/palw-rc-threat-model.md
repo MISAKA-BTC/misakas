@@ -201,9 +201,24 @@ honest "red (integration), lands in PR-N."
   (reproduced end to end). Closed (fix C3) by carrying the executor's own `execution_root` in the
   attempt and the claim, and requiring `binding.committed_execution_root` to equal it before any
   fault is read: `verify_binding` recomputes that root from the job context, both profile hashes
-  and every count and root, so pinning it pins all of them. **Still owed:** an end-to-end
-  `palw_v2_matmul_fraud_convicts_without_model` — no test anywhere asserts an `ExecutorGuilty`
-  conviction through the full path. Ladder no-show defaults are deliberately NOT acceptable V2 objects
+  and every count and root, so pinning it pins all of them. **The owed test landed 2026-08-20, in
+  two halves, and writing it found two defects that made the conviction impossible.**
+  `palw_v2_matmul_fraud_convicts_without_model` (arithmetic layer) builds a real BASE-0 execution,
+  corrupts one committed MatMul value, and convicts with `ComputationMismatch { value_index: 3 }`
+  from weights that arrive ONLY as artifact openings — the same refutation against `NoWeights` is
+  `Unadjudicable`, which is what makes the conviction mean something.
+  `palw_v2_matmul_fraud_convicts_a_claim_and_slashes_its_bond_without_a_model` (court + state)
+  carries it through `adjudicate_court_close_v2` and the transition: the claim is `Voided
+  { CourtFraud }` and the executor's bond is debited. Verified non-vacuous by registering the
+  class at a different artifact root — the opening stops proving and the conviction disappears.
+  **The two defects:** the step leg refused any 32-bit value whose f32 reinterpretation is
+  non-finite, and so did the adjudicator's preimage check. BASE-0 commits int32 codes, and every
+  integer in `[-8_388_608, -1]` has the all-ones exponent — so the RC's own liveness floor could
+  not commit a step leg at all, and any BASE-0 step that reached the court would have been
+  convicted of `StepNonFinite` for containing a negative number. Closed by
+  `PalwShapeProfileV3::lane` (`Float32` / `Int32`): the finiteness rule is a float-lane rule and
+  now says so. It is inside `shape_profile_id`, so a class cannot reinterpret its own lanes
+  without changing identity. Ladder no-show defaults are deliberately NOT acceptable V2 objects
   until the ladder itself is chain-carried — a forged default would void honest claims on
   demand; the system stays closed meanwhile (arithmetic conviction when data is held, the
   panel's `Unavailable` quorum when it is withheld, the `window_court` backstop when a challenge

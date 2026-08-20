@@ -131,6 +131,7 @@ fn attack_profile() -> PalwShapeProfileV3 {
     };
     PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
+        lane: crate::palw_step::PalwStepLaneV1::Float32,
         layer_count: 2,
         full_attention_interval: 2,
         hidden_dim: 16,

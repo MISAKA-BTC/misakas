@@ -230,6 +230,28 @@ pub struct PalwStepNodeV1 {
     pub input_refs: Vec<u16>,
 }
 
+/// **What a committed step value's 32 bits MEAN.**
+///
+/// The step leg refuses a value whose f32 reinterpretation is non-finite — a producer-side safety
+/// net, because a float execution that produced a NaN is invalid and must emit no receipt. That
+/// rule is a fact about FLOAT lanes, and applying it to an integer class is not conservative, it
+/// is wrong: BASE-0 commits int32 codes, and every integer in `[-8_388_608, -1]` has the
+/// all-ones exponent, so the builder rejected essentially every negative activation. The RC's
+/// permanently-Active liveness floor could not commit a step leg at all.
+///
+/// Inside `shape_profile_id` by construction (the id digests this struct), so a class cannot
+/// reinterpret its own lanes without changing identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwStepLaneV1 {
+    /// IEEE-754 binary32. Non-finite values are refused at commit.
+    Float32 = 0,
+    /// Two's-complement int32 (BASE-0). Every bit pattern is a legal value, so there is nothing
+    /// to refuse — and no float rule may be applied to them.
+    Int32 = 1,
+}
+
 /// Which of a profile's four node tables is being talked about. Exists so
 /// [`PalwShapeProfileV3::table_layer_span`] cannot be called with a table it does not know, and
 /// so validation and the profile author name the same four things.
@@ -318,6 +340,8 @@ pub struct PalwContractionFactV1 {
 pub struct PalwShapeProfileV3 {
     /// = [`PALW_STEP_OBJECT_VERSION_V1`].
     pub version: u16,
+    /// What this class's committed step values are (see [`PalwStepLaneV1`]).
+    pub lane: PalwStepLaneV1,
 
     // --- model geometry (restated from the pinned GGUF so the profile is self-contained) ---
     pub layer_count: u16,
@@ -835,6 +859,7 @@ mod tests {
     fn tiny_profile() -> PalwShapeProfileV3 {
         PalwShapeProfileV3 {
             version: PALW_STEP_OBJECT_VERSION_V1,
+            lane: crate::palw_step::PalwStepLaneV1::Float32,
             layer_count: 3,
             full_attention_interval: 2,
             hidden_dim: 8,
@@ -1026,8 +1051,13 @@ mod tests {
             // the other twelve — so a profile written into the old type would have declared the
             // wrong arithmetic for half the layers it covered. Same rule as last time: a
             // consensus change to the identity gets a new value, never a silent re-reading.
-            "092f92d6a8e2be369d7cd993782b38222f1f6ccedd0742fe360d5b8fea3ddfd9\
-             fb9bf904b65383ac7c352bade742a7fab7e5dd4075c0ef154e4f3fdef1d7c3c4"
+            //
+            //
+            // Re-frozen once more the same day: the profile gained `lane`. A class that commits
+            // int32 codes and one that commits f32 are not the same class, and both the leg
+            // builder and the adjudicator read the field — so it belongs inside the identity.
+            "24a01c7f90b50beab4ba53d4032119d494f5bebc671c75d271723de634f6fcbe\
+             f98c86768d86d0039e3286f7a297d27a46cbbc4fb3ac5fd9dd682552ecf0845a"
         );
     }
 

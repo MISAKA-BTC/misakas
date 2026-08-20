@@ -632,6 +632,118 @@ mod tests {
         );
     }
 
+    /// **P0-8's owed end-to-end: a MatMul fraud convicts through the WHOLE path, with no model.**
+    ///
+    /// The register asks for exactly this and said no test anywhere did it: "give a full node with
+    /// no model a proof-carrying refutation of a wrong MatMul step; assert a conviction, not
+    /// `Unadjudicable`." The arithmetic layer's half lives in `palw_step_refute`
+    /// (`palw_v2_matmul_fraud_convicts_without_model`); this is the half that matters for a
+    /// network — the claim really is voided as `CourtFraud` and the executor's bond really is
+    /// debited, through `adjudicate_court_close_v2` and the state transition.
+    ///
+    /// Every root here is REAL: the claim's `trace_root` and `execution_root` are the fraudulent
+    /// execution's own committed roots, and the class's `artifact_root` is the inventory the
+    /// weight opening proves against. Nothing reads a model file at any point — the only weights
+    /// that exist are bytes a Merkle path binds to the class's registration.
+    #[test]
+    fn palw_v2_matmul_fraud_convicts_a_claim_and_slashes_its_bond_without_a_model() {
+        let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_matmul_fraud();
+        let trace_root = refutation.binding.step_merkle_root;
+        let execution_root = refutation.binding.committed_execution_root;
+        let p = params();
+
+        // A class registered at the fraud's own artifact root, and a claim carrying the fraud's
+        // own committed roots — the two bindings `adjudicate_court_close_v2` checks before any
+        // fault may be read (audit C3).
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(0x21),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(0x22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
+        let mut env = attempt(40, 1);
+        env.attempt.artifact_root = artifact_root;
+        env.attempt.trace_root = trace_root;
+        env.attempt.execution_root = execution_root;
+        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
+        let (s3, _) = apply_palw_transition_v2(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        )
+        .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        assert_eq!(s4.bond(&bond_key(1)).unwrap().slashed, 0, "nothing is charged before a verdict");
+
+        let sid = court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64);
+        let (in_court, _) = apply_palw_transition_v2(
+            &s4,
+            &p,
+            &ctx(5, 110, 5),
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 64,
+            }],
+            None,
+        )
+        .unwrap();
+
+        // The conviction, derived from the carried proof.
+        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
+        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof).expect("a recomputable step adjudicates");
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
+
+        // …and the chain acts on it: the claim is void as CourtFraud and the bond is debited.
+        let (closed, _) = apply_palw_transition_v2(
+            &in_court,
+            &p,
+            &ctx(6, 111, 6),
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }],
+            None,
+        )
+        .unwrap();
+        match closed.claim(&claim_id).unwrap().phase {
+            crate::palw_state_v2::PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, .. } => {}
+            ref other => panic!("a proven fraud must void the claim as CourtFraud, got {other:?}"),
+        }
+        assert!(closed.bond(&bond_key(1)).unwrap().slashed > 0, "and the executor pays for it");
+        assert!(closed.court_session(&sid).is_none(), "the session is closed");
+    }
+
     /// **The close carries its proof, and the verdict is derived from it — not believed.**
     ///
     /// Before this, `CourtClosed` carried a bare verdict, so the pipeline had nothing to check and

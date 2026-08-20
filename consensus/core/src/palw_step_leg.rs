@@ -584,8 +584,13 @@ impl PalwStepLegBuilderV1 {
             return Err(PalwStepLegError::TileLengthNotCanonical { got: value_bits.len() as u32, expected: expected_values });
         }
         let mut values_le = Vec::with_capacity(value_bits.len() * 4);
+        // The finiteness rule belongs to FLOAT lanes only. On an integer class every bit pattern
+        // is a legal value, and applying the float rule there rejected every activation in
+        // `[-8_388_608, -1]` — the all-ones-exponent range — which is essentially every negative
+        // BASE-0 code. The RC's liveness floor could not commit a leg at all.
+        let check_finite = self.profile.lane == crate::palw_step::PalwStepLaneV1::Float32;
         for (i, bits) in value_bits.iter().enumerate() {
-            if !f32_is_finite_bits(*bits) {
+            if check_finite && !f32_is_finite_bits(*bits) {
                 return Err(PalwStepLegError::NonFiniteStepValue { leaf_index: next, value_index: i as u32 });
             }
             values_le.extend_from_slice(&bits.to_le_bytes());
@@ -995,10 +1000,15 @@ fn step_tile_fault(
     if Some(preimage.value_count) != expected {
         return Some(PalwStepFaultV1::StepValueCountNotCanonical);
     }
-    for (i, quad) in preimage.values_le.chunks_exact(4).enumerate() {
-        let bits = u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]);
-        if !f32_is_finite_bits(bits) {
-            return Some(PalwStepFaultV1::StepNonFinite { value_index: i as u32 });
+    // Float lanes only, for the reason `PalwStepLaneV1` gives: on an integer class this rule
+    // convicts every negative activation of being "non-finite", which would have made BASE-0 — the
+    // RC's own liveness floor — a class where every honest step is a provable fault.
+    if binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+        for (i, quad) in preimage.values_le.chunks_exact(4).enumerate() {
+            let bits = u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]);
+            if !f32_is_finite_bits(bits) {
+                return Some(PalwStepFaultV1::StepNonFinite { value_index: i as u32 });
+            }
         }
     }
     None
@@ -1138,6 +1148,7 @@ mod tests {
     fn profile() -> PalwShapeProfileV3 {
         PalwShapeProfileV3 {
             version: crate::palw_step::PALW_STEP_OBJECT_VERSION_V1,
+            lane: crate::palw_step::PalwStepLaneV1::Float32,
             layer_count: 2,
             full_attention_interval: 2,
             hidden_dim: 8,
@@ -1376,8 +1387,9 @@ mod tests {
             // Re-frozen 2026-08-20: it descends from the shape profile id, which moved when
             // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
             // byte could not describe the pinned model.
-            "4d9d6434da6b6a51ce22f60996b701c436b289d80bc03fad10ad6a9959d5e972\
-             1d2e13c6e67d9fb2a773b6ecc15ebd3250b1ab79c7efeac5afd4774bf84558d4"
+            // …and again for `lane` (see `palw_step`'s golden).
+            "0f491307719b0ade811690bba39ec44d99248e6c2d7876fad1e3959d05bbef2c\
+             8f87ce59a41b4c7f4c880661daf8854b86163a0f1a1bff733c982b29c234d07b"
         );
     }
 

@@ -509,6 +509,7 @@ pub(crate) mod tests {
         };
         PalwShapeProfileV3 {
             version: PALW_STEP_OBJECT_VERSION_V1,
+            lane: crate::palw_step::PalwStepLaneV1::Float32,
             layer_count: 4,
             full_attention_interval: 4,
             hidden_dim: 16,
