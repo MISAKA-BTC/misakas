@@ -41,6 +41,7 @@ pub const PALW_ATTEMPT_V2_VERSION: u16 = 2;
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;
 
 pub const PALW_ATTEMPT_V2_DOMAIN_CHALLENGE: &[u8] = b"misaka-palw/attempt-v2/challenge/v1";
+pub const PALW_ATTEMPT_V2_DOMAIN_NETWORK: &[u8] = b"misaka-palw/attempt-v2/network-domain/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT: &[u8] = b"misaka-palw/attempt-v2/commitment-root/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID: &[u8] = b"misaka-palw/attempt-v2/attempt-id/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_L1_TAG: &[u8] = b"misaka-palw/attempt-v2/l1-tag/v1";
@@ -57,8 +58,24 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID,
     PALW_ATTEMPT_V2_DOMAIN_L1_TAG,
     PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET,
+    PALW_ATTEMPT_V2_DOMAIN_NETWORK,
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
+
+/// The V2 network identity the challenge binds — ADR-0042 Decisions 3a and 11: network identity
+/// lives in the challenge's `network_domain`, deliberately OUTSIDE the ruleset id, so RC and
+/// mainnet share one fingerprint while neither can replay the other's blocks.
+///
+/// Derived from the same `NetworkId::to_string` byte form the Layer-0 finalizer binds
+/// (`b"mainnet"`, `b"testnet-11"`, …), length-prefixed under this module's own domain key. Using
+/// the finalizer's bytes is the point: the PoW digest and the challenge then separate networks by
+/// the SAME name, and no configuration can point them at different ones.
+pub fn palw_network_domain_v2(network_id: &[u8]) -> Hash64 {
+    let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_NETWORK);
+    state.update(&(network_id.len() as u64).to_le_bytes());
+    state.update(network_id);
+    finish(state)
+}
 
 /// 4-byte wire magic for the envelope as carried in `Header::palw_commitment` on an algo-6 header
 /// — `PalwBlockCommitmentV1`'s `PBC1` pattern, for the same reason: on the wire the field is a bag
@@ -556,6 +573,23 @@ mod tests {
         let mut short = envelope(a);
         short.signature.pop();
         assert!(matches!(short.validate_stateless_v2(net(), pph(), TS, NONCE), Err(PalwAttemptV2Error::SignatureLength { .. })));
+    }
+
+    /// Network domains separate networks, respect byte boundaries, and are golden-pinned: the
+    /// challenge's network identity is a consensus value, so a build whose derivation moves is a
+    /// build that cannot follow the network it claims.
+    #[test]
+    fn the_network_domain_separates_networks_and_stays_put() {
+        let t11 = palw_network_domain_v2(b"testnet-11");
+        let mainnet = palw_network_domain_v2(b"mainnet");
+        assert_ne!(t11, mainnet, "two networks, two domains");
+        assert_ne!(
+            palw_network_domain_v2(b"testnet-1"),
+            palw_network_domain_v2(b"testnet-11"),
+            "the length prefix keeps prefix-related names apart"
+        );
+        assert_eq!(format!("{t11}"), "3a9be06a5e9ca299a33afa5400aaa680c228f21e40f1b964b0bf7c96a170fa139214a2f803b3f24a6e20ca881e8653094470cdd060f52e65e1a3807531db9785", "the testnet-11 domain is frozen");
+        assert_eq!(format!("{mainnet}"), "77633d75b1bd12cb14fc0e3f567cc14f42ed24ef6bb45bc2c8eeab58ccf932a0156882cbcd2b33250e6ed5bb754594382beb1cd2a0cba2fe0e571a8643b800aa", "the mainnet domain is frozen");
     }
 
     /// The module's domains are distinct — a shared key would let one preimage serve two meanings.
