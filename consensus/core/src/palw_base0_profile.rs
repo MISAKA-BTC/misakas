@@ -146,6 +146,10 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     };
 
     // --- pre: the embedding gather ---
+    //
+    // No input refs, and that is the shape G5d settled: a gather's operands are the registered
+    // table and the TOKEN ID, not an opened row. The pre table has no upstream to supply one, and
+    // the id rides the refutation hash-checked against the job context's commitment.
     let pre_nodes = vec![weighted(
         PalwStepOpKindV1::EmbedLookup,
         KDESC_BASE0_EMBED,
@@ -681,67 +685,74 @@ mod tests {
         assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
 
-    /// **G5, measured: one node of this graph is still unadjudicable, and it says so.**
+    /// **G5 closed: every node of this graph is one the adjudicator can actually serve.**
     ///
-    /// The id gate certified this profile at "100% coverage" while several nodes could never be
-    /// recomputed, because it compares kernel IDs and never asks what a kernel can SERVE. Asking
-    /// properly — `kernel_can_serve_node_v1`, which lives next to the code that does the serving
-    /// — turns each of those into a registration-time refusal with a reason.
+    /// The id gate certified this profile at "100% coverage" while four of its twenty-one nodes
+    /// could never be recomputed, because it compares kernel IDs and never asks what a kernel can
+    /// SERVE. Asking properly — `kernel_can_serve_node_v1`, which lives beside the code that does
+    /// the serving — turned each into a registration-time refusal with a reason, and each was
+    /// then closed on its own terms:
     ///
-    /// Three of the four it found are closed. The attention matmuls multiply an activation by an
-    /// opened row instead of demanding a registered weight (G5a), `KvScaled` widths are derived
-    /// from the kv length the caller already holds (G5b), and the KV sentinels resolve to this
-    /// layer's cache-role nodes over the position history (G5c) — no new leaf format and no float
-    /// aux series, because the cache contents are already ordinary step tiles.
+    /// * **G5a** — `MatMulQuant` demanded a registered weight, so an activation × activation
+    ///   product had nothing to multiply by. ADR-0040 Decision D never said one side must be a
+    ///   weight; it takes its second operand from the second opened row now.
+    /// * **G5b** — `KvScaled` widths were refused for want of the kv length, which the caller
+    ///   already holds in the coordinate it passes.
+    /// * **G5c** — the KV sentinels were "registration-opaque". They name this layer's
+    ///   cache-role nodes over the position history: the cache contents are already ordinary step
+    ///   tiles, so no new leaf format and no float aux series were needed.
+    /// * **G5d** — the gather returned the identity of an input the pre table has no upstream to
+    ///   supply. Its operands are the registered table and the TOKEN ID, and the id rides the
+    ///   refutation hash-checked against the job context. Prefill only: a decode token is pinned
+    ///   by nothing there, and a challenger naming it freely would convict an honest producer.
     ///
-    /// One remains, and it is a blocker recorded in `docs/palw-qwen25-class-phase0.md` rather
-    /// than something to route around:
-    ///
-    /// * **pre/0, the embedding gather (G5d)** — `Base0Op::Embed` needs one input row and the pre
-    ///   table has no upstream to name. Adjudicating a real gather needs the TOKEN ID, which is
-    ///   not a step input and is not in the job context (only `prompt_token_ids_hash` is).
-    ///
-    /// This test asserts the CURRENT truth so the state is measured rather than believed. When
-    /// G5d closes it must be rewritten to expect zero refusals — the number is the point.
+    /// The remaining half of G5d — deriving a decode token from the previous position's committed
+    /// logits — is recorded in `docs/palw-qwen25-class-phase0.md`. It is a runtime `Unadjudicable`
+    /// on decode gathers, not a coverage failure: the node's SHAPE is servable, which is what
+    /// this gate decides.
     #[test]
-    fn the_servability_gate_names_exactly_what_is_still_unadjudicable() {
+    fn every_node_of_the_graph_is_one_the_adjudicator_can_serve() {
         use crate::palw_catalog_coverage::verify_profile_coverage_v1;
         use crate::palw_step_refute::kernel_can_serve_node_v1;
         let p = base0_profile_v1(geometry()).unwrap();
 
-        let mut refused: Vec<(&str, usize)> = Vec::new();
+        verify_profile_coverage_v1(&p).expect("100% coverage: every node of BASE-0's graph is servable");
+        let mut checked = 0;
         for (name, nodes) in [("pre", &p.pre_nodes), ("gdn", &p.gdn_nodes), ("attn", &p.attn_nodes), ("post", &p.post_nodes)] {
-            for (slot, node) in nodes.iter().enumerate() {
-                if kernel_can_serve_node_v1(node, name == "pre").is_err() {
-                    refused.push((name, slot));
-                }
+            for node in nodes {
+                kernel_can_serve_node_v1(node, name == "pre").expect("every node individually");
+                checked += 1;
             }
         }
-        assert_eq!(
-            refused,
-            vec![("pre", 0)],
-            "the embedding gather alone — the two attention matmuls closed with G5a/b/c, so 20 of 21 nodes are servable"
-        );
-        // Which means the profile as a whole is refused, and the refusal names a node.
-        assert!(matches!(
-            verify_profile_coverage_v1(&p),
-            Err(crate::palw_catalog_coverage::PalwCoverageError::NodeNotServable { .. })
-        ));
+        assert_eq!(checked, 21, "the whole graph was checked, not a prefix");
 
-        // The two closed halves, asserted directly so a regression in either is visible here:
-        // a weightless matmul with a second row is servable, and a kv-scaled one is too.
-        let mut activation_matmul = p.attn_nodes[5].clone();
-        activation_matmul.input_refs = vec![4, 3];
-        kernel_can_serve_node_v1(&activation_matmul, false).expect("an activation x activation matmul is servable now");
-        assert!(matches!(activation_matmul.out_len, PalwStepOutLenV1::KvScaled { .. }), "and at a kv-scaled width");
+        // The two attention nodes multiply an activation by an opened row at a kv-scaled width —
+        // the shape that was structurally unadjudicable before G5a/b/c.
+        for slot in [5usize, 7] {
+            let node = &p.attn_nodes[slot];
+            assert!(node.weight_name.is_empty(), "slot {slot} multiplies by an opened row, not a weight");
+            assert_eq!(node.input_refs.len(), 2, "so it names the row it multiplies by");
+        }
+        assert!(matches!(p.attn_nodes[5].out_len, PalwStepOutLenV1::KvScaled { .. }), "scores are kv-wide");
+        // The gather takes no opened row and names its table.
+        assert!(p.pre_nodes[0].input_refs.is_empty(), "a gather's operands are the table and the token id");
+        assert_eq!(p.pre_nodes[0].weight_name, "token_embd.weight");
 
-        // And the shapes it refuses, each for its own stated reason.
-        let mut orphan = activation_matmul.clone();
+        // And the gate still refuses each shape it names, so the 100% above is a measurement
+        // rather than a gate that stopped asking.
+        let mut orphan = p.attn_nodes[5].clone();
         orphan.input_refs = vec![4];
         assert!(kernel_can_serve_node_v1(&orphan, false).is_err(), "a weightless matmul with one input has nothing to multiply");
         let mut oracle_kv = p.attn_nodes[8].clone();
         oracle_kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 1 };
         assert!(kernel_can_serve_node_v1(&oracle_kv, false).is_err(), "a kv-scaled weight matmul names no matrix the oracle holds");
+        let mut fed_gather = p.pre_nodes[0].clone();
+        fed_gather.input_refs = vec![0];
+        assert!(kernel_can_serve_node_v1(&fed_gather, true).is_err(), "a gather with an opened row declares an input nothing supplies");
+        let mut tableless = p.pre_nodes[0].clone();
+        tableless.weight_name = String::new();
+        tableless.weight_dtypes = Vec::new();
+        assert!(kernel_can_serve_node_v1(&tableless, true).is_err(), "a gather must name the table it reads");
     }
 
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0

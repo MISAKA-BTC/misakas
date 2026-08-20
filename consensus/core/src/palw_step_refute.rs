@@ -270,9 +270,21 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             }
             Ok(())
         }
+        // The gather takes NO opened row (G5d): its operands are the registered embedding table
+        // and the token id the refutation carries, so a node that declared an input would be
+        // declaring one nothing supplies — the pre table has no upstream.
+        KernelProgram::Base0(Base0Op::Embed) => {
+            if node.weight_name.is_empty() {
+                return Err("an embedding gather names the table it reads from");
+            }
+            if !node.input_refs.is_empty() {
+                return Err("an embedding gather takes no opened row: its operands are the table and the token id");
+            }
+            Ok(())
+        }
         // One opened row.
         KernelProgram::Base0(
-            Base0Op::RmsNorm | Base0Op::Softmax | Base0Op::Silu | Base0Op::Embed,
+            Base0Op::RmsNorm | Base0Op::Softmax | Base0Op::Silu,
         )
         | KernelProgram::L2Norm
         | KernelProgram::SigmoidGlibcFma
@@ -316,6 +328,7 @@ fn base0_row(
     inputs: &[Vec<u32>],
     weights: &dyn PalwWeightOracleV1,
     kv_len: u64,
+    gather: (&PalwStepCoordinateV1, &[u32]),
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_ops as ops;
     let need = |n: usize| -> Result<(), PalwStepRefuteError> {
@@ -364,9 +377,37 @@ fn base0_row(
         // Embedding is a gather the leg has already opened: the challenged row IS the input, so
         // recomputation is the identity. Naming it in the catalog rather than leaving it
         // uncatalogued is the point — an uncatalogued op is an `Unadjudicable` hole (A4).
+        // **The gather, adjudicated (G5d).**
+        //
+        // This used to return `inputs[0]` — the identity — which is an admission that a real
+        // gather could not be checked, and it also forced the node to declare an input row that a
+        // pre table has no upstream to supply. Both are gone: the row comes from the registered
+        // embedding table at the token's own offset, and the token comes from the carried ids the
+        // court has already matched against the job context's `prompt_token_ids_hash`.
         Base0Op::Embed => {
-            need(1)?;
-            Ok(inputs[0].clone())
+            let (coord, prompt_ids) = gather;
+            // Prefill only. A DECODE token is whatever the model generated, so it is not in the
+            // prompt and its id is pinned by nothing here — a challenger naming it freely would
+            // convict an honest producer, which is the one failure this court may never have. The
+            // remaining half of G5d (deriving it from the previous position's committed logits)
+            // is recorded in `docs/palw-qwen25-class-phase0.md`.
+            if coord.call_index != 0 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let token = *prompt_ids.get(coord.position as usize).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let width = match node.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return Err(PalwStepRefuteError::Unadjudicable),
+            };
+            let start = (token as u64).checked_mul(width as u64).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let start = u32::try_from(start).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let row = weights
+                .weight_row(node.weight_name.as_str(), layer, start, width)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if row.len() != width as usize {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            Ok(row.iter().map(|b| *b as i8 as i32 as u32).collect())
         }
         // The three ops whose operands are registration artifacts rather than opened leaves —
         // weight rows, quantization multipliers and the pinned rotary table. They resolve through
@@ -555,6 +596,18 @@ pub struct PalwExecutionStepRefutationV1 {
     pub output_preimage: PalwStepTileLeafV1,
     /// MUST be exactly the canonical input set, in canonical order (§ Input integrity).
     pub inputs: Vec<PalwStepInputOpeningV1>,
+    /// **The prompt's token ids (G5d), carried because a gather cannot be checked without them.**
+    ///
+    /// The fault a court reads is "the committed tile differs from the correct computation", and
+    /// for an embedding the correct computation is `token_embd[t]`. A challenger may open any row
+    /// it likes; that proves fraud only if `t` is the right token. The id is not a step input and
+    /// the job context holds only `prompt_token_ids_hash` — so the requirement is irreducible and
+    /// the ids ride here, the same proof-carrying shape the operand openings use.
+    ///
+    /// Checked against that hash before a single one is read: unchecked, a challenger would name
+    /// whatever ids convict an honest producer. Empty is legal and means the refutation addresses
+    /// no gather — every other kernel ignores it.
+    pub prompt_token_ids: Vec<u32>,
 }
 
 /// Supplies raw rows of the pinned model artifact. The CALLER owns verifying the artifact
@@ -840,7 +893,25 @@ pub fn check_execution_step_refutation_v1(
     } else {
         binding.job_context.declared_prefill_tokens as u64 + out_coord.call_index as u64
     };
-    let recomputed_row = run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len)?;
+    // **G5d: the carried ids are checked BEFORE any of them is read.** Unchecked, a challenger
+    // would name whatever ids convict an honest producer — the ids are the whole basis on which a
+    // gather's "correct" output is decided. An empty list is legal (the refutation addresses no
+    // gather); a non-empty one must be the prompt the job context committed to.
+    if !refutation.prompt_token_ids.is_empty()
+        && crate::palw_v2::prompt_token_ids_hash_v2(&refutation.prompt_token_ids) != binding.job_context.prompt_token_ids_hash
+    {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried prompt ids are not the ones the job context commits to"));
+    }
+    let recomputed_row = run_program(
+        program,
+        node,
+        layer,
+        &binding.shape_profile,
+        &inputs,
+        weights,
+        kv_len,
+        (&out_coord, &refutation.prompt_token_ids),
+    )?;
 
     // 4) Compare the challenged tile's slice, exact bits.
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
@@ -883,9 +954,12 @@ fn run_program(
     // `KvScaled` node for not holding this, while its own caller derives it from the coordinate
     // it already has — so attention was unadjudicable for want of a value one frame up.
     kv_len: u64,
+    // G5d: the challenged position and the carried, hash-checked prompt ids. Only the gather
+    // reads them; every other kernel is a function of its opened rows and its weights.
+    gather: (&PalwStepCoordinateV1, &[u32]),
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     match program {
-        KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len),
+        KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
             Ok(l2_norm_row(x, profile.l2_eps_bits))
@@ -1117,6 +1191,11 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// No gather: the challenged coordinate is the graph's origin and no prompt ids are carried.
+    /// Every kernel but `Embed` ignores it, and `Embed` has its own tests.
+    const NO_GATHER: (&PalwStepCoordinateV1, &[u32]) =
+        (&PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 }, &[]);
+
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
     use crate::palw_step::{
@@ -1179,7 +1258,7 @@ pub(crate) mod tests {
         // A class registered with a large epsilon must be adjudicated with THAT epsilon.
         let mut big = profile();
         big.base0_rms_eps_q = 1 << 30;
-        let got = base0_row(Base0Op::RmsNorm, &node, Some(0), &big, &input, &NoWeights, 1).expect("adjudicable");
+        let got = base0_row(Base0Op::RmsNorm, &node, Some(0), &big, &input, &NoWeights, 1, NO_GATHER).expect("adjudicable");
         let want: Vec<u32> = crate::palw_base0_ops::rms_norm(&x, 1 << 30).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got, want, "the registered epsilon must be the one used");
 
@@ -1209,7 +1288,7 @@ pub(crate) mod tests {
         // One per-tensor (multiplier, shift): a gain of 2^8 at shift 23.
         let mut row = i32::MAX.to_le_bytes().to_vec();
         row.push(23);
-        let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1).expect("adjudicable");
+        let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1, NO_GATHER).expect("adjudicable");
         let want: Vec<u32> =
             crate::palw_base0_ops::rescale_row(&acc, crate::palw_base0_ops::ScaleParams { multiplier: i32::MAX, shift: 23 })
                 .into_iter()
@@ -1224,7 +1303,7 @@ pub(crate) mod tests {
             row.push(bad);
             assert!(
                 matches!(
-                    base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1),
+                    base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &FixedRow(row), 1, NO_GATHER),
                     Err(PalwStepRefuteError::InputSetNotCanonical(_))
                 ),
                 "shift {bad} is outside the 0..=62 domain and must be refused"
@@ -1252,7 +1331,7 @@ pub(crate) mod tests {
         // 3 output rows × 4 inputs = 12 weight bytes.
         let w: Vec<i8> = (1..=12i8).collect();
         let row: Vec<u8> = w.iter().map(|v| *v as u8).collect();
-        let got = base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(row), 1).expect("adjudicable");
+        let got = base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(row), 1, NO_GATHER).expect("adjudicable");
         let want: Vec<u32> = crate::palw_base0_ops::matmul_quant(&w, &x, 3).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(got.len(), 3, "the full declared output row is recomputed, not one element");
         assert_eq!(got, want);
@@ -1261,7 +1340,7 @@ pub(crate) mod tests {
         // valid block: it is a class/registration disagreement this court cannot resolve.
         let short: Vec<u8> = w[..4].iter().map(|v| *v as u8).collect();
         assert_eq!(
-            base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(short), 1),
+            base0_row(Base0Op::MatMul, &node, Some(0), &profile(), &input, &FixedRow(short), 1, NO_GATHER),
             Err(PalwStepRefuteError::Unadjudicable),
             "a short weight block is unadjudicable, never the challenger's fault"
         );
@@ -1271,7 +1350,7 @@ pub(crate) mod tests {
         kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 2 };
         let full: Vec<u8> = w.iter().map(|v| *v as u8).collect();
         assert_eq!(
-            base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full), 1),
+            base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full), 1, NO_GATHER),
             Err(PalwStepRefuteError::Unadjudicable)
         );
     }
@@ -1298,7 +1377,7 @@ pub(crate) mod tests {
             ok_row.push(10);
             ok_row.extend_from_slice(&0i32.to_le_bytes());
         }
-        let got = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(ok_row), 1);
+        let got = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(ok_row), 1, NO_GATHER);
         assert!(got.is_ok(), "an in-domain shift must still be recomputed: {got:?}");
 
         // Out-of-domain shifts are refused as non-canonical — including 32, the first one past the
@@ -1312,7 +1391,7 @@ pub(crate) mod tests {
                 row.push(if channel == 3 { bad } else { 10 });
                 row.extend_from_slice(&0i32.to_le_bytes());
             }
-            let refused = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(row), 1);
+            let refused = base0_row(Base0Op::Requantize, &node, Some(0), &profile(), &input, &FixedRow(row), 1, NO_GATHER);
             assert!(
                 matches!(refused, Err(PalwStepRefuteError::InputSetNotCanonical(_))),
                 "shift {bad} in the last channel must be refused as non-canonical, got {refused:?}"
@@ -1435,6 +1514,7 @@ pub(crate) mod tests {
                 values_le: Vec::new(),
             },
             inputs: Vec::new(),
+            prompt_token_ids: Vec::new(),
         }
     }
 
@@ -1766,6 +1846,120 @@ pub(crate) mod tests {
         assert!(PalwProvenOperandsV1::from_openings_v1(&openings, h64(0xBD)).is_err());
     }
 
+    /// **G5d: the gather is adjudicated from the registered table and a hash-checked token id.**
+    ///
+    /// It used to return the identity of `inputs[0]`, which is an admission that a real gather
+    /// could not be checked — and it also forced the node to declare an input row that a pre
+    /// table has no upstream to supply. Both are gone.
+    ///
+    /// The safety half is the point: the ids decide what "correct" means for this step, so an
+    /// unchecked list is a challenger naming whatever convicts an honest producer. They are
+    /// matched against the job context's own commitment before one of them is read.
+    #[test]
+    fn palw_v2_the_gather_reads_the_table_at_a_hash_checked_token_id() {
+        let node = PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::EmbedLookup,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: "token_embd.weight".to_string(),
+            weight_dtypes: vec![24],
+            out_len: crate::palw_step::PalwStepOutLenV1::Fixed { elements: 4 },
+            tile_len: 16,
+            kernel_semantics_id: kernel_semantics_id_v1(KDESC_BASE0_EMBED),
+            input_refs: Vec::new(),
+        };
+        // A four-row table: row t is [t, t+1, t+2, t+3] as int8 codes.
+        struct Table;
+        impl PalwWeightOracleV1 for Table {
+            fn weight_row(&self, name: &str, _l: Option<u16>, row_start: u32, elements: u32) -> Option<Vec<u8>> {
+                if name != "token_embd.weight" || row_start + elements > 16 {
+                    return None;
+                }
+                Some((row_start..row_start + elements).map(|i| (i % 4 + i / 4) as u8).collect())
+            }
+        }
+        let want = |t: u32| -> Vec<u32> { (0..4u32).map(|i| ((t * 4 + i) % 4 + t) as i32 as u32).collect() };
+
+        let ids = [3u32, 1, 2];
+        for (pos, id) in ids.iter().enumerate() {
+            let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: pos as u32, tile_index: 0 };
+            let got = base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&coord, &ids))
+                .expect("a prefill gather adjudicates");
+            assert_eq!(got, want(*id), "position {pos} must gather the row its token id names");
+        }
+
+        // A DECODE gather is refused rather than guessed: the token is whatever the model
+        // generated, so it is in no prompt and pinned by nothing here.
+        let decode = PalwStepCoordinateV1 { call_index: 1, node_slot: 0, position: 0, tile_index: 0 };
+        assert_eq!(
+            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&decode, &ids)),
+            Err(PalwStepRefuteError::Unadjudicable),
+            "a decode token is pinned by nothing here — refusing is the only safe answer"
+        );
+
+        // A position past the carried ids is a refusal, never a default: index 0 would adjudicate
+        // every out-of-range gather against the FIRST token and convict honest producers.
+        let past = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 9, tile_index: 0 };
+        assert_eq!(
+            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&past, &ids)),
+            Err(PalwStepRefuteError::Unadjudicable)
+        );
+        // A table that cannot serve the row is unadjudicable, not a conviction.
+        struct Empty;
+        impl PalwWeightOracleV1 for Empty {
+            fn weight_row(&self, _n: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+                None
+            }
+        }
+        let first = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 };
+        assert_eq!(
+            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Empty, 1, (&first, &ids)),
+            Err(PalwStepRefuteError::Unadjudicable)
+        );
+    }
+
+    /// **The carried ids are checked against the job context before any is read.**
+    ///
+    /// Without this the gather is a false-slash machine: a challenger picks the ids that make an
+    /// honest producer's committed row look wrong, and the court convicts on the challenger's own
+    /// choice of what the input was.
+    #[test]
+    fn palw_v2_a_refutation_carrying_foreign_prompt_ids_is_refused() {
+        let (binding, material, rows) = honest_execution();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 0 };
+        let mut refutation = build_refutation(&binding, &material, &rows, coord);
+
+        // Honest and empty: the refutation addresses no gather, and the check is inert.
+        assert!(refutation.prompt_token_ids.is_empty());
+        assert!(check_execution_step_refutation_v1(&refutation, &NoWeights).is_err(), "this fixture is a NoFault case");
+
+        // Ids the job context does not commit to are refused as non-canonical, in the
+        // `InputSetNotCanonical` family — the challenger's evidence is wrong, not the producer's.
+        refutation.prompt_token_ids = vec![1, 2, 3];
+        assert!(
+            matches!(
+                check_execution_step_refutation_v1(&refutation, &NoWeights),
+                Err(PalwStepRefuteError::InputSetNotCanonical(_))
+            ),
+            "ids the context does not commit to must never reach a kernel"
+        );
+
+        // …and the ids the context DOES commit to pass the check (the step then fails on its own
+        // merits, which is a different error).
+        let mut honest_ids = binding.job_context.clone();
+        let ids = vec![7u32, 8];
+        honest_ids.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        let mut with_ids = refutation.clone();
+        with_ids.binding.job_context = honest_ids;
+        with_ids.prompt_token_ids = ids;
+        assert!(
+            !matches!(
+                check_execution_step_refutation_v1(&with_ids, &NoWeights),
+                Err(PalwStepRefuteError::InputSetNotCanonical(m)) if m.contains("carried prompt ids")
+            ),
+            "ids matching the commitment must pass the id check"
+        );
+    }
+
     /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**
     ///
     /// `canonical_input_leaves` used to answer `None` for them — "KV / checkpoint arms:
@@ -2026,6 +2220,7 @@ pub(crate) mod tests {
             output_opening: step_opening_v1(&material.leaf_hashes, out_idx).unwrap(),
             output_preimage: tile_preimage(rows, binding, coord),
             inputs,
+            prompt_token_ids: Vec::new(),
         }
     }
 
