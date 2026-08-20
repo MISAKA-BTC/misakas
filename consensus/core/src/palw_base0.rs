@@ -73,12 +73,30 @@ pub const RSQRT_SEED: [i64; 16] = [
 ];
 
 /// The longest `int8 × int8` dot product that provably cannot overflow an `i32` accumulator:
-/// `|product| ≤ 127 × 127 = 16_129`, so `MAX_DOT_LEN × 16_129 ≤ i32::MAX`.
+/// `|product| ≤ 128 × 128 = 16_384`, so `MAX_DOT_LEN × 16_384 ≤ i32::MAX`.
+///
+/// # The worst case is `-128`, and this constant read `133_144` until it was measured
+///
+/// ADR-0040 C3 derives the bound from `127 × 127 = 16_129` — and states two sentences later that
+/// every narrowing "saturates to `[-128, 127]`". Both cannot be true, and the type wins:
+/// [`requantize`] really does return `-128` (`requantize(i32::MIN, i32::MAX, 0)`, pinned by
+/// `narrowing_saturates_at_both_ends`), an artifact's weight tensors are raw `i8` that nothing
+/// range-checks, and the refutation path decodes operands with `i8::try_from`, which accepts it.
+/// So `(-128)² = 16_384` is the product a conforming implementation must survive and `131_071` is
+/// the length that licenses — 1.6 % below the old figure, and three orders of magnitude above any
+/// real shape, which is why nothing ever reached it.
+///
+/// **Excluding `-128` at the narrowing sites was the alternative, and is the wrong repair.** It
+/// changes frozen catalog op 2 for every input that currently narrows to `-128`, contradicting
+/// C3's own saturation sentence; and it would still leave the artifact and refutation entry points
+/// open, each missed one being a panic inside an adjudicator rather than a wrong answer.
 ///
 /// ADR-0040 C3. This bound is what licenses Decision E's free reduction order, so a graph that
 /// exceeds it does not merely risk overflow — it loses the property the class exists for, and
-/// must accumulate in `i64` and say so.
-pub const MAX_DOT_LEN: usize = 133_144;
+/// must accumulate in `i64` and say so. It is therefore stated over the TYPE, with no side
+/// condition on which `i8` values a producer happens to emit: a premise that holds only for a
+/// subset of the operand type is not a premise Decision E can use.
+pub const MAX_DOT_LEN: usize = 131_071;
 
 /// Round-half-away-from-zero shift — one of the class's named lossy sites (ADR-0040 C1).
 ///
@@ -330,7 +348,7 @@ mod tests {
     #[test]
     fn constants_are_the_pinned_derivations() {
         assert_eq!(ONE, 16_777_216);
-        assert_eq!(MAX_DOT_LEN as i64, (i32::MAX as i64) / 16_129);
+        assert_eq!(MAX_DOT_LEN as i64, (i32::MAX as i64) / 16_384);
         // ln2 in Qk, bracketed: 0.693147 < LN2_Q/ONE < 0.693148
         assert!((LN2_Q as i64) * 1_000_000 > 693_147 * ONE);
         assert!((LN2_Q as i64) * 1_000_000 < 693_148 * ONE);
@@ -496,9 +514,18 @@ mod tests {
 
     /// The bound that licenses the property above: `MAX_DOT_LEN` worst-case products still fit an
     /// `i32`, and one more does not. Decision E is conditional on this, so it is pinned.
+    ///
+    /// **The worst case is asserted to be `i8::MIN`, not assumed to be `i8::MAX`.** This test read
+    /// `127 * 127` while [`requantize`] was already emitting `-128`, so it pinned the bound against
+    /// a subset of the operand type and passed. The first two assertions are the ones that make the
+    /// rest mean something: the wide end is reachable, and it is the negative one.
     #[test]
     fn the_no_overflow_bound_is_exactly_at_the_edge() {
-        let worst = 127i64 * 127;
+        assert_eq!(requantize(i32::MIN, i32::MAX, 0), i8::MIN, "-128 is a value this class produces");
+        let worst = (i8::MIN as i64) * (i8::MIN as i64);
+        assert_eq!(worst, 16_384);
+        assert!(worst > (i8::MAX as i64) * (i8::MAX as i64), "the negative end is the wider one");
+
         assert!(MAX_DOT_LEN as i64 * worst <= i32::MAX as i64, "the bound must fit");
         assert!((MAX_DOT_LEN as i64 + 1) * worst > i32::MAX as i64, "and must be the largest that does");
     }

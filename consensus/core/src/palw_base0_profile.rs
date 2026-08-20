@@ -364,6 +364,45 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     Ok(profile)
 }
 
+/// **A BASE-0 catalog entry whose numbers are COUNTED from the profile, never chosen.**
+///
+/// `canonical_step_leaf_count` is what ADR-0045 Decision 1 makes `pwu_per_inference` normatively
+/// equal to, and it is a direct, permanent multiplier on the class's fork-choice weight — so a
+/// registration that could pick it could pick its own weight. `verify_palw_genesis_v2` already
+/// refuses a registration whose declaration differs from the catalog's number; this is the other
+/// half, which makes the catalog's number a measurement rather than a second declaration.
+///
+/// Both counts come from `step_leaf_count`, the same function the leg builder sizes itself with,
+/// applied to the canonical job shape and to the class's worst case. Two counters would be two
+/// answers, and the leg builder's is the one an execution actually has to satisfy.
+///
+/// `canonical` is the (prefill, decode) shape of one canonical inference — the unit the class is
+/// paid per — and `worst_case` is the deepest run the ladder must still be able to walk.
+pub fn base0_catalog_entry_v1(
+    class_id: Hash64,
+    artifact_root: Hash64,
+    profile: &PalwShapeProfileV3,
+    canonical: &crate::palw_v2::PalwJobContextV2,
+    worst_case: &crate::palw_v2::PalwJobContextV2,
+) -> Result<crate::palw_mode_v2::PalwClassCatalogEntryV2, PalwStepError> {
+    let canonical_step_leaf_count = crate::palw_step::step_leaf_count(profile, canonical)?;
+    let max_step_leaf_count = crate::palw_step::step_leaf_count(profile, worst_case)?;
+    // Every kernel the graph can reach, read off the graph itself. A hand-maintained list here
+    // would be the coverage gate certifying a set nobody derived from the thing it covers.
+    let reachable_kernels = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
+        .into_iter()
+        .flatten()
+        .map(|node| node.kernel_semantics_id)
+        .collect();
+    Ok(crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count,
+        canonical_step_leaf_count,
+        reachable_kernels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +520,75 @@ mod tests {
         let mut declared: Vec<&str> = BASE0_TENSOR_NAMES.to_vec();
         declared.sort_unstable();
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
+    }
+
+    /// A canonical job shape for the geometry above, and a worst case ten times deeper.
+    fn job(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> crate::palw_v2::PalwJobContextV2 {
+        let mut ctx = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"base0-profile-test".to_vec(),
+            job_id: Hash64::from_u64_word(1),
+            job_nullifier: Hash64::from_u64_word(2),
+            assignment_id: Hash64::from_u64_word(3),
+            execution_seed: [7; 32],
+            model_profile_id: Hash64::from_u64_word(4),
+            runtime_manifest_hash: Hash64::from_u64_word(5),
+            runtime_class_id: Hash64::from_u64_word(6),
+            shape_profile_id: profile.shape_profile_id(),
+            trace_scheme_id: Hash64::default(),
+            cu_ruleset_id: Hash64::from_u64_word(9),
+            tokenizer_id: Hash64::from_u64_word(10),
+            prompt_token_ids_hash: Hash64::from_u64_word(11),
+            declared_prefill_tokens: prefill,
+            exact_decode_tokens: decode,
+            max_context_tokens: profile.n_ctx,
+        };
+        ctx.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
+        ctx
+    }
+
+    /// **The catalog's numbers are counted, not chosen.**
+    ///
+    /// `canonical_step_leaf_count` is what `pwu_per_inference` must equal (ADR-0045 Decision 1)
+    /// and therefore a direct multiplier on the class's fork-choice weight — so a registration
+    /// that could pick it could pick its own weight. `verify_palw_genesis_v2` refuses a
+    /// declaration that differs from the catalog; this is the half that makes the catalog's
+    /// number a measurement.
+    #[test]
+    fn the_catalog_entry_counts_the_profile_rather_than_declaring_a_number() {
+        let p = base0_profile_v1(geometry()).unwrap();
+        let canonical = job(&p, 8, 4);
+        let worst = job(&p, 64, 64);
+        let entry = base0_catalog_entry_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(0xA7), &p, &canonical, &worst)
+            .expect("the entry counts");
+
+        // The SAME counter the leg builder sizes itself with — one answer, not two.
+        assert_eq!(entry.canonical_step_leaf_count, crate::palw_step::step_leaf_count(&p, &canonical).unwrap());
+        assert!(entry.canonical_step_leaf_count > 0, "a canonical inference has steps");
+        assert!(
+            entry.canonical_step_leaf_count < entry.max_step_leaf_count,
+            "a canonical run is strictly inside the class's worst case, which is what keeps \
+             'work worth paying for' and 'work the ladder can walk' the same quantity"
+        );
+
+        // A deeper job counts more leaves: the number tracks the execution, so it cannot be
+        // restated as a constant.
+        let deeper = job(&p, 16, 8);
+        let deeper_entry =
+            base0_catalog_entry_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(0xA7), &p, &deeper, &worst).unwrap();
+        assert!(deeper_entry.canonical_step_leaf_count > entry.canonical_step_leaf_count);
+
+        // And the reachable set is read off the graph, so the coverage gate cannot pass on a set
+        // nobody derived from the thing it covers.
+        assert_eq!(
+            entry.reachable_kernels,
+            [&p.pre_nodes, &p.gdn_nodes, &p.attn_nodes, &p.post_nodes]
+                .into_iter()
+                .flatten()
+                .map(|n| n.kernel_semantics_id)
+                .collect()
+        );
+        assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
 
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0
