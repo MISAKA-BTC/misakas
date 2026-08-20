@@ -598,6 +598,20 @@ impl Params {
         if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
         }
+        // ADR-0038 Decision H, enforced where the decision says it must be — at construction.
+        //
+        // Audit H2: the cadence is in neither `PalwConsensusParamsV2` nor therefore
+        // `palw_ruleset_id_v2`, while every window inside the bundle is denominated in DAA score.
+        // Two networks could share a ruleset id and run different rules in wall-clock terms, which
+        // defeats the one property Decision 11 exists to give — that "the RC and mainnet ship the
+        // same ruleset" is a hash a node checks rather than a release note it trusts. The bundle's
+        // id still does not cover the cadence; this refuses the only configurations where that
+        // silence would matter.
+        if self.blockrate.target_time_per_block != crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS {
+            return Err(PalwModeV2Error::Invalid(
+                "a ConsensusV2 network must run the frozen 120 s cadence (ADR-0038 Decision H) — every window in the bundle is DAA-denominated",
+            ));
+        }
         Ok(())
     }
 

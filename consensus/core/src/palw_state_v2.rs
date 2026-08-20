@@ -403,6 +403,10 @@ pub struct PalwClaimStateV2 {
     pub trace_root: Hash64,
     /// The attempt's committed output root (output-side disputes bind it).
     pub output_root: Hash64,
+    /// The attempt's committed execution root — what a court refutation's binding must equal
+    /// before any fault is read out of it (audit C3). Copied for the same reason `trace_root` is:
+    /// the state IS the candidate-scoped source consumers read.
+    pub execution_root: Hash64,
     /// Collateral value reserved at creation: `pwu × slash_value_per_pwu(class at creation)`.
     /// Snapshotted so release always returns exactly what reserve took, whatever happens to the
     /// class record afterwards.
@@ -566,6 +570,8 @@ pub enum PalwStateV2Error {
     MissingParentState(BlockHash),
     #[error("class {0} registered with a zero target — an unmeetable difficulty is a dead class in costume")]
     ZeroClassTarget(Hash64),
+    #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
+    ZeroSlashValue(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
     Retarget(String),
 }
@@ -1149,11 +1155,49 @@ pub fn apply_palw_transition_v2(
         apply_attempt(&mut builder, ctx, envelope)?;
     }
 
-    // 5. Frontier observation: if the whole past is resolved at this point, the frontier is here.
+    // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
+    //    **the deepest block on this chain whose PALW work is `Final`, with nothing unresolved
+    //    below it.**
+    //
+    // What stood here asked `unresolved.is_empty()` — whether the chain, tip included, held no
+    // open claim — and named THIS block. Two failures fell out of it (audit C2), and they pull in
+    // opposite directions, which is why one rule has to answer both:
+    //
+    // * On a chain that produces work the condition is never true. Step 4 above just inserted
+    //   this block's own `Provisional` claim, so at every block forever the frontier stayed
+    //   wherever the chain last went idle. `pruning_ceiling_v2` froze with it (the node never
+    //   prunes again, and the carriage grows one claim per block without bound), and the
+    //   comparator's first key stopped discriminating between honest chains.
+    // * On a chain that produces NOTHING the condition is trivially true, so a fork carrying no
+    //   attempts at all advanced its frontier once per block and OUTRANKED a chain that had
+    //   matured real work. Reproduced: 60 attempt-less blocks beat a 60-block honest chain on
+    //   key 1, and the deep-reorg gate allowed it. That is precisely the fabrication that
+    //   ordering by frontier before weight exists to refuse.
+    //
+    // Both close by measuring MATURED WORK rather than the absence of open claims. `unresolved`
+    // is ordered by `accepted_blue_score`, so the resolved prefix ends immediately below its
+    // first entry; inside that prefix the frontier is the deepest `Final` claim — a claim, so it
+    // names its own accepting block, and a chain with no matured work has no frontier to stand
+    // on however long it grows. `Voided` claims are resolved (they do not hold the prefix back)
+    // but confer no frontier: a block whose work was thrown out matured nothing.
     let old_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
-    if builder.state.unresolved.is_empty() {
-        builder.state.safe_frontier_blue_score = ctx.blue_score;
-        builder.state.safe_frontier = ctx.block;
+    let resolved_through = match builder.state.unresolved.iter().next() {
+        // Nothing open anywhere: the whole chain including this block is a resolved prefix.
+        None => u64::MAX,
+        // Everything strictly below the oldest open claim is resolved. Its own point is not —
+        // pruning there would delete history a live claim still needs.
+        Some((oldest_open, _)) => oldest_open.saturating_sub(1),
+    };
+    if let Some(claim) = builder
+        .state
+        .claims
+        .values()
+        .filter(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.accepted_blue_score <= resolved_through)
+        .max_by_key(|c| c.accepted_blue_score)
+        && claim.accepted_blue_score > old_frontier.0
+    {
+        builder.state.safe_frontier_blue_score = claim.accepted_blue_score;
+        builder.state.safe_frontier = claim.accepted_block;
     }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     debug_assert!(new_frontier.0 >= old_frontier.0, "the frontier never retreats");
@@ -1250,19 +1294,67 @@ fn apply_class_retargets(
     // Snapshot the iteration set: the writes below mutate `class_targets`, never `classes`, but
     // borrowing rules want the plan separated from the writes anyway.
     let class_ids: Vec<Hash64> = builder.state.classes.keys().copied().collect();
+
+    // **Audit H1 — normalize the expectation over the classes that actually competed.**
+    //
+    // `retarget_over_span_v1` expects `share · total / 1000` blocks of a class, where `total` is
+    // what the span REALLY produced. The two disagree whenever some permille belongs to a class
+    // that produced nothing — frozen, unstaffed, or simply idle. Its permille stays in the
+    // denominator while its blocks are missing from `total`, so every class that DID produce looks
+    // like an over-producer and has its target divided. That verdict repeats every boundary, in
+    // the same direction, with `max_factor` bounding each step and nothing bounding the walk:
+    // measured at 4^12 over twelve boundaries, ending at zero, where `ZeroPreviousTarget` rejects
+    // every subsequent block deterministically and no node can rejoin.
+    //
+    // The rule below measures a span against the classes that were IN it. Expectations sum back to
+    // the realized total, so holding the whole of what happened is not over-producing; and a class
+    // that produced nothing is skipped rather than measured as zero, because a span it sat out
+    // says nothing about its difficulty in either direction. Genuine competition is untouched:
+    // when two classes both produce, both keep their table shares and the feedback works as
+    // designed — the survivor's windfall only exists when there is no competitor to give it to.
+    // Snapshot the census before any write, so the plan is a pure function of the parent state.
+    let produced_in_span: BTreeMap<Hash64, u64> = class_ids
+        .iter()
+        .map(|id| {
+            let blocks = builder
+                .state
+                .epoch_counters
+                .get(id)
+                .filter(|counter| counter.epoch_index == closed_epoch)
+                .map(|counter| counter.produced_blocks)
+                .unwrap_or(0);
+            (*id, blocks)
+        })
+        .collect();
+    let competing_permille: u64 = class_ids
+        .iter()
+        .filter(|id| !matches!(builder.state.classes.get(id).map(|c| &c.status), Some(PalwClassStatusV2::Frozen { .. })))
+        .filter(|id| produced_in_span.get(id).copied().unwrap_or(0) > 0)
+        .filter_map(|id| builder.params.class_daa.share_permille(id))
+        .map(u64::from)
+        .sum();
+    if competing_permille == 0 {
+        // Blocks were produced, but by no share-bearing unfrozen class. Nothing here is a
+        // statement about any class's difficulty.
+        return Ok(());
+    }
+
     for class_id in class_ids {
         let class = builder.state.classes.get(&class_id).expect("iterating the map's own keys");
         if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
             continue;
         }
         let Some(share) = builder.params.class_daa.share_permille(&class_id) else { continue };
-        let observed = builder
-            .state
-            .epoch_counters
-            .get(&class_id)
-            .filter(|counter| counter.epoch_index == closed_epoch)
-            .map(|counter| counter.produced_blocks)
-            .unwrap_or(0);
+        let observed = produced_in_span.get(&class_id).copied().unwrap_or(0);
+        if observed == 0 {
+            // It was not in this span. Measuring it as an under-producer would ease its target on
+            // every span it sits out, which is the same unbounded walk in the other direction.
+            continue;
+        }
+        // Renormalized share, saturating at the whole denominator: a sole competing class is
+        // expected to produce the whole span, which is what "its share of what happened" means.
+        let share = u16::try_from((u64::from(share) * 1000 / competing_permille).min(1000))
+            .expect("the value is clamped to 1000, which fits u16");
         let current = builder
             .state
             .class_targets
@@ -1271,7 +1363,12 @@ fn apply_class_retargets(
             .target;
         let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: observed, total_daa_blocks: total };
         let next = crate::palw_class_daa::retarget_over_span_v1(current, &census, share, builder.params.class_daa.max_factor())
-            .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?;
+            .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?
+            // A target of zero is not "impossibly hard", it is unrecoverable: the next retarget
+            // returns `ZeroPreviousTarget` and every block after it is rejected, deterministically,
+            // forever. One is the floor. With the normalization above nothing should walk here, and
+            // this exists so that "should" is not what stands between the chain and a hard stop.
+            .max(1);
         if next != current {
             builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
         }
@@ -1349,6 +1446,15 @@ fn apply_object(
             }
             if *initial_target == 0 {
                 return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
+            }
+            // **Audit H3.** `reserved = pwu × slash_value_per_pwu` is the collateral a claim puts
+            // at risk, and admission's ceiling (Decision 6 item 8) compares it against the bond's
+            // headroom. At zero every claim reserves zero, so ANY number of immature claims fits
+            // under ANY ceiling — the per-bond exposure cap, which is the whole of P0-10's remedy,
+            // silently evaluates to no cap at all. A class whose work cannot be slashed is not a
+            // cheap class, it is an unbonded one.
+            if *slash_value_per_pwu == 0 {
+                return Err(PalwStateV2Error::ZeroSlashValue(*class_id));
             }
             builder.write_class(
                 *class_id,
@@ -1505,6 +1611,7 @@ fn apply_attempt(
         accepted_block: ctx.block,
         trace_root: attempt.trace_root,
         output_root: attempt.output_root,
+        execution_root: attempt.execution_root,
         reserved,
         immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
         phase: PalwClaimPhaseV2::Provisional,
@@ -1899,6 +2006,26 @@ mod tests {
         ]
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_for_class(
+        pwu: u64,
+        nonce: u64,
+        class_id: Hash64,
+        bond: PalwBondKeyV2,
+        pubkey: Vec<u8>,
+        operator_id: Hash64,
+        artifact_root: Hash64,
+    ) -> PalwAttemptEnvelopeV2 {
+        let mut env = attempt(pwu, nonce);
+        env.attempt.class_id = class_id;
+        env.attempt.executor_bond = bond.0;
+        env.attempt.executor_pubkey = pubkey;
+        env.attempt.operator_id = operator_id;
+        env.attempt.artifact_root = artifact_root;
+        env.attempt.challenge = challenge_v2(env.attempt.network_domain, h64(5), 1_700, nonce, class_id, &bond.0);
+        env
+    }
+
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
         let network_domain = h64(999);
         let bond = bond_key(1).0;
@@ -1919,6 +2046,7 @@ mod tests {
                 trace_manifest_root: h64(33),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                execution_root: h64(41),
             },
             signature: vec![0; 8],
         }
@@ -1972,7 +2100,11 @@ mod tests {
         assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
         assert_eq!((s5.safe_weight(), s5.bounded_immature()), (40, 0), "Final: full pwu safe, immature released");
         assert_eq!(s5.reserved_exposure(&bond_key(1)), 0, "exposure released on Final");
-        assert_eq!(s5.safe_frontier(), (5, block(5)), "with the whole past resolved, the frontier is here");
+        // The frontier names the block whose WORK matured — block 2, which carried the attempt —
+        // not block 5, where the last transition happened to land. "Deepest block whose PALW work
+        // is Final" is the definition `palw_fork_choice` states, and it is what makes the key
+        // unforgeable: a fork can produce blocks freely, but it cannot produce a matured claim.
+        assert_eq!(s5.safe_frontier(), (2, block(2)), "the frontier is the block whose work reached Final");
     }
 
     /// **The audit register's P0-3 red test.** A candidate tip whose claim has no descendants —
@@ -2039,7 +2171,10 @@ mod tests {
         assert_eq!(s3.bounded_immature(), 0);
         assert_eq!(s3.reserved_exposure(&bond_key(1)), 0);
         assert_eq!(s3.safe_weight(), 0, "a voided claim mints nothing");
-        assert_eq!(s3.safe_frontier(), (3, block(3)), "voiding resolves the past too");
+        // Voiding RESOLVES the past (it stops holding the prefix back) but matures nothing, so it
+        // confers no frontier. A chain whose only claim was thrown out has done no provable work
+        // and must not outrank one that has — the frontier stays where it started.
+        assert_eq!(s3.safe_frontier(), PalwChainStateV2::genesis().safe_frontier(), "a voided claim matures nothing");
     }
 
     #[test]
@@ -2330,8 +2465,8 @@ mod tests {
         let (p2, _) = apply(&p1, &p, &ctx(13, 102, 3), &[], Some(&attempt(1000, 12)));
         let (pile, _) = apply(&p2, &p, &ctx(14, 103, 4), &[], Some(&attempt(1000, 13)));
 
-        assert_eq!(matured.safe_frontier().0, 5, "the matured chain's frontier reached its tip");
-        assert_eq!(pile.safe_frontier().0, 1, "the pile's frontier is stuck at the last fully-resolved point");
+        assert_eq!(matured.safe_frontier(), (2, block(2)), "the matured chain's frontier is the block whose work Finaled");
+        assert_eq!(pile.safe_frontier().0, 0, "the pile matured nothing, so it has no frontier at all");
         assert!(pile.bounded_immature() > matured.safe_weight(), "the pile really is heavier in raw immature weight");
 
         let matured_order = matured.candidate_order(block(5));
@@ -2340,6 +2475,112 @@ mod tests {
             compare_palw_candidates_v1(&matured_order, &pile_order),
             std::cmp::Ordering::Greater,
             "the matured chain outranks the heavier unproven pile"
+        );
+    }
+
+    /// **Audit C2, half one: the frontier must advance on a chain that is DOING WORK.**
+    ///
+    /// The old rule advanced only when `unresolved` was globally empty — and step 4 of every
+    /// apply inserts the block's own claim, so on a chain that produces a claim per block the
+    /// condition was false forever and the frontier never left its starting point. Everything
+    /// keyed on it went with it: `pruning_ceiling_v2` froze (a node that never prunes again) and
+    /// the comparator's first key stopped separating honest chains.
+    ///
+    /// Steady state here: one claim accepted per block, bound the next block, licensed the one
+    /// after, Final `window_challenge` later. So the frontier must trail the tip by a bounded
+    /// lag — the liability window — and must NOT stall.
+    #[test]
+    fn the_frontier_advances_on_a_chain_that_keeps_producing_claims() {
+        let p = params();
+        let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let mut accepted: Vec<(u64, Hash64)> = Vec::new(); // (block word, claim id)
+        let mut frontier_trace: Vec<u64> = Vec::new();
+        for n in 2..=60u64 {
+            let env = attempt(4, n);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let mut objects = Vec::new();
+            // Bind the claim accepted one block ago, license the one bound one block ago.
+            if let Some((_, prev)) = accepted.last().copied() {
+                objects.push(PalwConsensusObjectV2::PanelBound {
+                    claim: prev,
+                    anchor: h64(77),
+                    seats: vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(21) }],
+                });
+            }
+            if accepted.len() >= 2 {
+                let (_, older) = accepted[accepted.len() - 2];
+                objects.push(PalwConsensusObjectV2::ReceiptLicensed { claim: older });
+            }
+            let (next, _) = apply(&state, &p, &ctx(n, 100 + n, n), &objects, Some(&env));
+            state = next;
+            accepted.push((n, claim_id));
+            frontier_trace.push(state.safe_frontier().0);
+        }
+
+        let (frontier, frontier_block) = state.safe_frontier();
+        assert!(frontier > 0, "the frontier never left the start — this is the defect (trace: {frontier_trace:?})");
+        assert!(frontier < 60, "the frontier cannot reach the tip: the newest claims are still open");
+        // The lag is the liability window, not the chain's age: it must not grow with n. Bind and
+        // receipt take one block each here and `window_challenge` is 20 DAA = 20 blocks.
+        assert!(60 - frontier <= 25, "the frontier lagged {} blocks — that is a stall, not a window", 60 - frontier);
+        // It names the block that carried the matured claim, and that claim really is Final.
+        let (word, claim_id) = accepted.iter().find(|(w, _)| *w == frontier).copied().expect("the frontier names an accepting block");
+        assert_eq!(frontier_block, block(word));
+        assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        // Monotone the whole way — a frontier that retreats is a reorg with no reorg.
+        assert!(frontier_trace.windows(2).all(|w| w[1] >= w[0]), "the frontier retreated: {frontier_trace:?}");
+        // And it genuinely moved, repeatedly, rather than jumping once.
+        assert!(frontier_trace.windows(2).filter(|w| w[1] > w[0]).count() > 10, "the frontier barely moved: {frontier_trace:?}");
+    }
+
+    /// **Audit C2, half two: a fork that does NO work must not outrank one that did.**
+    ///
+    /// The old rule made this backwards. A fork carrying no attempts at all has an empty
+    /// `unresolved` set at every block, so it advanced its frontier once per block for free and
+    /// won key 1 against a chain that had matured real work — the exact fabrication that ordering
+    /// by frontier before weight exists to refuse, arriving through the frontier itself.
+    /// Reproduced by the audit at 60 blocks; asserted here at both ends of the comparator.
+    #[test]
+    fn a_fork_that_carries_no_work_never_outranks_a_matured_chain() {
+        let p = params();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // Honest: one claim, walked to Final.
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (h1, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(21) }];
+        let (h2, _) =
+            apply(&h1, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (h3, _) = apply(&h2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (honest, _) = apply(&h3, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(honest.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+
+        // Attacker: sixty blocks from the same base, not one of them carrying an attempt. Free to
+        // produce, and under the old rule each one advanced its frontier.
+        let mut workless = base.clone();
+        for n in 100..160u64 {
+            let (next, _) = apply(&workless, &p, &ctx(n, 100 + n, n), &[], None);
+            workless = next;
+        }
+
+        assert_eq!(workless.safe_frontier().0, 0, "sixty empty blocks matured nothing, so they buy no frontier");
+        assert_eq!(workless.safe_weight(), 0);
+        assert!(honest.safe_frontier().0 > workless.safe_frontier().0, "the chain that matured work has the deeper frontier");
+
+        let honest_order = honest.candidate_order(block(5));
+        let workless_order = workless.candidate_order(block(159));
+        assert_eq!(
+            compare_palw_candidates_v1(&honest_order, &workless_order),
+            std::cmp::Ordering::Greater,
+            "a workless fork outranked a matured chain — the C2 attack"
+        );
+        // And the gate that would actually let it happen says no, on the same comparator.
+        assert_eq!(
+            crate::palw_fork_authority_v2::decide_deep_reorg_v2(&honest_order, &workless_order),
+            crate::palw_fork_authority_v2::PalwDeepReorgV2::Refuse,
+            "the deep-reorg gate must refuse a challenger that matured nothing"
         );
     }
 
@@ -2660,7 +2901,18 @@ mod tests {
         let (s2, _) = apply(&s1, &p_half, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
         let (s3, _) = apply(&s2, &p_half, &ctx(3, 102, 3), &[], Some(&attempt(40, 2)));
         let (s4, _) = apply(&s3, &p_half, &ctx(4, 1_001, 4), &[], None);
-        assert!(s4.class_target(&h64(1)).unwrap().target < boot, "500‰ producing 100% of the span hardens");
+        // **Audit H1.** This used to assert that class 1 HARDENS, and that assertion was the bug
+        // written down: class 2's 500‰ is frozen, so it cannot produce, so demanding half the span
+        // of class 1 makes the only class still working a permanent over-producer whose target is
+        // divided at every boundary — with no floor, until `ZeroPreviousTarget` rejects every
+        // block on the chain forever. The expectation is now normalized over the ELIGIBLE
+        // permille, so a frozen class's share is redistributed rather than silently demanded:
+        // class 1 is expected to produce the whole span, it did, and nothing moves.
+        assert_eq!(
+            s4.class_target(&h64(1)).unwrap().target,
+            boot,
+            "the sole eligible class is expected to produce the whole span — producing it is not over-producing"
+        );
         assert_eq!(s4.class_target(&h64(2)).unwrap().target, boot, "a frozen class's target freezes with it");
 
         // Case 3: a boundary crossed with nothing produced (the counters are stale after case
@@ -2668,6 +2920,88 @@ mod tests {
         let hardened = s4.class_target(&h64(1)).unwrap().target;
         let (s5, _) = apply(&s4, &p_half, &ctx(5, 2_001, 5), &[], None);
         assert_eq!(s5.class_target(&h64(1)).unwrap().target, hardened, "an empty epoch measures nothing");
+    }
+
+    /// **Audit H1: an idle co-class must not strangle the class that is still working.**
+    ///
+    /// The failure the normalization prevents is not a one-epoch inaccuracy, it is a ratchet: the
+    /// same over-production verdict every boundary, in the same direction, with `max_factor`
+    /// bounding each step but nothing bounding the walk. Twelve boundaries at `max_factor = 4` is
+    /// 4^12 ≈ 1.7e7 harder — and it does not stop there; it stops at zero, where
+    /// `ZeroPreviousTarget` makes every subsequent block invalid on a chain no node can rejoin.
+    ///
+    /// Here class 2 holds 400‰ and never produces a block (registered, Active, simply idle — it
+    /// does not even need to be frozen). Class 1 produces every block of every span.
+    #[test]
+    fn an_idle_co_class_does_not_ratchet_the_working_class_toward_zero() {
+        let boot = u128::MAX / 2;
+        let shares = PalwClassDaaV2Params::new([(h64(1), 600u16), (h64(2), 400u16)].into_iter().collect(), 4).unwrap();
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: boot,
+        });
+        let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+
+        // Twelve epoch boundaries, class 1 producing throughout.
+        let mut nonce = 0u64;
+        let mut targets = Vec::new();
+        for epoch in 1..=12u64 {
+            for step in 0..3u64 {
+                nonce += 1;
+                let daa = epoch * 1000 + step + 1;
+                let (next, _) = apply(&state, &p, &ctx(nonce + 10, daa, nonce + 10), &[], Some(&attempt(4, nonce)));
+                state = next;
+            }
+            targets.push(state.class_target(&h64(1)).unwrap().target);
+        }
+
+        assert_eq!(targets.last().copied().unwrap(), boot, "the working class was not ratcheted: {targets:?}");
+        assert!(targets.iter().all(|t| *t == boot), "the target moved on some boundary: {targets:?}");
+        // The idle class keeps its own target — it is not punished for the span it sat out either.
+        assert_eq!(state.class_target(&h64(2)).unwrap().target, boot, "an idle class is not retargeted on production it never made");
+    }
+
+    /// The other half of H1's fix: **real competition must still retarget.** A normalization that
+    /// silenced the mechanism would be a worse bug than the ratchet it replaced, so this pins that
+    /// when both classes produce, both keep their table shares and the feedback bites.
+    #[test]
+    fn two_producing_classes_keep_their_table_shares_and_still_retarget() {
+        let boot = u128::MAX / 2;
+        let shares = PalwClassDaaV2Params::new([(h64(1), 500u16), (h64(2), 500u16)].into_iter().collect(), 4).unwrap();
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, shares).unwrap();
+
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: boot,
+        });
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_id: h64(22),
+            collateral: 1_000,
+        });
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+
+        // Class 1 takes three blocks of the span, class 2 takes one: 750/250 against a 500/500
+        // table, so class 1 over-produced and class 2 under-produced — both by real competition.
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&attempt(4, 1)));
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[], Some(&attempt(4, 2)));
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[], Some(&attempt(4, 3)));
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[], Some(&attempt_for_class(4, 4, h64(2), bond_key(2), vec![8; 4], h64(22), h64(12))));
+        let (s6, _) = apply(&s5, &p, &ctx(6, 1_001, 6), &[], None);
+
+        assert!(s6.class_target(&h64(1)).unwrap().target < boot, "the over-producing class hardens");
+        assert!(s6.class_target(&h64(2)).unwrap().target > boot, "the under-producing class eases");
     }
 
     #[test]

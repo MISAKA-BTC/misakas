@@ -199,6 +199,7 @@ mod tests {
                 trace_manifest_root: h64(33),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                execution_root: h64(41),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }
@@ -310,7 +311,13 @@ mod tests {
         assert_eq!(pile_challenges, PalwIbdCommitV2::KeepIncumbent, "IBD refuses the pile");
         assert_eq!(matured_challenges, PalwIbdCommitV2::Commit, "IBD accepts the matured chain over the pile");
         assert_eq!(pile_reorg, PalwDeepReorgV2::Refuse, "the deep-reorg gate refuses the pile with the same keys");
-        assert_eq!(ceiling, 5, "pruning may reach the frontier at the matured tip and no further");
+        // The frontier is the block whose WORK matured (blue score 2, the block that carried the
+        // attempt), not the block where the last transition happened to land — see the frontier
+        // rule in `palw_state_v2`. Pruning may reach exactly there: the claim below it is Final
+        // and travels summarized, while block 3's panel record and block 4's licence are history
+        // the claim at 2 no longer needs. A ceiling at the TIP would have been the old rule's
+        // answer, and the old rule also handed a workless fork a tip-deep frontier for free.
+        assert_eq!(ceiling, 2, "pruning may reach the deepest matured block and no further");
         assert_eq!(recovered, selected, "restart recovery re-selects the same tip through the carriage");
     }
 }

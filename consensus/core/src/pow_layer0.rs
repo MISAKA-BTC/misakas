@@ -599,6 +599,17 @@ pub fn pow_short_circuits_as_parentless_root(header: &crate::header::Header) -> 
 /// A caller MUST NOT substitute this for [`check_algo_id`] on a network whose history is
 /// single-algo: accepting "any known id" there lets a proof header claim an algorithm the network
 /// never mandated, which is a cheaper PoW than the one its difficulty was set for.
+/// **This list is the set of ids `kaspa_pow::StateLayer0::calculate_l1_tag` implements.** It is
+/// not the set of ids that have a CONSTANT — those are two different things, and conflating them
+/// is audit C1: `POW_ALGO_ID_PALW_COMMITTED_V2` has a constant, four pipeline gates that can
+/// DEMAND it, and no arm in the finalizer, so a network in `ConsensusV2` mode booted happily,
+/// accepted its parentless genesis, and then rejected every block after it — its own miner's
+/// included — as `InvalidPoW`, with no fallback id accepted and no pruning proof importable.
+/// Listing 6 here said the binary could verify something it cannot.
+///
+/// Adding an arm to the finalizer means adding its id here, and the mode gate
+/// (`PalwConsensusParamsV2::validate`) reads this function to refuse a ruleset whose algorithm
+/// this binary cannot compute — so the two can only be wrong together, loudly, at startup.
 #[inline]
 pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
     if algo_id == POW_ALGO_ID_KHEAVYHASH
@@ -606,7 +617,6 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_BLAKE2B_SHA3
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
-        || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
     {
         Ok(())
     } else {
@@ -1014,9 +1024,9 @@ mod tests {
         assert_eq!(required_algo_id(true, true, true), 5);
     }
 
-    /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can verify —
-    /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), and PALW LLM (4) — and
-    /// rejects the rest.
+    /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can FINALIZE —
+    /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), PALW LLM (4) and
+    /// PALW-Ollama (5) — and rejects the rest, the committed-V2 id (6) included.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
         for ok in [
@@ -1025,13 +1035,23 @@ mod tests {
             POW_ALGO_ID_BLAKE2B_SHA3,
             POW_ALGO_ID_PALW_LLM,
             POW_ALGO_ID_PALW_OLLAMA,
-            POW_ALGO_ID_PALW_COMMITTED_V2,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
         for bad in [0u8, 7, 8, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
+
+        // **Audit C1.** The V2 id has a constant and four gates that can demand it, but the
+        // finalizer has no arm for it: `calculate_l1_tag` falls to `UnknownAlgoId(6)`. Until that
+        // arm exists this function must SAY SO, because the mode gate reads it to decide whether a
+        // `ConsensusV2` ruleset is runnable at all. When the arm lands, this assertion is the one
+        // that flips — deliberately, in the same commit.
+        assert_eq!(
+            check_algo_id_known(POW_ALGO_ID_PALW_COMMITTED_V2),
+            Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_COMMITTED_V2)),
+            "the V2 id has no finalizer arm; claiming it is verifiable is what let a V2 network boot and then stall at block 1"
+        );
 
         // Knowing the V2 id is not accepting a V2 block. `required_algo_id` has no V2 arm until the
         // atomic bundle lands (ADR-0042 Decision 1), so no combination of today's fork flags demands

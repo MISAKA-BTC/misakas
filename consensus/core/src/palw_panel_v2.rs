@@ -84,6 +84,20 @@ impl PalwPanelParamsV2 {
         if quorum == 0 || quorum > seat_count {
             return Err(PalwPanelV2Error::InvalidParams("quorum must satisfy 1 ≤ quorum ≤ seat_count"));
         }
+        // **Audit C5 — the exclusivity invariant.** One `quorum` licenses BOTH directions:
+        // `Valid` moves the claim to `ReceiptLicensed`, `Unavailable` voids it as
+        // `ProducerDefaulted`. Without a majority requirement the two are simultaneously
+        // satisfiable — `seat_count = 4, quorum = 2` lets two seats license while two others
+        // default the same claim — and which one happens is decided by the ORDER the counts are
+        // checked in `validate_receipt_quorum_v2`, an implementation accident standing in for a
+        // rule. Requiring `2·quorum > seat_count` makes the two quorums provably disjoint, so at
+        // most one verdict can ever form. This is the discipline `vlt.rs` has carried since its
+        // own audit (`quorum_is_strictly_above_two_thirds`); the panel had no analogue.
+        if 2 * (quorum as u32) <= seat_count as u32 {
+            return Err(PalwPanelV2Error::InvalidParams(
+                "quorum must be a strict majority (2·quorum > seat_count), or Valid and Unavailable can both reach quorum at once",
+            ));
+        }
         if anchor_delay == 0 {
             return Err(PalwPanelV2Error::InvalidParams("a zero anchor delay lets the attempt's own block seed its panel"));
         }
@@ -427,6 +441,7 @@ mod tests {
                 trace_manifest_root: h64(33),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                execution_root: h64(41),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }
@@ -464,6 +479,11 @@ mod tests {
         assert!(PalwPanelParamsV2::new(0, 1, 1).is_err(), "zero seats");
         assert!(PalwPanelParamsV2::new(3, 0, 1).is_err(), "zero quorum");
         assert!(PalwPanelParamsV2::new(3, 4, 1).is_err(), "quorum above seats");
+        // Audit C5: a non-majority quorum lets Valid and Unavailable both form on one panel.
+        assert!(PalwPanelParamsV2::new(4, 2, 1).is_err(), "2 of 4 is not a majority — both verdicts could reach it");
+        assert!(PalwPanelParamsV2::new(3, 1, 1).is_err(), "1 of 3 lets one seat void an honest claim");
+        assert!(PalwPanelParamsV2::new(4, 3, 1).is_ok(), "3 of 4 is a strict majority");
+        assert!(PalwPanelParamsV2::new(1, 1, 1).is_ok(), "a single-seat panel is degenerate but self-consistent");
         assert!(PalwPanelParamsV2::new(3, 3, 0).is_err(), "zero anchor delay");
         let p = PalwPanelParamsV2::new(3, 2, 4).unwrap();
         assert!(p.validate_against_state_params(&state_params()).is_ok(), "delay 4 inside bind window 10");
@@ -502,7 +522,8 @@ mod tests {
         assert_eq!(a, b, "same anchor, same panel — determinism");
 
         // Ask for more seats than the registry can seat: refused, never quietly smaller.
-        let wide = PalwPanelParamsV2::new(4, 2, 4).unwrap();
+        // (3 of 4: the majority the exclusivity invariant now requires.)
+        let wide = PalwPanelParamsV2::new(4, 3, 4).unwrap();
         assert!(matches!(
             derive_panel_v2(&state, &wide, &claim_id, BlockHash::from_u64_word(0xA1)),
             Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 4, available: 3 })

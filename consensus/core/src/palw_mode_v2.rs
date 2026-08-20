@@ -34,6 +34,19 @@ use blake2b_simd::Params as Blake2bParams;
 
 pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
 
+/// ADR-0038 Decision H: **the block cadence a V2 network runs at is frozen at 120 s**, and
+/// Decision H says it is "refused at `Params` construction rather than at sync time".
+///
+/// It lives here, in the bundle's own module, because of audit H2: `palw_ruleset_id_v2` hashes
+/// `PalwConsensusParamsV2` and nothing else, and the cadence was in neither. Every window in the
+/// bundle — bind, receipt, challenge, court, the withdrawal delay, the epoch length — is
+/// denominated in DAA score, so the cadence is what gives all of them their wall-clock meaning.
+/// Two networks could therefore share a `palw_ruleset_id` and run measurably different rules,
+/// which is exactly the "RC == mainnet, checkable by machine" promise Decision 11 exists to make.
+/// [`crate::config::params::Params::validate_palw_v2`] refuses a V2 network that is not at this
+/// cadence, so the id's silence about it is no longer a hole an operator can walk through.
+pub const PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS: u64 = 120_000;
+
 pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
@@ -112,6 +125,34 @@ impl PalwConsensusParamsV2 {
     /// any of these does not boot — there is no degraded mode, because a degraded mode is a
     /// half-flip with a friendlier name.
     pub fn validate(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_ruleset_shape()?;
+        // **Audit C1 — last, because it is about this BINARY rather than the ruleset.**
+        //
+        // Four pipeline gates now demand `algorithm_id` on a `ConsensusV2` network. Nothing
+        // checked that the demanded algorithm has a finalizer arm, so a node booted (every
+        // invariant above held), accepted its parentless genesis, and then rejected every block
+        // after it — its own miner's included — as `InvalidPoW`, with no fallback id accepted and
+        // no pruning proof importable. A total, unrecoverable liveness failure at block 1,
+        // reachable purely by configuration.
+        //
+        // `check_algo_id_known` is the list of ids `kaspa_pow::StateLayer0::calculate_l1_tag`
+        // actually implements. Reading it here means the mode can only demand what the binary can
+        // compute: the day the V2 finalizer arm lands, this gate opens in the same commit, and
+        // until then a V2 ruleset refuses to boot instead of stalling silently.
+        crate::pow_layer0::check_algo_id_known(self.algorithm_id).map_err(|_| {
+            PalwModeV2Error::Invalid(
+                "this binary has no Layer-0 finalizer for the ruleset's algorithm_id — it would accept genesis and reject every block after it",
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Every Decision 1 invariant that is a property of the RULESET rather than of this binary.
+    ///
+    /// Split out from [`Self::validate`] so the ruleset invariants stay testable while the
+    /// runnability gate above is closed — a bundle can be well-formed and still be one this
+    /// build cannot execute, and those are different failures with different fixes.
+    pub fn validate_ruleset_shape(&self) -> Result<(), PalwModeV2Error> {
         if self.protocol_version != crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION {
             return Err(PalwModeV2Error::Invalid("protocol_version is not the V2 attempt version"));
         }
@@ -163,6 +204,23 @@ impl PalwConsensusParamsV2 {
         if self.state.window_court() <= self.worst_case_court_duration_daa {
             return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
         }
+        // ADR-0042 Decision 1 also states "challenge window > worst-case court duration", and the
+        // audit (H2) flagged its absence. It is deliberately NOT added: the ADR's clause assumes a
+        // design where a court has to finish inside the window that decides maturity, and this
+        // implementation chose a stronger one — an OPEN court suspends `ReceiptLicensed → Final`
+        // entirely (`open_courts_by_claim` gates the edge, and `rearm_after_challenger_side_close`
+        // re-arms the deadline afterwards), so the court is bounded by `window_court` and never
+        // races the challenge window at all. Requiring `window_challenge > worst_case` on top
+        // would force every honest claim to wait a full worst-case prosecution before maturing,
+        // for no safety gained. ADR-0042 Decision 1 should be amended to say which mechanism
+        // carries the guarantee.
+        //
+        // NOTE, and it is a residual rather than a fix: `worst_case_court_duration_daa` is an
+        // operator-attested number, not one derived from the class catalog's measured trace
+        // length (ADR-0042 Decision 8's `rounds = ceil(log2(step_leaf_count)) + terminal`). Both
+        // inequalities above therefore bound the bundle against the operator's OWN claim about
+        // the court. Deriving it needs the catalog preimage, which arrives with the RC genesis
+        // loader; until then this gate catches an inconsistent bundle, not an understated one.
 
         // Withdrawal outlasts the whole liability period plus the reorg margin: a bond cannot
         // commit fraud and leave before it is provable.
@@ -249,7 +307,7 @@ mod tests {
     #[test]
     fn a_conforming_bundle_validates_and_fingerprints_deterministically() {
         let bundle = conforming_bundle();
-        bundle.validate().expect("the fixture bundle holds every startup invariant");
+        bundle.validate_ruleset_shape().expect("the fixture bundle holds every startup invariant");
         let id = palw_ruleset_id_v2(&bundle);
         assert_eq!(id, palw_ruleset_id_v2(&bundle.clone()), "the fingerprint is a pure function of the bundle");
         assert_eq!(PalwConsensusMode::ConsensusV2(bundle).required_algo_id(), Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
@@ -321,7 +379,12 @@ mod tests {
         // SIMNET is the clean base: its `pow_palw_activation` is `never()`.
         let mut v2 = SIMNET_PARAMS.clone();
         v2.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
-        v2.validate_palw_v2().expect("a pure V2 set validates");
+        // …and is refused ANYWAY, today, because this binary has no finalizer for algo 6 (audit
+        // C1). The mixed-lineage clauses below are what this test is about, so it asserts the
+        // ruleset half separately from the runnability half.
+        let PalwConsensusMode::ConsensusV2(ref bundle) = v2.palw_consensus_mode else { unreachable!() };
+        bundle.validate_ruleset_shape().expect("a pure V2 set is a well-formed ruleset");
+        assert!(v2.validate_palw_v2().is_err(), "and still refuses to boot: no V2 finalizer exists yet");
 
         // …a broken bundle does not…
         let mut broken = conforming_bundle();
@@ -405,6 +468,74 @@ mod tests {
         assert_ne!(v2_id, v2b.consensus_params_id(), "a different ruleset is a different handshake");
     }
 
+    /// **Audit C1: a ruleset this binary cannot compute must refuse to boot, not stall at block 1.**
+    ///
+    /// `a460cdd7` wired `required_algo_id_for_mode` into the header processor, the virtual
+    /// processor's template stamp and the pruning-proof gate, so a `ConsensusV2` network demands
+    /// `pow_algo_id == 6` and refuses every other id. `kaspa_pow::StateLayer0::calculate_l1_tag`
+    /// has no arm for 6. Nothing connected those two facts, so the node started — every invariant
+    /// in the list above holds — accepted its parentless genesis, and then rejected every block
+    /// after it, its own miner's included, as `InvalidPoW`; the pruning-proof path failed the same
+    /// way, so IBD could not recover either.
+    ///
+    /// The gate is the last clause of `validate`, and it is deliberately expressed against
+    /// `check_algo_id_known` — the list of ids the finalizer implements — so that landing the V2
+    /// arm opens this gate in the same commit rather than requiring someone to remember.
+    #[test]
+    fn a_ruleset_this_binary_cannot_finalize_refuses_to_boot() {
+        let bundle = conforming_bundle();
+        // Well-formed as a ruleset…
+        bundle.validate_ruleset_shape().expect("the fixture is a well-formed ruleset");
+        // …and still refused, with a message that says which half is missing.
+        let err = bundle.validate().expect_err("a ruleset whose algorithm has no finalizer must not boot");
+        match err {
+            PalwModeV2Error::Invalid(msg) => assert!(msg.contains("finalizer"), "the refusal must name the missing half: {msg}"),
+            other => panic!("expected the finalizer refusal, got {other:?}"),
+        }
+        // The gate is not a hardcoded "V2 is off": it reads the finalizer's own list, so an
+        // algorithm this binary DOES implement passes it — only the ruleset-shape clause above
+        // stops such a bundle, which is a different failure with a different fix.
+        let mut legacy_algo = conforming_bundle();
+        legacy_algo.algorithm_id = crate::pow_layer0::POW_ALGO_ID_PALW_LLM;
+        assert!(crate::pow_layer0::check_algo_id_known(legacy_algo.algorithm_id).is_ok(), "algo 4 has a finalizer arm");
+        match legacy_algo.validate() {
+            Err(PalwModeV2Error::Invalid(msg)) => {
+                assert!(!msg.contains("finalizer"), "algo 4 must fail on the ruleset clause, not the runnability one: {msg}")
+            }
+            other => panic!("expected the algorithm-id ruleset refusal, got {other:?}"),
+        }
+    }
+
+    /// **Audit H2: the frozen cadence is outside the ruleset id, so it is refused at the params.**
+    ///
+    /// `palw_ruleset_id_v2` hashes the bundle, and the bundle has no cadence field — yet every
+    /// window in it is denominated in DAA score, so the cadence is what gives bind/receipt/
+    /// challenge/court/withdrawal their wall-clock meaning. Two networks sharing a ruleset id
+    /// could run measurably different rules, which is the exact opposite of what Decision 11
+    /// promises. Until the cadence is inside the id, `validate_palw_v2` refuses the
+    /// configurations where the silence would matter.
+    #[test]
+    fn a_v2_network_must_run_the_frozen_cadence() {
+        use crate::config::params::SIMNET_PARAMS;
+        let mut v2 = SIMNET_PARAMS.clone();
+        v2.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        v2.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS / 2;
+        // The finalizer gate (C1) fires first today, so aim the assertion at the clause under test
+        // by checking the cadence predicate the gate uses.
+        assert_ne!(v2.blockrate.target_time_per_block, PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
+        assert!(v2.validate_palw_v2().is_err(), "an off-cadence V2 network must not boot");
+
+        // And the constant is the decision's own number, not a stray default.
+        assert_eq!(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS, 120_000, "ADR-0038 Decision H: one block per 120 seconds");
+
+        // Disabled and LegacyTn11 networks are unaffected — the clause is scoped to ConsensusV2,
+        // so t11's own cadence is none of its business.
+        let mut legacy = SIMNET_PARAMS.clone();
+        legacy.palw_consensus_mode = PalwConsensusMode::LegacyTn11;
+        legacy.blockrate.target_time_per_block = 1_000;
+        legacy.validate_palw_v2().expect("the cadence freeze does not reach the legacy lineage");
+    }
+
     /// Decision 11's property: any consensus-deciding byte moves the id, and network identity is
     /// not in the preimage at all (there is no field for it — RC and mainnet share the id by
     /// construction, and the challenge's network_domain keeps their blocks apart).
@@ -425,7 +556,7 @@ mod tests {
         for (name, mutate) in mutations {
             let mut bundle = conforming_bundle();
             mutate(&mut bundle);
-            assert!(bundle.validate().is_ok(), "{name}: this mutation is a VALID other ruleset");
+            assert!(bundle.validate_ruleset_shape().is_ok(), "{name}: this mutation is a VALID other ruleset");
             assert_ne!(palw_ruleset_id_v2(&bundle), base_id, "{name}: a consensus byte moved and the id did not");
         }
     }

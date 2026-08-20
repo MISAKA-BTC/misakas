@@ -13,10 +13,17 @@
 //!
 //! ```text
 //! challenge       = H(network_domain ‖ pre_pow_hash ‖ timestamp ‖ nonce ‖ class_id ‖ bond)
-//! commitment_root = H(challenge ‖ class_id ‖ bond ‖ trace_root ‖ output_root ‖ pwu)
-//! L1 tag          = Expand(commitment_root)
 //! attempt_id      = H(canonical(PalwAttemptUnsignedV2))
+//! commitment_root = H(attempt_id)
+//! L1 tag          = Expand(commitment_root)
 //! ```
+//!
+//! **The priced set and the identity set are the same set, by construction.** `commitment_root`
+//! is derived FROM `attempt_id` rather than re-enumerating fields beside it, because an
+//! enumeration is a list that stops growing while the struct keeps growing: PR-06 added three
+//! data-availability fields to the attempt and the transcript did not follow, which re-opened
+//! P0-1 at V2 scale (one solved nonce, unlimited sibling identities, for the price of a
+//! re-signature). Deriving one hash from the other makes that class of drift unrepresentable.
 //!
 //! **Identity is `attempt_id`, never the signature bytes.** ML-DSA-87 signatures are not guaranteed
 //! unique, so folding raw signature bytes into a block id would re-open malleability wearing the
@@ -103,6 +110,18 @@ pub struct PalwAttemptUnsignedV2 {
     /// inside this window defaults the producer: claim void, bond slash (Decision 7) — silence
     /// can never pin a block at `Provisional` forever.
     pub trace_retention_daa: u64,
+    /// The executor's `committed_execution_root` (ADR-0030's `PalwStepBindingV2`) — the single
+    /// value that fixes the SHAPE of the execution being claimed: the job context, both profiles,
+    /// the leaf and checkpoint counts and their roots all recompute into it.
+    ///
+    /// It is here because the court needs something of the EXECUTOR'S to test a refutation's
+    /// binding against. Without it the only tie between an accusation and its target was the
+    /// claim's public `trace_root`, so an accuser could write the entire binding — including a
+    /// deliberately non-canonical shape profile — and harvest a `ShapeProfileNotCanonical`
+    /// conviction against an honest producer that never made that claim (audit C3). Pinning this
+    /// root forces every component of the binding to be the executor's own, because
+    /// `verify_binding` recomputes the root from all of them and requires equality.
+    pub execution_root: Hash64,
 }
 
 /// The signed envelope. The signature is a **witness**, never part of identity.
@@ -135,15 +154,24 @@ pub fn challenge_v2(
     finish(state)
 }
 
-/// `H(challenge ‖ class_id ‖ bond ‖ trace_root ‖ output_root ‖ pwu)` — what the PoW expands.
+/// `H(attempt_id)` — what the PoW expands. **Every identity-bearing field is priced, by
+/// construction.**
+///
+/// It used to hand-enumerate six fields (challenge, class, bond, trace root, output root, pwu)
+/// while [`attempt_id_v2`] covered the whole struct. That split is the P0-1 composition — a field
+/// that is identity-visible, PoW-invisible and content-unchecked lets ONE solved nonce mint
+/// unlimited distinct block identities, for the price of a re-signature. It was closed in PR-01
+/// and re-opened in PR-06, which added `trace_manifest_root` / `trace_chunk_count` /
+/// `trace_retention_daa` to the struct without adding them here; the audit found all three free
+/// (only `trace_chunk_count != 0` was checked anywhere).
+///
+/// Enumerating fields correctly is not the fix — staying correct as fields are added is. Deriving
+/// the root FROM the identity makes the two incapable of drifting: any field a future PR adds is
+/// priced the moment it is inside the attempt. The domain key keeps this hash distinct from the
+/// attempt id it consumes.
 pub fn commitment_root_v2(attempt: &PalwAttemptUnsignedV2) -> Hash64 {
     let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT);
-    state.update(attempt.challenge.as_byte_slice());
-    state.update(attempt.class_id.as_byte_slice());
-    update_outpoint(&mut state, &attempt.executor_bond);
-    state.update(attempt.trace_root.as_byte_slice());
-    state.update(attempt.output_root.as_byte_slice());
-    state.update(&attempt.pwu.to_le_bytes());
+    state.update(attempt_id_v2(attempt).as_byte_slice());
     finish(state)
 }
 
@@ -292,6 +320,7 @@ mod tests {
             trace_manifest_root: Hash64::from_u64_word(0xD0),
             trace_chunk_count: 8,
             trace_retention_daa: 999_999,
+            execution_root: Hash64::from_u64_word(0x41),
         }
     }
 
@@ -299,40 +328,90 @@ mod tests {
         PalwAttemptEnvelopeV2 { attempt: a, signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
     }
 
-    /// **ADR-0042 Decision 3a**: mutating any priced field fails the PoW.
+    /// **ADR-0042 Decision 3a**: mutating ANY field fails the PoW.
     ///
-    /// The audit's P0-1 remedy, as the consensus test it asks for. Six fields go into the
-    /// commitment root and the L1 tag expands it, so every one of them must move the tag — a
-    /// binding that covered five would leave the sixth swappable on a solved PoW, which is the
-    /// whole attack at one field's reduced scale.
+    /// The audit's P0-1 remedy, as the consensus test it asks for — and the shape matters as much
+    /// as the assertion. This used to hand-enumerate the six fields the commitment root happened
+    /// to hash, which is a test that agrees with the bug it should catch: PR-06 added three DA
+    /// fields to the struct, the enumeration did not grow, and one solved nonce could mint
+    /// unlimited sibling identities again.
+    ///
+    /// So the list is derived from an exhaustive destructuring of `PalwAttemptUnsignedV2`
+    /// instead. A field added tomorrow does not compile until it is named here, and naming it
+    /// forces a mutation for it — the test cannot silently fall behind the struct.
     #[test]
     fn every_priced_field_moves_the_pow_tag() {
         let base = attempt();
         let baseline = l1_tag_v2(commitment_root_v2(&base));
 
+        // Exhaustive by construction: this destructuring names every field of
+        // `PalwAttemptUnsignedV2`, so adding one to the struct breaks THIS LINE until the new
+        // field gets a mutation below.
+        let PalwAttemptUnsignedV2 {
+            version: _,
+            network_domain: _,
+            challenge: _,
+            class_id: _,
+            executor_bond: _,
+            executor_pubkey: _,
+            operator_id: _,
+            artifact_root: _,
+            trace_root: _,
+            output_root: _,
+            trace_manifest_root: _,
+            trace_chunk_count: _,
+            trace_retention_daa: _,
+            execution_root: _,
+            pwu: _,
+        } = base.clone();
+
         let mut mutations: Vec<(&str, PalwAttemptUnsignedV2)> = Vec::new();
-        let mut m = base.clone();
-        m.trace_root = Hash64::from_u64_word(0xDEAD);
-        mutations.push(("trace_root", m));
-        let mut m = base.clone();
-        m.output_root = Hash64::from_u64_word(0xBEEF);
-        mutations.push(("output_root", m));
-        let mut m = base.clone();
-        m.pwu += 1;
-        mutations.push(("pwu", m));
-        let mut m = base.clone();
-        m.class_id = Hash64::from_u64_word(0xC2);
-        mutations.push(("class_id", m));
-        let mut m = base.clone();
-        m.executor_bond = op(2);
-        mutations.push(("executor_bond", m));
-        let mut m = base.clone();
-        m.challenge = Hash64::from_u64_word(0x1234);
-        mutations.push(("challenge", m));
+        let mut push = |name: &'static str, f: &dyn Fn(&mut PalwAttemptUnsignedV2)| {
+            let mut m = base.clone();
+            f(&mut m);
+            assert_ne!(m, base, "the {name} mutation must actually change the attempt");
+            mutations.push((name, m));
+        };
+        push("version", &|m| m.version = m.version.wrapping_add(1));
+        push("network_domain", &|m| m.network_domain = Hash64::from_u64_word(0x9999));
+        push("challenge", &|m| m.challenge = Hash64::from_u64_word(0x1234));
+        push("class_id", &|m| m.class_id = Hash64::from_u64_word(0xC2));
+        push("executor_bond", &|m| m.executor_bond = op(2));
+        push("executor_pubkey", &|m| m.executor_pubkey[0] ^= 0xFF);
+        push("operator_id", &|m| m.operator_id = Hash64::from_u64_word(0x0FF1CE));
+        push("artifact_root", &|m| m.artifact_root = Hash64::from_u64_word(0xA27));
+        push("trace_root", &|m| m.trace_root = Hash64::from_u64_word(0xDEAD));
+        push("output_root", &|m| m.output_root = Hash64::from_u64_word(0xBEEF));
+        // The three PR-06 added. They were identity-visible and PoW-invisible: the whole finding.
+        push("trace_manifest_root", &|m| m.trace_manifest_root = Hash64::from_u64_word(0x1AA1));
+        push("trace_chunk_count", &|m| m.trace_chunk_count += 1);
+        push("trace_retention_daa", &|m| m.trace_retention_daa += 1);
+        push("execution_root", &|m| m.execution_root = Hash64::from_u64_word(0xE7));
+        push("pwu", &|m| m.pwu += 1);
 
         for (field, mutated) in mutations {
             assert_ne!(l1_tag_v2(commitment_root_v2(&mutated)), baseline, "mutating {field} left the PoW tag unchanged");
         }
+    }
+
+    /// The transcript and the identity are the SAME set of bytes, so they cannot drift.
+    ///
+    /// The stronger statement behind the exhaustive test above: two attempts share a PoW tag if
+    /// and only if they share an attempt id. Stated as a property here so a future refactor that
+    /// re-introduces a hand-written field list has to delete this test to do it.
+    #[test]
+    fn the_pow_tag_and_the_block_identity_agree_on_every_attempt() {
+        let base = attempt();
+        let mut other = base.clone();
+        other.trace_retention_daa += 1;
+
+        assert_ne!(attempt_id_v2(&other), attempt_id_v2(&base), "the ids differ");
+        assert_ne!(commitment_root_v2(&other), commitment_root_v2(&base), "so the priced roots must differ too");
+        // And the root is a pure function of the id — same id, same root, whatever the route.
+        assert_eq!(commitment_root_v2(&base), commitment_root_v2(&base.clone()));
+        // The root is NOT the id: a domain key separates them, so neither can be replayed as the
+        // other in any transcript that consumes both.
+        assert_ne!(commitment_root_v2(&base), attempt_id_v2(&base), "the root must be domain-separated from the id");
     }
 
     /// The challenge binds the header position, the class and the bond.

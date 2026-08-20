@@ -104,6 +104,8 @@ pub enum PalwCourtV2Error {
     MissingSession(Hash64),
     #[error("the proof does not bind this claim's committed trace root")]
     TraceRootMismatch,
+    #[error("the refutation's binding is not the execution this claim committed to")]
+    ExecutionRootMismatch,
     #[error("the operand openings do not prove against the class's registered artifact root: {0}")]
     OperandProofInvalid(String),
     #[error("the refutation does not adjudicate ({0}) — an unadjudicable object convicts nobody and acquits nobody")]
@@ -186,6 +188,27 @@ pub fn check_arithmetic_close_binding(claim_trace_root: Hash64, refutation_root:
     if refutation_root != claim_trace_root { Err(PalwCourtV2Error::TraceRootMismatch) } else { Ok(()) }
 }
 
+/// The binding must be the EXECUTION THE CLAIM COMMITTED TO — not merely one that mentions the
+/// claim's public trace root (audit C3).
+///
+/// The trace-root check alone left every other field of `PalwStepBindingV2` in the accuser's
+/// hands, and `check_step_refutation_v1` reads a whole family of faults out of the binding alone:
+/// a `shape_profile` that fails `validate_shape`, a `step_leaf_count` that is not the canonical
+/// function of (profile, context), a `checkpoint_count` that disagrees with the interval. Those
+/// convict the EXECUTOR for a shape it never claimed. Reproduced end to end: any registered bond
+/// could copy the public `trace_root`, attach a deliberately invalid profile with no operand
+/// openings at all, and take `Ok(ExecutorGuilty)` — voiding an honest claim as `CourtFraud` and
+/// slashing its bond, at the cost of one message.
+///
+/// `committed_execution_root` closes it in one comparison because `verify_binding` RECOMPUTES it
+/// from the job context, both profile hashes, the leaf and checkpoint counts and their roots, and
+/// refuses a binding whose parts do not produce it. Pin the root to the claim's own and every
+/// part is pinned with it — so a shape fault means the executor really did commit to a
+/// non-canonical shape, which is a conviction it has earned.
+pub fn check_execution_root_binding(claim_execution_root: Hash64, binding_root: Hash64) -> Result<(), PalwCourtV2Error> {
+    if binding_root != claim_execution_root { Err(PalwCourtV2Error::ExecutionRootMismatch) } else { Ok(()) }
+}
+
 /// Adjudicate a proposed close against the candidate state, returning the ONLY verdict that
 /// proof supports. The caller (the acceptance pipeline) then applies the state machine's
 /// `CourtClosed { verdict }` — with the verdict this function returned, never one the object
@@ -199,6 +222,7 @@ pub fn adjudicate_court_close_v2(
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings } => {
             check_arithmetic_close_binding(claim.trace_root, refutation.binding.step_merkle_root)?;
+            check_execution_root_binding(claim.execution_root, refutation.binding.committed_execution_root)?;
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
@@ -274,6 +298,7 @@ mod tests {
                 trace_manifest_root: h64(33),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                execution_root: h64(41),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }
@@ -455,6 +480,50 @@ mod tests {
         // The binding check: the claim's own root passes, any other root is another execution.
         assert!(check_arithmetic_close_binding(claim_root, claim_root).is_ok());
         assert!(matches!(check_arithmetic_close_binding(claim_root, h64(0xBAD)), Err(PalwCourtV2Error::TraceRootMismatch)));
+
+        // **Audit C3.** The trace root is PUBLIC — it rides in every attempt envelope and sits in
+        // every node's claim record — so copying it proves nothing about who wrote the binding.
+        // The execution root is the executor's own commitment, and pinning it is what stops an
+        // accuser from authoring a whole `PalwStepBindingV2` (non-canonical shape profile, no
+        // operand openings at all) and harvesting a shape-family conviction against a producer
+        // that never claimed that shape.
+        assert_eq!(claim.execution_root, h64(41), "the state carries the execution root the court binds");
+        assert!(check_execution_root_binding(claim.execution_root, claim.execution_root).is_ok());
+        assert!(
+            matches!(check_execution_root_binding(claim.execution_root, claim.trace_root), Err(PalwCourtV2Error::ExecutionRootMismatch)),
+            "the public trace root must not stand in for the executor's execution commitment"
+        );
+        assert!(matches!(
+            check_execution_root_binding(claim.execution_root, h64(0xBAD)),
+            Err(PalwCourtV2Error::ExecutionRootMismatch)
+        ));
+    }
+
+    /// The C3 attack, at the one function that decides it: an accuser-written binding is refused
+    /// BEFORE any fault can be read out of it.
+    ///
+    /// The attacker's material is exactly what the audit reproduced — the claim's public trace
+    /// root copied into `step_merkle_root`, an execution root of its own choosing (any value it
+    /// likes, since it is authoring the binding), and `operand_openings: vec![]`. The close must
+    /// die at the execution-root binding, so `check_step_refutation_v1`'s shape family is never
+    /// consulted and no verdict — guilty OR acquitting — is minted.
+    #[test]
+    fn an_accuser_written_binding_cannot_convict_an_honest_executor() {
+        let (state, claim_id) = licensed_state();
+        let claim = state.claim(&claim_id).unwrap();
+        // The accuser knows both of these: they are in the envelope every node relays.
+        let public_trace_root = claim.trace_root;
+        assert!(check_arithmetic_close_binding(claim.trace_root, public_trace_root).is_ok(), "copying the public root still passes");
+        // What it cannot produce is the executor's execution commitment.
+        let forged_execution_root = h64(0xF0_09ED);
+        assert_ne!(forged_execution_root, claim.execution_root);
+        assert!(
+            matches!(
+                check_execution_root_binding(claim.execution_root, forged_execution_root),
+                Err(PalwCourtV2Error::ExecutionRootMismatch)
+            ),
+            "an accuser-authored binding must be refused before any fault is read from it"
+        );
     }
 
     #[test]
