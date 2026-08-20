@@ -42,6 +42,14 @@ pub enum RuleError {
     #[error("bad palw_commitment shape: {0}")]
     BadPalwCommitmentShape(String),
 
+    /// MISAKA ADR-0042 Unit A / ADR-0044 Unit B: a V2-lineage header's carriage decoded, but its
+    /// STATELESS admission failed — the carried challenge is not the one this header position
+    /// derives, a budget field is zero, the signature is the wrong length, and so on. Separate
+    /// from `BadPalwCommitmentShape` because "this is not a commitment" and "this commitment does
+    /// not belong to this header" are different things to tell an operator.
+    #[error("PALW header (algo_id = {algo_id}) failed stateless admission: {reason}")]
+    BadPalwCarriageAdmission { algo_id: u8, reason: String },
+
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020). The EVM state-root / receipts
     // / commitment mismatch variants are added in the executor phase (P2) when
     // they are actually produced.

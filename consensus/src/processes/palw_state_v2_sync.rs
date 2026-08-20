@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use kaspa_consensus_core::Hash64;
     use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
-    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClassDaaV2Params, PalwPwuRuleV2, PalwStateBookV2, palw_operator_id_v2};
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwPwuRuleV2, PalwStateBookV2, palw_operator_id_v2};
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
@@ -204,8 +204,11 @@ mod tests {
             20,
             500,
             1000,
-            PalwClassDaaV2Params::new([(class_id(), 1000u16)].into_iter().collect(), 4).unwrap(),
+            class_id(),
+            4,
+            1000,
             100,
+            1000,
         )
         .unwrap()
     }
@@ -234,6 +237,7 @@ mod tests {
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(),

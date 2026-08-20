@@ -353,13 +353,18 @@ pub enum DatabaseStorePrefixes {
     /// lottery runs against, which is one of the two factors `palw_pwu` needs and the only one
     /// that is not frozen at registration.
     PalwClassState = 215,
+
     /// Singleton `u32`: the layout [`Self::PalwClassState`] rows were written under. Same reason
     /// as [`Self::PalwCarriagesSchema`] — a class whose target reads as absent is a class whose
     /// blocks weigh nothing, which is a wrong answer that looks like a valid one.
     PalwClassStateSchema = 214,
-    /// ADR-0042 Decision 5 / PR-08: per-chain-block `PalwStateDeltaV2` (Borsh bytes, verbatim) +
-    /// the resulting `state_root` — the reorg primitive on disk. A candidate's V2 standing is a
-    /// fold of these deltas along ITS chain, never a read of the node's sink.
+
+    // ---- MISAKA PALW V2 candidate-scoped state (ADR-0042 Decision 5 / ADR-0044 Unit C) ----
+    /// Per-chain-block `PalwStateDeltaV2` (Borsh bytes, verbatim) + the resulting `state_root` —
+    /// the reorg primitive on disk. Written in the same batch as the block's chain-commit data,
+    /// reverted (and deleted) newest-first when the block leaves the selected chain. A
+    /// candidate's V2 standing is a fold of these deltas along ITS chain, never a read of the
+    /// node's sink.
     PalwStateV2Deltas = 216,
     /// Singleton: the materialized V2 state at the selected sink — `PalwStateCarriageV2` Borsh
     /// bytes plus the chain block they stand at. Loading verifies the committed `state_root`, so

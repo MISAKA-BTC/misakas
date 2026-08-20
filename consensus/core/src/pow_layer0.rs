@@ -211,6 +211,24 @@ pub const POW_ALGO_ID_PALW_OLLAMA: u8 = 5;
 /// saving of one byte.
 pub const POW_ALGO_ID_PALW_COMMITTED_V2: u8 = 6;
 
+/// ADR-0044 Decision 6: the free-prompt **receipt-spend** block.
+///
+/// Distinct from [`POW_ALGO_ID_PALW_COMMITTED_V2`] (6) because their L1 tags mean different
+/// things — 6's is `Expand(commitment_root)` of a fresh chain-challenge attempt (one new ticket
+/// costs one new inference), 7's is `Expand(spend_id)` of a **certified** free-prompt quantum
+/// (the inference already happened, was audited through the claim lattice, and reached `Final`;
+/// the block admission is hashes, signatures, a beacon fact and a set lookup — no model, ever).
+/// An id meaning two things across block kinds is the fork hazard a byte of id space is cheap
+/// to avoid.
+///
+/// Like 6 before PR-10: **known, and demanded or accepted by nothing.** No fork flag returns it,
+/// [`required_algo_id_for_mode`] never yields it (a `ConsensusV2` network demands 6 exclusively
+/// until the FP bundle's wiring swaps the seam to the two-id set), and it is deliberately absent
+/// from [`check_algo_id_known`] — the pruning-proof path must not accept a header whose tag this
+/// binary cannot yet derive, because "accepted but unverifiable" downstream of that gate is the
+/// remote-crash shape the unknown-algo-id P0 already exhibited once.
+pub const POW_ALGO_ID_PALW_RECEIPT_V3: u8 = 7;
+
 /// Output width of the `algo_id = 5` tag:
 /// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
 pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;
@@ -383,6 +401,12 @@ pub enum PowLayer0Error {
     /// before any shape gate has run.
     #[error("PALW-V2 header (algo_id = 6) carries no decodable attempt envelope; the PoW has nothing to price")]
     PalwV2AttemptMissing,
+    /// The algo-7 counterpart (ADR-0044 Decision 6): a V3-lineage header reached the finalizer
+    /// without the carriage its tag expands. Same posture as `PalwV2AttemptMissing` — the shape
+    /// gate refuses such a header up-stack, so reaching here means a caller skipped it, and a
+    /// failed PoW is the answer rather than an `expect` on absent data.
+    #[error("PALW header (algo_id = {0}) carries no decodable carriage for its lane's tag")]
+    PalwCarriageMissing(u8),
     /// ADR-0042 Decision 3a: the carried attempt's `challenge` is not the one this header
     /// position derives — the envelope was mined for a different (pre_pow_hash, timestamp,
     /// nonce, class, bond). Refused by the finalizer arm itself so that EVERY path that
@@ -390,13 +414,17 @@ pub enum PowLayer0Error {
     /// stateful admission.
     #[error("PALW-V2 attempt's carried challenge is not the one this header position derives")]
     PalwV2ChallengeMismatch,
+
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
 /// hash) a `palw_commitment`, and the gate `hashing::header::write_header_preimage` reads.
 #[inline]
 pub fn is_palw_algo_id(algo_id: u8) -> bool {
-    algo_id == POW_ALGO_ID_PALW_LLM || algo_id == POW_ALGO_ID_PALW_OLLAMA || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+    algo_id == POW_ALGO_ID_PALW_LLM
+        || algo_id == POW_ALGO_ID_PALW_OLLAMA
+        || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+        || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
 }
 
 /// MISAKA ADR-0038: wire cap for `Header::palw_commitment` — the PBC1 envelope (4 magic +
@@ -464,17 +492,26 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
     if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
         return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
     }
+    // The V2-lineage lanes carry their OWN objects under their own magics, and they carry them
+    // ALWAYS — not behind the V1 fence (ADR-0042 Decision 1 removed that machine, and ADR-0044
+    // kept its lesson). No fence parameter is consulted here because none is needed: an algo-6
+    // or algo-7 header only exists on a network whose mode demands that id, which
+    // `check_algo_id_for_mode` decided up-stack. What the finalizer expands is exactly what this
+    // gate insists is present and well-formed, so "tagged but unvalidated" is unrepresentable.
     if algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 {
-        // ADR-0042 Decision 3a: on the committed-V2 id the binding is intrinsic — the finalizer's
-        // tag IS `Expand(commitment_root_v2)` — so `bound` (ADR-0038 Decision A's V1 rebinding
-        // fence) does not gate this arm in either direction. The field is REQUIRED and required
-        // to be a V2 envelope: an algo-6 header without one carries no work to price, and the
-        // finalizer refuses it as `PalwV2AttemptMissing` anyway; failing HERE names the shape
-        // defect (wrong magic, truncated body, zero pwu…) instead of a digest mismatch.
+        // The field is REQUIRED and required to be a V2 envelope: an algo-6 header without one
+        // carries no work to price, and the finalizer refuses it as `PalwV2AttemptMissing`
+        // anyway; failing HERE names the shape defect (wrong magic, truncated body, zero pwu…)
+        // instead of a digest mismatch.
         let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment)
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
         return envelope
             .validate_shape_v2()
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+    }
+    if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
+        return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
+            .map(|_| ())
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if !bound {
@@ -486,6 +523,7 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
         }
         return Ok(());
     }
+    // Bound: the commitment is required, and must be a commitment rather than arbitrary bytes.
     // Bound: the commitment is required, and must be a commitment rather than arbitrary bytes.
     // Emptiness falls out of the decoder (no PBC1 magic), which is the right error to report —
     // "this is not a commitment", not "this is the wrong length".
@@ -651,6 +689,11 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
         || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+        // ADR-0044 Unit B: 7 joins the set the moment its finalizer arm exists. "Known" here
+        // means "this binary can derive its tag", and the pruning-proof path is the caller that
+        // needs the distinction — a proof header whose tag we cannot derive must be refused, and
+        // one whose tag we CAN derive must not be.
+        || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
     {
         Ok(())
     } else {
@@ -1070,10 +1113,13 @@ mod tests {
             POW_ALGO_ID_PALW_LLM,
             POW_ALGO_ID_PALW_OLLAMA,
             POW_ALGO_ID_PALW_COMMITTED_V2,
+            // 7 joined when its finalizer arm landed (ADR-0044 Unit B): this set means "this
+            // binary can derive the tag", and it now can.
+            POW_ALGO_ID_PALW_RECEIPT_V3,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 7, 8, 0xff] {
+        for bad in [0u8, 8, 9, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 
@@ -1130,6 +1176,65 @@ mod tests {
                 "a V2 network accepts the committed-V2 id and nothing else"
             );
         }
+    }
+
+    /// ADR-0044 (FP-02): the receipt-spend id (7) exists, belongs to the PALW header family, and
+    /// is demanded or accepted by NOTHING — no fork-flag combination, no mode that exists today
+    /// (a `ConsensusV2` network still demands 6 exclusively), and not the pruning-proof gate,
+    /// whose contract is "algos this binary can verify" and whose over-acceptance is the
+    /// unknown-algo remote-crash shape.
+    #[test]
+    fn the_receipt_v3_id_is_known_to_the_family_and_demanded_by_nothing() {
+        assert!(is_palw_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3), "a receipt header carries (and hashes) its spend carriage");
+        assert!(
+            check_algo_id_known(POW_ALGO_ID_PALW_RECEIPT_V3).is_ok(),
+            "since Unit B the pruning-proof gate can derive this tag, so it must not refuse the id"
+        );
+        for (ollama, llm, sha3) in
+            [(false, false, false), (false, false, true), (false, true, false), (false, true, true), (true, true, true)]
+        {
+            assert_ne!(required_algo_id(ollama, llm, sha3), POW_ALGO_ID_PALW_RECEIPT_V3);
+            assert_eq!(
+                check_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3, ollama, llm, sha3),
+                Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_RECEIPT_V3))
+            );
+            for mode_required in [None, Some(POW_ALGO_ID_PALW_COMMITTED_V2)] {
+                assert_ne!(required_algo_id_for_mode(mode_required, ollama, llm, sha3), POW_ALGO_ID_PALW_RECEIPT_V3);
+                assert_eq!(
+                    check_algo_id_for_mode(POW_ALGO_ID_PALW_RECEIPT_V3, mode_required, ollama, llm, sha3),
+                    Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_RECEIPT_V3)),
+                    "no mode that exists today accepts a receipt block — the two-id set arrives only with the FP bundle's wiring"
+                );
+            }
+        }
+
+        // The header-shape gate, since Unit B: a receipt header MUST carry a well-formed spend
+        // envelope — empty is refused, junk is refused, and the V1 fence flag is not consulted
+        // at all (the lane's id already means the network demanded it).
+        for bound in [false, true] {
+            assert!(
+                matches!(
+                    check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[], bound),
+                    Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+                ),
+                "bound = {bound}: an empty carriage is not a spend"
+            );
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &[1, 2, 3], bound),
+                Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+            ));
+            // …and the attempt lane's rule is the mirror image: its own envelope or nothing.
+            assert!(matches!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &[], bound),
+                Err(PowLayer0Error::PalwCommitmentMalformed { .. })
+            ));
+        }
+        let oversized = vec![0u8; PALW_COMMITMENT_MAX_BYTES + 1];
+        assert_eq!(
+            check_palw_commitment_shape(POW_ALGO_ID_PALW_RECEIPT_V3, &oversized, false),
+            Err(PowLayer0Error::PalwCommitmentTooLong { got: oversized.len(), cap: PALW_COMMITMENT_MAX_BYTES }),
+            "the cap still reports the cap it broke, before any codec runs"
+        );
     }
 
     /// PALW-PoW seed (algo_id = 4): deterministic, and sensitive to EVERY grindable input — block,

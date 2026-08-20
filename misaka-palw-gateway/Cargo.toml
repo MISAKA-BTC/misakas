@@ -1,0 +1,33 @@
+[package]
+name = "misaka-palw-gateway"
+description = "MISAKA free-prompt gateway (ADR-0044 FP-07): an OpenAI-compatible /v1/chat/completions front end whose ONE inference answers the user AND produces the consensus-grade execution commitment inputs, via the pinned palw-worker's v3-job contract"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaka-palw-gateway"
+path = "src/main.rs"
+
+[[bin]]
+name = "misaka-palw-fp-rail"
+path = "src/bin/rail.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pq-validator-core.workspace = true
+
+borsh.workspace = true
+faster-hex.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

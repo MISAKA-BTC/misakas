@@ -115,7 +115,48 @@ impl HeaderProcessor {
         // well-formed PBC1 commitment from the fence's DAA.
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
-            .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))
+            .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
+        self.check_palw_carriage_stateless(header)
+    }
+
+    /// ADR-0042 Decision 6's stateless list (Unit A) and ADR-0044's (Unit B), at the header stage.
+    ///
+    /// The shape gate above proved the carriage DECODES; this proves it belongs to THIS header.
+    /// The two cannot be separated in time: the finalizer expands the carriage into the tag, so a
+    /// header whose carriage decoded but was never checked against its own position is a solved
+    /// PoW that can be re-announced elsewhere — audit P0-1, arriving through the new lanes.
+    ///
+    /// The SIGNATURE is deliberately not verified here. Its cost is ~1 ms of ML-DSA per header,
+    /// and what it proves ("the carried key signed this claim") is only meaningful next to the
+    /// stateful fact that the carried key IS the named bond's key — which needs chain state. Both
+    /// live in the stateful admission (Unit C's consumers); here we do the free, position-bound
+    /// checks that let a peer discard a mis-announced header without touching state.
+    fn check_palw_carriage_stateless(&self, header: &Header) -> BlockProcessResult<()> {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+        let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(&self.network_id);
+        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let reason = match header.pow_algo_id {
+            POW_ALGO_ID_PALW_COMMITTED_V2 => kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(
+                &header.palw_commitment,
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|envelope| {
+                envelope
+                    .validate_stateless_v2(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                    .map_err(|e| e.to_string())
+            }),
+            POW_ALGO_ID_PALW_RECEIPT_V3 => kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(
+                &header.palw_commitment,
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|envelope| {
+                envelope
+                    .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                    .map_err(|e| e.to_string())
+            }),
+            _ => return Ok(()),
+        };
+        reason.map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
     }
 
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {

@@ -1,4 +1,7 @@
-//! MISAKA PALW V2 chain state on disk (ADR-0042 Decision 5, PR-08's store shape).
+//! MISAKA PALW V2 chain state on disk (ADR-0042 Decision 5, PR-08's store shape; the same rows
+//! are ADR-0044 Unit C's substrate — the free-prompt candidate walk reads them through
+//! `processes::palw_state_walk`, the sink writer maintains them through
+//! `processes::palw_state_v2_sync`).
 //!
 //! # What is persisted, and why exactly this
 //!
@@ -174,6 +177,15 @@ impl DbPalwStateV2Store {
         self.tip.write(BatchDbWriter::new(batch), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
     }
 
+    /// Stage a tip row VERBATIM. Only the tests that must simulate post-write corruption use
+    /// this — every production writer goes through [`Self::set_tip_batch`], which computes the
+    /// root from the state it is handed, so a caller cannot store a snapshot under a root it
+    /// does not hash to.
+    #[cfg(test)]
+    pub fn set_tip_record_batch(&mut self, batch: &mut WriteBatch, record: PalwStateTipRecordV2) -> StoreResult<()> {
+        self.tip.write(BatchDbWriter::new(batch), &record)
+    }
+
     /// The tip row undecoded (which block, which root), without rebuilding the state.
     pub fn tip_record(&self) -> StoreResult<Option<PalwStateTipRecordV2>> {
         match self.tip.read() {
@@ -203,7 +215,7 @@ impl DbPalwStateV2Store {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_state_v2::{
-        PalwBlockContextV2, PalwBondKeyV2, PalwClassDaaV2Params, PalwConsensusObjectV2, PalwPwuRuleV2, apply_palw_transition_v2,
+        PalwBlockContextV2, PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, apply_palw_transition_v2,
         revert_delta_v2,
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -218,8 +230,11 @@ mod tests {
             20,
             500,
             1000,
-            PalwClassDaaV2Params::new([(Hash64::from_u64_word(1), 1000u16)].into_iter().collect(), 4).unwrap(),
+            Hash64::from_u64_word(1),
+            4,
+            1000,
             100,
+            1000,
         )
         .unwrap()
     }
@@ -236,6 +251,7 @@ mod tests {
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
+                share_permille: 1000,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }),

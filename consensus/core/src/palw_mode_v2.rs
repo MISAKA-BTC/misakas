@@ -27,6 +27,7 @@
 
 use crate::Hash64;
 use crate::palw_admission_v2::{PalwAdmissionParamsV2, PalwAdmissionV2Error};
+use crate::palw_freeprompt_v3::{PalwFpV3Error, PalwFreePromptParamsV3};
 use crate::palw_panel_v2::PalwPanelParamsV2;
 use crate::palw_reward_v2::PalwRewardParamsV2;
 use crate::palw_state_v2::{PalwStateParamsV2, PalwStateV2Error};
@@ -87,6 +88,20 @@ pub fn palw_v2_signature_contexts_root() -> Hash64 {
     out.copy_from_slice(state.finalize().as_bytes());
     Hash64::from_bytes(out)
 }
+
+pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
+
+/// `H(network_id_bytes)` — the value every V2-lineage object binds as its `network_domain`
+/// (ADR-0042 Decision 3a, ADR-0044).
+///
+/// **One derivation, re-exported, not a second one.** The integration found this concept defined
+/// TWICE under two different domain keys — here and in `palw_attempt_v2` — with the live header
+/// path reading this one and the envelope's own validation binding the other. Two derivations of
+/// a consensus identity are two identities: a correctly-formed attempt would have been refused by
+/// the validator that computed the domain the other way. `palw_attempt_v2` owns the derivation
+/// (its domain key is the one the frozen challenge preimage already binds), and this path is that
+/// function under the name the pipeline calls it by.
+pub use crate::palw_attempt_v2::palw_network_domain_v2;
 
 /// The court's shape, from which the worst-case honest prosecution is DERIVED (ADR-0042
 /// Decision 8: `rounds = ceil(log2(max_step_leaf_count)) + terminal/opening rounds`).
@@ -153,7 +168,6 @@ impl PalwCourtParamsV2 {
     }
 }
 
-pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -194,6 +208,10 @@ pub enum PalwModeV2Error {
     State(#[from] PalwStateV2Error),
     #[error("invalid V2 bundle: {0}")]
     Admission(#[from] PalwAdmissionV2Error),
+    #[error("invalid V2 bundle: {0}")]
+    FreePrompt(#[from] PalwFpV3Error),
+    #[error("invalid V2 bundle: {0}")]
+    Panel(#[from] crate::palw_panel_v2::PalwPanelV2Error),
 }
 
 /// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —
@@ -218,6 +236,10 @@ pub struct PalwConsensusParamsV2 {
     pub panel: PalwPanelParamsV2,
     pub reward: PalwRewardParamsV2,
     pub bond: PalwBondParamsV2,
+    /// ADR-0044: the free-prompt receipt lane — a REQUIRED part of the bundle, not a fence. A
+    /// ruleset without it is a different ruleset (a different `palw_ruleset_id_v2`), never this
+    /// one with a switch off.
+    pub freeprompt: PalwFreePromptParamsV3,
     /// Reorg safety margin added to the liability period in the withdrawal-delay invariant.
     pub reorg_margin_daa: u64,
     /// The court's shape. Its [`PalwCourtParamsV2::worst_case_duration_daa`] is what the court
@@ -366,7 +388,51 @@ impl PalwConsensusParamsV2 {
         if self.bond.withdrawal_delay_daa() <= liability {
             return Err(PalwModeV2Error::Invalid("the withdrawal delay does not outlast the liability period"));
         }
+
+        // ---- ADR-0044: the free-prompt lane's startup invariants ----
+
+        // The source split holds BOTH lanes open: a zero attempt share has no beacons (F16), a
+        // full one has no receipts. The split lives in the state params (the retarget consumes
+        // it); this gate is where its live range is enforced.
+        let split = self.state.fp_attempt_share_permille();
+        if !(1..=999).contains(&split) {
+            return Err(PalwModeV2Error::Invalid("a live FP network needs 1..=999‰ attempt share — both lanes must exist"));
+        }
+
+        // The per-class half of this clause retired with its subject. It used to walk a params
+        // share TABLE and refuse any class whose composed lane share rounds to zero; ADR-0045
+        // Decision 3 moved shares to chain state (granted at registration, conserved to 1000‰),
+        // so there is no table here to walk — and the retarget renormalizes each lane over the
+        // classes that actually competed in it, which makes a composed zero a SKIPPED span (the
+        // price holds still for the span) rather than a silently frozen price. The startup fact
+        // that remains is the one above: both lanes must exist.
+
+        // A late beacon must still bind inside the bind window: the panel's anchor is the FIRST
+        // attempt-class block at the slot, and the declared worst-case gap to one is part of the
+        // ruleset. Without this a thin floor quietly turns every FP claim into a BindTimeout.
+        let worst_anchor = self
+            .panel
+            .anchor_delay()
+            .checked_add(self.freeprompt.max_beacon_gap_daa())
+            .ok_or(PalwModeV2Error::Invalid("the anchor slot plus the beacon gap overflows the DAA score"))?;
+        if worst_anchor >= self.state.window_bind() {
+            return Err(PalwModeV2Error::Invalid("anchor_delay + max_beacon_gap must sit inside the bind window"));
+        }
+
+        // The draw beacon sits past the reorgable fringe of the certification it draws for.
+        if self.freeprompt.receipt_maturity_daa() < self.reorg_margin_daa {
+            return Err(PalwModeV2Error::Invalid("receipt maturity must cover the reorg margin"));
+        }
         Ok(())
+    }
+
+    /// Does this bundle accept the given header algorithm? A V2+FP network runs exactly two
+    /// block kinds: the attempt id and the receipt id (ADR-0044 Decision 1). This is the
+    /// two-id acceptance the FP-08 seam swap wires into the header/pruning gates; until then
+    /// the wired seam still demands the attempt id exclusively, and no live network carries a
+    /// bundle at all.
+    pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
+        algo_id == self.algorithm_id || algo_id == self.freeprompt.receipt_algorithm_id()
     }
 }
 
@@ -533,7 +599,23 @@ mod tests {
     }
 
     fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800).unwrap()
+    }
+
+    pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
+        PalwFreePromptParamsV3::new(
+            crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+            1_000,
+            10,
+            crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+            64,
+            4_096,
+            512,
+            150,
+            200,
+            5,
+        )
+        .unwrap()
     }
 
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
@@ -544,11 +626,13 @@ mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100).unwrap(),
+            // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800).unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
             bond: PalwBondParamsV2::new(100, 2_000).unwrap(),
+            freeprompt: conforming_freeprompt(),
             reorg_margin_daa: 100,
             // 2^20 step leaves -> 20 bisection rounds, +2 terminal, x20 DAA per turn = 440,
             // which must fit strictly inside the fixture's `window_court` of 500.
@@ -566,6 +650,12 @@ mod tests {
         bundle.validate_ruleset_shape().expect("the fixture bundle holds every startup invariant");
         let id = palw_ruleset_id_v2(&bundle);
         assert_eq!(id, palw_ruleset_id_v2(&bundle.clone()), "the fingerprint is a pure function of the bundle");
+        // The bundle accepts exactly its two block kinds (ADR-0044 Decision 1) — and nothing else.
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
+        for other in [0u8, 1, 2, 3, 4, 5, 8, 0xff] {
+            assert!(!bundle.accepts_algo_id(other), "algo {other} is neither lane");
+        }
         assert_eq!(PalwConsensusMode::ConsensusV2(bundle).required_algo_id(), Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert_eq!(PalwConsensusMode::Disabled.required_algo_id(), None);
         assert_eq!(PalwConsensusMode::LegacyTn11.required_algo_id(), None);
@@ -585,13 +675,62 @@ mod tests {
                 // enforces another — the C5 disagreement shape, applied to the base id.
                 "base id disagreement",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100).unwrap();
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800).unwrap();
+                }),
+            ),
+            (
+                // ADR-0044 Decision 1: a bundle whose freeprompt lane is live must hold BOTH
+                // lanes open — split 1000 has no receipts (and the params gate already refuses
+                // 0). The share TABLE cases that once sat beside this one retired with their
+                // subject (shares are chain state now); the split is still a params fact.
+                "one-lane split (1000‰ has no receipts)",
+                Box::new(|b| {
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000).unwrap();
+                }),
+            ),
+            (
+                "beacon gap outside the bind window",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        6, // anchor_delay 4 + gap 6 = 10 ≥ window_bind 10
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "receipt maturity inside the reorg margin",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        99, // reorg_margin_daa is 100
+                        200,
+                        5,
+                    )
+                    .unwrap()
                 }),
             ),
             // The two table-coherence cases ("budgetless share", "shareless budget") retired
             // with their subject: shares are chain state (ADR-0045 Decision 3) and the epoch
             // budget is derived at each boundary from them (Decision 2), so there are no two
-            // params tables left to drift apart.
+            // params tables left to drift apart. The FP "composed share rounds to zero" startup
+            // case retired the same way — with shares granted at registration and the retarget
+            // renormalizing over the classes that competed, a lane whose composition rounds to
+            // zero is SKIPPED for the span (its price holds still), not silently frozen.
             ("anchor outside bind window", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 2, 10).unwrap())),
             // A deeper ladder needs more rounds than the backstop window can hold…
             ("ladder deeper than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1 << 40, 20, 2).unwrap())),
@@ -930,6 +1069,20 @@ mod tests {
         legacy.validate_palw_v2().expect("the cadence freeze does not reach the legacy lineage");
     }
 
+    /// The network domain is a pure function of the network id bytes, and different networks get
+    /// different domains — which is what keeps a testnet object off mainnet even when the two
+    /// share a ruleset id (Decision 11's deliberate omission).
+    #[test]
+    fn the_network_domain_separates_networks() {
+        let mainnet = palw_network_domain_v2(b"mainnet");
+        assert_eq!(mainnet, palw_network_domain_v2(b"mainnet"), "a pure function of the bytes");
+        for other in [&b"testnet-11"[..], b"testnet-1", b"devnet", b"simnet", b""] {
+            assert_ne!(mainnet, palw_network_domain_v2(other), "{other:?} must not share mainnet's domain");
+        }
+        // Length-prefixed, so no two ids concatenate into one another's preimage.
+        assert_ne!(palw_network_domain_v2(b"testnet-1"), palw_network_domain_v2(b"testnet-11"));
+    }
+
     /// Decision 11's property: any consensus-deciding byte moves the id, and network identity is
     /// not in the preimage at all (there is no field for it — RC and mainnet share the id by
     /// construction, and the challenge's network_domain keeps their blocks apart).
@@ -954,6 +1107,42 @@ mod tests {
             (
                 "exposure ratio",
                 Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()),
+            ),
+            (
+                "free-prompt quantum",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_001,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        5,
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "free-prompt cu price",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        1_000,
+                        10,
+                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 2, decode_weight: 64 },
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        5,
+                    )
+                    .unwrap()
+                }),
             ),
         ];
         for (name, mutate) in mutations {

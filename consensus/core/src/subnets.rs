@@ -299,6 +299,14 @@ pub const SUBNETWORK_ID_PALW_BISECT_MOVE: SubnetworkId = SubnetworkId::from_byte
 /// and stakes its bond on what it saw.
 pub const SUBNETWORK_ID_PALW_RECEIPT: SubnetworkId = SubnetworkId::from_byte(0x49);
 
+// MISAKA free-prompt PALW (ADR-0044). Their own ids inside the PALW band: an FP commitment is a
+// different object with a different codec and a different signing context from the V2 carriage
+// commitment above (0x40), and routing them through one id would let a relay hand one band's
+// payload to the other band's validator.
+/// A free-prompt execution commitment — [`crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3`].
+/// Phase 1 of the receipt lane: published BEFORE the beacon that draws its audit panel exists.
+pub const SUBNETWORK_ID_PALW_FP_COMMITMENT: SubnetworkId = SubnetworkId::from_byte(0x4a);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +341,7 @@ mod tests {
             ("PALW_ATTESTATION", SUBNETWORK_ID_PALW_ATTESTATION),
             ("PALW_OPENING_CALL", SUBNETWORK_ID_PALW_OPENING_CALL),
             ("PALW_OPENING_ANSWER", SUBNETWORK_ID_PALW_OPENING_ANSWER),
+            ("PALW_FP_COMMITMENT", SUBNETWORK_ID_PALW_FP_COMMITMENT),
             ("PALW_REFUTATION", SUBNETWORK_ID_PALW_REFUTATION),
             ("PALW_EVIDENCE_CHUNK", SUBNETWORK_ID_PALW_EVIDENCE_CHUNK),
         ];
@@ -356,5 +365,13 @@ mod tests {
         {
             assert_eq!(*id, SubnetworkId::from_byte(0x40 + i as u8));
         }
+        // The rest of the PALW band, by their own byte (the contiguity check above covers the
+        // first six; these landed later and are pinned individually rather than by re-deriving
+        // an offset a future insertion would silently shift).
+        assert_eq!(SUBNETWORK_ID_PALW_EQUIVOCATION, SubnetworkId::from_byte(0x46));
+        assert_eq!(SUBNETWORK_ID_PALW_STEP_CONVICTION, SubnetworkId::from_byte(0x47));
+        assert_eq!(SUBNETWORK_ID_PALW_BISECT_MOVE, SubnetworkId::from_byte(0x48));
+        assert_eq!(SUBNETWORK_ID_PALW_RECEIPT, SubnetworkId::from_byte(0x49));
+        assert_eq!(SUBNETWORK_ID_PALW_FP_COMMITMENT, SubnetworkId::from_byte(0x4a));
     }
 }
