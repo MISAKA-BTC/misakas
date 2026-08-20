@@ -189,6 +189,38 @@ honest "red (integration), lands in PR-N."
   `receipts: Vec::new()`, a panel concluding without a word from the seat it had bound.
   **ADR-0042:** Decision 7.
 
+### P0-11 — the lifecycle objects have no way onto a chain (found 2026-08-20)
+
+- **Invariant:** a claim that does honest work reaches `Final`, so PALW weight is a measure of
+  work rather than a constant.
+- **Evidence:** `palw_fp_objects_v3.rs` — `palw_fp_objects_from_accepted_txs_v3` produces exactly
+  one object kind, `FreePromptCommitted`, and it is the ONLY extractor
+  (`processor.rs`'s `palw_v2_objects_of_block` calls nothing else). Grep the tree for
+  `PalwConsensusObjectV2::PanelBound`: every construction is inside a `mod tests`. The same holds
+  for `ReceiptLicensed`, `ProducerDefaulted`, `CourtOpened`, `CourtClosed`, the two rung moves,
+  and every `BondRegistered` that is not the genesis list.
+- **What it means.** A V2 network boots with the genesis class and genesis bond, admits attempts,
+  and then cannot advance a single one: no block can carry a `PanelBound`, so every claim sits
+  `Provisional` until `window_bind` lapses and voids as `BindTimeout`. `safe_weight` never grows,
+  the safe frontier never leaves the zero point, and PALW weight — the network's entire fork
+  choice — is permanently zero. No bond but the genesis one can ever register, so the panel
+  registry has one member and the court has no challenger.
+- **Why the lattice tests did not catch it.** They are correct and they are the wrong shape to
+  see this: each one hands the transition an object list it built in-process, which is the one
+  thing a chain cannot do. The gap is between "the state machine accepts this object" and
+  "something puts this object in a block", and nothing tested the second half.
+- **Red test:** `palw_v2_without_a_lifecycle_carriage_no_claim_can_ever_finalize` — accept an
+  attempt, then run blocks carrying only what a real block can carry (nothing), and assert the
+  claim voids at `BindTimeout` with `safe_weight` still zero. It asserts today's behaviour
+  deliberately; when the carriage lands it fails, and the fix is to rewrite it as the liveness
+  test it was always describing.
+- **What closing it needs:** a transaction carriage for the lifecycle objects, the same shape
+  `FreePromptCommitted` already has — a wire form, an extractor, and an acceptance check per kind
+  (several of which now exist: `validate_panel_bound_v2`, `check_court_open_acceptance_v2`,
+  `adjudicate_court_close_v2`, the two rung checks). This also subsumes the C5 tail: "nobody has
+  an incentive to bind someone else's claim" is a question about who WOULD; today nobody CAN.
+- Release-blocker for any network that carries weight. **ADR-0042:** Decisions 7 and 8.
+
 ### P0-8 — the arithmetic court is unadjudicable on a normal full node
 - **Invariant:** W1 (full node adjudicates every dispute with no LLM).
 - **Evidence:** `palw_step_refute.rs:269-329,418-444`; `processor.rs:2652-2677,3036-3049,8565-8575,

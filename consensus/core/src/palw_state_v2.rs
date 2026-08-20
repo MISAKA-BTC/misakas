@@ -4021,6 +4021,50 @@ pub(crate) mod tests {
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the freeze ended with the challenge");
     }
 
+    // ---- the lifecycle objects have no way onto a chain (found 2026-08-20) ----
+
+    /// **A V2 network cannot advance a single claim, because no block can carry a `PanelBound`.**
+    ///
+    /// The lattice is complete and every edge is tested — but every one of those tests hands the
+    /// transition an object list it built in-process. On a real chain the only objects that exist
+    /// are the ones something EXTRACTS from a block, and
+    /// `palw_fp_objects_from_accepted_txs_v3` produces exactly one kind: `FreePromptCommitted`.
+    /// Grep the tree: every construction of `PanelBound`, `ReceiptLicensed`, `CourtOpened`,
+    /// `CourtClosed` and a non-genesis `BondRegistered` is inside a `mod tests`.
+    ///
+    /// So this test does what a running network can do and nothing more: accept an attempt, then
+    /// let blocks pass. The claim reaches `BindTimeout` and voids, `safe_weight` never moves, and
+    /// the safe frontier never leaves the zero point — which is PALW weight permanently zero on a
+    /// network whose whole fork choice is PALW weight.
+    ///
+    /// It is written as an assertion of the CURRENT behaviour on purpose. When the lifecycle
+    /// carriage lands, this test fails, and the thing to do is rewrite it as the liveness test it
+    /// was always describing — not to delete it.
+    #[test]
+    fn palw_v2_without_a_lifecycle_carriage_no_claim_can_ever_finalize() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        // Genesis registrations are the ONE object list a real network gets for free.
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        assert!(matches!(s2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "the attempt was admitted");
+
+        // Now let the chain run with the object list a block can actually produce: empty.
+        let mut state = s2;
+        for (block, daa) in [(3u64, 105u64), (4, 110), (5, 115), (6, 130), (7, 200)] {
+            let (next, _) = apply(&state, &p, &ctx(block, daa, block), &[], None);
+            state = next;
+        }
+        match state.claim(&claim_id).unwrap().phase {
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. } => {}
+            ref other => panic!("with no way to bind a panel the claim can only time out, got {other:?}"),
+        }
+        assert_eq!(state.safe_weight(), 0, "no claim finalized, so no work is certified");
+        assert_eq!(state.safe_frontier(), (0, BlockHash::default()), "and the frontier never left the zero point");
+    }
+
     // ---- P0-7: an assigned seat that answers nothing pays for it ----
 
     /// A claim walked to `PanelBound` with a THREE-seat panel, so silence is attributable to a
