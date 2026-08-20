@@ -225,11 +225,22 @@ honest "red (integration), lands in PR-N."
   same gap is fail-closed and visible: `apply_palw_transition_v3` refuses a null root
   (`UnadjudicableCommitment`), so no free-prompt claim can be admitted at all today. The quiet
   lane is the worse one.
-- **Status:** **open — runtime instrumentation, not consensus.** The consensus half is done and
-  tested (`palw_fp_execution_v3`: the context derivation, the root by the court's own function,
-  and refusals for runs that could not have happened). The missing half is per-kernel tile
-  capture in the shim. Gates adjudicability on BOTH lanes, so it is a release-blocker for any
-  network that carries weight.
+- **Status:** **open — and the blocker is one level below the shim.** Two halves are done:
+  the consensus derivation (`palw_fp_execution_v3` — the context, the root by the court's own
+  function, refusals for runs that could not have happened) and the model geometry a step space is
+  built from, now MEASURED rather than declared (`palw-worker --mode geometry`, added 2026-08-20;
+  on the pinned Qwen3.5-2B: 24 layers, hidden 2048, 8 heads, 2 kv heads, head dim 256, rope type
+  40, and the pins agree with the model).
+- **What is actually missing, stated precisely.** Not "tile capture" alone. **No
+  `PalwShapeProfileV3` exists for any real model** — every instance in the tree is a test fixture,
+  and the worker does not reference the type at all. A profile is the step space's DEFINITION: the
+  per-layer node table, each node's `kernel_semantics_id`, its tile length and its data inputs.
+  Until one exists there is no step space to capture tiles INTO, so the capture cannot be written
+  first. The order of work is: (1) write the Qwen3.5-2B profile from the measured geometry and the
+  pinned tree's own graph, (2) instrument the shim to emit per-node tile outputs against it,
+  (3) build the step leg and hand `palw_fp_execution_root_v3` its fourth root.
+- Gates adjudicability on BOTH lanes, so it is a release-blocker for any network that carries
+  weight.
 
 ### P0-9 — bisection court incomplete (soundness + liveness)
 - **Invariant:** disputes terminate; deep fraud is prosecutable in-window.

@@ -134,6 +134,13 @@ unsafe extern "C" {
     ) -> *mut ShimCtx;
     fn shim_n_embd(s: *const ShimCtx) -> i32;
     fn shim_n_layer(s: *const ShimCtx) -> i32;
+    // P0-8b: the remaining geometry a step-space shape profile restates. Measured from the
+    // loaded model, never declared — a profile that disagrees with the GGUF describes an
+    // execution that never ran, and the court would adjudicate steps against it.
+    fn shim_n_head(s: *const ShimCtx) -> i32;
+    fn shim_n_head_kv(s: *const ShimCtx) -> i32;
+    fn shim_n_embd_head(s: *const ShimCtx) -> i32;
+    fn shim_rope_type(s: *const ShimCtx) -> i32;
     fn shim_capture_begin(s: *mut ShimCtx);
     fn shim_capture_status(s: *const ShimCtx) -> i32;
     fn shim_capture_positions(s: *const ShimCtx, slot: i32) -> i32;
@@ -1314,6 +1321,59 @@ fn run_v3_manifest() {
         "shape_string": shape_string_v3(),
     });
     println!("{doc}");
+}
+
+/// `--mode geometry`: the pinned model's real shape, measured (P0-8b).
+///
+/// A `PalwShapeProfileV3` restates the model's geometry so the step space is self-contained, and
+/// every number in it must come from the loaded GGUF rather than from a constant someone typed —
+/// a profile that disagrees with the model describes an execution that never ran, and the court
+/// would adjudicate steps against it. This is the measurement that feeds a profile, kept as its
+/// own mode so building one is never a guess and the numbers can be diffed against the pins.
+///
+/// It is a DISPLAY document, like `v2-manifest`: nothing here is a consensus identity. What it
+/// produces is the input a registration is written from.
+fn run_geometry() {
+    let model_path = pinned_model_path_v2();
+    let ctx = unsafe { shim_open(format!("{}\0", model_path.display()).as_ptr(), N_CTX, N_BATCH, N_THREADS) };
+    if ctx.is_null() {
+        die(format!("llama.cpp failed to load {}", model_path.display()));
+    }
+    let measured = |v: i32, what: &str| -> i32 {
+        if v <= 0 {
+            die(format!("the model reports no {what} ({v}) — a geometry that cannot be measured must not be claimed"));
+        }
+        v
+    };
+    let layer_count = measured(unsafe { shim_n_layer(ctx) }, "layer count");
+    let hidden_dim = measured(unsafe { shim_n_embd(ctx) }, "hidden dim");
+    let attn_heads = measured(unsafe { shim_n_head(ctx) }, "attention head count");
+    let attn_kv_heads = measured(unsafe { shim_n_head_kv(ctx) }, "kv head count");
+    let attn_head_dim = measured(unsafe { shim_n_embd_head(ctx) }, "head dim");
+    let rope_type = unsafe { shim_rope_type(ctx) };
+    unsafe { shim_close(ctx) };
+
+    // The pins exist so the tap profile can be chosen BEFORE load; here they are checked against
+    // what the model really reports. A mismatch means the artifact is not the pinned one in a way
+    // the SHA-256 gate missed, and a profile built on it would be a fiction.
+    let pins_agree = layer_count as u32 == qwen35_pins::MODEL_LAYER_COUNT && hidden_dim as u32 == qwen35_pins::MODEL_HIDDEN_DIM;
+    let doc = serde_json::json!({
+        "schema": "misaka.palw.geometry.v1",
+        "layer_count": layer_count,
+        "hidden_dim": hidden_dim,
+        "attn_heads": attn_heads,
+        "attn_kv_heads": attn_kv_heads,
+        "attn_head_dim": attn_head_dim,
+        "rope_type": rope_type,
+        "pinned_layer_count": qwen35_pins::MODEL_LAYER_COUNT,
+        "pinned_hidden_dim": qwen35_pins::MODEL_HIDDEN_DIM,
+        "pins_agree_with_the_model": pins_agree,
+        "note": "display document; the input a PalwShapeProfileV3 registration is written from (P0-8b)",
+    });
+    println!("{doc}");
+    if !pins_agree {
+        die("the loaded model's geometry disagrees with the pins — this is not the pinned artifact".into());
+    }
 }
 
 /// `--mode v3-job`: one framed Borsh [`PalwFpWorkerRequestV3`] on stdin, one framed Borsh
@@ -2560,6 +2620,7 @@ fn main() {
             | "v2-replay-bench"
             | "v3-job"
             | "v3-manifest"
+            | "geometry"
             | "pow-agent")
     ) && n_predict.is_some()
     {
@@ -2575,6 +2636,7 @@ fn main() {
             run_v3_job(Path::new(&dir));
         }
         Some("v3-manifest") => run_v3_manifest(),
+        Some("geometry") => run_geometry(),
         Some("v2-golden-gen") => {
             let out = out_path.unwrap_or_else(|| die("--out <path> is required for v2-golden-gen".into()));
             run_v2_golden_gen(&out);

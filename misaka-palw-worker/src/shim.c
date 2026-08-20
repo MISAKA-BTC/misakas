@@ -268,6 +268,40 @@ int32_t shim_n_layer(const shim_ctx * s) {
     return llama_model_n_layer(s->model);
 }
 
+// The rest of the geometry a step-space shape profile is built from (P0-8b).
+//
+// `PalwShapeProfileV3` restates the model's shape so the profile is self-contained, and every
+// one of those numbers has to come from the loaded model rather than from a constant a human
+// typed: a profile that disagrees with the GGUF describes a different execution, and the court
+// would then adjudicate steps that never ran. `n_embd`/`n_layer` were already exported for the
+// tap profile; these are the remainder.
+//
+// Each returns -1 when llama.cpp cannot answer, and the Rust side treats that as fail-closed —
+// a geometry it could not measure is one it must not claim.
+int32_t shim_n_head(const shim_ctx * s) {
+    return llama_model_n_head(s->model);
+}
+
+int32_t shim_n_head_kv(const shim_ctx * s) {
+    return llama_model_n_head_kv(s->model);
+}
+
+int32_t shim_n_embd_head(const shim_ctx * s) {
+    const int32_t n_head = llama_model_n_head(s->model);
+    if (n_head <= 0) {
+        return -1;
+    }
+    return llama_model_n_embd(s->model) / n_head;
+}
+
+int32_t shim_rope_type(const shim_ctx * s) {
+    return (int32_t) llama_model_rope_type(s->model);
+}
+
+float shim_rope_freq_base(const shim_ctx * s) {
+    return llama_model_rope_freq_scale_train(s->model);
+}
+
 // Clears the per-call bookkeeping. Called before every decode: `positions[]` is what tells the
 // Rust side how many rows this call produced, and the duplicate check depends on it starting at
 // zero. The sticky `status` is deliberately NOT cleared — a fault anywhere in the job must
