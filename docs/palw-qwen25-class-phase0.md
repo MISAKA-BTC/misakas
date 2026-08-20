@@ -91,9 +91,9 @@ BASE-0's closed set (ADR-0040 Decision D + H): `EmbedLookup`, `MatMulQuant`, `Re
 | --- | --- | --- |
 | embedding gather | `EmbedLookup` | **yes** |
 | RMSNorm, normalize | `RmsNorm` | **yes** |
-| RMSNorm, learned gain | — | **no — G1** |
+| RMSNorm, learned gain | — | **no — G1** (exact fold) |
 | q/k/v projection | `MatMulQuant` | **yes** |
-| q/k/v bias add | — | **no — G2** |
+| q/k/v bias add | — | **no — G2** (needs an ADR amendment) |
 | RoPE | `RopeTable` | **convention mismatch — G3** |
 | Q·Kᵀ scores | `MatMulQuant` | **no — G5** |
 | 1/√d scaling | `Rescale` | **yes** |
@@ -122,12 +122,32 @@ quantization semantics so a verifier can reproduce it.
 
 Same cause as G1 on the additive side.
 
-*Category:* resolvable with no new op, by the standard bias-column construction — append a
-constant lane to the input row and a bias column to the weight matrix, so `MatMulQuant` computes
-`Wx + b` directly. It is exact in integers **provided the constant lane and the bias share the
-weight's int8 scale**, which is a quantization-quality question Phase 2 must measure rather than
-assume. If the measured bias range does not fit, the fallback is a new registered-vector add op,
-i.e. an ADR-0040 extension.
+*Category:* **BASE-0 semantics の拡張が必要.** *(Corrected — the first draft of this document said
+"resolvable with no new op" and that is wrong.)*
+
+The bias-column construction — append a constant lane to the input row, a bias column to the
+weight — is exact and needs no new *kernel*. But it needs a row with that constant lane in it,
+and **nothing in BASE-0 can produce one**. `rms_norm(x, eps)` returns exactly `x.len()` values;
+there is no "append a constant" op; and the constant cannot be prepended before the norm, because
+the norm sums over the whole row and would fold it into the scale. Checked, not assumed:
+`QuantParams` is `{ multiplier, shift }` and `ScaleParams` likewise — **there is no zero-point
+anywhere in the op set**, so no additive registered term exists in any of the ten ops.
+
+So Qwen2.5 cannot be expressed in BASE-0's op set as it stands, and the blocker is the QKV bias.
+Two amendments would close it:
+
+1. **`QuantParams` gains a zero point**, so `Requantize` becomes
+   `Saturate8(RoundingShiftRight(SRDHM(acc, mult), shift) + zero)`. This is the standard int8
+   inference form, and its absence is itself worth noting — asymmetric quantization normally
+   carries one. It closes the bias as a by-product of a change that also improves quantization
+   quality, and it touches one op rather than adding one.
+2. **A new registered-vector add.** Narrower, but it is an eleventh op in a set whose closedness
+   is the class's selling point, and every op added is another kernel every implementation must
+   reproduce bit-for-bit.
+
+(1) is the smaller change to the *catalog* and the larger change to an *existing* op's semantics;
+(2) is the reverse. **The choice is an ADR-0040 amendment.** Note that G1 is unaffected — a
+multiplicative gain folds exactly into the next matmul and needs neither.
 
 ### G3 — RoPE convention
 
@@ -260,14 +280,20 @@ is missing. (BASE-0's own profile sets `attn_kv_heads = attn_heads`; Qwen's will
 
 1. `Qwen2.5-2B` does not exist; the work is parameterized and the size choice is the user's.
 2. Of the fourteen Qwen2.5 steps, ten map onto BASE-0 ops unchanged.
-3. G1, G2 and G3 are **exact PTQ-time transformations** — they need no new consensus op, and each
-   must be recorded in the artifact's quantization semantics so a verifier reproduces it. G2's
-   exactness is conditional on a measurement Phase 2 owes.
-4. **G5a/b/c are closed.** Attention is adjudicable now: `MatMulQuant` multiplies two activations,
+3. G1 and G3 are **exact PTQ-time transformations** — a multiplicative norm gain folds into the
+   next matmul, and RoPE's convention is a fixed permutation folded into the q/k rows. Neither
+   needs a new consensus op; both must be recorded in the artifact's quantization semantics so a
+   verifier reproduces them.
+4. **G2 does need an ADR-0040 amendment** (corrected from this document's first draft). The
+   bias-column construction needs a row carrying a constant lane, and no BASE-0 op produces one —
+   there is no zero point in `QuantParams` and no additive registered term anywhere in the ten
+   ops. Adding a zero point to `Requantize` is the smaller catalog change; a new vector-add op is
+   the smaller semantic change. Either is an amendment.
+5. **G5a/b/c are closed.** Attention is adjudicable now: `MatMulQuant` multiplies two activations,
    `KvScaled` widths are derived, and the KV sentinels name the cache-role nodes over the position
    history. The coverage gate asks what a kernel can SERVE rather than whether its id is listed,
    so an unadjudicable class is refused at registration.
-5. **G5d is open and is a decision, not a patch.** Adjudicating the embedding gather needs the
+6. **G5d is open and is a decision, not a patch.** Adjudicating the embedding gather needs the
    token id, which is irreducible; the three closures and their costs are above. Until one is
    chosen in an ADR amendment, no profile with an embedding node passes coverage — which blocks
    BOTH the RC floor and Qwen, and is the correct fail-closed answer.
@@ -278,7 +304,8 @@ Phase 1 ("1-layer Qwen2.5 deterministic reference execution") is not blocked by 
 executor can run without a court — so it can begin. What it cannot do is *register* the class.
 The ordering that follows from this phase:
 
-* G5d's ADR decision is on the critical path for both classes and should be made first, because
+* Two ADR decisions are on the critical path: G2's additive term and G5d's token ids. The first
+  gates whether Qwen is expressible at all; the second for both classes and should be made first, because
   it may change the step space (closure 2 adds a cross-position dependency).
 * The size question (1.5B or 3B) gates the artifact but nothing before it.
 * G2's bias-column exactness is a measurement Phase 2 owes before the artifact format freezes.
