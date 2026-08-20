@@ -10,11 +10,11 @@
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PrecommitEvidencePayload, PrecommitLock,
-    SignedEpochCheckOutcome, SignedEpochRecord, SlashingEvidencePayload, StakeAttestation, StakeAttestationShardPayload,
-    StakeBondPayload, StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, check_signed_epoch_record,
-    precommit_fault, single_attestation_shard, stake_attestation_message, stake_precommit_message, unbond_request_message,
-    validator_id_from_pubkey,
+    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PalwAttemptSignRecordV1, PrecommitEvidencePayload,
+    PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord, SlashingEvidencePayload, StakeAttestation,
+    StakeAttestationShardPayload, StakeBondPayload, StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT,
+    check_palw_attempt_sign_record_v1, check_signed_epoch_record, precommit_fault, single_attestation_shard,
+    stake_attestation_message, stake_precommit_message, unbond_request_message, validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -1573,6 +1573,90 @@ impl SignedEpochStore {
     }
 }
 
+/// On-disk shape of the per-validator PALW attempt journal (JSON). Records are a flat list —
+/// challenge keys live inside each record — so the file format owes nothing to how a map
+/// serializer renders keys; the in-memory index is rebuilt on load.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PalwAttemptJournalFile {
+    version: u16,
+    validator_id: Hash64,
+    records: Vec<PalwAttemptSignRecordV1>,
+}
+
+const PALW_ATTEMPT_JOURNAL_FILE_VERSION: u16 = 1;
+
+/// Persistent per-challenge signing journal enforcing ADR-0042 PR-05's anti-equivocation rule
+/// across restarts: one challenge, one attempt id, ever. The signer consults it BEFORE signing
+/// and records AFTER a successful sign with the same fsync-then-rename durability as
+/// [`SignedEpochStore`] — a record that did not reach stable storage is a record the next boot
+/// does not know, and the signature it covered must therefore never have been released.
+pub struct PalwAttemptJournalStore {
+    path: PathBuf,
+    validator_id: Hash64,
+    records: BTreeMap<Hash64, PalwAttemptSignRecordV1>,
+}
+
+impl PalwAttemptJournalStore {
+    /// Load the journal for `validator_id` from `path`, or start empty if the file is absent.
+    /// Errors if the file exists but belongs to a different validator — refusing to operate is
+    /// safer than risking a cross-key journal.
+    pub fn load_or_empty(path: PathBuf, validator_id: Hash64) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self { path, validator_id, records: BTreeMap::new() });
+        }
+        let raw = fs::read_to_string(&path).map_err(|e| format!("cannot read PALW attempt journal {}: {e}", path.display()))?;
+        let file: PalwAttemptJournalFile =
+            serde_json::from_str(&raw).map_err(|e| format!("cannot parse PALW attempt journal {}: {e}", path.display()))?;
+        if file.validator_id != validator_id {
+            return Err(format!("PALW attempt journal {} belongs to a different validator; refusing to use it", path.display()));
+        }
+        let records = file.records.into_iter().map(|r| (r.challenge, r)).collect();
+        Ok(Self { path, validator_id, records })
+    }
+
+    /// Equivocation outcome for `candidate` against the persisted record for its challenge.
+    pub fn check(&self, candidate: &PalwAttemptSignRecordV1) -> SignedEpochCheckOutcome {
+        check_palw_attempt_sign_record_v1(self.records.get(&candidate.challenge), candidate)
+    }
+
+    /// Number of challenges with a persisted signing record (for status / logging).
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Persist `record` for its challenge with the same durability discipline as
+    /// [`SignedEpochStore::record_and_flush`]: temp file, fsync, rename, directory fsync —
+    /// fail-closed on any error. Call only after a successful sign and after [`Self::check`]
+    /// returned [`SignedEpochCheckOutcome::Allow`].
+    pub fn record_and_flush(&mut self, record: PalwAttemptSignRecordV1) -> Result<(), String> {
+        self.records.insert(record.challenge, record);
+        let file = PalwAttemptJournalFile {
+            version: PALW_ATTEMPT_JOURNAL_FILE_VERSION,
+            validator_id: self.validator_id,
+            records: self.records.values().copied().collect(),
+        };
+        let json = serde_json::to_string_pretty(&file).map_err(|e| format!("cannot serialize PALW attempt journal: {e}"))?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cannot create PALW attempt journal dir {}: {e}", parent.display()))?;
+        }
+        let tmp = self.path.with_extension("json.tmp");
+        {
+            let mut f =
+                fs::File::create(&tmp).map_err(|e| format!("cannot create PALW attempt journal tmp {}: {e}", tmp.display()))?;
+            f.write_all(json.as_bytes()).map_err(|e| format!("cannot write PALW attempt journal tmp {}: {e}", tmp.display()))?;
+            f.sync_all().map_err(|e| format!("cannot fsync PALW attempt journal tmp {}: {e}", tmp.display()))?;
+        }
+        fs::rename(&tmp, &self.path).map_err(|e| format!("cannot commit PALW attempt journal {}: {e}", self.path.display()))?;
+        // Best-effort like SignedEpochStore's: persist the rename where the platform can.
+        if let Some(parent) = self.path.parent()
+            && let Ok(dir) = fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    }
+}
+
 /// Whether a funding UTXO can be spent right now. A coinbase output is locked until
 /// `coinbase_maturity` blocks have passed since it was mined (consensus rule); a non-coinbase
 /// output is always spendable. `virtual_daa` is the node's current virtual DAA score. Saturating
@@ -1681,8 +1765,7 @@ mod tests {
         );
         for foreign in [ATTESTATION_MLDSA87_CONTEXT, PRECOMMIT_MLDSA87_CONTEXT] {
             assert!(
-                !kaspa_txscript::verify_mldsa87_with_context(key.public_key(), message.as_bytes().as_slice(), &sig, foreign)
-                    .unwrap(),
+                !kaspa_txscript::verify_mldsa87_with_context(key.public_key(), message.as_bytes().as_slice(), &sig, foreign).unwrap(),
                 "a commitment signature verified under a foreign context — the domains are not disjoint"
             );
         }

@@ -2501,6 +2501,41 @@ pub fn check_signed_epoch_record(prev: Option<&SignedEpochRecord>, candidate: &S
     }
 }
 
+/// One row of the PALW attempt anti-equivocation journal (ADR-0042 Decision 4 / PR-05): for a
+/// given V2 challenge, the attempt id this key signed. The challenge already binds
+/// `(network_domain, pre_pow_hash, timestamp, nonce, class, bond)` — so "one challenge, one
+/// attempt id" is exactly "one solved position, one claimed content", and the signer refusing a
+/// second id under one challenge is what makes the sibling-minting double-sign impossible to
+/// PRODUCE rather than merely slashable after the fact.
+///
+/// Node-local (journal file + signer policy) — never on the wire, never a consensus input; the
+/// consensus-side face of the same offence is the court's (ADR-0042 Decision 8).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwAttemptSignRecordV1 {
+    /// [`crate::palw_attempt_v2::challenge_v2`] — the journal key.
+    pub challenge: Hash64,
+    /// [`crate::palw_attempt_v2::attempt_id_v2`] of the attempt that was signed.
+    pub attempt_id: Hash64,
+    /// Fingerprint of the signature released for it (forensic; NOT part of the equivocation
+    /// predicate — hedged ML-DSA-87 signatures over one message differ).
+    pub signature_fingerprint: Hash64,
+}
+
+/// The PALW twin of [`check_signed_epoch_record`], with the same decision table: no prior record
+/// for the challenge ⇒ `Allow`; the same attempt id again ⇒ `AllowRebroadcast` (re-signing one's
+/// own claim is a retry, not an equivocation — critical for restart-during-announce); a
+/// DIFFERENT attempt id under the same challenge ⇒ `Block`.
+pub fn check_palw_attempt_sign_record_v1(
+    prev: Option<&PalwAttemptSignRecordV1>,
+    candidate: &PalwAttemptSignRecordV1,
+) -> SignedEpochCheckOutcome {
+    match prev {
+        None => SignedEpochCheckOutcome::Allow,
+        Some(p) if p.attempt_id == candidate.attempt_id => SignedEpochCheckOutcome::AllowRebroadcast,
+        Some(_) => SignedEpochCheckOutcome::Block,
+    }
+}
+
 // ---------------------------------------------------------------------
 // Coordinated-failover protocol (ADR-0014).
 //
@@ -2669,6 +2704,12 @@ pub enum SigningPurpose {
     /// [`unbond_request_message`]; context is `UNBOND_REQUEST_CONTEXT`
     /// (audit H-03; appended, so discriminants 0-2 are unchanged).
     Unbond = 3,
+    /// PALW V2 block-production attempt (ADR-0042 Decision 4 / PR-05) — message digest is
+    /// [`crate::palw_attempt_v2::attempt_id_v2`]; context is
+    /// `crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT`; the signer guards
+    /// one-attempt-per-challenge through the [`PalwAttemptSignRecordV1`] journal.
+    /// (Appended, so discriminants 0-3 are unchanged.)
+    PalwAttemptV2 = 4,
 }
 
 /// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
@@ -2688,6 +2729,9 @@ pub enum SignerMessageDigest {
     Unbond(Hash),
     /// 32-byte takeover-token message digest ([`takeover_token_message`]).
     TakeoverToken(Hash),
+    /// 64-byte PALW V2 attempt id ([`crate::palw_attempt_v2::attempt_id_v2`]) — signing the
+    /// identity signs the claim, and nothing outside the identity can ride on the signature.
+    PalwAttemptV2(Hash64),
 }
 
 impl SignerMessageDigest {
@@ -2699,6 +2743,7 @@ impl SignerMessageDigest {
             SignerMessageDigest::Attestation(_) => SigningPurpose::Attestation,
             SignerMessageDigest::Unbond(_) => SigningPurpose::Unbond,
             SignerMessageDigest::TakeoverToken(_) => SigningPurpose::TakeoverToken,
+            SignerMessageDigest::PalwAttemptV2(_) => SigningPurpose::PalwAttemptV2,
         }
     }
 }
@@ -2712,8 +2757,22 @@ impl SignerMessageDigest {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SignerMetadata {
     None,
-    Attestation { epoch: u64, target_hash: Hash64, target_daa_score: u64 },
-    TakeoverToken { yielding_host_id: Hash, taking_over_host_id: Hash, valid_from_epoch: u64, grace_epochs: u8 },
+    Attestation {
+        epoch: u64,
+        target_hash: Hash64,
+        target_daa_score: u64,
+    },
+    TakeoverToken {
+        yielding_host_id: Hash,
+        taking_over_host_id: Hash,
+        valid_from_epoch: u64,
+        grace_epochs: u8,
+    },
+    /// The V2 challenge the attempt answers — the anti-equivocation journal's key. In-band
+    /// policy input like its siblings, never part of the signed message.
+    PalwAttemptV2 {
+        challenge: Hash64,
+    },
 }
 
 /// Failure modes for a [`SignerRequest`]. Tuple-variant data is
@@ -6029,9 +6088,7 @@ pub fn total_voting_weight_by_epoch(
 pub fn active_bond_total_sompi(bonds: &[StakeBondRecord], validator_id: &Hash64, anchor_daa: u64, pin_daa: u64) -> u64 {
     bonds
         .iter()
-        .filter(|b| {
-            b.validator_pubkey_hash == *validator_id && b.activation_daa_score <= pin_daa && is_bond_active_at(b, anchor_daa)
-        })
+        .filter(|b| b.validator_pubkey_hash == *validator_id && b.activation_daa_score <= pin_daa && is_bond_active_at(b, anchor_daa))
         .fold(0u64, |acc, b| acc.saturating_add(b.amount))
 }
 
@@ -8611,8 +8668,18 @@ mod tests {
 
         // The numerator half: one identity votes once per epoch, whichever of its bonds signed.
         let contribs = vec![
-            AttestationContribution { epoch: 10, validator_id: split[0].validator_pubkey_hash, bond_outpoint: split[0].bond_outpoint, signed_weight: compute },
-            AttestationContribution { epoch: 10, validator_id: split[1].validator_pubkey_hash, bond_outpoint: split[1].bond_outpoint, signed_weight: compute },
+            AttestationContribution {
+                epoch: 10,
+                validator_id: split[0].validator_pubkey_hash,
+                bond_outpoint: split[0].bond_outpoint,
+                signed_weight: compute,
+            },
+            AttestationContribution {
+                epoch: 10,
+                validator_id: split[1].validator_pubkey_hash,
+                bond_outpoint: split[1].bond_outpoint,
+                signed_weight: compute,
+            },
         ];
         let tallies = aggregate_epoch_tallies(&contribs, &w_split);
         assert_eq!(tallies[0].signed_weight, compute, "two bonds, one identity, one vote's worth of weight");
@@ -8818,8 +8885,16 @@ mod tests {
         assert_eq!(snapshot.pin_daa_score(), 0);
         assert_eq!(snapshot.credited(&post_fork.validator_pubkey_hash, 9), x, "the compute itself is in the shared table");
 
-        assert_eq!(validator_voting_weight_of_bond(&pre_fork, std::slice::from_ref(&pre_fork), u64::MAX, 10, &snapshot, &vlt), x, "the bond the branches agreed on votes");
-        assert_eq!(validator_voting_weight_of_bond(&post_fork, std::slice::from_ref(&post_fork), u64::MAX, 10, &snapshot, &vlt), 0, "a bond only one branch has does not");
+        assert_eq!(
+            validator_voting_weight_of_bond(&pre_fork, std::slice::from_ref(&pre_fork), u64::MAX, 10, &snapshot, &vlt),
+            x,
+            "the bond the branches agreed on votes"
+        );
+        assert_eq!(
+            validator_voting_weight_of_bond(&post_fork, std::slice::from_ref(&post_fork), u64::MAX, 10, &snapshot, &vlt),
+            0,
+            "a bond only one branch has does not"
+        );
 
         // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
         // the other side's recent bonds either.

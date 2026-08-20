@@ -23,15 +23,16 @@ use std::{
 
 use kaspa_consensus_core::{
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, SignedEpochCheckOutcome, SignedEpochRecord,
-        SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome, SignerPolicy,
-        SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
+        ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome,
+        SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
+        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
         compute_signer_audit_chain_entry, signature_fingerprint,
     },
+    palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
     tx::TransactionOutpoint,
 };
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{SignedEpochStore, ValidatorKey};
+use kaspa_pq_validator_core::{PalwAttemptJournalStore, SignedEpochStore, ValidatorKey};
 
 /// An append-only, hash-chained, fsync'd audit log (ADR-0015 §"Audit log"). Each record extends the
 /// chain via [`compute_signer_audit_chain_entry`]; on load the file is replayed to recompute the
@@ -247,6 +248,9 @@ pub struct SignerState {
     /// validator signing two different targets for one epoch is slashable regardless of bond — so a
     /// fixed default `bond_outpoint` keys the reused [`SignedEpochStore`] purely by epoch.
     epoch_stores: HashMap<Hash64, SignedEpochStore>,
+    /// Per-`validator_id` PALW attempt journal (ADR-0042 PR-05): one challenge, one attempt id,
+    /// enforced before a signature exists rather than slashed after one leaks.
+    palw_journals: HashMap<Hash64, PalwAttemptJournalStore>,
     audit: AuditLog,
     /// Audit M-04: append-only log of [`SignerAuditCheckpoint`]s anchoring the audit chain head with
     /// an ML-DSA-87 signature. Lives beside `audit.log`; meant to be exported off-box.
@@ -308,6 +312,7 @@ impl SignerState {
             policy,
             state_dir,
             epoch_stores: HashMap::new(),
+            palw_journals: HashMap::new(),
             audit,
             checkpoint_path,
             appends_since_checkpoint: 0,
@@ -344,6 +349,15 @@ impl SignerState {
             self.epoch_stores.insert(vid, store);
         }
         Ok(self.epoch_stores.get_mut(&vid).expect("just inserted"))
+    }
+
+    fn palw_journal(&mut self, vid: Hash64) -> Result<&mut PalwAttemptJournalStore, String> {
+        if !self.palw_journals.contains_key(&vid) {
+            let path = self.state_dir.join(format!("{vid}.palw-attempts.json"));
+            let store = PalwAttemptJournalStore::load_or_empty(path, vid)?;
+            self.palw_journals.insert(vid, store);
+        }
+        Ok(self.palw_journals.get_mut(&vid).expect("just inserted"))
     }
 
     /// Handle one request: enforce policy, sign (or refuse), append an audit record, and return the
@@ -445,11 +459,15 @@ impl SignerState {
         // that defeats the whole point of the strict signer. So the three overlay
         // contexts are RESERVED to their matching purpose, and a Transaction may not
         // borrow any of them (it carries its own tx-domain context).
-        const OVERLAY_CONTEXTS: [&[u8]; 3] = [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT];
+        const RESERVED_CONTEXTS: [&[u8]; 4] =
+            [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT, PALW_ATTEMPT_V2_MLDSA87_CONTEXT];
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
             SigningPurpose::TakeoverToken => Some(TAKEOVER_TOKEN_CONTEXT),
+            // The PALW attempt context is reserved exactly like the overlay three: a purpose that
+            // could borrow it would mint block-production signatures past the journal below.
+            SigningPurpose::PalwAttemptV2 => Some(PALW_ATTEMPT_V2_MLDSA87_CONTEXT),
             SigningPurpose::Transaction => None,
         };
         match required_ctx {
@@ -459,9 +477,9 @@ impl SignerState {
                     req.purpose
                 )));
             }
-            None if OVERLAY_CONTEXTS.contains(&req.context.as_slice()) => {
+            None if RESERVED_CONTEXTS.contains(&req.context.as_slice()) => {
                 return Err(SignerError::PolicyViolation(
-                    "Transaction purpose may not borrow an overlay signing context (audit C-02)".into(),
+                    "Transaction purpose may not borrow a reserved signing context (audit C-02)".into(),
                 ));
             }
             _ => {}
@@ -509,6 +527,38 @@ impl SignerState {
             }
         }
 
+        // (3b) PALW attempt anti-equivocation journal (ADR-0042 PR-05) — same shape as the
+        //      attestation guard, keyed by the V2 challenge: one solved position, one claimed
+        //      content, ever. Strict refuses a second attempt id under one challenge; re-signing
+        //      the SAME attempt id is a retry (restart-during-announce), not an equivocation.
+        let mut palw_record_after_sign: Option<PalwAttemptSignRecordV1> = None;
+        if matches!(req.purpose, SigningPurpose::PalwAttemptV2) && !matches!(self.policy, SignerPolicy::Permissive) {
+            let SignerMetadata::PalwAttemptV2 { challenge } = req.metadata else {
+                return Err(SignerError::PolicyViolation("PALW attempt request missing PalwAttemptV2 metadata (challenge)".into()));
+            };
+            // purpose_matches_digest (1) already pinned the digest variant to the purpose.
+            let SignerMessageDigest::PalwAttemptV2(attempt_id) = req.message_digest else {
+                return Err(SignerError::PolicyViolation("PALW attempt request missing PalwAttemptV2 digest".into()));
+            };
+            let candidate = PalwAttemptSignRecordV1 { challenge, attempt_id, signature_fingerprint: Hash64::default() };
+            let policy = self.policy;
+            let journal = self.palw_journal(req.validator_id).map_err(SignerError::InternalError)?;
+            match journal.check(&candidate) {
+                SignedEpochCheckOutcome::Block => {
+                    let msg = format!(
+                        "equivocation: challenge {challenge} already signed a different attempt id (validator {})",
+                        req.validator_id
+                    );
+                    if matches!(policy, SignerPolicy::Strict) {
+                        return Err(SignerError::PolicyViolation(msg));
+                    }
+                    log::warn!("[signer] AuditOnly: {msg} — signing anyway");
+                }
+                SignedEpochCheckOutcome::Allow => palw_record_after_sign = Some(candidate),
+                SignedEpochCheckOutcome::AllowRebroadcast => {}
+            }
+        }
+
         // (4) Sign the typed digest with the caller-provided ML-DSA-87 context.
         let key = self.keys.get(&req.validator_id).expect("checked above");
         let digest: Vec<u8> = match &req.message_digest {
@@ -516,6 +566,7 @@ impl SignerState {
             SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) | SignerMessageDigest::TakeoverToken(h) => {
                 h.as_bytes().to_vec()
             }
+            SignerMessageDigest::PalwAttemptV2(h) => h.as_bytes().to_vec(),
         };
         let sig = key.sign_with_context(&digest, &req.context);
 
@@ -525,6 +576,14 @@ impl SignerState {
             rec.signature_fingerprint = signature_fingerprint(&sig);
             let store = self.epoch_store(req.validator_id).map_err(SignerError::InternalError)?;
             store.record_and_flush(rec).map_err(SignerError::InternalError)?;
+        }
+        // (5b) Same discipline for a brand-new PALW attempt: the journal entry becomes durable
+        //      BEFORE the signature is released — a flush failure refuses the request, so no
+        //      signature exists whose record could be lost. Fail-closed before a double-sign.
+        if let Some(mut rec) = palw_record_after_sign {
+            rec.signature_fingerprint = signature_fingerprint(&sig);
+            let journal = self.palw_journal(req.validator_id).map_err(SignerError::InternalError)?;
+            journal.record_and_flush(rec).map_err(SignerError::InternalError)?;
         }
         Ok(sig.to_vec())
     }
@@ -1022,6 +1081,101 @@ mod tests {
         let mut s2 = SignerState::new(vec![key(0x55)], SignerPolicy::Strict, dir, Hash::default()).unwrap();
         let blocked = s2.handle_request(&att_request(2, vid, 9, t_y, 91), Hash::default(), 2).result;
         assert!(matches!(blocked, Err(SignerError::PolicyViolation(_))), "equivocation guard persists across restart");
+    }
+
+    fn palw_request(req_id: u64, vid: Hash64, challenge: Hash64, attempt_id: Hash64) -> SignerRequest {
+        SignerRequest {
+            request_id: req_id,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwAttemptV2,
+            context: PALW_ATTEMPT_V2_MLDSA87_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwAttemptV2(attempt_id),
+            metadata: SignerMetadata::PalwAttemptV2 { challenge },
+        }
+    }
+
+    /// ADR-0042 PR-05's done-when, as the test: one challenge, one attempt id — the second
+    /// CONTENT under one solved position is refused before a signature for it exists. The same
+    /// attempt id again is a retry (restart-during-announce) and signs; a different challenge is
+    /// a different position and signs.
+    #[test]
+    fn palw_attempt_strict_blocks_double_sign_allows_rebroadcast() {
+        let k = key(0x77);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("palw-strict"), Hash::default()).unwrap();
+        let challenge = Hash64::from_bytes([0xC1; 64]);
+        let (id_x, id_y) = (Hash64::from_bytes([0x2a; 64]), Hash64::from_bytes([0x2b; 64]));
+        assert!(s.handle_request(&palw_request(1, vid, challenge, id_x), Hash::default(), 1).result.is_ok(), "first attempt signs");
+        assert!(
+            s.handle_request(&palw_request(2, vid, challenge, id_x), Hash::default(), 2).result.is_ok(),
+            "re-signing the SAME attempt id is a retry, not an equivocation"
+        );
+        let blocked = s.handle_request(&palw_request(3, vid, challenge, id_y), Hash::default(), 3).result;
+        assert!(
+            matches!(blocked, Err(SignerError::PolicyViolation(_))),
+            "a second attempt id under one challenge is the double-sign; it must not exist"
+        );
+        let other_challenge = Hash64::from_bytes([0xC2; 64]);
+        assert!(
+            s.handle_request(&palw_request(4, vid, other_challenge, id_y), Hash::default(), 4).result.is_ok(),
+            "a different challenge is a different position"
+        );
+    }
+
+    /// The journal is fsync'd before the signature is released, so a crash-and-restart signer
+    /// still refuses the conflicting attempt — fail-closed BEFORE a double-sign, not slashable
+    /// after one.
+    #[test]
+    fn palw_attempt_guard_survives_restart() {
+        let k = key(0x78);
+        let vid = k.validator_id;
+        let dir = tmp_dir("palw-restart");
+        let challenge = Hash64::from_bytes([0xC3; 64]);
+        let (id_x, id_y) = (Hash64::from_bytes([0x3a; 64]), Hash64::from_bytes([0x3b; 64]));
+        {
+            let mut s = SignerState::new(vec![k], SignerPolicy::Strict, dir.clone(), Hash::default()).unwrap();
+            assert!(s.handle_request(&palw_request(1, vid, challenge, id_x), Hash::default(), 1).result.is_ok());
+        }
+        let mut s2 = SignerState::new(vec![key(0x78)], SignerPolicy::Strict, dir, Hash::default()).unwrap();
+        let blocked = s2.handle_request(&palw_request(2, vid, challenge, id_y), Hash::default(), 2).result;
+        assert!(matches!(blocked, Err(SignerError::PolicyViolation(_))), "the journal survives the restart");
+        assert!(
+            s2.handle_request(&palw_request(3, vid, challenge, id_x), Hash::default(), 3).result.is_ok(),
+            "the original attempt id still re-signs after restart"
+        );
+    }
+
+    /// C-02, extended to the fourth reserved context: the PALW purpose demands its own context,
+    /// a PALW-context signature cannot be minted under any other purpose, and a request whose
+    /// metadata omits the challenge is refused rather than journaled as nothing.
+    #[test]
+    fn palw_attempt_context_and_metadata_are_bound() {
+        let k = key(0x79);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("palw-ctx"), Hash::default()).unwrap();
+        let challenge = Hash64::from_bytes([0xC4; 64]);
+        let id = Hash64::from_bytes([0x4a; 64]);
+
+        // Wrong context for the purpose.
+        let mut wrong_ctx = palw_request(1, vid, challenge, id);
+        wrong_ctx.context = ATTESTATION_MLDSA87_CONTEXT.to_vec();
+        assert!(matches!(s.handle_request(&wrong_ctx, Hash::default(), 1).result, Err(SignerError::PolicyViolation(_))));
+
+        // A Transaction may not borrow the PALW context.
+        let borrow = SignerRequest {
+            request_id: 2,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: PALW_ATTEMPT_V2_MLDSA87_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xab; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(matches!(s.handle_request(&borrow, Hash::default(), 2).result, Err(SignerError::PolicyViolation(_))));
+
+        // Missing challenge metadata: refused, never silently unguarded.
+        let mut no_meta = palw_request(3, vid, challenge, id);
+        no_meta.metadata = SignerMetadata::None;
+        assert!(matches!(s.handle_request(&no_meta, Hash::default(), 3).result, Err(SignerError::PolicyViolation(_))));
     }
 
     #[test]
