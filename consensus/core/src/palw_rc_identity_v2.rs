@@ -32,7 +32,15 @@
 //! 3. the network is at the frozen cadence, sets no V1 fence, and activates no V1 PALW PoW
 //!    (`Params::validate_palw_v2`);
 //! 4. the genesis objects actually apply — the first transition runs and its state root exists,
-//!    so "this artifact boots" is a computation rather than a plan.
+//!    so "this artifact boots" is a computation rather than a plan;
+//! 5. **the court's ladder is provisioned for the whole step space**, not for the class set this
+//!    genesis happens to carry. `max_step_leaf_count` is a bundle field, so it is inside
+//!    `palw_ruleset_id_v2` and therefore inside the network's identity: a class deeper than the
+//!    ladder cannot join a running chain, it needs a new ruleset. Unlike the other four gates this
+//!    one is not about whether the artifact is correct — it is about whether the network can ever
+//!    admit a second class, and the answer is decided once, here, and cannot be revisited. It is a
+//!    refusal rather than an installation because silently rewriting a caller's court would change
+//!    the ruleset id underneath them.
 //!
 //! It is **not** a shipped preset, and nothing here adds one. `params_do_not_install_a_palw_fence`
 //! still holds: every network in `config::params` is `Disabled` or `LegacyTn11`. Shipping is
@@ -56,6 +64,14 @@ pub enum PalwRcIdentityError {
     Transition(#[from] PalwStateV2Error),
     #[error("the base params already carry a PALW mode — an RC identity is assembled from a mode-free base")]
     BaseAlreadyHasAMode,
+    /// Gate 5. The ladder must be `PALW_RC_COURT_MAX_STEP_LEAF_COUNT`, which is the step space's
+    /// own cap: measured, provisioning it there rather than at the RC floor's 184,456 costs four
+    /// bisection rounds (18 → 22) and buys every class that could ever be adjudicable, because
+    /// `worst_case_step_leaf_count_v1` refuses anything deeper than the cap in the first place.
+    #[error(
+        "the court's ladder is {got} step leaves; an RC identity must provision the whole step space ({want})          or it can never admit a second class — the value is inside the ruleset id and cannot be revisited"
+    )]
+    LadderNotProvisionedForTheStepSpace { got: u64, want: u64 },
 }
 
 /// The assembled identity: the params a node would run, and the state its genesis block produces.
@@ -84,6 +100,16 @@ pub fn assemble_palw_rc_identity_v2(
 ) -> Result<PalwRcIdentityV2, PalwRcIdentityError> {
     if !matches!(base.palw_consensus_mode, PalwConsensusMode::Disabled) {
         return Err(PalwRcIdentityError::BaseAlreadyHasAMode);
+    }
+    // Gate 5 first, because it is the only one whose answer expires. Everything below decides
+    // whether THIS artifact is correct; this decides whether the network the artifact mints can
+    // ever be joined by a class that does not exist yet.
+    let ladder = bundle.court.max_step_leaf_count();
+    if ladder != crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT {
+        return Err(PalwRcIdentityError::LadderNotProvisionedForTheStepSpace {
+            got: ladder,
+            want: crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+        });
     }
     // The catalog gates run BEFORE the params are assembled, so a bad artifact never produces a
     // `Params` value at all — there is no half-built identity for a caller to mistake for one.
@@ -146,7 +172,8 @@ mod tests {
         let mut b = crate::palw_mode_v2::tests::conforming_bundle();
         b.base_class_id = h64(1);
         b.class_catalog_root = catalog.root();
-        b.court = PalwCourtParamsV2::new(LEAVES, 4, 2).expect("a court that can walk the catalog");
+        b.court = PalwCourtParamsV2::new(crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2)
+            .expect("the step space is a legal ladder");
         // The sweep measures rung silence against the STATE's copy, so the two move together or
         // the bundle is audited against one ladder and run against another.
         b.state = b.state.clone().with_turn_deadline_daa(4).expect("4 is inside the court window");
@@ -183,6 +210,44 @@ mod tests {
         let mut p = crate::config::params::SIMNET_PARAMS.clone();
         p.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
         p
+    }
+
+    #[test]
+    /// **Gate 5: the RC cannot mint an identity that can never admit a second class.**
+    ///
+    /// `max_step_leaf_count` is a bundle field and the bundle is `palw_ruleset_id_v2`, so the
+    /// ladder a network freezes is the deepest class it will ever be able to admit. Sizing it to
+    /// the class set this genesis happens to carry is the one mistake here that cannot be repaired
+    /// later — by the time the second class exists the number is already part of the network's
+    /// identity. So a floor-sized ladder is refused at assembly rather than noticed at registration.
+    ///
+    /// The price of the alternative is measured, not feared: `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` is
+    /// the step space's own cap, four bisection rounds above the RC floor's own worst case
+    /// (18 → 22), and nothing deeper than the cap is admissible at all.
+    #[test]
+    fn an_identity_whose_ladder_cannot_grow_is_refused() {
+        let catalog = catalog();
+        let mut short = bundle(&catalog);
+        // Sized for exactly the class this genesis carries — correct for today, and a network that
+        // can never take another class.
+        short.court = PalwCourtParamsV2::new(catalog.max_step_leaf_count(), 4, 2).expect("a catalog-sized court is well-formed");
+        let err = assemble_palw_rc_identity_v2(&base(), short, &catalog, &genesis_objects(), &ctx())
+            .expect_err("a ladder that cannot grow is not an RC identity");
+        assert!(
+            matches!(err, PalwRcIdentityError::LadderNotProvisionedForTheStepSpace { want, .. }
+                if want == crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT),
+            "got {err:?}"
+        );
+
+        // And the gate is not merely "bigger is fine": the value is exact, because the ruleset id
+        // is a hash and two networks with different ladders are different networks.
+        let mut over = bundle(&catalog);
+        over.court =
+            PalwCourtParamsV2::new(crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT + 1, 4, 2).expect("legal");
+        assert!(
+            assemble_palw_rc_identity_v2(&base(), over, &catalog, &genesis_objects(), &ctx()).is_err(),
+            "a ladder past the step space is a ladder for classes that cannot exist"
+        );
     }
 
     #[test]

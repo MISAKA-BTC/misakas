@@ -86,9 +86,16 @@ its worst case.
 > Using the declared job understates a class's own ladder, which is the same mistake as admitting a
 > class an attacker picks the job length for.
 
-> **Decision needed at genesis:** set the RC's `court.max_step_leaf_count` to `PALW_STEP_MAX_LEAVES`
-> rather than to the floor's own worst case. This is the only part of the plan that expires. Pinned
-> in code as `palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT`.
+**Taken, and made structural.** `assemble_palw_rc_identity_v2` now carries a fifth gate: an RC
+identity whose `court.max_step_leaf_count` is not `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` is
+**refused**, exactly — not "at least", because the ruleset id is a hash and two ladders are two
+networks. A refusal rather than a silent installation, since rewriting a caller's court would move
+the ruleset id underneath them.
+
+Unlike gates 1–4, which decide whether *this artifact* is correct, gate 5 decides whether the
+network the artifact mints can ever admit a class that does not exist yet. It is the only answer
+here that expires, so it is the first one checked.
+(`an_identity_whose_ladder_cannot_grow_is_refused`.)
 
 ## 5. The second class exists now — and its declared context is not adjudicable
 
@@ -134,7 +141,8 @@ node more storage.
 
 ## 6. Remaining work, in order
 
-1. **Choose the genesis ladder** (§4). Expires at genesis.
+1. ~~Choose the genesis ladder (§4).~~ **Done** — gate 5 of `assemble_palw_rc_identity_v2` refuses
+   any other value, so the RC cannot mint an identity that forecloses the second class.
 2. **PTQ pipeline** for whichever geometry the second class takes —
    `docs/palw-base0-ptq-pipeline-scope.md`, whose §5 engine gaps (norm gain via `MulElem`, GQA,
    per-channel requant) are what decide how faithful a dense-Qwen port can be.
