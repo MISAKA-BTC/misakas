@@ -35,7 +35,7 @@
 use kaspa_consensus_core::palw_base0::K;
 use kaspa_consensus_core::palw_base0_ops::{
     self as ops, PalwBase0OpError, QuantParams, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem,
-    requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
+    requantize_row, requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
 };
 
 use crate::artifact::Base0ArtifactV1;
@@ -196,19 +196,35 @@ impl<'a> Base0Engine<'a> {
 
             // ---- attention ------------------------------------------------------------------
             let normed = self.norm_to_code(&h)?;
-            let q = requantize_row_uniform(&matmul_quant(&layer.wq, &normed, d)?, layer.requant[0]);
-            let k = requantize_row_uniform(&matmul_quant(&layer.wk, &normed, d)?, layer.requant[1]);
-            let v = requantize_row_uniform(&matmul_quant(&layer.wv, &normed, d)?, layer.requant[2]);
+            // Per-channel when the artifact supplies it — that is where a projection BIAS lives,
+            // in the `zero` of each channel's triple — and tensor-wide otherwise, which is what
+            // every artifact built before grouped-query attention meant.
+            let narrow = |acc: &[i32], idx: usize| -> Result<Vec<i8>, EngineError> {
+                match &layer.qkv_channel_requant {
+                    Some(per) => requantize_row(acc, &per[idx]).map_err(EngineError::from),
+                    None => Ok(requantize_row_uniform(acc, layer.requant[idx])),
+                }
+            };
+            let kv = shape.kv_dim();
+            let q = narrow(&matmul_quant(&layer.wq, &normed, d)?, 0)?;
+            let k = narrow(&matmul_quant(&layer.wk, &normed, kv)?, 1)?;
+            let v = narrow(&matmul_quant(&layer.wv, &normed, kv)?, 2)?;
 
             // Rotate each head's q and k in place. `RopeTable` preserves the scale it is handed,
             // so the widening here is a reinterpretation and the narrowing after is only a clamp.
             let mut q_rot = Vec::with_capacity(d);
-            let mut k_rot = Vec::with_capacity(d);
             for head in 0..shape.n_heads {
                 let r = head * shape.d_head..(head + 1) * shape.d_head;
-                let qh: Vec<i32> = q[r.clone()].iter().map(|c| *c as i32).collect();
-                let kh: Vec<i32> = k[r].iter().map(|c| *c as i32).collect();
+                let qh: Vec<i32> = q[r].iter().map(|c| *c as i32).collect();
                 q_rot.extend(requantize_row_uniform(&rope_table(&qh, cos_row, sin_row)?, CODE_CLAMP));
+            }
+            // The KEY heads are rotated over `n_kv_heads`, not `n_heads`: under grouped-query
+            // attention there are fewer of them, and rotating `n_heads` of them would read past
+            // the projection.
+            let mut k_rot = Vec::with_capacity(kv);
+            for head in 0..shape.n_kv_heads {
+                let r = head * shape.d_head..(head + 1) * shape.d_head;
+                let kh: Vec<i32> = k[r].iter().map(|c| *c as i32).collect();
                 k_rot.extend(requantize_row_uniform(&rope_table(&kh, cos_row, sin_row)?, CODE_CLAMP));
             }
 
@@ -217,15 +233,22 @@ impl<'a> Base0Engine<'a> {
             let history = cache.keys[li].len();
 
             let mut attn = vec![0i8; d];
+            let group = shape.gqa_group();
             for head in 0..shape.n_heads {
                 let off = head * shape.d_head;
+                // Which kv head this query head reads. Contiguous grouping — query heads
+                // `[g·group, (g+1)·group)` share kv head `g` — which is the layout every
+                // Qwen2/LLaMA-family checkpoint stores; an interleaved reading would pair each
+                // query with the wrong key and produce a model that is wrong everywhere without
+                // being wrong anywhere in particular.
+                let kv_off = (head / group) * shape.d_head;
                 let qh = &q_rot[off..off + shape.d_head];
 
                 // Logits: one DotI8 per key, then the amplification that makes softmax
                 // discriminate. Without `rescale_row` here the distribution is uniform to four
                 // decimals regardless of the keys — see ADR-0040 H.
                 let raw: Vec<i32> = (0..history)
-                    .map(|j| dot_i8(qh, &cache.keys[li][j][off..off + shape.d_head]))
+                    .map(|j| dot_i8(qh, &cache.keys[li][j][kv_off..kv_off + shape.d_head]))
                     .collect::<Result<_, _>>()?;
                 let probs = softmax(&rescale_row(&raw, layer.attn_logit_scale))?;
                 probe.attention_spread.push(probs.iter().max().copied().unwrap_or(0) - probs.iter().min().copied().unwrap_or(0));
@@ -234,7 +257,7 @@ impl<'a> Base0Engine<'a> {
                 let p8 = requantize_row_uniform(&probs, QK_TO_CODE);
 
                 for i in 0..shape.d_head {
-                    let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][off + i]).collect();
+                    let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
                     let weighted = dot_i8(&p8, &column)?;
                     attn[off + i] = requantize_row_uniform(&[weighted], CODE_PRODUCT_TO_CODE)[0];
                 }
@@ -325,6 +348,8 @@ mod tests {
         Base0ShapeV1 {
             n_layers: 2,
             n_heads: 2,
+            // Multi-head: the pre-GQA meaning, so this fixture is BASE-0 exactly as it was.
+            n_kv_heads: 2,
             d_head: 8,
             d_ff: 32,
             vocab: 16,
@@ -608,14 +633,77 @@ mod tests {
     /// the trace moved with it. That was allowed because BASE-0 is registered nowhere and no block
     /// has ever claimed these numbers. The class id did not change, which is exactly the situation
     /// that would have been unacceptable after registration: same id, different arithmetic.
+    /// **Phase 1: a Qwen2.5-shaped layer executes deterministically.**
+    ///
+    /// Grouped-query attention is the structural difference from BASE-0 — every Qwen2.5 dense
+    /// member has 2 kv heads against 12 or 16 query heads — and it is not a detail that can be
+    /// folded away: with `n_kv_heads == n_heads` this engine runs multi-head attention, which is
+    /// a different model.
+    ///
+    /// Weights are DERIVED from a seed rather than converted, because Phase 1 is about the
+    /// execution and Phase 2 owns the artifact. What is asserted is what Phase 1 owes: the shape
+    /// is accepted, the pass completes, and it is reproducible.
+    #[test]
+    fn a_qwen25_shaped_layer_executes_deterministically() {
+        // Qwen2.5-1.5B's proportions at one layer and a small vocabulary — the head geometry is
+        // the real thing (12 query heads over 2 kv heads, 128-wide), which is what GQA is about.
+        let qwen = Base0ShapeV1 {
+            n_layers: 1,
+            n_heads: 12,
+            n_kv_heads: 2,
+            d_head: 128,
+            d_ff: 8_960,
+            vocab: 512,
+            max_position: 64,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1 << 8,
+        };
+        assert_eq!(qwen.d_model(), 1_536, "the measured hidden width");
+        assert_eq!(qwen.kv_dim(), 256, "and the measured kv width — not the hidden one");
+        assert_eq!(qwen.gqa_group(), 6, "six query heads per kv head");
+        qwen.validate().expect("a grouped-query shape is a valid shape");
+
+        let a = Base0ArtifactV1::derive_deterministic(qwen, 20_260_821).unwrap();
+        let engine = Base0Engine::new(&a);
+
+        let run = || {
+            let mut cache = KvCache::new(&a);
+            let mut logits = Vec::new();
+            for (position, token) in [7usize, 19, 3].iter().enumerate() {
+                logits.push(engine.forward_token(&mut cache, *token, position).expect("the pass completes"));
+            }
+            logits
+        };
+        let first = run();
+        assert_eq!(first.len(), 3);
+        assert!(first.iter().all(|l| l.len() == qwen.vocab), "one logit per vocabulary entry");
+        // Not degenerate: a pass that returned a constant row would "complete" and mean nothing.
+        assert!(first.iter().all(|l| l.iter().any(|v| *v != l[0])), "the logits vary across the vocabulary");
+        // Deterministic: the same inputs, the same bits. This is the property the whole class
+        // rests on, and integer arithmetic is why it holds without pinning a reduction order.
+        assert_eq!(run(), first, "two runs of one artifact must agree bit for bit");
+
+        // The kv cache really is the narrow one — 256 wide, not 1536. A cache sized at the query
+        // width would work arithmetically and silently be a different (much larger) model.
+        let mut cache = KvCache::new(&a);
+        engine.forward_token(&mut cache, 7, 0).unwrap();
+        assert_eq!(cache.keys[0][0].len(), 256, "the cached key is one kv head set, not one query head set");
+        assert_eq!(cache.values[0][0].len(), 256);
+    }
+
     #[test]
     fn the_engine_matches_its_golden_trace() {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
             a.execution_class_id().to_string(),
+            // Re-frozen 2026-08-21: the shape digest gained `n_kv_heads`, so the class ID moved.
+            // The LOGITS below did not, and that is the assertion that matters — the arithmetic is
+            // untouched at `n_kv_heads == n_heads`, which is what every artifact built before
+            // grouped-query attention meant. A class id that moved while the trace held is a
+            // renaming; one where the trace moved too would have been a different model.
             concat!(
-                "20d08577455fcd619b4047175a5d7888fda9f7ad89e3e2ca4eb391629a2586f9",
-                "af55ec12f0600d3820095c16ccdf6109aec541bcf2b02ac5ddc6a0a219a04965"
+                "2d1913069ea7230c073c431846d2e42291b60154f6a086498e44f6757e98dd5e",
+                "7972163d76e192c039de5ba4b35676ce7cecd2c263ed899fe73d8299559b69e7"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );
