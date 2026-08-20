@@ -40,6 +40,8 @@ use crate::rope::{RopeGenError, RopeTableV1};
 /// Domain separator for the artifact digest. Distinct from every block-commitment domain so an
 /// artifact digest can never be replayed as a commitment or a challenge.
 pub const PALW_BASE0_ARTIFACT_DOMAIN: &[u8] = b"MISAKA/PALW/BASE0/ARTIFACT/V1\0\0\0";
+/// Its own key, so a tokenizer commitment can never collide with an artifact digest.
+pub const PALW_BASE0_TOKENIZER_DOMAIN: &[u8] = b"MISAKA/PALW/BASE0/TOKENIZER/V1\0\0";
 
 /// `ln 10000` at `rope::GEN_Q` — the conventional RoPE base, carried as the default.
 pub const LN_THETA_10000_GEN_Q: i128 = 2_592_480_341_699_211;
@@ -219,6 +221,18 @@ pub struct Base0ArtifactV1 {
     pub unembed: Vec<i8>,
     pub layers: Vec<Base0LayerWeightsV1>,
     pub rope: RopeTableV1,
+    /// **What the token ids MEAN (condition 6's tokenizer/vocab commitment).**
+    ///
+    /// A class's execution is a function of token ids, and an id is only a token because some
+    /// tokenizer says so. Two nodes running identical weights under different tokenizers agree on
+    /// every step and disagree about what was computed — and the court, which adjudicates
+    /// arithmetic, would see nothing wrong. So the tokenizer is part of the class identity, and it
+    /// enters as a commitment rather than as a file: consensus never runs a tokenizer, it only
+    /// needs to know that everyone used the same one.
+    ///
+    /// `Hash64::default()` means a class that declares none — legal for a derived artifact, which
+    /// has no tokenizer at all, and refused for a registered one by the layer that registers it.
+    pub tokenizer_commitment: Hash64,
     /// Requantisation for the embedding-normalisation step and for the final norm.
     pub norm_requant: QuantParams,
     /// Narrowing applied after each residual add. `AddElem` widens two `int8` codes to `i32`, so
@@ -268,7 +282,17 @@ impl Base0ArtifactV1 {
             }
         }
         let rope = RopeTableV1::generate(shape.d_head, shape.max_position, shape.ln_theta_gen_q)?;
-        Ok(Self { shape, embed, unembed, layers, rope, norm_requant, residual_requant, derived_seed: None })
+        Ok(Self {
+            shape,
+            embed,
+            unembed,
+            layers,
+            rope,
+            tokenizer_commitment: Hash64::default(),
+            norm_requant,
+            residual_requant,
+            derived_seed: None,
+        })
     }
 
     /// A concrete artifact derived from `seed` alone, for exercising the engine and the digest.
@@ -335,6 +359,27 @@ impl Base0ArtifactV1 {
         Ok(artifact)
     }
 
+    /// Declare which tokenizer this class's token ids belong to.
+    ///
+    /// The commitment is over the tokenizer's own bytes — `tokenizer.json` as shipped — so a
+    /// verifier checks it by hashing the file rather than by re-deriving a vocabulary, which no
+    /// two implementations would agree on.
+    pub fn with_tokenizer_commitment(mut self, commitment: Hash64) -> Self {
+        self.tokenizer_commitment = commitment;
+        self
+    }
+
+    /// The commitment for a tokenizer file's bytes.
+    pub fn tokenizer_commitment_of(tokenizer_bytes: &[u8]) -> Hash64 {
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_TOKENIZER_DOMAIN).to_state();
+        state.update(&(tokenizer_bytes.len() as u64).to_le_bytes());
+        state.update(tokenizer_bytes);
+        let out = state.finalize();
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(out.as_bytes());
+        Hash64::from_bytes(bytes)
+    }
+
     /// True when the weights came from [`derive_deterministic`] rather than from a real model.
     /// Load-bearing: a derived artifact must never be reported as a registered class.
     pub fn is_derived(&self) -> bool {
@@ -354,6 +399,9 @@ impl Base0ArtifactV1 {
         let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_ARTIFACT_DOMAIN).to_state();
         state.update(&self.shape.digest_bytes());
         state.update(&self.rope.digest_bytes());
+        // The tokenizer, inside the identity: two classes with identical weights and different
+        // tokenizers compute different things while agreeing on every arithmetic step.
+        state.update(self.tokenizer_commitment.as_byte_slice());
         absorb_tensor(&mut state, b"embed", &self.embed);
         absorb_tensor(&mut state, b"unembed", &self.unembed);
         absorb_quant(&mut state, &self.norm_requant);
@@ -445,6 +493,37 @@ fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
 
 #[cfg(test)]
 mod tests {
+    /// **Condition 6: the tokenizer is inside the class identity.**
+    ///
+    /// A class's execution is a function of token ids, and an id is only a token because some
+    /// tokenizer says so. Two nodes with identical weights and different tokenizers agree on every
+    /// arithmetic step and disagree about what was computed — and the court, which adjudicates
+    /// arithmetic, would see nothing wrong at all. So the commitment has to be in the id.
+    #[test]
+    fn the_tokenizer_is_part_of_the_class() {
+        let base = Base0ArtifactV1::derive_deterministic(tiny(), 11).unwrap();
+        assert_eq!(base.tokenizer_commitment, Hash64::default(), "a derived artifact declares none");
+
+        let a = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"a\"}"));
+        let b = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"b\"}"));
+        assert_ne!(a.execution_class_id(), b.execution_class_id(), "two tokenizers are two classes");
+        assert_ne!(a.execution_class_id(), base.execution_class_id(), "and declaring one is not declaring none");
+
+        // The commitment is over the FILE's bytes, so a verifier checks it by hashing what it
+        // downloaded rather than by re-deriving a vocabulary — which no two implementations would
+        // agree on.
+        assert_eq!(
+            Base0ArtifactV1::tokenizer_commitment_of(b"abc"),
+            Base0ArtifactV1::tokenizer_commitment_of(b"abc"),
+            "the same bytes commit the same way"
+        );
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"abc"), Base0ArtifactV1::tokenizer_commitment_of(b"abd"));
+        // Length-prefixed, so no two files concatenate into a third's commitment.
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"ab"), Base0ArtifactV1::tokenizer_commitment_of(b"a"));
+        // …and its own domain key, so it cannot collide with an artifact digest.
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.execution_class_id());
+    }
+
     /// **Condition 6: the requant parameters are inside `artifact_root`, biases included.**
     ///
     /// They were not. `absorb_scale` wrote a multiplier and a shift, so the zero point — the
