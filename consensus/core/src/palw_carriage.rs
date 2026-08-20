@@ -343,6 +343,76 @@ pub struct PalwStepConvictionCarriageV1 {
     pub refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1,
 }
 
+/// Authorship of an execution, for a producer that **withheld** it (external audit P0-9 item 3).
+///
+/// `adjudicate_step_conviction_carriage_v1` accepts only a signed `PalwExecutionAttestationV1` as
+/// its authorship half. The bisection ladder exists precisely for a producer that published a root
+/// and withheld the execution behind it — and such a producer has signed no attestation, so the
+/// ladder can never terminate in a conviction object that adjudicator will accept. A terminal that
+/// charged the challenger for not filing what it structurally cannot file would be fail-open.
+///
+/// The block's own commitment is the authorship it does have: the executor signed
+/// `PalwBlockCommitmentV1::message` over the payload AND the exact attempt, and that signature
+/// names the trace root and the bond. This is the pure decision over that evidence.
+///
+/// **The signature is re-verified here rather than taken from admission**, for the reason the
+/// attestation arm states about itself: this feeds a SLASH decision, and "admission ran first" is a
+/// property of the current wiring, not of this function's contract. The attempt fields travel with
+/// the evidence for the same reason — a digest this function cannot rebuild is one it cannot check.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwWithheldAuthorshipV1 {
+    /// The commitment the accused block announced.
+    pub commitment: crate::palw_block_commitment::PalwBlockCommitmentV1,
+    /// The attempt the signature covers. Without all three the digest cannot be rebuilt, and a
+    /// signature over one attempt would otherwise be replayable onto another.
+    pub pre_pow_hash: Hash64,
+    pub timestamp: u64,
+    pub nonce: u64,
+}
+
+impl PalwWithheldAuthorshipV1 {
+    /// Does this establish that `accused_bond` stands behind `refuted_trace_root`?
+    ///
+    /// Four conjuncts, and dropping any one of them admits a different forgery:
+    ///
+    /// * the commitment names the accused bond — otherwise a conviction slashes a bond that signed
+    ///   nothing about this execution;
+    /// * the commitment's trace root IS the refuted one — otherwise an honest block's signature
+    ///   authorises a conviction over some other execution entirely;
+    /// * the signature verifies under the accused bond's own key and the block-commitment domain —
+    ///   the domain because a signature is only evidence about the family it was made for;
+    /// * the bond is active at the point of view — the same liveness rule every other slash path
+    ///   applies, so an already-slashed or unbonded party is not convicted twice.
+    pub fn establishes_authorship_v1<F>(
+        &self,
+        accused_bond: &StakeBondRecord,
+        refuted_trace_root: &Hash64,
+        chain_network_id: &[u8],
+        pov_daa_score: u64,
+        verify_signature: F,
+    ) -> bool
+    where
+        F: Fn(&[u8], &Hash, &[u8], &[u8]) -> bool,
+    {
+        if self.commitment.executor_bond_outpoint != accused_bond.bond_outpoint {
+            return false;
+        }
+        if self.commitment.trace_root != *refuted_trace_root {
+            return false;
+        }
+        if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+            return false;
+        }
+        let digest = self.commitment.message(chain_network_id, self.pre_pow_hash, self.timestamp, self.nonce);
+        verify_signature(
+            &accused_bond.validator_pubkey,
+            &digest,
+            &self.commitment.signature,
+            crate::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT,
+        )
+    }
+}
+
 /// One move in a bisection ladder, carried.
 ///
 /// **No deadline field, deliberately.** The rung clock is `accepted_daa + w_round` — the DAA of
@@ -2895,6 +2965,76 @@ mod bisect_move_tests {
     }
 
     /// The kind routes on its own subnetwork id and survives both decode paths.
+    fn bond_record_for_authorship() -> StakeBondRecord {
+        StakeBondRecord {
+            version: 1,
+            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0),
+            owner_pubkey_hash: Hash64::from_u64_word(1),
+            validator_pubkey_hash: Hash64::from_u64_word(1),
+            validator_pubkey: vec![1u8; 32],
+            amount: 20_000,
+            activation_daa_score: 0,
+            created_daa_score: 0,
+            unbonding_period_blocks: 100,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: crate::dns_finality::BondStatus::Active,
+        }
+    }
+
+    /// **Audit P0-9 item 3**: a producer that withheld its execution still has authorship.
+    ///
+    /// The ladder exists for exactly that producer, and it has signed no attestation — so the only
+    /// conviction object the step adjudicator accepts can never be built against it, and a terminal
+    /// charging the challenger for not filing it would be fail-open. Its block commitment is the
+    /// signed claim it does have.
+    ///
+    /// Each conjunct is dropped in turn, because each admits a different forgery.
+    #[test]
+    fn a_withheld_execution_is_authored_by_the_block_commitment() {
+        use crate::palw_block_commitment::{PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT, PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
+        let bond = bond_record_for_authorship();
+        let root = Hash64::from_u64_word(0x7A);
+        let authorship = PalwWithheldAuthorshipV1 {
+            commitment: PalwBlockCommitmentV1 {
+                version: PALW_BLOCK_COMMITMENT_VERSION_V1,
+                execution_class_id: Hash64::from_u64_word(0xC1),
+                executor_bond_outpoint: bond.bond_outpoint,
+                trace_root: root,
+                output_root: Hash64::from_u64_word(0),
+                pwu_claim: 42,
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            },
+            pre_pow_hash: Hash64::from_u64_word(0xB0),
+            timestamp: 1_700_000_000,
+            nonce: 7,
+        };
+        let ok = |_k: &[u8], _d: &Hash, s: &[u8], c: &[u8]| {
+            s == vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN].as_slice() && c == PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+        };
+        assert!(authorship.establishes_authorship_v1(&bond, &root, b"net", 1_000, ok), "the honest case must hold");
+
+        // The refuted root must be the one this commitment announced — otherwise an honest block's
+        // signature authorises a conviction over a different execution.
+        assert!(!authorship.establishes_authorship_v1(&bond, &Hash64::from_u64_word(0xFF), b"net", 1_000, ok));
+
+        // The commitment must name THIS bond — otherwise the conviction slashes a party that signed
+        // nothing about this execution.
+        let mut other = bond.clone();
+        other.bond_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x99; 64]), 0);
+        assert!(!authorship.establishes_authorship_v1(&other, &root, b"net", 1_000, ok));
+
+        // The signature must verify under the BLOCK-COMMITMENT domain: a signature is evidence only
+        // about the family it was made for.
+        let wrong_domain = |_k: &[u8], _d: &Hash, _s: &[u8], c: &[u8]| c == b"another-domain".as_slice();
+        assert!(!authorship.establishes_authorship_v1(&bond, &root, b"net", 1_000, wrong_domain));
+
+        // And the attempt is inside the digest, so a signature over one attempt does not carry to
+        // another — the network is likewise bound.
+        assert!(!authorship.establishes_authorship_v1(&bond, &root, b"other-net", 1_000, |_k, _d, _s, _c| false));
+    }
+
     #[test]
     fn the_kind_routes_and_roundtrips() {
         let obj = PalwCarriageV1::BisectMove(carriage(open_body(16)));
