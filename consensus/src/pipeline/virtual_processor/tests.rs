@@ -126,6 +126,14 @@ impl TestContext {
             .unwrap();
         t.block.header.timestamp = timestamp;
         t.block.header.nonce = nonce;
+        // ADR-0042 Decision 3a: the template DECLARES algo-6 on a `ConsensusV2` network but does
+        // not carry an attempt — the carriage is the miner's, and producing one is what the work
+        // IS. The harness stands in for that miner, and it must stamp after the timestamp and the
+        // nonce because the challenge binds both: an envelope built before them would be an
+        // attempt mounted at a different position, which is exactly what the finalizer refuses.
+        if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            t.block.header.palw_commitment = self.consensus.palw_v2_test_carriage(&t.block.header);
+        }
         t.block.header.finalize();
         t
     }
@@ -134,6 +142,11 @@ impl TestContext {
         let mut b = self.consensus.build_block_with_parents_and_transactions(blockhash::NONE, parents, Default::default());
         b.header.timestamp = timestamp;
         b.header.nonce = nonce;
+        // Same reason as `build_block_template`: the challenge binds the timestamp and the nonce,
+        // so the carriage is stamped after they are final.
+        if b.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            b.header.palw_commitment = self.consensus.palw_v2_test_carriage(&b.header);
+        }
         b.header.finalize(); // This overrides the NONE hash we passed earlier with the actual hash
         b
     }
@@ -217,16 +230,9 @@ async fn template_mining_sanity_test() {
 /// whole virtual processor on a shipped-shaped network, and the PALW store is untouched at the
 /// end — no genesis tip, no delta rows.
 ///
-/// **The V2 half of this property cannot be tested here, and the reason is worth recording** so
-/// the next person does not spend the afternoon I spent on it: a `ConsensusV2` network demands
-/// `pow_algo_id == 6` at `check_algo_id_for_mode`, before GHOSTDAG. `skip_proof_of_work` does not
-/// reach that gate — it skips the DIFFICULTY check, not the algorithm-id one — so every block
-/// this harness mines is refused at the door and no chain is ever built. Testing the walk on a V2
-/// network needs a harness that mines algo-6 headers, which is PR-10's miner-side work. Until
-/// then the walk's three legs are covered where they are pure and the coverage is real:
-/// `processes::palw_state_v2_sync` (advance / retreat / restart against the same store this
-/// pipeline writes) and `processes::palw_state_walk` (a reorg walked through the store reaching
-/// the state the winning branch was built as).
+/// The V2 half is `palw_v2_state_walks_with_the_utxo_diff` below, which the harness can now build
+/// because `TestConsensus::build_header_with_parents` stamps a position-bound attempt envelope on
+/// a `ConsensusV2` network.
 #[tokio::test]
 async fn a_network_without_a_v2_bundle_keeps_no_palw_state() {
     let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
@@ -246,6 +252,105 @@ async fn a_network_without_a_v2_bundle_keeps_no_palw_state() {
         store.iter_delta_blocks().next().is_none(),
         "no V2 bundle, no delta rows — real block processing wrote nothing into the PALW store"
     );
+}
+
+/// **The other half: on a `ConsensusV2` network the state really walks with the diff.**
+///
+/// Every chain block writes its delta in its own batch, the tip ends at the walk's own end point,
+/// and — the property the whole store shape exists for — folding the deltas from genesis
+/// reproduces the materialized tip exactly. A walk that drifted from its own deltas would be a
+/// node whose resumed state and whose replayed state disagree, which is P0-4 wearing a different
+/// hat.
+#[tokio::test]
+async fn palw_v2_state_walks_with_the_utxo_diff() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, apply_delta_v2};
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    // The fixture is a ruleset a node would really boot on, not a shape that merely type-checks.
+    config.params.validate_palw_v2().expect("the fixture bundle is a runnable ruleset");
+    let state_params = match &config.params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => bundle.state.clone(),
+        _ => unreachable!(),
+    };
+    let genesis_hash = config.params.genesis.hash;
+
+    let consensus = TestConsensus::new(&config);
+    {
+        let store = consensus.virtual_processor().palw_state_v2_store.read();
+        let tip = store.tip_record().unwrap().expect("a V2 network installs its genesis tip");
+        assert_eq!(tip.block, genesis_hash, "the zero point stands at genesis");
+    }
+
+    let mut ctx = TestContext::new(consensus);
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+    let tip = store.tip_record().unwrap().expect("the walk wrote a tip");
+    assert_ne!(tip.block, genesis_hash, "the walk advanced past genesis — the chain really was built");
+
+    // The tip reloads under its OWN committed root: the same refusal a peer-supplied pruning
+    // carriage gets, run against what this node just wrote.
+    let (block, state) = store.load_tip(&state_params).unwrap().expect("the tip loads");
+    assert_eq!(block, tip.block);
+    assert_eq!(state.state_root(), tip.state_root, "the stored root is the state's own");
+    assert!(store.has_delta(tip.block).unwrap(), "the tip block's own delta is on disk");
+
+    // Fold every delta from genesis and compare. This is the differential the store exists to
+    // make checkable — resume and replay must be the same state.
+    let chain: Vec<_> = ctx
+        .consensus
+        .virtual_processor()
+        .reachability_service
+        .default_backward_chain_iterator(tip.block)
+        .take_while(|h| *h != genesis_hash)
+        .collect();
+    assert!(!chain.is_empty(), "the fixture must produce chain blocks for the fold to mean anything");
+    let mut folded = PalwChainStateV2::genesis();
+    for block in chain.iter().rev() {
+        let (_, delta) = store.delta_of(*block).expect("every chain block on the walk has a delta");
+        folded = apply_delta_v2(&folded, &delta, &state_params).expect("the deltas fold");
+    }
+    assert_eq!(folded.state_root(), state.state_root(), "folding the deltas reproduces the materialized tip");
+}
+
+/// BASE-0's own reachable set, so the fixture cannot certify itself (see
+/// `base0_reaches_only_kernels_this_build_adjudicates`).
+fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {
+    use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwClassCatalogV2};
+    PalwClassCatalogV2::new(vec![PalwClassCatalogEntryV2 {
+        class_id: kaspa_hashes::Hash64::from_u64_word(1),
+        artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
+        max_step_leaf_count: 1 << 16,
+        canonical_step_leaf_count: 4_096,
+        reachable_kernels: kaspa_consensus_core::palw_step_refute::KDESC_BASE0_ALL
+            .iter()
+            .map(|d| kaspa_consensus_core::palw_step::kernel_semantics_id_v1(d))
+            .collect(),
+    }])
+    .expect("a well-formed catalog")
+}
+
+fn palw_v2_test_bundle(
+    catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
+) -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+    let mut b = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+        kaspa_hashes::Hash64::from_u64_word(1),
+        catalog.root(),
+        kaspa_hashes::Hash64::from_u64_word(0xC0757),
+    )
+    .expect("the devnet bundle validates");
+    b.class_catalog_root = catalog.root();
+    b
 }
 
 #[tokio::test]

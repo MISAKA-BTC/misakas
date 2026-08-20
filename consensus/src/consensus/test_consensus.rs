@@ -138,8 +138,66 @@ impl TestConsensus {
         header.timestamp = self.consensus.services.window_manager.calc_past_median_time(&ghostdag_data).unwrap().0 + 1;
         header.blue_score = ghostdag_data.blue_score;
         header.blue_work = ghostdag_data.blue_work;
+        // ADR-0042 Decision 3a: on a `ConsensusV2` network the carriage is not optional — the
+        // algo-6 tag IS `Expand(commitment_root)`, so a header without an envelope has no work to
+        // price and `check_palw_commitment_shape` refuses it before GHOSTDAG. `skip_proof_of_work`
+        // does not reach that gate (it skips the DIFFICULTY check, not the algorithm-id or shape
+        // ones), so without this a V2 harness cannot build a chain at ALL and a test that tries
+        // hangs rather than failing — which is exactly how this was found.
+        //
+        // The envelope is stamped LAST, after every field the challenge binds, because the
+        // challenge is a function of the header's own position. Stamping it earlier would produce
+        // a `PalwV2ChallengeMismatch` at the finalizer — the same refusal a re-mounted attempt
+        // gets, which is the property it exists for.
+        if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            header.palw_commitment = self.palw_v2_test_carriage(&header);
+        }
 
         header
+    }
+
+    /// A position-bound `PalwAttemptEnvelopeV2` for `header`, as a miner on a V2 network would
+    /// carry — the harness's answer to "what does a block of this network look like".
+    ///
+    /// The signature is a fixture: the finalizer does not read it (identity is the UNSIGNED
+    /// attempt, ADR-0042 Decision 3c) and stateful admission — where the key and the bond are
+    /// checked — is Unit C step 3's consumer, not this. What must be real is everything the
+    /// challenge and the commitment root cover, because those are what the PoW prices.
+    pub(crate) fn palw_v2_test_carriage(&self, header: &Header) -> Vec<u8> {
+        use kaspa_consensus_core::palw_attempt_v2::{
+            PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2,
+        };
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let network_id = self.params.net.to_string();
+        let network_domain = palw_network_domain_v2(network_id.as_bytes());
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let class_id = match &self.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id,
+            _ => unreachable!("only called on a ConsensusV2 network"),
+        };
+        let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class_id, &bond),
+            class_id,
+            executor_bond: bond,
+            executor_pubkey: vec![7u8; 32],
+            operator_id: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
+            trace_root: kaspa_hashes::Hash64::from_u64_word(0x7A),
+            output_root: kaspa_hashes::Hash64::from_u64_word(0x00),
+            execution_root: kaspa_hashes::Hash64::from_u64_word(0x4E),
+            pwu: 1,
+            trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0xD0),
+            trace_chunk_count: 8,
+            trace_retention_daa: u64::MAX,
+        };
+        PalwAttemptEnvelopeV2 {
+            attempt,
+            signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        }
+        .encode_wire()
     }
 
     pub fn add_header_only_block_with_parents(

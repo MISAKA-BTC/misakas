@@ -94,17 +94,30 @@ header) are still open. The transition is called with an empty object list, whic
 content of a block that carries no PALW transactions — every block on every network that exists
 today.
 
-**A harness limit found while testing it, recorded so it is not rediscovered:** a `ConsensusV2`
-network demands `pow_algo_id == 6` at `check_algo_id_for_mode`, before GHOSTDAG.
-`skip_proof_of_work` does not reach that gate — it skips the DIFFICULTY check, not the
-algorithm-id one — so the virtual-processor harness cannot build a chain on a V2 network at all,
-and a test that tries hangs rather than failing. Testing the walk end-to-end on a V2 network needs
-a harness that mines algo-6 headers, which is PR-10's miner-side work. What is covered today:
-`a_network_without_a_v2_bundle_keeps_no_palw_state` asserts the inert half against real block
-processing (the half every shipped network depends on), and the three legs are covered where they
-are pure — `processes::palw_state_v2_sync` (advance / retreat / restart) and
-`processes::palw_state_walk` (a reorg walked through the store reaching the state the winning
-branch was built as).
+**The harness can mine a V2 chain now**, which was not true when the walk landed and is worth
+recording because the failure mode was confusing: a `ConsensusV2` network demands
+`pow_algo_id == 6` at `check_algo_id_for_mode`, before GHOSTDAG, and `skip_proof_of_work` does not
+reach that gate — it skips the DIFFICULTY check, not the algorithm-id or the commitment-shape one.
+So a V2 harness could not build a chain at all, and a test that tried HUNG rather than failing.
+
+`TestConsensus::palw_v2_test_carriage` stands in for the miner: it stamps a position-bound
+`PalwAttemptEnvelopeV2` on every algo-6 header, at all three build paths
+(`build_header_with_parents`, the block TEMPLATE path, and `build_block_with_parents`). It must be
+stamped **after** the timestamp and the nonce are final, because the challenge binds both — an
+envelope built earlier is an attempt mounted at a different position, which is precisely what the
+finalizer refuses (`PalwV2ChallengeMismatch`). The template path needed it separately because the
+template only DECLARES the algo id: producing the carriage is the miner's work, and on a real
+network it IS the work.
+
+Covered end to end today: `palw_v2_state_walks_with_the_utxo_diff` builds a real V2 chain through
+the virtual processor and asserts that folding every delta from genesis reproduces the
+materialized tip — resume and replay agreeing is the property the store shape exists for — and
+`a_network_without_a_v2_bundle_keeps_no_palw_state` asserts the inert half, which is the one every
+shipped network depends on. The legs are additionally covered where they are pure:
+`processes::palw_state_v2_sync` (advance / retreat / restart) and `processes::palw_state_walk`
+(a reorg walked through the store reaching the state the winning branch was built as).
+
+**This also unblocks Unit D**, which could not be tested before for the same reason.
 
 ### Unit D — one fork-choice authority
 
