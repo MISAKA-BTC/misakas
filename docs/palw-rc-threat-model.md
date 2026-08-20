@@ -96,8 +96,14 @@ honest "red (integration), lands in PR-N."
   `docs/adr/0039-...md:205-222`; `palw_chain_weight.rs:90-96`.
 - **Red test:** `palw_v2_all_selection_sites_agree` — feed one DAG; assert virtual tip == header
   authority == IBD-complete tip == pruning point selection.
-- **Status:** red (integration). **Greens in:** PR-08. **ADR-0042:** Decision 9. *(The store rename
-  `header_selected_tip → header_download_hint` is a mechanical guard in the same PR.)*
+- **Status:** **substrate green** (P0-5 comparator + rename `319a4c97`, PR-08 authority): the
+  named test `palw_v2_all_selection_sites_agree` passes — virtual selection, IBD commit
+  (strict-win-or-keep), the deep-reorg gate, the pruning ceiling (never past the safe frontier)
+  and restart recovery all answer through `palw_fork_authority_v2`'s functions over the one
+  comparator, identically for opposite application orders, and all prefer the matured chain over
+  the heavier immature pile. The store rename landed with P0-5. Pipeline sites consume these
+  functions when `PalwConsensusMode::ConsensusV2` exists to demand them (PR-10) — a dead handle
+  in today's blue-work pipeline would be surface without semantics. **ADR-0042:** Decision 9.
 
 ### P0-6 — conviction / equivocation verified under the wrong signature context
 - **Invariant:** W5 (conviction voids the convicted block's weight) — slashing state and work state
