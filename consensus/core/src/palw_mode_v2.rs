@@ -47,6 +47,111 @@ pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
 /// cadence, so the id's silence about it is no longer a hole an operator can walk through.
 pub const PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS: u64 = 120_000;
 
+/// Version of the fork-choice ORDER a V2 network runs (`compare_palw_candidates_v1`'s key list
+/// and their precedence). Decision 11 names it in the ruleset-id preimage; it was not in the
+/// bundle, so two networks could share an id while ordering candidates differently — the one
+/// disagreement that partitions a chain without either side being wrong about anything else.
+pub const PALW_V2_FORK_CHOICE_VERSION: u16 = 1;
+
+/// Version of the trace/step object format the court adjudicates against
+/// (`PalwStepBindingV2` and the leaf encodings under it). Also named by Decision 11 and also
+/// absent: a network that changed the trace format would still fingerprint identically.
+pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 1;
+
+/// The ML-DSA-87 signing contexts the V2 ruleset uses, in a fixed order.
+///
+/// Decision 11 lists "signature_contexts" in the preimage, and this is the honest way to put
+/// them there: not a version NUMBER a human bumps, but the bytes themselves. The bundle commits
+/// to [`palw_v2_signature_contexts_root`] and the startup gate recomputes it from THIS BINARY'S
+/// constants, so a build whose contexts differ from what the network committed to refuses to
+/// run — the same shape as the algorithm-finalizer gate. Editing a context string here without
+/// re-minting the ruleset id is a startup failure rather than a silent cross-family replay.
+pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+];
+
+pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
+
+/// `H(count ‖ (len ‖ context)*)` over [`PALW_V2_SIGNATURE_CONTEXTS`]. Length-prefixed per entry
+/// so no two different context lists can concatenate to the same preimage.
+pub fn palw_v2_signature_contexts_root() -> Hash64 {
+    let mut state = Blake2bParams::new().hash_length(64).key(PALW_V2_SIGNATURE_CONTEXTS_DOMAIN).to_state();
+    state.update(&(PALW_V2_SIGNATURE_CONTEXTS.len() as u64).to_le_bytes());
+    for context in PALW_V2_SIGNATURE_CONTEXTS {
+        state.update(&(context.len() as u64).to_le_bytes());
+        state.update(context);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The court's shape, from which the worst-case honest prosecution is DERIVED (ADR-0042
+/// Decision 8: `rounds = ceil(log2(max_step_leaf_count)) + terminal/opening rounds`).
+///
+/// This replaces a bare `worst_case_court_duration_daa` field. The audit's objection to that
+/// field was not that it was wrong but that it was **self-certifying**: the one startup
+/// invariant standing between the ruleset and an un-prosecutable fraud window compared
+/// `window_court` against a number the same operator typed, with nothing deriving it. Splitting
+/// it into the three quantities the ADR's formula actually takes does not make them
+/// unfalsifiable — an operator can still understate `max_step_leaf_count` — but each is now a
+/// NAMED fact with a place to be checked: the leaf count is a property of the registered class
+/// catalog, which the RC genesis loader verifies against the catalog preimage, and the turn
+/// deadline is a protocol constant a reader can compare against the ladder's own measurement.
+/// One opaque number becomes three checkable ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCourtParamsV2 {
+    /// Worst-case step-tree leaf count over every registered class — what the bisection ladder
+    /// must be able to walk. A property of the class catalog, not of the operator's opinion.
+    max_step_leaf_count: u64,
+    /// DAA budget one bisection turn gets before the silent party defaults.
+    turn_deadline_daa: u64,
+    /// Rounds beyond the bisection itself: the terminal one-step adjudication and its opening.
+    terminal_rounds: u32,
+}
+
+impl PalwCourtParamsV2 {
+    pub fn new(max_step_leaf_count: u64, turn_deadline_daa: u64, terminal_rounds: u32) -> Result<Self, PalwModeV2Error> {
+        if max_step_leaf_count < 2 {
+            return Err(PalwModeV2Error::Invalid("a trace with fewer than two step leaves cannot be bisected"));
+        }
+        if turn_deadline_daa == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero turn deadline defaults whichever party the block order reaches first"));
+        }
+        if terminal_rounds == 0 {
+            return Err(PalwModeV2Error::Invalid("the terminal adjudication is a round; zero of them never reaches a verdict"));
+        }
+        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds })
+    }
+
+    pub fn max_step_leaf_count(&self) -> u64 {
+        self.max_step_leaf_count
+    }
+
+    pub fn turn_deadline_daa(&self) -> u64 {
+        self.turn_deadline_daa
+    }
+
+    pub fn terminal_rounds(&self) -> u32 {
+        self.terminal_rounds
+    }
+
+    /// `ceil(log2(max_step_leaf_count))` — the bisection depth needed to isolate one step.
+    pub fn bisection_rounds(&self) -> u32 {
+        // `next_power_of_two` is exact for powers of two, so this is ceil(log2(n)) for n >= 2.
+        self.max_step_leaf_count.next_power_of_two().trailing_zeros()
+    }
+
+    /// ADR-0042 Decision 8's formula, in DAA units. `None` on overflow, which the startup gate
+    /// treats as a refusal rather than a saturation — a court window that cannot be represented
+    /// is not a long window.
+    pub fn worst_case_duration_daa(&self) -> Option<u64> {
+        let rounds = u64::from(self.bisection_rounds()).checked_add(u64::from(self.terminal_rounds))?;
+        rounds.checked_mul(self.turn_deadline_daa)
+    }
+}
+
 pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
@@ -114,10 +219,24 @@ pub struct PalwConsensusParamsV2 {
     pub bond: PalwBondParamsV2,
     /// Reorg safety margin added to the liability period in the withdrawal-delay invariant.
     pub reorg_margin_daa: u64,
-    /// Measured worst-case honest prosecution time (the ladder-gap measurement's output); the
-    /// court backstop window must exceed it or an honest prosecution can be timed out by its
-    /// own clock.
-    pub worst_case_court_duration_daa: u64,
+    /// The court's shape. Its [`PalwCourtParamsV2::worst_case_duration_daa`] is what the court
+    /// backstop window must exceed, DERIVED rather than asserted.
+    pub court: PalwCourtParamsV2,
+    /// The cadence every DAA-denominated window in this bundle is measured against
+    /// (ADR-0038 Decision H's frozen 120 s). Inside the bundle — and therefore inside the
+    /// ruleset id — because without it two networks could share an id and run every window at a
+    /// different wall-clock length, which is the exact opposite of what Decision 11 promises.
+    /// [`crate::config::params::Params::validate_palw_v2`] additionally requires the network's
+    /// own `target_time_per_block` to equal it, so the commitment and the behaviour agree.
+    pub cadence_target_time_per_block_ms: u64,
+    /// == [`PALW_V2_FORK_CHOICE_VERSION`]. Named by Decision 11's preimage.
+    pub fork_choice_version: u16,
+    /// == [`PALW_V2_TRACE_FORMAT_VERSION`]. Named by Decision 11's preimage.
+    pub trace_format_version: u16,
+    /// == [`palw_v2_signature_contexts_root`] as THIS BINARY computes it. Named by Decision 11's
+    /// preimage, and committed as the context bytes' own digest rather than a version number, so
+    /// a build whose contexts differ from the network's refuses to start.
+    pub signature_contexts_root: Hash64,
 }
 
 impl PalwConsensusParamsV2 {
@@ -197,11 +316,27 @@ impl PalwConsensusParamsV2 {
             .validate_against_state_params(&self.state)
             .map_err(|_| PalwModeV2Error::Invalid("the anchor slot does not sit inside the bind window"))?;
 
-        // The court backstop exceeds the measured worst-case honest prosecution.
-        if self.worst_case_court_duration_daa == 0 {
-            return Err(PalwModeV2Error::Invalid("an unmeasured court duration cannot gate anything"));
+        // Decision 11's preimage, checked against what this binary implements. Each of these was
+        // named in the ADR's `palw_ruleset_id` formula and absent from the bundle (audit H2), so
+        // "RC and mainnet share a ruleset id" said less than it appeared to.
+        if self.fork_choice_version != PALW_V2_FORK_CHOICE_VERSION {
+            return Err(PalwModeV2Error::Invalid("fork_choice_version is not the order this binary implements"));
         }
-        if self.state.window_court() <= self.worst_case_court_duration_daa {
+        if self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION {
+            return Err(PalwModeV2Error::Invalid("trace_format_version is not the format this binary adjudicates"));
+        }
+        if self.signature_contexts_root != palw_v2_signature_contexts_root() {
+            return Err(PalwModeV2Error::Invalid("signature_contexts_root is not the context set this binary signs under"));
+        }
+        if self.cadence_target_time_per_block_ms != PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS {
+            return Err(PalwModeV2Error::Invalid("the bundle's cadence is not the frozen 120 s (ADR-0038 Decision H)"));
+        }
+
+        // The court backstop exceeds the worst-case honest prosecution — DERIVED from the
+        // court's shape by ADR-0042 Decision 8's formula, not asserted as a lone number.
+        let worst_case =
+            self.court.worst_case_duration_daa().ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
+        if self.state.window_court() <= worst_case {
             return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
         }
         // ADR-0042 Decision 1 also states "challenge window > worst-case court duration", and the
@@ -215,12 +350,11 @@ impl PalwConsensusParamsV2 {
         // for no safety gained. ADR-0042 Decision 1 should be amended to say which mechanism
         // carries the guarantee.
         //
-        // NOTE, and it is a residual rather than a fix: `worst_case_court_duration_daa` is an
-        // operator-attested number, not one derived from the class catalog's measured trace
-        // length (ADR-0042 Decision 8's `rounds = ceil(log2(step_leaf_count)) + terminal`). Both
-        // inequalities above therefore bound the bundle against the operator's OWN claim about
-        // the court. Deriving it needs the catalog preimage, which arrives with the RC genesis
-        // loader; until then this gate catches an inconsistent bundle, not an understated one.
+        // RESIDUAL: `court.max_step_leaf_count` is still a number the bundle asserts rather than
+        // one this gate can read off the catalog — the catalog PREIMAGE arrives with the RC
+        // genesis loader, and only `class_catalog_root` is here. What changed is that the
+        // unchecked quantity is now a named catalog FACT with a place to be checked, instead of
+        // an opaque duration with nowhere to check it.
 
         // Withdrawal outlasts the whole liability period plus the reorg margin: a bond cannot
         // commit fraud and leave before it is provable.
@@ -300,7 +434,13 @@ mod tests {
             reward: PalwRewardParamsV2::new(620).unwrap(),
             bond: PalwBondParamsV2::new(20_000, 2_000).unwrap(),
             reorg_margin_daa: 100,
-            worst_case_court_duration_daa: 400,
+            // 2^20 step leaves -> 20 bisection rounds, +2 terminal, x20 DAA per turn = 440,
+            // which must fit strictly inside the fixture's `window_court` of 500.
+            court: PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap(),
+            cadence_target_time_per_block_ms: PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS,
+            fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
+            trace_format_version: PALW_V2_TRACE_FORMAT_VERSION,
+            signature_contexts_root: palw_v2_signature_contexts_root(),
         }
     }
 
@@ -351,8 +491,14 @@ mod tests {
                 }),
             ),
             ("anchor outside bind window", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 2, 10).unwrap())),
-            ("unmeasured court", Box::new(|b| b.worst_case_court_duration_daa = 0)),
-            ("court window too small", Box::new(|b| b.worst_case_court_duration_daa = 500)),
+            // A deeper ladder needs more rounds than the backstop window can hold…
+            ("ladder deeper than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1 << 40, 20, 2).unwrap())),
+            // …and so does a slower turn, at the same depth.
+            ("turn slower than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap())),
+            ("fork choice version", Box::new(|b| b.fork_choice_version += 1)),
+            ("trace format version", Box::new(|b| b.trace_format_version += 1)),
+            ("signature contexts", Box::new(|b| b.signature_contexts_root = h64(0xBAD))),
+            ("cadence", Box::new(|b| b.cadence_target_time_per_block_ms /= 2)),
             ("withdrawal inside liability", Box::new(|b| b.bond = PalwBondParamsV2::new(20_000, 640).unwrap())),
         ];
         for (name, mutate) in cases {
@@ -388,7 +534,7 @@ mod tests {
 
         // …a broken bundle does not…
         let mut broken = conforming_bundle();
-        broken.worst_case_court_duration_daa = 0;
+        broken.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap();
         let mut bad_bundle = SIMNET_PARAMS.clone();
         bad_bundle.palw_consensus_mode = PalwConsensusMode::ConsensusV2(broken);
         assert!(bad_bundle.validate_palw_v2().is_err(), "the startup invariants gate the config");
@@ -506,6 +652,78 @@ mod tests {
         }
     }
 
+    /// **Audit H2: Decision 11's preimage, item by item.**
+    ///
+    /// The id used to hash a bundle that named none of `cadence`, `fork_choice_version`,
+    /// `trace_format_version` or `signature_contexts` — so "the RC and mainnet ship the same
+    /// ruleset" was checkable only for the fields that happened to be in the struct. Two networks
+    /// could share an id and still order candidates differently, adjudicate a different trace
+    /// format, sign under different contexts, or run every DAA window at half the wall-clock
+    /// length. They are in the struct now, and the id is `H(borsh(bundle))`, so each one moves it.
+    ///
+    /// `every_bundle_byte_moves_the_ruleset_id` cannot cover them: it requires each mutation to
+    /// remain a VALID other ruleset, and these four are pinned to what this binary implements —
+    /// mutating one is an invalid bundle by construction. That is the stronger property, not a
+    /// gap: they are in the preimage AND they cannot vary. This test asserts both halves.
+    #[test]
+    fn the_ruleset_id_covers_every_component_decision_11_names() {
+        let base = conforming_bundle();
+        let base_id = palw_ruleset_id_v2(&base);
+
+        let pinned: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
+            ("cadence", Box::new(|b: &mut PalwConsensusParamsV2| b.cadence_target_time_per_block_ms /= 2)),
+            ("fork_choice_version", Box::new(|b: &mut PalwConsensusParamsV2| b.fork_choice_version += 1)),
+            ("trace_format_version", Box::new(|b: &mut PalwConsensusParamsV2| b.trace_format_version += 1)),
+            ("signature_contexts_root", Box::new(|b: &mut PalwConsensusParamsV2| b.signature_contexts_root = h64(0xBAD))),
+        ];
+        for (name, mutate) in pinned {
+            let mut bundle = base.clone();
+            mutate(&mut bundle);
+            assert_ne!(palw_ruleset_id_v2(&bundle), base_id, "{name} is not inside the ruleset id");
+            assert!(bundle.validate_ruleset_shape().is_err(), "{name} is pinned to this binary and must not validate when moved");
+        }
+
+        // The signature contexts are committed as their own BYTES, not as a version number, so
+        // editing a context string is a startup failure rather than a silent cross-family replay.
+        assert_eq!(base.signature_contexts_root, palw_v2_signature_contexts_root());
+        assert_eq!(
+            PALW_V2_SIGNATURE_CONTEXTS,
+            [crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT, crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT],
+            "the committed context set is the one the V2 objects actually sign under"
+        );
+    }
+
+    /// **Audit H2: the worst-case court duration is DERIVED, not asserted.**
+    ///
+    /// It used to be one operator-typed number that the only invariant standing between the
+    /// ruleset and an un-prosecutable fraud window compared itself against — self-certifying.
+    /// It is now ADR-0042 Decision 8's formula over three named quantities.
+    #[test]
+    fn the_worst_case_court_duration_follows_the_adr_formula() {
+        // ceil(log2(n)) is exact on powers of two and rounds up in between.
+        assert_eq!(PalwCourtParamsV2::new(2, 1, 1).unwrap().bisection_rounds(), 1);
+        assert_eq!(PalwCourtParamsV2::new(1_024, 1, 1).unwrap().bisection_rounds(), 10);
+        assert_eq!(PalwCourtParamsV2::new(1_025, 1, 1).unwrap().bisection_rounds(), 11, "a non-power-of-two rounds UP");
+        assert_eq!(PalwCourtParamsV2::new(1 << 40, 1, 1).unwrap().bisection_rounds(), 40);
+
+        // rounds = ceil(log2(leaves)) + terminal, duration = rounds * turn deadline.
+        let court = PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap();
+        assert_eq!(court.worst_case_duration_daa(), Some((20 + 2) * 20));
+
+        // Overflow is a refusal, not a saturation: a window that cannot be represented is not a
+        // long window.
+        let huge = PalwCourtParamsV2::new(1 << 40, u64::MAX, 1).unwrap();
+        assert_eq!(huge.worst_case_duration_daa(), None);
+        let mut bundle = conforming_bundle();
+        bundle.court = huge;
+        assert!(bundle.validate_ruleset_shape().is_err(), "an unrepresentable court duration must refuse the bundle");
+
+        // Shapes that cannot host a bisection at all are refused at construction.
+        assert!(PalwCourtParamsV2::new(1, 20, 2).is_err(), "one leaf cannot be bisected");
+        assert!(PalwCourtParamsV2::new(1_024, 0, 2).is_err(), "a zero turn deadline defaults by block order");
+        assert!(PalwCourtParamsV2::new(1_024, 20, 0).is_err(), "zero terminal rounds never reaches a verdict");
+    }
+
     /// **Audit H2: the frozen cadence is outside the ruleset id, so it is refused at the params.**
     ///
     /// `palw_ruleset_id_v2` hashes the bundle, and the bundle has no cadence field — yet every
@@ -547,7 +765,8 @@ mod tests {
             ("panel quorum", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 3, 4).unwrap())),
             ("bond floor", Box::new(|b| b.bond = PalwBondParamsV2::new(20_001, 2_000).unwrap())),
             ("reorg margin", Box::new(|b| b.reorg_margin_daa += 1)),
-            ("court measurement", Box::new(|b| b.worst_case_court_duration_daa += 1)),
+            // Still a valid bundle (22 rounds x 19 = 418 < 500), and a different one.
+            ("court shape", Box::new(|b| b.court = PalwCourtParamsV2::new(1_048_576, 19, 2).unwrap())),
             (
                 "exposure ratio",
                 Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()),

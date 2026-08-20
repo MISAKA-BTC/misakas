@@ -612,6 +612,12 @@ impl Params {
                 "a ConsensusV2 network must run the frozen 120 s cadence (ADR-0038 Decision H) — every window in the bundle is DAA-denominated",
             ));
         }
+        // …and the cadence the bundle COMMITS to must be the cadence the network RUNS. The
+        // bundle's copy is what enters `palw_ruleset_id_v2`; this is what stops the id from
+        // describing a cadence the node does not keep.
+        if self.blockrate.target_time_per_block != bundle.cadence_target_time_per_block_ms {
+            return Err(PalwModeV2Error::Invalid("the network's cadence is not the one its ruleset id commits to"));
+        }
         Ok(())
     }
 
