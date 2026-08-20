@@ -136,7 +136,7 @@ mod tests {
     }
 
     fn freeprompt() -> PalwFreePromptParamsV3 {
-        crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(h64(1), h64(0xCA7), h64(0xC0757)).unwrap().freeprompt
+        crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_for_tests(h64(1), h64(0xCA7), h64(0xC0757)).unwrap().freeprompt
     }
 
     /// A commitment whose CU earns real quanta under the devnet bundle.

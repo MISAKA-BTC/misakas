@@ -110,7 +110,16 @@ const MAX_EXPOSURE_RATIO_PERMILLE: u32 = 500;
 /// Devnet bond floor and withdrawal delay. The delay must outlast bind+receipt+challenge+court
 /// plus the reorg margin (5100 here), so 6000 leaves margin without making a devnet operator
 /// wait a week to leave.
-const MIN_COLLATERAL_SOMPI: u64 = 20_000;
+/// Sized against what a claim actually RESERVES, which is the number that binds: at
+/// `initial_target = u128::MAX/2` the derivation yields pwu = 2 × `pwu_per_inference`, and a claim
+/// reserves `pwu × slash_value_per_pwu`. At 4,096 per inference and 5 per pwu that is 40,960 per
+/// claim, so a bond must carry at least `40_960 / (500‰)` = 81,920 to make ONE claim — and the
+/// floor below funds four concurrent ones.
+///
+/// The old 20,000 was chosen before the exposure ceiling had a consumer, and it made every
+/// attempt on this bundle refusable: `reserved 0 + 40960 > ceiling 10000`. Measured the moment
+/// P0-10's check was wired into the pipeline, which is exactly what that check is for.
+const MIN_COLLATERAL_SOMPI: u64 = 400_000;
 const WITHDRAWAL_DELAY: u64 = 6_000;
 
 /// Per-adjustment retarget clamp (ADR-0038 Decision D) and the ADR-0045 Decision 2 epoch-budget
@@ -135,10 +144,23 @@ const WORKER_CARVE_PERMILLE: u16 = 620;
 ///
 /// Single-class table (BASE-0 at 1000‰), which is the honest devnet shape: an accelerated class
 /// with `coverage < 100%` carries share 0 at RC anyway (ADR-0042 Decision 8).
+/// The initial per-class DAA target the genesis registration seeds. Deliberately easy: a devnet
+/// that cannot win its own lottery produces nothing, and the retarget moves it from here.
+const GENESIS_CLASS_TARGET: u128 = u128::MAX / 2;
+/// Slashable value per pwu — what an exposure ceiling is measured in.
+const SLASH_VALUE_PER_PWU: u64 = 5;
+
 pub fn palw_fp_devnet_bundle_v3(
     base_class_id: Hash64,
     class_catalog_root: Hash64,
     court_catalog_root: Hash64,
+    // The catalog's counted canonical step-leaf count for `base_class_id` — the value
+    // `verify_palw_genesis_v2` demands the registration declare.
+    genesis_pwu_per_inference: u64,
+    genesis_artifact_root: Hash64,
+    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
+    genesis_bond_pubkey: Vec<u8>,
+    genesis_operator_pubkey: Vec<u8>,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
     // ADR-0045 Decision 3: no share table here. The chain grants shares at registration — the
     // first registration on the chain must be `base_class_id` at the whole 1000‰, which is the
@@ -194,11 +216,59 @@ pub fn palw_fp_devnet_bundle_v3(
         fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
         trace_format_version: PALW_V2_TRACE_FORMAT_VERSION,
         signature_contexts_root: palw_v2_signature_contexts_root(),
+        // The genesis artifact's own registrations: the liveness floor at the whole 1000‰, and
+        // one bond to execute under. Without them the network cannot produce its first block —
+        // admission refuses an attempt naming a bond the chain does not have — so a bundle
+        // carrying none is a bundle that boots and then stalls.
+        //
+        // `pwu_per_inference` is the catalog's counted canonical step-leaf count, which
+        // `verify_palw_genesis_v2` checks: the declaration is not the fact.
+        genesis_objects: vec![
+            crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                class_id: base_class_id,
+                artifact_root: genesis_artifact_root,
+                slash_value_per_pwu: SLASH_VALUE_PER_PWU,
+                pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },
+                initial_target: GENESIS_CLASS_TARGET,
+                share_permille: 1000,
+            },
+            crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
+                bond: genesis_bond,
+                pubkey: genesis_bond_pubkey,
+                operator_pubkey: genesis_operator_pubkey,
+                collateral: MIN_COLLATERAL_SOMPI,
+            },
+        ],
     };
     // Validated HERE, so the constructor cannot hand back a bundle that would refuse to boot:
     // a caller holding an `Ok` holds a bundle a node will start on.
     bundle.validate()?;
     Ok(bundle)
+}
+
+/// The devnet bundle with the fixture identities every caller in this tree used before the
+/// genesis registrations became part of the ruleset. One helper rather than eight arguments
+/// repeated at every call site, and `pub(crate)` so the fixture is the SAME one everywhere — two
+/// fixtures for one bundle is how two tests come to disagree about a ruleset id.
+#[cfg(test)]
+pub(crate) fn palw_fp_devnet_bundle_for_tests(
+    base_class_id: Hash64,
+    class_catalog_root: Hash64,
+    court_catalog_root: Hash64,
+) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    palw_fp_devnet_bundle_v3(
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        4_096,
+        Hash64::from_u64_word(0xA7),
+        crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+            transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
+            index: 0,
+        }),
+        vec![7; 4],
+        vec![21; 8],
+    )
 }
 
 #[cfg(test)]
@@ -211,7 +281,19 @@ mod tests {
     }
 
     fn bundle() -> PalwConsensusParamsV2 {
-        palw_fp_devnet_bundle_v3(h64(0xBA5E), h64(0xCA7), h64(0xC0757)).expect("the devnet bundle validates")
+        palw_fp_devnet_bundle_v3(
+            h64(0xBA5E),
+            h64(0xCA7),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
+                index: 0,
+            }),
+            vec![7; 4],
+            vec![21; 8],
+        ).expect("the devnet bundle validates")
     }
 
     /// **The interlock exists.** Every Decision-1 and ADR-0044 startup invariant holds on one
@@ -240,7 +322,7 @@ mod tests {
         let b = bundle();
         let id = palw_ruleset_id_v2(&b);
         assert_eq!(id, palw_ruleset_id_v2(&bundle()), "the fingerprint is a pure function of the values");
-        assert_ne!(id, palw_ruleset_id_v2(&palw_fp_devnet_bundle_v3(h64(0xBA5E), h64(0xCA8), h64(0xC0757)).unwrap()));
+        assert_ne!(id, palw_ruleset_id_v2(&palw_fp_devnet_bundle_for_tests(h64(0xBA5E), h64(0xCA8), h64(0xC0757)).unwrap()));
         assert_eq!(
             PalwConsensusMode::ConsensusV2(b.clone()).required_algo_id(),
             Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2)

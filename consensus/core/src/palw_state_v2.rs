@@ -1064,6 +1064,13 @@ impl PalwChainStateV2 {
         self.receipt_epoch_counters.get(class_id)
     }
 
+    /// Every claim this state holds, in canonical order — what a fold over the lattice reads
+    /// (ADR-0042 Decision 10's maturity walk, and any consumer that must ask a question of the
+    /// whole claim set rather than of one id).
+    pub fn claims_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwClaimStateV2)> {
+        self.claims.iter()
+    }
+
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
         self.claims.get(id)
     }

@@ -171,8 +171,34 @@ impl TestConsensus {
         let network_id = self.params.net.to_string();
         let network_domain = palw_network_domain_v2(network_id.as_bytes());
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let class_id = match &self.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id,
+        let (class_id, class_target, pwu_per_inference) = match &self.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                // The class's registered seed target and per-inference cost, read from the genesis
+                // registration the bundle carries — the same two facts admission will re-derive
+                // from chain state. Reading them from the bundle rather than hard-coding is what
+                // keeps the harness a MINER: it computes what the chain will demand.
+                let mut target = 0u128;
+                let mut per_inference = 0u64;
+                for object in &bundle.genesis_objects {
+                    if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                        class_id: id,
+                        initial_target,
+                        pwu_rule,
+                        ..
+                    } = object
+                        && *id == bundle.base_class_id
+                    {
+                        target = *initial_target;
+                        per_inference = match pwu_rule {
+                            kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
+                                *pwu_per_inference
+                            }
+                            kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
+                        };
+                    }
+                }
+                (bundle.base_class_id, target, per_inference)
+            }
             _ => unreachable!("only called on a ConsensusV2 network"),
         };
         let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
@@ -183,21 +209,59 @@ impl TestConsensus {
             class_id,
             executor_bond: bond,
             executor_pubkey: vec![7u8; 32],
-            operator_id: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            // DERIVED from the operator key, never a literal: `BondRegistered` mints the id with
+            // `palw_operator_id_v2(operator_pubkey)`, and admission item 3 compares the carried id
+            // against the registration's. A hand-written value here is an attempt no chain admits,
+            // which is what the harness measured before this line existed.
+            operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&[21u8; 8]),
             artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
             trace_root: kaspa_hashes::Hash64::from_u64_word(0x7A),
             output_root: kaspa_hashes::Hash64::from_u64_word(0x00),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0x4E),
-            pwu: 1,
+            // DERIVED, not chosen: ADR-0045 Decision 1 makes admission item 6 an EQUALITY against
+            // `palw_pwu_v1(class target at the candidate point, pwu_per_inference)`. Both factors
+            // are chain state, so a miner picking a number is a miner refused — which is the whole
+            // point of the derivation, and what this harness measured the moment it was wired.
+            pwu: kaspa_consensus_core::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
             trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0xD0),
             trace_chunk_count: 8,
             trace_retention_daa: u64::MAX,
         };
+        let attempt = self.palw_v2_win_class_ticket(attempt, class_target);
         PalwAttemptEnvelopeV2 {
             attempt,
             signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }
         .encode_wire()
+    }
+
+    /// The class LOTTERY, run the way a miner runs it (ADR-0039: "ticket, not hash").
+    ///
+    /// The network target decides whether a header is a block at all; the class target decides
+    /// whether it is a block of THIS class, and `class_ticket_v2` is a function of the whole
+    /// unsigned attempt — so a miner varies its `job_nonce` until the ticket lands under the
+    /// class's target. The harness does exactly that, and it must: the alternative is a fixture
+    /// that only ever produced losing tickets, which is what it did before this existed.
+    ///
+    /// Bounded, and the bound fails LOUDLY. A silent give-up would hand back a carriage the chain
+    /// refuses, and the block would die at admission with no hint that the lottery was the reason.
+    fn palw_v2_win_class_ticket(
+        &self,
+        mut attempt: kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        class_target: u128,
+    ) -> kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2 {
+        // The ticket is a function of the whole unsigned attempt, and what a real executor varies
+        // between tries is its EXECUTION — a different run yields a different trace root. The
+        // harness stands in for that by varying the trace root, which is the same lever at the
+        // same place; it does not touch the challenge (that binds the header position) or the
+        // pwu (that is derived and checked for equality).
+        for nonce in 0u64..1_000_000 {
+            attempt.trace_root = kaspa_hashes::Hash64::from_u64_word(0x7A00_0000_0000_0000u64.wrapping_add(nonce));
+            if kaspa_consensus_core::palw_attempt_v2::class_ticket_v2(&attempt) <= class_target {
+                return attempt;
+            }
+        }
+        panic!("the harness could not win the class lottery in 1e6 tries — the target is unreachably tight for a test")
     }
 
     pub fn add_header_only_block_with_parents(

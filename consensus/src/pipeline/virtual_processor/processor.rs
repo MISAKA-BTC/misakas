@@ -354,6 +354,16 @@ pub struct VirtualStateProcessor {
     /// ADR-0044's free-prompt bundle, `Some` on the same networks as `palw_state_params_v2`. It is
     /// what turns an accepted transaction into a consensus object (Unit C step 3).
     pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
+    /// ADR-0042 Decision 6's params, `Some` on the same networks as `palw_state_params_v2`.
+    pub(super) palw_admission_params_v2: Option<kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2>,
+    /// Decision 7's panel constants, and Decision 10's reward split.
+    pub(super) palw_panel_params_v2: Option<kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2>,
+    pub(super) palw_reward_params_v2: Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
+    /// Decision 8's court shape — the ladder depth a challenge is opened over.
+    pub(super) palw_court_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2>,
+    /// The bundle's genesis registration list — what the genesis block applies (Decision 11: the
+    /// ruleset id covers it, so two networks sharing an id register the same classes).
+    pub(super) palw_genesis_objects_v2: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     /// The network's own name bytes — the ONE source `palw_network_domain_v2` is derived from, so
     /// the domain a payload must bind and the domain the Layer-0 digest binds are one fact.
     pub(super) network_id_bytes: Vec<u8>,
@@ -649,6 +659,26 @@ impl VirtualStateProcessor {
             palw_freeprompt_params_v3: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.freeprompt.clone()),
                 _ => None,
+            },
+            palw_admission_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.admission.clone()),
+                _ => None,
+            },
+            palw_panel_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.panel),
+                _ => None,
+            },
+            palw_reward_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.reward),
+                _ => None,
+            },
+            palw_court_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.court),
+                _ => None,
+            },
+            palw_genesis_objects_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.genesis_objects.clone(),
+                _ => Vec::new(),
             },
             network_id_bytes: params.net.to_string().into_bytes(),
             dns_state_store: storage.dns_state_store.clone(),
@@ -1145,11 +1175,25 @@ impl VirtualStateProcessor {
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
                                 let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data);
+                                // Decisions 7/8: every lifecycle object meets its own validator
+                                // before the transition folds it.
+                                if let Err(obj_error) = self.palw_v2_validate_objects(state, state_params, &point, &objects) {
+                                    info!("Block {} is disqualified from virtual chain (PALW object): {}", current, obj_error);
+                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                    chain_disqualified_counter += 1;
+                                    continue;
+                                }
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
                                 // spending block. A block that supplied its own beacon would be
                                 // choosing the randomness that decides whether it wins.
+                                if let Err(adm_error) = self.palw_v2_check_attempt_admission(&header, state, state_params, &point) {
+                                    info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, adm_error);
+                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                    chain_disqualified_counter += 1;
+                                    continue;
+                                }
                                 if let Err(fp_error) = self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
                                     info!("Block {} is disqualified from virtual chain (PALW receipt spend): {}", current, fp_error);
                                     self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
@@ -3407,6 +3451,194 @@ impl VirtualStateProcessor {
         let Ok(header) = self.headers_store.get_header(candidate_point) else { return true };
         let (frontier, _) = state.safe_frontier();
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
+    }
+
+    /// **ADR-0042 Decision 10's consumer: what this block's PALW carve is, and whether anyone may
+    /// spend it.**
+    ///
+    /// The decision is an ESCROW, not a split: `block accepted → escrow → Final → spendable`, with
+    /// `Voided → forfeit` (burned). So the question a coinbase must ask is never "what is the
+    /// carve" alone — it is "which claims BECAME spendable on this chain", and the answer is a
+    /// fold over candidate state, not a property of the block being built.
+    ///
+    /// Returns `(claim, worker_carve_sompi)` for every claim this candidate has matured. A block's
+    /// own claim is `Provisional` at the moment its coinbase is built, so it is never in its own
+    /// list — which is Decision 10 stated as arithmetic rather than as a rule to remember.
+    ///
+    /// **What this deliberately does not do is pay.** A `PalwBondStateV2` carries a pubkey and
+    /// collateral but no payout script, so there is no payee to resolve; inventing one (the
+    /// miner's address, say) would pay the wrong party for work a bonded executor did. Wiring the
+    /// outputs needs a payout SPK on the bond registration — the same field
+    /// `owner_reward_spk_payload` gives a validator bond — and that is a registration-object
+    /// change, not a line here. Until it lands, this is the eligibility and the amount, computed
+    /// and testable, with the missing half named.
+    fn palw_v2_matured_carves(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        subsidy: u64,
+    ) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        use kaspa_consensus_core::palw_reward_v2::{PalwRewardStatusV2, palw_reward_carve_v2, palw_reward_status_v2};
+        let Some(reward) = self.palw_reward_params_v2.as_ref() else { return Vec::new() };
+        let split = palw_reward_carve_v2(subsidy, reward);
+        state
+            .claims_iter()
+            .filter(|(_, claim)| palw_reward_status_v2(&claim.phase) == PalwRewardStatusV2::Spendable)
+            .map(|(id, _)| (*id, split.worker))
+            .collect()
+    }
+
+    /// **ADR-0042 Decisions 7 and 8's consumers: every lifecycle object is ADJUDICATED before it
+    /// is folded.**
+    ///
+    /// `apply_palw_transition_v3` moves a claim's phase on the object's say-so — deliberately, its
+    /// module boundary says so: signature verification and sortition are `palw_panel_v2`'s job,
+    /// the court's verdict is `palw_court_v2`'s. Folding an object nobody validated would make the
+    /// state machine a transcription service for whatever a block asserted, which is the fail-open
+    /// shape the consumer-layer audit found ten of.
+    ///
+    /// So each object meets its own validator here, BEFORE the fold:
+    ///
+    /// * **`PanelBound`** — `validate_panel_bound_v2` re-derives the panel by sortition from the
+    ///   candidate's own bond registry and compares seats EXACTLY. The anchor is not taken from
+    ///   the object either: it is derived from this candidate's chain, the same rule the beacon
+    ///   follows, because a producer that supplies its own anchor picks its own jury.
+    /// * **`CourtOpened`** — `validate_court_opened_v2`: the claim is challengeable at this point
+    ///   and the session id is the one its own parts derive.
+    /// * **`CourtClosed`** — `adjudicate_court_close_v2` returns the ONLY verdict the proof
+    ///   supports, and the object's announced verdict must equal it. An object that merely NAMES
+    ///   a verdict is an accusation, not an adjudication.
+    ///
+    /// A network with no V2 bundle has no objects to check (extraction yields none), so this is
+    /// `Ok(())` everywhere today.
+    fn palw_v2_validate_objects(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> Result<(), String> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else {
+            return if objects.is_empty() { Ok(()) } else { Err("PALW objects on a network with no V2 bundle".to_string()) };
+        };
+        for object in objects {
+            match object {
+                Obj::PanelBound { claim, anchor, seats } => {
+                    let claim_record = state.claim(claim).ok_or_else(|| format!("panel names unknown claim {claim}"))?;
+                    let anchor_fact = self
+                        .palw_v2_anchor_fact_of_candidate(point.block, claim_record.accepted_daa, panel_params)
+                        .ok_or_else(|| format!("no anchor exists yet for claim {claim} on this chain"))?;
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        claim,
+                        &anchor_fact,
+                        *anchor,
+                        seats,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtOpened { session_id, claim, challenger_bond } => {
+                    // The bisection space is the class's own step-leaf count — a catalog fact, not
+                    // an object field, for the reason H2 gives: a space the accuser chose is a
+                    // ladder depth the accuser chose.
+                    let court = self.palw_court_params_v2.as_ref().ok_or("no court params")?;
+                    kaspa_consensus_core::palw_court_v2::validate_court_opened_v2(
+                        state,
+                        state_params,
+                        point,
+                        session_id,
+                        claim,
+                        challenger_bond,
+                        kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                        court.max_step_leaf_count(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtClosed { session_id, verdict } => {
+                    // Without a carried proof there is nothing to adjudicate, and a close that
+                    // adjudicates nothing must not move a claim. The proof rides its own carriage
+                    // kind; until that lands, a close is refused rather than trusted.
+                    let _ = (session_id, verdict);
+                    return Err("a court close with no proof carriage cannot be adjudicated".to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The panel's anchor, derived from THIS candidate's chain (Decision 7's sortition input).
+    ///
+    /// The first chain block at or past `accepted_daa + anchor_delay`, with the predecessor's DAA
+    /// as the witness that makes "first at or past" checkable — the same shape as the free-prompt
+    /// beacon, for the same reason: a producer that supplies its own anchor picks its own jury.
+    fn palw_v2_anchor_fact_of_candidate(
+        &self,
+        from: BlockHash,
+        accepted_daa: u64,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
+        let slot = accepted_daa.checked_add(panel_params.anchor_delay())?;
+        let mut candidate: Option<(BlockHash, u64)> = None;
+        for block in self.reachability_service.default_backward_chain_iterator(from) {
+            let daa = self.headers_store.get_header(block).ok()?.daa_score;
+            if daa >= slot {
+                candidate = Some((block, daa));
+                continue;
+            }
+            // The first block BELOW the slot is the witness; the last one recorded at or above it
+            // is the anchor.
+            let (anchor_block, anchor_daa) = candidate?;
+            return Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
+                anchor_block,
+                anchor_daa,
+                predecessor_daa: daa,
+            });
+        }
+        let (anchor_block, anchor_daa) = candidate?;
+        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
+    }
+
+    /// **ADR-0042 Decision 6's consumer: an attempt-lane (algo-6) block's stateful admission.**
+    ///
+    /// Closes P0-2 and P0-10 at the point they bite. The stateless half — shape, and the challenge
+    /// against the header's own position — already runs at `check_palw_carriage_stateless` before
+    /// GHOSTDAG. This is everything that needs CHAIN STATE and therefore could not run there: the
+    /// bond exists and is not retiring, its key IS the carried key (which is what turns the
+    /// stateless signature into a statement about a bonded party rather than about a keypair), one
+    /// operator per bond, the class is registered and unfrozen, the artifact root is the class's,
+    /// the pwu is the derivation and not a claim, the epoch budget still has room, the class
+    /// lottery admits the ticket, and the bond's immature exposure stays under its ceiling.
+    ///
+    /// `Ok(())` on every block that is not an attempt-lane block, which is every block of every
+    /// network that exists today — the arm is chosen by the header's declared algorithm.
+    fn palw_v2_check_attempt_admission(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), String> {
+        use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
+        if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            return Ok(());
+        }
+        let Some(admission) = self.palw_admission_params_v2.as_ref() else {
+            return Err("an attempt-lane block on a network with no V2 admission params".to_string());
+        };
+        let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_v2(
+            state,
+            state_params,
+            admission,
+            point,
+            &envelope,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
@@ -8500,13 +8732,34 @@ impl VirtualStateProcessor {
         // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
         // network with no V2 bundle (every shipped preset), where the store stays empty.
         if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+            // The genesis block APPLIES the bundle's registration list. A V2 network has no class
+            // and no bond until something registers them, and the only block that can is this one:
+            // admission refuses an attempt naming a bond the chain does not have, so a genesis
+            // that registers nothing produces a network that boots and then cannot make a block.
+            // Found by measurement — the harness wedged exactly there the moment admission was
+            // wired, with every block refused for a bond that existed nowhere.
+            let objects = self.palw_genesis_objects_v2.clone();
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: self.genesis.hash,
+                daa_score: self.genesis.daa_score,
+                blue_score: 0,
+            };
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+                &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
+                state_params,
+                &point,
+                &objects,
+                None,
+            )
+            .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();
-            let genesis_state = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis();
             let mut store = self.palw_state_v2_store.write();
+            // The delta rides too, so the genesis point is walkable like every other chain block
+            // rather than a special case the reorg walk has to know about.
+            store.insert_delta_batch(&mut batch, self.genesis.hash, genesis_state.state_root(), &delta).unwrap();
             store.set_tip_batch(&mut batch, self.genesis.hash, &genesis_state).unwrap();
             drop(store);
             self.db.write(batch).unwrap();
-            let _ = state_params;
         }
 
         // Init the virtual selected chain store

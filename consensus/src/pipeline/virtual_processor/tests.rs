@@ -307,14 +307,18 @@ async fn palw_v2_state_walks_with_the_utxo_diff() {
 
     // Fold every delta from genesis and compare. This is the differential the store exists to
     // make checkable — resume and replay must be the same state.
+    // Genesis is INCLUDED now: it applies the bundle's registration list, so it has a delta like
+    // every other chain block. Stopping the walk above it (the shape this test had before the
+    // registrations landed) folds from a state the chain never had, and the second delta refuses
+    // to apply — which is `revert/apply_delta_v2` doing its job, not a test detail.
     let chain: Vec<_> = ctx
         .consensus
         .virtual_processor()
         .reachability_service
         .default_backward_chain_iterator(tip.block)
-        .take_while(|h| *h != genesis_hash)
+        .take_while(|h| *h != kaspa_consensus_core::blockhash::ORIGIN)
         .collect();
-    assert!(!chain.is_empty(), "the fixture must produce chain blocks for the fold to mean anything");
+    assert!(chain.len() > 1, "the fixture must produce chain blocks beyond genesis for the fold to mean anything");
     let mut folded = PalwChainStateV2::genesis();
     for block in chain.iter().rev() {
         let (_, delta) = store.delta_of(*block).expect("every chain block on the walk has a delta");
@@ -574,6 +578,73 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
 }
 
+/// **ADR-0042 Decision 6: attempt admission runs on the live path, and every clause bites.**
+///
+/// The pure function was tested; what this asserts is that the PIPELINE calls it — and it is
+/// worth a test of its own because wiring it is what proved the harness had been mining blocks no
+/// chain would admit. Before this the fixture carried a hand-written operator id, a chosen `pwu`,
+/// a losing class ticket and a bond with a tenth of the collateral its own claim reserves. Each
+/// of those is a real rule, and each refused every block until the harness was made to do what a
+/// miner does.
+#[tokio::test]
+async fn palw_v2_attempt_admission_runs_on_the_live_path() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    // The genesis list is the only place a V2 network gets a class and a bond. Without it every
+    // attempt names a bond the chain does not have and the network cannot make its first block —
+    // which is what the harness measured the moment admission was wired.
+    assert_eq!(bundle.genesis_objects.len(), 2, "the bundle registers exactly its class and its bond");
+    assert!(bundle.genesis_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { .. })));
+    assert!(bundle.genesis_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::BondRegistered { .. })));
+
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let genesis_hash = config.params.genesis.hash;
+    let consensus = TestConsensus::new(&config);
+
+    // Genesis APPLIED the registrations — the class and the bond exist before block 1.
+    {
+        let vp = consensus.virtual_processor();
+        let store = vp.palw_state_v2_store.read();
+        let (_, state) = store.load_tip(&bundle.state).unwrap().expect("the genesis tip loads");
+        assert!(state.class(&bundle.base_class_id).is_some(), "the liveness floor is registered at genesis");
+        assert_eq!(state.class_share_permille(&bundle.base_class_id), Some(1000), "and holds the whole table");
+        assert!(store.has_delta(genesis_hash).unwrap(), "genesis carries a delta like any chain block");
+    }
+
+    let mut ctx = TestContext::new(consensus);
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    // Blocks whose attempts pass every admission clause DO advance the chain — the wiring is a
+    // gate, not a wall.
+    assert_ne!(ctx.consensus.get_sink(), genesis_hash, "admissible attempts build a chain");
+
+    // …and one that does not is refused. The pwu is the sharpest clause: ADR-0045 Decision 1
+    // makes item 6 an EQUALITY against a value derived from chain state, so a miner that picks a
+    // number is a miner refused.
+    let sink_before = ctx.consensus.get_sink();
+    let template = ctx.build_block_template(11, ctx.simulated_time + 1);
+    let mut liar = template.block.clone();
+    let mut envelope =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&liar.header.palw_commitment).unwrap();
+    envelope.attempt.pwu += 1;
+    liar.header.palw_commitment = envelope.encode_wire();
+    liar.header.finalize();
+    let liar_hash = liar.header.hash;
+    ctx.validate_and_insert_block(liar.to_immutable()).await;
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "an attempt claiming a pwu it did not derive cannot become the sink");
+    assert_ne!(liar_hash, sink_before);
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {
@@ -594,10 +665,22 @@ fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalo
 fn palw_v2_test_bundle(
     catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
 ) -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+    // The bond and the class the harness's own attempt carriage names
+    // (`TestConsensus::palw_v2_test_carriage`). They must agree: admission refuses an attempt
+    // whose bond the chain does not have, and the genesis registration list is the only place a
+    // V2 network gets one.
     let mut b = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         kaspa_hashes::Hash64::from_u64_word(1),
         catalog.root(),
         kaspa_hashes::Hash64::from_u64_word(0xC0757),
+        4_096,
+        kaspa_hashes::Hash64::from_u64_word(0xA7),
+        kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+            kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+            0,
+        )),
+        vec![7u8; 32],
+        vec![21u8; 8],
     )
     .expect("the devnet bundle validates");
     b.class_catalog_root = catalog.root();

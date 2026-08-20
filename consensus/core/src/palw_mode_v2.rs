@@ -260,6 +260,19 @@ pub struct PalwConsensusParamsV2 {
     /// preimage, and committed as the context bytes' own digest rather than a version number, so
     /// a build whose contexts differ from the network's refuses to start.
     pub signature_contexts_root: Hash64,
+    /// **The genesis registration list — the RC genesis artifact's own objects.**
+    ///
+    /// A `ConsensusV2` network has no class and no bond until something registers them, and the
+    /// only block that can is genesis: an attempt is refused by admission for naming a bond the
+    /// chain does not have, so a network whose genesis registers nothing can never produce its
+    /// first block. Measured, not reasoned about — the harness wedged exactly there once
+    /// admission was wired.
+    ///
+    /// They live in the BUNDLE because the ruleset id must cover them: two networks that share a
+    /// ruleset id and register different classes are two rulesets, which is the property
+    /// Decision 11 exists to make checkable. `palw_genesis_v2::verify_palw_genesis_v2` checks
+    /// this list against the catalog preimage at load.
+    pub genesis_objects: Vec<crate::palw_state_v2::PalwConsensusObjectV2>,
 }
 
 impl PalwConsensusParamsV2 {
@@ -672,6 +685,25 @@ pub(crate) mod tests {
             fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
             trace_format_version: PALW_V2_TRACE_FORMAT_VERSION,
             signature_contexts_root: palw_v2_signature_contexts_root(),
+            genesis_objects: vec![
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                    class_id: base,
+                    artifact_root: h64(11),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 1000,
+                },
+                crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
+                    bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                        transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
+                        index: 0,
+                    }),
+                    pubkey: vec![7; 4],
+                    operator_pubkey: vec![21; 8],
+                    collateral: 100_000,
+                },
+            ],
         }
     }
 
