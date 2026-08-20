@@ -105,7 +105,6 @@ pub fn palw_fp_job_context_v3(
     class: &PalwFpClassFactsV3,
     facts: &PalwFpRunFactsV3,
     network_id: &[u8],
-    execution_seed: [u8; 32],
 ) -> Result<PalwJobContextV2, PalwFpExecutionV3Error> {
     if network_id.is_empty() || network_id.len() > crate::palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES {
         return Err(PalwFpExecutionV3Error::NetworkIdShape);
@@ -154,7 +153,20 @@ pub fn palw_fp_job_context_v3(
         // meaning different things.
         job_nullifier: Hash64::default(),
         assignment_id: Hash64::default(),
-        execution_seed,
+        // **Audit H7, closed on this lane: the seed is DERIVED, never supplied.**
+        //
+        // `execution_seed` is a free field on the V2 envelope — carriage never inspects it — so
+        // gate item 5's premise ("chain-bound, grinding-closed") was false for the objects the
+        // gate credits. Taking it as a parameter here would have carried that hole into the
+        // free-prompt lane, so it is not a parameter: it is a function of the job's ANCHOR, which
+        // is a recent chain block whose freshness admission bounds. The producer picks when to
+        // anchor, not what the anchor is.
+        //
+        // `job_nonce` is deliberately excluded even though it is in the job id. It is
+        // producer-chosen, and a seed a producer can grind is the thing this closes; the nonce's
+        // own doc says it carries no lottery meaning, and letting it into the seed would give it
+        // one.
+        execution_seed: palw_fp_execution_seed_v3(job),
         model_profile_id: class.model_profile_id,
         runtime_manifest_hash: class.runtime_manifest_hash,
         runtime_class_id: class.runtime_class_id,
@@ -167,6 +179,25 @@ pub fn palw_fp_job_context_v3(
         exact_decode_tokens: facts.decode_tokens_executed,
         max_context_tokens: job.max_context_tokens,
     })
+}
+
+pub const PALW_FP_V3_DOMAIN_EXECUTION_SEED: &[u8] = b"misaka-palw/fp-v3/execution-seed/v1";
+
+/// The execution seed a free-prompt job runs under — a function of CHAIN facts, not a field.
+///
+/// Bound to the network domain, the class and the anchor block. Every one of those is either
+/// fixed by the registration or is a block the producer did not mine; admission bounds how old
+/// the anchor may be, so a producer choosing WHEN to anchor is the whole of its freedom here.
+/// `job_nonce` is excluded on purpose (see the call site).
+pub fn palw_fp_execution_seed_v3(job: &PalwFreePromptJobV3) -> [u8; 32] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_V3_DOMAIN_EXECUTION_SEED).to_state();
+    state.update(job.network_domain.as_byte_slice());
+    state.update(job.class_id.as_byte_slice());
+    state.update(job.anchor_block.as_byte_slice());
+    state.update(&job.anchor_daa.to_le_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&state.finalize().as_bytes()[..32]);
+    seed
 }
 
 /// The `committed_execution_root` a free-prompt commitment must carry.
@@ -242,7 +273,7 @@ mod tests {
     /// never have produced.
     #[test]
     fn a_derived_context_is_one_the_court_accepts() {
-        let ctx = palw_fp_job_context_v3(&job(), &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32])
+        let ctx = palw_fp_job_context_v3(&job(), &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), NET)
             .expect("an honest run derives a context");
         assert_eq!(ctx.exact_decode_tokens, 77, "the context records what RAN, not the ceiling");
         assert_eq!(ctx.declared_prefill_tokens, 64);
@@ -259,7 +290,7 @@ mod tests {
     #[test]
     fn the_execution_root_is_the_composite_the_court_recomputes() {
         let f = facts(77, PalwFpStopReasonV3::EndOfGeneration);
-        let ctx = palw_fp_job_context_v3(&job(), &class(), &f, NET, [9; 32]).unwrap();
+        let ctx = palw_fp_job_context_v3(&job(), &class(), &f, NET).unwrap();
         let root = palw_fp_execution_root_v3(&ctx, &f);
         assert_eq!(
             root,
@@ -288,9 +319,9 @@ mod tests {
 
         // …and so does the context: a different class, a different decode count, a different
         // network all name a different execution.
-        let other_net = palw_fp_job_context_v3(&job(), &class(), &f, b"testnet-11", [9; 32]).unwrap();
+        let other_net = palw_fp_job_context_v3(&job(), &class(), &f, b"testnet-11").unwrap();
         assert_ne!(palw_fp_execution_root_v3(&other_net, &f), root, "the network is inside the root");
-        let other_len = palw_fp_job_context_v3(&job(), &class(), &facts(78, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32]).unwrap();
+        let other_len = palw_fp_job_context_v3(&job(), &class(), &facts(78, PalwFpStopReasonV3::EndOfGeneration), NET).unwrap();
         assert_ne!(palw_fp_execution_root_v3(&other_len, &f), root, "the decode count is inside the root");
     }
 
@@ -300,39 +331,93 @@ mod tests {
     fn impossible_runs_are_refused_before_they_get_a_root() {
         let j = job();
         assert_eq!(
-            palw_fp_job_context_v3(&j, &class(), &facts(0, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32]).unwrap_err(),
+            palw_fp_job_context_v3(&j, &class(), &facts(0, PalwFpStopReasonV3::EndOfGeneration), NET).unwrap_err(),
             PalwFpExecutionV3Error::NoDecodeTokens
         );
         assert_eq!(
-            palw_fp_job_context_v3(&j, &class(), &facts(129, PalwFpStopReasonV3::ExactBudgetReached), NET, [9; 32]).unwrap_err(),
+            palw_fp_job_context_v3(&j, &class(), &facts(129, PalwFpStopReasonV3::ExactBudgetReached), NET).unwrap_err(),
             PalwFpExecutionV3Error::OverBudget { executed: 129, limit: 128 }
         );
         // The stop reason is canonical, not descriptive: one execution must have ONE encoding, or
         // it has two claim ids.
         assert!(matches!(
-            palw_fp_job_context_v3(&j, &class(), &facts(77, PalwFpStopReasonV3::ExactBudgetReached), NET, [9; 32]),
+            palw_fp_job_context_v3(&j, &class(), &facts(77, PalwFpStopReasonV3::ExactBudgetReached), NET),
             Err(PalwFpExecutionV3Error::StopReasonInconsistent(_))
         ));
         assert!(matches!(
-            palw_fp_job_context_v3(&j, &class(), &facts(128, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32]),
+            palw_fp_job_context_v3(&j, &class(), &facts(128, PalwFpStopReasonV3::EndOfGeneration), NET),
             Err(PalwFpExecutionV3Error::StopReasonInconsistent(_))
         ));
         // …and the canonical pairings are accepted.
-        palw_fp_job_context_v3(&j, &class(), &facts(128, PalwFpStopReasonV3::ExactBudgetReached), NET, [9; 32])
+        palw_fp_job_context_v3(&j, &class(), &facts(128, PalwFpStopReasonV3::ExactBudgetReached), NET)
             .expect("a run that hit its ceiling");
-        palw_fp_job_context_v3(&j, &class(), &facts(1, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32])
+        palw_fp_job_context_v3(&j, &class(), &facts(1, PalwFpStopReasonV3::EndOfGeneration), NET)
             .expect("a run that stopped early");
 
         let mut tight = job();
         tight.max_context_tokens = 100;
         assert_eq!(
-            palw_fp_job_context_v3(&tight, &class(), &facts(64, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32]).unwrap_err(),
+            palw_fp_job_context_v3(&tight, &class(), &facts(64, PalwFpStopReasonV3::EndOfGeneration), NET).unwrap_err(),
             PalwFpExecutionV3Error::ContextOverflow { prefill: 64, decode: 64, max: 100 }
         );
         assert_eq!(
-            palw_fp_job_context_v3(&j, &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), b"", [9; 32]).unwrap_err(),
+            palw_fp_job_context_v3(&j, &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), b"").unwrap_err(),
             PalwFpExecutionV3Error::NetworkIdShape
         );
+    }
+
+    /// **Audit H7, closed on this lane and measured: the execution seed cannot be ground.**
+    ///
+    /// Gate item 5 credits "chain-bound `execution_seed`, grinding-closed". On the V2 envelope
+    /// that premise was false — the field is free and carriage never inspects it — so the report
+    /// the gate asks for would have measured the entropy of a value its producer chose. Taking it
+    /// as a parameter here would have carried the hole into this lane; deriving it from the
+    /// job's anchor closes it, and this pins both halves of "closed".
+    #[test]
+    fn the_execution_seed_is_chain_bound_and_not_grindable() {
+        let base = job();
+        let seed = palw_fp_execution_seed_v3(&base);
+
+        // (a) The producer's own free field does NOT move it. `job_nonce` is the one value a
+        //     producer varies at will, and a seed it could move is a seed it could grind.
+        for n in [0u8, 1, 7, 0xFF] {
+            let mut ground = base.clone();
+            ground.job_nonce = [n; 32];
+            assert_eq!(palw_fp_execution_seed_v3(&ground), seed, "grinding the nonce must not move the seed");
+        }
+        // Nor do the fields that describe the request rather than the chain.
+        let mut other_prompt = base.clone();
+        other_prompt.prompt_token_ids_hash = h64(0xBEEF);
+        other_prompt.decode_token_limit = 1;
+        assert_eq!(palw_fp_execution_seed_v3(&other_prompt), seed);
+
+        // (b) Every CHAIN fact does move it — otherwise "chain-bound" would be a word rather than
+        //     a property, and one seed would serve two anchors, two classes or two networks.
+        for (name, mutate) in [
+            ("anchor block", (|j: &mut PalwFreePromptJobV3| j.anchor_block = h64(0xAA)) as fn(&mut PalwFreePromptJobV3)),
+            ("anchor daa", |j: &mut PalwFreePromptJobV3| j.anchor_daa += 1),
+            ("class", |j: &mut PalwFreePromptJobV3| j.class_id = h64(2)),
+            ("network", |j: &mut PalwFreePromptJobV3| j.network_domain = h64(0x99)),
+        ] {
+            let mut moved = base.clone();
+            mutate(&mut moved);
+            assert_ne!(palw_fp_execution_seed_v3(&moved), seed, "the {name} must be inside the seed");
+        }
+
+        // (c) And the derived context really carries it, so the root inherits the binding: two
+        //     jobs differing only in their anchor produce different execution roots.
+        let f = facts(77, PalwFpStopReasonV3::EndOfGeneration);
+        let here = palw_fp_job_context_v3(&base, &class(), &f, NET).unwrap();
+        assert_eq!(here.execution_seed, seed);
+        let mut elsewhere_job = base.clone();
+        elsewhere_job.anchor_block = h64(0xAA);
+        let elsewhere = palw_fp_job_context_v3(&elsewhere_job, &class(), &f, NET).unwrap();
+        assert_ne!(
+            palw_fp_execution_root_v3(&elsewhere, &f),
+            palw_fp_execution_root_v3(&here, &f),
+            "the anchor reaches the root through the seed"
+        );
+        assert_ne!(seed, [0u8; 32], "a null seed would be no binding at all");
     }
 
     /// The free-prompt lane's context zeroes the two fields that name an ORDERER, and that is a
@@ -340,7 +425,7 @@ mod tests {
     /// nullifier to spend. Pinned so a later "fill these in" does not happen by accident.
     #[test]
     fn a_self_originated_job_names_no_orderer() {
-        let ctx = palw_fp_job_context_v3(&job(), &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), NET, [9; 32]).unwrap();
+        let ctx = palw_fp_job_context_v3(&job(), &class(), &facts(77, PalwFpStopReasonV3::EndOfGeneration), NET).unwrap();
         assert_eq!(ctx.job_nullifier, Hash64::default());
         assert_eq!(ctx.assignment_id, Hash64::default());
         // …while everything that DOES apply is carried through from the class registration.
