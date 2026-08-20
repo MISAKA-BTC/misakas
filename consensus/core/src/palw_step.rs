@@ -593,6 +593,27 @@ pub fn kv_aux_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV
     attn_layers * profile.attn_kv_heads as u64 * 2 * positions.div_ceil(profile.kv_chunk_calls as u64)
 }
 
+/// The largest leaf count this profile can ever produce — the class's worst case, from shape alone.
+///
+/// The longest job a class admits is its whole context as prefill with one decode call, so this is
+/// [`step_leaf_count`] at that point. Callers that need "can this class be adjudicated at all"
+/// (`palw_schedule::class_is_adjudicable_v1`) want exactly this and nothing job-specific: admitting
+/// a class whose TYPICAL job fits the ladder while its longest does not is admitting a class an
+/// attacker chooses the job length for.
+pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64, PalwStepError> {
+    let prefill = profile.n_ctx.saturating_sub(1);
+    let mut total = 0u64;
+    for p in 0..prefill as u64 {
+        total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill as u64));
+    }
+    // One decode call at the far end of the context, matching `step_leaf_count`'s own enumeration.
+    total = total.saturating_add(leaves_per_position(profile, prefill as u64 + 1, true));
+    if total > PALW_STEP_MAX_LEAVES {
+        return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+    }
+    Ok(total)
+}
+
 /// Total step-leg leaves for `(profile, context)`: the main enumeration then the aux series.
 /// Errors when the job shape exceeds the cap.
 pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<u64, PalwStepError> {

@@ -474,6 +474,13 @@ pub(crate) mod tests {
         BlockrateParams::new_two_minute_bps()
     }
 
+    /// The fixture profile, for `palw_schedule`'s ladder-reachability probe. `pub(crate)` so the
+    /// activation condition is tested against a shape this tree actually builds rather than one
+    /// invented beside it.
+    pub(crate) fn profile_for_schedule_probe() -> PalwShapeProfileV3 {
+        profile_with_libm(false)
+    }
+
     fn profile_with_libm(binds_libm: bool) -> PalwShapeProfileV3 {
         // `h64(0x11)` is deliberately NOT a catalogued kernel id: this is the float class's
         // profile, and the float catalog is incomplete by design (ADR-0031 Fact 4). A class

@@ -64,6 +64,11 @@ pub const PALW_SCHEDULE_REPLAY_KAPPA: u64 = 3;
 pub enum PalwScheduleError {
     #[error("unsupported palw-schedule object version {got} (expected {expected})")]
     UnsupportedVersion { got: u16, expected: u16 },
+    #[error(
+        "this class's worst-case step space is {leaves} leaves and the ladder can reach {reachable} — \
+         a fraud deeper than that is unprosecutable inside the challenge window"
+    )]
+    LadderCannotReachTheClass { leaves: u64, reachable: u64 },
     #[error("block cadence is frozen at {required_ms} ms per block (ADR-0038 Decision H); this network targets {got_ms} ms")]
     CadenceNotFrozen { got_ms: u64, required_ms: u64 },
     #[error("window parameters are not canonical: {reason}")]
@@ -191,6 +196,42 @@ pub fn affordable_ladder_rounds_v1(params: &PalwScheduleParamsV1) -> u64 {
     let after = PALW_SCHEDULE_WINDOWS_AFTER_LADDER.saturating_mul(params.w_round);
     let usable = params.w_challenge.saturating_sub(params.w_replay).saturating_sub(after);
     usable / (PALW_SCHEDULE_WINDOWS_PER_RUNG * params.w_round)
+}
+
+/// **Can this class's disputes actually be adjudicated under these windows?** (audit P0-9 item 4)
+///
+/// The audit's own remedy: *measure the real `step_leaf_count` and make "a terminal verdict is
+/// reachable inside the challenge window, for every class" an activation condition*. This is that
+/// condition, as a refusal rather than a note.
+///
+/// A step space larger than [`max_ladder_space_v1`] cannot be bisected to a terminal index before
+/// `w_challenge` closes, so the terminal opening and the conviction it enables land past the window
+/// and are discarded. A fraud that deep is **unprosecutable** — not slow, not expensive:
+/// structurally beyond reach — and a network that activates such a class has a court that cannot
+/// convict, which is the assumption A4 leans on.
+///
+/// The worst case is what is checked, at the profile's own `n_ctx`: a class is admitted or not, and
+/// admitting one whose TYPICAL job fits while its longest does not is admitting a class an attacker
+/// picks the job length for.
+///
+/// `Err` names both numbers, because "your ladder is too short" and "your model is too big" are the
+/// same fact seen from two ends and the operator has to see which end they can move.
+pub fn class_is_adjudicable_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    params: &PalwScheduleParamsV1,
+) -> Result<u64, PalwScheduleError> {
+    // The longest job this class admits. `exact_decode_tokens` of 1 with the whole context as
+    // prefill is the largest leaf count the enumeration can reach for a given `n_ctx`.
+    // `step_leaf_count` reads only the token counts off the context, so the worst case is computed
+    // from those alone rather than by inventing a whole job — a synthetic job id or seed here would
+    // be a value nobody checks that a reader could mistake for one that matters.
+    let leaves = crate::palw_step::worst_case_step_leaf_count_v1(profile)
+        .map_err(|_| PalwScheduleError::ParamsNotCanonical { reason: "the class's own shape exceeds the step-space cap" })?;
+    let reachable = max_ladder_space_v1(params);
+    if leaves > reachable {
+        return Err(PalwScheduleError::LadderCannotReachTheClass { leaves, reachable });
+    }
+    Ok(leaves)
 }
 
 /// The largest bisection space these parameters can walk to a terminal index in time.
@@ -991,6 +1032,36 @@ mod tests {
         let floor_leaves = LAYERS * 3 * 1 * 16;
         assert_eq!(floor_leaves, 1_152);
         assert!(floor_leaves > max_ladder_space_v1(&two_minute), "even the floor of the envelope exceeds the affordable space");
+    }
+
+    /// **Audit P0-9 item 4**: a class whose disputes cannot terminate in time is refused.
+    ///
+    /// The audit's own remedy — measure the real step space and make reachability an ACTIVATION
+    /// CONDITION — as a refusal. A class larger than the ladder can walk has a court that cannot
+    /// convict at any depth beyond it, which is A4's assumption failing silently rather than a
+    /// network being slow.
+    ///
+    /// The toy fixture passes and a realistic geometry does not, which is the whole point: the
+    /// check is what turns "nobody measured this" into "this network cannot be built".
+    #[test]
+    fn a_class_the_ladder_cannot_walk_is_refused() {
+        use crate::palw_step::PalwShapeProfileV3;
+        let two_minute = PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
+
+        // A tiny fixture class fits inside 2^10 and is admitted, with its measured space returned.
+        let small = crate::palw_registry::tests::profile_for_schedule_probe();
+        let leaves = class_is_adjudicable_v1(&small, &two_minute).expect("a toy class fits the ladder");
+        assert!(leaves <= max_ladder_space_v1(&two_minute));
+
+        // Widen the same shape toward the pinned model's depth and it stops being adjudicable.
+        let mut realistic = PalwShapeProfileV3 { layer_count: 24, n_ctx: 64, ..small };
+        realistic.n_batch = realistic.n_ctx;
+        realistic.n_ubatch = realistic.n_ctx;
+        let err = class_is_adjudicable_v1(&realistic, &two_minute).expect_err("24 layers over 64 tokens outruns 2^10");
+        assert!(
+            matches!(err, PalwScheduleError::LadderCannotReachTheClass { reachable, .. } if reachable == max_ladder_space_v1(&two_minute)),
+            "the error must name both ends, since raising the ladder and shrinking the class are the same fact: {err}"
+        );
     }
 
     /// ADR-0038 Decision H: the 120-second cadence is frozen, and "well-formed" does not imply

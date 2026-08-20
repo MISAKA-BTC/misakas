@@ -602,6 +602,19 @@ impl Params {
                     "palw_schedule is set without palw_credit — there is no registered class for these windows to describe",
                 ));
             }
+            // Audit P0-9 item 4, as an activation condition rather than a note: a class whose worst
+            // -case step space outruns what the ladder can walk inside `w_challenge` has a court
+            // that cannot convict beyond that depth. A4 ("the catalog covers every reachable
+            // kernel") then fails silently — the dispute opens, the rungs run, and the terminal
+            // opening lands past the window and is discarded. Refusing here makes it a network that
+            // cannot be built instead of one that runs with an unusable court.
+            if let Some(credit) = self.palw_credit.as_ref() {
+                crate::palw_schedule::class_is_adjudicable_v1(&credit.registration.shape_profile, schedule).map_err(|_| {
+                    crate::palw_registry::PalwRegistryError::NotCanonical(
+                        "the registered class's step space outruns the ladder these windows can walk",
+                    )
+                })?;
+            }
         }
         if let Some(ramp) = self.palw_ramp.as_ref() {
             ramp.validate()
