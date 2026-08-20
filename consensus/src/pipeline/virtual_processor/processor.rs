@@ -1511,6 +1511,43 @@ impl VirtualStateProcessor {
         derive_beacon_fact_to_genesis_v3(slot, bundle.algorithm_id, facts).map_err(|e| format!("beacon: {e}"))
     }
 
+    /// ADR-0042 Decision 9 (Unit D): may this candidate replace the incumbent sink?
+    ///
+    /// `true` on a network with no V2 ruleset (nothing to say), and `true` when the candidate does
+    /// not reorg at all — extending the incumbent is not abandoning it, and demanding a strict
+    /// comparator win there would refuse the chain's own next block whenever a claim's maturing
+    /// left the orders equal.
+    ///
+    /// A candidate this node cannot weigh is REFUSED, not admitted: the same direction the tip
+    /// heap takes, and the one that keeps a node from adopting a chain it never evaluated.
+    fn palw_deep_reorg_allows(&self, candidate: BlockHash, prev_sink: BlockHash) -> bool {
+        use kaspa_consensus_core::palw_fork_authority_v2::{PalwDeepReorgV2, decide_deep_reorg_v2};
+        if self.palw_consensus_v2.is_none() || candidate == prev_sink {
+            return true;
+        }
+        if self.reachability_service.try_is_chain_ancestor_of(prev_sink, candidate).unwrap_or(false) {
+            return true; // extending, not reorging
+        }
+        // Retreating along the SAME chain is not abandoning it either — it is what the search does
+        // when nothing ahead validates, and it terminates at genesis. Demanding a comparator win
+        // there refuses the escape hatch and walks the search past genesis into ORIGIN, which is
+        // exactly the panic this arm was written after seeing.
+        if self.reachability_service.try_is_chain_ancestor_of(candidate, prev_sink).unwrap_or(false) {
+            return true;
+        }
+        let (Some(incumbent), Some(challenger)) = (self.palw_candidate_order(prev_sink), self.palw_candidate_order(candidate)) else {
+            warn!("[palw-fork-choice] cannot weigh the reorg {prev_sink} -> {candidate}; refusing it");
+            return false;
+        };
+        match decide_deep_reorg_v2(&incumbent, &challenger) {
+            PalwDeepReorgV2::Allow => true,
+            PalwDeepReorgV2::Refuse => {
+                debug!("[palw-fork-choice] candidate {candidate} does not strictly outrank the sink {prev_sink}; refusing the reorg");
+                false
+            }
+        }
+    }
+
     /// The parent-side PALW state root a block extending `selected_parent` must commit
     /// (ADR-0043) — what a miner puts in its carriage, and what validation compares against.
     ///
@@ -1545,11 +1582,7 @@ impl VirtualStateProcessor {
     /// which a caller must treat as "no PALW opinion", never as "zero weight". A candidate that
     /// looks weightless because its history could not be read is exactly the fabrication the
     /// frontier-first ordering exists to refuse.
-    // Unused on purpose until Unit D wires all four selection sites at once. Wiring one while
-    // the others order by blue work is P0-5, so the capability waits for its callers rather than
-    // acquiring them one at a time.
-    #[allow(dead_code)]
-    pub(super) fn palw_candidate_order(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+    pub(crate) fn palw_candidate_order(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
         let bundle = self.palw_consensus_v2.as_ref()?;
         // A candidate this node has never seen has no chain to derive from, and asking the
         // reachability service about it PANICS. "No opinion" must be returned, not raised —
@@ -7566,8 +7599,17 @@ impl VirtualStateProcessor {
                     // rejection is soft — we fall through to push the candidate's parents
                     // and continue, converging on a DNS-valid sink (mirrors the
                     // invalid-UTXO handling below).
+                    // ADR-0042 Decision 9 (Unit D, site 2): on a V2 network a candidate that
+                    // REORGS the sink must strictly win the one comparator. Depth, raw blue work
+                    // and arrival order are not the authority — the same rule the tip heap above
+                    // ranks by, applied to the decision to abandon the incumbent. Soft refusal,
+                    // exactly like the DNS gate beside it: fall through, push parents, converge.
+                    // The V2 gate rides the SAME accept predicate as the DNS one, so a refusal
+                    // falls through to the shared parent-push at the bottom of the loop rather
+                    // than growing a second copy of it — one convergence path, not two.
+                    let palw_v2_allows = self.palw_deep_reorg_allows(candidate, prev_sink);
                     let dns_outcome = self.dns_reorg_outcome(candidate, prev_sink, bond_view);
-                    if dns_outcome.is_accept() {
+                    if palw_v2_allows && dns_outcome.is_accept() {
                         // Self-wedge signal (incident 2026-07-19 §2-1). The 7/19 freeze ran 3.5h
                         // with ZERO warnings: the gate refused every block of the network's chain
                         // while the node believed it was correctly repelling a deep reorg, and the
@@ -9190,6 +9232,19 @@ where
 /// `palw` is `None` until a resolver assembles the weight facts from chain state. With
 /// `BlueWorkOnly` that field is not read at all, so the ordering is exactly `SortableBlock`'s.
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// The sink search's heap entry.
+///
+/// **This is a SEARCH order, not the authority** (ADR-0042 Decision 9, Unit D). A candidate's
+/// PALW standing is only defined once its chain has been applied — the state is the result of
+/// applying blocks, and an unvalidated tip has no delta to apply — so a heap of unvalidated tips
+/// cannot be ordered by the comparator, and pretending otherwise would mean ranking candidates by
+/// a state nobody has computed.
+///
+/// The authority is `palw_deep_reorg_allows`, at the point the sink actually MOVES: a candidate
+/// that survives UTXO and PALW validation may take the sink only by strictly outranking the
+/// incumbent under the one comparator. Every sink move therefore goes through the comparator,
+/// which is what Decision 9 requires; what the heap decides is only the order candidates are
+/// TRIED in.
 struct RankedTip {
     block: SortableBlock,
     palw: Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1>,

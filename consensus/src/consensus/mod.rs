@@ -2106,6 +2106,10 @@ impl ConsensusApi for Consensus {
         self.headers_store.get_header(hash).optional().unwrap().ok_or(ConsensusError::HeaderNotFound(hash))
     }
 
+    fn get_palw_candidate_order(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+        self.virtual_processor.palw_candidate_order(candidate)
+    }
+
     fn get_header_download_hint(&self) -> BlockHash {
         self.headers_selected_tip_store.read().get().unwrap().hash
     }

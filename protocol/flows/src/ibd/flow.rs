@@ -159,6 +159,31 @@ pub struct IbdFlow {
     challenger_receiver: broadcast::Receiver<CandidateId>,
 }
 
+/// ADR-0042 Decision 9 (Unit D, site 4): may the staged chain replace the active one?
+///
+/// `true` on a network with no V2 ruleset — `get_palw_candidate_order` answers `None` there, and
+/// two `None`s mean "this rule has nothing to say", not "the challenger loses". A network that DOES
+/// run the ruleset and cannot weigh one of the two chains refuses: adopting a chain nobody
+/// evaluated is the failure IBD candidate selection exists to prevent.
+fn palw_ibd_commit_allows(
+    active: &kaspa_consensusmanager::ConsensusInstance,
+    staged: &kaspa_consensusmanager::ConsensusInstance,
+) -> bool {
+    use kaspa_consensus_core::palw_fork_authority_v2::{PalwIbdCommitV2, decide_ibd_commit_v2};
+    let active = active.unguarded_session_blocking();
+    let staged = staged.unguarded_session_blocking();
+    let incumbent = active.get_palw_candidate_order(active.get_sink());
+    let challenger = staged.get_palw_candidate_order(staged.get_sink());
+    match (incumbent, challenger) {
+        (None, None) => true,
+        (Some(incumbent), Some(challenger)) => matches!(decide_ibd_commit_v2(&incumbent, &challenger), PalwIbdCommitV2::Commit),
+        _ => {
+            warn!("PALW fork choice: one of the two chains could not be weighed; refusing to replace the incumbent");
+            false
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Flow for IbdFlow {
     fn router(&self) -> Option<Arc<Router>> {
@@ -1505,7 +1530,18 @@ impl IbdFlow {
                             switch_count: gate.restored_switches(),
                         };
                         let committed = spawn_blocking(move || {
-                            staging.commit_if(|active| {
+                            staging.commit_if(|active, staged| {
+                                // ADR-0042 Decision 9 (Unit D, site 4): on a V2 network the staged
+                                // chain must STRICTLY outrank the incumbent under the one PALW
+                                // comparator — the same rule the virtual sink and the pruning
+                                // point use. Ties keep the incumbent, so a re-derived equal chain
+                                // never churns the sink between two nodes that staged in different
+                                // orders. Both readings happen HERE, under the write lock, because
+                                // a comparison carried in from before it is a comparison of two
+                                // chains that have since moved.
+                                if !palw_ibd_commit_allows(active, staged) {
+                                    return false;
+                                }
                                 let Some(permit) = permit else {
                                     return true; // no adoption decision rode on the defender
                                 };

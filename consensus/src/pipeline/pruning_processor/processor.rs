@@ -204,11 +204,44 @@ impl PruningProcessor {
         true
     }
 
+    /// Drop pruning-point candidates above the PALW safe frontier (ADR-0042 Decision 9).
+    ///
+    /// A no-op on every network with no V2 ruleset, and on a node whose frontier cannot be read —
+    /// the conservative direction there is to prune NOTHING new rather than to prune on a frontier
+    /// nobody could derive, so an unreadable state clamps the list empty.
+    fn palw_clamp_pruning_points(&self, candidates: Vec<BlockHash>) -> Vec<BlockHash> {
+        // The mode comes from the config (this processor derefs to storage, which holds the
+        // store); no second copy of the fact.
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return candidates;
+        };
+        let store = self.palw_state_v2_store.read();
+        let Ok((_, state)) = crate::processes::palw_state_walk::load_anchor(&store, &bundle.state) else {
+            kaspa_core::warn!("[palw-pruning] cannot read the PALW safe frontier; not advancing the pruning point this round");
+            return Vec::new();
+        };
+        let (frontier_blue_score, _) = state.safe_frontier();
+        let kept: Vec<BlockHash> = candidates
+            .into_iter()
+            .take_while(|point| {
+                let blue = self.ghostdag_store.get_blue_score(*point).unwrap_or(u64::MAX);
+                kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(blue, frontier_blue_score)
+            })
+            .collect();
+        kept
+    }
+
     fn advance_pruning_point_if_possible(&self, sink_ghostdag_data: CompactGhostdagData) {
         let pruning_point_read = self.pruning_point_store.upgradable_read();
         let (current_pruning_point, current_index) = pruning_point_read.pruning_point_and_index().unwrap();
         let new_pruning_points = self.pruning_point_manager.next_pruning_points(sink_ghostdag_data, current_pruning_point);
 
+        // ADR-0042 Decision 9 (Unit D, site 3): on a V2 network the pruning point may not pass the
+        // safe frontier. Below it every claim is Final or Voided and the carriage summarizes them;
+        // above it live court evidence and unresolved claims still need their history, so a
+        // pruning point above the frontier would delete the record mid-trial.
+        let new_pruning_points = self.palw_clamp_pruning_points(new_pruning_points);
         if let Some(new_pruning_point) = new_pruning_points.last().copied() {
             let retention_period_root = pruning_point_read.retention_period_root().unwrap();
 

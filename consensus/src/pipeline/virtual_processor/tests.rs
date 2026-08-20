@@ -5074,6 +5074,13 @@ mod palw_state_walk_wiring {
         }
 
         // A short chain, then a heavier sibling branch that reorgs it out.
+        //
+        // The competing branch is built on a SECOND consensus instance, because PALW state exists
+        // only along a node's own selected chain: a block commits its parent-side state root, and
+        // that state is derivable only for chain blocks. A real miner never hits this — it mines
+        // on its own virtual — but a test that built both branches on one node would be asking it
+        // to mine on a parent it had not chosen, which no miner does. (The first draft did exactly
+        // that and produced blocks with no carriage at all.)
         let mut chain_a = vec![genesis];
         for i in 1..=3u64 {
             let hash = Hash64::from_u64_word(0xA000 + i);
@@ -5091,12 +5098,10 @@ mod palw_state_walk_wiring {
         }
         assert_eq!(tc.get_sink(), *chain_a.last().unwrap());
 
-        // Branch B off genesis, one block longer, so it takes the sink.
-        let mut chain_b = vec![genesis];
-        for i in 1..=5u64 {
-            let hash = Hash64::from_u64_word(0xB000 + i);
-            tc.add_utxo_valid_block_with_parents(hash, vec![*chain_b.last().unwrap()], vec![]).await.unwrap();
-            chain_b.push(hash);
+        // Branch B, mined by another node on its own chain, then relayed here.
+        let (chain_b, blocks_b) = build_branch_on_a_peer(&config, 0xB000, 5).await;
+        for block in &blocks_b {
+            tc.validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
         }
         assert_eq!(tc.get_sink(), *chain_b.last().unwrap(), "the heavier branch took the sink");
         {
@@ -5114,6 +5119,35 @@ mod palw_state_walk_wiring {
         tc.shutdown(handles);
     }
 
+    /// Build a chain of `len` blocks on a SEPARATE consensus instance — a peer's node, where that
+    /// chain IS the selected chain — and return its hashes and the blocks themselves for relay.
+    ///
+    /// This exists because PALW state is chain-scoped: a block's parent-side state root is only
+    /// derivable when its parent is on the deriving node's own chain. Mining a competing branch is
+    /// something a DIFFERENT node does, and modelling it that way is what makes the reorg tests
+    /// realistic rather than a shape no miner produces.
+    async fn build_branch_on_a_peer(
+        config: &kaspa_consensus_core::config::Config,
+        hash_base: u64,
+        len: u64,
+    ) -> (Vec<Hash64>, Vec<Block>) {
+        let peer = v2_consensus(config);
+        let handles = peer.init();
+        let mut chain = vec![config.genesis.hash];
+        let mut blocks = Vec::new();
+        for i in 1..=len {
+            let hash = Hash64::from_u64_word(hash_base + i);
+            let miner = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
+            let block = peer.build_utxo_valid_block_with_parents(hash, vec![*chain.last().unwrap()], miner, vec![]).to_immutable();
+            peer.validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
+            assert_eq!(peer.get_sink(), hash, "the peer's own chain advances");
+            chain.push(hash);
+            blocks.push(block);
+        }
+        peer.shutdown(handles);
+        (chain, blocks)
+    }
+
     /// **Unit D's prerequisite**: any candidate can be ordered from its OWN chain, and the one
     /// comparator ranks them — the capability all four selection sites will share, so they cannot
     /// grow four answers (P0-5).
@@ -5126,18 +5160,17 @@ mod palw_state_walk_wiring {
         let handles = tc.init();
         let genesis = config.genesis.hash;
 
-        // Two branches off genesis, one longer.
+        // A short chain here, and a longer one relayed from a peer (see the note in the reorg
+        // test above about why the competing branch is built elsewhere).
         let mut short = vec![genesis];
         for i in 1..=2u64 {
             let hash = Hash64::from_u64_word(0xD000 + i);
             tc.add_utxo_valid_block_with_parents(hash, vec![*short.last().unwrap()], vec![]).await.unwrap();
             short.push(hash);
         }
-        let mut long = vec![genesis];
-        for i in 1..=4u64 {
-            let hash = Hash64::from_u64_word(0xE000 + i);
-            tc.add_utxo_valid_block_with_parents(hash, vec![*long.last().unwrap()], vec![]).await.unwrap();
-            long.push(hash);
+        let (long, blocks_long) = build_branch_on_a_peer(&config, 0xE000, 4).await;
+        for block in &blocks_long {
+            tc.validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
         }
 
         // Both branches can be ordered, each from its own chain — including the one that LOST,
@@ -5327,6 +5360,47 @@ mod palw_state_walk_wiring {
             "a block that disagrees about the chain it extends is disqualified"
         );
         assert_eq!(tc.get_sink(), config.genesis.hash);
+
+        tc.shutdown(handles);
+    }
+
+    /// **Unit D's authority, at the point the sink moves.** A relayed branch that does NOT
+    /// strictly outrank the incumbent under the one comparator cannot take the sink — depth,
+    /// blue work and arrival order are not the authority.
+    ///
+    /// The heap that orders candidates is a SEARCH order, not the authority: a candidate's PALW
+    /// standing is only defined once its chain has been applied, so unvalidated tips cannot be
+    /// ranked by the comparator. Every sink MOVE goes through it, which is what Decision 9 needs.
+    #[tokio::test]
+    async fn a_branch_that_does_not_outrank_the_sink_cannot_take_it() {
+        let config = v2_config();
+        let tc = v2_consensus(&config);
+        let handles = tc.init();
+        let genesis = config.genesis.hash;
+
+        // The incumbent: four blocks, four claims' worth of immature weight.
+        let mut incumbent = vec![genesis];
+        for i in 1..=4u64 {
+            let hash = Hash64::from_u64_word(0xA100 + i);
+            tc.add_utxo_valid_block_with_parents(hash, vec![*incumbent.last().unwrap()], vec![]).await.unwrap();
+            incumbent.push(hash);
+        }
+        let sink = *incumbent.last().unwrap();
+        assert_eq!(tc.get_sink(), sink);
+
+        // A relayed branch of TWO blocks: a genuine fork, and lighter under the comparator.
+        let (_, short_blocks) = build_branch_on_a_peer(&config, 0xB100, 2).await;
+        for block in &short_blocks {
+            tc.validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
+        }
+        assert_eq!(tc.get_sink(), sink, "a branch that does not outrank the sink does not take it");
+
+        // …and a longer relayed branch does, through the same gate.
+        let (long, long_blocks) = build_branch_on_a_peer(&config, 0xC100, 7).await;
+        for block in &long_blocks {
+            tc.validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
+        }
+        assert_eq!(tc.get_sink(), *long.last().unwrap(), "a branch that DOES outrank it takes the sink");
 
         tc.shutdown(handles);
     }

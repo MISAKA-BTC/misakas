@@ -534,6 +534,17 @@ pub trait ConsensusApi: Send + Sync {
     ///
     /// The old name read like an authority and was used like a hint. Anything that starts reading
     /// this to decide chain state reopens P0-5, and now has to type "download hint" to do it.
+    /// ADR-0042 Decision 9 (Unit D): this node's standing under the ONE PALW comparator, for the
+    /// chain ending at `candidate`.
+    ///
+    /// `None` on a network with no V2 ruleset, and on a candidate this node cannot weigh — which
+    /// a caller must read as "no opinion", never as "zero weight". Exposed on the API because the
+    /// IBD-complete decision is made at the protocol layer, and it must decide with the same
+    /// comparator the virtual processor and the pruning point use.
+    fn get_palw_candidate_order(&self, _candidate: BlockHash) -> Option<crate::palw_fork_choice::PalwCandidateOrderV1> {
+        None
+    }
+
     fn get_header_download_hint(&self) -> BlockHash {
         unimplemented!()
     }

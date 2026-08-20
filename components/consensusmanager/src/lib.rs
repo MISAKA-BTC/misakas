@@ -226,9 +226,14 @@ impl StagingConsensus {
     /// `still_valid` runs while `inner` is held for writing, so it must not touch the manager —
     /// reading the consensus it is handed is fine, since that is a DB read and takes no manager
     /// lock.
-    pub fn commit_if(self, still_valid: impl FnOnce(&ConsensusInstance) -> bool) -> Result<(), Self> {
+    /// `still_valid` receives BOTH instances — the active one and the staged challenger — because
+    /// a replacement decision is a COMPARISON, and a predicate that could only see the defender
+    /// would have to carry its reading of the challenger in from before the lock (ADR-0042
+    /// Decision 9: the IBD-complete tip is one of the sites the single fork-choice authority must
+    /// decide, and it decides it from both sides).
+    pub fn commit_if(self, still_valid: impl FnOnce(&ConsensusInstance, &ConsensusInstance) -> bool) -> Result<(), Self> {
         let mut g = self.manager.inner.write();
-        if !still_valid(&g.current.consensus) {
+        if !still_valid(&g.current.consensus, &self.staging.consensus) {
             drop(g);
             return Err(self);
         }
@@ -249,7 +254,7 @@ impl StagingConsensus {
     /// Commit unconditionally. The ordinary path, where nothing about the active consensus was part
     /// of the decision to replace it.
     pub fn commit(self) {
-        let _ = self.commit_if(|_| true);
+        let _ = self.commit_if(|_, _| true);
     }
 
     pub fn cancel(self) {
