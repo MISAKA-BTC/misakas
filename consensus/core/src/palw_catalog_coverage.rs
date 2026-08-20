@@ -111,6 +111,8 @@ pub enum PalwCoverageError {
         /// EVERY missing id, ascending — a truncated list would read as "covered" when it isn't.
         missing: Vec<Hash64>,
     },
+    #[error("the {table} table's node {slot} names a kernel this build cannot serve for that shape: {why}")]
+    NodeNotServable { table: &'static str, slot: u32, why: &'static str },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -125,6 +127,37 @@ pub enum PalwCoverageError {
 /// Deterministic in its inputs and invariant under how the sets were built (the `BTreeSet`
 /// already erased insertion order); two verifiers of the same claims emit byte-identical
 /// certificates.
+/// **Coverage over a PROFILE: every node's shape, not just every kernel's id.**
+///
+/// `verify_catalog_coverage_v1` answers "is each id in the catalog", which is weaker than what
+/// coverage promises. A kernel serves a SHAPE — a matmul needs something to multiply by, a
+/// two-operand elementwise op needs two rows — so a node can name a catalogued id while asking
+/// for a shape nothing can produce. The BASE-0 profile shipped 2026-08-20 did exactly that at two
+/// nodes per layer (its attention matmuls), passed the id gate, and would have hit
+/// `Unadjudicable` at the first dispute over either.
+///
+/// This asks the adjudicator itself, node by node, through
+/// [`crate::palw_step_refute::kernel_can_serve_node_v1`] — the statement lives next to the code
+/// that does the serving, so the two cannot drift. A class that fails here is refused at
+/// registration, which is when it is still someone's problem to fix.
+pub fn verify_profile_coverage_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+) -> Result<(), PalwCoverageError> {
+    for (table, nodes) in [
+        ("pre", &profile.pre_nodes),
+        ("gdn", &profile.gdn_nodes),
+        ("attn", &profile.attn_nodes),
+        ("post", &profile.post_nodes),
+    ] {
+        for (slot, node) in nodes.iter().enumerate() {
+            if let Err(why) = crate::palw_step_refute::kernel_can_serve_node_v1(node, table == "pre") {
+                return Err(PalwCoverageError::NodeNotServable { table, slot: slot as u32, why });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Domain for the adjudicable-primitive-set commitment.
 pub const PALW_COURT_CATALOG_ROOT_DOMAIN: &[u8] = b"misaka-palw/court-catalog/root/v1";
 

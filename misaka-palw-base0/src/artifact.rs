@@ -85,6 +85,16 @@ impl From<RopeGenError> for ArtifactError {
 pub struct Base0ShapeV1 {
     pub n_layers: usize,
     pub n_heads: usize,
+    /// **Grouped-query attention: how many KEY/VALUE heads the query heads share.**
+    ///
+    /// `n_kv_heads == n_heads` is multi-head attention and is what every artifact built before
+    /// this field meant, so BASE-0's own class is unchanged by its addition. A second class needs
+    /// it: every Qwen2.5 dense member has 2 kv heads against 12–16 query heads, and folding that
+    /// away would be running a different model.
+    ///
+    /// Must divide `n_heads` — a group is a whole number of query heads per kv head, and a
+    /// remainder would leave some query head reading no key at all.
+    pub n_kv_heads: usize,
     pub d_head: usize,
     pub d_ff: usize,
     pub vocab: usize,
@@ -102,9 +112,22 @@ impl Base0ShapeV1 {
         self.n_heads * self.d_head
     }
 
+    /// The width of a K or V projection. Equal to `d_model` only when attention is multi-head.
+    pub fn kv_dim(&self) -> usize {
+        self.n_kv_heads * self.d_head
+    }
+
+    /// How many query heads share one kv head.
+    pub fn gqa_group(&self) -> usize {
+        self.n_heads / self.n_kv_heads.max(1)
+    }
+
     pub fn validate(&self) -> Result<(), ArtifactError> {
         if self.n_layers == 0
             || self.n_heads == 0
+            || self.n_kv_heads == 0
+            || self.n_kv_heads > self.n_heads
+            || !self.n_heads.is_multiple_of(self.n_kv_heads)
             || self.d_head == 0
             || self.d_ff == 0
             || self.vocab == 0
@@ -120,7 +143,7 @@ impl Base0ShapeV1 {
         // absurd dimensions outright is cheaper than auditing each product (audit 2.4). No real
         // shape approaches this: MAX_DOT_LEN is 131_071 and every dimension must fit under it.
         let bound = kaspa_consensus_core::palw_base0::MAX_DOT_LEN;
-        for got in [self.n_layers, self.n_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
+        for got in [self.n_layers, self.n_heads, self.n_kv_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
             if got > bound {
                 return Err(ArtifactError::DotTooLong { got });
             }
@@ -137,8 +160,8 @@ impl Base0ShapeV1 {
     /// Little-endian, fixed-width, in declaration order. Fixed width matters: a varint encoding
     /// would let two different shapes produce the same bytes at a field boundary.
     pub fn digest_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(8 * 6 + 16 + 8);
-        for v in [self.n_layers, self.n_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
+        let mut out = Vec::with_capacity(8 * 7 + 16 + 8);
+        for v in [self.n_layers, self.n_heads, self.n_kv_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
             out.extend_from_slice(&(v as u64).to_le_bytes());
         }
         out.extend_from_slice(&self.ln_theta_gen_q.to_le_bytes());
@@ -165,6 +188,17 @@ pub struct Base0LayerWeightsV1 {
     /// [`Base0LayerWeightsV1::ffn_gate_scale`] instead of narrowing — and is kept so the array
     /// index matches the projection index everywhere else.
     pub requant: [QuantParams; 7],
+    /// **Per-output-channel requantization for q, k and v — where a projection BIAS lives.**
+    ///
+    /// `requant[0..3]` is one parameter set for a whole tensor, which is all BASE-0 ever needed:
+    /// its projections have no bias, so the only per-channel quantity would be a scale nobody
+    /// varies. Qwen2.5 carries a bias on each of q, k and v (measured from the safetensors
+    /// table), and a bias is per-channel by definition — so it rides the `zero` of a per-channel
+    /// triple.
+    ///
+    /// `None` means "use the tensor-wide `requant[i]`", which is exactly what every artifact
+    /// built before this field meant. BASE-0's own class is unchanged.
+    pub qkv_channel_requant: Option<[Vec<QuantParams>; 3]>,
     /// Gain applied to the attention logits before `SoftMax`. **Amplifying**, so it cannot be a
     /// `QuantParams`: a `d_head`-long `DotI8` lands around 0.002 in Qk and `SoftMax` returns
     /// uniform there. ADR-0040 H.
@@ -220,8 +254,8 @@ impl Base0ArtifactV1 {
         for l in layers.iter() {
             let per: [(&'static str, usize, usize); 7] = [
                 ("wq", d * d, l.wq.len()),
-                ("wk", d * d, l.wk.len()),
-                ("wv", d * d, l.wv.len()),
+                ("wk", shape.kv_dim() * d, l.wk.len()),
+                ("wv", shape.kv_dim() * d, l.wv.len()),
                 ("wo", d * d, l.wo.len()),
                 ("w_gate", shape.d_ff * d, l.w_gate.len()),
                 ("w_up", shape.d_ff * d, l.w_up.len()),
@@ -264,20 +298,23 @@ impl Base0ArtifactV1 {
         let layers = (0..shape.n_layers)
             .map(|_| Base0LayerWeightsV1 {
                 wq: fill(d * d),
-                wk: fill(d * d),
-                wv: fill(d * d),
+                wk: fill(shape.kv_dim() * d),
+                wv: fill(shape.kv_dim() * d),
                 wo: fill(d * d),
                 w_gate: fill(shape.d_ff * d),
                 w_up: fill(shape.d_ff * d),
                 w_down: fill(d * shape.d_ff),
+                // Tensor-wide: a derived artifact has no biases to carry, so there is nothing
+                // per-channel to say. A converted one supplies `Some`.
+                qkv_channel_requant: None,
                 requant: [
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(d) },
-                    QuantParams { multiplier: i32::MAX, shift: shift_for(shape.d_ff) },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: shift_for(shape.d_ff), zero: 0 },
                 ],
                 attn_logit_scale: amplify_for(shape.d_head),
                 ffn_gate_scale: amplify_for(d),
@@ -289,10 +326,10 @@ impl Base0ArtifactV1 {
             unembed,
             layers,
             // Qk → an activation code: 1.0 must land on 127, not on 1.
-            QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7 },
+            QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 },
             // Halve on each residual add, so two `int8` codes summed into `i32` come back to
             // `int8` without saturating — the standard int8-residual convention.
-            QuantParams { multiplier: i32::MAX, shift: 1 },
+            QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 },
         )?;
         artifact.derived_seed = Some(seed);
         Ok(artifact)
@@ -379,6 +416,8 @@ mod tests {
         Base0ShapeV1 {
             n_layers: 2,
             n_heads: 2,
+            // Multi-head: the pre-GQA meaning, so this fixture is BASE-0 exactly as it was.
+            n_kv_heads: 2,
             d_head: 8,
             d_ff: 32,
             vocab: 16,
