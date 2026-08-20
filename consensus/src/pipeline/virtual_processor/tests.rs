@@ -386,6 +386,78 @@ async fn a_block_committing_to_the_wrong_palw_state_root_is_disqualified() {
     assert_eq!(ctx.consensus.get_sink(), honest_hash, "the honest commitment advances the chain");
 }
 
+/// **Unit C step 4: the beacon is derived from the candidate's chain, and a block cannot name
+/// its own.**
+///
+/// This is the property the wiring note calls out by name — "a fact taken from the spending
+/// block's own bytes would be the producer asserting its own randomness". The receipt lane's right
+/// to spend a quantum is a DRAW, so whoever picks the beacon picks the winner.
+///
+/// Asserted at the derivation, which is where the property lives: the same slot walked from two
+/// different starting points on ONE chain yields the same fact, and the fact names a block the
+/// walk found rather than one anybody supplied. The end-to-end spend path additionally needs a
+/// certified free-prompt claim on chain, which needs the FP worker's legs capture (see
+/// `docs/palw-fp-wiring-atomicity.md`) — until then the pipeline's arm is exercised by the
+/// derivation it calls, and by every V2 block going through it with no receipt lane in play.
+#[tokio::test]
+async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..6 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let sink_daa = vp.headers_store.get_header(sink).unwrap().daa_score;
+
+    // Every block this harness mines is attempt-class (algo 6), so every DAA at or below the sink
+    // has a beacon and the fact's own witness must sit strictly below the slot.
+    for slot in 0..=sink_daa {
+        let fact = vp.palw_beacon_fact_of_candidate(sink, slot).expect("a chain of attempt blocks has a beacon for every slot");
+        assert!(fact.beacon_daa >= slot, "the beacon is at or after the slot it draws for");
+        assert!(
+            fact.prev_attempt_daa < slot || (slot == 0 && fact.prev_attempt_daa == 0),
+            "the witness is the last attempt block strictly below the slot: slot {slot}, witness {}",
+            fact.prev_attempt_daa
+        );
+        // The named block is one this chain really contains, at the DAA the fact claims.
+        let header = vp.headers_store.get_header(fact.beacon_block).expect("the beacon names a block on this chain");
+        assert_eq!(header.daa_score, fact.beacon_daa);
+    }
+
+    // The derivation is a function of the CHAIN, not of the walker's position: walking from the
+    // sink and from the sink's own parent agree wherever both can see the answer. Two nodes with
+    // different sinks on one candidate therefore draw the same beacon, which is the whole point.
+    let parent = vp.headers_store.get_header(sink).unwrap().direct_parents()[0];
+    let parent_daa = vp.headers_store.get_header(parent).unwrap().daa_score;
+    for slot in 0..=parent_daa {
+        assert_eq!(
+            vp.palw_beacon_fact_of_candidate(sink, slot).unwrap(),
+            vp.palw_beacon_fact_of_candidate(parent, slot).unwrap(),
+            "slot {slot}: the fact is the chain's, not the walker's"
+        );
+    }
+
+    // A slot past the tip has no beacon yet, and that is a REFUSAL rather than a zero. A
+    // derivation that invented one would be a draw nobody made.
+    let err = vp.palw_beacon_fact_of_candidate(sink, sink_daa + 1).unwrap_err();
+    assert!(
+        matches!(err, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error::NoBeaconYet { .. }),
+        "got {err:?}"
+    );
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {

@@ -89,10 +89,27 @@ lost the deltas are still on disk and the next `load_tip` resumes from the older
 forward over them, reproducing exactly the same state. Losing a DELTA would not be recoverable,
 which is why those ride the block's batch and the tip does not.
 
-Steps 3 (objects from carriage), 4 (beacon facts from the chain) and 5 (`palw_state_root` in the
-header) are still open. The transition is called with an empty object list, which is the honest
-content of a block that carries no PALW transactions — every block on every network that exists
-today.
+**Steps 3, 4 and 5 have LANDED too** (2026-08-20):
+
+* **3** — `palw_v2_objects_of_block` folds the block's accepted transactions through
+  `palw_fp_objects_from_accepted_txs_v3`, in the block's own acceptance order (the transition is a
+  FOLD, so the order is consensus, not presentation), read from the acceptance data the validation
+  just produced rather than from a store row the commit has not written yet.
+* **4** — `palw_beacon_fact_of_candidate` walks the candidate's own selected-parent chain
+  downward. A receipt-lane block's spend is admitted against THAT fact and never against one the
+  block carries, which is the property this document states: a fact from the spending block's own
+  bytes would be the producer asserting its own randomness. A slot past the tip is a REFUSAL, not
+  a zero.
+* **5** — `Header::palw_state_root`, double-gated in the preimage on the `palw_commitment`
+  pattern (by V2 algo id, by zero) so no shipped genesis hash moves, and carried over P2P and RPC
+  because a header that lost it in relay would hash differently at the peer.
+
+**It commits to the PARENT's state root, and that was forced.** The post-state root is a function
+of `PalwBlockContextV2`, whose `block` is the header's own hash — so committing it makes the hash
+a function of the root and the root a function of the hash. Measured rather than reasoned about:
+the first version disqualified every block at its own validation. The parent's root is
+non-circular and still binding; the tip's own state is committed by the next block, which is the
+standard cost of a non-circular state commitment.
 
 **The harness can mine a V2 chain now**, which was not true when the walk landed and is worth
 recording because the failure mode was confusing: a `ConsensusV2` network demands

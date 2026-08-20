@@ -1145,6 +1145,17 @@ impl VirtualStateProcessor {
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
                                 let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data);
+                                // Unit C step 4: a receipt-lane block spends a quantum, and its
+                                // right to do so is a DRAW — so the beacon it draws against is
+                                // derived from this candidate's own chain, never read off the
+                                // spending block. A block that supplied its own beacon would be
+                                // choosing the randomness that decides whether it wins.
+                                if let Err(fp_error) = self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
+                                    info!("Block {} is disqualified from virtual chain (PALW receipt spend): {}", current, fp_error);
+                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                    chain_disqualified_counter += 1;
+                                    continue;
+                                }
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
                                     state, state_params, &point, &objects, None,
                                 ) {
@@ -3354,6 +3365,89 @@ impl VirtualStateProcessor {
     /// reaches the pruning point). Returning empty is semantically correct — a block with no
     /// accountable acceptance data contributes no txs; a genuine inconsistency on a non-pruned block
     /// surfaces in the trace log instead of crashing the virtual processor.
+    /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
+    /// this node DERIVED from the candidate's chain rather than one the block asserted.
+    ///
+    /// `Ok(())` on every block that is not a receipt-lane block, which is every block of every
+    /// network that exists today — the arm is selected by the header's own declared algorithm, so
+    /// "is this a spend" is a fact about the header rather than a discovery.
+    fn palw_v2_check_receipt_spend(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), String> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwReceiptSpendEnvelopeV3, fp_draw_slot_v3};
+        if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
+            return Ok(());
+        }
+        let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
+            return Err("a receipt-lane block on a network with no free-prompt bundle".to_string());
+        };
+        let envelope = PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).map_err(|e| e.to_string())?;
+        let claim = state
+            .claim(&envelope.spend.claim_id)
+            .ok_or_else(|| format!("claim {} does not exist at this chain point", envelope.spend.claim_id))?;
+        let kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
+            return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
+        };
+        let slot = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa())
+            .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
+        // Derived from the block's OWN selected parent, so the walk is the candidate's and the
+        // beacon cannot be chosen by the party it decides for.
+        let beacon = self
+            .palw_beacon_fact_of_candidate(header.direct_parents()[0], slot)
+            .map_err(|e| e.to_string())?;
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_v3(
+            state,
+            point,
+            freeprompt.receipt_maturity_daa(),
+            freeprompt.receipt_use_window_daa(),
+            &beacon,
+            &envelope,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())?;
+        let _ = (state_params, network_domain);
+        Ok(())
+    }
+
+    /// ADR-0044 / Unit C step 4: the beacon fact for `slot`, derived from THIS candidate's own
+    /// selected-parent chain.
+    ///
+    /// The whole point is where the randomness comes from. A `PalwBeaconFactV3` taken from the
+    /// spending block's own bytes would be the producer asserting its own draw — it would pick
+    /// the beacon that makes its receipt win. So the fact is never read off a block: it is the
+    /// first attempt-class chain block at or after the slot, found by walking the candidate's
+    /// chain downward, with `prev_attempt_daa` — the last attempt-class block strictly BELOW the
+    /// slot — as the witness that makes "first at or after" checkable by someone who did not walk.
+    ///
+    /// The walk starts at `from` and descends, which is what makes it candidate-scoped: two nodes
+    /// with different sinks but the same candidate derive the same fact, because they walk the
+    /// same chain.
+    pub(super) fn palw_beacon_fact_of_candidate(
+        &self,
+        from: BlockHash,
+        slot: u64,
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error>
+    {
+        let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
+        let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
+            let header = self.headers_store.get_header(block).ok()?;
+            Some(kaspa_consensus_core::palw_fp_beacon_v3::PalwChainBlockFactV3 {
+                block,
+                daa_score: header.daa_score,
+                pow_algo_id: header.pow_algo_id,
+            })
+        });
+        // `..._to_genesis` rather than the bounded form: the iterator really does reach genesis,
+        // and the bounded form's `WalkTooShort` exists for callers that stop early. A caller that
+        // stopped early and reported `prev_attempt_daa = 0` would be inventing a witness.
+        kaspa_consensus_core::palw_fp_beacon_v3::derive_beacon_fact_to_genesis_v3(slot, attempt_algo_id, facts)
+    }
+
     /// ADR-0042 Unit C step 3: this chain block's PALW consensus objects, in the block's own
     /// deterministic acceptance order.
     ///
