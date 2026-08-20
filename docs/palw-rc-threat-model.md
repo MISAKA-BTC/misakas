@@ -259,10 +259,31 @@ honest "red (integration), lands in PR-N."
     *base* (1e7). Nothing in Rust called it yet, so it never mis-registered anything; it would
     have the moment the profile was written. There is no `llama_model_rope_freq_base` in the
     pinned header at all, which is why the metadata dump exists.
-- **Still open after that:** the node tables themselves (op order, tile lengths,
-  `kernel_semantics_id` per node, `input_refs`), the transcendental bindings and contraction
-  facts, the per-node tile capture in the shim, and the leg. The GDN half is the larger unknown:
-  eighteen of twenty-four layers are GatedDeltaNet, whose kernel set is not the attention set.
+- **The work order above named the wrong model for the RC floor, and the measurement is what
+  showed it.** Writing a Qwen3.5-2B profile means naming a `kernel_semantics_id` per node, and
+  `verify_palw_genesis_v2` only accepts a class whose reachable kernels are all in
+  `catalogued_kernel_ids_v1()` — the seventeen `KERNEL_CATALOG` really recomputes. Ten of those
+  are `PALW-BASE-0`'s integer ops; the other seven are L2Norm, fused RMS-norm, SwiGLU, sigmoid,
+  softplus and the two GatedDeltaNet cores. **There is no float quantized matmul in the catalog
+  at all** — the only matmul is `base0/matmul-quant/i8xi8-i32-exact` — and no float RoPE and no
+  float softmax. The pinned model's every layer is Q4_K/Q5_K/Q6_K matmuls, and its six attention
+  layers are IMRoPE + softmax. So a faithful Qwen3.5-2B profile would name kernels this build
+  cannot adjudicate, and the coverage gate would refuse the class — correctly.
+- **That is by design, and `palw_base0_ops` says so in its own first paragraph:** BASE-0's nine
+  ops were "chosen for closability rather than for parity with the float classes' graph", because
+  "integerising GatedDeltaNet, interleaved-multimodal RoPE and fused SwiGLU would reproduce the
+  catalog problem this class exists to escape." The RC's permanently-Active liveness floor is
+  BASE-0, so **the profile the RC genesis needs is BASE-0's, not the pinned float model's** — and
+  BASE-0's is authorable today, because every op in it already has an adjudicator.
+- **Still open, split by which class it belongs to.**
+  - *BASE-0 (blocks the RC genesis):* its shape profile — node table, tile lengths, `input_refs`,
+    the `kernel_semantics_id` per node — plus the catalog entry built from it
+    (`canonical_step_leaf_count` is counted from the profile, not chosen) and the artifact root.
+    Every instance in the tree today is still a fixture.
+  - *The pinned float model (blocks the FP lane, not the RC floor):* adjudicators for quantized
+    float matmul, IMRoPE and float softmax must exist BEFORE its profile can be written, and the
+    node tables, the per-node tile capture in the shim, and the leg after that. The GDN half is
+    the larger unknown of the two: eighteen of twenty-four layers are GatedDeltaNet.
 - Gates adjudicability on BOTH lanes, so it is a release-blocker for any network that carries
   weight.
 
