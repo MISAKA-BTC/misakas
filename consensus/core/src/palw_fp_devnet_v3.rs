@@ -193,10 +193,7 @@ pub fn palw_fp_devnet_bundle_v3(
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.
-    let admission = PalwAdmissionParamsV2::new(
-        MAX_EXPOSURE_RATIO_PERMILLE,
-        [(base_class_id, (EPOCH_LENGTH as u128) * (PWU_PER_QUANTUM as u128) * 4)].into_iter().collect(),
-    )?;
+    let admission = PalwAdmissionParamsV2::new(MAX_EXPOSURE_RATIO_PERMILLE)?;
     let freeprompt = PalwFreePromptParamsV3::new(
         crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
         QUANTUM_CU,

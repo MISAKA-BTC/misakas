@@ -702,7 +702,7 @@ pub(crate) mod tests {
                 .unwrap()
                 .with_turn_deadline_daa(20)
                 .unwrap(),
-            admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
+            admission: PalwAdmissionParamsV2::new(500).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
             reward: PalwRewardParamsV2::new(620).unwrap(),
             bond: PalwBondParamsV2::new(100, 2_000).unwrap(),
@@ -1226,7 +1226,7 @@ pub(crate) mod tests {
             ),
             (
                 "exposure ratio",
-                Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()),
+                Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501).unwrap()),
             ),
             (
                 "free-prompt quantum",

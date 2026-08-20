@@ -2097,6 +2097,12 @@ pub fn apply_palw_transition_v3(
         apply_object(&mut builder, ctx, object)?;
     }
 
+    // 3b. ADR-0045 Decision 2's epoch budgets, in blocks. AFTER the objects, because the genesis
+    //     block's own registrations are what create the share table this derives from — deriving
+    //     before them would give the first epoch an empty budget map, which refuses every attempt
+    //     on the network's first epoch.
+    ensure_epoch_budgets(&mut builder, ctx);
+
     // 4. The block's own work — an attempt, a certified-quantum spend, or none.
     match block_work {
         PalwBlockWorkV3::None => {}
@@ -2347,6 +2353,70 @@ fn granted_share_table_v2(
 /// a one-class network at 1000‰ is a deliberate no-op. Classes skip the span if they are frozen
 /// (the target freezes with the class — easing while frozen would hand the unfreeze a burst) or
 /// carry no share in the table (a share-less class cannot be admitted anyway).
+/// **ADR-0045 Decision 2: one epoch's per-class budgets, in blocks, derived from the share table.**
+///
+/// This is the sizing basis the static pwu budget never had. A class's share is a permille of
+/// CADENCE, so its budget is a count of BLOCKS: the epoch's expected block count (its DAA span —
+/// one block per DAA unit is the cadence the retarget itself targets) times the class's share,
+/// times the tolerance that says how far above its share a class may run before the cap bites.
+///
+/// The tolerance is what keeps this from being the "permanent hard stop" the audit named. Fenced
+/// at or above unity, a class holding the whole table gets a budget at least as large as the
+/// epoch's expected production, so the cap cannot bind on an honest chain running at cadence —
+/// it binds on a class producing well beyond its share, which is the only thing it is for.
+///
+/// Blocks, never pwu: under `DerivedV1` an attempt's pwu is a function of the class TARGET, so a
+/// pwu budget shrinks in block terms exactly as a class gets harder — a popular class would stall
+/// its own chain for getting popular. The share also cancels out of a pwu inequality entirely
+/// (ADR-0045's amendment defect (e)).
+pub fn derive_epoch_budgets_v2(
+    shares: &BTreeMap<Hash64, u16>,
+    epoch_length: u64,
+    tolerance_permille: u32,
+    epoch_index: u64,
+) -> PalwEpochBudgetsV2 {
+    let budget_blocks = shares
+        .iter()
+        .map(|(class_id, share)| {
+            // `epoch_length · share / 1000 · tolerance / 1000`, in u128 so the two permille
+            // multiplications cannot overflow before the divisions bring it back down.
+            let expected = (epoch_length as u128) * (*share as u128) / 1000;
+            let with_tolerance = expected * (tolerance_permille as u128) / 1000;
+            // Never zero: a class with a share is a class that may produce, and a zero budget
+            // would freeze it under the name of a cap. One block is the floor.
+            (*class_id, with_tolerance.max(1).min(u64::MAX as u128) as u64)
+        })
+        .collect();
+    PalwEpochBudgetsV2 { epoch_index, budget_blocks }
+}
+
+/// Install the budgets for `ctx`'s epoch when the state carries none, or carries another epoch's.
+///
+/// Runs on every transition rather than only at boundaries, and the two are the same answer: the
+/// share table is genesis-fixed (a class cannot enter through a transaction —
+/// `palw_lifecycle_objects_v2`), so a budget derived mid-epoch equals the one the boundary would
+/// have derived. Running it everywhere is what gives epoch 0 a budget, which a
+/// boundary-only rule cannot: no boundary has been crossed when the first block lands, and a
+/// missing budget refuses every attempt.
+fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    let epoch_index = ctx.daa_score / builder.params.epoch_length;
+    if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
+        return;
+    }
+    if builder.state.class_shares.is_empty() {
+        // Nothing is registered yet — the genesis block before its own object list applies. A
+        // budget over an empty table is not "no budget", it is a fact that does not exist yet.
+        return;
+    }
+    let budgets = derive_epoch_budgets_v2(
+        &builder.state.class_shares,
+        builder.params.epoch_length,
+        builder.params.budget_tolerance_permille,
+        epoch_index,
+    );
+    builder.write_epoch_budgets(Some(budgets));
+}
+
 fn apply_class_retargets(
     builder: &mut TransitionBuilder<'_>,
     parent: &PalwChainStateV2,

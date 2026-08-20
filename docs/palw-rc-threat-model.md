@@ -230,8 +230,24 @@ honest "red (integration), lands in PR-N."
     funds an entrant by donation from every incumbent) and brings its own `pwu_rule`.
     `verify_palw_genesis_v2` refuses `MaxPerAttempt` at genesis precisely because a ceiling makes
     weight a measure of collateral rather than of work, and letting a class in through a
-    transaction would route around that check. Keeping classes to genesis closes the **H3 tail**
-    structurally instead of with a second copy of the same rule.
+    transaction would route around that check. Keeping classes to genesis closes the **H3 tail's
+    pwu-rule half** structurally instead of with a second copy of the same rule.
+- **The H3 tail's other half — the epoch budget — closed the same day.** Admission read a static
+  per-class **pwu** ceiling carried in the bundle: a number with no sizing basis and the wrong
+  currency. Under `DerivedV1` an attempt's pwu is a function of the class TARGET, so the same
+  budget buys fewer and fewer blocks as a class gets harder — a class that got popular would hard
+  stop its own chain for the rest of every epoch, for getting popular. The share also cancels out
+  of a pwu inequality entirely (ADR-0045's amendment defect (e)), so the cap could not express
+  "this class's share of cadence", which is the only thing it was for. `PalwEpochBudgetsV2`
+  already had the right shape — budgets in BLOCKS, per epoch — and nothing wrote or read it.
+  `derive_epoch_budgets_v2` now builds it from the share table, the epoch's DAA span and the
+  tolerance, `ensure_epoch_budgets` installs it (on every transition, not only at boundaries, so
+  epoch 0 has one), and admission item 7 counts `produced_blocks` against it. The static table is
+  deleted rather than left beside it. The tolerance is what keeps the cap from being a permanent
+  hard stop: at or above unity a class holding the whole table gets at least the epoch's expected
+  production, so the cap binds only on a class producing well beyond its share
+  (`the_epoch_budget_is_blocks_derived_from_the_class_share`,
+  `the_epoch_budget_counts_this_chains_production_in_this_epoch`).
   - `FreePromptCommitted` — its own subnetwork, where its price is checked.
 - **The C5 tail is now a real question rather than a hypothetical one.** "Nobody has an incentive
   to bind someone else's claim" was unanswerable while nobody *could*; with the carriage in place

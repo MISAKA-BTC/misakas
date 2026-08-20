@@ -46,7 +46,6 @@ use crate::palw_attempt_v2::{PalwAttemptEnvelopeV2, PalwAttemptV2Error, attempt_
 use crate::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClassStatusV2, PalwPwuRuleV2, PalwStateParamsV2,
 };
-use std::collections::BTreeMap;
 
 /// Admission's own network constants. Constructed only through [`PalwAdmissionParamsV2::new`];
 /// like the state params, they are part of the atomic ruleset bundle (ADR-0042 Decision 1) and
@@ -56,38 +55,26 @@ pub struct PalwAdmissionParamsV2 {
     /// Decision 6's `max_exposure_ratio`, in permille of the bond's slashable collateral. The
     /// ceiling is `collateral × ratio / 1000`, floored — conservative, and identical everywhere.
     max_exposure_ratio_permille: u32,
-    /// Per-class epoch production budget in pwu (ADR-0039 D5's share table, as the number this
-    /// predicate needs). A class absent from this table CANNOT be admitted — a missing budget is
-    /// a missing fact, and ADR-0039 D5e already refuses starved tables at startup, so a zero
-    /// budget is refused at construction rather than carried as a dead class.
-    class_epoch_budget_pwu: BTreeMap<Hash64, u128>,
 }
 
 impl PalwAdmissionParamsV2 {
-    pub fn new(
-        max_exposure_ratio_permille: u32,
-        class_epoch_budget_pwu: BTreeMap<Hash64, u128>,
-    ) -> Result<Self, PalwAdmissionV2Error> {
+    /// **No epoch-budget table here any more (ADR-0045 Decision 2).**
+    ///
+    /// It carried a static per-class pwu ceiling: a number with no sizing basis and the wrong
+    /// currency, since under `DerivedV1` an attempt's pwu tracks the class TARGET, so the same
+    /// budget bought fewer blocks the harder a class got — a class that became popular would hard
+    /// stop its own chain for the rest of every epoch. The chain derives `budget_blocks` from the
+    /// share table now (`derive_epoch_budgets_v2`), which is where a cadence cap belongs, and a
+    /// second copy here would be a second answer.
+    pub fn new(max_exposure_ratio_permille: u32) -> Result<Self, PalwAdmissionV2Error> {
         if max_exposure_ratio_permille == 0 {
             return Err(PalwAdmissionV2Error::InvalidParams("a zero exposure ratio admits no work at all"));
         }
-        if class_epoch_budget_pwu.values().any(|budget| *budget == 0) {
-            return Err(PalwAdmissionV2Error::InvalidParams("a zero epoch budget is a starved class (ADR-0039 D5e)"));
-        }
-        Ok(Self { max_exposure_ratio_permille, class_epoch_budget_pwu })
+        Ok(Self { max_exposure_ratio_permille })
     }
 
     pub fn max_exposure_ratio_permille(&self) -> u32 {
         self.max_exposure_ratio_permille
-    }
-
-    pub fn class_epoch_budget_pwu(&self, class_id: &Hash64) -> Option<u128> {
-        self.class_epoch_budget_pwu.get(class_id).copied()
-    }
-
-    /// Every budgeted class, in canonical order (the startup gate's table-coherence check).
-    pub fn budgeted_class_ids(&self) -> Vec<Hash64> {
-        self.class_epoch_budget_pwu.keys().copied().collect()
     }
 }
 
@@ -197,20 +184,41 @@ pub fn check_palw_attempt_admission_v2(
         }
     }
 
-    // 7. The epoch budget, as a predicate on the PRODUCING block's own selected-chain class
-    //    production: the counter the candidate chain accumulated, read at the producing block's
-    //    epoch. A counter from an older epoch contributes zero — the epoch rolled over.
-    let budget =
-        admission.class_epoch_budget_pwu(&attempt.class_id).ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
+    // 7. **The epoch budget, in BLOCKS, from the chain's own derived table (ADR-0045 Decision 2).**
+    //
+    //    It used to read a static per-class pwu ceiling carried in the bundle — a number with no
+    //    sizing basis and the wrong currency. Under `DerivedV1` an attempt's pwu is a function of
+    //    the class TARGET, so a pwu budget shrinks in block terms exactly as a class gets harder:
+    //    a class that got popular would stall its own chain for getting popular, permanently, for
+    //    the rest of every epoch. The share also cancels out of a pwu inequality entirely
+    //    (ADR-0045's amendment defect (e)), so the cap could not express "this class's share of
+    //    cadence" — which is the only thing it was ever for.
+    //
+    //    The chain derives `budget_blocks` at each epoch from the share table, the epoch's DAA
+    //    span and the tolerance, so the cap is sized by the class's own share and cannot bind on
+    //    a chain running at cadence. A class with no budget in THIS epoch admits nothing: a
+    //    missing budget is a missing fact, never a permissive zero.
     let epoch_index = ctx.daa_score / state_params.epoch_length();
+    let budgets = state.epoch_budgets().filter(|b| b.epoch_index == epoch_index).ok_or(
+        PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id),
+    )?;
+    let budget = *budgets
+        .budget_blocks
+        .get(&attempt.class_id)
+        .ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
     let produced = match state.epoch_counter(&attempt.class_id) {
-        Some(counter) if counter.epoch_index == epoch_index => counter.produced_pwu,
+        Some(counter) if counter.epoch_index == epoch_index => counter.produced_blocks,
         _ => 0,
     };
-    let claimed = attempt.pwu as u128;
-    let would_produce = produced.checked_add(claimed).ok_or(PalwAdmissionV2Error::Overflow("epoch production"))?;
+    // This attempt is one block of this class.
+    let would_produce = produced.checked_add(1).ok_or(PalwAdmissionV2Error::Overflow("epoch production"))?;
     if would_produce > budget {
-        return Err(PalwAdmissionV2Error::EpochBudgetExceeded { class_id: attempt.class_id, produced, claimed, budget });
+        return Err(PalwAdmissionV2Error::EpochBudgetExceeded {
+            class_id: attempt.class_id,
+            produced: produced as u128,
+            claimed: 1,
+            budget: budget as u128,
+        });
     }
 
     // 6b. The CLASS lottery (ADR-0039's per-class DAA). The network target decided this header
@@ -324,7 +332,7 @@ mod tests {
     }
 
     fn admission_params() -> PalwAdmissionParamsV2 {
-        PalwAdmissionParamsV2::new(500, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()
+        PalwAdmissionParamsV2::new(500).unwrap()
     }
 
     fn bond_outpoint(v: u64) -> TransactionOutpoint {
@@ -572,6 +580,13 @@ mod tests {
             share_permille: 100,
         }];
         let (state, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
+        // One block past the epoch boundary (epoch_length 1000), because ADR-0045 Decision 2's
+        // budgets are derived per epoch from the share table AS IT STOOD when the epoch opened: a
+        // class registered mid-epoch has no budget until the next boundary, and a missing budget
+        // is a missing fact rather than a permissive zero. On a live network the rule never bites
+        // — classes only enter at genesis, which IS the first block — but a fixture that
+        // registers at daa 101 has to cross a boundary before its class can produce.
+        let (state, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(3, 1_001, 3), &[], None).unwrap();
         state
     }
 
@@ -596,14 +611,15 @@ mod tests {
     }
 
     fn admission_params_with_derived_class() -> PalwAdmissionParamsV2 {
-        PalwAdmissionParamsV2::new(500, [(h64(1), 10_000u128), (h64(2), 10_000u128)].into_iter().collect()).unwrap()
+        PalwAdmissionParamsV2::new(500).unwrap()
     }
 
     #[test]
     fn derived_pwu_admits_exactly_one_value() {
         let state = state_with_derived_class(u128::MAX / 2);
         let admission = admission_params_with_derived_class();
-        let c = ctx(3, 102, 3);
+        // Epoch 1, where the derived class has a budget (see `state_with_derived_class`).
+        let c = ctx(4, 1_002, 4);
         let derived = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, 7);
         assert_eq!(derived, 14, "two expected attempts at seven per inference");
 
@@ -633,7 +649,7 @@ mod tests {
     #[test]
     fn derived_pwu_reads_the_target_at_the_candidate_point() {
         let admission = admission_params_with_derived_class();
-        let c = ctx(3, 102, 3);
+        let c = ctx(4, 1_002, 4);
 
         let easy = state_with_derived_class(u128::MAX / 2); // 2 attempts expected → pwu 14
         let hard = state_with_derived_class(u128::MAX / 8); // 8 attempts expected → pwu 56
@@ -708,14 +724,46 @@ mod tests {
         assert!(matches!(admit(&applied, &ctx(3, 102, 3), &env), Err(PalwAdmissionV2Error::DuplicateAttempt(_))));
     }
 
-    /// Item 7: the predicate is on the producing block's own selected-chain production. The same
-    /// class that exhausted THIS epoch's budget admits again in the next epoch — and a class with
-    /// no budget entry admits nowhere.
+    /// **The epoch budget is a count of BLOCKS, sized from the class's share (ADR-0045 D2).**
+    ///
+    /// It used to be a static per-class pwu ceiling in the bundle — a number with no sizing basis
+    /// and the wrong currency. Under `DerivedV1` an attempt's pwu is a function of the class
+    /// TARGET, so the same pwu budget buys fewer and fewer blocks as a class gets harder: a class
+    /// that got popular would hard-stop its own chain for the rest of every epoch, for getting
+    /// popular. The chain derives `budget_blocks` instead, from the share table, the epoch's DAA
+    /// span and the tolerance.
+    #[test]
+    fn the_epoch_budget_is_blocks_derived_from_the_class_share() {
+        use crate::palw_state_v2::derive_epoch_budgets_v2;
+
+        // The sizing basis, stated as arithmetic: a class holding the whole table at unity
+        // tolerance gets the epoch's whole expected production, so the cap cannot bind on a chain
+        // running at cadence. Halve the share and the budget halves with it.
+        let whole = derive_epoch_budgets_v2(&[(h64(1), 1000u16)].into_iter().collect(), 1_000, 1_000, 0);
+        assert_eq!(whole.budget_blocks[&h64(1)], 1_000, "the whole table gets the whole epoch");
+        let half = derive_epoch_budgets_v2(&[(h64(1), 500u16)].into_iter().collect(), 1_000, 1_000, 0);
+        assert_eq!(half.budget_blocks[&h64(1)], 500, "half the share, half the blocks");
+        let generous = derive_epoch_budgets_v2(&[(h64(1), 500u16)].into_iter().collect(), 1_000, 1_500, 0);
+        assert_eq!(generous.budget_blocks[&h64(1)], 750, "tolerance is the headroom above the share");
+        // Never zero: a class with a share may produce, and a zero budget would freeze it under
+        // the name of a cap.
+        let tiny = derive_epoch_budgets_v2(&[(h64(1), 1u16)].into_iter().collect(), 10, 1_000, 0);
+        assert_eq!(tiny.budget_blocks[&h64(1)], 1);
+
+        // And the chain really installs it: the fixture's class holds the whole table, so its
+        // budget is the epoch's span.
+        let state = base_state();
+        let budgets = state.epoch_budgets().expect("the chain derives budgets for its own epoch");
+        assert_eq!(budgets.epoch_index, 101 / state_params().epoch_length());
+        assert_eq!(budgets.budget_blocks[&h64(1)], state_params().epoch_length(), "whole share, whole span");
+    }
+
+    /// The cap still binds — on the thing it is for. A class whose budget is exhausted admits
+    /// nothing more THIS epoch, and admits again in the next one.
     #[test]
     fn the_epoch_budget_counts_this_chains_production_in_this_epoch() {
-        // Budget 10_000 pwu; rule ceiling 500 per attempt; epoch length 1000. A dedicated
-        // high-collateral bond (ceiling 200_000 × 500‰ = 100_000 ≫ any live reserve here) keeps
-        // item 8 out of the way: this test is about item 7 and only item 7.
+        use crate::palw_state_v2::derive_epoch_budgets_v2;
+        // A dedicated high-collateral bond keeps item 8 out of the way: this is about item 7.
         let mut state = {
             let objects = vec![PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(2)),
@@ -727,35 +775,44 @@ mod tests {
             let (s, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
             s
         };
+        let budget = state.epoch_budgets().unwrap().budget_blocks[&h64(1)];
+        assert_eq!(budget, derive_epoch_budgets_v2(&[(h64(1), 1000u16)].into_iter().collect(), state_params().epoch_length(), 1_000, 0).budget_blocks[&h64(1)]);
+
         let rich_attempt = |pwu: u64, nonce: u64| attempt_for_bond(pwu, nonce, bond_outpoint(2), vec![8; 4], op_id(0x22));
-        // 20 × 500 pwu = exactly the budget, inside epoch 0. (Bind-timeout voids along the way
-        // release EXPOSURE but never production — the budget counts what was produced.)
-        for i in 0..20u64 {
-            let env = rich_attempt(500, 100 + i);
-            let c = ctx(3 + i, 102 + i, 3 + i);
-            admit(&state, &c, &env).unwrap_or_else(|e| panic!("claim {i} fits the budget: {e}"));
+        // Fill the budget exactly, all inside epoch 0. (Bind-timeout voids along the way release
+        // EXPOSURE but never production — the budget counts what was produced.)
+        for i in 0..budget {
+            let env = rich_attempt(1, 100 + i);
+            // One DAA score for all of them: the transition requires `daa_score` not to
+            // DECREASE and `blue_score` to strictly increase, and the whole run must stay inside
+            // epoch 0 for the budget to be the one being filled.
+            let c = ctx(3 + i, 102, 3 + i);
+            admit(&state, &c, &env).unwrap_or_else(|e| panic!("block {i} fits the budget: {e}"));
             state = apply_attempt(&state, &c, &env);
         }
-        // The 21st in the same epoch is refused.
-        let overflow = rich_attempt(1, 990);
-        let err = admit(&state, &ctx(30, 130, 30), &overflow).expect_err("the budget is exhausted");
-        assert!(matches!(err, PalwAdmissionV2Error::EpochBudgetExceeded { produced: 10_000, .. }));
+        // One more in the same epoch is refused, and the error names the count, not a pwu sum.
+        let overflow = rich_attempt(1, 90_001);
+        let err = admit(&state, &ctx(9_000, 950, 9_000), &overflow).expect_err("the budget is exhausted");
+        assert!(matches!(err, PalwAdmissionV2Error::EpochBudgetExceeded { produced, claimed: 1, .. } if produced == budget as u128));
 
-        // The same attempt admits in the NEXT epoch (daa 1000+): the counter rolled over.
-        assert!(admit(&state, &ctx(31, 1_000, 31), &overflow).is_ok(), "a new epoch is new budget");
+        // The same attempt admits in the NEXT epoch: the counter rolled over — but only once the
+        // chain has been there, because that is when the next epoch's budgets are derived.
+        let (next_epoch, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(9_001, 1_000, 9_001), &[], None).unwrap();
+        assert!(admit(&next_epoch, &ctx(9_002, 1_001, 9_002), &overflow).is_ok(), "a new epoch is new budget");
 
-        // A class with no budget entry: refused as unspecified, never as unlimited.
-        let empty_budget = PalwAdmissionParamsV2::new(500, BTreeMap::new()).unwrap();
-        let err = check_palw_attempt_admission_v2(&state, &state_params(), &empty_budget, &ctx(31, 1_000, 31), &overflow)
-            .expect_err("no budget entry, no admission");
-        assert!(matches!(err, PalwAdmissionV2Error::EpochBudgetUnspecified(_)));
+        // A class the epoch's table does not name admits nothing: a missing budget is a missing
+        // fact, never a permissive zero. (It fails earlier than item 7 — the class is not
+        // registered at all — so the point stands on the budget table itself.)
+        assert!(
+            !next_epoch.epoch_budgets().unwrap().budget_blocks.contains_key(&h64(0xAB5E)),
+            "an unregistered class has no budget entry"
+        );
     }
 
     #[test]
     fn admission_params_refuse_the_permissive_zeros() {
-        assert!(PalwAdmissionParamsV2::new(0, BTreeMap::new()).is_err(), "zero ratio");
-        assert!(PalwAdmissionParamsV2::new(1, [(h64(1), 0u128)].into_iter().collect()).is_err(), "zero budget = starved class");
-        assert!(PalwAdmissionParamsV2::new(1, [(h64(1), 1u128)].into_iter().collect()).is_ok());
+        assert!(PalwAdmissionParamsV2::new(0).is_err(), "zero ratio admits no work at all");
+        assert!(PalwAdmissionParamsV2::new(1).is_ok());
     }
 
     /// The full composer refuses stateless violations before touching state: a wrong-position
