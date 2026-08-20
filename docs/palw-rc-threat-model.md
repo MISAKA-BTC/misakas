@@ -37,27 +37,48 @@ honest "red (integration), lands in PR-N."
 - **Attack A:** solve one PALW nonce, then swap `trace_root`/`output_root`/bond to mint unlimited
   sibling identities under the same PoW.
 - **Red test:** `palw_v2_commitment_mutation_invalidates_pow` — build a valid header, flip one bit of
-  the commitment root, assert the PoW verification now **fails**. Today it passes (PoW ignores the
-  commitment) ⇒ **red**.
-- **Status:** **RED (integration).** *Corrected 2026-08-20 by the follow-up audit — this row read
-  "substrate green" on a claim the tree did not support.* Two distinct facts were conflated:
-  * The **transcript** is now total, and more strongly than the row claimed: `commitment_root_v2`
-    is `H(attempt_id_v2(attempt))`, so the priced set and the identity set are the same set by
-    construction (fix C4). It had NOT been: PR-06 added `trace_manifest_root` /
-    `trace_chunk_count` / `trace_retention_daa` to the attempt without adding them to the six-field
-    transcript, so one solved nonce minted unlimited sibling identities for the price of a
-    re-signature. `every_priced_field_moves_the_pow_tag` now derives its field list from an
-    exhaustive destructuring, so a field added tomorrow does not compile until it is priced.
-  * The **finalizer** still has no arm for `POW_ALGO_ID_PALW_COMMITTED_V2`, and nothing carries a
-    `PalwAttemptEnvelopeV2` from a header to a verifier. `l1_tag_v2` and `commitment_root_v2` have
-    no non-test callers. So "the finalizer consumes `Expand(root)`" describes an intention, not a
-    code path, and the named red test `palw_v2_commitment_mutation_invalidates_pow` does not exist.
-  Since `a460cdd7` wired the DEMAND side into four pipeline gates, that gap was a total liveness
-  failure waiting on a config change (fix C1): `check_algo_id_known` no longer claims to verify
-  algo 6, and `PalwConsensusParamsV2::validate` refuses a ruleset whose algorithm this binary
-  cannot finalize. A V2 network now fails to boot instead of accepting genesis and rejecting every
-  block after it. This row goes green when the finalizer arm, the wire carrier and the named test
-  land together. **ADR-0042:** Decision 3a.
+  the commitment root, assert the PoW verification now **fails**.
+- **Status:** **green (integration).** *History: corrected to RED on 2026-08-20 by the follow-up
+  audit (the row had read "substrate green" on a claim the tree did not support); closed the same
+  day when the finalizer arm, the wire carrier and the named test landed together — the exact
+  trio the RED text demanded.*
+  * The **transcript** is total, and more strongly than the original row claimed:
+    `commitment_root_v2` is `H(attempt_id_v2(attempt))`, so the priced set and the identity set
+    are the same set by construction (fix C4). `every_priced_field_moves_the_pow_tag` derives its
+    field list from an exhaustive destructuring, so a field added tomorrow does not compile until
+    it is priced.
+  * The **finalizer arm** exists: `StateLayer0::calculate_l1_tag`'s `POW_ALGO_ID_PALW_COMMITTED_V2`
+    arm computes `l1_tag_v2(commitment_root_v2(attempt))` — and enforces the challenge equation
+    itself (carried `challenge` == `challenge_v2(domain, pre_pow_hash, timestamp, nonce, class,
+    bond)`), so EVERY path that computes PoW — the pruning-proof path included, which never reaches
+    stateful admission — refuses an attempt re-mounted at another position (`PalwV2ChallengeMismatch`).
+  * The **wire carrier** exists: on an algo-6 header, `Header::palw_commitment` carries the
+    `PAV2`-magic Borsh envelope (7,897 bytes at real ML-DSA-87 lengths, inside the 8,192 cap —
+    size pinned by `a_real_envelope_fits_the_header_wire_cap`); `StateLayer0::new` decodes it
+    once; a missing/undecodable carrier is the named `PalwV2AttemptMissing`, a failed PoW and
+    never a panic; `check_palw_commitment_shape`'s algo-6 arm REQUIRES a decodable envelope,
+    independent of V1's `bound` fence (V2's binding is intrinsic).
+  * The **named test exists and is deterministic**: content fields move the Layer-0 digest (the
+    solution does not transfer — asserted as digest movement, not a target miss, so it cannot
+    flake), challenge-equation fields and re-mounted positions are refused outright, carrier
+    absence is named, and an exhaustive destructuring forces every future field into a bucket.
+    Mutation-checked twice: deleting the challenge equation from the arm and replacing the root
+    with a constant each make the test fail.
+  * `check_algo_id_known` lists 6 again, in the same commit — so the C1 boot refusal
+    (`PalwConsensusParamsV2::validate`) opened exactly as its doc promised
+    (`the_runnability_gate_opened_with_the_finalizer_arm`).
+  * **Deliberately NOT landed — Decision 3c as written.** The signature stays outside the priced
+    identity (flipping it moves neither `attempt_id` nor the digest; the named test pins this),
+    but the block-identity digest still hashes the RAW carrier bytes, signature included, rather
+    than `attempt_id`. That retention is a decision, not an omission: with identity =
+    `attempt_id`, a third party who flips one signature bit produces the SAME block id with an
+    invalid witness, and the first-seen invalid copy poisons the honest block's id in every
+    known-invalid cache — a zero-cost censorship primitive the ADR text does not address. With
+    raw-bytes identity, a flipped-signature copy is a DIFFERENT id that dies alone at admission;
+    only the bond holder can mint valid-signature siblings of their own block (ML-DSA-87 signing
+    is hedged), each sharing one PoW but deduplicated at the claim (`claim_id = attempt_id`).
+    3c needs its own design pass (a mutated-witness path that rejects without caching id
+    invalidity) before it can land safely. **ADR-0042:** Decision 3a; 3c deferred with cause.
 
 ### P0-2 — block-commitment ML-DSA-87 signature never verified at admission
 - **Invariant:** ADR-0038 W8 (no bond, no block — the *holder's* authorization).
@@ -299,7 +320,7 @@ rest are recorded here. Fixes landed on `palw-rc-audit-fixes`.
 
 | # | Where | Defect | Status |
 |---|---|---|---|
-| **C1** | `consensus/pow/src/lib.rs:345` | `a460cdd7` wired only the DEMAND side: four pipeline gates require `pow_algo_id == 6`, while `calculate_l1_tag` has no arm for 6 and falls to `UnknownAlgoId`. A V2 network booted — every Decision 1 invariant held — accepted its parentless genesis, then rejected every block after it, its own miner's included; the pruning-proof path failed identically, so IBD could not recover. `check_algo_id_known` listed 6 under a doc-comment calling it "every algo this binary can verify". | **fail-closed** — 6 removed from `check_algo_id_known`; `PalwConsensusParamsV2::validate` reads that list and refuses a ruleset whose algorithm this binary cannot compute. Opens automatically when the finalizer arm lands. |
+| **C1** | `consensus/pow/src/lib.rs:345` | `a460cdd7` wired only the DEMAND side: four pipeline gates require `pow_algo_id == 6`, while `calculate_l1_tag` has no arm for 6 and falls to `UnknownAlgoId`. A V2 network booted — every Decision 1 invariant held — accepted its parentless genesis, then rejected every block after it, its own miner's included; the pruning-proof path failed identically, so IBD could not recover. `check_algo_id_known` listed 6 under a doc-comment calling it "every algo this binary can verify". | **closed** — first fail-closed (6 delisted from `check_algo_id_known`; `PalwConsensusParamsV2::validate` refuses a ruleset this binary cannot compute), then opened by landing the trio the P0-1 row demanded: the algo-6 finalizer arm (`Expand(commitment_root_v2)` + the challenge equation in-arm), the wire carrier (`PAV2` envelope in `Header::palw_commitment`, decoded by `StateLayer0::new`, demanded by the shape gate) and `palw_v2_commitment_mutation_invalidates_pow` (mutation-checked). 6 is re-listed and the boot gate opened in that same commit (`the_runnability_gate_opened_with_the_finalizer_arm`). What algo-6 blocks still lack on the V2 lane is the STATEFUL side (admission/transition wiring — PR-10), tracked by the rows above, not by this one. |
 | **C2** | `consensus/core/src/palw_state_v2.rs:1153` | The frontier advanced only when the GLOBAL unresolved set was empty — and step 4 of every apply inserts the block's own claim, so on a chain producing work it never moved. `pruning_ceiling_v2` froze with it. Worse than inert: a fork carrying no attempts at all had an empty unresolved set at every block, so it advanced its frontier for free and **outranked a chain that had matured real work** (reproduced: 60 empty blocks reach frontier 60 against an honest chain stuck at 1; `decide_deep_reorg_v2` said `Allow`). | **fixed** — the frontier is the deepest block whose PALW work is `Final` with nothing unresolved below it, which is the definition `palw_fork_choice` already stated. A chain that matured nothing has no frontier however long it grows. 2 regression tests, mutation-checked. |
 | **C3** | `consensus/core/src/palw_court_v2.rs:201` | See the corrected P0-8 row: an accuser-authored binding could harvest a shape-family conviction against an honest executor. | **fixed** — `check_execution_root_binding` pins the binding to the claim's own `execution_root` before any fault is read. |
 | **C4** | `consensus/core/src/palw_attempt_v2.rs:139` | See the corrected P0-1 row: six of fourteen fields priced, three of the rest unconstrained. A PR-01 closure re-opened by PR-06. | **fixed** — `commitment_root_v2 = H(attempt_id_v2)`; the exhaustive test cannot fall behind the struct. |
