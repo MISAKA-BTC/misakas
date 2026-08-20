@@ -1995,6 +1995,19 @@ mod resolver_tests {
         // instead — which is what the old code did — trades a liveness cost for a soundness hole,
         // and that is the wrong direction.
         //
+        // UPDATE (ADR-0042 / palw-v2): all four grounds are now answered, and the move is
+        // specified rather than rejected. `palw_terminal` adjudicates the one-index interval
+        // against the anchor pair the responder itself pinned, which is what turns the steering
+        // objection below into a slower way to lose: junk disclosures produce junk endpoints, and a
+        // primitive recomputed from proven operands cannot carry one to the other. `palw_artifact`
+        // supplies the operands without a local model, and `PalwWithheldAuthorshipV1` supplies the
+        // authorship half a withheld execution lacks. What remains is wire plumbing — a carriage
+        // kind for the opening and the ladder state to drive it — not a soundness question.
+        //
+        // The rejection and its reasoning are kept below because they are why the move is shaped
+        // the way it is, and because a future reader who deletes the terminal check against the
+        // anchor pair needs to find the argument for it here rather than rediscover it.
+        //
         // A terminal-opening move was designed and REJECTED (2026-08-17) on four independent
         // grounds. Two of them were defects in shipped code and are now fixed; two are prerequisites
         // that remain, and adding the move before they are settled converts this fail-CLOSED liveness

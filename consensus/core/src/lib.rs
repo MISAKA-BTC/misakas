@@ -198,6 +198,7 @@ pub mod palw_base0_ops;
 pub mod palw_chain_weight;
 pub mod palw_attempt_v2;
 pub mod palw_artifact;
+pub mod palw_terminal;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_pwu;
