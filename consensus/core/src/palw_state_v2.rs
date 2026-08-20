@@ -134,6 +134,12 @@ pub struct PalwStateParamsV2 {
     /// DAA-score window from receipt licensing after which, with no open court session, the
     /// claim becomes `Final`.
     window_challenge: u64,
+    /// DAA-score budget one court session gets from opening to verdict — the liveness backstop
+    /// (ADR-0042 Decision 8 items 3/4 as the state machine sees them). A session still open past
+    /// it closes CHALLENGER-side: prosecution is the challenger's burden, and a challenge nobody
+    /// finishes must not freeze an honest claim forever. Decision 1's startup gate must hold
+    /// `window_court > worst-case ladder duration` so an honest prosecution always fits.
+    window_court: u64,
     /// Length of a class-production epoch in DAA score units (ADR-0039 D5 counters).
     epoch_length: u64,
 }
@@ -144,18 +150,19 @@ impl PalwStateParamsV2 {
         window_bind: u64,
         window_receipt: u64,
         window_challenge: u64,
+        window_court: u64,
         epoch_length: u64,
     ) -> Result<Self, PalwStateV2Error> {
         if beta_permille > 1000 {
             return Err(PalwStateV2Error::InvalidParams("beta_permille exceeds 1000 (β ≤ 1)"));
         }
-        if window_bind == 0 || window_receipt == 0 || window_challenge == 0 {
+        if window_bind == 0 || window_receipt == 0 || window_challenge == 0 || window_court == 0 {
             return Err(PalwStateV2Error::InvalidParams("every lattice window must be at least one DAA unit"));
         }
         if epoch_length == 0 {
             return Err(PalwStateV2Error::InvalidParams("epoch_length must be at least one DAA unit"));
         }
-        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, epoch_length })
+        Ok(Self { beta_permille, window_bind, window_receipt, window_challenge, window_court, epoch_length })
     }
 
     pub fn beta_permille(&self) -> u16 {
@@ -172,6 +179,17 @@ impl PalwStateParamsV2 {
     /// when a claim's panel may still legally bind.
     pub fn window_bind(&self) -> u64 {
         self.window_bind
+    }
+
+    /// The challenge window, exposed so court acceptance can agree with the Final sweep about
+    /// when a claim is still challengeable.
+    pub fn window_challenge(&self) -> u64 {
+        self.window_challenge
+    }
+
+    /// The per-session court budget (see the field's doc).
+    pub fn window_court(&self) -> u64 {
+        self.window_court
     }
 }
 
@@ -315,6 +333,13 @@ pub struct PalwClaimStateV2 {
     pub accepted_blue_score: u64,
     /// The chain block that carried the attempt.
     pub accepted_block: BlockHash,
+    /// The attempt's committed step-trace root — what the court adjudicates against (PR-07) and
+    /// what DA obligations serve chunks of. Copied into the record because the state IS the
+    /// candidate-scoped source consumers read; sending them back to the envelope would be a
+    /// second lookup path to diverge in.
+    pub trace_root: Hash64,
+    /// The attempt's committed output root (output-side disputes bind it).
+    pub output_root: Hash64,
     /// Collateral value reserved at creation: `pwu × slash_value_per_pwu(class at creation)`.
     /// Snapshotted so release always returns exactly what reserve took, whatever happens to the
     /// class record afterwards.
@@ -346,6 +371,9 @@ pub struct PalwCourtSessionStateV2 {
     pub claim: Hash64,
     pub challenger_bond: PalwBondKeyV2,
     pub opened_daa: u64,
+    /// `opened_daa + window_court` — the backstop. Past it the session closes challenger-side
+    /// at the sweep (prosecution is the challenger's burden; see the params field doc).
+    pub deadline_daa: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -510,6 +538,9 @@ pub struct PalwChainStateV2 {
     unresolved: BTreeSet<(u64, Hash64)>,
     /// Open court sessions per claim — what gates `ReceiptLicensed → Final`.
     open_courts_by_claim: BTreeMap<Hash64, u32>,
+    /// `(deadline_daa, session)` — the court backstop sweep queue. Exactly rebuildable from the
+    /// session records (each carries its deadline), so never serialized, never hashed.
+    court_deadlines: BTreeSet<(u64, Hash64)>,
 }
 
 impl PalwChainStateV2 {
@@ -534,6 +565,7 @@ impl PalwChainStateV2 {
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             open_courts_by_claim: BTreeMap::new(),
+            court_deadlines: BTreeSet::new(),
         }
     }
 
@@ -682,6 +714,10 @@ impl PalwChainStateV2 {
         }
         if open_courts != self.open_courts_by_claim {
             return Err(PalwStateV2Error::CarriageInconsistent("open-court index differs from the sessions".into()));
+        }
+        let court_deadlines: BTreeSet<(u64, Hash64)> = self.court_sessions.iter().map(|(id, s)| (s.deadline_daa, *id)).collect();
+        if court_deadlines != self.court_deadlines {
+            return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
         }
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
@@ -912,9 +948,11 @@ impl<'a> TransitionBuilder<'a> {
             if *count == 0 {
                 self.state.open_courts_by_claim.remove(&previous.claim);
             }
+            self.state.court_deadlines.remove(&(previous.deadline_daa, key));
         }
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
+            self.state.court_deadlines.insert((record.deadline_daa, key));
         }
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
     }
@@ -1023,9 +1061,11 @@ pub fn apply_palw_transition_v2(
 
     let mut builder = TransitionBuilder::new(parent, params);
 
-    // 2. Deadline sweep — everything strictly past is resolved before this block says anything.
-    //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.)
+    // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
+    //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
+    //    first, then the court backstop: the order is fixed, and fixed IS the requirement.
     sweep_deadlines(&mut builder, ctx)?;
+    sweep_court_deadlines(&mut builder, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     for object in accepted_objects {
@@ -1061,6 +1101,44 @@ pub fn apply_palw_transition_v2(
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
     Ok((builder.state, delta))
+}
+
+/// After the LAST open session on a licensed claim ends challenger-side (an explicit
+/// `ChallengerDefeated` verdict, or the backstop sweep), re-arm the claim's path to `Final`:
+/// never earlier than the licensed floor, never in this block's past.
+fn rearm_after_challenger_side_close(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.state.open_courts_by_claim.contains_key(&claim_id)
+        && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
+    {
+        let floor =
+            licensed_daa.checked_add(builder.params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+        builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
+    }
+    Ok(())
+}
+
+/// The court backstop (runs AFTER the claim sweep, in `(deadline, session)` order — the fixed
+/// ordering is consensus): a session still open past `deadline_daa` closes CHALLENGER-side.
+/// Prosecution is the challenger's burden — a ladder default against the executor is provable
+/// and closable by ANYONE as `CourtClosed(ExecutorGuilty)` long before this fires, so the only
+/// sessions that reach the backstop are ones nobody could or would finish, and an honest claim
+/// must not stay frozen for them.
+fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
+        if deadline >= ctx.daa_score {
+            break;
+        }
+        let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+        builder.write_court(session_id, None);
+        let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim)?;
+    }
+    Ok(())
 }
 
 fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
@@ -1208,9 +1286,16 @@ fn apply_object(
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "CourtOpened" });
             }
             builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            let deadline_daa =
+                ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
             builder.write_court(
                 *session_id,
-                Some(PalwCourtSessionStateV2 { claim: *claim_id, challenger_bond: *challenger_bond, opened_daa: ctx.daa_score }),
+                Some(PalwCourtSessionStateV2 {
+                    claim: *claim_id,
+                    challenger_bond: *challenger_bond,
+                    opened_daa: ctx.daa_score,
+                    deadline_daa,
+                }),
             );
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
@@ -1233,16 +1318,7 @@ fn apply_object(
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
-                    // If this was the last open session on a licensed claim, re-arm its path to
-                    // Final: never earlier than the licensed floor, never in this block's past.
-                    if !builder.state.open_courts_by_claim.contains_key(&claim_id)
-                        && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
-                    {
-                        let floor = licensed_daa
-                            .checked_add(builder.params.window_challenge)
-                            .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
-                        builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
-                    }
+                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim)?;
                 }
             }
         }
@@ -1286,6 +1362,8 @@ fn apply_attempt(
         accepted_daa: ctx.daa_score,
         accepted_blue_score: ctx.blue_score,
         accepted_block: ctx.block,
+        trace_root: attempt.trace_root,
+        output_root: attempt.output_root,
         reserved,
         immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
         phase: PalwClaimPhaseV2::Provisional,
@@ -1417,8 +1495,10 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         .map(|(id, claim)| (claim.accepted_blue_score, *id))
         .collect();
     state.open_courts_by_claim = BTreeMap::new();
-    for session in state.court_sessions.values() {
+    state.court_deadlines = BTreeSet::new();
+    for (id, session) in &state.court_sessions {
         *state.open_courts_by_claim.entry(session.claim).or_insert(0) += 1;
+        state.court_deadlines.insert((session.deadline_daa, *id));
     }
 }
 
@@ -1563,6 +1643,7 @@ impl PalwStateCarriageV2 {
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             open_courts_by_claim: BTreeMap::new(),
+            court_deadlines: BTreeSet::new(),
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
@@ -1641,7 +1722,7 @@ mod tests {
     use crate::tx::TransactionId;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 1000).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000).unwrap()
     }
 
     fn h64(v: u64) -> Hash64 {
@@ -1942,6 +2023,40 @@ mod tests {
             ref other => panic!("expected the standing void, got {other:?}"),
         }
         assert!(s6.court_session(&h64(600)).is_none());
+    }
+
+    /// The backstop: a session nobody closes expires challenger-side at `opened + window_court`,
+    /// and the frozen claim's path to Final re-arms — an unfinished challenge is not a freeze ray.
+    #[test]
+    fn an_abandoned_court_expires_challenger_side_and_the_claim_finals() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id }], None);
+        let (s5, _) = apply(
+            &s4,
+            &p,
+            &ctx(5, 104, 5),
+            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(500), claim: claim_id, challenger_bond: bond_key(1) }],
+            None,
+        );
+        // Inside the court budget (opened at 104, window 500 → deadline 604): frozen.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 600, 6), &[], None);
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert!(s6.court_session(&h64(500)).is_some());
+        // Past it: the sweep closes the session challenger-side and re-arms Final at this point…
+        let (s7, _) = apply(&s6, &p, &ctx(7, 605, 7), &[], None);
+        assert!(s7.court_session(&h64(500)).is_none(), "the abandoned session expired");
+        assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        // …and the next block past the re-armed deadline finals the claim.
+        let (s8, _) = apply(&s7, &p, &ctx(8, 606, 8), &[], None);
+        assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the freeze ended with the challenge");
     }
 
     // ---- strictness: a missing fact is an error ----
@@ -2363,21 +2478,22 @@ mod tests {
 
     #[test]
     fn params_refuse_out_of_range_values() {
-        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1).is_err(), "β > 1");
-        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1).is_err(), "zero bind window");
-        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1).is_err(), "zero receipt window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1).is_err(), "zero challenge window");
-        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0).is_err(), "zero epoch length");
-        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1).is_ok(), "β = 1 exactly is the boundary");
+        assert!(PalwStateParamsV2::new(1001, 1, 1, 1, 1, 1).is_err(), "β > 1");
+        assert!(PalwStateParamsV2::new(100, 0, 1, 1, 1, 1).is_err(), "zero bind window");
+        assert!(PalwStateParamsV2::new(100, 1, 0, 1, 1, 1).is_err(), "zero receipt window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 0, 1, 1).is_err(), "zero challenge window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 0, 1).is_err(), "zero court window");
+        assert!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 0).is_err(), "zero epoch length");
+        assert!(PalwStateParamsV2::new(1000, 1, 1, 1, 1, 1).is_ok(), "β = 1 exactly is the boundary");
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10).unwrap();
+        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 }

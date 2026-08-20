@@ -145,8 +145,16 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_matmul_fraud_convicts_without_model` — give a full node with **no model** a
   proof-carrying refutation (operands + weight row + quant params + Merkle proofs) of a wrong MatMul
   step; assert a conviction, not `Unadjudicable`.
-- **Status:** red (unit once evidence is proof-carrying; `consensus/core`). **Greens in:** PR-07.
-  **ADR-0042:** Decision 8. *(Runtime-removal half is Decision 4 / P0-W1 below.)*
+- **Status:** **substrate green** (P0-8 mechanism `b9333e47` + PR-07): evidence is
+  proof-carrying (`PalwProvenOperandsV1` against the class's registered artifact root), and
+  `adjudicate_court_close_v2` is the V2 consumer — a conviction is `ExecutorGuilty`, an honest
+  recomputation is `ChallengerDefeated`, and anything unadjudicable REFUSES the close (convicts
+  nobody, acquits nobody). Ladder no-show defaults are deliberately NOT acceptable V2 objects
+  until the ladder itself is chain-carried — a forged default would void honest claims on
+  demand; the system stays closed meanwhile (arithmetic conviction when data is held, the
+  panel's `Unavailable` quorum when it is withheld, the `window_court` backstop when a challenge
+  is abandoned). **ADR-0042:** Decision 8. *(Runtime-removal half is Decision 4 / P0-W1 below —
+  closed in PR-02.)*
 
 ### P0-9 — bisection court incomplete (soundness + liveness)
 - **Invariant:** disputes terminate; deep fraud is prosecutable in-window.

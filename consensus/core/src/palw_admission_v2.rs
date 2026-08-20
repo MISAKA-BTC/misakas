@@ -261,7 +261,7 @@ mod tests {
     }
 
     fn state_params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 1000).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000).unwrap()
     }
 
     fn admission_params() -> PalwAdmissionParamsV2 {
