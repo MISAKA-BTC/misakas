@@ -304,3 +304,56 @@ The ordering that follows from this phase:
   it may change the step space (closure 2 adds a cross-position dependency).
 * The size question (1.5B or 3B) gates the artifact but nothing before it.
 * G2's bias-column exactness is a measurement Phase 2 owes before the artifact format freezes.
+
+
+---
+
+## Phase 2 — the converter, and the calibration it exposes (2026-08-21)
+
+`misaka-palw-base0::convert` reads a Qwen2.5 `safetensors` blob and produces the integer
+artifact: header parse, BF16 widening, the three folds, symmetric int8 quantization, and the
+requantization triples.
+
+**Reproducibility is the requirement here, not float-order independence.** The converter runs
+offline and its output is a hash, so a verifier re-runs it to check a registered root — which
+means two conversions of one checkpoint must agree bit for bit. That is why there is no summation
+anywhere in the quantizer: a scale is `absmax / 127`, and a max reduction is exact and
+order-independent. The only rounding is one `f64` division per weight, with no FMA to contract
+and no accumulation to reorder. A quantizer computing a mean or an MSE would have needed a pinned
+order; this one has nothing to pin.
+
+**The fold un-ties the embedding.** `tie_word_embeddings` is true in the file, but `model.norm`'s
+gain folds into the lm_head and not into the gather, so the two matrices differ by `diag(g)`
+afterwards and the artifact carries both. A real consequence, not a packing choice.
+
+### Blocker — activation calibration (量子化品質)
+
+A bias enters as the `zero` of a requantization triple, and `zero` is in units of the OUTPUT
+ACTIVATION CODE — so placing it needs `scale_out = scale_weight × scale_activation × 2^shift`.
+Two of those are properties of tensors the converter reads. **The third is a property of the data
+the model runs on**, and deriving it is calibration: a forward pass over sample inputs, measuring
+the range each projection actually produces. That is Phase 3's measurement.
+
+It is carried as `Qwen25ConvertPlan::activation_scale` so the pipeline is complete and the missing
+number is named rather than guessed inside a formula.
+
+**An uncalibrated value drops every bias silently**, and that was measured rather than predicted:
+with the norm gain folded in, the weight scale rises by the gain's magnitude, so a bias comparable
+to the weights before the fold rounds to zero after it. `biased_channel_count` exists so that
+failure is a number somebody reads instead of a model that runs and is quietly wrong.
+
+### A consensus-safety defect the converter's own test found
+
+Asserting that a calibrated and an uncalibrated conversion are *different classes* failed: they
+had the same `execution_class_id`. `absorb_scale` wrote a multiplier and a shift, so the
+requantization **zero point was outside the artifact digest** — as was every per-channel triple.
+
+Two artifacts whose every bias differed shared one class id, which means a class could be
+registered with one set of biases and executed with another while the court saw a single
+identity. Closed: `absorb_quant` covers all three fields, the per-channel lists are length-
+prefixed, and `None` is a different stream from an empty `Some`.
+`the_class_id_covers_every_quantization_parameter` moves the id with ONE channel's bias in the
+LAST position, because a digest that missed the tail would be exactly as broken.
+
+Condition 6 asks for the requant parameters to be inside `artifact_root`. Until this commit they
+were not.

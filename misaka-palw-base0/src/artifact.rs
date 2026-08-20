@@ -356,8 +356,8 @@ impl Base0ArtifactV1 {
         state.update(&self.rope.digest_bytes());
         absorb_tensor(&mut state, b"embed", &self.embed);
         absorb_tensor(&mut state, b"unembed", &self.unembed);
-        absorb_scale(&mut state, self.norm_requant.multiplier, self.norm_requant.shift);
-        absorb_scale(&mut state, self.residual_requant.multiplier, self.residual_requant.shift);
+        absorb_quant(&mut state, &self.norm_requant);
+        absorb_quant(&mut state, &self.residual_requant);
         for (i, l) in self.layers.iter().enumerate() {
             state.update(&(i as u64).to_le_bytes());
             for (label, w) in [
@@ -372,8 +372,27 @@ impl Base0ArtifactV1 {
                 absorb_tensor(&mut state, label, w);
             }
             for p in l.requant.iter() {
-                absorb_scale(&mut state, p.multiplier, p.shift);
+                absorb_quant(&mut state, p);
             }
+            // The per-channel triples, which is where a converted class's BIASES are. Length-
+            // prefixed and tagged with presence, so `None` and an empty `Some` are different
+            // streams — one means "this class has no per-channel parameters" and the other means
+            // "it has three empty lists", and a digest that could not tell them apart would be a
+            // digest two different artifacts share.
+            match &l.qkv_channel_requant {
+                None => {
+                    state.update(&[0u8]);
+                }
+                Some(per) => {
+                    state.update(&[1u8]);
+                    for channel in per.iter() {
+                        state.update(&(channel.len() as u64).to_le_bytes());
+                        for p in channel {
+                            absorb_quant(&mut state, p);
+                        }
+                    }
+                }
+            };
             absorb_scale(&mut state, l.attn_logit_scale.multiplier, l.attn_logit_scale.shift);
             absorb_scale(&mut state, l.ffn_gate_scale.multiplier, l.ffn_gate_scale.shift);
         }
@@ -403,13 +422,81 @@ fn absorb_tensor(state: &mut blake2b_simd::State, label: &[u8], w: &[i8]) {
 /// One `(multiplier, shift)` pair into the digest. Shared by [`QuantParams`] and [`ScaleParams`]
 /// because both are the same two numbers; keeping one absorber means a new scale field cannot be
 /// added with a subtly different encoding.
+/// A `ScaleParams` — multiplier and shift, no additive term (there is none in that type).
 fn absorb_scale(state: &mut blake2b_simd::State, multiplier: i32, shift: u8) {
     state.update(&multiplier.to_le_bytes());
     state.update(&[shift]);
 }
 
+/// A `QuantParams` — multiplier, shift **and zero point**.
+///
+/// The zero is the additive term the ADR-0040 amendment added, and it is where a projection bias
+/// lives. It was outside the digest for exactly as long as it did not exist; leaving it there
+/// would mean two artifacts whose every bias differs share one class id — a class could be
+/// registered with one set of biases and executed with another, and the court would see a single
+/// identity. `absorb_quant` is separate from `absorb_scale` rather than a widened version of it
+/// because `ScaleParams` genuinely has no third field, and a shared function would have had to
+/// invent a zero for it.
+fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
+    state.update(&p.multiplier.to_le_bytes());
+    state.update(&[p.shift]);
+    state.update(&p.zero.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
+    /// **Condition 6: the requant parameters are inside `artifact_root`, biases included.**
+    ///
+    /// They were not. `absorb_scale` wrote a multiplier and a shift, so the zero point — the
+    /// additive term the ADR-0040 amendment added, and where a projection bias lives — was
+    /// outside the digest. Two artifacts whose every bias differed shared one class id, which
+    /// means a class could be registered with one set of biases and executed with another while
+    /// the court saw a single identity. Found by a converter test asserting that a calibrated and
+    /// an uncalibrated conversion are different classes; they were not.
+    #[test]
+    fn the_class_id_covers_every_quantization_parameter() {
+        use kaspa_consensus_core::palw_base0_ops::QuantParams;
+        let base = Base0ArtifactV1::derive_deterministic(tiny(), 7).unwrap();
+        let id = base.execution_class_id();
+
+        // Each field of each triple moves it, one at a time.
+        for mutate in [
+            (|a: &mut Base0ArtifactV1| a.layers[0].requant[0].zero = 3) as fn(&mut Base0ArtifactV1),
+            |a| a.layers[0].requant[0].multiplier -= 1,
+            |a| a.layers[0].requant[0].shift += 1,
+            |a| a.norm_requant.zero = 1,
+            |a| a.residual_requant.zero = -1,
+            |a| a.layers[1].requant[6].zero = 2,
+        ] {
+            let mut m = base.clone();
+            mutate(&mut m);
+            assert_ne!(m.execution_class_id(), id, "a quantization parameter must be inside the identity");
+        }
+
+        // The per-channel triples too — and PRESENCE is distinguishable from an empty list, so
+        // "this class has no per-channel parameters" and "it has three empty ones" are different
+        // streams rather than one digest two artifacts share.
+        let mut with_channels = base.clone();
+        with_channels.layers[0].qkv_channel_requant = Some([Vec::new(), Vec::new(), Vec::new()]);
+        assert_ne!(with_channels.execution_class_id(), id, "an empty Some is not a None");
+
+        let d = tiny().d_model();
+        let kv = tiny().kv_dim();
+        let triple = |zero: i32| QuantParams { multiplier: i32::MAX, shift: 7, zero };
+        let mut biased = base.clone();
+        biased.layers[0].qkv_channel_requant =
+            Some([vec![triple(0); d], vec![triple(0); kv], vec![triple(0); kv]]);
+        let unbiased_id = biased.execution_class_id();
+        let mut one_bias = biased.clone();
+        one_bias.layers[0].qkv_channel_requant.as_mut().unwrap()[0][d - 1] = triple(1);
+        assert_ne!(
+            one_bias.execution_class_id(),
+            unbiased_id,
+            "ONE channel's bias, in the LAST position, must move the class id — a digest that missed it \
+             would let a class run with biases it was not registered with"
+        );
+    }
+
     use super::*;
 
     pub(crate) fn tiny() -> Base0ShapeV1 {

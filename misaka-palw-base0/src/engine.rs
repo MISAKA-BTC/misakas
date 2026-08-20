@@ -696,14 +696,16 @@ mod tests {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
             a.execution_class_id().to_string(),
-            // Re-frozen 2026-08-21: the shape digest gained `n_kv_heads`, so the class ID moved.
+            // Re-frozen 2026-08-21, twice: the shape digest gained `n_kv_heads`, and then the
+            // artifact digest gained the requantization ZERO POINTS and the per-channel triples —
+            // without which two artifacts whose every bias differs shared one class id.
             // The LOGITS below did not, and that is the assertion that matters — the arithmetic is
             // untouched at `n_kv_heads == n_heads`, which is what every artifact built before
             // grouped-query attention meant. A class id that moved while the trace held is a
             // renaming; one where the trace moved too would have been a different model.
             concat!(
-                "2d1913069ea7230c073c431846d2e42291b60154f6a086498e44f6757e98dd5e",
-                "7972163d76e192c039de5ba4b35676ce7cecd2c263ed899fe73d8299559b69e7"
+                "bca34a5c626c9b2f34c759d061ab20d3dcab5f7d9f58473c673f00844d9d9edd",
+                "3521ee6c8ff3680a32ca551e5e946846711c908efe91c2f5fba03dbd979efab7"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );

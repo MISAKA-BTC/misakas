@@ -5848,6 +5848,7 @@ dependencies = [
  "blake2b_simd",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "serde_json",
 ]
 
 [[package]]
