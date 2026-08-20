@@ -202,6 +202,7 @@ pub mod palw_terminal;
 pub mod palw_exposure;
 pub mod palw_fork_choice;
 pub mod palw_state_v2;
+pub mod palw_admission_v2;
 pub mod palw_facts;
 pub mod palw_pwu;
 pub mod palw_receipt;

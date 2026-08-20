@@ -37,6 +37,11 @@ pub const PALW_ATTEMPT_V2_DOMAIN_CHALLENGE: &[u8] = b"misaka-palw/attempt-v2/cha
 pub const PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT: &[u8] = b"misaka-palw/attempt-v2/commitment-root/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID: &[u8] = b"misaka-palw/attempt-v2/attempt-id/v1";
 pub const PALW_ATTEMPT_V2_DOMAIN_L1_TAG: &[u8] = b"misaka-palw/attempt-v2/l1-tag/v1";
+/// ML-DSA-87 signing context for a V2 attempt — its own family domain (audit P0-6: one
+/// context-free closure serving several object families is how a signature crosses meanings).
+/// The signed message is [`attempt_id_v2`]: identity covers every field, so signing the id signs
+/// the claim, and nothing outside the id can ride on the signature.
+pub const PALW_ATTEMPT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/attempt-v2/mldsa87/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
@@ -44,6 +49,7 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_DOMAIN_COMMITMENT_ROOT,
     PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID,
     PALW_ATTEMPT_V2_DOMAIN_L1_TAG,
+    PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -172,6 +178,8 @@ pub enum PalwAttemptV2Error {
     SignatureLength { got: usize, expected: usize },
     #[error("the executor public key is empty")]
     MissingPublicKey,
+    #[error("the signature does not verify over the attempt id under the carried executor key")]
+    SignatureInvalid,
 }
 
 impl PalwAttemptEnvelopeV2 {
@@ -206,6 +214,27 @@ impl PalwAttemptEnvelopeV2 {
             || a.challenge != challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, a.class_id, &a.executor_bond)
         {
             return Err(PalwAttemptV2Error::ChallengeMismatch);
+        }
+        Ok(())
+    }
+
+    /// Stateless signature check (ADR-0042 Decision 6's stateless list): the signature must
+    /// verify over [`attempt_id_v2`] under the **carried** `executor_pubkey`, in this family's
+    /// own context. What it proves is exactly "the carried key signed this claim" — whether the
+    /// carried key IS the named bond's key is the stateful side's item 2, checked against the
+    /// candidate-chain bond record. Split this way, an unsigned attempt costs a peer one
+    /// signature verification and zero chain lookups.
+    ///
+    /// The verifier is passed in because this crate holds no ML-DSA implementation; the CONTEXT
+    /// is not passed in — the family's own code chooses it, so no caller can supply a foreign
+    /// domain (audit P0-6).
+    pub fn validate_signature_v2<V>(&self, verify_mldsa87: V) -> Result<(), PalwAttemptV2Error>
+    where
+        V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
+        let message = attempt_id_v2(&self.attempt);
+        if !verify_mldsa87(&self.attempt.executor_pubkey, message.as_byte_slice(), &self.signature, PALW_ATTEMPT_V2_MLDSA87_CONTEXT) {
+            return Err(PalwAttemptV2Error::SignatureInvalid);
         }
         Ok(())
     }

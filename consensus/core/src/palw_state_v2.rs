@@ -102,6 +102,10 @@ pub const PALW_STATE_V2_DOMAIN_STATE_ROOT: &[u8] = b"misaka-palw/state-v2/state-
 pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collection/v1";
 pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage/v1";
 
+/// Every domain this module keys, so the cross-family uniqueness test can see them.
+pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] =
+    &[PALW_STATE_V2_DOMAIN_STATE_ROOT, PALW_STATE_V2_DOMAIN_COLLECTION, PALW_STATE_V2_DOMAIN_CARRIAGE];
+
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
 }
@@ -156,6 +160,12 @@ impl PalwStateParamsV2 {
 
     pub fn beta_permille(&self) -> u16 {
         self.beta_permille
+    }
+
+    /// The epoch arithmetic admission's budget predicate must share with the state's counters —
+    /// two epoch definitions would let a claim be inside one and outside the other.
+    pub fn epoch_length(&self) -> u64 {
+        self.epoch_length
     }
 }
 
@@ -219,6 +229,18 @@ pub enum PalwClassStatusV2 {
     Frozen { since_daa: u64 },
 }
 
+/// The class's PWU rule — what Decision 6 item 6 checks an attempt's claimed `pwu` against.
+///
+/// The real per-class PWU DERIVATION is ADR-0039's still-open item, and ADR-0042 requires it
+/// before any class carries weight; until that record lands, the only shape a registration can
+/// commit to is a ceiling. The enum exists so the derivation arrives as a new variant instead of
+/// a schema break — and so admission can already refuse a claim no rule would ever license.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwPwuRuleV2 {
+    /// An attempt may claim at most this many pwu (and at least 1, enforced statelessly).
+    MaxPerAttempt(u64),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassStateV2 {
     /// What artifact openings prove against; an attempt whose `artifact_root` differs is
@@ -227,6 +249,8 @@ pub struct PalwClassStateV2 {
     /// Sompi of collateral one pwu of this class puts at stake — the multiplier in Decision 6's
     /// reserved-exposure formula.
     pub slash_value_per_pwu: u64,
+    /// Decision 6 item 6's referent (see [`PalwPwuRuleV2`]).
+    pub pwu_rule: PalwPwuRuleV2,
     pub status: PalwClassStatusV2,
     pub registered_daa: u64,
 }
@@ -365,6 +389,7 @@ pub enum PalwConsensusObjectV2 {
         class_id: Hash64,
         artifact_root: Hash64,
         slash_value_per_pwu: u64,
+        pwu_rule: PalwPwuRuleV2,
         initial_compact_target: u32,
     },
     ClassFrozen {
@@ -1091,7 +1116,7 @@ fn apply_object(
                 }
             }
         }
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, initial_compact_target } => {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_compact_target } => {
             if builder.state.classes.contains_key(class_id) {
                 return Err(PalwStateV2Error::DuplicateClass(*class_id));
             }
@@ -1100,6 +1125,7 @@ fn apply_object(
                 Some(PalwClassStateV2 {
                     artifact_root: *artifact_root,
                     slash_value_per_pwu: *slash_value_per_pwu,
+                    pwu_rule: *pwu_rule,
                     status: PalwClassStatusV2::Active,
                     registered_daa: ctx.daa_score,
                 }),
@@ -1629,6 +1655,7 @@ mod tests {
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_compact_target: 0x207fffff,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_id: h64(21), collateral: 1_000 },
@@ -2077,6 +2104,7 @@ mod tests {
                 class_id: h64(2),
                 artifact_root: h64(12),
                 slash_value_per_pwu: 1,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_compact_target: 0x207fffff,
             }],
             None,

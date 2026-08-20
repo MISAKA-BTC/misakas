@@ -54,8 +54,12 @@ honest "red (integration), lands in PR-N."
   signature and passes W8.
 - **Red test:** `palw_v2_foreign_bond_garbage_signature_rejected` — admission of a commitment whose
   signature does not verify under the bond record's key must return `CommitmentSignatureInvalid`.
-- **Status:** red (unit, `consensus/pow`). **Greens in:** PR-04 (admission wiring; a matching fix is
-  already in flight on `palw-only-v4` — reconcile, do not duplicate). **ADR-0042:** Decision 6.
+- **Status:** **green** — twice over. The V1 lane's fix landed as `82d2db44` (inherited on this
+  branch: `verify_mldsa87` under the bond record's key, `CommitmentSignatureInvalid`, the family's
+  own context). The V2 lane (PR-04): `palw_v2_foreign_bond_garbage_signature_rejected` pins both
+  faces — a foreign key on a victim's bond is `BondKeyMismatch` (stateful item 2) even when the
+  signature verifies under the carried key, and a garbage signature is refused statelessly over
+  the attempt id in `PALW_ATTEMPT_V2_MLDSA87_CONTEXT`. **ADR-0042:** Decision 6.
 
 ### P0-3 — a fresh PALW tip is always "unresolved," so fork choice never engages
 - **Invariant:** W3 fork choice actually uses PALW weight.
@@ -155,7 +159,10 @@ honest "red (integration), lands in PR-N."
 - **Red test:** `palw_v2_bond_exposure_ceiling_enforced` — reserve `Σ immature_pwu × slash_per_pwu`
   per bond; assert the N+1th commitment that would exceed `collateral × max_exposure_ratio` is
   rejected at admission.
-- **Status:** red (integration). **Greens in:** PR-04. **ADR-0042:** Decision 6.
+- **Status:** **substrate green** (PR-04): the named test passes — reservation at claim creation
+  (PR-03's accounting), the inclusive ceiling refusal at admission item 8, and release-on-resolve
+  re-opening exactly the held headroom. The V1 weigher carries no ceiling until PR-08 retires it;
+  no V2 network exists before the bundle. **ADR-0042:** Decision 6.
 
 ---
 
