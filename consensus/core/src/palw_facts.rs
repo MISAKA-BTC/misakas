@@ -1559,6 +1559,132 @@ mod resolver_tests {
         );
     }
 
+    /// **P0-6, by its registered name: an equivocation that slashes must also void the weight.**
+    ///
+    /// The attack the register describes is a DISAGREEMENT between two subsystems that read the
+    /// same signature. A valid `ClassContradiction` certificate reaches the slash path and debits
+    /// the bond; the weight resolver reads the same attestation signatures under a DIFFERENT
+    /// signing context, fails to verify them, leaves `convicted_before_close = false`, and the
+    /// fabricated block keeps every unit of its fork-choice weight. The bond pays and the forgery
+    /// still wins the tip — W5 ("conviction voids the convicted block's weight") broken not by a
+    /// missing rule but by two rules asking different questions of one fact.
+    ///
+    /// So the assertion is deliberately end-to-end and deliberately about WEIGHT, not about a
+    /// boolean: inject a valid equivocation, and the ramp stage must be `Voided` and the effective
+    /// weight must fall to the spam backbone alone — in the SAME resolve that authenticates the
+    /// certificate. A test that only asserted `convicted_before_close` would pass on a resolver
+    /// that computed the flag and never let it reach the weight.
+    #[test]
+    fn palw_v2_equivocation_voids_fork_choice_weight() {
+        use crate::palw_weight::{PalwWeightParamsV1, PalwWorkRampStageV1, effective_weight_v1, ramp_stage_v1};
+
+        let bonds = bonds();
+        let panel = [seat(1), seat(2), seat(3)];
+        let weights = NoStepWeights;
+        // Quorum-many receipts, so the block would otherwise be licensed and (window closed)
+        // `Final`: the conviction has something real to take away. A fixture that was Provisional
+        // anyway could not tell "the void landed" from "it never had weight".
+        let licensed: Vec<_> = vec![receipt_row(1, 1_100), receipt_row(2, 1_100), receipt_row(3, 1_100)];
+        let params = PalwWeightParamsV1 { receipt_quorum: 3, rho_r_permille: 1000 };
+        const BACKBONE: u64 = 7_000;
+        const PWU: u64 = 4_242;
+
+        let clean = resolve_block_facts_v1(&input(&licensed, &panel, 9_000, &bonds, &weights), accept_fixture_signature);
+        let clean_facts = weight_facts_v1(&clean, 100).expect("the fixture resolves");
+        let clean_stage = ramp_stage_v1(&clean_facts, &params);
+        assert_eq!(clean_stage, PalwWorkRampStageV1::Final, "the control must actually have weight to lose");
+        assert_eq!(effective_weight_v1(BACKBONE, PWU, clean_stage, &params), (BACKBONE as u128) + (PWU as u128));
+
+        // The same block, same receipts, plus one valid equivocation certificate inside the window.
+        let mut convicted = licensed.clone();
+        convicted.push(equivocation_row(1_200));
+        let resolved = resolve_block_facts_v1(&input(&convicted, &panel, 9_000, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(
+            resolved.convicted_before_close,
+            Some(true),
+            "the resolver must AUTHENTICATE the certificate — under the attestation domain, which is the defect"
+        );
+        let facts = weight_facts_v1(&resolved, 100).expect("resolves");
+        let stage = ramp_stage_v1(&facts, &params);
+        assert_eq!(stage, PalwWorkRampStageV1::Voided, "a conviction inside the window voids the ramp");
+        assert_eq!(
+            effective_weight_v1(BACKBONE, PWU, stage, &params),
+            BACKBONE as u128,
+            "the convicted block keeps its spam backbone and loses every unit of ramped pwu"
+        );
+
+        // And the void is not a blanket "any carriage kills weight": the same certificate accepted
+        // AFTER the window is telemetry, and the block stays `Final`. Without this the test would
+        // pass on a resolver that voided on the mere presence of an equivocation row.
+        let mut late = licensed;
+        late.push(equivocation_row(9_500));
+        let late_resolved = resolve_block_facts_v1(&input(&late, &panel, 9_600, &bonds, &weights), accept_fixture_signature);
+        let late_stage = ramp_stage_v1(&weight_facts_v1(&late_resolved, 100).expect("resolves"), &params);
+        assert_eq!(late_stage, PalwWorkRampStageV1::Final, "a conviction after the window cannot rewrite settled weight");
+    }
+
+    /// **P0-6's guard companion: no signature closure may name its own context.**
+    ///
+    /// The red test above proves the resolver asks the right question TODAY. This one is the
+    /// tripwire for the shape that made it ask the wrong one: a caller-supplied closure that
+    /// ignores the `context` parameter and substitutes a constant. Such a closure type-checks
+    /// perfectly, verifies most signatures correctly, and silently mis-verifies exactly the family
+    /// whose domain differs — which is why the original defect survived review.
+    ///
+    /// The check is per-family and by ELIMINATION, which is what makes it catch the real defect
+    /// rather than a strawman. A first draft accepted only a foreign domain and demanded nothing
+    /// be credited; it passed against a deliberately re-introduced hardcode of the *receipt*
+    /// domain on the conviction arm, because a closure handed one real domain instead of another
+    /// still answers "no" to a foreign-only oracle. Vacuous. The rule a guard must state is
+    /// positive: **each family is creditable under its OWN domain and under no other.**
+    #[test]
+    fn palw_v2_no_contextless_signature_closure() {
+        let bonds = bonds();
+        let panel = [seat(1)];
+        let weights = NoStepWeights;
+        let carriage = vec![receipt_row(1, 1_100), equivocation_row(1_200)];
+
+        let receipt_domain = crate::palw_receipt::PALW_RECEIPT_MLDSA87_CONTEXT;
+        let attestation_domain = crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT;
+        let foreign: &[u8] = b"misaka-palw/NOT-A-REAL-DOMAIN/v1";
+        // The precondition that makes the elimination meaningful.
+        assert_ne!(receipt_domain, attestation_domain, "two families sharing one domain would make the split unenforceable");
+
+        // One oracle that accepts under exactly ONE domain. Sweeping it over every domain in play
+        // pins each arm's question exactly: the receipt arm must be creditable under the receipt
+        // domain and under nothing else, the conviction arm under the attestation domain and under
+        // nothing else. A hardcode — of ANY constant, real or not — moves one of these cells.
+        let sweep = |allowed: &'static [u8]| {
+            let oracle = move |key: &[u8], d: &kaspa_hashes::Hash, sig: &[u8], context: &[u8]| {
+                context == allowed && accept_fixture_signature(key, d, sig, context)
+            };
+            let r = resolve_block_facts_v1(&input(&carriage, &panel, 2_000, &bonds, &weights), oracle);
+            (r.assigned_receipts, r.convicted_before_close)
+        };
+
+        assert_eq!(
+            sweep(receipt_domain),
+            (Some(1), Some(false)),
+            "under the receipt domain ONLY the receipt arm may credit — a conviction here means the conviction arm asks under the receipt domain (the P0-6 defect)"
+        );
+        assert_eq!(
+            sweep(attestation_domain),
+            (Some(0), Some(true)),
+            "under the attestation domain ONLY the conviction arm may credit — a receipt here means the receipt arm asks under the attestation domain"
+        );
+        assert_eq!(
+            sweep(foreign),
+            (Some(0), Some(false)),
+            "under a domain no family owns, nothing may credit — anything here means a closure dropped its context parameter"
+        );
+
+        // And the complement, so the sweep cannot pass by the arms simply never asking: with every
+        // real domain accepted, the same carriage credits both.
+        let real = resolve_block_facts_v1(&input(&carriage, &panel, 2_000, &bonds, &weights), accept_fixture_signature);
+        assert_eq!(real.assigned_receipts, Some(1), "the fixture must be creditable at all");
+        assert_eq!(real.convicted_before_close, Some(true), "the fixture must be convictable at all");
+    }
+
     /// ADR-0038 I10, exhaustively: exactly one adjudication outcome freezes the class.
     ///
     /// A conviction that LANDS slashes the executor and leaves the class running. A conviction that
