@@ -298,8 +298,40 @@ int32_t shim_rope_type(const shim_ctx * s) {
     return (int32_t) llama_model_rope_type(s->model);
 }
 
-float shim_rope_freq_base(const shim_ctx * s) {
+// The rope frequency SCALE, which is what llama.cpp exposes an accessor for.
+//
+// It used to be named `shim_rope_freq_base` and was read as the profile's `rope_freq_base_bits`.
+// Those are two different numbers — the base is the period constant (10000, 1e6, …), the scale is
+// the context-extension factor (usually 1.0) — so the profile would have registered a constant
+// the model never used, and the court would have recomputed every RoPE step against it. There is
+// no `llama_model_rope_freq_base` in the pinned header at all; the base is a GGUF metadata key,
+// which is what `shim_meta_*` below is for.
+float shim_rope_freq_scale_train(const shim_ctx * s) {
     return llama_model_rope_freq_scale_train(s->model);
+}
+
+// The pinned GGUF's own metadata, key by key.
+//
+// A shape profile restates the model's architecture, and most of those facts (ffn dim, the norm
+// epsilons, the rope base, the vocab, the GatedDeltaNet geometry) have no llama.cpp accessor —
+// they live in the file's key/value block. Reading them from there is the difference between a
+// profile that describes the pinned model and one that describes what someone believed about it.
+int32_t shim_meta_count(const shim_ctx * s) {
+    return llama_model_meta_count(s->model);
+}
+
+int32_t shim_meta_key_by_index(const shim_ctx * s, int32_t i, char * buf, int32_t buf_len) {
+    if (buf_len <= 0) {
+        return -1;
+    }
+    return llama_model_meta_key_by_index(s->model, i, buf, (size_t) buf_len);
+}
+
+int32_t shim_meta_val_by_index(const shim_ctx * s, int32_t i, char * buf, int32_t buf_len) {
+    if (buf_len <= 0) {
+        return -1;
+    }
+    return llama_model_meta_val_str_by_index(s->model, i, buf, (size_t) buf_len);
 }
 
 // Clears the per-call bookkeeping. Called before every decode: `positions[]` is what tells the

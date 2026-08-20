@@ -199,9 +199,23 @@ pub struct PalwStepNodeV1 {
     /// ADR-0030 Fact 4's per-layer dtype variance: `{layer}` in the name is substituted with
     /// the layer index at interpretation time.
     pub weight_name: String,
-    /// GGML dtype byte of the weight operand (0 when `weight_name` is empty). Registration
-    /// checks it against the pinned GGUF.
-    pub weight_dtype: u8,
+    /// **GGML dtype bytes of the weight operand, PER LAYER (empty when `weight_name` is empty).**
+    ///
+    /// One byte per layer this node's table applies to, in layer order — not one byte for the
+    /// node. The field used to be a single `u8`, and its own doc claimed to bind "ADR-0030 Fact
+    /// 4's per-layer dtype variance", which a single byte cannot do. Measured on the pinned
+    /// Qwen3.5-2B-Q4_K_M (2026-08-20): `ffn_down.weight` is `Q6_K` on twelve layers and `Q4_K` on
+    /// the other twelve, and `attn_v.weight` is `Q6_K` on four of the six attention layers and
+    /// `Q4_K` on the other two. The split follows the quantizer's imatrix heuristics, not any
+    /// rule a profile could restate — so a single byte could not describe the pinned model at
+    /// all, and any profile written into the old type would have declared a dtype that is wrong
+    /// for half the layers it covers.
+    ///
+    /// That matters because dtype IS arithmetic here: a `Q4_K` and a `Q6_K` matmul dequantize
+    /// through different block layouts and accumulate differently. A court recomputing a step
+    /// against the declared dtype would convict an honest producer on every layer where the
+    /// declaration and the file disagree.
+    pub weight_dtypes: Vec<u8>,
     pub out_len: PalwStepOutLenV1,
     /// Elements per committed tile (last tile ragged). Bounds: [MIN, MAX]_TILE_LEN.
     pub tile_len: u32,
@@ -214,6 +228,17 @@ pub struct PalwStepNodeV1 {
     /// input, K/V aux chunks, and checkpoint state. The weight operand is `weight_name`, not
     /// listed here.
     pub input_refs: Vec<u16>,
+}
+
+/// Which of a profile's four node tables is being talked about. Exists so
+/// [`PalwShapeProfileV3::table_layer_span`] cannot be called with a table it does not know, and
+/// so validation and the profile author name the same four things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwStepTableV1 {
+    Pre,
+    Gdn,
+    Attn,
+    Post,
 }
 
 /// `input_refs` sentinel: the layer's input row (the previous layer's final output, or the
@@ -396,9 +421,13 @@ impl PalwShapeProfileV3 {
         if self.post_nodes.is_empty() {
             return Err(bad("post table must at least produce logits"));
         }
-        for (name, table) in
-            [("pre", &self.pre_nodes), ("gdn", &self.gdn_nodes), ("attn", &self.attn_nodes), ("post", &self.post_nodes)]
-        {
+        for (name, which, table) in [
+            ("pre", PalwStepTableV1::Pre, &self.pre_nodes),
+            ("gdn", PalwStepTableV1::Gdn, &self.gdn_nodes),
+            ("attn", PalwStepTableV1::Attn, &self.attn_nodes),
+            ("post", PalwStepTableV1::Post, &self.post_nodes),
+        ] {
+            let table_layer_span = self.table_layer_span(which);
             if table.len() > PALW_STEP_MAX_NODES_PER_TABLE {
                 let _ = name;
                 return Err(bad("node table exceeds the per-table cap"));
@@ -437,8 +466,20 @@ impl PalwShapeProfileV3 {
                         }
                     }
                 }
-                if node.weight_name.is_empty() != (node.weight_dtype == 0) {
-                    return Err(bad("weight name and dtype must be both present or both absent"));
+                if node.weight_name.is_empty() != node.weight_dtypes.is_empty() {
+                    return Err(bad("weight name and dtypes must be both present or both absent"));
+                }
+                // One byte per layer the table covers, and never a zero: a zero dtype names no
+                // GGML type, so it is the "unset" value, and an unset entry inside a non-empty
+                // list is a layer whose arithmetic nobody declared.
+                if !node.weight_dtypes.is_empty() {
+                    let expected = table_layer_span;
+                    if node.weight_dtypes.len() != expected {
+                        return Err(bad("a node's dtype list must carry exactly one byte per layer its table covers"));
+                    }
+                    if node.weight_dtypes.contains(&0) {
+                        return Err(bad("a zero dtype names no GGML type — every covered layer must declare one"));
+                    }
                 }
                 if node.weight_name.len() > 128 {
                     return Err(bad("weight name exceeds the cap"));
@@ -463,6 +504,22 @@ impl PalwShapeProfileV3 {
 
     pub fn gdn_layer_exists(&self) -> bool {
         self.full_attention_interval != 1 || self.layer_count == 0
+    }
+
+    /// How many layers a given node table covers — which is how many dtype bytes each of its
+    /// nodes must carry. The pre/post tables run once for the whole graph; the per-layer tables
+    /// run once per layer OF THEIR KIND, which on the pinned Qwen3.5-2B is 6 attention layers and
+    /// 18 GatedDeltaNet layers out of 24.
+    pub fn table_layer_span(&self, table: PalwStepTableV1) -> usize {
+        match table {
+            PalwStepTableV1::Pre | PalwStepTableV1::Post => 1,
+            PalwStepTableV1::Attn => {
+                (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::Attention).count()
+            }
+            PalwStepTableV1::Gdn => {
+                (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet).count()
+            }
+        }
     }
 
     /// Layer kind under the pinned rule (Fact 1). `layer` must be `< layer_count`.
@@ -764,7 +821,7 @@ mod tests {
             op_kind: kind,
             role: PalwStepNodeRoleV1::Plain,
             weight_name: String::new(),
-            weight_dtype: 0,
+            weight_dtypes: Vec::new(),
             out_len: out,
             tile_len: tile,
             kernel_semantics_id: h64(0x11),
@@ -875,6 +932,83 @@ mod tests {
         }
     }
 
+    /// **The pinned model's real dtype variance, and why one byte per node could not hold it.**
+    ///
+    /// Measured 2026-08-20 by reading the pinned `Qwen3.5-2B-Q4_K_M.gguf`'s tensor table
+    /// directly. The numbers are the finding, not decoration: `ffn_down.weight` is `Q6_K` on
+    /// twelve of the twenty-four layers and `Q4_K` on the other twelve, in an order the
+    /// quantizer's imatrix heuristics chose — no rule a profile could restate. `attn_v.weight`
+    /// splits 4/2 across the six attention layers the same way.
+    ///
+    /// The old `weight_dtype: u8` claimed in its own doc to bind "per-layer dtype variance". It
+    /// could not: one byte per node describes one dtype for every layer that node covers. A
+    /// profile written into it would have declared `Q4_K` where the file holds `Q6_K`, and a
+    /// court recomputing that node would convict an honest producer on every layer where the two
+    /// disagree — dequantization block layout and accumulation order are not the same between
+    /// them.
+    ///
+    /// So this test does two things: it fixes the shape of the fix (one byte per covered layer,
+    /// never zero), and it records the measurement that forced it, so a later simplification back
+    /// to a scalar has to argue with the model rather than with a preference.
+    #[test]
+    fn a_nodes_dtypes_are_one_per_covered_layer_because_the_pinned_model_varies_them() {
+        // The pinned model's shape, as measured: 24 layers, attention every 4th.
+        let mut p = tiny_profile();
+        p.layer_count = 24;
+        p.full_attention_interval = 4;
+        assert_eq!(p.table_layer_span(PalwStepTableV1::Attn), 6, "layers 3,7,11,15,19,23 are attention");
+        assert_eq!(p.table_layer_span(PalwStepTableV1::Gdn), 18, "the other eighteen are GatedDeltaNet");
+        assert_eq!(p.table_layer_span(PalwStepTableV1::Pre), 1, "the pre table runs once for the graph");
+        assert_eq!(p.table_layer_span(PalwStepTableV1::Post), 1);
+
+        // `ffn_down.weight` as the file really carries it: Q6_K on twelve layers, Q4_K on twelve.
+        const Q4_K: u8 = 12;
+        const Q6_K: u8 = 14;
+        let ffn_down_by_layer: Vec<u8> = (0..24u16)
+            .map(|l| if [0, 1, 2, 5, 8, 11, 14, 17, 20, 21, 22, 23].contains(&l) { Q6_K } else { Q4_K })
+            .collect();
+        assert_eq!(ffn_down_by_layer.iter().filter(|d| **d == Q6_K).count(), 12);
+        assert_eq!(ffn_down_by_layer.iter().filter(|d| **d == Q4_K).count(), 12);
+        assert!(
+            ffn_down_by_layer.iter().collect::<std::collections::BTreeSet<_>>().len() > 1,
+            "the whole point: a single byte cannot carry this"
+        );
+
+        // A GDN-table node covering the eighteen GDN layers needs eighteen bytes — not one, and
+        // not twenty-four.
+        let gdn_layers: Vec<u16> = (0..24u16).filter(|l| p.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet).collect();
+        let mut ffn_down = node(PalwStepOpKindV1::MatMulQuant, PalwStepOutLenV1::Fixed { elements: 8 }, 16);
+        ffn_down.weight_name = "blk.{layer}.ffn_down.weight".to_string();
+        ffn_down.weight_dtypes = gdn_layers.iter().map(|l| ffn_down_by_layer[*l as usize]).collect();
+        assert_eq!(ffn_down.weight_dtypes.len(), 18);
+        p.gdn_nodes = vec![ffn_down.clone()];
+        p.attn_nodes = vec![{
+            let mut n = ffn_down.clone();
+            n.weight_dtypes = (0..24u16)
+                .filter(|l| p.layer_kind(*l) == PalwLayerKindV1::Attention)
+                .map(|l| ffn_down_by_layer[l as usize])
+                .collect();
+            n
+        }];
+        p.validate_shape().expect("a profile whose dtype lists match its tables is well-formed");
+
+        // One byte short, one byte long, and a zero entry: each is a layer whose arithmetic
+        // nobody declared, or a declaration for a layer that does not exist.
+        for wrong in [17usize, 19, 24] {
+            let mut short = p.clone();
+            short.gdn_nodes[0].weight_dtypes = vec![Q4_K; wrong];
+            assert!(short.validate_shape().is_err(), "{wrong} bytes must not pass for 18 GDN layers");
+        }
+        let mut zeroed = p.clone();
+        zeroed.gdn_nodes[0].weight_dtypes[7] = 0;
+        assert!(zeroed.validate_shape().is_err(), "a zero dtype names no GGML type");
+
+        // And a name without dtypes, or dtypes without a name, stay refused as before.
+        let mut nameless = p.clone();
+        nameless.gdn_nodes[0].weight_name = String::new();
+        assert!(nameless.validate_shape().is_err());
+    }
+
     #[test]
     fn shape_profile_id_golden_vector() {
         // Frozen 2026-08-16: the SCHEMA hash derivation (canonical borsh under the v3 domain)
@@ -885,8 +1019,15 @@ mod tests {
             // Re-frozen 2026-08-17: the profile gained `base0_rms_eps_q`, so its Borsh bytes — and
             // therefore its id — moved. That is the point of the field: a class cannot change the
             // epsilon its norms are adjudicated under without changing its identity.
-            "2fe1f76b0423389eaacda28a57dba5e6f69e6c5429b3fb39bc8a197f3293a3e5\
-             8ebf00165931dea4b7625a037ef3bfff2553fdb3d5bf8f89bf25ec53d0ec3cfa"
+            //
+            // Re-frozen again 2026-08-20: `weight_dtype: u8` became `weight_dtypes: Vec<u8>`,
+            // one byte per layer the node's table covers. The single byte could not describe the
+            // pinned Qwen3.5-2B at all — `ffn_down.weight` is Q6_K on twelve layers and Q4_K on
+            // the other twelve — so a profile written into the old type would have declared the
+            // wrong arithmetic for half the layers it covered. Same rule as last time: a
+            // consensus change to the identity gets a new value, never a silent re-reading.
+            "092f92d6a8e2be369d7cd993782b38222f1f6ccedd0742fe360d5b8fea3ddfd9\
+             fb9bf904b65383ac7c352bade742a7fab7e5dd4075c0ef154e4f3fdef1d7c3c4"
         );
     }
 

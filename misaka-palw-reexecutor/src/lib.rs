@@ -738,7 +738,7 @@ pub mod fixtures {
             op_kind: kind,
             role: PalwStepNodeRoleV1::Plain,
             weight_name: String::new(),
-            weight_dtype: 0,
+            weight_dtypes: Vec::new(),
             out_len: PalwStepOutLenV1::Fixed { elements: 16 },
             tile_len: 16,
             kernel_semantics_id: h64(0x11),

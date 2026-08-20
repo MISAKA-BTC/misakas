@@ -1890,6 +1890,7 @@ mod tests {
             )),
             vec![7u8; 32],
             vec![21u8; 8],
+            Hash64::from_bytes([0x9A; 64]),
         )
         .expect("the devnet bundle validates")
     }

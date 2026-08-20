@@ -1127,7 +1127,7 @@ mod tests {
             op_kind: kind,
             role: PalwStepNodeRoleV1::Plain,
             weight_name: String::new(),
-            weight_dtype: 0,
+            weight_dtypes: Vec::new(),
             out_len: out,
             tile_len: tile,
             kernel_semantics_id: h64(0x11),
@@ -1372,8 +1372,12 @@ mod tests {
             // verifier began enforcing. The second move is the interesting one — the fixture had
             // been incoherent (a context naming `h64(7)` while carrying a real profile) for as long
             // as nothing compared them.
-            "7a3d770fbc69401b5b63aad12a035bc74285752718da301989ab327fdf3c968f\
-             54940dcf656ca828dca187eccf4a06e2200912f769d9a337ba5b77246ee0226a"
+            //
+            // Re-frozen 2026-08-20: it descends from the shape profile id, which moved when
+            // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
+            // byte could not describe the pinned model.
+            "4d9d6434da6b6a51ce22f60996b701c436b289d80bc03fad10ad6a9959d5e972\
+             1d2e13c6e67d9fb2a773b6ecc15ebd3250b1ab79c7efeac5afd4774bf84558d4"
         );
     }
 

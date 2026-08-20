@@ -239,6 +239,30 @@ honest "red (integration), lands in PR-N."
   first. The order of work is: (1) write the Qwen3.5-2B profile from the measured geometry and the
   pinned tree's own graph, (2) instrument the shim to emit per-node tile outputs against it,
   (3) build the step leg and hand `palw_fp_execution_root_v3` its fourth root.
+- **Step (1) started 2026-08-20, and the measurement immediately found a defect in the type it
+  has to be written into.** `palw-worker --mode geometry` now dumps the pinned GGUF's whole
+  metadata block, and the file's tensor table was read directly. What the model actually is:
+  architecture `qwen35`, 24 layers with `full_attention_interval = 4` (six attention layers,
+  eighteen GatedDeltaNet), hidden 2048, ffn 6144, 8 heads / 2 kv heads / head dim 256,
+  `rms_eps = 1e-6`, `rope.dimension_count = 64`, **`rope.freq_base = 1e7`**, ssm conv kernel 4 /
+  group count 16 / inner 2048 / state 128 / dt rank 16.
+  - **`weight_dtype: u8` could not describe it.** `ffn_down.weight` is `Q6_K` on twelve layers
+    and `Q4_K` on the other twelve; `attn_v.weight` is `Q6_K` on four of six attention layers.
+    The split is the quantizer's imatrix heuristics, not a rule. One byte per node declares one
+    dtype for every layer that node covers, so a profile written into the old type would have
+    declared the wrong arithmetic for half its layers — and a court recomputing against it would
+    convict honest producers there, because `Q4_K` and `Q6_K` dequantize through different block
+    layouts. Fixed: `weight_dtypes: Vec<u8>`, one byte per covered layer, none of them zero.
+    `shape_profile_id` moved, as a consensus change to the identity must.
+  - **A second trap, caught before it was used.** `shim_rope_freq_base` returned
+    `llama_model_rope_freq_scale_train` — the context-extension *scale* (1.0 here), not the
+    *base* (1e7). Nothing in Rust called it yet, so it never mis-registered anything; it would
+    have the moment the profile was written. There is no `llama_model_rope_freq_base` in the
+    pinned header at all, which is why the metadata dump exists.
+- **Still open after that:** the node tables themselves (op order, tile lengths,
+  `kernel_semantics_id` per node, `input_refs`), the transcendental bindings and contraction
+  facts, the per-node tile capture in the shim, and the leg. The GDN half is the larger unknown:
+  eighteen of twenty-four layers are GatedDeltaNet, whose kernel set is not the attention set.
 - Gates adjudicability on BOTH lanes, so it is a release-blocker for any network that carries
   weight.
 

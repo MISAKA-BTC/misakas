@@ -141,6 +141,13 @@ unsafe extern "C" {
     fn shim_n_head_kv(s: *const ShimCtx) -> i32;
     fn shim_n_embd_head(s: *const ShimCtx) -> i32;
     fn shim_rope_type(s: *const ShimCtx) -> i32;
+    fn shim_rope_freq_scale_train(s: *const ShimCtx) -> f32;
+    // The GGUF's own key/value block. Most of a shape profile's constants (ffn dim, the norm
+    // epsilons, the rope BASE, the vocab, the GatedDeltaNet geometry) have no llama.cpp accessor
+    // and live only here.
+    fn shim_meta_count(s: *const ShimCtx) -> i32;
+    fn shim_meta_key_by_index(s: *const ShimCtx, i: i32, buf: *mut u8, buf_len: i32) -> i32;
+    fn shim_meta_val_by_index(s: *const ShimCtx, i: i32, buf: *mut u8, buf_len: i32) -> i32;
     fn shim_capture_begin(s: *mut ShimCtx);
     fn shim_capture_status(s: *const ShimCtx) -> i32;
     fn shim_capture_positions(s: *const ShimCtx, slot: i32) -> i32;
@@ -1351,6 +1358,32 @@ fn run_geometry() {
     let attn_kv_heads = measured(unsafe { shim_n_head_kv(ctx) }, "kv head count");
     let attn_head_dim = measured(unsafe { shim_n_embd_head(ctx) }, "head dim");
     let rope_type = unsafe { shim_rope_type(ctx) };
+    let rope_freq_scale_train = unsafe { shim_rope_freq_scale_train(ctx) };
+    // The whole metadata block, verbatim. Not filtered to "the keys a profile needs": the set of
+    // keys an architecture carries is itself a fact about the model, and a filter written from
+    // one architecture's expectations is how a GatedDeltaNet constant goes missing silently.
+    let meta = {
+        let count = unsafe { shim_meta_count(ctx) };
+        let mut pairs = serde_json::Map::new();
+        let mut key = vec![0u8; 512];
+        let mut val = vec![0u8; 4096];
+        for i in 0..count.max(0) {
+            let klen = unsafe { shim_meta_key_by_index(ctx, i, key.as_mut_ptr(), key.len() as i32) };
+            let vlen = unsafe { shim_meta_val_by_index(ctx, i, val.as_mut_ptr(), val.len() as i32) };
+            if klen <= 0 || vlen < 0 {
+                continue;
+            }
+            let k = String::from_utf8_lossy(&key[..klen as usize]).to_string();
+            let v = String::from_utf8_lossy(&val[..(vlen as usize).min(val.len())]).to_string();
+            // Tokenizer tables are megabytes of vocabulary and say nothing about execution shape.
+            if k.starts_with("tokenizer.ggml.") && (k.ends_with("tokens") || k.ends_with("scores") || k.ends_with("token_type") || k.ends_with("merges")) {
+                pairs.insert(k, serde_json::json!(format!("<{} bytes elided>", vlen)));
+                continue;
+            }
+            pairs.insert(k, serde_json::json!(v));
+        }
+        pairs
+    };
     unsafe { shim_close(ctx) };
 
     // The pins exist so the tap profile can be chosen BEFORE load; here they are checked against
@@ -1365,6 +1398,8 @@ fn run_geometry() {
         "attn_kv_heads": attn_kv_heads,
         "attn_head_dim": attn_head_dim,
         "rope_type": rope_type,
+        "rope_freq_scale_train": rope_freq_scale_train,
+        "gguf_metadata": meta,
         "pinned_layer_count": qwen35_pins::MODEL_LAYER_COUNT,
         "pinned_hidden_dim": qwen35_pins::MODEL_HIDDEN_DIM,
         "pins_agree_with_the_model": pins_agree,

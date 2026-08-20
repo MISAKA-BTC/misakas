@@ -203,6 +203,7 @@ fn main() {
         )),
         vec![7u8; 32],
         vec![21u8; 8],
+        Hash64::from_u64_word(0x9A11),
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
     let weights = *bundle.freeprompt.cu_weights();
