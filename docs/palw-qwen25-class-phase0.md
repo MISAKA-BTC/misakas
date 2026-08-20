@@ -326,21 +326,28 @@ order; this one has nothing to pin.
 gain folds into the lm_head and not into the gather, so the two matrices differ by `diag(g)`
 afterwards and the artifact carries both. A real consequence, not a packing choice.
 
-### Blocker — activation calibration (量子化品質)
+### The "calibration blocker" was mine, and it is withdrawn
 
-A bias enters as the `zero` of a requantization triple, and `zero` is in units of the OUTPUT
-ACTIVATION CODE — so placing it needs `scale_out = scale_weight × scale_activation × 2^shift`.
-Two of those are properties of tensors the converter reads. **The third is a property of the data
-the model runs on**, and deriving it is calibration: a forward pass over sample inputs, measuring
-the range each projection actually produces. That is Phase 3's measurement.
+The first version of this section said placing a bias needs `scale_activation`, that
+`scale_activation` is a property of the DATA, and that deriving it is Phase 3 calibration. **That
+is wrong**, and the correction matters because it removes a blocker that was never there.
 
-It is carried as `Qwen25ConvertPlan::activation_scale` so the pipeline is complete and the missing
-number is named rather than guessed inside a formula.
+A bias's `zero` is in units of the output activation code, so it needs the activation's step —
+and the matmul's input is the output of an **RMS norm, whose RMS is 1 by construction**. Its range
+is set by the requantization that narrows Qk to a code, not by the model and not by the data.
+`rms_norm` returns Qk (`K = 24` fractional bits) and `norm_requant` shifts it down, so one code is
+worth `2^(shift − K)`. `activation_scale_of` computes exactly that.
 
-**An uncalibrated value drops every bias silently**, and that was measured rather than predicted:
-with the norm gain folded in, the weight scale rises by the gain's magnitude, so a bias comparable
-to the weights before the fold rounds to zero after it. `biased_channel_count` exists so that
-failure is a number somebody reads instead of a model that runs and is quietly wrong.
+What actually happened is that the converter set `norm_requant` to a shift of `K`, where a
+normalized value of 1.0 lands on **1** instead of 127 — the collapse `derive_deterministic`'s own
+comment warns about ("1.0 must land on 127, not on 1") — and a bias measured against that step
+rounded away. The bug was a wrong constant in code I had just written, and the bias arithmetic is
+what made it visible. Fixed by using the established `shift = K − 7`.
+
+`biased_channel_count` stays: a conversion whose biases all round to zero is a model that runs and
+is quietly wrong, and the count makes that a number somebody reads.
+
+**Category correction:** not 量子化品質, and not a blocker. 実装不足, in my own converter, closed.
 
 ### A consensus-safety defect the converter's own test found
 

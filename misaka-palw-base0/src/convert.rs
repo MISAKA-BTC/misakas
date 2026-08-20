@@ -200,25 +200,28 @@ pub struct Qwen25ConvertPlan {
     /// f32 bits of `rms_norm_eps`, carried so the artifact records which epsilon the float model
     /// used even though the integer class runs `shape.eps_q`.
     pub rms_norm_eps_bits: u32,
-    /// **The step of one activation code — and the thing this converter cannot derive alone.**
-    ///
-    /// A bias enters as the `zero` of a requantization triple, and `zero` is measured in units of
-    /// the OUTPUT ACTIVATION CODE. So placing it needs `scale_out`, and
-    /// `scale_out = scale_weight × scale_activation × 2^shift`: two of those three are properties
-    /// of tensors this function reads, and the third is a property of the DATA the model runs on.
-    ///
-    /// Deriving it is calibration — a forward pass over sample inputs, measuring the activation
-    /// range each projection actually produces — which is Phase 3's measurement, not Phase 2's.
-    /// Carrying it here means the pipeline is complete and the missing number is named rather
-    /// than guessed inside a formula.
-    ///
-    /// **An uncalibrated value silently drops the bias.** Measured on the fixture below: with the
-    /// norm gain folded in, the weight scale rises by the gain's magnitude, and a bias that was
-    /// comparable to the weights before the fold rounds to zero after it. That is not a rounding
-    /// nicety — it is the whole bias vanishing — so `convert_qwen25` reports how many channels
-    /// landed on a non-zero `zero`, and a conversion where that count is zero has not carried the
-    /// biases at all.
-    pub activation_scale: f64,
+}
+
+/// **The value one normalized activation code is worth — DERIVED, not calibrated.**
+///
+/// A bias enters as the `zero` of a requantization triple, and `zero` is in units of the output
+/// activation code, so placing it needs the activation's own step. That looks like it needs
+/// calibration — a forward pass measuring what range each projection actually produces — and it
+/// does not, for one reason: **the matmul's input is the output of an RMS norm, whose RMS is 1 by
+/// construction.** Its range is set by the requantization that narrows Qk to a code, not by the
+/// model and not by the data.
+///
+/// `rms_norm` returns Qk (`K` fractional bits) and `norm_requant` shifts it down, so a code is
+/// worth `2^(shift − K)`. At the convention `derive_deterministic` established — `shift = K − 7`,
+/// "1.0 must land on 127, not on 1" — that is `1/128`.
+///
+/// *(This function replaces a `Qwen25ConvertPlan::activation_scale` field and the "calibration
+/// blocker" that came with it. The blocker was mine: the converter had set `norm_requant` to a
+/// shift of `K`, which is the collapse that comment warns about — every normalized value landing
+/// on 1 or 0 — and a bias measured against it rounded away. The design was never data-dependent.)*
+pub fn activation_scale_of(norm_requant: &QuantParams) -> f64 {
+    let k = kaspa_consensus_core::palw_base0::K as i32;
+    2f64.powi(norm_requant.shift as i32 - k)
 }
 
 /// Fold a per-channel gain into the COLUMNS of a `[out][in]` row-major matrix.
@@ -278,6 +281,8 @@ fn permute_rope_vector(v: &[f32], d_head: usize) -> Vec<f32> {
 pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0ArtifactV1, ConvertError> {
     let index = parse_safetensors_header(blob)?;
     let s = plan.shape;
+    let norm_shift = (kaspa_consensus_core::palw_base0::K as u8) - 7;
+    let activation_scale = activation_scale_of(&QuantParams { multiplier: i32::MAX, shift: norm_shift, zero: 0 });
     let d = s.d_model();
     let kv = s.kv_dim();
     let read = |name: &str, want: &[usize]| read_bf16_tensor(blob, &index, name, want);
@@ -340,9 +345,9 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
         let shift_for = |n: usize| -> u8 { 5 + ((usize::BITS - 1 - n.leading_zeros()) / 2) as u8 };
         let triples = |bias: &[f32], scale_w: f64, n: usize| -> Vec<QuantParams> {
             // `zero` is in units of the OUTPUT activation code, and one such code is worth
-            // `scale_w × activation_scale × 2^shift` in the model's own units. All three factors
-            // are here: two read from the tensors, the third supplied by calibration.
-            let scale_out = scale_w * plan.activation_scale * (1u64 << shift_for(n)) as f64;
+            // `scale_w × activation_scale × 2^shift` in the model's own units. Every factor is
+            // derived: two from the tensors, the third from the norm's own requantization.
+            let scale_out = scale_w * activation_scale * (1u64 << shift_for(n)) as f64;
             bias.iter()
                 .map(|b| QuantParams {
                     multiplier: i32::MAX,
@@ -375,7 +380,12 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
         });
     }
 
-    let norm_requant = QuantParams { multiplier: i32::MAX, shift: 24, zero: 0 };
+    // The SAME convention `derive_deterministic` uses: Qk → an activation code where 1.0 lands on
+    // 127 rather than on 1. A shift of `K` would land it on 1 and collapse every normalized value
+    // to a handful of levels — which is what this converter did until the bias arithmetic made it
+    // visible.
+    let norm_requant =
+        QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 };
     let residual_requant = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
     Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, residual_requant).map_err(ConvertError::Artifact)
 }
@@ -456,13 +466,6 @@ mod tests {
         blob
     }
 
-    /// The activation step this fixture's own numbers imply. Not a universal constant and not a
-    /// guess: `1/128` is the code→value step that makes a bias of the fixture's magnitude land on
-    /// a representable `zero`, which is what a real calibration pass computes from measured
-    /// activation ranges. It is here so the test exercises a CALIBRATED conversion; a real one
-    /// gets this number from Phase 3.
-    const CALIBRATED_FIXTURE_ACTIVATION_SCALE: f64 = 1.0 / 128.0;
-
     fn tiny_qwen_shape() -> Base0ShapeV1 {
         // Qwen2.5's structure at a size a test can run: grouped-query attention with a real
         // group, and the head dim even so the rotary pairing is defined.
@@ -488,7 +491,7 @@ mod tests {
     fn a_checkpoint_converts_reproducibly() {
         let shape = tiny_qwen_shape();
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
 
         let a = convert_qwen25(&blob, &plan).expect("a well-formed checkpoint converts");
         let b = convert_qwen25(&blob, &plan).unwrap();
@@ -506,18 +509,19 @@ mod tests {
         let per = a.layers[0].qkv_channel_requant.as_ref().expect("converted artifacts carry per-channel triples");
         assert_eq!(per[0].len(), shape.d_model());
         assert_eq!(per[1].len(), shape.kv_dim());
-        assert!(per[0].iter().any(|q| q.zero != 0), "a calibrated conversion must carry the biases");
+        assert!(per[0].iter().any(|q| q.zero != 0), "the biases reach their zero points");
         assert!(biased_channel_count(&a) > 0);
 
-        // **And an UNCALIBRATED one drops them silently — which is why the count exists.**
-        // With the norm gain folded in, the weight scale rises by the gain's magnitude, so a bias
-        // that was comparable to the weights before the fold rounds to zero after it. That is the
-        // whole bias vanishing, not a rounding nicety, and it is a 量子化品質 blocker recorded in
-        // the Phase 0 document rather than a number to shrug at.
-        let uncalibrated = Qwen25ConvertPlan { activation_scale: 1.0, ..plan };
-        let dropped = convert_qwen25(&blob, &uncalibrated).unwrap();
-        assert_eq!(biased_channel_count(&dropped), 0, "an uncalibrated scale drops every bias, and the count says so");
-        assert_ne!(dropped.execution_class_id(), a.execution_class_id(), "…and it is a different class, not a rounding difference");
+        // The activation step is DERIVED, not calibrated: an RMS norm's output has RMS 1 by
+        // construction, so its range is set by the requantization that narrows Qk to a code.
+        assert_eq!(activation_scale_of(&a.norm_requant), 1.0 / 128.0, "1.0 lands on 127, not on 1");
+
+        // And the collapse the convention exists to prevent, measured: at a shift of `K` a
+        // normalized value lands on 1 instead of 127, and a bias measured against that step
+        // rounds away entirely. `biased_channel_count` is what makes that a number somebody reads
+        // rather than a model that runs and is quietly wrong.
+        let collapsed = QuantParams { multiplier: i32::MAX, shift: kaspa_consensus_core::palw_base0::K as u8, zero: 0 };
+        assert_eq!(activation_scale_of(&collapsed), 1.0, "at a shift of K one code is one whole unit");
     }
 
     /// **And it really executes** — the converted artifact runs the integer engine, which is what
@@ -527,7 +531,7 @@ mod tests {
         let mut shape = tiny_qwen_shape();
         shape.n_layers = 1;
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
         let a = convert_qwen25(&blob, &plan).unwrap();
 
         let engine = crate::engine::Base0Engine::new(&a);
@@ -568,7 +572,7 @@ mod tests {
 
         let mut wrong = shape;
         wrong.d_ff = 128;
-        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0, activation_scale: 1.0 };
+        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0 };
         match convert_qwen25(&blob, &plan) {
             Err(ConvertError::ShapeMismatch { tensor, .. }) => assert!(tensor.contains("gate_proj")),
             other => panic!("a wrong ffn width must be refused by name, got {other:?}"),
