@@ -184,9 +184,12 @@ pub fn palw_fp_devnet_bundle_v3(
         ATTEMPT_SHARE_PERMILLE,
         FP_ABANDON_HOLD,
     )?
-    // The SAME constant the `reward` field below declares — `validate()` requires the two to
-    // agree, so this is not a second source, it is the one source reaching both readers.
-    .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?;
+    // The SAME constants the `reward` and `court` fields below declare — `validate()` requires
+    // each pair to agree, so these are not second sources, they are the one source reaching both
+    // readers. `COURT_TURN_DEADLINE` here is what turns the interactive ladder ON: it is strictly
+    // inside `WINDOW_COURT`, which is what makes a rung deadline able to fire at all.
+    .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
+    .with_turn_deadline_daa(COURT_TURN_DEADLINE)?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.

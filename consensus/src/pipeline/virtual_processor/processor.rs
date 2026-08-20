@@ -3562,11 +3562,21 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                Obj::CourtOpened { session_id, claim, challenger_bond } => {
-                    // The bisection space is the class's own step-leaf count — a catalog fact, not
-                    // an object field, for the reason H2 gives: a space the accuser chose is a
-                    // ladder depth the accuser chose.
+                Obj::CourtOpened { session_id, claim, challenger_bond, space, space_size } => {
+                    // The object now DECLARES the space, because the transition opens a ladder
+                    // from it — but the ruleset still DECIDES it. H2's rule is unchanged: a space
+                    // the accuser chose is a ladder depth the accuser chose, so a declaration that
+                    // is not the catalog's own step-leaf count is refused here, before the
+                    // transition ever sees it.
                     let court = self.palw_court_params_v2.as_ref().ok_or("no court params")?;
+                    if *space != kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves
+                        || *space_size != court.max_step_leaf_count()
+                    {
+                        return Err(format!(
+                            "court {session_id} declares a {space_size}-wide {space:?} space; the ruleset's is {} step leaves",
+                            court.max_step_leaf_count()
+                        ));
+                    }
                     kaspa_consensus_core::palw_court_v2::validate_court_opened_v2(
                         state,
                         state_params,
@@ -3576,6 +3586,32 @@ impl VirtualStateProcessor {
                         challenger_bond,
                         kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
                         court.max_step_leaf_count(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtDisclosed { session_id, disclosure, signature } => {
+                    // The responder's rung, under the responder's key. Unsigned, a challenger
+                    // could write the answers it wants to convict.
+                    kaspa_consensus_core::palw_court_v2::check_court_disclosure_acceptance_v2(
+                        state,
+                        session_id,
+                        disclosure,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtVerdictPosted { session_id, verdict, signature } => {
+                    kaspa_consensus_core::palw_court_v2::check_court_verdict_acceptance_v2(
+                        state,
+                        session_id,
+                        verdict,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
                     )
                     .map_err(|e| e.to_string())?;
                 }

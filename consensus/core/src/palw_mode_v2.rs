@@ -350,6 +350,14 @@ impl PalwConsensusParamsV2 {
             return Err(PalwModeV2Error::Invalid("the producer carve the bundle commits to is not the one claims actually escrow"));
         }
 
+        // And once more for the rung window (P0-9). `court` is what Decision 8's worst-case ladder
+        // duration is computed from — the check a few lines below — while `state` is what the
+        // sweep actually measures silence against. A bundle where they differ is audited against
+        // one ladder and run against another.
+        if self.state.turn_deadline_daa() != self.court.turn_deadline_daa() {
+            return Err(PalwModeV2Error::Invalid("the rung window the bundle commits to is not the one the sweep enforces"));
+        }
+
         // The anchor slot sits strictly inside the bind window (PR-06's cross-check).
         self.panel
             .validate_against_state_params(&self.state)
@@ -657,6 +665,8 @@ pub(crate) mod tests {
             .unwrap()
             .with_worker_carve_permille(620)
             .unwrap()
+            .with_turn_deadline_daa(20)
+            .unwrap()
     }
 
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
@@ -689,6 +699,8 @@ pub(crate) mod tests {
             state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800, 0)
                 .unwrap()
                 .with_worker_carve_permille(620)
+                .unwrap()
+                .with_turn_deadline_daa(20)
                 .unwrap(),
             admission: PalwAdmissionParamsV2::new(500, [(base, 10_000u128)].into_iter().collect()).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
@@ -817,7 +829,13 @@ pub(crate) mod tests {
             // A deeper ladder needs more rounds than the backstop window can hold…
             ("ladder deeper than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1 << 40, 20, 2).unwrap())),
             // …and so does a slower turn, at the same depth.
-            ("turn slower than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap())),
+            (
+                "turn slower than the court window",
+                Box::new(|b| {
+                    b.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap();
+                    b.state = b.state.clone().with_turn_deadline_daa(30).unwrap();
+                }),
+            ),
             ("fork choice version", Box::new(|b| b.fork_choice_version += 1)),
             ("trace format version", Box::new(|b| b.trace_format_version += 1)),
             ("signature contexts", Box::new(|b| b.signature_contexts_root = h64(0xBAD))),
@@ -858,6 +876,7 @@ pub(crate) mod tests {
         // …a broken bundle does not…
         let mut broken = conforming_bundle();
         broken.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap();
+        broken.state = broken.state.clone().with_turn_deadline_daa(30).unwrap();
         let mut bad_bundle = SIMNET_PARAMS.clone();
         bad_bundle.palw_consensus_mode = PalwConsensusMode::ConsensusV2(broken);
         assert!(bad_bundle.validate_palw_v2().is_err(), "the startup invariants gate the config");
@@ -1198,7 +1217,13 @@ pub(crate) mod tests {
             ),
             ("reorg margin", Box::new(|b| b.reorg_margin_daa += 1)),
             // Still a valid bundle (22 rounds x 19 = 418 < 500), and a different one.
-            ("court shape", Box::new(|b| b.court = PalwCourtParamsV2::new(1_048_576, 19, 2).unwrap())),
+            (
+                "court shape",
+                Box::new(|b| {
+                    b.court = PalwCourtParamsV2::new(1_048_576, 19, 2).unwrap();
+                    b.state = b.state.clone().with_turn_deadline_daa(19).unwrap();
+                }),
+            ),
             (
                 "exposure ratio",
                 Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501, [(h64(1), 10_000u128)].into_iter().collect()).unwrap()),

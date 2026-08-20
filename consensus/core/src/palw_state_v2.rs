@@ -202,6 +202,25 @@ pub struct PalwStateParamsV2 {
     /// Decision 3 made them chain state (`PalwChainStateV2::class_shares`), granted by
     /// registration — the lane split composes with those granted shares at retarget.
     fp_attempt_share_permille: u16,
+    /// **One rung's window: how long the party whose turn it is has to move (P0-9).**
+    ///
+    /// It lives here, not only on `PalwCourtParamsV2`, because it decides STATE: the ladder is
+    /// chain state now, and its deadlines are what the rung sweep reads. Two structs holding one
+    /// number is the audit-C5 shape, so `PalwConsensusParamsV2::validate` requires the bundle's
+    /// declared court window to equal this one.
+    ///
+    /// **Defaults to `window_court`** — one rung may take the whole session. The sweep treats a
+    /// rung window that is not STRICTLY inside the session budget as no clock at all, so the
+    /// default reproduces exactly the behavior of every network built before the ladder was
+    /// carried: the backstop stays the only thing that fires, and it still closes
+    /// challenger-side. That distinction matters because the two verdicts are opposite — a
+    /// first-rung silence is the RESPONDER's default, the backstop is the CHALLENGER's — so a
+    /// default that let the rung fire would have inverted the outcome of every unfinished
+    /// challenge on every network that never configured a ladder. A
+    /// network that wants an interactive ladder tightens it through
+    /// [`PalwStateParamsV2::with_turn_deadline_daa`]. It is never zero, because a zero window
+    /// defaults whichever party the block order happens to reach first.
+    turn_deadline_daa: u64,
     /// **The producer's carve of a block's subsidy, in permille — what a claim ESCROWS.**
     ///
     /// It lives here, in the state machine's own parameters, because it decides STATE: the
@@ -300,7 +319,28 @@ impl PalwStateParamsV2 {
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
             worker_carve_permille: 0,
+            // The whole session as one rung: the identity that leaves the backstop as the only
+            // clock. See the field doc.
+            turn_deadline_daa: window_court,
         })
+    }
+
+    /// Set the rung window (P0-9). Refuses zero for the reason `PalwCourtParamsV2::new` does, and
+    /// refuses a window longer than the session it must fit inside — a rung that outlives the
+    /// backstop is a rung whose deadline can never be reached.
+    pub fn with_turn_deadline_daa(mut self, turn_deadline_daa: u64) -> Result<Self, PalwStateV2Error> {
+        if turn_deadline_daa == 0 {
+            return Err(PalwStateV2Error::InvalidParams("a zero rung window defaults whichever party the block order reaches first"));
+        }
+        if turn_deadline_daa > self.window_court {
+            return Err(PalwStateV2Error::InvalidParams("a rung window longer than the court window can never come due"));
+        }
+        self.turn_deadline_daa = turn_deadline_daa;
+        Ok(self)
+    }
+
+    pub fn turn_deadline_daa(&self) -> u64 {
+        self.turn_deadline_daa
     }
 
     /// Set the producer carve (ADR-0042 Decision 10). Consuming-builder rather than a `new`
@@ -746,6 +786,18 @@ pub struct PalwCourtSessionStateV2 {
     /// `opened_daa + window_court` — the backstop. Past it the session closes challenger-side
     /// at the sweep (prosecution is the challenger's burden; see the params field doc).
     pub deadline_daa: u64,
+    /// **The interactive ladder, on chain (P0-9's remaining half).**
+    ///
+    /// It lives here because `PalwBisectNoShowV1` is "only mintable from the machine's own
+    /// state", and until that state was the CHAIN's, a validating node could not tell a real
+    /// default from a forged one — so `palw_court_v2` refused ladder defaults outright, and a
+    /// dispute could only end arithmetically or by the whole-session backstop.
+    ///
+    /// With the ladder here, nobody submits a default at all: the rung deadline is a machine
+    /// fact, silence past it is visible to every node computing the same state, and the SWEEP
+    /// closes the session against whoever was due to move. An offense that is produced by
+    /// absence cannot be forged by presence.
+    pub ladder: crate::palw_bisect::PalwBisectLadderV1,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -884,10 +936,35 @@ pub enum PalwConsensusObjectV2 {
         session_id: Hash64,
         claim: Hash64,
         challenger_bond: PalwBondKeyV2,
+        /// The index space the dispute is over, and its size. Carried because the ladder is
+        /// opened here now: both are already inside `session_id`
+        /// (`court_session_id_v2`), so a mismatch cannot pass the acceptance layer's id
+        /// derivation — they are declared for the transition to build from, not trusted.
+        space: crate::palw_bisect::PalwBisectSpaceV1,
+        space_size: u64,
     },
     CourtClosed {
         session_id: Hash64,
         verdict: PalwCourtVerdictV2,
+    },
+    /// The responder's rung: "my execution's state at the disputed midpoint is `mid_state`".
+    ///
+    /// The signature is the acceptance layer's to check, exactly as it is for `BondRegistered` —
+    /// but here it is not a formality: an unsigned disclosure would let the CHALLENGER write the
+    /// responder's answers, bind it to states it never claimed, and win the terminal check
+    /// against an honest execution. `palw_court_v2` verifies it under the claim's bond key.
+    CourtDisclosed {
+        session_id: Hash64,
+        disclosure: crate::palw_bisect::PalwBisectDisclosureV1,
+        signature: Vec<u8>,
+    },
+    /// The challenger's rung verdict, and the mirror-image danger: an unsigned verdict would let
+    /// the RESPONDER steer the interval away from its own divergence. Verified under the
+    /// challenger bond's key.
+    CourtVerdictPosted {
+        session_id: Hash64,
+        verdict: crate::palw_bisect::PalwBisectVerdictV1,
+        signature: Vec<u8>,
     },
     /// Decision 7's producer default: a data obligation missed its deadline.
     ProducerDefaulted {
@@ -983,6 +1060,10 @@ pub enum PalwStateV2Error {
     EmptyOperatorKey(PalwBondKeyV2),
     #[error("bond {0:?} registered a zero payout payload — every reward it matured would be minted to a script nobody can open")]
     EmptyPayoutPayload(PalwBondKeyV2),
+    #[error("court session {0} refused a ladder move: {1}")]
+    LadderRefused(Hash64, String),
+    #[error("court session {0} was opened over a space its own session id does not name")]
+    SessionIdMismatch(Hash64),
     #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
     ZeroSlashValue(Hash64),
     #[error(
@@ -1388,7 +1469,11 @@ impl PalwChainStateV2 {
         if open_courts != self.open_courts_by_claim {
             return Err(PalwStateV2Error::CarriageInconsistent("open-court index differs from the sessions".into()));
         }
-        let court_deadlines: BTreeSet<(u64, Hash64)> = self.court_sessions.iter().map(|(id, s)| (s.deadline_daa, *id)).collect();
+        // The SAME key the writer and the rebuild use — whichever of the session's two clocks
+        // runs out first. Recomputing it any other way here would make the checker disagree with
+        // the index it is checking, which is how a ladder move looked like corruption.
+        let court_deadlines: BTreeSet<(u64, Hash64)> =
+            self.court_sessions.iter().map(|(id, s)| (court_next_deadline_v2(s), *id)).collect();
         if court_deadlines != self.court_deadlines {
             return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
         }
@@ -1690,11 +1775,11 @@ impl<'a> TransitionBuilder<'a> {
             if *count == 0 {
                 self.state.open_courts_by_claim.remove(&previous.claim);
             }
-            self.state.court_deadlines.remove(&(previous.deadline_daa, key));
+            self.state.court_deadlines.remove(&(court_next_deadline_v2(previous), key));
         }
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
-            self.state.court_deadlines.insert((record.deadline_daa, key));
+            self.state.court_deadlines.insert((court_next_deadline_v2(record), key));
         }
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
     }
@@ -2065,14 +2150,83 @@ fn rearm_after_challenger_side_close(
 /// and closable by ANYONE as `CourtClosed(ExecutorGuilty)` long before this fires, so the only
 /// sessions that reach the backstop are ones nobody could or would finish, and an honest claim
 /// must not stay frozen for them.
+/// **The DAA score at which a session next needs attention — whichever clock runs out first.**
+///
+/// A session has two: the rung window (the party whose turn it is must move) and the
+/// whole-session backstop. Indexing on the minimum keeps ONE sweep queue, and keeps the rebuilt
+/// index exactly derivable from the session records — which is what lets the index be dropped
+/// from the state root and rebuilt on load. A ladder that has been abandoned or has reached
+/// `Terminal` has no rung clock left to run, so only the backstop applies.
+pub(crate) fn court_next_deadline_v2(session: &PalwCourtSessionStateV2) -> u64 {
+    use crate::palw_bisect::PalwBisectTurnV1;
+    match session.ladder.turn() {
+        PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict | PalwBisectTurnV1::Terminal => {
+            session.deadline_daa.min(session.ladder.last_deadline_daa())
+        }
+        PalwBisectTurnV1::Abandoned => session.deadline_daa,
+    }
+}
+
 fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
         if deadline >= ctx.daa_score {
             break;
         }
-        let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
-        builder.write_court(session_id, None);
+        let mut session =
+            builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
         let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+
+        // **P0-9: silence at a rung decides the dispute, and no object says so.**
+        //
+        // `declare_no_show` reads whose turn it was from the machine's own state, which is this
+        // chain's state — so every node reaches the same verdict from the same absence, and there
+        // is nothing for an attacker to forge. That is the whole reason the ladder had to be
+        // carried before defaults could be honoured.
+        //
+        // A silent RESPONDER loses: it announced a root and would not stand behind it at the
+        // index it was asked about. A silent CHALLENGER loses: prosecution is its burden, which
+        // is the same rule the backstop below applies. Either way the session ends here.
+        // A rung clock counts only if it runs out STRICTLY inside the session budget. When the
+        // two coincide — which is what `turn_deadline_daa`'s default makes them — the rung can
+        // decide nothing the backstop would not already have decided, and letting it try would
+        // silently invert the outcome: the backstop closes challenger-side, a first-rung silence
+        // closes against the responder. So a network without a tighter rung window keeps exactly
+        // the pre-ladder behavior, and one with a real ladder gets the rung verdict it configured.
+        let rung_fired = session.ladder.last_deadline_daa() < ctx.daa_score
+            && session.ladder.last_deadline_daa() < session.deadline_daa;
+        if rung_fired {
+            if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
+                builder.write_court(session_id, None);
+                match no_show.silent_party {
+                    crate::palw_bisect::PalwBisectPartyV1::Responder => {
+                        // Same treatment a proven fault gets, and for the same reason: an
+                        // executor that will not stand behind its own announced root at the
+                        // index it was asked about has not been convicted of arithmetic, but it
+                        // HAS defaulted on the only defence available to it. A late default
+                        // against an already-terminal claim closes the session and changes
+                        // nothing else, exactly as a late verdict does.
+                        if !claim.phase.is_terminal() {
+                            builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                        }
+                    }
+                    crate::palw_bisect::PalwBisectPartyV1::Challenger => {
+                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim)?;
+                    }
+                }
+                continue;
+            }
+            // The ladder is already `Abandoned` — its rung clock is spent and only the backstop
+            // can still act. Rewriting the record re-indexes it under the backstop, so the queue
+            // moves forward instead of spinning on a deadline nothing consumes.
+            if session.deadline_daa >= ctx.daa_score {
+                let refreshed = session.clone();
+                builder.write_court(session_id, Some(refreshed));
+                continue;
+            }
+        }
+        // The backstop (or an abandoned ladder whose session budget is also spent): closed
+        // challenger-side, because an unfinished challenge must not freeze an honest claim.
+        builder.write_court(session_id, None);
         rearm_after_challenger_side_close(builder, ctx, session.claim, &claim)?;
     }
     Ok(())
@@ -2500,7 +2654,7 @@ fn apply_object(
                 builder.arm_deadline(deadline, *claim_id);
             }
         }
-        PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond } => {
+        PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size } => {
             if builder.state.court_sessions.contains_key(session_id) {
                 return Err(PalwStateV2Error::DuplicateSession(*session_id));
             }
@@ -2511,6 +2665,30 @@ fn apply_object(
             builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+            // The responder's first rung window. Sized from the state machine's own
+            // `turn_deadline_daa` so the ladder and the backstop are measured on one clock.
+            let first_deadline_daa = ctx
+                .daa_score
+                .checked_add(builder.params.turn_deadline_daa)
+                .ok_or(PalwStateV2Error::Overflow("rung deadline"))?;
+            // The ladder's id is derived from the same six inputs `court_session_id_v2` uses, so
+            // a ladder whose id is not `session_id` means the object's declared space does not
+            // match the id it was opened under — refused here, not merely at the acceptance
+            // layer, because the transition is what every node recomputes.
+            let ladder = crate::palw_bisect::PalwBisectLadderV1::open(
+                claim_id,
+                &claim.trace_root,
+                &crate::palw_court_v2::court_party_id_v2(challenger_bond),
+                &crate::palw_court_v2::court_party_id_v2(&claim.bond),
+                *space,
+                *space_size,
+                ctx.daa_score,
+                first_deadline_daa,
+            )
+            .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
+            if ladder.session_id() != *session_id {
+                return Err(PalwStateV2Error::SessionIdMismatch(*session_id));
+            }
             builder.write_court(
                 *session_id,
                 Some(PalwCourtSessionStateV2 {
@@ -2518,6 +2696,7 @@ fn apply_object(
                     challenger_bond: *challenger_bond,
                     opened_daa: ctx.daa_score,
                     deadline_daa,
+                    ladder,
                 }),
             );
             // An open court freezes the path to Final: the claim keeps no deadline while any
@@ -2547,6 +2726,24 @@ fn apply_object(
                     rearm_after_challenger_side_close(builder, ctx, claim_id, &claim)?;
                 }
             }
+        }
+        PalwConsensusObjectV2::CourtDisclosed { session_id, disclosure, signature: _ } => {
+            let mut session =
+                builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            session
+                .ladder
+                .apply_disclosure(disclosure, ctx.daa_score, builder.params.turn_deadline_daa)
+                .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
+            builder.write_court(*session_id, Some(session));
+        }
+        PalwConsensusObjectV2::CourtVerdictPosted { session_id, verdict, signature: _ } => {
+            let mut session =
+                builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            session
+                .ladder
+                .apply_verdict(verdict, ctx.daa_score, builder.params.turn_deadline_daa)
+                .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
+            builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -2901,7 +3098,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     state.court_deadlines = BTreeSet::new();
     for (id, session) in &state.court_sessions {
         *state.open_courts_by_claim.entry(session.claim).or_insert(0) += 1;
-        state.court_deadlines.insert((session.deadline_daa, *id));
+        state.court_deadlines.insert((court_next_deadline_v2(session), *id));
     }
 }
 
@@ -3227,6 +3424,51 @@ pub(crate) mod tests {
 
     fn ctx(block_word: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
         PalwBlockContextV2 { block: block(block_word), daa_score: daa, blue_score: blue, subsidy: 0 }
+    }
+
+    /// A `CourtOpened` whose `session_id` is the one `court_session_id_v2` derives — which the
+    /// transition now REQUIRES, because the ladder it builds carries that id. The fixtures used
+    /// to invent an id (`h64(500)`); no acceptance layer would ever have admitted one, so the
+    /// helper is what those tests always meant.
+    fn court_open(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+        const SPACE: crate::palw_bisect::PalwBisectSpaceV1 = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
+        const SIZE: u64 = 16;
+        PalwConsensusObjectV2::CourtOpened {
+            session_id: crate::palw_court_v2::court_session_id_v2(&claim_id, &trace_root, &executor, &challenger, SPACE, SIZE),
+            claim: claim_id,
+            challenger_bond: challenger,
+            space: SPACE,
+            space_size: SIZE,
+        }
+    }
+
+    /// The id `court_open` produced, for the tests that close or sweep the session afterwards.
+    fn court_session_of(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> Hash64 {
+        let PalwConsensusObjectV2::CourtOpened { session_id, .. } = court_open(claim_id, trace_root, executor, challenger) else {
+            unreachable!("court_open builds a CourtOpened")
+        };
+        session_id
+    }
+
+    /// A SECOND session on the same dispute. With derived ids, "another court" means another
+    /// index space — the same six inputs cannot produce two ids.
+    fn second_court_open(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+        const SPACE: crate::palw_bisect::PalwBisectSpaceV1 = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
+        const SIZE: u64 = 32;
+        PalwConsensusObjectV2::CourtOpened {
+            session_id: crate::palw_court_v2::court_session_id_v2(&claim_id, &trace_root, &executor, &challenger, SPACE, SIZE),
+            claim: claim_id,
+            challenger_bond: challenger,
+            space: SPACE,
+            space_size: SIZE,
+        }
+    }
+
+    fn second_court_session_of(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> Hash64 {
+        let PalwConsensusObjectV2::CourtOpened { session_id, .. } = second_court_open(claim_id, trace_root, executor, challenger) else {
+            unreachable!("second_court_open builds a CourtOpened")
+        };
+        session_id
     }
 
     fn register_class_and_bond() -> Vec<PalwConsensusObjectV2> {
@@ -3593,7 +3835,7 @@ pub(crate) mod tests {
             &s4,
             &p,
             &ctx(5, 104, 5),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(500), claim: claim_id, challenger_bond: bond_key(1) }],
+            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
             None,
         );
         // Far past the challenge window: the claim must NOT final while the court is open.
@@ -3608,7 +3850,7 @@ pub(crate) mod tests {
             &s6,
             &p,
             &ctx(7, 210, 7),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: h64(500), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
+            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
             None,
         );
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
@@ -3628,14 +3870,14 @@ pub(crate) mod tests {
             &s2,
             &p,
             &ctx(3, 102, 3),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(500), claim: claim_id, challenger_bond: bond_key(1) }],
+            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
             None,
         );
         let (s4, _) = apply(
             &s3,
             &p,
             &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: h64(500), verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ExecutorGuilty }],
             None,
         );
         match s4.claim(&claim_id).unwrap().phase {
@@ -3649,7 +3891,7 @@ pub(crate) mod tests {
             &p,
             &ctx(3, 102, 3),
             &[
-                PalwConsensusObjectV2::CourtOpened { session_id: h64(600), claim: claim_id, challenger_bond: bond_key(1) },
+                second_court_open(claim_id, h64(31), bond_key(1), bond_key(1)),
                 PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: Vec::new() },
             ],
             None,
@@ -3658,7 +3900,10 @@ pub(crate) mod tests {
             &s5,
             &p,
             &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: h64(600), verdict: PalwCourtVerdictV2::ExecutorGuilty }],
+            &[PalwConsensusObjectV2::CourtClosed {
+                session_id: second_court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            }],
             None,
         );
         match s6.claim(&claim_id).unwrap().phase {
@@ -3667,7 +3912,7 @@ pub(crate) mod tests {
             }
             ref other => panic!("expected the standing void, got {other:?}"),
         }
-        assert!(s6.court_session(&h64(600)).is_none());
+        assert!(s6.court_session(&second_court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_none());
     }
 
     /// The backstop: a session nobody closes expires challenger-side at `opened + window_court`,
@@ -3688,20 +3933,171 @@ pub(crate) mod tests {
             &s4,
             &p,
             &ctx(5, 104, 5),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(500), claim: claim_id, challenger_bond: bond_key(1) }],
+            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
             None,
         );
         // Inside the court budget (opened at 104, window 500 → deadline 604): frozen.
         let (s6, _) = apply(&s5, &p, &ctx(6, 600, 6), &[], None);
         assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-        assert!(s6.court_session(&h64(500)).is_some());
+        assert!(s6.court_session(&court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_some());
         // Past it: the sweep closes the session challenger-side and re-arms Final at this point…
         let (s7, _) = apply(&s6, &p, &ctx(7, 605, 7), &[], None);
-        assert!(s7.court_session(&h64(500)).is_none(), "the abandoned session expired");
+        assert!(
+            s7.court_session(&court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_none(),
+            "the abandoned session expired"
+        );
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
         // …and the next block past the re-armed deadline finals the claim.
         let (s8, _) = apply(&s7, &p, &ctx(8, 606, 8), &[], None);
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the freeze ended with the challenge");
+    }
+
+    // ---- P0-9: the ladder is chain state, so silence at a rung decides the dispute ----
+
+    /// Params with a rung window STRICTLY inside the court budget — the configuration that turns
+    /// the interactive ladder on. The default leaves rung == backstop, which the sweep treats as
+    /// no rung clock at all.
+    fn params_with_ladder() -> PalwStateParamsV2 {
+        params().with_turn_deadline_daa(20).unwrap()
+    }
+
+    fn licensed_with_court(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64) {
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) =
+            apply(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None);
+        let (s5, _) = apply(&s4, p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
+        (s5, claim_id, sid)
+    }
+
+    fn disclose(sid: Hash64, round: u32, midpoint: u64, state_word: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::CourtDisclosed {
+            session_id: sid,
+            disclosure: crate::palw_bisect::PalwBisectDisclosureV1 {
+                version: crate::palw_bisect::PALW_BISECT_OBJECT_VERSION_V1,
+                session_id: sid,
+                round,
+                midpoint,
+                mid_state: h64(state_word),
+            },
+            // The acceptance layer checks it (`check_court_disclosure_acceptance_v2`); the
+            // transition applies the MOVE. Same split as `BondRegistered`.
+            signature: vec![0xAA; 8],
+        }
+    }
+
+    fn rung_verdict(sid: Hash64, round: u32, agree: bool) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::CourtVerdictPosted {
+            session_id: sid,
+            verdict: crate::palw_bisect::PalwBisectVerdictV1 {
+                version: crate::palw_bisect::PALW_BISECT_OBJECT_VERSION_V1,
+                session_id: sid,
+                round,
+                agree,
+            },
+            signature: vec![0xBB; 8],
+        }
+    }
+
+    /// **The ladder narrows on chain.** Rung moves ride blocks, the state machine applies them,
+    /// and the interval collapses to one index — at which point the ladder is `Terminal` and only
+    /// an arithmetic close can finish the job.
+    #[test]
+    fn palw_v2_the_ladder_narrows_across_blocks() {
+        let p = params_with_ladder();
+        let (s5, _claim_id, sid) = licensed_with_court(&p);
+        let ladder = &s5.court_session(&sid).unwrap().ladder;
+        assert_eq!(ladder.interval(), (0, 16), "the dispute opens over the whole space");
+        assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure, "the responder moves first");
+        assert_eq!(ladder.last_deadline_daa(), 124, "opened at 104 + a 20-DAA rung window");
+
+        // Round 0: disclose at midpoint 8, challenger disagrees ⇒ the divergence is below.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        assert_eq!(s6.court_session(&sid).unwrap().ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::AwaitVerdict);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 106, 7), &[rung_verdict(sid, 0, false)], None);
+        assert_eq!(s7.court_session(&sid).unwrap().ladder.interval(), (0, 8), "disagreement takes the lower half");
+
+        // Three more rungs collapse [0,8) to a single index.
+        let (s8, _) = apply(&s7, &p, &ctx(8, 107, 8), &[disclose(sid, 1, 4, 0xD1)], None);
+        let (s9, _) = apply(&s8, &p, &ctx(9, 108, 9), &[rung_verdict(sid, 1, true)], None);
+        assert_eq!(s9.court_session(&sid).unwrap().ladder.interval(), (4, 8), "agreement takes the upper half");
+        let (s10, _) = apply(&s9, &p, &ctx(10, 109, 10), &[disclose(sid, 2, 6, 0xD2)], None);
+        let (s11, _) = apply(&s10, &p, &ctx(11, 110, 11), &[rung_verdict(sid, 2, false)], None);
+        let (s12, _) = apply(&s11, &p, &ctx(12, 111, 12), &[disclose(sid, 3, 5, 0xD3)], None);
+        let (s13, _) = apply(&s12, &p, &ctx(13, 112, 13), &[rung_verdict(sid, 3, false)], None);
+
+        let ladder = &s13.court_session(&sid).unwrap().ladder;
+        assert_eq!(ladder.interval(), (4, 5), "one index wide");
+        assert_eq!(ladder.terminal_index(), Some(4), "and the dispute is located");
+        assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal, "only an arithmetic close finishes it now");
+    }
+
+    /// **A silent responder loses, and no object says so.** This is the whole reason the ladder
+    /// had to become chain state: the verdict comes from the chain's own clock plus an absence,
+    /// so there is no message for an attacker to forge.
+    #[test]
+    fn palw_v2_a_silent_responder_loses_the_dispute() {
+        let p = params_with_ladder();
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+        // The rung deadline is 124; the backstop is 604. Nothing is due yet at 124.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 124, 6), &[], None);
+        assert!(s6.court_session(&sid).is_some(), "the rung window has not lapsed");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+
+        // One DAA past it, with the responder never having disclosed.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
+        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
+        match s7.claim(&claim_id).unwrap().phase {
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. } => {}
+            ref other => panic!("a responder that would not answer must lose the claim, got {other:?}"),
+        }
+        // And it cost the executor its stake, exactly as a proven fault does.
+        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "a default is not free");
+    }
+
+    /// **A silent challenger loses too** — prosecution is its burden. The direction matters: the
+    /// two outcomes are opposite, so a sweep that could not tell whose turn it was would decide
+    /// half of all disputes backwards.
+    #[test]
+    fn palw_v2_a_silent_challenger_loses_the_dispute() {
+        let p = params_with_ladder();
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+        // The responder answers; now the challenger owes a verdict by 105 + 20 = 125.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        assert_eq!(s6.court_session(&sid).unwrap().ladder.last_deadline_daa(), 125);
+
+        let (s7, _) = apply(&s6, &p, &ctx(7, 126, 7), &[], None);
+        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
+        assert!(
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "the claim survives an abandoned prosecution and resumes its path to Final"
+        );
+        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "and the executor is not punished for the challenger's silence");
+    }
+
+    /// The default configuration has no ladder clock, so an unfinished challenge still ends at
+    /// the BACKSTOP and still ends challenger-side. Without this, turning the ladder on by
+    /// default would have silently inverted every such outcome.
+    #[test]
+    fn palw_v2_without_a_rung_window_the_backstop_still_decides() {
+        let p = params();
+        assert_eq!(p.turn_deadline_daa(), p.window_court(), "the default is one rung per session");
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+        // Opened at 104: both clocks read 604. One past them, and the CHALLENGER-side close runs.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 605, 6), &[], None);
+        assert!(s6.court_session(&sid).is_none());
+        assert!(
+            matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "the pre-ladder outcome, unchanged"
+        );
+        assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nobody is slashed for it");
     }
 
     // ---- strictness: a missing fact is an error ----
@@ -4101,14 +4497,14 @@ pub(crate) mod tests {
                 5,
                 104,
                 5,
-                vec![PalwConsensusObjectV2::CourtOpened { session_id: h64(500), claim: claim_id, challenger_bond: bond_key(1) }],
+                vec![court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
                 None,
             ),
             (
                 6,
                 150,
                 6,
-                vec![PalwConsensusObjectV2::CourtClosed { session_id: h64(500), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
+                vec![PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated }],
                 None,
             ),
             (7, 151, 7, vec![], None),
@@ -4530,12 +4926,12 @@ pub(crate) mod tests {
             &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
             None,
         );
-        let sid = h64(0xC0)             ;
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
         let (s5, _) = apply(
             &s4,
             &p,
             &ctx(5, 104, 5),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: sid, claim: claim_id, challenger_bond: bond_key(1) }],
+            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
             None,
         );
         let (s6, _) = apply(
@@ -5368,7 +5764,7 @@ pub(crate) mod tests {
             &s4,
             &p,
             &ctx(5, 104, 5),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: h64(0x5E), claim: claim_id, challenger_bond: bond_key(1) }],
+            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
             None,
         );
         let certified = certify_fp_claim(&p, 60, 3);

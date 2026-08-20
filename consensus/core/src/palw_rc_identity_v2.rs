@@ -147,6 +147,9 @@ mod tests {
         b.base_class_id = h64(1);
         b.class_catalog_root = catalog.root();
         b.court = PalwCourtParamsV2::new(LEAVES, 4, 2).expect("a court that can walk the catalog");
+        // The sweep measures rung silence against the STATE's copy, so the two move together or
+        // the bundle is audited against one ladder and run against another.
+        b.state = b.state.clone().with_turn_deadline_daa(4).expect("4 is inside the court window");
         b
     }
 

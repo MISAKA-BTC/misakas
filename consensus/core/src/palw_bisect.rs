@@ -175,23 +175,29 @@ pub fn bisect_offense_id_v1(offense: &PalwBisectNoShowV1) -> Hash64 {
 // ---------------------------------------------------------------------------------------------
 
 /// Whose move it is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Borsh-serializable with a pinned discriminant because the ladder is chain state now
+/// (`PalwCourtSessionStateV2::ladder`) and therefore part of the PALW state root: a reordering of
+/// these variants would silently move every root that contains a live dispute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum PalwBisectTurnV1 {
     /// The responder must disclose the current midpoint's state commitment.
-    AwaitDisclosure,
+    AwaitDisclosure = 0,
     /// The challenger must agree/disagree with the last disclosure.
-    AwaitVerdict,
+    AwaitVerdict = 1,
     /// The interval is one index wide: the responder must open that index's input state for
     /// the terminal one-step / one-call check. The ladder's job is done.
     Terminal,
     /// A party went silent past its rung deadline and the dispute is decided against them. An
     /// absorbing state: no later move is legal, and no second no-show is chargeable.
-    Abandoned,
+    Abandoned = 3,
 }
 
 /// The full ladder state. Every observer feeding it the same message stream derives the same
 /// state — that is what makes rung silence an OBJECTIVE offense.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwBisectLadderV1 {
     session_id: Hash64,
     space_size: u64,
@@ -288,6 +294,12 @@ impl PalwBisectLadderV1 {
 
     pub fn turn(&self) -> PalwBisectTurnV1 {
         self.turn
+    }
+
+    /// The DAA score by which the party named by [`Self::turn`] must move. The rung sweep reads
+    /// it: silence past it is the objective offense, and the chain is the observer that sees it.
+    pub fn last_deadline_daa(&self) -> u64 {
+        self.last_deadline_daa
     }
 
     pub fn round(&self) -> u32 {

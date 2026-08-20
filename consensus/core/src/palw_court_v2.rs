@@ -16,23 +16,31 @@
 //!   rather than minting either verdict: an unadjudicable object convicts nobody (P0-8's rule),
 //!   and it also acquits nobody.
 //!
-//! **Ladder no-show defaults are NOT acceptable objects on the V2 lineage yet — deliberately.**
-//! A `PalwBisectNoShowV1` is "only mintable from the machine's own state", and the machine's
-//! state is the rung stream; until the ladder itself is carried in `PalwChainStateV2`, a
-//! candidate-scoped validator cannot distinguish a real default from a FORGED one — and a forged
-//! executor-default would void any honest claim on demand. That is a critical, not a feature
-//! gap. The system stays closed without it for the RC's BASE-0 class:
+//! **Ladder no-show defaults are still not acceptable OBJECTS — and now they never will be.**
+//!
+//! The old reason was that the ladder was not chain state, so a validator could not tell a real
+//! default from a forged one, and a forged executor-default would void any honest claim on
+//! demand. The ladder is chain state now (`PalwCourtSessionStateV2::ladder`), and the fix that
+//! made possible is better than admitting the object: **nobody submits a default at all.** The
+//! rung deadline is a machine fact every node recomputes, silence past it is visible to all of
+//! them, and `sweep_court_deadlines` closes the session against whichever party was due to move.
+//! An offense produced by ABSENCE cannot be forged by presence — there is no message to forge.
+//!
+//! What IS acceptable, and signed, are the two rung moves themselves:
+//! [`check_court_disclosure_acceptance_v2`] and [`check_court_verdict_acceptance_v2`]. Those need
+//! signatures for the mirror-image reasons a default does not: each is a claim ATTRIBUTED to one
+//! party, and either party could otherwise write the other's half of the dispute.
+//!
+//! A rung window only counts when it is strictly tighter than the session backstop — see
+//! `PalwStateParamsV2::turn_deadline_daa`. A network that leaves it at the default has no
+//! interactive ladder, and closes exactly as it did before: the backstop at `opened +
+//! window_court`, challenger-side, because prosecution is the challenger's burden and an
+//! unfinished challenge must not freeze an honest claim. The other two paths are unchanged:
 //!
 //! * data served → any holder finds the divergent step offline and convicts **arithmetically**
 //!   (no ladder narrows needed when you hold the trace);
 //! * data withheld pre-license → the PANEL's `Unavailable` quorum justifies `ProducerDefaulted`
-//!   (PR-06);
-//! * a challenge nobody finishes → the state machine's court backstop closes it
-//!   challenger-side at `opened + window_court`, and the claim's path to `Final` re-arms.
-//!
-//! The interactive ladder (with its per-rung deadlines and attributable offenses) becomes
-//! acceptable exactly when its state is chain-carried; that lands with the reorg-equivalence
-//! work, not before.
+//!   (PR-06).
 //!
 //! ## Session identity (Decision 8 item 1)
 //!
@@ -52,8 +60,17 @@ use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError
 use blake2b_simd::Params;
 
 pub const PALW_COURT_V2_DOMAIN_PARTY_ID: &[u8] = b"misaka-palw/court-v2/party-id/v1";
+/// ML-DSA-87 signing context for a responder's rung disclosure. Its own family domain, for the
+/// P0-6 reason every other context has one: a signature must not be able to cross meanings.
+pub const PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT: &[u8] = b"misaka-palw/court-v2/disclosure/mldsa87/v1";
+/// ML-DSA-87 signing context for a challenger's rung verdict. Separate from the disclosure
+/// context, not merely from the attempt's: the two rung messages are made by DIFFERENT parties
+/// with opposite interests, so one shared court context would let a responder's signature over
+/// its own disclosure be replayed as the challenger's verdict.
+pub const PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT: &[u8] = b"misaka-palw/court-v2/verdict/mldsa87/v1";
 
-pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_COURT_V2_DOMAIN_PARTY_ID];
+pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] =
+    &[PALW_COURT_V2_DOMAIN_PARTY_ID, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT];
 
 /// A bond outpoint as a 64-byte dispute-party identity (what the bisect session id space
 /// expects). Domain-separated so a party id can never collide with an attempt id, a claim id, or
@@ -88,6 +105,8 @@ pub fn court_session_id_v2(
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwCourtV2Error {
+    #[error("a rung message's signature does not verify under the party it is attributed to")]
+    RungSignatureInvalid,
     #[error("claim {0} does not exist at this chain point")]
     MissingClaim(Hash64),
     #[error("claim {claim} is not challengeable: {why}")]
@@ -169,6 +188,66 @@ pub enum PalwCourtVerdictProofV2 {
     /// the recomputation touches arrives as an opening against the class's registered artifact
     /// root, and the refutation binds the claim's committed trace root.
     Arithmetic { refutation: PalwExecutionStepRefutationV1, operand_openings: Vec<PalwArtifactOpeningV1> },
+}
+
+/// **Who may post a rung, and under whose key (P0-9's forgery half).**
+///
+/// A disclosure is the RESPONDER's answer and a verdict is the CHALLENGER's, and both must be
+/// signed by the party they are attributed to. Unsigned, the ladder is worse than absent:
+///
+/// * a challenger writing the responder's disclosures binds an honest executor to states it
+///   never claimed, and then convicts it arithmetically at the terminal step;
+/// * a responder writing the challenger's verdicts steers the interval away from its own
+///   divergence and walks out acquitted.
+///
+/// Both keys come from the CANDIDATE state's bond registry — the executor's from the claim the
+/// session disputes, the challenger's from the session record — so neither party can name its
+/// own key, and the message signed is the canonical encoding of the rung itself, which already
+/// carries the session id and the round.
+pub fn check_court_disclosure_acceptance_v2<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    disclosure: &crate::palw_bisect::PalwBisectDisclosureV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    if disclosure.session_id != *session_id {
+        return Err(PalwCourtV2Error::SessionIdMismatch);
+    }
+    let bond = state.bond(&claim.bond).ok_or(PalwCourtV2Error::ChallengerMissing(claim.bond))?;
+    let message = borsh::to_vec(disclosure).expect("a disclosure is borsh-serializable");
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// The challenger's half of [`check_court_disclosure_acceptance_v2`]. Same shape, other party,
+/// other context.
+pub fn check_court_verdict_acceptance_v2<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    verdict: &crate::palw_bisect::PalwBisectVerdictV1,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let (session, _claim) = resolve_court_session_v2(state, session_id)?;
+    if verdict.session_id != *session_id {
+        return Err(PalwCourtV2Error::SessionIdMismatch);
+    }
+    let bond = state.bond(&session.challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(session.challenger_bond))?;
+    let message = borsh::to_vec(verdict).expect("a verdict is borsh-serializable");
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
 }
 
 /// Resolve a session to the claim it disputes — the lookups every close shares, isolated so a
@@ -485,7 +564,13 @@ mod tests {
             &state,
             &p,
             &ctx(5, 110, 5),
-            &[PalwConsensusObjectV2::CourtOpened { session_id: sid, claim: claim_id, challenger_bond: bond_key(2) }],
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 64,
+            }],
             None,
         )
         .unwrap();
@@ -544,7 +629,14 @@ mod tests {
 
     #[test]
     fn the_court_domains_are_distinct_from_nothing_by_accident() {
-        // One domain today; the list exists so the cross-family collision test sees it.
-        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 1);
+        // The party id, and the two rung signing contexts. The count is pinned so ADDING a domain
+        // is a decision someone makes here rather than a line that slips in; the cross-family
+        // collision test reads the list itself.
+        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 3);
+        let unique: std::collections::BTreeSet<_> = PALW_COURT_V2_ALL_DOMAINS.iter().collect();
+        assert_eq!(unique.len(), PALW_COURT_V2_ALL_DOMAINS.len(), "a repeated domain is a collision inside one family");
+        // The two rung contexts in particular: the parties have opposite interests, so one shared
+        // context would let a responder's own signature be replayed as the challenger's verdict.
+        assert_ne!(PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT);
     }
 }
