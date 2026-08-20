@@ -812,6 +812,70 @@ impl PalwShadowLedgerV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// **H13, measured rather than asserted: the shipped mainnet identity cannot carry PALW.**
+    ///
+    /// ADR-0036 Decision 2 and the readiness audit reached this independently, and both state it
+    /// as a conclusion. A conclusion in prose is a thing that can quietly stop being true — a
+    /// preset edit, a Crescendo retune — so it is pinned here as arithmetic over the values the
+    /// binary actually ships.
+    ///
+    /// Two independent refusals, and it matters that they are independent: fixing either one
+    /// alone leaves the other standing, which is why the answer is a new network identity rather
+    /// than a parameter change.
+    #[test]
+    fn the_shipped_mainnet_identity_cannot_carry_a_palw_schedule() {
+        use crate::config::params::MAINNET_PARAMS;
+
+        let blockrate = &MAINNET_PARAMS.blockrate;
+        // 1. The cadence. PALW is frozen at 120 s/block (ADR-0038 Decision H); mainnet runs
+        //    10 BPS. This is not a window that can be widened — every DAA-denominated window in
+        //    the ruleset takes its wall-clock meaning from the cadence, so a PALW ruleset on a
+        //    100 ms chain means something different by every number in it.
+        assert_ne!(blockrate.target_time_per_block, PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS);
+        assert_eq!(blockrate.target_time_per_block, 100, "mainnet is 10 BPS — 100 ms per block");
+
+        // 2. The window inequality, which fails for BOTH shipped presets and fails on the
+        //    finality depth rather than on anything a schedule can choose. At 10 BPS the depth is
+        //    orders of magnitude above either challenge window, so no preset in this file fits.
+        for (name, params) in [
+            ("deci-bps", PalwScheduleParamsV1::stage1_defaults_deci_bps()),
+            ("two-minute", PalwScheduleParamsV1::stage1_defaults_two_minute_bps()),
+        ] {
+            assert!(
+                blockrate.finality_depth >= params.w_challenge,
+                "{name}: finality_depth {} must be >= w_challenge {} for this to be the refusal under test",
+                blockrate.finality_depth,
+                params.w_challenge
+            );
+            assert!(
+                matches!(
+                    params.validate_for_value_network_v1(blockrate),
+                    Err(PalwScheduleError::CadenceNotFrozen { .. })
+                ),
+                "{name}: a value network must refuse on the cadence first — the frozen fact is the message"
+            );
+            // …and the window rule refuses it too, independently of the cadence: `validate`
+            // skips the cadence clause, so this is the second refusal standing on its own.
+            assert!(
+                matches!(
+                    params.validate(blockrate),
+                    Err(PalwScheduleError::WindowInequalityViolated { rule: "finality_depth < w_challenge" })
+                ),
+                "{name}: the window inequality must fail on its own, not only behind the cadence"
+            );
+        }
+
+        // The same schedule on a 120 s chain with a proportionate finality depth is admissible —
+        // so what this test measures is the mainnet IDENTITY, not the schedule presets.
+        let mut palw_rate = blockrate.clone();
+        palw_rate.target_time_per_block = PALW_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+        palw_rate.finality_depth = 600;
+        PalwScheduleParamsV1::stage1_defaults_two_minute_bps()
+            .validate_for_value_network_v1(&palw_rate)
+            .expect("the two-minute preset fits a two-minute network");
+    }
     use crate::palw_legs::PALW_LEGS_ALL_DOMAINS;
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_slash::PALW_S_ALL_DOMAINS;
