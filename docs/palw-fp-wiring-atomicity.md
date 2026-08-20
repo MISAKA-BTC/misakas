@@ -221,6 +221,12 @@ tests are the *existing* baseline, and the daemon-suite abort is an environment/
 the same binary. A wiring PR is clean when it leaves this table unchanged, not when the suite is
 green.
 
+**Re-measured 2026-08-20 after the public main-wallet genesis move**, which is the kind of change
+most likely to move an integration suite (it re-genesises testnet-11 and adds a network):
+`kaspa-testing-integration --lib consensus_` gives 18 passed / 2 failed — the same two, for the
+same `InvalidPoW` — and the daemon suite aborts in the same place. `kaspa-consensus-core --lib` is
+1129 passed / 0 failed and `kaspa-consensus --lib` 224 / 0. Table unchanged.
+
 ## The free-prompt lane is not adjudicable yet, and says so (found at the 2026-08-20 integration)
 
 The attempt lane's audit-C3 fix gives a claim the executor's `committed_execution_root`, and

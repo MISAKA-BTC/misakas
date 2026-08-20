@@ -95,6 +95,19 @@ const VAULT_ADDRESSES: [&str; VAULT_COUNT] = [
 const MAINNET_MAIN_ADDRESS: &str =
     "misaka:q20f8cwx3uyhwhej6d994h28wxj2k4efd46grtkqpx4vaenaeyr5dsve3m3uzkhm6vx0897py3378qttk0dq0ndh9aqlwg25emf33jsgtcpswdj3";
 
+/// The 9B main wallet for the PUBLIC PALW test nets (testnet-11 and the PALW-RC testnet-12),
+/// operator-supplied 2026-08-20.
+///
+/// It replaces [`TESTNET_MAIN_ADDRESS`] on those two networks and nowhere else: testnet-10 has a
+/// running chain whose `utxo_commitment` must not move, and devnet/simnet keep the regenerable
+/// Claude-managed key their harnesses depend on. The 40 vault UTXOs are unchanged on every
+/// network — this is the main wallet only, which is the ~9B of the 13B premine.
+///
+/// A text address, like every other allocation in this file, so the genesis is auditable by
+/// reading it rather than by decoding a payload.
+const PALW_PUBLIC_MAIN_ADDRESS: &str =
+    "misakatest:qf7hzj76mg0wrch9mm89ag8s8apgrz7qgkk77j5z0ypykngrl2ayd2rnvleafk0fxhaxl70kr29x6fakav79jax9ul6jghrcs42nmlqx0tawqn8x";
+
 /// Testnet/devnet/simnet main-wallet (9B) address — Claude-managed, regenerable from
 /// `tests::TESTNET_MAIN_SEED` (value-less). Pinned by `testnet_main_key_is_reproducible`.
 const TESTNET_MAIN_ADDRESS: &str =
@@ -139,12 +152,43 @@ fn main_address(network_type: NetworkType) -> &'static str {
     }
 }
 
+/// The 9B main wallet for a network id — the suffix-aware form.
+///
+/// testnet-11 and the PALW-RC net (testnet-12) hold theirs at
+/// [`PALW_PUBLIC_MAIN_ADDRESS`]; every other network keeps [`main_address`]'s answer. The split
+/// is by NETWORK ID rather than by type because that is the granularity the fact has: t10 is a
+/// chain with history and its commitment must not move, while t11 and t12 are the public PALW
+/// nets whose genesis this operator is setting.
+///
+/// The 40 vault UTXOs are untouched everywhere — this replaces the main wallet only.
+fn main_address_for(net: NetworkId) -> &'static str {
+    if net.network_type == NetworkType::Testnet && matches!(net.suffix, Some(11) | Some(12)) {
+        return PALW_PUBLIC_MAIN_ADDRESS;
+    }
+    main_address(net.network_type)
+}
+
 /// The canonical kaspa-pq genesis premine UTXO set for `network_type`: 40 vault UTXOs
 /// of 0.1B KAS each (indices `0..VAULT_COUNT`) + one 9B main UTXO (index `VAULT_COUNT`)
 /// = 13B KAS, all single-key ML-DSA-87 P2PKH and spendable from block 0
 /// (`is_coinbase: false`, no maturity delay). The vault payloads are network-independent;
 /// the 9B main wallet is per-network (see [`main_address`]).
 pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
+    // `NetworkId::new` PANICS on a type that requires a suffix (testnet does), and this entry
+    // point takes only the type — so the suffix-less answer is expressed directly rather than
+    // by constructing an id that cannot exist. Callers who have a suffix use
+    // `misaka_premine_utxos_for`, which is the only way to reach the public PALW nets' wallet.
+    misaka_premine_utxos_inner(main_address(network_type))
+}
+
+/// The same set, chosen by NETWORK ID so the public PALW nets can hold their main wallet at
+/// their own address (see [`main_address_for`]). [`misaka_premine_utxos`] is this with a
+/// suffix-less id, which is what every non-suffixed caller means.
+pub fn misaka_premine_utxos_for(net: NetworkId) -> UtxoCollection {
+    misaka_premine_utxos_inner(main_address_for(net))
+}
+
+fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
     let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
     let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(VAULT_COUNT + 1);
     for (i, addr) in VAULT_ADDRESSES.iter().enumerate() {
@@ -152,7 +196,7 @@ pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
         let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
         utxos.push((outpoint, UtxoEntry { amount: VAULT_PREMINE_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false }));
     }
-    let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address(network_type)));
+    let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main));
     let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
     utxos.push((outpoint, UtxoEntry { amount: MAIN_PREMINE_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false }));
     UtxoCollection::from_iter(utxos)
@@ -230,7 +274,7 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
 /// because t10 and t11 share a type and must NOT share a UTXO set: t10 is a running chain whose
 /// commitment cannot move.
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
-    let mut set = misaka_premine_utxos(net.network_type);
+    let mut set = misaka_premine_utxos_for(net);
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
         set.extend(testnet11_community_utxos());
     }
@@ -249,6 +293,91 @@ mod tests {
     /// during the re-genesis E2E validation. NEVER mainnet.
     pub(super) const TESTNET_MAIN_SEED: &[u8] = b"misaka-testnet-premine-9b-claude-managed";
 
+    /// **The public PALW nets' 9B main wallet is the operator's address, and ONLY on those two.**
+    ///
+    /// The 2026-08-20 change moves the main wallet on testnet-11 and the PALW-RC net
+    /// (testnet-12) to `PALW_PUBLIC_MAIN_ADDRESS`. Everything else is deliberately untouched:
+    /// testnet-10 has a running chain whose commitment must not move, devnet and simnet keep the
+    /// regenerable Claude-managed key their harnesses depend on, and mainnet's custody address is
+    /// its own. The 40 vault UTXOs are unchanged everywhere — this is the main wallet only.
+    #[test]
+    fn the_public_palw_nets_hold_the_main_wallet_at_the_operator_address() {
+        let public_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(PALW_PUBLIC_MAIN_ADDRESS));
+        let claude_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(TESTNET_MAIN_ADDRESS));
+        assert_ne!(public_spk, claude_spk, "the fixture must actually differ or this test proves nothing");
+
+        let main_of = |net: NetworkId| {
+            let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
+            let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
+            let set = genesis_premine_utxos_for(net);
+            set.get(&outpoint).expect("the main UTXO sits at index VAULT_COUNT").clone()
+        };
+
+        for suffix in [11u32, 12] {
+            let entry = main_of(NetworkId::with_suffix(NetworkType::Testnet, suffix));
+            assert_eq!(entry.script_public_key, public_spk, "testnet-{suffix} pays the operator address");
+            assert_eq!(entry.amount, MAIN_PREMINE_SOMPI, "and it is the whole 9B, unchanged");
+        }
+        // testnet-10 and the suffix-less testnet answer keep the Claude-managed wallet.
+        assert_eq!(main_of(NetworkId::with_suffix(NetworkType::Testnet, 10)).script_public_key, claude_spk);
+        for net in [NetworkType::Devnet, NetworkType::Simnet] {
+            let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
+            let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
+            let set = misaka_premine_utxos(net);
+            assert_eq!(set.get(&outpoint).unwrap().script_public_key, claude_spk, "{net:?} is untouched");
+        }
+        // Mainnet keeps its own custody address, which is neither of the above.
+        let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
+        let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
+        let mainnet_main = misaka_premine_utxos(NetworkType::Mainnet).get(&outpoint).unwrap().script_public_key.clone();
+        assert_ne!(mainnet_main, public_spk);
+        assert_ne!(mainnet_main, claude_spk);
+
+        // The vaults did not move on any network: same count, same amount, same scripts as the
+        // mainnet set (their payloads are network-independent).
+        for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {
+            let set = misaka_premine_utxos(net);
+            assert_eq!(set.len(), VAULT_COUNT + 1);
+        }
+        let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        assert_eq!(
+            t11.len(),
+            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "testnet-11 is the premine plus the community list, and nothing else"
+        );
+        for i in 0..VAULT_COUNT as u32 {
+            let outpoint = TransactionOutpoint { transaction_id: txid, index: i };
+            assert_eq!(t11.get(&outpoint).unwrap().amount, VAULT_PREMINE_SOMPI, "vault {i} is untouched");
+        }
+    }
+
+    /// The community list is exactly what the operator collected: nine entrants, 347M total, and
+    /// the two who changed address appear ONCE, at their new one.
+    #[test]
+    fn the_community_allocation_is_the_collected_list() {
+        assert_eq!(TESTNET11_COMMUNITY_ALLOCATIONS.len(), 9);
+        let total: u64 = TESTNET11_COMMUNITY_ALLOCATIONS.iter().map(|(_, msk)| *msk).sum();
+        assert_eq!(total, 347_000_000, "100+5+30+100+100+1+5+5+1");
+        assert_eq!(TESTNET11_COMMUNITY_SOMPI, total * SOMPI_PER_KASPA);
+
+        // The superseded addresses are ABSENT — an entrant paid twice is an entrant paid wrong.
+        for superseded in [
+            "qfdqr02rxqyqh4jqtcn8qhwgsad3xqqn502tw26yajv7jg7eqap5slhggrcyngq8g789cxymezhc8mjfr3q2fj0w8j5w7mk986fta7u049hfph2n",
+            "qfa2z97yspcra7pel80h06jg4a6mg0669fj5qx63e4v5y8geddd8hvyvy75rqaejgrq69e8yv4nd66rzlt5tqepw95q7q3k55qev84g6ey5yj8x8",
+        ] {
+            assert!(
+                !TESTNET11_COMMUNITY_ALLOCATIONS.iter().any(|(a, _)| a.contains(superseded)),
+                "a superseded address is still in the list"
+            );
+        }
+        // …and every entry is distinct, so nobody is paid twice under two addresses either.
+        let mut seen = std::collections::BTreeSet::new();
+        for (addr, _) in TESTNET11_COMMUNITY_ALLOCATIONS {
+            assert!(seen.insert(*addr), "duplicate community address {addr}");
+            assert!(addr.starts_with("misakatest:"), "{addr} is not a testnet address");
+        }
+    }
+
     /// Prints the per-network genesis `utxo_commitment`s to hardcode in `genesis.rs`.
     /// Run:
     /// `cargo test -p kaspa-consensus-core --lib config::premine::tests::print_premine_commitment -- --nocapture`
@@ -263,6 +392,14 @@ mod tests {
             let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
             println!("{net:?}_PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
         }
+        // The PALW-RC net (testnet-12): premine with the public main wallet, no community set.
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 12)) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("PALW_RC_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
         // testnet-11: premine ∪ community — the value TESTNET11_GENESIS.utxo_commitment pins.
         let mut ms = MuHash::new();
         for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {

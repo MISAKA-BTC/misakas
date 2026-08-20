@@ -2229,6 +2229,66 @@ pub const TESTNET11_PARAMS: Params = Params {
     ..TESTNET_PARAMS
 };
 
+/// **The PALW-RC network (ADR-0036 Decision 2, ADR-0042 PR-10) — a FUNCTION, not a `const`.**
+///
+/// A `ConsensusV2` bundle carries a catalog root, a court shape and a genesis registration list,
+/// and its construction can FAIL (`validate`); a `const` cannot hold a fallible construction, and
+/// faking one with `unwrap()` in a static would turn a bad ruleset into a panic at first use
+/// instead of an error at the call site. So the RC network is built and checked, and a caller
+/// holding an `Ok` holds params a node will start on.
+///
+/// **What it is:** testnet suffix 12, at PALW's frozen 120 s cadence, `ConsensusV2` from genesis,
+/// with no V1 PALW proof-of-work (a V2 network may activate none — which is why this could not be
+/// a re-flag of testnet-10 or -11) and its own genesis block.
+///
+/// **What it is NOT: mainnet.** ADR-0042 says window sizes, the share table, ρ_r, k, bonds and
+/// `base(C)` are soak outputs, filled in "after Chaosnet + RC, in a later ADR". This carries the
+/// free-prompt devnet bundle's numbers, which are honest devnet numbers and are not calibrated
+/// for a network holding value. Shipping mainnet numbers today would mean inventing them.
+///
+/// The `finality_depth` is the one thing this must fix beyond the cadence: PALW's schedule
+/// requires `finality_depth < w_challenge`, and testnet's 10-BPS depth fails it by orders of
+/// magnitude. It is the second of the two independent refusals
+/// `the_shipped_mainnet_identity_cannot_carry_a_palw_schedule` measures.
+pub fn palw_rc_params(
+    base_class_id: crate::Hash64,
+    class_catalog_root: crate::Hash64,
+    court_catalog_root: crate::Hash64,
+    genesis_pwu_per_inference: u64,
+    genesis_artifact_root: crate::Hash64,
+    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
+    genesis_bond_pubkey: Vec<u8>,
+    genesis_operator_pubkey: Vec<u8>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        genesis_pwu_per_inference,
+        genesis_artifact_root,
+        genesis_bond,
+        genesis_bond_pubkey,
+        genesis_operator_pubkey,
+    )?;
+    let mut params = TESTNET_PARAMS.clone();
+    params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+    params.genesis = crate::config::genesis::PALW_RC_GENESIS;
+    params.dns_seeders = &[];
+    // A `ConsensusV2` network activates no V1 PALW proof-of-work and installs no V1 fence —
+    // `validate_palw_v2` refuses both, and that refusal is why this is a new identity.
+    params.pow_blake2b_sha3_activation = ForkActivation::never();
+    params.pow_palw_activation = ForkActivation::never();
+    params.pow_palw_ollama_activation = ForkActivation::never();
+    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+    // Sized against the bundle's own challenge window, which is what the schedule rule compares:
+    // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
+    // than by one.
+    params.blockrate.finality_depth = bundle.state.window_challenge() / 2;
+    params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
+    params.validate_palw_v2()?;
+    Ok(params)
+}
+
 pub const DEVNET_PARAMS: Params = Params {
     // kaspa-pq: PQ-only enforcement from genesis (ADR-0019).
     pq_enforcement: PqEnforcementMode::Consensus,
@@ -2520,10 +2580,13 @@ mod consensus_params_id_tests {
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
-            // Moved by the Relaunch-2 public re-genesis (2026-08-20): the 347M MSK community
-            // allocation entered the genesis utxo_commitment and the relaunch marker bumped, so
-            // the genesis hash — and with it this fingerprint — changed. Only this row moved.
-            ("testnet-11", TESTNET11_PARAMS, "49ff962891445eeef0411f6499561e8f00640339ad3cdb0ac306ad07ccf299db"),
+            // Moved TWICE by the 2026-08-20 public re-genesis, both times through the genesis
+            // `utxo_commitment`: first the 347M MSK community allocation and the bumped relaunch
+            // marker, then the 9B main wallet moving to the operator's `PALW_PUBLIC_MAIN_ADDRESS`
+            // (the 40 vault UTXOs are untouched — this is the main wallet only). Only this row
+            // moved either time: t10 keeps the shared testnet premine, and devnet/simnet/mainnet
+            // are not testnet-11.
+            ("testnet-11", TESTNET11_PARAMS, "06285374aca22e781bd33368e51314f6c87cdd1c52ef36b0ba5dfc29d94dc9e8"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
@@ -2648,7 +2711,7 @@ mod consensus_params_id_tests {
         // 2026-08-18. Note the object: a node fingerprints `Params::from(NetworkId)`, which is
         // `with_registered_models(TESTNET11_PARAMS)` — NOT the bare preset, whose id is a
         // different value entirely. Asserting on the preset would pass while the network forked.
-        const TESTNET11_LIVE_FINGERPRINT: &str = "49ff962891445eeef0411f6499561e8f00640339ad3cdb0ac306ad07ccf299db";
+        const TESTNET11_LIVE_FINGERPRINT: &str = "06285374aca22e781bd33368e51314f6c87cdd1c52ef36b0ba5dfc29d94dc9e8";
         let live: Params = crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11).into();
         assert_eq!(
             live.consensus_params_id().to_string(),

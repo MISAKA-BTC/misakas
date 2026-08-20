@@ -253,6 +253,66 @@ mod tests {
         assert!(matches!(err, PalwRcIdentityError::BaseAlreadyHasAMode), "got {err:?}");
     }
 
+    /// **The shipped PALW-RC network assembles, boots, and runs its own genesis block.**
+    ///
+    /// `palw_rc_params` is the preset ADR-0042 PR-10 asks for, and this is the check that it is a
+    /// network rather than a struct: the bundle validates, the cadence and the window inequality
+    /// both hold (the two independent refusals that made a new identity necessary), the genesis
+    /// artifact loads against its catalog, and the genesis block's registrations APPLY.
+    #[test]
+    fn the_shipped_palw_rc_network_boots_and_runs_its_genesis() {
+        use crate::palw_state_v2::PalwBondKeyV2;
+        use crate::tx::{TransactionId, TransactionOutpoint};
+
+        let catalog = catalog();
+        let bond = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xB0), index: 0 });
+        let params = crate::config::params::palw_rc_params(
+            h64(1),
+            catalog.root(),
+            h64(0xC0757),
+            CANONICAL,
+            h64(0xA7),
+            bond,
+            vec![7; 32],
+            vec![21; 8],
+        )
+        .expect("the RC network is a runnable ruleset");
+
+        // A new identity, and both reasons it had to be one.
+        assert_eq!(params.net.to_string(), "testnet-12");
+        assert_eq!(params.blockrate.target_time_per_block, crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
+        assert!(params.palw_credit.is_none(), "a V2 network installs no V1 fence");
+        assert!(!params.pow_palw_activation.is_active(u64::MAX - 1), "and activates no V1 PALW PoW");
+
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("not V2") };
+        assert!(
+            params.blockrate.finality_depth < bundle.state.window_challenge(),
+            "finality_depth {} must be under w_challenge {} — the rule testnet's 10-BPS depth fails by orders of magnitude",
+            params.blockrate.finality_depth,
+            bundle.state.window_challenge()
+        );
+
+        // Its genesis is its OWN block: a different marker means a different merkle root means a
+        // different hash from every other network's.
+        assert_ne!(params.genesis.hash, crate::config::params::TESTNET11_PARAMS.genesis.hash);
+        assert_ne!(params.genesis.hash, crate::config::params::MAINNET_PARAMS.genesis.hash);
+
+        // The artifact loads against its catalog, and the genesis block's registrations apply —
+        // a network whose genesis registers nothing boots and then cannot produce.
+        verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects).expect("the genesis artifact loads");
+        let point = PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0 };
+        let (state, _) = crate::palw_state_v2::apply_palw_transition_v2(
+            &PalwChainStateV2::genesis(),
+            &bundle.state,
+            &point,
+            &bundle.genesis_objects,
+            None,
+        )
+        .expect("the genesis registrations apply");
+        assert_eq!(state.class_share_permille(&h64(1)), Some(1000), "the liveness floor holds the whole table");
+        assert!(state.bond(&bond).is_some(), "and there is a bond to execute under");
+    }
+
     /// **Nothing here ships a preset.** The assembly exists so the RC genesis is a checked
     /// artifact, not so a network quietly acquires one — every shipped preset is still fence-free.
     #[test]
