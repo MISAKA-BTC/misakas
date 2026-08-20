@@ -29,6 +29,7 @@ use kaspa_consensus_core::{
         compute_signer_audit_chain_entry, signature_fingerprint,
     },
     palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_MLDSA87_SPEND_CONTEXT},
     tx::TransactionOutpoint,
 };
 use kaspa_hashes::Hash64;
@@ -459,8 +460,14 @@ impl SignerState {
         // that defeats the whole point of the strict signer. So the three overlay
         // contexts are RESERVED to their matching purpose, and a Transaction may not
         // borrow any of them (it carries its own tx-domain context).
-        const RESERVED_CONTEXTS: [&[u8]; 4] =
-            [ATTESTATION_MLDSA87_CONTEXT, UNBOND_REQUEST_CONTEXT, TAKEOVER_TOKEN_CONTEXT, PALW_ATTEMPT_V2_MLDSA87_CONTEXT];
+        const RESERVED_CONTEXTS: [&[u8]; 6] = [
+            ATTESTATION_MLDSA87_CONTEXT,
+            UNBOND_REQUEST_CONTEXT,
+            TAKEOVER_TOKEN_CONTEXT,
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+            PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+        ];
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
@@ -468,6 +475,15 @@ impl SignerState {
             // The PALW attempt context is reserved exactly like the overlay three: a purpose that
             // could borrow it would mint block-production signatures past the journal below.
             SigningPurpose::PalwAttemptV2 => Some(PALW_ATTEMPT_V2_MLDSA87_CONTEXT),
+            // The two free-prompt contexts are reserved the same way (ADR-0044 FP-08). Neither
+            // runs a journal — the commitment has no per-challenge uniqueness to guard (the
+            // chain refuses duplicate claim ids idempotently), and a per-(claim, quantum) spend
+            // journal would strand an honest producer whose fork's beacon diverged; the chain's
+            // branch-scoped spent set is the double-spend guard. The RESERVATION still matters:
+            // without it a Transaction request could borrow either context and mint a signature
+            // that verifies as a consensus commitment or a block-producing spend.
+            SigningPurpose::PalwFpCommitmentV3 => Some(PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT),
+            SigningPurpose::PalwFpSpendV3 => Some(PALW_FP_V3_MLDSA87_SPEND_CONTEXT),
             SigningPurpose::Transaction => None,
         };
         match required_ctx {
@@ -566,7 +582,9 @@ impl SignerState {
             SignerMessageDigest::Attestation(h) | SignerMessageDigest::Unbond(h) | SignerMessageDigest::TakeoverToken(h) => {
                 h.as_bytes().to_vec()
             }
-            SignerMessageDigest::PalwAttemptV2(h) => h.as_bytes().to_vec(),
+            SignerMessageDigest::PalwAttemptV2(h)
+            | SignerMessageDigest::PalwFpCommitmentV3(h)
+            | SignerMessageDigest::PalwFpSpendV3(h) => h.as_bytes().to_vec(),
         };
         let sig = key.sign_with_context(&digest, &req.context);
 
@@ -975,6 +993,83 @@ mod tests {
             s.handle_request(&legit, Hash::default(), 1000).result.is_ok(),
             "a well-formed Unbond under its own context still signs"
         );
+    }
+
+    /// ADR-0044 (FP-08): the two free-prompt purposes hold the same C-02 discipline — each is
+    /// bound to its own reserved context, neither may be borrowed, neither runs a journal (the
+    /// commitment has nothing per-challenge to guard; a spend journal would strand honest
+    /// producers on diverged forks — the doc on the purpose enum carries the argument), and a
+    /// legitimate request under its own context signs and RE-SIGNS (idempotence is the point).
+    #[test]
+    fn fp_purposes_are_context_bound_and_journal_free() {
+        let k = key(0x43);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("fp-c02"), Hash::default()).unwrap();
+        let claim_id = Hash64::from_bytes([0xFC; 64]);
+        let spend_id = Hash64::from_bytes([0xF5; 64]);
+
+        // A commitment purpose may not borrow the ATTEMPT context (that would mint a
+        // block-production signature past the attempt journal)…
+        let borrow_attempt = SignerRequest {
+            request_id: 10,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwFpCommitmentV3,
+            context: PALW_ATTEMPT_V2_MLDSA87_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwFpCommitmentV3(claim_id),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&borrow_attempt, Hash::default(), 1000).result.is_err());
+
+        // …a Transaction may not borrow either FP context…
+        for (id, ctx) in [(11u64, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT), (12, PALW_FP_V3_MLDSA87_SPEND_CONTEXT)] {
+            let forged = SignerRequest {
+                request_id: id,
+                validator_id: vid,
+                purpose: SigningPurpose::Transaction,
+                context: ctx.to_vec(),
+                message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0x66; 64])),
+                metadata: SignerMetadata::None,
+            };
+            assert!(s.handle_request(&forged, Hash::default(), 1000).result.is_err(), "tx may not borrow an FP context");
+        }
+
+        // …the two FP contexts may not serve each other (a spend is not a commitment)…
+        let crossed = SignerRequest {
+            request_id: 13,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwFpSpendV3,
+            context: PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwFpSpendV3(spend_id),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&crossed, Hash::default(), 1000).result.is_err());
+
+        // …and both purposes, under their own contexts, sign — twice, because re-signing an
+        // identical identity is legal here (no journal; the chain is the uniqueness authority).
+        for (base, purpose, ctx, digest) in [
+            (
+                20u64,
+                SigningPurpose::PalwFpCommitmentV3,
+                PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+                SignerMessageDigest::PalwFpCommitmentV3(claim_id),
+            ),
+            (30, SigningPurpose::PalwFpSpendV3, PALW_FP_V3_MLDSA87_SPEND_CONTEXT, SignerMessageDigest::PalwFpSpendV3(spend_id)),
+        ] {
+            for offset in 0..2u64 {
+                let legit = SignerRequest {
+                    request_id: base + offset,
+                    validator_id: vid,
+                    purpose,
+                    context: ctx.to_vec(),
+                    message_digest: digest.clone(),
+                    metadata: SignerMetadata::None,
+                };
+                assert!(
+                    s.handle_request(&legit, Hash::default(), 1000).result.is_ok(),
+                    "{purpose:?} under its own context signs (attempt {offset})"
+                );
+            }
+        }
     }
 
     #[test]

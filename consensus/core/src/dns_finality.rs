@@ -2710,6 +2710,23 @@ pub enum SigningPurpose {
     /// one-attempt-per-challenge through the [`PalwAttemptSignRecordV1`] journal.
     /// (Appended, so discriminants 0-3 are unchanged.)
     PalwAttemptV2 = 4,
+    /// PALW free-prompt execution commitment (ADR-0044, FP-08) — message digest is
+    /// [`crate::palw_freeprompt_v3::fp_claim_id_v3`]; context is
+    /// `crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`. **No journal, by
+    /// decision, not omission**: a commitment has no per-challenge uniqueness to guard — every
+    /// job is its own identity, and the chain refuses a duplicate claim id idempotently, so a
+    /// re-signed commitment mints nothing twice. (Appended; 0-4 unchanged.)
+    PalwFpCommitmentV3 = 5,
+    /// PALW free-prompt receipt-quantum spend (ADR-0044, FP-08) — message digest is
+    /// [`crate::palw_freeprompt_v3::fp_spend_id_v3`]; context is
+    /// `crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT`. **No journal here
+    /// either**, and this one is the considered call: a per-(claim, quantum) journal would look
+    /// like anti-double-spend hygiene, but the chain's branch-scoped spent set already IS the
+    /// guard (the UTXO analogy — a fork may legally spend the same quantum), and forks that
+    /// diverged before the draw slot carry DIFFERENT beacons, so the honest producer must sign
+    /// a second, different spend envelope to follow the winning fork. A journal would strand
+    /// exactly that producer. (Appended; 0-5 unchanged.)
+    PalwFpSpendV3 = 6,
 }
 
 /// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
@@ -2732,6 +2749,11 @@ pub enum SignerMessageDigest {
     /// 64-byte PALW V2 attempt id ([`crate::palw_attempt_v2::attempt_id_v2`]) — signing the
     /// identity signs the claim, and nothing outside the identity can ride on the signature.
     PalwAttemptV2(Hash64),
+    /// 64-byte free-prompt claim id ([`crate::palw_freeprompt_v3::fp_claim_id_v3`]) — same
+    /// principle: the identity is total over the commitment, so signing it signs everything.
+    PalwFpCommitmentV3(Hash64),
+    /// 64-byte free-prompt spend id ([`crate::palw_freeprompt_v3::fp_spend_id_v3`]).
+    PalwFpSpendV3(Hash64),
 }
 
 impl SignerMessageDigest {
@@ -2744,6 +2766,8 @@ impl SignerMessageDigest {
             SignerMessageDigest::Unbond(_) => SigningPurpose::Unbond,
             SignerMessageDigest::TakeoverToken(_) => SigningPurpose::TakeoverToken,
             SignerMessageDigest::PalwAttemptV2(_) => SigningPurpose::PalwAttemptV2,
+            SignerMessageDigest::PalwFpCommitmentV3(_) => SigningPurpose::PalwFpCommitmentV3,
+            SignerMessageDigest::PalwFpSpendV3(_) => SigningPurpose::PalwFpSpendV3,
         }
     }
 }
