@@ -463,7 +463,7 @@ mod tests {
 
         // 8. A frozen class admits no new blocks — certified receipts included; the freeze is
         //    the chain saying this class's arithmetic is in doubt.
-        let freeze = PalwConsensusObjectV2::ClassFrozen { class_id: h64(1) };
+        let freeze = crate::palw_state_v2::tests::freeze(h64(1));
         let (frozen, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[freeze], None).unwrap();
         assert_eq!(admit(&frozen, &ctx(7, 135, 7), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::ClassFrozen(h64(1)));
     }

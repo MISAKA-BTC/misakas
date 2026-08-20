@@ -352,6 +352,51 @@ impl PalwStateParamsV2 {
 /// `⌊β · pwu / 1000⌋` — THE definition of an immature claim's live contribution. Floor, so the
 /// immature side is never rounded up into weight nobody earned; every node computes the same
 /// integer or the chain forks on a rounding mode.
+/// The structural half of a class-contradiction proof — everything a PURE transition can decide
+/// about whether a freeze is earned (gate item 12, ADR-0027 §5).
+///
+/// Signature verification is deliberately NOT here, for the reason `BondRegistered` states: the
+/// key registry is chain state the acceptance layer owns, and crypto lives outside
+/// `consensus-core`. `crate::palw_slash::adjudicate_class_contradiction_v1` is the whole
+/// adjudication, run where a verifier is in hand; this is the subset the state machine must not
+/// admit a freeze without, so that a block carrying a well-formed-looking but empty certificate
+/// cannot halt a class on its own.
+///
+/// The three facts:
+///
+/// 1. **The certificate is about THIS class.** `runtime_class_id` and `execution_class_id` are one
+///    namespace (ADR-0038), so the comparison is direct. Without it, evidence about any class
+///    could freeze any other — including a real contradiction in a disposable class being used to
+///    freeze the liveness floor.
+/// 2. **Both attestations bind the certificate's own job context.** A pair that talks about two
+///    different jobs is two facts, not a contradiction.
+/// 3. **They actually disagree.** Two attestations that match are a class working correctly; a
+///    freeze on them would let anyone halt a class by quoting it agreeing with itself.
+pub fn check_class_contradiction_shape_v2(
+    class_id: Hash64,
+    certificate: &crate::palw_slash::PalwClassContradictionCertificateV1,
+) -> Result<(), PalwStateV2Error> {
+    if certificate.version != crate::palw_slash::PALW_S_OBJECT_VERSION_V3 {
+        return Err(PalwStateV2Error::ContradictionNotProven("the certificate is of an unsupported version"));
+    }
+    if certificate.job_context.runtime_class_id != class_id {
+        return Err(PalwStateV2Error::ContradictionNamesAnotherClass {
+            frozen: class_id,
+            evidenced: certificate.job_context.runtime_class_id,
+        });
+    }
+    let context_hash = certificate.job_context.context_hash();
+    if certificate.attestation_a.job_context_hash != context_hash || certificate.attestation_b.job_context_hash != context_hash {
+        return Err(PalwStateV2Error::ContradictionNotProven("an attestation binds a different job context"));
+    }
+    let same_logits = certificate.attestation_a.full_logits_trace_root == certificate.attestation_b.full_logits_trace_root;
+    let same_committed = certificate.attestation_a.committed_root == certificate.attestation_b.committed_root;
+    if same_logits && same_committed {
+        return Err(PalwStateV2Error::ContradictionNotProven("the two attestations agree — there is no contradiction to act on"));
+    }
+    Ok(())
+}
+
 /// Whether a claim record is a free-prompt commitment abandoned at `BindTimeout` whose
 /// collateral hold has not yet elapsed at `at_daa` (audit C5, free-prompt half).
 ///
@@ -700,12 +745,35 @@ pub enum PalwConsensusObjectV2 {
         /// whoever may register a class may fund it, and nobody else may move a permille.
         share_permille: u16,
     },
+    /// **The emergency off-switch, and it carries its own proof (gate item 12).**
+    ///
+    /// This used to be `ClassFrozen { class_id }` — a bare instruction any block's object list
+    /// could contain, checked only for "the class exists and is Active". A network running it
+    /// could be halted by one block naming the liveness floor: freeze BASE-0 and no class can
+    /// produce, which is the whole chain. An off-switch anyone may pull is not a safety
+    /// mechanism, it is the attack it was built to survive.
+    ///
+    /// The freeze is OBJECTIVE instead (ADR-0027 §5, the gate ledger §2): the evidence is a
+    /// class-contradiction certificate — two attestations binding one job context under one
+    /// class, disagreeing about what that job produced. That is the class's own determinism
+    /// claim refuted by its own participants, and it needs no governance step because nobody
+    /// decided it. The transition checks the structural half here; signatures are the acceptance
+    /// layer's, exactly as they are for `BondRegistered`.
     ClassFrozen {
         class_id: Hash64,
+        certificate: crate::palw_slash::PalwClassContradictionCertificateV1,
     },
-    ClassUnfrozen {
-        class_id: Hash64,
-    },
+    // **There is deliberately no `ClassUnfrozen`, and its absence is the design.**
+    //
+    // The variant that stood here accepted `{ class_id }` with no evidence and no authority, so
+    // the pair composed into a switch anyone could flip in either direction. The gate ledger's
+    // rule is that re-activation "re-runs the full §12 gate from zero-credit" — a coordinated
+    // release action with an audit trail, not something a block can assert. And a chain-level
+    // unfreeze is the freeze's own undoing: it turns an objective, permanent consequence into a
+    // temporary one, which is exactly what an attacker holding the emit path would want. A class
+    // whose determinism has been refuted ON THIS CHAIN stays refuted; bringing the model back
+    // means registering a NEW class id, with its own catalog entry and registration — which IS
+    // the audit trail the ledger asks for, expressed as chain state rather than a promise.
     PanelBound {
         claim: Hash64,
         anchor: Hash64,
@@ -855,6 +923,10 @@ pub enum PalwStateV2Error {
     ZeroQuanta,
     #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
     NonUniformQuanta { pwu: u64, quanta: u32 },
+    #[error("class {frozen} cannot be frozen on evidence about class {evidenced}")]
+    ContradictionNamesAnotherClass { frozen: Hash64, evidenced: Hash64 },
+    #[error("the class-contradiction certificate proves nothing: {0}")]
+    ContradictionNotProven(&'static str),
     #[error(
         "free-prompt claim {0} carries a null execution root — the court would have nothing to bind a refutation to,          so this claim could never be convicted of arithmetic fraud (audit C3, free-prompt lane)"
     )]
@@ -2221,27 +2293,19 @@ fn apply_object(
             // field, two slots — a second declared number would be a second fact to drift.
             builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
         }
-        PalwConsensusObjectV2::ClassFrozen { class_id } => {
+        PalwConsensusObjectV2::ClassFrozen { class_id, certificate } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
-            match record.status {
-                PalwClassStatusV2::Frozen { .. } => return Err(PalwStateV2Error::FrozenClass(*class_id)),
-                PalwClassStatusV2::Active => {
-                    let mut frozen = record;
-                    frozen.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
-                    builder.write_class(*class_id, Some(frozen));
-                }
+            if let PalwClassStatusV2::Frozen { .. } = record.status {
+                return Err(PalwStateV2Error::FrozenClass(*class_id));
             }
-        }
-        PalwConsensusObjectV2::ClassUnfrozen { class_id } => {
-            let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
-            match record.status {
-                PalwClassStatusV2::Active => return Err(PalwStateV2Error::ClassNotFrozen(*class_id)),
-                PalwClassStatusV2::Frozen { .. } => {
-                    let mut thawed = record;
-                    thawed.status = PalwClassStatusV2::Active;
-                    builder.write_class(*class_id, Some(thawed));
-                }
-            }
+            // The structural half of the proof, checked HERE because it is the half a pure
+            // transition can decide. Signatures are the acceptance layer's, the same split
+            // `BondRegistered` uses — and `adjudicate_class_contradiction_v1` is the function
+            // that runs the whole thing where a verifier is in hand.
+            check_class_contradiction_shape_v2(*class_id, certificate)?;
+            let mut frozen = record;
+            frozen.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
+            builder.write_class(*class_id, Some(frozen));
         }
         PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats } => {
             if seats.is_empty() {
@@ -2914,7 +2978,7 @@ impl PalwStateBookV2 {
 // ---------------------------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
     use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -2928,6 +2992,34 @@ mod tests {
 
     /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
     /// state machine mint the id — the same path a real registration takes.
+    /// A structurally-valid class-contradiction certificate naming `class_id`: two attestations
+    /// on one job context that disagree about what the job produced. Signature verification is
+    /// the acceptance layer's, so the fixture carries the shape the transition actually reads.
+    pub(crate) fn contradiction(class_id: Hash64) -> crate::palw_slash::PalwClassContradictionCertificateV1 {
+        let mut ctx = crate::palw_step_refute::tests::skeleton_refutation().binding.job_context;
+        ctx.runtime_class_id = class_id;
+        let context_hash = ctx.context_hash();
+        let att = |root: Hash64| crate::palw_slash::PalwExecutionAttestationV1 {
+            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+            executor_id: h64(0xE1),
+            job_context_hash: context_hash,
+            full_logits_trace_root: root,
+            committed_root: root,
+            bond_outpoint: bond_key(1).0,
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        crate::palw_slash::PalwClassContradictionCertificateV1 {
+            version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,
+            attestation_a: att(h64(0x1A)),
+            attestation_b: att(h64(0x2B)),
+            job_context: ctx,
+        }
+    }
+
+    pub(crate) fn freeze(class_id: Hash64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassFrozen { class_id, certificate: contradiction(class_id) }
+    }
+
     fn op_key(v: u64) -> Vec<u8> {
         vec![v as u8; 8]
     }
@@ -3364,7 +3456,7 @@ mod tests {
         ));
 
         // Frozen class refuses the attempt.
-        let (frozen, _) = apply(&s1, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1) }], None);
+        let (frozen, _) = apply(&s1, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
         assert!(matches!(
             apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1))),
             Err(PalwStateV2Error::FrozenClass(_))
@@ -3612,7 +3704,7 @@ mod tests {
         let (with_claim, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
         let (with_retire, _) =
             apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1) }], None);
-        let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1) }], None);
+        let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
         let (position_only, _) = apply(&base, &p, &ctx(2, 101, 2), &[], None);
 
         let roots = [
@@ -3858,7 +3950,7 @@ mod tests {
             initial_target: boot,
             share_permille: 500,
         });
-        objects.push(PalwConsensusObjectV2::ClassFrozen { class_id: h64(2) });
+        objects.push(freeze(h64(2)));
         let (s1, _) = apply(&genesis, &p_half, &ctx(1, 100, 1), &objects, None);
         // ADR-0045 Decision 3: freeze moves NO share — the table is the allocation of record,
         // and absence is the census's business, not a mutation's.
@@ -4217,6 +4309,87 @@ mod tests {
             None,
         );
         assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
+    }
+
+    /// **Gate item 12: the emergency off-switch is objective, and nobody can pull it by hand.**
+    ///
+    /// The variant this replaces was `ClassFrozen { class_id }` — a bare instruction, checked
+    /// only for "the class exists and is Active". On a running network that is a halt button with
+    /// no lock on it: freeze the liveness floor and no class can produce, which is the whole
+    /// chain, at the cost of one block's object list. An off-switch anyone may pull is not a
+    /// safety mechanism; it is the attack it was built to survive.
+    ///
+    /// The freeze needs the class's own determinism claim refuted BY ITS OWN PARTICIPANTS — two
+    /// attestations on one job context that disagree about what that job produced. Nobody decides
+    /// that, which is why it needs no governance step and why it cannot be manufactured against a
+    /// class that is behaving.
+    #[test]
+    fn a_class_freezes_only_on_a_contradiction_about_itself() {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 100,
+        });
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+
+        // (a) Evidence about ANOTHER class cannot freeze this one. This is the liveness-floor
+        //     attack in its cheapest form: manufacture a real contradiction inside a disposable
+        //     class, then quote it at BASE-0.
+        let cross = PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: contradiction(h64(2)) };
+        let err = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[cross], None);
+        assert!(
+            matches!(err, Err(PalwStateV2Error::ContradictionNamesAnotherClass { frozen, evidenced }) if frozen == h64(1) && evidenced == h64(2)),
+            "got {err:?}"
+        );
+
+        // (b) Two attestations that AGREE are a class working correctly. Freezing on them would
+        //     let anyone halt a class by quoting it agreeing with itself.
+        let mut agreeing = contradiction(h64(1));
+        agreeing.attestation_b = agreeing.attestation_a.clone();
+        let err = apply_palw_transition_v2(
+            &base,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: agreeing }],
+            None,
+        );
+        assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
+
+        // (c) An attestation that binds a different job context is a second fact, not a
+        //     contradiction.
+        let mut foreign_job = contradiction(h64(1));
+        foreign_job.attestation_b.job_context_hash = h64(0xDEAD);
+        let err = apply_palw_transition_v2(
+            &base,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: foreign_job }],
+            None,
+        );
+        assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
+
+        // (d) The real thing freezes, and the freeze is what every consumer already reads: the
+        //     class stops producing, stops being retargeted, and stops admitting attempts.
+        let (frozen, _) = apply(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
+        assert!(matches!(frozen.class(&h64(1)).unwrap().status, PalwClassStatusV2::Frozen { since_daa: 101 }));
+        let refused = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1)));
+        assert!(matches!(refused, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(1)), "got {refused:?}");
+
+        // (e) One-way. There is no edge back to Active anywhere in this machine — a chain-level
+        //     unfreeze would turn an objective, permanent consequence into a temporary one, which
+        //     is precisely what an attacker holding the emit path would want. Freezing again is
+        //     refused rather than being a no-op, so a second certificate cannot quietly restamp
+        //     `since_daa` and move the record's own history.
+        let again = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[freeze(h64(1))], None);
+        assert!(matches!(again, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(1)), "got {again:?}");
+        // The share stays where it was: ADR-0045 Decision 3 keeps the table the allocation of
+        // record, and absence is the census's business.
+        assert_eq!(frozen.class_share_permille(&h64(1)), base.class_share_permille(&h64(1)));
     }
 
     /// **A free-prompt claim the court could never bind a refutation to is refused (audit C3,

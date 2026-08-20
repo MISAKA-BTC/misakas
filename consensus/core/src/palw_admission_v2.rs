@@ -682,7 +682,7 @@ mod tests {
 
         // 4b. Frozen class.
         let (frozen, _) =
-            apply_palw_transition_v2(&state, &state_params(), &c, &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1) }], None)
+            apply_palw_transition_v2(&state, &state_params(), &c, &[crate::palw_state_v2::tests::freeze(h64(1))], None)
                 .unwrap();
         assert!(matches!(admit(&frozen, &ctx(3, 102, 3), &attempt(100, 1)), Err(PalwAdmissionV2Error::ClassFrozen(_))));
 
