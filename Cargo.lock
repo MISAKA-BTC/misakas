@@ -5866,6 +5866,7 @@ dependencies = [
  "faster-hex 0.9.0",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-pq-validator-core",
  "rand 0.8.6",
  "serde",
  "serde_json",
