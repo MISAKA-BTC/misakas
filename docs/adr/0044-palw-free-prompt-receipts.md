@@ -252,7 +252,10 @@ eligible(claim, q)     ⟺ palw_ticket_admits_v1(ticket, receipt_target[class])
 - Uniform quanta make the lottery math trivial (flat per-class target, the existing 128-bit
   ticket space and `palw_ticket_admits_v1` reused as-is), give a big job and ten small jobs the
   same expected block count per CU, and bound the per-receipt jackpot (`max_quanta_per_receipt`)
-  — the draft's `MAX_PWU_PER_RECEIPT` split, made the primitive instead of the patch.
+  — the draft's `MAX_PWU_PER_RECEIPT` split, made the primitive instead of the patch. A
+  sub-quantum job (`cu < quantum_cu`) is not carried on chain at all: the state refuses a
+  zero-quanta commitment, because a claim that can never act is exposure reserved for nothing
+  and dead weight in every root.
 - Expected value is linear in certified CU; variance favors nobody. Pooling needs no protocol:
   a gateway pointing at a shared bond *is* a pool (the bond owner is the accountable party).
 
@@ -288,12 +291,20 @@ the candidate chain's `PalwChainStateV2`:
 1. claim exists and is a free-prompt claim in Final
 2. quantum_index < quanta(claim), and not in the claim's spent set
 3. beacon_block == beacon(final_daa + receipt_maturity_daa) on this chain (beacon fact checked)
-4. ticket(claim, q) admits under receipt_target[class] as of the beacon's chain point
+4. ticket(claim, q) admits under receipt_target[class] at the CANDIDATE point
 5. block DAA within [beacon_daa, beacon_daa + receipt_use_window_daa]
 6. producer_bond == the claim's executor bond, Active, not in withdrawal
 7. the bond record's pubkey == the carried producer_pubkey
 8. class Active (not frozen) at the candidate point
 ```
+
+Item 4's target point, precisely: the BEACON fixes the draw (historical, grind-priced); the
+TARGET is the spending block's own difficulty context, read at the candidate point like every
+difficulty check on this chain — past targets are not state. A marginal ticket can flip
+eligibility across a retarget boundary inside its use window, deterministically and identically
+on every node, with no grinding surface. (An earlier draft of this ADR said "as of the beacon's
+chain point"; the implementation is where that was discovered to demand a target history nobody
+keeps, and this text now matches the code.)
 
 Weight: a receipt block contributes `pwu_per_quantum` at **`Final` stage immediately** — safe
 weight at acceptance. Everything the block's validity rests on is prior chain fact; there is
@@ -432,6 +443,17 @@ palw-worker v3-job  ──▶  answer (output ids + rendered bytes, returned to 
 - The gateway never re-runs the inference for mining. There is no second lane. That property is
   testable: the worker executes once per job id, and the commitment's roots are byte-derived from
   the same execution that produced the returned answer.
+- Two properties that must not be conflated (the gateway smoke's first draft did, instructively):
+  re-asking the same conversation yields the SAME answer — F1, the fresh `job_nonce` never
+  touches the model's input — and a DIFFERENT trace root, because every trace event binds the
+  job id (nonce included). The second is the anti-replay binding: one job's trace can never be
+  presented as another's. "Same input, same trace" holds per job, never across jobs.
+- The v1 template is plain-marker text, deliberately: the pinned tokenizer runs with
+  `parse_special = false` (untrusted text must never smuggle control tokens), so a ChatML
+  template would tokenize its own markers as prose. Consequence, measured: the model rarely
+  emits EOG under it, answers end at the decode ceiling, and the gateway's display-layer stop
+  guard trims presentation while the commitment covers every executed token. A ChatML profile
+  with segment-wise special tokenization is a future class identity.
 
 ## Invariants
 
@@ -490,10 +512,14 @@ any point before a dedicated RC/devnet preset PR.
 | **FP-05** | bundle extension + startup invariants + ruleset id | invariant-refusal table extended; preset fingerprints byte-stable |
 | **FP-06** | worker v3: tokenize mode, v3-job (EOG stop, answer in response), new shape/profile ids | one execution yields answer + projection; v2 golden gate untouched |
 | **FP-07** | `misaka-palw-gateway`: /v1/chat/completions → template → tokenize → job → answer + commitment emission | F1 test: bytes to the model == canonical tokens of the user request, nothing else |
-| **FP-08** | pipeline wiring: objects from carriage, beacon facts from stores, template/lane selection, store layer (shared with V2's own pending wiring) | devnet blocks of both kinds validate cross-node |
+| **FP-08** | pipeline wiring: objects from carriage, beacon facts from stores, seam swap to the two-id set, trace DA retention + the signer/executor rail, store layer (shared with V2's own pending wiring) | devnet blocks of both kinds validate cross-node |
 | **FP-09** | fleet drill + measured params + RC/devnet preset | soak outputs fill the bundle |
 
-This branch lands FP-00 through FP-05 (consensus substrate) and begins FP-06/07 (sidecars).
+This branch lands FP-00 through FP-07. FP-06/07 are measured on the real pinned model
+(Qwen3.5-2B): one inference produced the user's answer AND the commitment roots; the Text arm
+and the TokenIds replay arm reached byte-identical roots; repeated runs were byte-identical on
+every consensus-visible field; the OpenAI-compatible surface answered with the roots and the CU
+in-band and the artifact in the outbox.
 
 ## What this ADR does not decide
 

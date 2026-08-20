@@ -170,7 +170,7 @@ fn hex64(s: &str, what: &str) -> Hash64 {
 }
 
 fn hex_bytes(s: &str, what: &str) -> Vec<u8> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         die(format!("{what} is not even-length hex"));
     }
     let mut out = vec![0u8; s.len() / 2];
