@@ -219,8 +219,24 @@ honest "red (integration), lands in PR-N."
   `palw_v2_bisection_challenger_timeout_defaults`; `palw_v2_bisection_responder_timeout_defaults`;
   `palw_v2_bisection_midpoint_must_be_in_commitment`; `palw_v2_ladder_depth_covers_measured_trace`
   (rounds = `ceil(log2(step_leaf_count)) + terminal`).
-- **Status:** red (mixed: schedule-depth is unit, terminal/default/midpoint are integration).
-  **Greens in:** PR-07. **ADR-0042:** Decision 8.
+- **Status:** **GREEN (unit) 2026-08-20** — all five named tests exist and pass in `palw_bisect`.
+  The row read "red (mixed: schedule-depth is unit, terminal/default/midpoint are integration)";
+  the integration framing was wrong, because `PalwBisectLadderV1` IS the machine — termination,
+  the two defaults and the midpoint rule are properties of it, and a pipeline harness would only
+  have wrapped them. Termination is asserted over EVERY divergence in a 16-wide space and the
+  located index is checked to be the one the verdicts steered to (a fixture that terminated
+  anywhere would have proved nothing); the two defaults assert the SILENT party by name and the
+  absorbing transition (a no-show that left the ladder movable was the 2026-08-17 finding); the
+  midpoint rule sweeps seven wrong indices plus both endpoint echoes and asserts the refused move
+  mutates nothing; the depth test walks real ladders up to `PALW_BISECT_MAX_SPACE` and compares
+  the rungs taken against `ceil(log2(N))` measured from the walk rather than a restated formula,
+  then pins `PalwCourtParamsV2::bisection_rounds` to the same number so a ruleset cannot declare a
+  shallower ladder than the one that runs. Verified non-vacuous by injection: never reaching
+  `Terminal` fails the termination test with `RoundBudgetExceeded`, a no-show that does not
+  abandon fails the responder default, and dropping the midpoint comparison fails the midpoint
+  test. What remains for PR-07 is the terminal OPENING's consumer (the court reading a located
+  index into a verdict), which is `adjudicate_court_close_v2`'s side, not the ladder's.
+  **ADR-0042:** Decision 8.
 
 ### P0-10 — one bond backs unbounded immature work
 - **Invariant:** collateral bounds work at risk.

@@ -507,6 +507,262 @@ mod tests {
         PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, space_size, 100, 200).unwrap()
     }
 
+    /// Walk a ladder to its terminal, driving the interval toward `divergence`. Returns the
+    /// ladder at whatever state the walk reached — the tests below assert what that state is.
+    fn walk_to_terminal(space_size: u64, divergence: u64) -> PalwBisectLadderV1 {
+        let mut ladder = open_ladder(space_size);
+        let mut accepted = 200u64;
+        while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
+            let round = ladder.round();
+            let mid = ladder.expected_midpoint().expect("a ladder awaiting disclosure has a midpoint");
+            accepted += 1;
+            ladder
+                .apply_disclosure(
+                    &PalwBisectDisclosureV1 {
+                        version: PALW_BISECT_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round,
+                        midpoint: mid,
+                        // Distinct per rung: the endpoint-repeat rule refuses a state that echoes
+                        // either anchor, and a fixture that tripped it would be testing that rule
+                        // instead of this one.
+                        mid_state: h64(0x40u8.wrapping_add(round as u8)),
+                    },
+                    accepted,
+                    W_ROUND,
+                )
+                .expect("the disclosure is on turn, on round and on midpoint");
+            accepted += 1;
+            // "Agree" means the divergence is PAST the midpoint. Steering by the real divergence
+            // is what makes the located index meaningful rather than an artifact of the fixture.
+            ladder
+                .apply_verdict(
+                    &PalwBisectVerdictV1 {
+                        version: PALW_BISECT_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round,
+                        agree: divergence >= mid,
+                    },
+                    accepted,
+                    W_ROUND,
+                )
+                .expect("the verdict is on turn and on round");
+        }
+        ladder
+    }
+
+    /// **P0-9 item 1: the ladder REACHES a terminal, and the terminal is one step wide.**
+    ///
+    /// A bisection that narrows forever adjudicates nothing — the challenge window closes with
+    /// the dispute open, which under ADR-0038's ramp pins the block at `Provisional` and lets an
+    /// unfalsifiable accusation deny an honest producer its weight indefinitely. What the court
+    /// owes is termination at a SINGLE index, because a one-step interval is the only thing the
+    /// arithmetic layer can adjudicate without the model.
+    #[test]
+    fn palw_v2_bisection_reaches_terminal_verdict() {
+        // Every divergence in a 16-wide space, so the property is the ladder's and not one
+        // fixture's luck.
+        for divergence in 0..16u64 {
+            let ladder = walk_to_terminal(16, divergence);
+            assert_eq!(ladder.turn(), PalwBisectTurnV1::Terminal, "divergence {divergence}: the ladder must terminate");
+            let (lo, hi) = ladder.interval();
+            assert_eq!(hi - lo, 1, "divergence {divergence}: a terminal interval is one index wide");
+            assert_eq!(ladder.terminal_index(), Some(lo), "divergence {divergence}: the terminal names its index");
+            assert_eq!(lo, divergence, "divergence {divergence}: the ladder located the index the verdicts steered it to");
+            // And the ladder is closed to further ladder moves — the terminal opening is the
+            // court's business, not another rung.
+            let round = ladder.round();
+            let mut after = ladder.clone();
+            assert!(matches!(
+                after.apply_disclosure(
+                    &PalwBisectDisclosureV1 {
+                        version: PALW_BISECT_OBJECT_VERSION_V1,
+                        session_id: after.session_id(),
+                        round,
+                        midpoint: lo,
+                        mid_state: h64(0xEE),
+                    },
+                    900,
+                    W_ROUND
+                ),
+                Err(PalwBisectError::AlreadyTerminal)
+            ));
+        }
+    }
+
+    /// **P0-9 item 2: the responder's silence decides the dispute against it.**
+    ///
+    /// Liveness, not soundness: a responder that simply stops answering must not be able to hold
+    /// a dispute open past the challenge window. Silence past a rung deadline is the objective
+    /// offense, and the ladder must end — a no-show that left the machine movable was the shape
+    /// the 2026-08-17 re-audit found (a game with no terminal state).
+    #[test]
+    fn palw_v2_bisection_responder_timeout_defaults() {
+        let mut ladder = open_ladder(16);
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::AwaitDisclosure, "the responder moves first");
+        let deadline = 200; // `open`'s `first_deadline_daa`
+
+        // Before the deadline there is no offense: an early accusation would let a challenger
+        // win by being impatient.
+        assert!(matches!(
+            ladder.declare_no_show(deadline),
+            Err(PalwBisectError::DeadlineNotReached { deadline: 200, observed: 200 })
+        ));
+
+        let offense = ladder.declare_no_show(deadline + 1).expect("silence past the deadline is an offense");
+        assert_eq!(offense.silent_party, PalwBisectPartyV1::Responder);
+        assert_eq!((offense.deadline_daa, offense.observed_daa), (deadline, deadline + 1));
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::Abandoned, "the dispute is decided, not merely annotated");
+
+        // Absorbing: no later move, and no second charge for the same silence.
+        assert!(matches!(ladder.declare_no_show(deadline + 99), Err(PalwBisectError::AlreadyTerminal)));
+        assert!(matches!(
+            ladder.apply_disclosure(
+                &PalwBisectDisclosureV1 {
+                    version: PALW_BISECT_OBJECT_VERSION_V1,
+                    session_id: ladder.session_id(),
+                    round: 0,
+                    midpoint: 8,
+                    mid_state: h64(0x40),
+                },
+                deadline + 2,
+                W_ROUND
+            ),
+            Err(PalwBisectError::AlreadyTerminal)
+        ));
+    }
+
+    /// **P0-9 item 3: the challenger's silence decides it the other way.**
+    ///
+    /// The mirror matters on its own: a challenger that opens a dispute and goes quiet is the
+    /// cheapest denial-of-service against an honest producer's maturity, so the default must run
+    /// in both directions and name the right party. Charging the wrong one would slash the honest
+    /// side for its opponent's silence.
+    #[test]
+    fn palw_v2_bisection_challenger_timeout_defaults() {
+        let mut ladder = open_ladder(16);
+        ladder
+            .apply_disclosure(
+                &PalwBisectDisclosureV1 {
+                    version: PALW_BISECT_OBJECT_VERSION_V1,
+                    session_id: ladder.session_id(),
+                    round: 0,
+                    midpoint: 8,
+                    mid_state: h64(0x40),
+                },
+                210,
+                W_ROUND,
+            )
+            .expect("the responder answers its rung");
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::AwaitVerdict, "now the challenger owes a move");
+
+        // The deadline is a fact about the chain and the registered window — neither party sets
+        // it (the re-audit's fix: a party that set its opponent's clock could win by expiry).
+        let deadline = 210 + W_ROUND;
+        assert!(matches!(ladder.declare_no_show(deadline), Err(PalwBisectError::DeadlineNotReached { .. })));
+
+        let offense = ladder.declare_no_show(deadline + 1).expect("the challenger's silence is an offense too");
+        assert_eq!(offense.silent_party, PalwBisectPartyV1::Challenger, "the SILENT party is charged, not the accused");
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::Abandoned);
+
+        // The two offenses are distinct objects, so a slash consumer can never confuse them.
+        let mut responder_side = open_ladder(16);
+        let responder_offense = responder_side.declare_no_show(201).expect("responder silence");
+        assert_ne!(
+            bisect_offense_id_v1(&offense),
+            bisect_offense_id_v1(&responder_offense),
+            "the two defaults must not share an offense id"
+        );
+    }
+
+    /// **P0-9 item 4: a disclosure must be about the midpoint the ladder is at.**
+    ///
+    /// Without it the responder chooses which index the ladder narrows toward, so the located
+    /// step is a function of what the accused decided to talk about rather than of where the
+    /// executions actually diverge — a court that convicts on an index the responder picked is
+    /// no court at all. The endpoint-repeat rule is asserted beside it because the two together
+    /// are what bind a rung: the right INDEX, and a state that is not one the responder already
+    /// committed to.
+    #[test]
+    fn palw_v2_bisection_midpoint_must_be_in_commitment() {
+        let mut ladder = open_ladder(16);
+        let expected = ladder.expected_midpoint().expect("a fresh ladder has a midpoint");
+        assert_eq!(expected, bisect_midpoint_v1(0, 16));
+
+        let disclose = |midpoint: u64, mid_state: Hash64| PalwBisectDisclosureV1 {
+            version: PALW_BISECT_OBJECT_VERSION_V1,
+            session_id: ladder.session_id(),
+            round: 0,
+            midpoint,
+            mid_state,
+        };
+        for wrong in [0u64, 1, expected - 1, expected + 1, 15, 16, u64::MAX] {
+            let mut probe = ladder.clone();
+            assert!(
+                matches!(
+                    probe.apply_disclosure(&disclose(wrong, h64(0x40)), 210, W_ROUND),
+                    // A wrong-midpoint "disclosure" is not a protocol move at all, which is the
+                    // error's own wording — the index is the move's identity, not a parameter.
+                    Err(PalwBisectError::TurnMismatch { expected: "the pinned midpoint", .. })
+                ),
+                "midpoint {wrong} must be refused; only {expected} is the ladder's own"
+            );
+            assert_eq!(probe, ladder, "a refused disclosure moves nothing");
+        }
+
+        // A state that repeats either anchor is refused too: an interval whose ends agree contains
+        // no divergence, so a ladder driven onto one has disproved its own dispute.
+        for repeat in [h64(1), h64(2)] {
+            let mut probe = ladder.clone();
+            assert!(probe.apply_disclosure(&disclose(expected, repeat), 210, W_ROUND).is_err(), "an endpoint echo must be refused");
+        }
+
+        ladder.apply_disclosure(&disclose(expected, h64(0x40)), 210, W_ROUND).expect("the ladder's own midpoint is accepted");
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::AwaitVerdict);
+    }
+
+    /// **P0-9 item 5: the ladder is deep enough for the traces the network really registers.**
+    ///
+    /// The measurement `d1891333` is the origin of this row: a fixed 10-round ladder cannot reach
+    /// a step inside the pinned model's trace, so deep fraud was structurally un-prosecutable —
+    /// the court would run out of rungs before it located anything. The rule is
+    /// `rounds = ceil(log2(step_leaf_count))`, and what this pins is that the machine's own budget
+    /// covers it for every space the catalog can legally register.
+    #[test]
+    fn palw_v2_ladder_depth_covers_measured_trace() {
+        // A bisection over N indices needs ceil(log2(N)) halvings. Asserted against the walk, not
+        // against a formula restated — a formula that agreed with a wrong implementation would
+        // prove nothing.
+        for space in [2u64, 3, 4, 5, 16, 17, 1_024, 4_096, 65_536, 1 << 20, PALW_BISECT_MAX_SPACE] {
+            let expected_rounds = space.next_power_of_two().trailing_zeros();
+            for divergence in [0, space / 3, space / 2, space - 1] {
+                let ladder = walk_to_terminal(space, divergence);
+                assert_eq!(ladder.turn(), PalwBisectTurnV1::Terminal, "space {space} divergence {divergence} must terminate");
+                assert!(
+                    ladder.round() <= expected_rounds,
+                    "space {space} divergence {divergence}: took {} rungs, ceil(log2) is {expected_rounds}",
+                    ladder.round()
+                );
+                assert!(
+                    ladder.round() <= PALW_BISECT_MAX_ROUNDS,
+                    "space {space}: the ladder's own budget must cover its own space"
+                );
+            }
+        }
+
+        // And the court's declared shape agrees with the machine: `PalwCourtParamsV2` derives its
+        // worst-case duration from the same ceil(log2), so a ruleset cannot claim a shallower
+        // ladder than the one that runs.
+        for leaves in [2u64, 1_024, 65_536, 1 << 20] {
+            let court = crate::palw_mode_v2::PalwCourtParamsV2::new(leaves, 20, 2).expect("a well-formed court");
+            assert_eq!(
+                court.bisection_rounds(),
+                leaves.next_power_of_two().trailing_zeros(),
+                "the ruleset's declared depth and the ladder's real depth are one number"
+            );
+        }
+    }
+
     #[test]
     fn bisect_domains_are_unique_across_all_palw_modules() {
         let mut seen = std::collections::HashSet::new();
