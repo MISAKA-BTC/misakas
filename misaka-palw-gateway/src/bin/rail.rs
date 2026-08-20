@@ -195,6 +195,14 @@ fn main() {
         commitment.job.class_id,
         Hash64::from_u64_word(0xCA7),
         Hash64::from_u64_word(0xC0757),
+        4_096,
+        Hash64::from_u64_word(0xA7),
+        kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+            kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+            0,
+        )),
+        vec![7u8; 32],
+        vec![21u8; 8],
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
     let weights = *bundle.freeprompt.cu_weights();

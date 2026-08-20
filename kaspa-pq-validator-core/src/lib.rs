@@ -1882,6 +1882,14 @@ mod tests {
             Hash64::from_bytes([0xBA; 64]),
             Hash64::from_bytes([0xCA; 64]),
             Hash64::from_bytes([0xC0; 64]),
+            4_096,
+            Hash64::from_bytes([0xA7; 64]),
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+                0,
+            )),
+            vec![7u8; 32],
+            vec![21u8; 8],
         )
         .expect("the devnet bundle validates")
     }
