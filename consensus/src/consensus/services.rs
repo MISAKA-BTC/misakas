@@ -190,6 +190,7 @@ impl ConsensusServices {
             params.pow_palw_activation,
             params.palw_block_commitment,
             params.pow_palw_ollama_activation,
+            params.palw_consensus_mode.required_algo_id(),
             is_consensus_exiting,
         ));
 

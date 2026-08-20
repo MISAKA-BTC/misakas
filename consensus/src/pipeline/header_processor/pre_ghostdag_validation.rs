@@ -100,8 +100,14 @@ impl HeaderProcessor {
         let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
         let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-        kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
-            .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))?;
+        kaspa_consensus_core::pow_layer0::check_algo_id_for_mode(
+            header.pow_algo_id,
+            self.palw_required_algo_id,
+            palw_ollama_active,
+            palw_active,
+            blake2b_sha3_active,
+        )
+        .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))?;
         // MISAKA ADR-0038: structural shape rule for the post-PoW palw_commitment field.
         // The NON-PALW arm is not behind any fence — a hash-invisible non-empty field there is
         // block-hash malleability and is refused at the door on every network. The PALW arm is

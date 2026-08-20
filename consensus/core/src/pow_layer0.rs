@@ -518,6 +518,44 @@ pub fn check_algo_id(
     }
 }
 
+/// The algorithm a header MUST declare, with the V2 mode consulted FIRST (ADR-0042 Decision 1,
+/// PR-08 seam).
+///
+/// `mode_required` is [`crate::palw_mode_v2::PalwConsensusMode::required_algo_id`]: `Some(6)`
+/// exactly on a `ConsensusV2` network, `None` on `Disabled` / `LegacyTn11` — which is **every**
+/// network that exists today. So on every shipped preset this is `required_algo_id(...)`
+/// unchanged, byte for byte; only a network carrying the whole atomic V2 bundle demands the
+/// committed-V2 id, and it does so exclusively — a V2 network accepts nothing else, and the V1
+/// cascade is not consulted for it. This is the one place "does this network demand V2" is
+/// decided, so a site cannot answer it a second, drifting way.
+#[inline]
+pub fn required_algo_id_for_mode(
+    mode_required: Option<u8>,
+    palw_ollama_active: bool,
+    palw_llm_active: bool,
+    blake2b_sha3_active: bool,
+) -> u8 {
+    mode_required.unwrap_or_else(|| required_algo_id(palw_ollama_active, palw_llm_active, blake2b_sha3_active))
+}
+
+/// [`check_algo_id`], with the V2 mode consulted first via [`required_algo_id_for_mode`]. The
+/// validation processors and the pruning-proof gate call THIS, so the mode's demand and the
+/// header's declaration are compared in one place.
+#[inline]
+pub fn check_algo_id_for_mode(
+    algo_id: u8,
+    mode_required: Option<u8>,
+    palw_ollama_active: bool,
+    palw_llm_active: bool,
+    blake2b_sha3_active: bool,
+) -> Result<(), PowLayer0Error> {
+    if algo_id == required_algo_id_for_mode(mode_required, palw_ollama_active, palw_llm_active, blake2b_sha3_active) {
+        Ok(())
+    } else {
+        Err(PowLayer0Error::UnknownAlgoId(algo_id))
+    }
+}
+
 /// Does Layer-0 PoW verification short-circuit for this header instead of reaching the Layer-1
 /// finalizer?
 ///
@@ -1010,6 +1048,33 @@ mod tests {
                 check_algo_id(POW_ALGO_ID_PALW_COMMITTED_V2, ollama, llm, sha3),
                 Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_COMMITTED_V2)),
                 "a V2 header must be refused everywhere today"
+            );
+            // The mode seam (PR-08): with no V2 mode (`None` — every real network), the
+            // mode-aware gate is the V1 gate exactly, so a V2 header is still refused…
+            assert_eq!(
+                check_algo_id_for_mode(POW_ALGO_ID_PALW_COMMITTED_V2, None, ollama, llm, sha3),
+                Err(PowLayer0Error::UnknownAlgoId(POW_ALGO_ID_PALW_COMMITTED_V2)),
+                "with no V2 mode the V2 id is refused, exactly as the V1 gate refuses it"
+            );
+            assert_eq!(
+                required_algo_id_for_mode(None, ollama, llm, sha3),
+                required_algo_id(ollama, llm, sha3),
+                "no mode = the V1 cascade, byte for byte"
+            );
+            // …and ONLY a ConsensusV2 mode (`Some(6)`) demands and accepts it — exclusively, the
+            // V1 flags no longer consulted for that network.
+            assert_eq!(
+                required_algo_id_for_mode(Some(POW_ALGO_ID_PALW_COMMITTED_V2), ollama, llm, sha3),
+                POW_ALGO_ID_PALW_COMMITTED_V2
+            );
+            assert!(
+                check_algo_id_for_mode(POW_ALGO_ID_PALW_COMMITTED_V2, Some(POW_ALGO_ID_PALW_COMMITTED_V2), ollama, llm, sha3).is_ok()
+            );
+            // A V2 network refuses the V1 ids it would otherwise have required — nothing but V2.
+            assert_eq!(
+                check_algo_id_for_mode(required_algo_id(ollama, llm, sha3), Some(POW_ALGO_ID_PALW_COMMITTED_V2), ollama, llm, sha3),
+                Err(PowLayer0Error::UnknownAlgoId(required_algo_id(ollama, llm, sha3))),
+                "a V2 network accepts the committed-V2 id and nothing else"
             );
         }
     }

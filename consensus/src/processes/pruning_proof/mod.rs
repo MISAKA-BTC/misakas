@@ -129,6 +129,10 @@ pub struct PruningProofManager {
     palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// MISAKA Phase 4b: PALW-Ollama (`algo_id = 5`) activation — same POW-01 rationale.
     pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, `None`
+    /// otherwise (every network today). Consulted first by the proof-header algo-id gate so it
+    /// enforces the SAME required-algo rule the main pipeline does.
+    palw_required_algo_id: Option<u8>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -154,6 +158,7 @@ impl PruningProofManager {
         pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
         palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
         pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
+        palw_required_algo_id: Option<u8>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -193,6 +198,7 @@ impl PruningProofManager {
             pow_palw_activation,
             palw_block_commitment,
             pow_palw_ollama_activation,
+            palw_required_algo_id,
 
             is_consensus_exiting,
         }
@@ -225,8 +231,14 @@ impl PruningProofManager {
             let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
             let palw_active = self.pow_palw_activation.is_active(header.daa_score);
             let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-            kaspa_consensus_core::pow_layer0::check_algo_id(header.pow_algo_id, palw_ollama_active, palw_active, blake2b_sha3_active)
-                .map_err(|_| PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id))?;
+            kaspa_consensus_core::pow_layer0::check_algo_id_for_mode(
+                header.pow_algo_id,
+                self.palw_required_algo_id,
+                palw_ollama_active,
+                palw_active,
+                blake2b_sha3_active,
+            )
+            .map_err(|_| PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id))?;
         }
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)

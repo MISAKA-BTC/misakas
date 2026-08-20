@@ -342,6 +342,44 @@ mod tests {
         assert!(mixed_fence.validate_palw_v2().is_err(), "a V1 fence under a V2 mode is the five-fences defect reborn");
     }
 
+    /// **The PR-08 seam is inert on every shipped network.** For every preset, at a sweep of DAA
+    /// scores, the mode-aware required-algo answer equals the V1 cascade's answer byte for byte —
+    /// so threading the mode through the header, virtual and pruning-proof gates changed nothing
+    /// any node accepts today. Only a `ConsensusV2` network answers differently, and no shipped
+    /// preset is one.
+    #[test]
+    fn the_mode_seam_changes_no_shipped_networks_required_algo() {
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+        use crate::pow_layer0::{
+            POW_ALGO_ID_PALW_COMMITTED_V2, check_algo_id, check_algo_id_for_mode, required_algo_id, required_algo_id_for_mode,
+        };
+
+        for params in [&MAINNET_PARAMS, &TESTNET_PARAMS, &TESTNET11_PARAMS, &DEVNET_PARAMS, &SIMNET_PARAMS] {
+            let mode_required = params.palw_consensus_mode.required_algo_id();
+            assert_eq!(mode_required, None, "{} demands no V2 id", params.net);
+            for daa in [0u64, 1, 1_000, 1_000_000, u64::MAX - 1] {
+                let (o, l, s) = (
+                    params.pow_palw_ollama_activation.is_active(daa),
+                    params.pow_palw_activation.is_active(daa),
+                    params.pow_blake2b_sha3_activation.is_active(daa),
+                );
+                let v1 = required_algo_id(o, l, s);
+                assert_eq!(
+                    required_algo_id_for_mode(mode_required, o, l, s),
+                    v1,
+                    "{} @ {daa}: the seam moved a live network",
+                    params.net
+                );
+                assert_eq!(check_algo_id_for_mode(v1, mode_required, o, l, s), check_algo_id(v1, o, l, s));
+                assert!(
+                    check_algo_id_for_mode(POW_ALGO_ID_PALW_COMMITTED_V2, mode_required, o, l, s).is_err(),
+                    "{} @ {daa} must still refuse a V2 header",
+                    params.net
+                );
+            }
+        }
+    }
+
     /// The mode is in the P2P consensus fingerprint — through the ruleset id, so the handshake
     /// commitment and the ruleset commitment cannot drift — and `Disabled` leaves the
     /// fingerprint exactly where it was before the field existed.

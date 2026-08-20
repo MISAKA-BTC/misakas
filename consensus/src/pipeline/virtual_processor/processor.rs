@@ -310,6 +310,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_tip_order: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, or `None`
+    /// on every non-V2 network. Computed once from `params.palw_consensus_mode`; consulted first
+    /// by the header-declaration gate so the mode's demand and the V1 cascade agree in one place.
+    pub(super) palw_required_algo_id: Option<u8>,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -600,6 +604,7 @@ impl VirtualStateProcessor {
             pow_palw_activation: params.pow_palw_activation,
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
+            palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             max_block_mass: params.max_block_mass,
@@ -7981,7 +7986,8 @@ impl VirtualStateProcessor {
             // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this
             // DAA score — PALW LLM (algo_id = 4) once activated, else BLAKE2b-512 ∥ SHA3-512 (3)
             // once activated, else kHeavyHash (1).
-            kaspa_consensus_core::pow_layer0::required_algo_id(
+            kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
+                self.palw_required_algo_id,
                 self.pow_palw_ollama_activation.is_active(virtual_state.daa_score),
                 self.pow_palw_activation.is_active(virtual_state.daa_score),
                 self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),

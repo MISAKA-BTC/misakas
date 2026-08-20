@@ -129,7 +129,8 @@ impl TestConsensus {
         // this DAA score (`header_from_precomputed_hash` defaults to the
         // Phase-1 kHeavyHash id, which `check_pow_algo_id` rejects on the
         // BLAKE2b-SHA3-active mainnet/testnet params).
-        header.pow_algo_id = kaspa_consensus_core::pow_layer0::required_algo_id(
+        header.pow_algo_id = kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
+            self.params.palw_consensus_mode.required_algo_id(),
             self.params.pow_palw_ollama_activation.is_active(daa_window.daa_score),
             self.params.pow_palw_activation.is_active(daa_window.daa_score),
             self.params.pow_blake2b_sha3_activation.is_active(daa_window.daa_score),
