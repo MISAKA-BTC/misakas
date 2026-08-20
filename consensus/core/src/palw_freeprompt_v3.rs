@@ -59,6 +59,10 @@ pub const PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT: &[u8] = b"misaka-palw/fp-v3/com
 pub const PALW_FP_V3_MLDSA87_SPEND_CONTEXT: &[u8] = b"misaka-palw/fp-v3/spend-mldsa87/v1";
 /// Keyed hash over the raw worker-request frame — the wire-level echo the caller re-verifies.
 pub const PALW_FP_V3_DOMAIN_WORKER_REQUEST: &[u8] = b"misaka-palw/fp-v3/worker-request/v1";
+/// One retained-trace chunk's digest (see [`fp_trace_chunk_digest_v3`]).
+pub const PALW_FP_V3_DOMAIN_TRACE_CHUNK: &[u8] = b"misaka-palw/fp-v3/trace-chunk/v1";
+/// The retained-trace manifest root (see [`fp_trace_manifest_root_v3`]).
+pub const PALW_FP_V3_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/fp-v3/trace-manifest/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -70,7 +74,64 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
     PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
     PALW_FP_V3_DOMAIN_WORKER_REQUEST,
+    PALW_FP_V3_DOMAIN_TRACE_CHUNK,
+    PALW_FP_V3_DOMAIN_TRACE_MANIFEST,
 ];
+
+// ---------------------------------------------------------------------------------------------
+// Retained-trace data availability (the commitment's DA obligation trio, made honest)
+// ---------------------------------------------------------------------------------------------
+
+/// Events per retained-trace chunk. At the 4096-event trace cap this is at most 16 chunks of
+/// 16 KiB — small enough to serve whole, large enough that a manifest is a page, not a book.
+pub const PALW_FP_TRACE_CHUNK_EVENTS_V3: u32 = 256;
+
+/// What the producer retains and serves: the ORDERED EVENT-HASH LIST, chunked. Deliberately not
+/// the logits themselves — the execution is deterministic, so a replayer recomputes every row
+/// from chain data; what the list adds is *localization*: a challenger comparing their replay's
+/// event hashes against the served list finds the first diverging index without holding the
+/// executor's machine, and `trace_event_opening_v2` proves any served event against the
+/// committed trace root. (Step-level leg/checkpoint material for the arithmetic court is a
+/// future retention profile; a receipt claim at drill stage is refuted by panel replay.)
+///
+/// `H(domain ‖ binding ‖ chunk_index ‖ count ‖ events…)` — index-bound so chunks cannot be
+/// reordered, binding-bound so one job's chunks cannot serve another's manifest.
+pub fn fp_trace_chunk_digest_v3(trace_binding: Hash64, chunk_index: u32, events: &[Hash64]) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_TRACE_CHUNK);
+    state.update(trace_binding.as_byte_slice());
+    state.update(&chunk_index.to_le_bytes());
+    state.update(&(events.len() as u32).to_le_bytes());
+    for event in events {
+        state.update(event.as_byte_slice());
+    }
+    finish(state)
+}
+
+/// `H(domain ‖ binding ‖ chunk_size ‖ count ‖ digests…)` over the per-chunk digests, in order.
+/// Flat, not a tree: at ≤16 chunks the manifest is served whole, and a flat list has no odd-node
+/// arm to get wrong.
+pub fn fp_trace_manifest_root_v3(trace_binding: Hash64, chunk_digests: &[Hash64]) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_TRACE_MANIFEST);
+    state.update(trace_binding.as_byte_slice());
+    state.update(&PALW_FP_TRACE_CHUNK_EVENTS_V3.to_le_bytes());
+    state.update(&(chunk_digests.len() as u32).to_le_bytes());
+    for digest in chunk_digests {
+        state.update(digest.as_byte_slice());
+    }
+    finish(state)
+}
+
+/// Chunk an ordered event list and derive `(manifest_root, chunk_count, chunk_digests)`. The
+/// worker calls this over what it retains; a verifier calls it over what was served; equality is
+/// the availability check.
+pub fn fp_trace_manifest_v3(trace_binding: Hash64, events: &[Hash64]) -> (Hash64, u32, Vec<Hash64>) {
+    let digests: Vec<Hash64> = events
+        .chunks(PALW_FP_TRACE_CHUNK_EVENTS_V3 as usize)
+        .enumerate()
+        .map(|(index, chunk)| fp_trace_chunk_digest_v3(trace_binding, index as u32, chunk))
+        .collect();
+    (fp_trace_manifest_root_v3(trace_binding, &digests), digests.len() as u32, digests)
+}
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
@@ -709,6 +770,12 @@ pub struct PalwFpWorkerResultV3 {
     pub trace_root: Hash64,
     pub output_root: Hash64,
     pub schedule_root: Hash64,
+    /// The retained-trace manifest ([`fp_trace_manifest_v3`] over the event list the worker
+    /// wrote to its `--trace-out` directory). Retention is NOT optional on this path: a
+    /// commitment whose producer kept nothing cannot serve an opening and would default in
+    /// court, so the worker refuses to run without a retention directory.
+    pub trace_manifest_root: Hash64,
+    pub trace_chunk_count: u32,
     pub trace_event_count: u32,
     pub decode_tokens_executed: u32,
     pub stop_reason: PalwFpStopReasonV3,
@@ -771,19 +838,25 @@ impl PalwFpWorkerResultV3 {
         if self.output_token_ids.len() != self.decode_tokens_executed as usize {
             return Err(PalwFpV3Error::WorkerResultMismatch("the answer's token count is not the executed decode count"));
         }
+        // The retained-trace shape is recomputable from the executed count alone — a worker
+        // cannot under-retain without the mismatch showing here, and a zero manifest is not a
+        // manifest.
+        let expected_chunks = self.trace_event_count.div_ceil(PALW_FP_TRACE_CHUNK_EVENTS_V3);
+        if self.trace_chunk_count != expected_chunks {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the retained-trace chunk count is not the executed shape's"));
+        }
+        if self.trace_manifest_root == Hash64::default() {
+            return Err(PalwFpV3Error::WorkerResultMismatch("a zero trace manifest retains nothing"));
+        }
         Ok(())
     }
 
-    /// Assemble the consensus commitment from a validated result plus the pieces only the caller
-    /// holds: the trace DA obligation and the bundle's CU weights. The CU is DERIVED here — the
-    /// worker reports counts, never prices (invariant F7 starts at assembly, not at admission).
-    pub fn to_commitment(
-        &self,
-        weights: &PalwFpCuWeightsV3,
-        trace_manifest_root: Hash64,
-        trace_chunk_count: u32,
-        trace_retention_daa: u64,
-    ) -> PalwFreePromptCommitmentV3 {
+    /// Assemble the consensus commitment from a validated result plus the two pieces only the
+    /// caller holds: the retention DEADLINE (a chain-time promise the worker cannot make) and
+    /// the bundle's CU weights. The CU is DERIVED here — the worker reports counts, never
+    /// prices (invariant F7 starts at assembly, not at admission); the DA manifest is the
+    /// worker's own retained-trace measurement, cross-checked by `validate_against_request`.
+    pub fn to_commitment(&self, weights: &PalwFpCuWeightsV3, trace_retention_daa: u64) -> PalwFreePromptCommitmentV3 {
         PalwFreePromptCommitmentV3 {
             job: self.job.clone(),
             trace_root: self.trace_root,
@@ -792,8 +865,8 @@ impl PalwFpWorkerResultV3 {
             decode_tokens_executed: self.decode_tokens_executed,
             stop_reason: self.stop_reason,
             cu: fp_cu_v3(self.job.prompt_tokens, self.decode_tokens_executed, weights),
-            trace_manifest_root,
-            trace_chunk_count,
+            trace_manifest_root: self.trace_manifest_root,
+            trace_chunk_count: self.trace_chunk_count,
             trace_retention_daa,
         }
     }
@@ -1181,6 +1254,8 @@ mod tests {
             trace_root: Hash64::from_u64_word(0x7A),
             output_root: Hash64::from_u64_word(0x0B),
             schedule_root: Hash64::from_u64_word(0x5C),
+            trace_manifest_root: Hash64::from_u64_word(0xDA),
+            trace_chunk_count: 1,
             trace_event_count: 77,
             decode_tokens_executed: 77,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
@@ -1191,9 +1266,14 @@ mod tests {
         };
         result.validate_against_request(&request, request_hash).expect("the honest result binds");
 
-        let commitment = result.to_commitment(&weights(), Hash64::from_u64_word(0xD0), 8, 999_999);
+        let commitment = result.to_commitment(&weights(), 999_999);
         assert_eq!(commitment.cu, fp_cu_v3(j.prompt_tokens, 77, &weights()), "CU is derived, never copied");
         assert_eq!(commitment.job, j);
+        assert_eq!(
+            (commitment.trace_manifest_root, commitment.trace_chunk_count, commitment.trace_retention_daa),
+            (Hash64::from_u64_word(0xDA), 1, 999_999),
+            "the DA trio: manifest from the worker's retention, deadline from the caller"
+        );
 
         // Lies, each caught: a different request echoed; a job field swapped; ids the job hash
         // does not bind; an ids-arm echo mismatch; an overrun; a non-canonical stop; a trace
@@ -1219,9 +1299,42 @@ mod tests {
         let mut ragged_trace = result.clone();
         ragged_trace.trace_event_count += 1;
         assert!(ragged_trace.validate_against_request(&request, request_hash).is_err());
-        let mut short_answer = result;
+        let mut short_answer = result.clone();
         short_answer.output_token_ids.pop();
         assert!(short_answer.validate_against_request(&request, request_hash).is_err());
+        let mut under_retained = result.clone();
+        under_retained.trace_chunk_count = 0;
+        assert!(under_retained.validate_against_request(&request, request_hash).is_err(), "a chunk count off the executed shape");
+        let mut hollow_manifest = result;
+        hollow_manifest.trace_manifest_root = Hash64::default();
+        assert!(hollow_manifest.validate_against_request(&request, request_hash).is_err(), "a zero manifest retains nothing");
+    }
+
+    /// The retained-trace manifest: chunking is exact at the boundary, digests bind binding and
+    /// index, and the verifier's recomputation equals the producer's.
+    #[test]
+    fn trace_manifest_chunks_and_binds() {
+        let binding = Hash64::from_u64_word(0xB1);
+        let events: Vec<Hash64> = (0..257).map(|i| Hash64::from_u64_word(i as u64 + 1)).collect();
+        let (root, count, digests) = fp_trace_manifest_v3(binding, &events);
+        assert_eq!(count, 2, "257 events at 256/chunk is two chunks");
+        assert_eq!(digests.len(), 2);
+        assert_eq!(root, fp_trace_manifest_root_v3(binding, &digests), "the composed fn equals its parts");
+        let (root_exact, count_exact, _) = fp_trace_manifest_v3(binding, &events[..256]);
+        assert_eq!(count_exact, 1, "the boundary is exact");
+        assert_ne!(root, root_exact);
+
+        assert_ne!(
+            fp_trace_chunk_digest_v3(binding, 0, &events[..256]),
+            fp_trace_chunk_digest_v3(binding, 1, &events[..256]),
+            "the index is inside the digest — chunks cannot be reordered"
+        );
+        assert_ne!(
+            fp_trace_chunk_digest_v3(binding, 0, &events[..256]),
+            fp_trace_chunk_digest_v3(Hash64::from_u64_word(0xB2), 0, &events[..256]),
+            "the binding is inside the digest — one job's chunks cannot serve another's manifest"
+        );
+        assert_ne!(root, Hash64::default());
     }
 
     /// Cross-family separation on equal preimages: the same borsh bytes under the FP job-id key,

@@ -19,12 +19,12 @@
 //! nonce, bond) rides in the job identity, outside the token stream, and the unit tests pin the
 //! rendered form.
 //!
-//! **What the outbox holds, honestly.** The framed `PalwFpWorkerResultV3` plus a JSON summary —
-//! everything the executor rail (FP-08) needs to assemble, sign and submit the on-chain
-//! commitment transaction. The gateway does NOT fabricate the pieces it does not have: the trace
-//! DA obligation needs the retained trace chunks (a worker/rail feature this artifact's summary
-//! names as pending), and the ML-DSA signature belongs to the signer sidecar. An artifact that
-//! pretended otherwise would be a commitment nobody could defend in court.
+//! **What the outbox holds, honestly.** The framed `PalwFpWorkerResultV3`, the UNSIGNED
+//! `PalwFreePromptCommitmentV3` (with the real retained-trace DA trio — the worker chunks the
+//! ordered event-hash list to `<outbox>/traces/<job-id>/` before its result frame exists), and
+//! a JSON summary. The gateway does NOT fabricate the one piece it must not have: the ML-DSA
+//! signature belongs to the signer sidecar, and the summary names that and the transaction
+//! rail as the two remaining steps.
 //!
 //! **HTTP, hand-rolled.** One POST route and a health probe over std's `TcpListener`, following
 //! `rpc/eth`'s in-tree precedent of not pulling an async HTTP stack for a small, exact surface.
@@ -154,6 +154,9 @@ struct Config {
     quantum_cu: u128,
     max_decode_default: u32,
     max_decode_cap: u32,
+    /// How long past the job's anchor the producer promises to serve retained-trace chunks, in
+    /// DAA score. A chain-time promise, so it rides the caller side of `to_commitment`.
+    trace_retention_window_daa: u64,
 }
 
 fn die(msg: String) -> ! {
@@ -257,11 +260,11 @@ struct ChatRequest {
 // The worker round trip
 // ---------------------------------------------------------------------------------------------
 
-fn run_worker_v3(worker: &Path, request: &PalwFpWorkerRequestV3) -> Result<(PalwFpWorkerResultV3, Hash64), String> {
+fn run_worker_v3(worker: &Path, trace_out: &Path, request: &PalwFpWorkerRequestV3) -> Result<(PalwFpWorkerResultV3, Hash64), String> {
     let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
     let request_hash = fp_worker_request_hash_v3(&payload);
     let mut child = Command::new(worker)
-        .args(["--mode", "v3-job"])
+        .args(["--mode", "v3-job", "--trace-out", &trace_out.display().to_string()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -393,9 +396,13 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
         trace_scheme_id: worker_id.trace_scheme_id,
     };
 
-    let (result, _request_hash) = run_worker_v3(&config.worker, &request)?;
+    let trace_dir = config.outbox.join("traces");
+    std::fs::create_dir_all(&trace_dir).map_err(|e| format!("cannot create the trace retention dir: {e}"))?;
+    let (result, _request_hash) = run_worker_v3(&config.worker, &trace_dir, &request)?;
     let job_id = fp_job_id_v3(&result.job);
-    let cu = fp_cu_v3(result.job.prompt_tokens, result.decode_tokens_executed, &config.cu_weights);
+    let commitment = result.to_commitment(&config.cu_weights, anchor_daa.saturating_add(config.trace_retention_window_daa));
+    let cu = commitment.cu;
+    let claim_id = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&commitment);
     let quanta = if config.quantum_cu == 0 { 0 } else { fp_quanta_v3(cu, config.quantum_cu, u32::MAX) };
 
     // The outbox artifact: the framed result (borsh) + a JSON summary. Everything the executor
@@ -406,6 +413,9 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
     let artifact_json = config.outbox.join(format!("{artifact_stem}.json"));
     let result_bytes = borsh::to_vec(&result).map_err(|e| format!("cannot serialize the artifact: {e}"))?;
     std::fs::write(&artifact_borsh, &result_bytes).map_err(|e| format!("cannot write {}: {e}", artifact_borsh.display()))?;
+    let commitment_borsh = config.outbox.join(format!("{artifact_stem}.commitment-unsigned.borsh"));
+    let commitment_bytes = borsh::to_vec(&commitment).map_err(|e| format!("cannot serialize the commitment: {e}"))?;
+    std::fs::write(&commitment_borsh, &commitment_bytes).map_err(|e| format!("cannot write {}: {e}", commitment_borsh.display()))?;
     let rendered_string = String::from_utf8_lossy(&result.rendered).into_owned();
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
@@ -415,15 +425,19 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
         "decode_tokens_executed": result.decode_tokens_executed,
         "decode_token_limit": result.job.decode_token_limit,
         "stop_reason": match result.stop_reason { PalwFpStopReasonV3::ExactBudgetReached => "exact_budget", PalwFpStopReasonV3::EndOfGeneration => "end_of_generation" },
+        "fp_claim_id": hex(claim_id),
         "trace_root": hex(result.trace_root),
         "output_root": hex(result.output_root),
         "schedule_root": hex(result.schedule_root),
+        "trace_manifest_root": hex(result.trace_manifest_root),
+        "trace_chunk_count": result.trace_chunk_count,
+        "trace_retention_daa": commitment.trace_retention_daa,
+        "trace_dir": trace_dir.join(hex(job_id)).display().to_string(),
         "cu": cu.to_string(),
         "cu_weights": { "prefill": config.cu_weights.prefill_weight, "decode": config.cu_weights.decode_weight },
         "quanta_at_configured_quantum": quanta,
         "answer_untrimmed": rendered_string,
         "pending_for_chain_submission": [
-            "trace chunk retention + DA manifest (worker returns roots only at v1)",
             "ML-DSA-87 signature over fp_claim_id (signer sidecar)",
             "commitment transaction assembly + submission (executor rail, FP-08)",
         ],
@@ -479,6 +493,7 @@ fn main() {
     let mut quantum_cu: u128 = 0;
     let mut max_decode_default: u32 = 256;
     let mut max_decode_cap: u32 = 1024;
+    let mut trace_retention_window_daa: u64 = 500_000;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -492,6 +507,9 @@ fn main() {
             "--quantum-cu" => quantum_cu = value("--quantum-cu").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--max-decode-default" => max_decode_default = value("--max-decode-default").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--max-decode-cap" => max_decode_cap = value("--max-decode-cap").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--trace-retention-window" => {
+                trace_retention_window_daa = value("--trace-retention-window").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--cu-prefill-weight n] [--cu-decode-weight n] [--quantum-cu n] [--max-decode-default n] [--max-decode-cap n]"
             )),
@@ -507,6 +525,7 @@ fn main() {
         quantum_cu,
         max_decode_default,
         max_decode_cap,
+        trace_retention_window_daa,
     };
     if cu_decode == 0 {
         die("--cu-decode-weight 0 prices the reference shape at nothing".into());

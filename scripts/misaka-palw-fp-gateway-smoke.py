@@ -87,8 +87,13 @@ try:
     assert int(summary["quanta_at_configured_quantum"]) >= 1, "the job earned at least one draw at quantum 1000"
     borsh_artifact = artifact.with_suffix("").with_suffix(".result.borsh")
     assert borsh_artifact.is_file() and borsh_artifact.stat().st_size > 0, "the framed result rides beside the summary"
-    assert summary["pending_for_chain_submission"], "the artifact says what is still pending, honestly"
-    print(f"[3] artifact ok: {artifact.name} (+ {borsh_artifact.name}, {borsh_artifact.stat().st_size} bytes)")
+    commitment_artifact = artifact.with_suffix("").with_suffix(".commitment-unsigned.borsh")
+    assert commitment_artifact.is_file() and commitment_artifact.stat().st_size > 0, "the unsigned commitment rides too"
+    assert summary["trace_manifest_root"] and int(summary["trace_chunk_count"]) >= 1
+    trace_dir = pathlib.Path(summary["trace_dir"])
+    assert (trace_dir / "manifest.json").is_file() and (trace_dir / "chunk-0.bin").is_file(), "the retained trace is where the summary says"
+    assert summary["pending_for_chain_submission"] and all("trace" not in item for item in summary["pending_for_chain_submission"]),         "retention is no longer pending; the signer and the rail are"
+    print(f"[3] artifact ok: {artifact.name} + unsigned commitment + retained trace ({summary['trace_chunk_count']} chunk)")
 
     # Same conversation again. Two properties, both load-bearing and easy to conflate:
     # * F1: the ANSWER is identical — the fresh nonce never touches the model's input.

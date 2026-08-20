@@ -69,8 +69,8 @@ use kaspa_consensus_core::palw_legs::{
     PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
 };
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    fp_job_id_v3, fp_worker_request_hash_v3, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
-    PalwFpWorkerResultV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
+    fp_job_id_v3, fp_trace_manifest_v3, fp_worker_request_hash_v3, PalwFpStopReasonV3, PalwFpWorkerInputV3,
+    PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
 };
 use kaspa_consensus_core::palw_schedule::{
     nearest_rank_percentile, replay_p99_fits_v1, PalwScheduleParamsV1, PALW_SCHEDULE_REPLAY_KAPPA,
@@ -1326,7 +1326,7 @@ fn run_v3_manifest() {
 /// EXECUTED count as its exact count with its one stop variant — at the trace layer that reads
 /// "this trace is complete at E events", which is true; the run's own stop reason
 /// (budget vs end-of-generation) is the v3 result's, checked canonical by every consumer.
-fn run_v3_job() {
+fn run_v3_job(trace_out: &Path) {
     let mut stdin = std::io::stdin().lock();
     let payload = read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v3-job rejected: {e}")));
     let request_hash = fp_worker_request_hash_v3(&payload);
@@ -1504,6 +1504,34 @@ fn run_v3_job() {
     let event_merkle = trace_event_merkle_root_v2(&events).unwrap_or_else(|e| die(format!("internal error: trace merkle failed: {e}")));
     let trace_root = full_logits_trace_root_v2(&binding, &summary, &event_merkle);
 
+    // Retained-trace DA (ADR-0044 Decision 3's obligation trio, made honest): the ordered
+    // event-hash list, chunked to disk BEFORE the result frame exists — a commitment whose
+    // producer kept nothing cannot serve an opening and would default in court, so failing to
+    // retain is failing the job. Layout: <trace_out>/<job-id-hex>/chunk-<k>.bin (raw 64-byte
+    // event hashes) + manifest.json (digests, for the serving layer's own bookkeeping).
+    let (trace_manifest_root, trace_chunk_count, chunk_digests) = fp_trace_manifest_v3(binding, &events);
+    let retain_dir = trace_out.join(hex(binding));
+    std::fs::create_dir_all(&retain_dir).unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
+    for (index, chunk) in events.chunks(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3 as usize).enumerate() {
+        let mut bytes = Vec::with_capacity(chunk.len() * 64);
+        for event in chunk {
+            bytes.extend_from_slice(event.as_byte_slice());
+        }
+        let path = retain_dir.join(format!("chunk-{index}.bin"));
+        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot retain {}: {e}", path.display())));
+    }
+    let manifest_doc = serde_json::json!({
+        "schema": "misaka.palw.fp-v3-trace-manifest.v1",
+        "trace_binding": hex(binding),
+        "trace_root": hex(trace_root),
+        "chunk_events": kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3,
+        "chunk_count": trace_chunk_count,
+        "chunk_digests": chunk_digests.iter().map(|d| hex(*d)).collect::<Vec<_>>(),
+        "manifest_root": hex(trace_manifest_root),
+    });
+    std::fs::write(retain_dir.join("manifest.json"), serde_json::to_vec_pretty(&manifest_doc).unwrap())
+        .unwrap_or_else(|e| die(format!("cannot write the retention manifest: {e}")));
+
     eprintln!(
         "[palw-worker] v3 executed: prefill={prefill} decode={executed}/{limit} stop={stop_reason:?} in {:?}; root={}…",
         exec_started.elapsed(),
@@ -1518,6 +1546,8 @@ fn run_v3_job() {
         trace_root,
         output_root: output_commitment_v2(&binding, &outputs, &rendered_output_hash_v2(&rendered)),
         schedule_root: schedule_commitment,
+        trace_manifest_root,
+        trace_chunk_count,
         trace_event_count: executed,
         decode_tokens_executed: executed,
         stop_reason,
@@ -2410,6 +2440,7 @@ fn main() {
     let mut runs: Option<u32> = None;
     let mut decode_override: Option<u32> = None;
     let mut legs_flag = false;
+    let mut trace_out: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -2447,6 +2478,10 @@ fn main() {
                 decode_override = args.get(i).and_then(|s| s.parse().ok());
             }
             "--legs" => legs_flag = true,
+            "--trace-out" => {
+                i += 1;
+                trace_out = args.get(i).cloned();
+            }
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
@@ -2483,7 +2518,10 @@ fn main() {
     match mode.as_deref() {
         Some("v2-job") => run_v2_job(),
         Some("v2-manifest") => run_v2_manifest(),
-        Some("v3-job") => run_v3_job(),
+        Some("v3-job") => {
+            let dir = trace_out.unwrap_or_else(|| die("--trace-out <dir> is required for v3-job: a job whose trace is not retained cannot be defended".into()));
+            run_v3_job(Path::new(&dir));
+        }
         Some("v3-manifest") => run_v3_manifest(),
         Some("v2-golden-gen") => {
             let out = out_path.unwrap_or_else(|| die("--out <path> is required for v2-golden-gen".into()));

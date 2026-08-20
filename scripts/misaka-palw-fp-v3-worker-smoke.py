@@ -7,9 +7,11 @@ usage: misaka-palw-fp-v3-worker-smoke.py <palw-worker> <gguf>
 """
 import hashlib
 import json
+import pathlib
 import struct
 import subprocess
 import sys
+import tempfile
 
 WORKER = sys.argv[1]
 GGUF = sys.argv[2]
@@ -57,9 +59,12 @@ def ids_arm(ids) -> bytes:
     return struct.pack("B", 1) + struct.pack("<I", len(ids)) + b"".join(struct.pack("<I", t) for t in ids)
 
 
+TRACE_OUT = tempfile.mkdtemp(prefix="palw-fp-trace.")
+
+
 def run_job(payload, timeout=600):
     frame = struct.pack("<I", len(payload)) + payload
-    return subprocess.run([WORKER, "--mode", "v3-job"], input=frame, capture_output=True, env=ENV, timeout=timeout)
+    return subprocess.run([WORKER, "--mode", "v3-job", "--trace-out", TRACE_OUT], input=frame, capture_output=True, env=ENV, timeout=timeout)
 
 
 def parse_result(stdout, payload):
@@ -89,8 +94,9 @@ def parse_result(stdout, payload):
     (n_ids,) = struct.unpack_from("<I", body, off); off += 4
     job["prompt_ids"] = list(struct.unpack_from(f"<{n_ids}I", body, off)); off += 4 * n_ids
     r = {}
-    for name in ("trace_root", "output_root", "schedule_root"):
+    for name in ("trace_root", "output_root", "schedule_root", "trace_manifest_root"):
         r[name] = body[off : off + 64]; off += 64
+    (r["chunks"],) = struct.unpack_from("<I", body, off); off += 4
     r["events"], r["executed"] = struct.unpack_from("<II", body, off); off += 8
     (r["stop"],) = struct.unpack_from("B", body, off); off += 1
     (n_out,) = struct.unpack_from("<I", body, off); off += 4
@@ -123,12 +129,38 @@ print(f"  prompt_tokens={job['prompt_tokens']} executed={r1['executed']}/{job['l
 print(f"  answer: {answer!r}")
 assert len(answer.strip()) > 0, "the answer is not empty"
 
+print("[1b] retained trace: chunks on disk, digests and manifest recompute exactly")
+job_id_hex = None
+for d in pathlib.Path(TRACE_OUT).iterdir():
+    if (d / "manifest.json").is_file():
+        job_id_hex = d.name
+        trace_man = json.loads((d / "manifest.json").read_text())
+        break
+assert job_id_hex is not None, "the worker retained a trace directory"
+assert trace_man["chunk_count"] == r1["chunks"] >= 1
+events = b""
+for k in range(trace_man["chunk_count"]):
+    events += (pathlib.Path(TRACE_OUT) / job_id_hex / f"chunk-{k}.bin").read_bytes()
+assert len(events) == r1["events"] * 64, "the retained bytes are the ordered event-hash list"
+binding = bytes.fromhex(job_id_hex)
+digests = []
+for k in range(trace_man["chunk_count"]):
+    chunk = events[k * 256 * 64 : (k + 1) * 256 * 64]
+    h = hashlib.blake2b(digest_size=64, key=b"misaka-palw/fp-v3/trace-chunk/v1")
+    h.update(binding + struct.pack("<I", k) + struct.pack("<I", len(chunk) // 64) + chunk)
+    digests.append(h.digest())
+    assert digests[k].hex() == trace_man["chunk_digests"][k], f"chunk {k} digest recomputes"
+h = hashlib.blake2b(digest_size=64, key=b"misaka-palw/fp-v3/trace-manifest/v1")
+h.update(binding + struct.pack("<I", 256) + struct.pack("<I", len(digests)) + b"".join(digests))
+assert h.digest() == r1["trace_manifest_root"], "the manifest root in the result is the retained material's"
+print(f"  ok: {trace_man['chunk_count']} chunk(s), {r1['events']} events, manifest root recomputed")
+
 print("[2] determinism: the same text twice — every consensus-visible byte identical")
 p2 = run_job(payload)
 assert p2.returncode == 0, p2.stderr.decode()
 job2, r2 = parse_result(p2.stdout, payload)
 assert job2 == job, "the bound job is identical"
-for k in ("trace_root", "output_root", "schedule_root", "events", "executed", "stop", "output_ids", "rendered"):
+for k in ("trace_root", "output_root", "schedule_root", "trace_manifest_root", "chunks", "events", "executed", "stop", "output_ids", "rendered"):
     assert r2[k] == r1[k], f"{k} must not move between runs (telemetry may; commitments may not)"
 print("  ok")
 
@@ -139,7 +171,7 @@ assert p3.returncode == 0, p3.stderr.decode()
 job3, r3 = parse_result(p3.stdout, replay_payload)
 assert job3["prompt_ids"] == job["prompt_ids"], "the ids arm echoes its input"
 assert job3["prompt_hash"] == job["prompt_hash"]
-for k in ("trace_root", "output_root", "schedule_root"):
+for k in ("trace_root", "output_root", "schedule_root", "trace_manifest_root", "chunks"):
     assert r3[k] == r1[k], f"{k} must be identical across the two arms"
 assert r3["output_ids"] == r1["output_ids"] and r3["rendered"] == r1["rendered"]
 print("  ok: text-in and ids-in converge on one execution")
