@@ -872,6 +872,68 @@ impl PalwFpWorkerResultV3 {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The on-chain commitment payload (FP-08): what rides SUBNETWORK_ID_PALW_FP_COMMITMENT
+// ---------------------------------------------------------------------------------------------
+
+/// Wire cap for one FP commitment payload. The body is the commitment (fixed-shape apart from
+/// the pubkey), the prompt token ids under PublicDA (≤ 4096 × 4 bytes), and one ML-DSA-87
+/// signature (~4.6 KB) — 48 KiB is generous headroom and still far under anything that stresses
+/// relay.
+pub const PALW_FP_COMMITMENT_TX_MAX_BYTES: usize = 48 * 1024;
+
+/// The transaction payload: the commitment, its PublicDA prompt, and the executor's signature.
+///
+/// The prompt token ids ride here rather than inside the commitment because the commitment's
+/// identity already binds their hash — carrying them in the signed body would double the bytes
+/// under the signature for no added binding, and carrying them NOWHERE would leave the panel
+/// unable to replay (ADR-0044 Decision 8: PublicDA deletes the withholding failure mode rather
+/// than adjudicating it). Acceptance re-derives the hash and refuses a mismatch, so the ids are
+/// bound in effect while being carried once.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpCommitmentTxPayloadV3 {
+    pub version: u16,
+    pub commitment: PalwFreePromptCommitmentV3,
+    /// The canonical prompt ids the commitment's `prompt_token_ids_hash` binds.
+    pub prompt_token_ids: Vec<u32>,
+    /// ML-DSA-87 over [`fp_claim_id_v3`] under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`].
+    pub signature: Vec<u8>,
+}
+
+impl PalwFpCommitmentTxPayloadV3 {
+    /// Stateless acceptance for the payload: the commitment's own stateless rules, plus the two
+    /// facts only the payload can state — that the carried ids ARE the ids the commitment binds,
+    /// and that the PublicDA promise is kept (a non-empty list under the mode that requires one).
+    ///
+    /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
+    /// [`Self::signed_message`] is what it must verify over.
+    pub fn validate_stateless_v3(&self, network_domain: Hash64, weights: &PalwFpCuWeightsV3) -> Result<(), PalwFpV3Error> {
+        if self.version != PALW_FP_V3_VERSION {
+            return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
+        }
+        let envelope =
+            PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
+        envelope.validate_stateless_v3(network_domain, weights)?;
+        if self.prompt_token_ids.len() != self.commitment.job.prompt_tokens as usize {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt length is not the committed prompt length"));
+        }
+        if crate::palw_v2::prompt_token_ids_hash_v2(&self.prompt_token_ids) != self.commitment.job.prompt_token_ids_hash {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt ids are not the ones the commitment binds"));
+        }
+        Ok(())
+    }
+
+    /// The message the signature covers — the claim id, which is total over the commitment.
+    pub fn signed_message(&self) -> Hash64 {
+        fp_claim_id_v3(&self.commitment)
+    }
+
+    /// The claim id this payload creates on acceptance.
+    pub fn claim_id(&self) -> Hash64 {
+        self.signed_message()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1308,6 +1370,38 @@ mod tests {
         let mut hollow_manifest = result;
         hollow_manifest.trace_manifest_root = Hash64::default();
         assert!(hollow_manifest.validate_against_request(&request, request_hash).is_err(), "a zero manifest retains nothing");
+    }
+
+    /// The on-chain payload: an honest one validates, and the two lies only the payload can tell
+    /// — a prompt of the wrong length, and a prompt whose hash the commitment does not bind —
+    /// are refused. (PublicDA's whole point is that the panel replays from THESE bytes.)
+    #[test]
+    fn commitment_tx_payload_binds_its_publicda_prompt() {
+        let ids: Vec<u32> = (0..96u32).collect();
+        let mut c = commitment();
+        c.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        c.job.prompt_tokens = ids.len() as u32;
+        c.cu = fp_cu_v3(c.job.prompt_tokens, c.decode_tokens_executed, &weights());
+        let payload =
+            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment: c, prompt_token_ids: ids.clone(), signature: sig() };
+        payload.validate_stateless_v3(net(), &weights()).expect("the honest payload validates");
+        assert_eq!(payload.claim_id(), fp_claim_id_v3(&payload.commitment));
+        assert_eq!(payload.signed_message(), payload.claim_id(), "the signature covers the identity, which is total");
+
+        let mut short = payload.clone();
+        short.prompt_token_ids.pop();
+        assert!(short.validate_stateless_v3(net(), &weights()).is_err(), "a prompt of the wrong length");
+
+        let mut swapped = payload.clone();
+        swapped.prompt_token_ids = (1..=96u32).collect();
+        assert!(swapped.validate_stateless_v3(net(), &weights()).is_err(), "a prompt the commitment does not bind");
+
+        let mut wrong_version = payload;
+        wrong_version.version = 2;
+        assert!(matches!(
+            wrong_version.validate_stateless_v3(net(), &weights()),
+            Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })
+        ));
     }
 
     /// The retained-trace manifest: chunking is exact at the boundary, digests bind binding and

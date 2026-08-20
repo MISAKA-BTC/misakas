@@ -23,7 +23,12 @@ use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
     SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
     SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT,
-    SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
+    SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
+    SubnetworkId,
+};
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PalwFpCommitmentTxPayloadV3, PalwFreePromptCommitmentV3, PALW_FP_COMMITMENT_TX_MAX_BYTES,
+    PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, fp_claim_id_v3,
 };
 use kaspa_consensus_core::token::{
     TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload,
@@ -753,6 +758,62 @@ impl ValidatorKey {
         };
         let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed commitment is infallible");
         self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+    }
+
+    /// Sign and build a **free-prompt execution commitment** transaction (ADR-0044 FP-08).
+    ///
+    /// The executor rail's one on-chain step: it takes the commitment the gateway assembled from
+    /// its own inference (roots, executed shape, derived CU, the retained-trace DA trio) plus the
+    /// PublicDA prompt ids, signs the CLAIM ID — which is total over the commitment, so signing
+    /// the identity signs every field — and funds the overlay transaction.
+    ///
+    /// What this function refuses, and why each refusal is here rather than at acceptance:
+    ///
+    /// * a prompt that is not the one the commitment binds — the panel replays from these bytes,
+    ///   so a mismatch produces a commitment no honest verifier can ever reproduce;
+    /// * a `pwu`/`quanta` derivation the bundle would not make — the state machine demands
+    ///   uniform non-zero quanta, and a claim that cannot enter the chain should not cost a fee;
+    /// * an oversized payload, before it is built rather than after a peer drops it.
+    ///
+    /// The CU is NOT re-derived here on purpose: `to_commitment` derived it from the executed
+    /// counts under the bundle's weights, and every validator re-derives it at admission
+    /// (invariant F7). A second derivation site here would be a second place to drift.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_commitment_tx(
+        &self,
+        network_domain: Hash64,
+        commitment: PalwFreePromptCommitmentV3,
+        prompt_token_ids: Vec<u32>,
+        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
+        freeprompt: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        // Sign the identity first so the payload carries a signature over exactly the bytes the
+        // stateless check will re-derive.
+        let signature = self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        let payload = PalwFpCommitmentTxPayloadV3 {
+            version: PALW_FP_V3_VERSION,
+            commitment,
+            prompt_token_ids,
+            signature,
+        };
+        // The same stateless rules a peer will apply, applied before spending a fee on them.
+        payload.validate_stateless_v3(network_domain, weights).map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+        // …and the derivation the state machine will demand: a sub-quantum job never enters the
+        // chain, so publishing one is paying a fee for a claim that can never act.
+        let (quanta, pwu) = freeprompt
+            .derive_quanta_and_pwu(payload.commitment.cu)
+            .ok_or_else(|| format!("free-prompt job earns no quanta at cu {} — it certifies nothing the chain can act on", payload.commitment.cu))?;
+        if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
+            return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
+        }
+        let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the free-prompt commitment: {e}"))?;
+        if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
+            return Err(format!("free-prompt commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap", bytes.len()));
+        }
+        self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Sign this validator's **verifier verdict** over a peer's receipt.
@@ -1794,6 +1855,156 @@ mod tests {
     const SF_FEE: u64 = 250_000;
     const SF_MATURITY: u64 = 100;
     const SF_VDAA: u64 = 10_000;
+
+    // ---- ADR-0044 (FP-08): the free-prompt commitment transaction ----
+
+    fn fp_bundle() -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+            Hash64::from_bytes([0xBA; 64]),
+            Hash64::from_bytes([0xCA; 64]),
+            Hash64::from_bytes([0xC0; 64]),
+        )
+        .expect("the devnet bundle validates")
+    }
+
+    /// A commitment whose CU earns real quanta under the devnet bundle: 96 prompt tokens, 256
+    /// executed decode tokens at 1:64 = 16_480 CU ≈ 16 quanta.
+    fn fp_commitment_fixture(
+        network_domain: Hash64,
+        key: &ValidatorKey,
+        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
+    ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PalwFpStopReasonV3, PalwFreePromptJobV3, fp_cu_v3, fp_trace_manifest_v3,
+        };
+        let ids: Vec<u32> = (0..96u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            class_id: Hash64::from_bytes([0xBA; 64]),
+            executor_bond: fop(7, 0),
+            executor_pubkey: key.public_key().to_vec(),
+            operator_id: Hash64::from_bytes([0xE0; 64]),
+            anchor_block: Hash64::from_bytes([0xA0; 64]),
+            anchor_daa: 5_000,
+            job_nonce: [0x11; 32],
+            tokenizer_id: Hash64::from_bytes([0x70; 64]),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 512,
+            max_context_tokens: 4_096,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+        };
+        let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
+        let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);
+        let commitment = PalwFreePromptCommitmentV3 {
+            trace_root: Hash64::from_bytes([0x7A; 64]),
+            output_root: Hash64::from_bytes([0x0B; 64]),
+            schedule_root: Hash64::from_bytes([0x5C; 64]),
+            decode_tokens_executed: 256,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            cu: fp_cu_v3(job.prompt_tokens, 256, weights),
+            trace_manifest_root: manifest_root,
+            trace_chunk_count: chunk_count,
+            trace_retention_daa: 505_000,
+            job,
+        };
+        (commitment, ids)
+    }
+
+    /// The executor rail's round trip: build → the payload decodes from the transaction → the
+    /// signature verifies under the bond key in ITS OWN context → the claim id is the one the
+    /// signature covers. A funded overlay transaction, like every other in this file.
+    #[test]
+    fn fp_commitment_tx_round_trips_and_binds_its_claim() {
+        let key = compute_key();
+        let bundle = fp_bundle();
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let (commitment, ids) = fp_commitment_fixture(network_domain, &key, bundle.freeprompt.cu_weights());
+        let expected_claim = fp_claim_id_v3(&commitment);
+
+        let tx = key
+            .build_fp_commitment_tx(
+                network_domain,
+                commitment,
+                ids.clone(),
+                bundle.freeprompt.cu_weights(),
+                &bundle.freeprompt,
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+            .expect("an admissible free-prompt commitment builds");
+        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_PALW_FP_COMMITMENT);
+
+        let decoded: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).expect("the payload decodes");
+        assert_eq!(decoded.claim_id(), expected_claim, "the on-chain claim id is the one the builder signed");
+        assert_eq!(decoded.prompt_token_ids, ids, "PublicDA carries the prompt the panel replays from");
+        decoded.validate_stateless_v3(network_domain, bundle.freeprompt.cu_weights()).expect("a peer accepts what we built");
+
+        // The signature verifies over the claim id under the bond key, in the commitment context…
+        assert!(
+            key.verify_with_context(expected_claim.as_byte_slice(), &decoded.signature, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT),
+            "the commitment signature verifies in its own context"
+        );
+        // …and NOT under any neighbouring context — the same separation the signer reserves.
+        for foreign in [
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+            kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            ATTESTATION_MLDSA87_CONTEXT,
+        ] {
+            assert!(
+                !key.verify_with_context(expected_claim.as_byte_slice(), &decoded.signature, foreign),
+                "a commitment signature must not replay in a foreign context"
+            );
+        }
+    }
+
+    /// The builder refuses, before spending a fee, exactly what a peer would refuse after: a
+    /// prompt the commitment does not bind, and a job too small to earn a single quantum.
+    #[test]
+    fn fp_commitment_tx_refuses_what_the_chain_would() {
+        let key = compute_key();
+        let bundle = fp_bundle();
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let weights = bundle.freeprompt.cu_weights();
+        let (commitment, ids) = fp_commitment_fixture(network_domain, &key, weights);
+
+        // A prompt that is not the committed one.
+        let mut wrong_ids = ids.clone();
+        wrong_ids[0] = 0xFFFF;
+        let err = key
+            .build_fp_commitment_tx(
+                network_domain,
+                commitment.clone(),
+                wrong_ids,
+                weights,
+                &bundle.freeprompt,
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+            .unwrap_err();
+        assert!(err.contains("not admissible"), "got {err}");
+
+        // A sub-quantum job: it certifies nothing the chain can act on, so it never becomes a fee.
+        let mut tiny = commitment;
+        tiny.decode_tokens_executed = 1;
+        tiny.cu = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(tiny.job.prompt_tokens, 1, weights);
+        let err = key
+            .build_fp_commitment_tx(
+                network_domain,
+                tiny,
+                ids,
+                weights,
+                &bundle.freeprompt,
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+            .unwrap_err();
+        assert!(err.contains("earns no quanta"), "got {err}");
+    }
 
     // ---- MISAKA Verified LLM Token-Weighted BFT: compute-overlay transaction builders ----
 
