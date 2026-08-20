@@ -143,17 +143,28 @@ implementation reading only the formula would reproduce it.
 
 **C3. Overflow is impossible at accumulation and saturating at narrowing.**
 
-Accumulation is `i32` and the shape profile must PROVE it cannot overflow. For `int8 × int8`,
-`|product| ≤ 127 × 127 = 16_129`, so a dot product of length `K` is bounded by `K × 16_129`, and
-the registration-time rule is:
-
-```
-K_max × 16_129  ≤  2^31 − 1    ⟹  K_max ≤ 133_144
-```
-
-A class whose graph exceeds that must accumulate in `i64` and declare it. Every narrowing
+Accumulation is `i32` and the shape profile must PROVE it cannot overflow. Every narrowing
 (`i32 → int8`) saturates to `[-128, 127]`; nothing wraps anywhere. Wrapping would turn a
 one-unit error into a full-scale one, and — worse for this design — it would break Decision E.
+
+The operand type is therefore the whole of `int8`, so `|product| ≤ 128 × 128 = 16_384`, a dot
+product of length `K` is bounded by `K × 16_384`, and the registration-time rule is:
+
+```
+K_max × 16_384  ≤  2^31 − 1    ⟹  K_max ≤ 131_071
+```
+
+A class whose graph exceeds that must accumulate in `i64` and declare it.
+
+**Amended 2026-08-20: this clause derived the bound from `127 × 127 = 16_129` and gave
+`K_max ≤ 133_144`.** That contradicted the saturation sentence directly above it in the same
+clause — the narrowing produces `-128`, and `(-128)²` is wider than `127²`. The wrong figure was
+never reachable (`d_model` and `d_ff` are thousands, not a hundred thousand) but it was not a
+premise Decision E could use: it held over a subset of the operand type, while nothing range-checks
+an artifact's weight bytes and the refutation path decodes operands with `i8::try_from`. Narrowing
+the operand range to `[-127, 127]` instead was considered and rejected — it would change frozen
+catalog op 2 for every input that currently saturates to `-128`, and would leave every entry point
+that does not pass through `Requantize` still open. `MAX_DOT_LEN` is `131_071`.
 
 ## Decision D — The op set, closed and minimal
 

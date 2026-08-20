@@ -358,10 +358,14 @@ mod tests {
         // a saturating negative accumulator, and nothing range-checks an artifact's weight bytes.
         // Under `overflow-checks = true` a MAX_DOT_LEN derived from `127²` does not return a wrong
         // sum here, it panics — inside an adjudicator, on peer-supplied operands.
+        //
+        // The expected values are computed in `i64` and the result widened to meet them, so that an
+        // over-large MAX_DOT_LEN fails HERE, inside `dot_i8`, rather than while rustc const-folds
+        // this test's own arithmetic. The defect being pinned is the accumulator, not the literal.
         let at_bound = vec![i8::MAX; MAX_DOT_LEN];
-        assert_eq!(dot_i8(&at_bound, &at_bound), Ok((MAX_DOT_LEN as i32) * 127 * 127));
+        assert_eq!(dot_i8(&at_bound, &at_bound).map(i64::from), Ok(MAX_DOT_LEN as i64 * 127 * 127));
         let at_bound_negative = vec![i8::MIN; MAX_DOT_LEN];
-        assert_eq!(dot_i8(&at_bound_negative, &at_bound_negative), Ok((MAX_DOT_LEN as i32) * 128 * 128));
+        assert_eq!(dot_i8(&at_bound_negative, &at_bound_negative).map(i64::from), Ok(MAX_DOT_LEN as i64 * 128 * 128));
     }
 
     /// Softmax is a distribution, its max element dominates, and it is invariant to a constant

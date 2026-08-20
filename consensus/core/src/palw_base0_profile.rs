@@ -403,6 +403,83 @@ pub fn base0_catalog_entry_v1(
     })
 }
 
+/// The geometry the PALW-RC network registers BASE-0 with.
+///
+/// Small on purpose. ADR-0039 §2a makes BASE-0 the slow floor by design — it exists so the chain
+/// can always produce and always adjudicate, not so it can be fast — and every dimension here is
+/// inside the class identity, so this is the RC declaring what its floor is rather than a tuning
+/// knob anyone may turn.
+pub const PALW_RC_BASE0_GEOMETRY: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
+    layer_count: 4,
+    hidden_dim: 256,
+    ffn_dim: 512,
+    attn_heads: 4,
+    attn_head_dim: 64,
+    vocab_size: 4_096,
+    n_ctx: 512,
+    n_threads: 1,
+    rms_eps_q: 1 << 8,
+    tile_len: 64,
+};
+
+/// The canonical inference BASE-0 is paid per, and the worst case its ladder must walk.
+pub const PALW_RC_BASE0_CANONICAL: (u32, u32) = (8, 4);
+pub const PALW_RC_BASE0_WORST_CASE: (u32, u32) = (64, 64);
+
+/// **Everything the RC's BASE-0 registration needs, from the ONE thing code cannot mint.**
+///
+/// The class id, the shape profile, the catalog and its root, `pwu_per_inference`, the reachable
+/// kernel set and the court catalog root are all DERIVED here — from
+/// [`PALW_RC_BASE0_GEOMETRY`], from `step_leaf_count`, and from this build's own adjudication
+/// table. The only input is `artifact_root`, the commitment to the int8 weights, the
+/// requantization parameters and the pinned sin/cos table, because those are bytes somebody
+/// produces and no function can invent.
+///
+/// The class id IS the shape profile id. A class is its graph: two registrations of the same
+/// graph are the same class, two different graphs cannot share an id, and there is no separate
+/// label anyone could pick.
+pub fn palw_rc_base0_registration_v1(
+    artifact_root: Hash64,
+) -> Result<(PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogV2), PalwStepError> {
+    let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY)?;
+    let class_id = profile.shape_profile_id();
+    let canonical = rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let worst = rc_job_context(&profile, PALW_RC_BASE0_WORST_CASE.0, PALW_RC_BASE0_WORST_CASE.1);
+    let entry = base0_catalog_entry_v1(class_id, artifact_root, &profile, &canonical, &worst)?;
+    let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry])
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the RC catalog is not well-formed"))?;
+    Ok((profile, catalog))
+}
+
+/// The job context the RC's leaf counts are taken over.
+///
+/// Only the shape fields matter to `step_leaf_count`; the identity fields are fixed so two nodes
+/// deriving the RC's catalog reach the same numbers. It is not an execution — nothing runs this
+/// context — it is the yardstick the class is measured with.
+fn rc_job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> crate::palw_v2::PalwJobContextV2 {
+    let mut ctx = crate::palw_v2::PalwJobContextV2 {
+        version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+        network_id: b"misaka-palw-rc".to_vec(),
+        job_id: Hash64::default(),
+        job_nullifier: Hash64::default(),
+        assignment_id: Hash64::default(),
+        execution_seed: [0; 32],
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: profile.shape_profile_id(),
+        trace_scheme_id: Hash64::default(),
+        cu_ruleset_id: Hash64::default(),
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: Hash64::default(),
+        declared_prefill_tokens: prefill,
+        exact_decode_tokens: decode,
+        max_context_tokens: profile.n_ctx,
+    };
+    ctx.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
+    ctx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2250,6 +2250,47 @@ pub const TESTNET11_PARAMS: Params = Params {
 /// requires `finality_depth < w_challenge`, and testnet's 10-BPS depth fails it by orders of
 /// magnitude. It is the second of the two independent refusals
 /// `the_shipped_mainnet_identity_cannot_carry_a_palw_schedule` measures.
+/// **The RC network from the ONE thing code cannot mint, plus the operator's own identities.**
+///
+/// `palw_rc_params` takes nine arguments because a bundle needs nine facts. Eight of them are
+/// derivable — the class id is its graph's `shape_profile_id`, the catalog root is over a catalog
+/// counted from that graph, `pwu_per_inference` is that count, and the court catalog root is this
+/// build's own adjudication table. Passing them separately is nine places a number could be
+/// chosen twice, and ADR-0042 Decision 11's whole claim is that RC and mainnet agree by hash.
+///
+/// So this derives all eight and takes only what it cannot: the BASE-0 artifact root (the int8
+/// weights, the requantization parameters and the pinned sin/cos table, which somebody produces)
+/// and the genesis bond's identities.
+///
+/// **The genesis bond set is a list for a reason.** `derive_panel_v2` excludes the executor's own
+/// bond, its operator and its key, so a registry with one bond can never seat a panel and every
+/// claim on such a network would void at `BindTimeout`. A network that carries weight registers
+/// its initial validator set here — bonds cannot enter through a transaction until a collateral
+/// lock exists (`palw_lifecycle_objects_v2`).
+pub fn palw_rc_params_from_artifacts(
+    base0_artifact_root: crate::Hash64,
+    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
+    genesis_bond_pubkey: Vec<u8>,
+    genesis_operator_pubkey: Vec<u8>,
+    genesis_payout_payload: crate::Hash64,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let (profile, catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(base0_artifact_root)
+        .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("BASE-0's registration does not derive"))?;
+    let class_id = profile.shape_profile_id();
+    let entry = catalog.entries().first().expect("the RC catalog has its one class");
+    palw_rc_params(
+        class_id,
+        catalog.root(),
+        crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
+        entry.canonical_step_leaf_count,
+        base0_artifact_root,
+        genesis_bond,
+        genesis_bond_pubkey,
+        genesis_operator_pubkey,
+        genesis_payout_payload,
+    )
+}
+
 pub fn palw_rc_params(
     base_class_id: crate::Hash64,
     class_catalog_root: crate::Hash64,

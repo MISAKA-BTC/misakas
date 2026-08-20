@@ -123,8 +123,8 @@ the reference implementation, not a `f64` approximation of it.
 
 | constraint | value | source |
 |---|---|---|
-| `n_layers, n_heads, d_head, d_ff, vocab, max_position` each ≤ | **133,144** | `Base0ShapeV1::validate`, bound = `MAX_DOT_LEN` |
-| longest reduction (`max(d_model, d_ff)`) ≤ | **133,144** | same |
+| `n_layers, n_heads, d_head, d_ff, vocab, max_position` each ≤ | **131,071** | `Base0ShapeV1::validate`, bound = `MAX_DOT_LEN` |
+| longest reduction (`max(d_model, d_ff)`) ≤ | **131,071** | same |
 | `d_model` | **must equal `n_heads · d_head`** | `Base0ShapeV1::d_model` |
 | `d_head` | **must be even** | `validate` (RoPE pairs) |
 | grouped-query attention | **not representable** — `wk`/`wv` are `[d_model][d_model]` | `from_parts` length checks |
@@ -134,9 +134,9 @@ the reference implementation, not a `f64` approximation of it.
 | residual stream precision | **`i8`** — `AddElem` takes `&[i8]` | `palw_base0_ops::add_elem` |
 | KV cache | `i8`, full `d_model` per position per layer | `KvCache` |
 | tied embeddings | expressible only by **carrying equal bytes twice** | `embed` / `unembed` separate |
-| weight codes | keep to **`[-127, 127]`** (see §10) | `MAX_DOT_LEN` premise |
+| weight codes | full `i8` is legal, `-128` included (see §10) | `MAX_DOT_LEN` premise |
 
-**`vocab ≤ 133,144` is a real filter on tokenizers.** A 151,936-entry vocabulary (Qwen2.5/Qwen3
+**`vocab ≤ 131,071` is a real filter on tokenizers.** A 151,936-entry vocabulary (Qwen2.5/Qwen3
 family) is refused by `validate` outright. Llama-3-class vocabularies (128,256) fit.
 
 ---
@@ -274,12 +274,14 @@ agreement rate over a fixed prompt set.
    exports statistics and a Rust binary does the solve and the emit. The second keeps every call to
    `requantize` on the reference implementation, which §3 argues for.
 
-## 10. Noted in passing, not part of this scope
+## 10. Noted in passing — resolved
 
-`MAX_DOT_LEN = 133_144` is derived from `i32::MAX / (127 · 127)`, but `requantize` clamps to
-`[-128, 127]` and can therefore emit `-128`, whose worst-case product is `128 · 128 = 16_384`. The
-length that bound licenses is `131_071`, not `133_144`. Unreachable at any realistic shape
-(`d_model` is thousands, not a hundred thousand), and the ordinary defence is for the pipeline to
-clamp weight codes to `[-127, 127]` — but the documented premise and the ops disagree, and with
-`overflow-checks = true` the failure mode would be a panic in an adjudicator rather than a wrong
-answer.
+`MAX_DOT_LEN` was `133_144`, derived from `i32::MAX / (127 · 127)`, while `requantize` clamps to
+`[-128, 127]` and can therefore emit `-128`, whose worst-case product is `128 · 128 = 16_384`.
+Unreachable at any realistic shape, but not a premise ADR-0040 Decision E could use: it held over a
+subset of the operand type while nothing range-checks an artifact's weight bytes.
+
+**Fixed 2026-08-20**: `MAX_DOT_LEN = 131_071`, derived from the whole of `int8`, with ADR-0040 C3
+amended to match. Restricting the operand range instead was rejected — it would have changed frozen
+catalog op 2. The pipeline therefore does **not** need to avoid `-128`; the full `i8` range is
+legal for weight codes.

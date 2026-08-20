@@ -118,7 +118,7 @@ impl Base0ShapeV1 {
         // those multiplications overflow `usize` and wrap to a small number, which would then pass
         // the reduction bound below and mis-size every tensor check in `from_parts`. Refusing
         // absurd dimensions outright is cheaper than auditing each product (audit 2.4). No real
-        // shape approaches this: MAX_DOT_LEN is 133_144 and every dimension must fit under it.
+        // shape approaches this: MAX_DOT_LEN is 131_071 and every dimension must fit under it.
         let bound = kaspa_consensus_core::palw_base0::MAX_DOT_LEN;
         for got in [self.n_layers, self.n_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
             if got > bound {

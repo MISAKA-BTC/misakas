@@ -80,8 +80,9 @@ pub const RSQRT_SEED: [i64; 16] = [
 /// ADR-0040 C3 derives the bound from `127 × 127 = 16_129` — and states two sentences later that
 /// every narrowing "saturates to `[-128, 127]`". Both cannot be true, and the type wins:
 /// [`requantize`] really does return `-128` (`requantize(i32::MIN, i32::MAX, 0)`, pinned by
-/// `narrowing_saturates_at_both_ends`), an artifact's weight tensors are raw `i8` that nothing
-/// range-checks, and the refutation path decodes operands with `i8::try_from`, which accepts it.
+/// `shift_and_multiply_round_and_saturate_as_specified`), an artifact's weight tensors are raw
+/// `i8` that nothing range-checks, and the refutation path decodes operands with `i8::try_from`,
+/// which accepts it.
 /// So `(-128)² = 16_384` is the product a conforming implementation must survive and `131_071` is
 /// the length that licenses — 1.6 % below the old figure, and three orders of magnitude above any
 /// real shape, which is why nothing ever reached it.
@@ -97,6 +98,18 @@ pub const RSQRT_SEED: [i64; 16] = [
 /// condition on which `i8` values a producer happens to emit: a premise that holds only for a
 /// subset of the operand type is not a premise Decision E can use.
 pub const MAX_DOT_LEN: usize = 131_071;
+
+/// Decision E's premise, enforced by the compiler rather than by a test that has to be run.
+///
+/// A test can pin this and still be deleted, skipped, or — as happened here — written against the
+/// wrong end of the operand type and pass for four days. A `const` assertion cannot: raising
+/// [`MAX_DOT_LEN`] past what an `i32` accumulator survives stops the crate from building, and the
+/// only honest way past it is to move the accumulator to `i64` and say so, which is exactly what
+/// ADR-0040 C3 requires of a class whose graph outgrows the bound.
+const _: () = assert!(
+    MAX_DOT_LEN as i64 * (i8::MIN as i64) * (i8::MIN as i64) <= i32::MAX as i64,
+    "MAX_DOT_LEN worst-case products must fit an i32 accumulator (ADR-0040 C3, premise of Decision E)"
+);
 
 /// Round-half-away-from-zero shift — one of the class's named lossy sites (ADR-0040 C1).
 ///

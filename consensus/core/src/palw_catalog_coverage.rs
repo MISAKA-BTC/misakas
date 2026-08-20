@@ -125,6 +125,31 @@ pub enum PalwCoverageError {
 /// Deterministic in its inputs and invariant under how the sets were built (the `BTreeSet`
 /// already erased insertion order); two verifiers of the same claims emit byte-identical
 /// certificates.
+/// Domain for the adjudicable-primitive-set commitment.
+pub const PALW_COURT_CATALOG_ROOT_DOMAIN: &[u8] = b"misaka-palw/court-catalog/root/v1";
+
+/// **This build's adjudicable primitive set, as one hash — the bundle's `court_catalog_root`.**
+///
+/// The field was checked only for being non-zero, so it committed to nothing: a ruleset could
+/// name any value and the startup gate would pass while the set it claimed to describe was
+/// whatever the binary happened to implement. Derived from `catalogued_kernel_ids_v1()` — the
+/// ADJUDICATION table, not a restated list — it becomes what ADR-0042 Decision 11 needs it to be:
+/// two nodes whose courts can recompute different sets of primitives now produce different
+/// ruleset ids and cannot agree they are running the same rules.
+pub fn palw_court_catalog_root_v1() -> Hash64 {
+    let ids = crate::palw_step_refute::catalogued_kernel_ids_v1();
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_COURT_CATALOG_ROOT_DOMAIN).to_state();
+    h.update(&(ids.len() as u64).to_le_bytes());
+    // BTreeSet iterates ascending, so the preimage is order-independent of how the table was
+    // written — a reordering of `KERNEL_CATALOG` must not move a consensus identity.
+    for id in &ids {
+        h.update(id.as_byte_slice());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 pub fn verify_catalog_coverage_v1(
     reachable: &PalwReachableKernelSetV1,
 ) -> Result<PalwCatalogCoverageCertificateV1, PalwCoverageError> {

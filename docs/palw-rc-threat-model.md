@@ -378,10 +378,22 @@ honest "red (integration), lands in PR-N."
   is `base0_rms_eps_q`, and integer addition is exactly associative so there is no contraction to
   pin.
 - **Still open, split by which class it belongs to.**
-  - *BASE-0 (blocks the RC genesis):* the ARTIFACT, not the graph — the int8 weight rows, the
+  - *BASE-0 (blocks the RC genesis):* **only the ARTIFACT now** — the int8 weight rows, the
     per-tensor requantization parameters and the pinned sin/cos table, hashed into
-    `artifact_root`, plus the catalog entry whose `canonical_step_leaf_count` is COUNTED from the
-    profile. Code cannot mint weights; this is a registration artifact somebody produces.
+    `artifact_root`. Code cannot mint weights. Everything else derives:
+    `palw_rc_params_from_artifacts(artifact_root, bond, keys, payout)` builds the profile from
+    `PALW_RC_BASE0_GEOMETRY`, the catalog from `step_leaf_count`, `pwu_per_inference` from that
+    count, the class id from the graph's own `shape_profile_id`, and `court_catalog_root` from
+    this build's adjudication table — so the eight facts that used to be eight arguments are
+    eight fewer places a number can be chosen twice
+    (`the_rc_network_derives_from_its_artifact_root_alone`). `court_catalog_root` was previously
+    checked only for being non-zero, i.e. it committed to nothing; it is
+    `palw_court_catalog_root_v1()` now, so two nodes whose courts recompute different primitive
+    sets produce different ruleset ids.
+    **Also required before the RC can advance a claim:** the genesis bond LIST must hold at least
+    three bonds. `derive_panel_v2` excludes the executor's own bond, its operator and its key, so
+    a one-bond registry can never seat a panel — and bonds cannot enter through a transaction
+    until a collateral lock exists (P0-11).
   - *The pinned float model (blocks the FP lane, not the RC floor):* adjudicators for quantized
     float matmul, IMRoPE and float softmax must exist BEFORE its profile can be written, and the
     node tables, the per-node tile capture in the shim, and the leg after that. The GDN half is

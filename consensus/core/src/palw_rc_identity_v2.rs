@@ -318,6 +318,73 @@ mod tests {
         assert!(state.bond(&bond).is_some(), "and there is a bond to execute under");
     }
 
+    /// **The RC network derives from ONE operator fact, and boots.**
+    ///
+    /// `palw_rc_params` takes nine arguments; eight are derivable, and eight separate arguments
+    /// are eight places a number could be chosen twice. `palw_rc_params_from_artifacts` derives
+    /// them from BASE-0's own graph, from the leaf counter, and from this build's adjudication
+    /// table, so the only inputs left are the ones no function can invent: the artifact root over
+    /// the int8 weights and the pinned sin/cos table, and the operator's bond identities.
+    #[test]
+    fn the_rc_network_derives_from_its_artifact_root_alone() {
+        use crate::palw_state_v2::PalwBondKeyV2;
+        use crate::tx::{TransactionId, TransactionOutpoint};
+
+        let artifact_root = h64(0xA7);
+        let bond = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xB0), index: 0 });
+        let params = crate::config::params::palw_rc_params_from_artifacts(
+            artifact_root,
+            bond,
+            vec![7; 32],
+            vec![21; 8],
+            h64(0x9A11),
+        )
+        .expect("the RC network derives and validates");
+
+        assert_eq!(params.net.to_string(), "testnet-12");
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("not V2") };
+
+        // The class id IS its graph. A class is what it computes, so there is no label to pick.
+        let (profile, catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(artifact_root).unwrap();
+        assert_eq!(bundle.base_class_id, profile.shape_profile_id(), "the class id is the graph's id");
+        assert_eq!(bundle.class_catalog_root, catalog.root());
+        assert_eq!(
+            bundle.court_catalog_root,
+            crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
+            "the court root commits to THIS BUILD's adjudicable set, not to a value someone typed"
+        );
+
+        // `pwu_per_inference` is the COUNTED canonical leaf count, and the genesis loader checks
+        // exactly that — so the declaration and the measurement are one number.
+        let entry = catalog.entries().first().unwrap();
+        let PalwConsensusObjectV2::ClassRegistered { pwu_rule, class_id, artifact_root: registered, .. } =
+            &bundle.genesis_objects[0]
+        else {
+            panic!("the first genesis object registers the class")
+        };
+        assert_eq!(*class_id, profile.shape_profile_id());
+        assert_eq!(*registered, artifact_root);
+        assert_eq!(*pwu_rule, PalwPwuRuleV2::DerivedV1 { pwu_per_inference: entry.canonical_step_leaf_count });
+        verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects).expect("the genesis artifact loads");
+
+        // And every kernel BASE-0 can reach is one this build adjudicates — the check a faithful
+        // profile for the pinned float model fails, because no float quantized matmul is
+        // catalogued at all.
+        assert!(entry.reachable_kernels.is_subset(&crate::palw_step_refute::catalogued_kernel_ids_v1()));
+
+        // Same artifact root, same network: the identity is a function of its inputs.
+        let again =
+            crate::config::params::palw_rc_params_from_artifacts(artifact_root, bond, vec![7; 32], vec![21; 8], h64(0x9A11))
+                .unwrap();
+        assert_eq!(again.consensus_params_id(), params.consensus_params_id());
+        // A different artifact root is a different network, because the weights are part of what
+        // the class IS.
+        let other =
+            crate::config::params::palw_rc_params_from_artifacts(h64(0xA8), bond, vec![7; 32], vec![21; 8], h64(0x9A11))
+                .unwrap();
+        assert_ne!(other.consensus_params_id(), params.consensus_params_id());
+    }
+
     /// **Nothing here ships a preset.** The assembly exists so the RC genesis is a checked
     /// artifact, not so a network quietly acquires one — every shipped preset is still fence-free.
     #[test]
