@@ -205,7 +205,12 @@ impl<'a> Base0Engine<'a> {
             let layer = &self.artifact.layers[li];
 
             // ---- attention ------------------------------------------------------------------
-            let normed = self.norm_to_code(&h)?;
+            // **Every IR slot is captured** (audit C-01/C-05). The probe used to record ten of the
+            // thirty-six, so a step leg could commit only the rows the capture happened to keep and
+            // `execution_root` was, for the other twenty-six, whatever the miner wrote.
+            let norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
+            probe.steps.push((li as u16, 0, norm_q.clone()));
+            let normed = requantize_row_uniform(&norm_q, self.artifact.norm_requant);
             probe.steps.push((li as u16, 1, normed.iter().map(|c| *c as i32).collect()));
             // Per-channel when the artifact supplies it — that is where a projection BIAS lives,
             // in the `zero` of each channel's triple — and tensor-wide otherwise, which is what
@@ -217,38 +222,55 @@ impl<'a> Base0Engine<'a> {
                 }
             };
             let kv = shape.kv_dim();
-            let q = narrow(&matmul_quant(&layer.wq, &normed, d)?, 0)?;
+            let q_acc = matmul_quant(&layer.wq, &normed, d)?;
+            probe.steps.push((li as u16, 2, q_acc.clone()));
+            let q = narrow(&q_acc, 0)?;
             probe.steps.push((li as u16, 3, q.iter().map(|c| *c as i32).collect()));
-            let k = narrow(&matmul_quant(&layer.wk, &normed, kv)?, 1)?;
+            let k_acc = matmul_quant(&layer.wk, &normed, kv)?;
+            probe.steps.push((li as u16, 4, k_acc.clone()));
+            let k = narrow(&k_acc, 1)?;
             probe.steps.push((li as u16, 5, k.iter().map(|c| *c as i32).collect()));
-            let v = narrow(&matmul_quant(&layer.wv, &normed, kv)?, 2)?;
+            let v_acc = matmul_quant(&layer.wv, &normed, kv)?;
+            probe.steps.push((li as u16, 6, v_acc.clone()));
+            let v = narrow(&v_acc, 2)?;
             probe.steps.push((li as u16, 7, v.iter().map(|c| *c as i32).collect()));
 
             // Rotate each head's q and k in place. `RopeTable` preserves the scale it is handed,
             // so the widening here is a reinterpretation and the narrowing after is only a clamp.
             let mut q_rot = Vec::with_capacity(d);
+            let mut q_rot_raw: Vec<i32> = Vec::with_capacity(d);
             for head in 0..shape.n_heads {
                 let r = head * shape.d_head..(head + 1) * shape.d_head;
                 let qh: Vec<i32> = q[r].iter().map(|c| *c as i32).collect();
-                q_rot.extend(requantize_row_uniform(&rope_table(&qh, cos_row, sin_row)?, self.artifact.rope_clamp()));
+                let rotated = rope_table(&qh, cos_row, sin_row)?;
+                q_rot_raw.extend(rotated.iter().copied());
+                q_rot.extend(requantize_row_uniform(&rotated, self.artifact.rope_clamp()));
             }
+            probe.steps.push((li as u16, 8, q_rot_raw));
+            probe.steps.push((li as u16, 9, q_rot.iter().map(|c| *c as i32).collect()));
             // The KEY heads are rotated over `n_kv_heads`, not `n_heads`: under grouped-query
             // attention there are fewer of them, and rotating `n_heads` of them would read past
             // the projection.
             let mut k_rot = Vec::with_capacity(kv);
+            let mut k_rot_raw: Vec<i32> = Vec::with_capacity(kv);
             for head in 0..shape.n_kv_heads {
                 let r = head * shape.d_head..(head + 1) * shape.d_head;
                 let kh: Vec<i32> = k[r].iter().map(|c| *c as i32).collect();
-                k_rot.extend(requantize_row_uniform(&rope_table(&kh, cos_row, sin_row)?, self.artifact.rope_clamp()));
+                let rotated = rope_table(&kh, cos_row, sin_row)?;
+                k_rot_raw.extend(rotated.iter().copied());
+                k_rot.extend(requantize_row_uniform(&rotated, self.artifact.rope_clamp()));
             }
-
-            probe.steps.push((li as u16, 9, q_rot.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 10, k_rot_raw));
             probe.steps.push((li as u16, 11, k_rot.iter().map(|c| *c as i32).collect()));
+
             cache.keys[li].push(k_rot);
             cache.values[li].push(v);
             let history = cache.keys[li].len();
 
             let mut attn = vec![0i8; d];
+            // Slots 12..=15 of the IR, accumulated head-major across the loop below.
+            let mut per_head: [Vec<i32>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+            let mut weighted_raw: Vec<i32> = Vec::with_capacity(d);
             let group = shape.gqa_group();
             for head in 0..shape.n_heads {
                 let off = head * shape.d_head;
@@ -266,38 +288,83 @@ impl<'a> Base0Engine<'a> {
                 let raw: Vec<i32> = (0..history)
                     .map(|j| dot_i8(qh, &cache.keys[li][j][kv_off..kv_off + shape.d_head]))
                     .collect::<Result<_, _>>()?;
-                let probs = softmax(&rescale_row(&raw, layer.attn_logit_scale))?;
+                let amplified = rescale_row(&raw, layer.attn_logit_scale);
+                let probs = softmax(&amplified)?;
                 probe.attention_spread.push(probs.iter().max().copied().unwrap_or(0) - probs.iter().min().copied().unwrap_or(0));
                 // Narrowed so the value-weighted sum is an ordinary DotI8 rather than a
                 // mixed-scale reduction with no op in the catalog.
                 let p8 = requantize_row_uniform(&probs, self.artifact.qk_to_code());
+                // **The four per-head steps, captured** (ADR-0049 Decision F, audit C-01/C-05).
+                //
+                // The engine runs these once per QUERY HEAD and the probe recorded none of them,
+                // so no step leg could carry the arithmetic attention actually happens in — the
+                // capture went straight from the rotated key to the output projection. They are
+                // appended head-major into one row per slot, which is exactly the `KvPerHead`
+                // width the IR declares: `attn_heads x kv_len`, one tile index space over the
+                // concatenation.
+                per_head[0].extend(raw.iter().copied());
+                per_head[1].extend(amplified.iter().copied());
+                per_head[2].extend(probs.iter().copied());
+                per_head[3].extend(p8.iter().map(|c| *c as i32));
 
                 for i in 0..shape.d_head {
                     let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
                     let weighted = dot_i8(&p8, &column)?;
                     attn[off + i] = requantize_row_uniform(&[weighted], self.artifact.code_product())[0];
                 }
+                weighted_raw.extend((0..shape.d_head).map(|i| {
+                    let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
+                    dot_i8(&p8, &column).unwrap_or(0)
+                }));
             }
+            for (offset, row) in per_head.iter().enumerate() {
+                probe.steps.push((li as u16, 12 + offset as u16, row.clone()));
+            }
+            probe.steps.push((li as u16, 16, weighted_raw));
+            probe.steps.push((li as u16, 17, attn.iter().map(|c| *c as i32).collect()));
 
-            let projected = requantize_row_uniform(&matmul_quant(&layer.wo, &attn, d)?, layer.requant[3]);
+            let projected_acc = matmul_quant(&layer.wo, &attn, d)?;
+            probe.steps.push((li as u16, 18, projected_acc.clone()));
+            let projected = requantize_row_uniform(&projected_acc, layer.requant[3]);
             probe.steps.push((li as u16, 19, projected.iter().map(|c| *c as i32).collect()));
-            h = requantize_row_uniform(&add_elem(&h, &projected)?, self.artifact.residual_requant_at(li, 0));
+            let residual = add_elem(&h, &projected)?;
+            probe.steps.push((li as u16, 20, residual.clone()));
+            h = requantize_row_uniform(&residual, self.artifact.residual_requant_at(li, 0));
             probe.steps.push((li as u16, 21, h.iter().map(|c| *c as i32).collect()));
 
             // ---- SwiGLU feed-forward --------------------------------------------------------
-            let normed = self.norm_to_code(&h)?;
-            let gate_q = rescale_row(&matmul_quant(&layer.w_gate, &normed, shape.d_ff)?, layer.ffn_gate_scale);
-            let gate = requantize_row_uniform(&silu(&gate_q), self.artifact.qk_to_code());
+            let ffn_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
+            probe.steps.push((li as u16, 22, ffn_norm_q.clone()));
+            let normed = requantize_row_uniform(&ffn_norm_q, self.artifact.norm_requant);
+            probe.steps.push((li as u16, 23, normed.iter().map(|c| *c as i32).collect()));
+            let gate_acc = matmul_quant(&layer.w_gate, &normed, shape.d_ff)?;
+            probe.steps.push((li as u16, 24, gate_acc.clone()));
+            let gate_q = rescale_row(&gate_acc, layer.ffn_gate_scale);
+            probe.steps.push((li as u16, 25, gate_q.clone()));
+            let activated = silu(&gate_q);
+            probe.steps.push((li as u16, 26, activated.clone()));
+            let gate = requantize_row_uniform(&activated, self.artifact.qk_to_code());
+            probe.steps.push((li as u16, 27, gate.iter().map(|c| *c as i32).collect()));
             probe.gate_extremes.push((
                 gate.iter().map(|c| *c as i32).min().unwrap_or(0),
                 gate.iter().map(|c| *c as i32).max().unwrap_or(0),
             ));
-            let up = requantize_row_uniform(&matmul_quant(&layer.w_up, &normed, shape.d_ff)?, layer.requant[5]);
+            let up_acc = matmul_quant(&layer.w_up, &normed, shape.d_ff)?;
+            probe.steps.push((li as u16, 28, up_acc.clone()));
+            let up = requantize_row_uniform(&up_acc, layer.requant[5]);
             probe.steps.push((li as u16, 29, up.iter().map(|c| *c as i32).collect()));
-            let gated = requantize_row_uniform(&mul_elem(&gate, &up)?, self.artifact.code_product());
+            let product = mul_elem(&gate, &up)?;
+            probe.steps.push((li as u16, 30, product.clone()));
+            let gated = requantize_row_uniform(&product, self.artifact.code_product());
             probe.steps.push((li as u16, 31, gated.iter().map(|c| *c as i32).collect()));
-            let down = requantize_row_uniform(&matmul_quant(&layer.w_down, &gated, d)?, layer.requant[6]);
-            h = requantize_row_uniform(&add_elem(&h, &down)?, self.artifact.residual_requant_at(li, 1));
+            let down_acc = matmul_quant(&layer.w_down, &gated, d)?;
+            probe.steps.push((li as u16, 32, down_acc.clone()));
+            let down = requantize_row_uniform(&down_acc, layer.requant[6]);
+            probe.steps.push((li as u16, 33, down.iter().map(|c| *c as i32).collect()));
+            let ffn_residual = add_elem(&h, &down)?;
+            probe.steps.push((li as u16, 34, ffn_residual.clone()));
+            h = requantize_row_uniform(&ffn_residual, self.artifact.residual_requant_at(li, 1));
+            probe.steps.push((li as u16, 35, h.iter().map(|c| *c as i32).collect()));
             probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
         }
 

@@ -11,12 +11,18 @@
 //!
 //! # What this covers, and what it does not
 //!
-//! [`crate::engine::ForwardProbe::steps`] records the WHOLE-ROW steps: the ones the engine computes
-//! as a row rather than inside a per-head loop. That is the norm, the three projections, both
-//! rotations, the attention output projection, the attention residual, the up projection and the
-//! gated product. The per-head steps — the scores, their softmax, and the value-weighted sum —
-//! are computed head by head and need the loop instrumented at head granularity, which is the
-//! remaining half.
+//! [`crate::engine::ForwardProbe::steps`] records EVERY step the IR declares — thirty-six per
+//! layer, at the IR's own slot numbers. It used to record ten: the ones the engine happened to
+//! compute as a whole row and keep in a variable. The other twenty-six were uncaptured, so a leg
+//! committed the zero hash for them and `execution_root` was, at those coordinates, whatever the
+//! miner wrote.
+//!
+//! The per-head steps — scores, amplification, softmax and the narrowing after it — are the ones
+//! that needed the loop instrumented, and they are captured head-major into one row per slot,
+//! which is exactly the `KvPerHead` width the IR declares. The IR declared them once per LAYER
+//! until this landed, so the step space itself was `attn_heads` times too small at the four nodes
+//! attention happens in: a challenger disputing the second head's softmax had no coordinate to
+//! name it with.
 //!
 //! What is complete is the SHAPE of the path: rows at IR slots, tiled at the profile's own
 //! `tile_len`, hashed with the leg's own leaf rule, into the Merkle root a binding carries. Nothing
@@ -213,8 +219,14 @@ mod tests {
         let mut cache = crate::engine::KvCache::new(&a);
         let (_, probe) = engine.forward_token_probed(&mut cache, 3, 0).expect("the pass completes");
         assert!(!probe.steps.is_empty(), "the engine records the rows it produced");
-        // Every layer contributes the whole-row steps; the per-head ones are the remaining half.
-        assert_eq!(probe.steps.len(), 10 * geometry().layer_count as usize, "ten whole-row steps a layer");
+        // **Every step, not a subset.** The probe recorded ten of the thirty-six, so a leg could
+        // commit only the rows the capture happened to keep and `execution_root` was, for the
+        // other twenty-six, whatever the miner wrote — the finding this module exists to close.
+        assert_eq!(
+            probe.steps.len(),
+            kaspa_consensus_core::palw_base0_profile::BASE0_LAYER_IR.len() * geometry().layer_count as usize,
+            "one captured row per IR step per layer"
+        );
 
         let tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &probe.steps).expect("the rows tile");
         assert!(!tiles.tiles.is_empty(), "and land somewhere in the step space");
@@ -240,6 +252,58 @@ mod tests {
             let expected = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&profile, &ctx, &leaf.coord)
                 .expect("the coordinate is canonical");
             assert_eq!(*index, expected, "a capture may not choose a leaf index");
+        }
+    }
+
+    /// **Audit C-05: the engine and the declared graph are checked against each other, step by
+    /// step.**
+    ///
+    /// `base0_profile_v1` is generated from `BASE0_LAYER_IR` and the engine is still written by
+    /// hand, so nothing structural stops the two describing different computations — which they
+    /// did, four times over, and each divergence was found by someone reading rather than by
+    /// anything failing. A generator would make it impossible; short of one, this makes it
+    /// FAIL LOUDLY, which is the property that was missing.
+    ///
+    /// What it compares is the whole observable shape of an execution: the slot sequence, in
+    /// order, and each row's length against the width the profile declares for that node at this
+    /// position's `kv_len`. A step the engine performs and the graph omits shows up as a slot
+    /// nobody declared; a step the graph declares and the engine skips shows up as a missing slot;
+    /// and a step whose width disagrees — the `KvDim`-vs-`Hidden` attention output, the per-head
+    /// nodes declared once per layer — shows up as a length.
+    #[test]
+    fn the_engine_performs_exactly_the_graph_the_profile_declares() {
+        use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
+
+        let a = artifact();
+        let profile = base0_profile_v1(geometry()).expect("expressible");
+        let engine = crate::engine::Base0Engine::new(&a);
+        let mut cache = crate::engine::KvCache::new(&a);
+
+        // Two positions, because every `KvScaled` width is a function of `kv_len` and a single
+        // position cannot tell a per-head width from a per-layer one (both are `kv_len` at one).
+        for position in 0..2u32 {
+            let (_, probe) = engine.forward_token_probed(&mut cache, 3, position as usize).expect("the pass completes");
+            let kv_len = u64::from(position) + 1;
+            for layer in 0..profile.layer_count {
+                let rows: Vec<_> = probe.steps.iter().filter(|(l, _, _)| *l == layer).collect();
+                let slots: Vec<u16> = rows.iter().map(|(_, slot, _)| *slot).collect();
+                let declared: Vec<u16> = (0..profile.attn_nodes.len() as u16).collect();
+                assert_eq!(slots, declared, "layer {layer}: the engine's step ORDER is the graph's");
+                for (_, slot, row) in rows {
+                    let node = &profile.attn_nodes[*slot as usize];
+                    let want = match node.out_len {
+                        PalwStepOutLenV1::Fixed { elements } => u64::from(elements),
+                        PalwStepOutLenV1::KvScaled { multiplier } => u64::from(multiplier) * kv_len,
+                    };
+                    assert_eq!(
+                        row.len() as u64,
+                        want,
+                        "layer {layer} slot {slot} ({:?}) at kv_len {kv_len}: the engine produced {} values, the graph declares {want}",
+                        node.op_kind,
+                        row.len()
+                    );
+                }
+            }
         }
     }
 }

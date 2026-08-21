@@ -110,6 +110,20 @@ pub enum Base0IrWidthV1 {
     HeadDim,
     /// `multiplier x kv_len(position)` — attention scores and their softmax.
     KvScaled(u32),
+    /// **One row PER QUERY HEAD, concatenated** — `attn_heads x kv_len(position)`.
+    ///
+    /// The engine runs the score / amplify / softmax / narrow sequence once per query head, and
+    /// the IR declared it once per LAYER at `KvScaled(1)`. So the declared graph was
+    /// `attn_heads` times smaller than the computation at exactly the four nodes attention
+    /// happens in: `leaves_per_position` counted one head's scores for all of them, the ladder was
+    /// sized against that count, and a challenger disputing the second head's softmax had no
+    /// coordinate to name it with — the step space did not contain it.
+    ///
+    /// Expressed as a WIDTH rather than as a repeat count, so no coordinate field is added: the
+    /// heads' rows are concatenated head-major, a tile index addresses a slice of that
+    /// concatenation, and which head a tile belongs to is `tile · tile_len / kv_len`. The step
+    /// space grows to contain every head; nothing about how a step is named changes.
+    KvPerHead,
 }
 
 /// Where a step's operand comes from.
@@ -140,7 +154,7 @@ pub struct Base0IrNodeV1 {
 }
 
 use Base0IrInputV1::{CachedK, CachedV, LayerIn, Step};
-use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvScaled};
+use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvPerHead, KvScaled};
 
 /// The thirty-six steps, in the engine's own order (`misaka-palw-base0/src/engine.rs`).
 pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
@@ -168,12 +182,18 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     c(PalwStepOpKindV1::MulElem, PalwStepNodeRoleV1::KCacheWrite, KDESC_BASE0_REQUANTIZE, "blk.{layer}.rope_clamp.requant", KvDim, &[Step(10)]),
     // Scores, amplified into the Qk band SoftMax is defined on, then narrowed back to codes so the
     // value-weighted sum is an ordinary DotI8 (ADR-0040 Decision H).
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", KvScaled(1), &[Step(9), CachedK]),
-    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.attn_logit.scale", KvScaled(1), &[Step(12)]),
-    n(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, "", KvScaled(1), &[Step(13)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", KvScaled(1), &[Step(14)]),
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", KvDim, &[Step(15), CachedV]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", KvDim, &[Step(16)]),
+    // Per QUERY HEAD, concatenated. The engine runs these four once per head; the table declared
+    // them once per layer, so the step space was `attn_heads` times too small at exactly the
+    // nodes attention happens in.
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", KvPerHead, &[Step(9), CachedK]),
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.attn_logit.scale", KvPerHead, &[Step(12)]),
+    n(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, "", KvPerHead, &[Step(13)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", KvPerHead, &[Step(14)]),
+    // The value-weighted sum writes `attn`, which is `d_model` wide — one `d_head` slice per QUERY
+    // head. `KvDim` is `n_kv_heads x d_head` and coincides with it only when attention is
+    // multi-head; under grouped-query attention the declared width was short by the group factor.
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", Hidden, &[Step(15), CachedV]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", Hidden, &[Step(16)]),
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_output.weight", Hidden, &[Step(17)]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_output.requant", Hidden, &[Step(18)]),
     // The residual, and the narrowing that was never declared.
@@ -327,6 +347,7 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
                 FfnDim => PalwStepOutLenV1::Fixed { elements: geometry.ffn_dim },
                 HeadDim => PalwStepOutLenV1::Fixed { elements: geometry.attn_head_dim },
                 KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
+                KvPerHead => PalwStepOutLenV1::KvScaled { multiplier: geometry.attn_heads as u32 },
             },
             tile_len: tile,
             kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
