@@ -989,14 +989,53 @@ impl VirtualStateProcessor {
         // so a corrupted or hand-edited snapshot refuses to become a sink instead of becoming one
         // quietly. `None` everywhere else, and every leg below is a no-op there — the walk is not a
         // dead handle in the blue-work pipeline, it is absent from it.
-        let mut palw_state = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_record()) {
-            (Some(params), Ok(Some(_))) => self
-                .palw_state_v2_store
-                .read()
-                .load_tip(params)
-                .expect("a stored V2 tip must load under its own committed root")
-                .map(|(_, state)| state),
-            _ => None,
+        //
+        // **The state is derived AT `from`, not read as if the tip already stood there** (launch
+        // blockers §7, fourth bullet). This used to take the stored tip's state verbatim, on the
+        // invariant that the tip row and virtual's selected parent always agree. They agree only
+        // between rounds: the tip is written in its own batch at the end of this walk, and the
+        // virtual state commits after it, so a crash in that window leaves the tip one or more
+        // blocks AHEAD of the sink. The next start then reverted `from`'s ancestors out of a state
+        // that already stood past them, `revert_delta_v2` rejected the value it was asked to
+        // replace, and the `.expect` below turned that into a panic — on every subsequent start,
+        // with no recovery short of wiping the data directory.
+        //
+        // Walking the path from the tip to `from` costs nothing when they are equal (the common
+        // case: an empty path) and repairs the window when they are not, in either direction. A
+        // walk that genuinely cannot be completed is a named refusal that leaves the node up and
+        // the sink where it was, not a crash loop.
+        let mut palw_state = match self.palw_state_params_v2.as_ref() {
+            None => None,
+            Some(params) => {
+                let loaded =
+                    self.palw_state_v2_store.read().load_tip(params).expect("a stored V2 tip must load under its own committed root");
+                match loaded {
+                    None => None,
+                    Some((tip_block, tip_state)) if tip_block == from => Some(tip_state),
+                    Some((tip_block, tip_state)) => {
+                        let path = self.dag_traversal_manager.calculate_chain_path(tip_block, from, None);
+                        let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
+                        let added: Vec<BlockHash> = path.added.iter().copied().collect();
+                        let store = self.palw_state_v2_store.read();
+                        match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
+                            Ok(state) => {
+                                warn!(
+                                    "PALW V2 state tip stood at {tip_block} while the UTXO walk starts at {from} (an unclean shutdown between the two commits); re-derived the state at {from} over {} reverted and {} applied deltas",
+                                    removed.len(),
+                                    added.len()
+                                );
+                                Some(state)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "PALW V2 state tip stands at {tip_block}, the UTXO walk starts at {from}, and the path between them cannot be walked ({e}); leaving the sink at {from}"
+                                );
+                                return from;
+                            }
+                        }
+                    }
+                }
+            }
         };
 
         // Avoid reorging if disqualified status is already known
@@ -1354,6 +1393,12 @@ impl VirtualStateProcessor {
         // deltas are still on disk and the next `load_tip` resumes from the older tip and walks
         // forward over them, which reproduces exactly this state. Losing a delta would not be
         // recoverable, which is why those ride the block's own batch and this does not.
+        //
+        // It is deliberately NOT folded into the last block's batch: the row carries the whole
+        // registry as a carriage, so a per-block tip write would re-serialize the entire state on
+        // every chain block. The crash window that ordering opens — this write landing while the
+        // virtual state commit does not — is closed at the READ above, which derives the state at
+        // the walk's own starting point instead of trusting the tip to stand there.
         if let Some(state) = palw_state.as_ref() {
             let mut batch = WriteBatch::default();
             let mut store = self.palw_state_v2_store.write();
@@ -4045,7 +4090,7 @@ impl VirtualStateProcessor {
                 // **This match is EXHAUSTIVE on purpose**: the `_ => {}` it replaces is what let
                 // four money-moving object kinds through in silence, and an exhaustive match makes
                 // adding a fifth a decision somebody has to write down.
-                Obj::BondRegistered { .. } | Obj::PanelBound { .. } => {}
+                Obj::BondRegistered { .. } => {}
                 Obj::FreePromptCommitted { .. } => {}
             }
         }
@@ -7712,13 +7757,37 @@ impl VirtualStateProcessor {
         // forward progress was refused as a failed reorg. A block that EXTENDS the sink is not
         // abandoning anything, which is why the existing DNS gate scopes itself the same way (it
         // asks whether the candidate still contains the confirmed anchor).
-        if !matches!(self.reachability_service.try_is_chain_ancestor_of(prev_sink, candidate), Ok(true))
-            && let (Some(incumbent), Some(challenger)) =
-                (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate))
+        if self.palw_state_params_v2.is_some()
+            && !matches!(self.reachability_service.try_is_chain_ancestor_of(prev_sink, candidate), Ok(true))
         {
-            return match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
-                kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => DnsReorgOutcome::GateInactive,
-                kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+            // **An unweighable candidate LOSES; it does not disappear** (launch blockers §7).
+            //
+            // This used to require BOTH orders to resolve, and fell through to the DNS gate — which
+            // answers `GateInactive`, i.e. allow — whenever either was `None`. `palw_state_walk`
+            // refuses a missing delta on purpose ("reading absent data as nothing is forbidden",
+            // ADR-0042 Decision 5) and `.ok()?` two layers up turned that refusal into `None`, so
+            // the deep-reorg gate failed OPEN on exactly the candidate it could not weigh — which
+            // is the one an attacker supplies.
+            //
+            // Three cases, and none of them is "carry on": a weighed challenger against a weighed
+            // incumbent is the comparator's; a challenger this node cannot weigh never beats one it
+            // can; and an incumbent this node cannot weigh is a state fault, refused rather than
+            // silently downgraded to blue work.
+            return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
+                (Some(incumbent), Some(challenger)) => {
+                    match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
+                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => DnsReorgOutcome::GateInactive,
+                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+                    }
+                }
+                (Some(_), None) => {
+                    info!("deep reorg refused: candidate {candidate} cannot be weighed by this node's PALW authority");
+                    DnsReorgOutcome::DominanceViolation
+                }
+                (None, _) => {
+                    info!("deep reorg refused: this node cannot weigh its own sink {prev_sink} — PALW state is incomplete");
+                    DnsReorgOutcome::DominanceViolation
+                }
             };
         }
         let Some(dns_params) = self.dns_params.as_ref() else {
@@ -8054,24 +8123,40 @@ impl VirtualStateProcessor {
     /// The window floor is the finality point's DAA. Every candidate must have the finality point
     /// on its chain to be a candidate at all, so below it they share every block — folding deeper
     /// adds identical terms to both sides.
-    fn palw_tip_weights_v1(
+    pub(super) fn palw_tip_weights_v1(
         &self,
         tip: BlockHash,
         finality_point: BlockHash,
         sink: BlockHash,
         sink_view: &ActiveBondView,
     ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
-        // **Unit D, site 1: on a V2 network the tip order is the SAME authority the other three
-        // sites use.** `PalwCandidateOrderV1`'s `(safe_weight, live_total)` is exactly what
-        // `PalwChainWeightsV1` carries, so the V2 lineage feeds the existing `order_tips_v1` seam
-        // rather than adding a comparator beside it — `compare_tips_v1` and
-        // `compare_palw_candidates_v1` then agree on the two keys they share, and the frontier
-        // key is upheld by `palw_v2_sink_is_the_blue_work_maximum` below.
-        if let Some(order) = self.palw_candidate_order_v2(tip) {
-            return Some(kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1 {
-                safe: order.safe_weight,
-                live: order.live_total,
-            });
+        // **On a V2 network this heap is a SEARCH ORDER, not the authority** (launch blockers §7).
+        //
+        // A version of this fed `palw_candidate_order_v2` into the seam, on the reasoning that one
+        // authority means every site orders by the same key. The reasoning was right and the site
+        // was wrong: this ranking runs over candidates that have NOT been UTXO-validated yet, and
+        // a candidate's V2 order is derived by walking stored deltas — which `commit_utxo_state`
+        // writes only for blocks that have already been committed to the selected chain. So
+        // "resolvable" here does not mean "heavier"; it means "already mine". `order_tips_v1`
+        // ranks `Some` above `None`, so the incumbent chain outranked every challenger by
+        // construction, whatever its weight.
+        //
+        // That is a permanent wedge, not a preference. Once a node's sink is itself a tip — its
+        // branch stopped while the network moved on — every competing tip is unweighable, the sink
+        // wins every contest, and the node never reorgs again. An attacker forces exactly that
+        // state on a chosen victim with one privately-delivered block. It also cannot be repaired
+        // by ranking `None` higher, which would invert it into "prefer the chain I cannot weigh".
+        //
+        // The authority is `dns_reorg_outcome`'s `decide_deep_reorg_v2` (site 4), which runs AFTER
+        // `calculate_utxo_state_relatively` has validated the candidate and therefore written its
+        // deltas — the first moment both sides of the comparison are weighable. Every sink move
+        // still passes it, so there is still exactly one comparator; this is not a second one
+        // being dropped, it is the site where a comparator cannot yet be evaluated.
+        //
+        // `RankedTip::cmp` already said the virtual-tip site is deliberately not PALW-ordered.
+        // It was true for the V1 lineage and false for V2 while this branch stood.
+        if self.palw_state_params_v2.is_some() {
+            return None;
         }
         let schedule = self.palw_schedule.as_ref()?;
         let ramp = self.palw_ramp.as_ref()?;
@@ -8294,11 +8379,20 @@ impl VirtualStateProcessor {
                         // additionally drops the EQUAL-work siblings virtual is supposed to merge,
                         // and the parent set silently narrows on every network. Measured, not
                         // reasoned about.
+                        //
+                        // Scoped further to the V1 fence: on a V2 network `palw_tip_weights_v1`
+                        // answers `None` for every candidate (see there), so this heap IS blue-work
+                        // ordered, the sink IS the maximum, and the assumption holds for free.
+                        // Leaving the filter on would then drop the EQUAL-work siblings — the exact
+                        // silent parent-set narrowing the paragraph above measured — on every block
+                        // of the only lineage that ships it.
                         let sink_blue_work = match tip_order {
-                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::PalwWeighted => {
+                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::PalwWeighted
+                                if self.palw_state_params_v2.is_none() =>
+                            {
                                 Some(self.ghostdag_store.get_blue_work(candidate).unwrap_or_default())
                             }
-                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly => None,
+                            _ => None,
                         };
                         return (
                             candidate,

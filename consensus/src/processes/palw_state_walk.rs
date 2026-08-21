@@ -273,7 +273,7 @@ mod tests {
     /// test's, which is the shape of every P0-4.
     #[test]
     fn the_store_walk_and_the_in_memory_book_agree() {
-        let (_lt, _db, store, p, _fork, _fork_state, a_blocks, a_state, b_blocks, b_state) = fixture();
+        let (_lt, _db, _store, p, _fork, _fork_state, a_blocks, a_state, b_blocks, b_state) = fixture();
 
         let mut book = PalwStateBookV2::new(p.clone());
         book.insert_genesis(h64(0));

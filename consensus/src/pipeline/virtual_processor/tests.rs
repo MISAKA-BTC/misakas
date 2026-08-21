@@ -536,6 +536,7 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     use crate::model::stores::virtual_state::VirtualStateStoreReader;
     use kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::sortable_block::SortableBlock;
 
     let catalog = palw_v2_test_catalog();
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -562,21 +563,163 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     let sink = ctx.consensus.get_sink();
     let virtual_parents = vp.virtual_stores.read().state.get().unwrap().parents.clone();
     assert!(virtual_parents.contains(&sink), "the sink is one of virtual's parents");
-    let sink_blue_work = vp.ghostdag_store.get_blue_work(sink).unwrap();
+    // **The invariant is GHOSTDAG's OWN key, which is `SortableBlock` — `(blue_work, hash)`.**
+    //
+    // This asserted strictly-lower blue work, which is stronger than the rule and therefore wrong
+    // in the merge-narrowing direction: `find_selected_parent` is `max()` over `SortableBlock`, so
+    // an equal-work parent whose hash sorts BELOW the sink's cannot be selected over it and is a
+    // perfectly legal virtual parent. Demanding strict `<` forced the filter that dropped exactly
+    // those siblings on every block of the only lineage that ships V2 (launch blockers §7).
+    let sink_sortable = SortableBlock { hash: sink, blue_work: vp.ghostdag_store.get_blue_work(sink).unwrap() };
     for parent in &virtual_parents {
         if *parent == sink {
             continue;
         }
+        let parent_sortable = SortableBlock { hash: *parent, blue_work: vp.ghostdag_store.get_blue_work(*parent).unwrap() };
         assert!(
-            vp.ghostdag_store.get_blue_work(*parent).unwrap() < sink_blue_work,
-            "virtual parent {parent} out-weighs the sink in blue work — GHOSTDAG would select IT, not the sink"
+            parent_sortable < sink_sortable,
+            "virtual parent {parent} out-ranks the sink under GHOSTDAG's own key — it would be selected, not the sink"
         );
     }
+    // And the consequence stated directly, so the invariant is pinned by the rule it protects
+    // rather than by a proxy for it.
+    assert_eq!(
+        vp.ghostdag_manager.find_selected_parent(virtual_parents.iter().copied()),
+        sink,
+        "GHOSTDAG selects the sink out of virtual's parent set"
+    );
 
     // The blue-work network keeps its own behaviour: the filter is scoped, so equal-work siblings
     // are still merged there. Asserted as the rule rather than as a chain shape.
     let plain = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
     assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
+}
+
+/// **An unclean shutdown between the PALW tip batch and the virtual-state commit is repaired, not
+/// fatal** (launch blockers §7, fourth bullet).
+///
+/// The tip row carries the whole registry as a carriage, so it is written once at the end of the
+/// UTXO walk rather than in each block's batch — which means there is a window where the tip has
+/// landed and the sink has not. The walk used to take the tip's state verbatim as the state at its
+/// own starting point; in that window the two are different blocks, `revert_delta_v2` rejected the
+/// value it was asked to replace, and the `.expect` around it panicked on every start from then on.
+///
+/// Both legs are exercised: the pipeline recovers when the tip trails the sink, and the revert leg
+/// — the shape the crash window actually produces — is walked directly.
+#[tokio::test]
+async fn palw_v2_a_tip_that_does_not_stand_at_the_sink_is_re_derived() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor().clone();
+    let (tip_block, tip_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let parent = vp.ghostdag_store.get_selected_parent(tip_block).expect("the tip has a selected parent");
+    let parent_state = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(tip_block).expect("the tip has a delta");
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&tip_state, &delta, &bundle.state)
+            .expect("reverting the tip's own delta yields its parent's state")
+    };
+
+    // The revert leg, walked directly: this is the shape the crash window leaves — the tip standing
+    // one block AHEAD of where the next walk starts.
+    {
+        let store = vp.palw_state_v2_store.read();
+        let rederived =
+            crate::processes::palw_state_walk::walk_chain_path(&store, &bundle.state, tip_state.clone(), &[tip_block], &[])
+                .expect("the path from the tip back to the sink walks");
+        assert_eq!(rederived.state_root(), parent_state.state_root(), "the re-derived state is the state at the sink");
+    }
+
+    // The apply leg, through the real pipeline. The template is built BEFORE the tip is moved,
+    // which is what the crash window really looks like: the block on the wire is honest and commits
+    // the right root — it is this node's own tip row that no longer stands where the walk starts.
+    // Moving the tip first would instead corrupt the template's own state root and test nothing.
+    ctx.build_block_template_row(0..1);
+    vp.palw_state_v2_store.write().set_tip_for_tests(parent, &parent_state).unwrap();
+    assert_eq!(vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().block, parent, "the tip really moved");
+
+    // Before the repair this panicked inside `calculate_utxo_state_relatively` on this insert.
+    ctx.validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    let (recovered_block, recovered_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(recovered_block, ctx.consensus.get_sink(), "the tip is back at the sink");
+    assert_ne!(recovered_block, parent, "and the chain advanced rather than stalling");
+    let expected = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(recovered_block).expect("the new tip has a delta");
+        let (_, prev_delta) = store.delta_of(tip_block).expect("the old tip has a delta");
+        let at_old = kaspa_consensus_core::palw_state_v2::apply_delta_v2(&parent_state, &prev_delta, &bundle.state).unwrap();
+        kaspa_consensus_core::palw_state_v2::apply_delta_v2(&at_old, &delta, &bundle.state).unwrap()
+    };
+    assert_eq!(recovered_state.state_root(), expected.state_root(), "and it is the state the deltas fold to");
+}
+
+/// **The V2 sink-search heap carries no PALW key, and the deep-reorg gate carries all of it**
+/// (launch blockers §7, first bullet).
+///
+/// The wedge this pins: `palw_candidate_order_v2` derives a candidate's standing by walking stored
+/// deltas, and `commit_utxo_state` writes a delta only for a block already committed to the
+/// selected chain. Feeding that into `order_tips_v1` — which ranks `Some` above `None` — makes
+/// "weighable" mean "already mine", so the incumbent outranks every challenger by construction. A
+/// node whose own branch stalls then never reorgs again, and one privately-delivered block puts a
+/// chosen victim in that state.
+///
+/// Two halves, and the test is only worth something with both: the heap key is gone, AND the
+/// authority still exists at the site that can evaluate it.
+#[tokio::test]
+async fn palw_v2_tip_heap_has_no_weight_key_but_the_gate_does() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+        })
+        .build();
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    // The V2 branch answers before it reads either of these, which is the property being pinned:
+    // no finality window and no bond view can make the heap prefer the incumbent.
+    let finality_point = config.params.genesis.hash;
+    let bond_view = kaspa_consensus_core::dns_finality::ActiveBondView::new();
+
+    // Half one: the incumbent gets no rank the heap can prefer it by. If this ever answers `Some`
+    // again, every challenger — which is every block not yet on this node's chain — loses to the
+    // sink whatever its weight.
+    assert!(
+        vp.palw_tip_weights_v1(sink, finality_point, sink, &bond_view).is_none(),
+        "the V2 sink-search heap must be blue-work ordered — a PALW key here is a permanent wedge"
+    );
+    for tip in ctx.consensus.body_tips().iter().copied() {
+        assert!(vp.palw_tip_weights_v1(tip, finality_point, sink, &bond_view).is_none(), "tip {tip} carries a heap weight key");
+    }
+
+    // Half two: the authority did not evaporate with it. The sink IS weighable — the gate runs
+    // after UTXO validation, which is the first moment both sides of a reorg comparison are.
+    assert!(vp.palw_candidate_order_v2(sink).is_some(), "the deep-reorg gate must still be able to weigh a validated chain");
 }
 
 /// **ADR-0042 Decision 6: attempt admission runs on the live path, and every clause bites.**

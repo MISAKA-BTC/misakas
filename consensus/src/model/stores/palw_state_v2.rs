@@ -206,6 +206,17 @@ impl DbPalwStateV2Store {
         }
     }
 
+    /// Move the tip row to a block the sink does not stand at, reproducing what an unclean
+    /// shutdown between this store's batch and the virtual-state commit leaves behind. Test-only:
+    /// production writes the tip exactly where the UTXO walk ended.
+    #[cfg(test)]
+    pub fn set_tip_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        let carriage = PalwStateCarriageV2::from_state(state);
+        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        self.tip.write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
     /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a
     /// schema bump) leaves behind: a live ConsensusV2 bundle with no PALW state under it. Test-only,
     /// because nothing in production should ever reach that state deliberately — the startup guard
