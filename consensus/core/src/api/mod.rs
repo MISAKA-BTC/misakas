@@ -511,6 +511,12 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **The seat duties this node holds** (launch blockers §2) — the claims whose panels name a
+    /// bond in `mine`, with the roots each seat must decide against.
+    fn palw_seat_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
+        Vec::new()
+    }
+
     /// Import: install the pruning point's PALW V2 chain state (launch blockers §1).
     ///
     /// The carriage is REBUILT and its `state_root` demanded back against the pruning point's own

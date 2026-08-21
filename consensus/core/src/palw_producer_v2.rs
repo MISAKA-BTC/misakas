@@ -374,15 +374,8 @@ mod tests {
 
         // A NON-floor class is still capped, because the cap is what Decision 2 is for. Nothing was
         // loosened; the exemption is exactly the one admission already makes.
-        let entrant = palw_producer_facts_v2(
-            &state,
-            &params,
-            &admission,
-            crate::BlockHash::from_u64_word(1),
-            far,
-            h64(2),
-            Some(&bond_key),
-        );
+        let entrant =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), far, h64(2), Some(&bond_key));
         assert!(entrant.is_none(), "this fixture registers no entrant; the floor is the only class");
     }
 
@@ -404,4 +397,64 @@ mod tests {
             palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None).is_none()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The panel's half of the contract
+// ---------------------------------------------------------------------------------------------
+
+/// One seat duty this node holds: a claim whose panel names a bond it can sign for.
+///
+/// The claim's committed roots ride along, because that is what a seat DECIDES against — a seat
+/// that had to fetch them separately could be handed a different pair than the chain holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwSeatDutyV2 {
+    pub claim_id: Hash64,
+    pub seat_bond: PalwBondKeyV2,
+    /// The producer whose material this seat must judge. Never this seat: `derive_panel_v2`
+    /// excludes a claim's own executor by bond, by operator and by key.
+    pub executor_bond: PalwBondKeyV2,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    /// When the panel was bound. The receipt window runs from here, and a receipt signed outside
+    /// it is refused by `validate_receipt_quorum_v2`.
+    pub bound_daa: u64,
+    /// The last DAA at which a receipt for this claim still counts.
+    pub receipt_deadline: u64,
+}
+
+/// **Every seat duty this node holds at one chain point** (launch blockers §2).
+///
+/// Nothing in the tree ever filed a `ReceiptLicensed`, so no claim reached `Final`: every panel
+/// voided at `ReceiptTimeout` with all its seats slashed, `safe_weight` stayed zero, and the
+/// escrowed worker carve of every block was burned. A seat cannot act on a duty it cannot see, and
+/// this is where it sees them.
+///
+/// `mine` is the set of bonds this node can sign for. Derived from the state the chain holds rather
+/// than assembled by the caller, for the same reason `palw_producer_facts_v2` is: a seat that
+/// computed its own deadline would eventually disagree with the quorum check about it.
+pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
+    let mut out = Vec::new();
+    for (claim_id, claim) in state.claims_iter() {
+        // Only a bound panel owes receipts; every other phase is somebody else's edge.
+        let crate::palw_state_v2::PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
+            continue;
+        };
+        let Some(panel) = state.panel(claim_id) else { continue };
+        for seat in &panel.seats {
+            if !mine.contains(&seat.bond) {
+                continue;
+            }
+            out.push(PalwSeatDutyV2 {
+                claim_id: *claim_id,
+                seat_bond: seat.bond,
+                executor_bond: claim.bond,
+                execution_root: claim.execution_root,
+                trace_root: claim.trace_root,
+                bound_daa,
+                receipt_deadline: bound_daa.saturating_add(state_params.window_receipt()),
+            });
+        }
+    }
+    out
 }

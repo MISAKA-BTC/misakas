@@ -499,6 +499,35 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_STAKE_PRECOMMIT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// **A PALW V2 lifecycle object, carried on subnetwork 0x4b** (launch blockers §2).
+    ///
+    /// The lattice's edges — `ReceiptLicensed` above all — ride an ordinary transaction, and
+    /// nothing in the tree built one. So no claim could ever reach `Final`: every panel voided at
+    /// `ReceiptTimeout` with all its seats slashed, `safe_weight` stayed zero, and the escrowed
+    /// worker carve of every block was burned. The object itself is checked by the acceptance
+    /// layer against chain state; what this owes is the funding and the signature.
+    pub fn build_palw_lifecycle_tx(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let payload = kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+            object: object.clone(),
+        };
+        let bytes = borsh::to_vec(&payload).map_err(|e| format!("a lifecycle object must serialize: {e}"))?;
+        self.build_funded_overlay_tx(
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            bytes,
+            funding_outpoint,
+            funding,
+            fee,
+            false,
+        )
+    }
+
     /// MISAKA PALW Stage-0 chain carriage (ADR-0029 §5): a fee-funded, signed
     /// **native-subnetwork** transaction carrying an opaque payload — the
     /// `"MPALW2" ‖ kind ‖ borsh` envelope built by `kaspa_consensus_core::palw_carriage`.

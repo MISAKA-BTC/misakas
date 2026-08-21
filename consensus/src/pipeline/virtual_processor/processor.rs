@@ -3614,6 +3614,18 @@ impl VirtualStateProcessor {
     /// store tip is the selected parent's state, so the epoch a producer checks its budget against
     /// must be the one the candidate will be admitted in — reading the tip's would put a producer
     /// one epoch behind at every boundary, mining into a refusal it could not see the reason for.
+    /// The seat duties this node holds at the state store's tip (launch blockers §2).
+    pub fn palw_seat_duties_v2_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&state, state_params, mine)
+    }
+
     pub fn palw_producer_facts_v2_impl(
         &self,
         class_id: kaspa_hashes::Hash64,

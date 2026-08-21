@@ -1017,7 +1017,137 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
-/// **The pruning-point PALW import installs a real state and REFUSES a forged one** (launch
+/// **A panel really binds, and a signed quorum really licenses the claim** (launch blockers §2).
+///
+/// Nothing in the tree ever filed a `ReceiptLicensed`, so no claim could reach `Final`: every panel
+/// voided at `ReceiptTimeout` with all its seats slashed, `safe_weight` stayed zero forever, and
+/// the escrowed worker carve of every block — its entire 620-permille worker base share — was
+/// burned. The lattice had no configuration in which it turned over.
+///
+/// This drives the real edges: the chain derives the panel, `palw_seat_duties_v2` reports what the
+/// seats owe, real ML-DSA-87 receipts are signed over `palw_receipt_message_v2`, and the acceptance
+/// layer's quorum check licenses the claim.
+#[tokio::test]
+async fn palw_v2_a_signed_quorum_licenses_a_claim() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2};
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Past the anchor delay, so the chain can derive a panel for the first claims.
+    for _ in 0..(bundle.panel.anchor_delay() + 4) {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+
+    // **A panel really bound.** Before the registry gates this was impossible with one bond.
+    let (claim_id, claim) = state
+        .claims_iter()
+        .find(|(id, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }) && state.panel(id).is_some())
+        .map(|(id, c)| (*id, c.clone()))
+        .expect("the chain derives a panel once the anchor exists");
+    let panel = state.panel(&claim_id).expect("bound").clone();
+    assert_eq!(panel.seats.len(), bundle.panel.seat_count() as usize, "a full jury, not a short one");
+
+    // **The seats see their duty.** A seat cannot act on something it cannot see.
+    let mine: Vec<_> = panel.seats.iter().map(|s| s.bond).collect();
+    let duties = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&state, &bundle.state, &mine);
+    let for_this_claim: Vec<_> = duties.iter().filter(|d| d.claim_id == claim_id).collect();
+    assert_eq!(for_this_claim.len(), mine.len(), "every seat of this panel is a duty this node holds");
+    assert!(duties.len() >= for_this_claim.len(), "and duties across every bound claim are reported, not just one");
+    let duty = for_this_claim[0];
+    assert_eq!(duty.execution_root, claim.execution_root, "and it carries what the seat must decide against");
+    assert_ne!(duty.executor_bond, duty.seat_bond, "a seat never judges its own claim");
+
+    // Real signatures, from the harness identity every genesis bond registers.
+    // Each seat signs under ITS OWN registered key — the quorum check resolves the seat bond to its
+    // registry pubkey, so one shared key would (correctly) fail to verify for the others.
+    // `palw_devnet_bond_registry_v1` keys row `n` at txid `0xB0 + n`, so the row index is the
+    // outpoint's own offset — and row 0 is the harness identity the executor bond registers.
+    let seat_key = |bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| {
+        let index = (0..16u64)
+            .find(|i| bond.0.transaction_id == kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0 + i) && bond.0.index == 0)
+            .expect("a registry row");
+        if index == 0 {
+            crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair()
+        } else {
+            crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(index)
+        }
+    };
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let signed_daa = ctx.consensus.get_virtual_daa_score();
+    let receipts: Vec<PalwSeatReceiptV2> = panel
+        .seats
+        .iter()
+        .take(bundle.panel.quorum() as usize)
+        .map(|seat| {
+            let message = palw_receipt_message_v2(network_domain, claim_id, PalwReceiptVerdictV2::Valid, signed_daa);
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &seat_key(&seat.bond).signing_key,
+                message.as_byte_slice(),
+                kaspa_consensus_core::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+                [0x11u8; 32],
+            )
+            .expect("sign")
+            .as_ref()
+            .to_vec();
+            PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat.bond, signed_daa, signature }
+        })
+        .collect();
+
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: tip,
+        daa_score: signed_daa,
+        blue_score: signed_daa,
+        subsidy: 0,
+    };
+    let object = Obj::ReceiptLicensed { claim: claim_id, receipts: receipts.clone() };
+    vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&object))
+        .expect("a signed quorum licenses the claim");
+
+    // And one seat short of quorum does not — the quorum is a bound, not a formality.
+    let short = Obj::ReceiptLicensed { claim: claim_id, receipts: receipts[..receipts.len() - 1].to_vec() };
+    assert!(
+        vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&short)).is_err(),
+        "below quorum is refused"
+    );
+
+    // Folding it moves the claim out of PanelBound — the edge that did not exist.
+    // The transition demands a strictly-increasing chain point; acceptance above does not, so the
+    // fold gets its own point one step past the tip's.
+    let next_point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: kaspa_consensus_core::BlockHash::from_u64_word(0xF01D),
+        daa_score: signed_daa + 1,
+        blue_score: state.last_point().map(|p| p.blue_score).unwrap_or(0) + 1,
+        subsidy: 0,
+    };
+    let (licensed, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+        &state,
+        &bundle.state,
+        &next_point,
+        std::slice::from_ref(&object),
+        None,
+    )
+    .expect("the transition takes it");
+    assert!(
+        matches!(licensed.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "the claim is licensed, and its path to Final is open"
+    );
+}
+
+/// **The pruning-point PALW import installs a real state and REFUSES a forged one**/// **The pruning-point PALW import installs a real state and REFUSES a forged one** (launch
 /// blockers §1, the import half).
 ///
 /// `PalwChainStateV2` was written only by `process_genesis`, so a node joining by pruned IBD had
@@ -1552,6 +1682,12 @@ fn palw_v2_test_bundle(
             );
             registry[0].pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
             registry[0].operator_pubkey = vec![21u8; 8];
+            // Every OTHER row gets a real ML-DSA-87 identity too. They carried four-byte
+            // placeholders, so no fixture could sign a panel receipt — which is part of why the
+            // missing `ReceiptLicensed` edge went unnoticed for so long.
+            for (i, row) in registry.iter_mut().enumerate().skip(1) {
+                row.pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(i as u64);
+            }
             registry
         },
     )

@@ -515,7 +515,10 @@ mod tests {
                     assert!(
                         n.op_kind == PalwStepOpKindV1::EmbedLookup && coord.call_index > 0,
                         "an unexpected leaf is unadjudicable — {:?} at call {} pos {} tile {}; only decode-embed is known-open",
-                        n.op_kind, coord.call_index, coord.position, coord.tile_index
+                        n.op_kind,
+                        coord.call_index,
+                        coord.position,
+                        coord.tile_index
                     );
                 }
                 other => convicted
@@ -596,6 +599,46 @@ mod tests {
         assert_eq!(a.execution_root, again.execution_root);
     }
 
+    /// **A seat's check catches a producer that kept something other than what it committed**
+    /// (launch blockers §2).
+    ///
+    /// Nothing in the tree ever filed a `ReceiptLicensed`, so no claim could reach `Final` and every
+    /// panel seat was slashed at `ReceiptTimeout`. A seat has to decide something before it signs,
+    /// and this is that decision: rebuild the leg from the retained tiles and ask whether it
+    /// reproduces the roots the CLAIM carries. A rubber stamp would license a producer that
+    /// committed one root and kept another.
+    #[test]
+    fn a_seat_licenses_only_material_that_matches_the_claim() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let material: Base0RetainedMaterialV1 = (run.binding.clone(), run.tiles.tiles.clone(), run.generated_token_ids.clone());
+
+        assert!(
+            base0_material_matches_claim_v1(&material, run.execution_root, run.trace_root).expect("checkable"),
+            "a producer that kept what it committed is licensed"
+        );
+
+        // A claim committing a DIFFERENT execution root — one execution published, another kept.
+        // This is the case a rubber stamp would sign.
+        assert!(
+            !base0_material_matches_claim_v1(&material, Hash64::from_u64_word(0xBAD), run.trace_root).expect("checkable"),
+            "material that does not match the committed execution root must not be licensed"
+        );
+        assert!(
+            !base0_material_matches_claim_v1(&material, run.execution_root, Hash64::from_u64_word(0xBAD)).expect("checkable"),
+            "nor material whose trace root is not the committed one"
+        );
+
+        // And material whose own tiles do not reproduce its own binding: a commitment kept without
+        // the execution behind it.
+        let mut tampered = material.clone();
+        tampered.1[0].1.values_le[0] = tampered.1[0].1.values_le[0].wrapping_add(1);
+        assert!(
+            !base0_material_matches_claim_v1(&tampered, run.execution_root, run.trace_root).expect("checkable"),
+            "a binding its own tiles do not reproduce is a commitment, not an execution"
+        );
+    }
+
     /// A producer that ran a shorter prompt than its context declares ran a DIFFERENT job from the
     /// one it committed to — refused at the source rather than committed and argued about later.
     #[test]
@@ -610,4 +653,57 @@ mod tests {
             Some(ProduceError::TokenOutOfVocab { token: 9_999, vocab: artifact.shape.vocab })
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The panel's half: reading back retained material and deciding a verdict
+// ---------------------------------------------------------------------------------------------
+
+/// The execution material a producer retains for `trace_retention_daa`, as it is stored.
+///
+/// `(binding, tiles, generated ids)` — everything a seat needs to decide whether the producer
+/// committed to what it actually computed, and everything a refutation is assembled from later.
+pub type Base0RetainedMaterialV1 = (
+    kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
+    Vec<u32>,
+);
+
+/// **What a panel seat checks before it signs `Valid`.**
+///
+/// A seat's receipt is an attestation that the producer served material matching what its claim
+/// committed. The check that makes it more than a rubber stamp is the one the court would run:
+/// rebuild the step leg from the tiles and see whether it reproduces the `execution_root` the claim
+/// carries. A producer that committed one root and retained a different execution fails here —
+/// before any court, and without opening one.
+///
+/// `Err` is "I could not verify", which is a seat's honest `Unavailable`; `Ok(false)` is "the
+/// material does not match what was committed", which is the same verdict for a different reason.
+/// Neither is a conviction: convicting is the court's, on evidence a challenger assembles.
+pub fn base0_material_matches_claim_v1(
+    material: &Base0RetainedMaterialV1,
+    committed_execution_root: Hash64,
+    committed_trace_root: Hash64,
+) -> Result<bool, ProduceError> {
+    let (binding, tiles, _generated) = material;
+    // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
+    // binding whose root does not match its own tiles kept a commitment, not an execution.
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    for (index, leaf) in tiles {
+        let Some(slot) = leaves.get_mut(*index as usize) else {
+            return Ok(false); // a tile outside the space it claims to fill
+        };
+        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+    }
+    let Ok(root) = kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves) else {
+        return Ok(false);
+    };
+    if root != binding.step_merkle_root {
+        return Ok(false);
+    }
+    // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained
+    // a consistent execution of some other job.
+    Ok(binding.committed_execution_root == committed_execution_root && binding.full_logits_trace_root == committed_trace_root)
 }

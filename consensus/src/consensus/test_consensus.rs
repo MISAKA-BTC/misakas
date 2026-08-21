@@ -185,6 +185,29 @@ impl TestConsensus {
         KP.get_or_init(|| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]))
     }
 
+    /// **A real ML-DSA-87 identity per genesis-registry row.**
+    ///
+    /// The registry's non-executor rows carried four-byte placeholders, which no signature can
+    /// verify against — so no fixture could ever sign a panel RECEIPT, which is one reason the
+    /// missing `ReceiptLicensed` edge went unnoticed. Row `n` gets a distinct key, deterministically.
+    pub(crate) fn palw_v2_registry_keypair(n: u64) -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+        static KPS: std::sync::OnceLock<Vec<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>> = std::sync::OnceLock::new();
+        let all = KPS.get_or_init(|| {
+            (0..16u64)
+                .map(|i| {
+                    let mut seed = [0xB0u8; 32];
+                    seed[0] = 0xB0u8.wrapping_add(i as u8);
+                    libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed)
+                })
+                .collect()
+        });
+        &all[(n as usize) % all.len()]
+    }
+
+    pub(crate) fn palw_v2_registry_pubkey(n: u64) -> Vec<u8> {
+        Self::palw_v2_registry_keypair(n).verification_key.as_ref().to_vec()
+    }
+
     /// The verification key the genesis bond registers and the carriage carries — one value, so
     /// admission item 2's equality is a fact about the harness rather than a coincidence.
     pub(crate) fn palw_v2_harness_pubkey() -> Vec<u8> {

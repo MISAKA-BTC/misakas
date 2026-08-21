@@ -2117,6 +2117,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_overlay_snapshot()
     }
 
+    fn palw_seat_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        self.virtual_processor.palw_seat_duties_v2_impl(&mine)
+    }
+
     fn import_pruning_point_palw_state(
         &self,
         pruning_point: BlockHash,
