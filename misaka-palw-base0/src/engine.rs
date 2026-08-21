@@ -80,7 +80,11 @@ impl From<PalwBase0OpError> for EngineError {
 /// than like a bug.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KvCache {
-    class_id: kaspa_hashes::Hash64,
+    /// The ARTIFACT digest, not the class id (ADR-0049 Decision G): what this cache is asking is
+    /// "were you filled from these exact bytes", which is the digest's job. A class id would be
+    /// the wrong question — two artifacts of one class differ in weights and their caches must
+    /// never be interchanged.
+    artifact_digest: kaspa_hashes::Hash64,
     d_model: usize,
     /// `[layer][position][d_model]`.
     keys: Vec<Vec<Vec<i8>>>,
@@ -90,7 +94,7 @@ pub struct KvCache {
 impl KvCache {
     pub fn new(artifact: &Base0ArtifactV1) -> Self {
         Self {
-            class_id: artifact.execution_class_id(),
+            artifact_digest: artifact.artifact_digest(),
             d_model: artifact.shape.d_model(),
             keys: vec![Vec::new(); artifact.shape.n_layers],
             values: vec![Vec::new(); artifact.shape.n_layers],
@@ -158,12 +162,12 @@ impl ForwardProbe {
 /// A forward pass bound to one artifact.
 pub struct Base0Engine<'a> {
     artifact: &'a Base0ArtifactV1,
-    class_id: kaspa_hashes::Hash64,
+    artifact_digest: kaspa_hashes::Hash64,
 }
 
 impl<'a> Base0Engine<'a> {
     pub fn new(artifact: &'a Base0ArtifactV1) -> Self {
-        Self { artifact, class_id: artifact.execution_class_id() }
+        Self { artifact, artifact_digest: artifact.artifact_digest() }
     }
 
     pub fn artifact(&self) -> &Base0ArtifactV1 {
@@ -190,7 +194,7 @@ impl<'a> Base0Engine<'a> {
         let mut probe = ForwardProbe::default();
         let shape = &self.artifact.shape;
         let d = shape.d_model();
-        if cache.class_id != self.class_id || cache.d_model != d || cache.keys.len() != shape.n_layers {
+        if cache.artifact_digest != self.artifact_digest || cache.d_model != d || cache.keys.len() != shape.n_layers {
             return Err(EngineError::CacheShapeMismatch);
         }
         if position >= shape.max_position || position != cache.len() {
@@ -602,7 +606,7 @@ mod tests {
         }
 
         // And the class id must separate the two, or an executor could retune the model in place.
-        assert_ne!(good.execution_class_id(), flat.execution_class_id());
+        assert_ne!(good.artifact_digest(), flat.artifact_digest());
     }
 
     /// The same final token over the same prefix *content* in a different ORDER must give
@@ -715,7 +719,7 @@ mod tests {
     fn the_engine_matches_its_golden_trace() {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
-            a.execution_class_id().to_string(),
+            a.artifact_digest().to_string(),
             // Re-frozen 2026-08-21, four times: the shape digest gained `n_kv_heads`, the
             // artifact digest gained the requantization ZERO POINTS and the per-channel triples
             // (without which two artifacts whose every bias differs shared one class id), and

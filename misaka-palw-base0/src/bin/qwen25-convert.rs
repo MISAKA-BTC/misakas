@@ -69,7 +69,7 @@ fn main() {
     let weight_bytes: usize = artifact.embed.len()
         + artifact.unembed.len()
         + artifact.layers.iter().map(|l| l.wq.len() + l.wk.len() + l.wv.len() + l.wo.len() + l.w_gate.len() + l.w_up.len() + l.w_down.len()).sum::<usize>();
-    println!("class id      {}", artifact.execution_class_id());
+    println!("class id      {}", artifact.artifact_digest());
     println!("tokenizer     {commitment}");
     println!("int8 weights  {} MiB", weight_bytes / (1 << 20));
     println!("biased chans  {} (zero would mean the biases rounded away)", biased_channel_count(&artifact));
@@ -92,7 +92,7 @@ fn main() {
             let shifts: Vec<u8> = table.iter().map(|p| p[1].shift).collect();
             println!("  ffn residual shifts {shifts:?}");
         }
-        println!("  class id (calibrated) {}", calibrated.execution_class_id());
+        println!("  class id (calibrated) {}", calibrated.artifact_digest());
         calibrated
     };
     let started = std::time::Instant::now();

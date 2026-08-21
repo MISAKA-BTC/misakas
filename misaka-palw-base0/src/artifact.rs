@@ -5,7 +5,7 @@
 //! ADR-0039 made BASE-0 the class that replaces the hash floor, and gave the reason: it is the
 //! only class whose kernel catalog can *close*. A closed catalog is worth nothing on its own —
 //! two nodes still need to agree on which weights the catalog was applied to. The artifact is
-//! that agreement, and [`Base0ArtifactV1::execution_class_id`] is the single 64-byte value the
+//! that agreement, and [`Base0ArtifactV1::artifact_digest`] is the single 64-byte value the
 //! rest of the system quotes.
 //!
 //! # Everything that changes the output is inside the digest
@@ -81,6 +81,18 @@ pub enum ArtifactError {
     /// free-reduction-order proof does not hold. Refused at construction because the alternative
     /// is an accumulator that silently overflows mid-inference.
     DotTooLong { got: usize },
+    /// The geometry a caller asked the class id for is not the geometry this artifact has
+    /// (ADR-0049 Decision G). Deriving the id anyway would name a class whose graph reads tensors
+    /// of a different width than the ones carried here.
+    GeometryMismatch { field: &'static str, artifact: u64, geometry: u64 },
+    /// The geometry is one no BASE-0 profile exists for, so it names no class.
+    Profile(&'static str),
+}
+
+impl std::fmt::Display for ArtifactError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 impl From<RopeGenError> for ArtifactError {
@@ -449,12 +461,78 @@ impl Base0ArtifactV1 {
         self.derived_seed
     }
 
-    /// The class id: a 64-byte digest over shape, weights, quantisation, and the rotary table.
+    /// **The ARTIFACT digest — not the class id** (ADR-0049 Decision G).
+    ///
+    /// A 64-byte digest over shape, weights, quantisation, the tokenizer commitment and the rotary
+    /// table. It was called `execution_class_id`, and that name was the H-08 defect: two different
+    /// values were called a class id in two places. The chain keys classes on
+    /// `PalwShapeProfileV3::shape_profile_id` — "a class is its graph, which is what the chain
+    /// already keys on" — while this is a flat hash of a whole artifact, and Decision G's own
+    /// objection to using it is that **nothing can be opened against it**: a court that wants one
+    /// weight row cannot prove anything about a digest that hashed the file.
+    ///
+    /// So the two values now have their two jobs. This one answers "are these the same bytes",
+    /// which is what a converter, a fleet check and an equality test need.
+    /// [`Self::execution_class_id`] answers "is this the class the chain registered", and
+    /// `artifact_root` (the inventory's Merkle root) answers "does this row belong to it".
     ///
     /// `derived_seed` is NOT covered, and that is the correct side of the rule stated in the
     /// module docs: it does not change any output, so covering it would split one computed class
     /// into two.
-    pub fn execution_class_id(&self) -> Hash64 {
+    /// **The CLASS id: the shape profile id of the graph this artifact is run under**
+    /// (ADR-0049 Decision G — "`execution_class_id` is the shape profile id").
+    ///
+    /// It takes the geometry rather than deriving it, and that is the fact worth stating: a class
+    /// is not a function of an artifact. `n_ctx`, `tile_len` and `n_threads` are registration
+    /// choices that no weight file contains, and they are inside the profile — so an artifact
+    /// alone cannot say which class it belongs to, and the value that pretended otherwise was the
+    /// flat digest this method replaces.
+    ///
+    /// What the artifact CAN do is refuse a geometry that is not its own, which is what makes this
+    /// bridge safe: the two namespaces meet in exactly one place, with a check between them.
+    pub fn execution_class_id(
+        &self,
+        geometry: kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1,
+    ) -> Result<Hash64, ArtifactError> {
+        self.check_geometry(&geometry)?;
+        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(geometry)
+            .map_err(|_| ArtifactError::Profile("this geometry builds no BASE-0 profile, so it names no class"))?;
+        Ok(profile.shape_profile_id())
+    }
+
+    /// Every geometry field this artifact also carries must agree with it. `n_ctx`, `tile_len` and
+    /// `n_threads` are the registration's alone — the artifact has nothing to say about them, and
+    /// pretending it did would be inventing a fact.
+    pub fn check_geometry(
+        &self,
+        geometry: &kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1,
+    ) -> Result<(), ArtifactError> {
+        let checks: [(&'static str, u64, u64); 6] = [
+            ("layer_count", self.shape.n_layers as u64, geometry.layer_count as u64),
+            ("hidden_dim", self.shape.d_model() as u64, geometry.hidden_dim as u64),
+            ("ffn_dim", self.shape.d_ff as u64, geometry.ffn_dim as u64),
+            ("attn_heads", self.shape.n_heads as u64, geometry.attn_heads as u64),
+            ("attn_head_dim", self.shape.d_head as u64, geometry.attn_head_dim as u64),
+            ("vocab_size", self.shape.vocab as u64, geometry.vocab_size as u64),
+        ];
+        for (field, artifact, geometry) in checks {
+            if artifact != geometry {
+                return Err(ArtifactError::GeometryMismatch { field, artifact, geometry });
+            }
+        }
+        // `rms_eps_q` is an artifact field AND a profile field, and it moves every activation, so
+        // a disagreement here is a class computing something else under this class's name.
+        if self.shape.eps_q != geometry.rms_eps_q {
+            return Err(ArtifactError::GeometryMismatch {
+                field: "rms_eps_q",
+                artifact: self.shape.eps_q as u64,
+                geometry: geometry.rms_eps_q as u64,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn artifact_digest(&self) -> Hash64 {
         let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_ARTIFACT_DOMAIN).to_state();
         state.update(&self.shape.digest_bytes());
         state.update(&self.rope.digest_bytes());
@@ -581,8 +659,8 @@ mod tests {
 
         let a = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"a\"}"));
         let b = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"b\"}"));
-        assert_ne!(a.execution_class_id(), b.execution_class_id(), "two tokenizers are two classes");
-        assert_ne!(a.execution_class_id(), base.execution_class_id(), "and declaring one is not declaring none");
+        assert_ne!(a.artifact_digest(), b.artifact_digest(), "two tokenizers are two classes");
+        assert_ne!(a.artifact_digest(), base.artifact_digest(), "and declaring one is not declaring none");
 
         // The commitment is over the FILE's bytes, so a verifier checks it by hashing what it
         // downloaded rather than by re-deriving a vocabulary — which no two implementations would
@@ -596,7 +674,7 @@ mod tests {
         // Length-prefixed, so no two files concatenate into a third's commitment.
         assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"ab"), Base0ArtifactV1::tokenizer_commitment_of(b"a"));
         // …and its own domain key, so it cannot collide with an artifact digest.
-        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.execution_class_id());
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.artifact_digest());
     }
 
     /// **Condition 6: the requant parameters are inside `artifact_root`, biases included.**
@@ -611,7 +689,7 @@ mod tests {
     fn the_class_id_covers_every_quantization_parameter() {
         use kaspa_consensus_core::palw_base0_ops::QuantParams;
         let base = Base0ArtifactV1::derive_deterministic(tiny(), 7).unwrap();
-        let id = base.execution_class_id();
+        let id = base.artifact_digest();
 
         // Each field of each triple moves it, one at a time.
         for mutate in [
@@ -624,7 +702,7 @@ mod tests {
         ] {
             let mut m = base.clone();
             mutate(&mut m);
-            assert_ne!(m.execution_class_id(), id, "a quantization parameter must be inside the identity");
+            assert_ne!(m.artifact_digest(), id, "a quantization parameter must be inside the identity");
         }
 
         // The per-channel triples too — and PRESENCE is distinguishable from an empty list, so
@@ -632,7 +710,7 @@ mod tests {
         // streams rather than one digest two artifacts share.
         let mut with_channels = base.clone();
         with_channels.layers[0].qkv_channel_requant = Some([Vec::new(), Vec::new(), Vec::new()]);
-        assert_ne!(with_channels.execution_class_id(), id, "an empty Some is not a None");
+        assert_ne!(with_channels.artifact_digest(), id, "an empty Some is not a None");
 
         let d = tiny().d_model();
         let kv = tiny().kv_dim();
@@ -640,11 +718,11 @@ mod tests {
         let mut biased = base.clone();
         biased.layers[0].qkv_channel_requant =
             Some([vec![triple(0); d], vec![triple(0); kv], vec![triple(0); kv]]);
-        let unbiased_id = biased.execution_class_id();
+        let unbiased_id = biased.artifact_digest();
         let mut one_bias = biased.clone();
         one_bias.layers[0].qkv_channel_requant.as_mut().unwrap()[0][d - 1] = triple(1);
         assert_ne!(
-            one_bias.execution_class_id(),
+            one_bias.artifact_digest(),
             unbiased_id,
             "ONE channel's bias, in the LAST position, must move the class id — a digest that missed it \
              would let a class run with biases it was not registered with"
@@ -674,16 +752,68 @@ mod tests {
         let a = Base0ArtifactV1::derive_deterministic(tiny(), 7).unwrap();
         let b = Base0ArtifactV1::derive_deterministic(tiny(), 7).unwrap();
         assert_eq!(a, b);
-        assert_eq!(a.execution_class_id(), b.execution_class_id());
+        assert_eq!(a.artifact_digest(), b.artifact_digest());
     }
 
     /// **Every** shape field must move the class id. This is the test the module docs name: it
     /// fails when a field is added to the shape and not added to `digest_bytes`, which is the bug
     /// that would give two differently-computing artifacts one id.
+    /// **Audit H-08: one meaning for "class id" (ADR-0049 Decision G).**
+    ///
+    /// Two different values were called a class id in two places. This crate's was a flat digest
+    /// over a whole artifact — which is not what the chain keys on, and, Decision G's own
+    /// objection, is a value **nothing can be opened against**: a court that wants one weight row
+    /// cannot prove anything about a hash of the file. The chain keys on the shape profile id
+    /// ("a class is its graph"), and `palw_rc_base0_registration_v1` already did.
+    ///
+    /// The two now answer their two questions, and the pair of assertions below is the whole
+    /// point: same graph + different weights is ONE class and TWO artifacts.
+    #[test]
+    fn the_class_id_is_the_graph_and_the_digest_is_the_bytes() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+
+        let geometry = PALW_RC_BASE0_GEOMETRY;
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let a = Base0ArtifactV1::derive_deterministic(shape, 1).unwrap();
+        let b = Base0ArtifactV1::derive_deterministic(shape, 2).unwrap();
+
+        // One graph, one class — whatever the weights are.
+        let expected = base0_profile_v1(geometry).unwrap().shape_profile_id();
+        assert_eq!(a.execution_class_id(geometry).unwrap(), expected);
+        assert_eq!(b.execution_class_id(geometry).unwrap(), expected, "different weights are the SAME class");
+        // Two artifacts, though — which is what the digest is for, and why it cannot be the id.
+        assert_ne!(a.artifact_digest(), b.artifact_digest(), "different weights are DIFFERENT artifacts");
+
+        // A class is not a function of an artifact: `n_ctx` and `tile_len` are registration
+        // choices no weight file contains, and they move the id.
+        let wider = kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1 { tile_len: geometry.tile_len / 2, ..geometry };
+        assert_ne!(a.execution_class_id(wider).unwrap(), expected, "a tile length is inside the class");
+        assert_eq!(a.artifact_digest(), a.artifact_digest(), "and outside the artifact");
+
+        // And the bridge refuses a geometry that is not this artifact's, so the two namespaces
+        // cannot be joined across a mismatch.
+        let foreign = kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1 {
+            hidden_dim: geometry.hidden_dim + geometry.attn_head_dim,
+            attn_heads: geometry.attn_heads + 1,
+            ..geometry
+        };
+        assert!(matches!(a.execution_class_id(foreign), Err(ArtifactError::GeometryMismatch { field: "hidden_dim", .. })));
+    }
+
     #[test]
     fn shape_digest_covers_every_field() {
         let base = tiny();
-        let baseline = Base0ArtifactV1::derive_deterministic(base, 1).unwrap().execution_class_id();
+        let baseline = Base0ArtifactV1::derive_deterministic(base, 1).unwrap().artifact_digest();
         let mutations: [(&str, Base0ShapeV1); 8] = [
             ("n_layers", Base0ShapeV1 { n_layers: 3, ..base }),
             ("n_heads", Base0ShapeV1 { n_heads: 4, ..base }),
@@ -695,7 +825,7 @@ mod tests {
             ("eps_q", Base0ShapeV1 { eps_q: 1 << 9, ..base }),
         ];
         for (field, shape) in mutations {
-            let id = Base0ArtifactV1::derive_deterministic(shape, 1).unwrap().execution_class_id();
+            let id = Base0ArtifactV1::derive_deterministic(shape, 1).unwrap().artifact_digest();
             assert_ne!(baseline, id, "changing `{field}` did not change the class id");
         }
         // And the fixed-width encoding must not let two shapes collide at a field boundary.
@@ -709,7 +839,7 @@ mod tests {
     #[test]
     fn every_tensor_is_inside_the_digest() {
         let base = Base0ArtifactV1::derive_deterministic(tiny(), 3).unwrap();
-        let id = base.execution_class_id();
+        let id = base.artifact_digest();
         let flip = |v: &Vec<i8>| -> Vec<i8> {
             let mut v = v.clone();
             v[0] = v[0].wrapping_add(1);
@@ -717,10 +847,10 @@ mod tests {
         };
         let mut a = base.clone();
         a.embed = flip(&a.embed);
-        assert_ne!(id, a.execution_class_id(), "embed is outside the digest");
+        assert_ne!(id, a.artifact_digest(), "embed is outside the digest");
         let mut a = base.clone();
         a.unembed = flip(&a.unembed);
-        assert_ne!(id, a.execution_class_id(), "unembed is outside the digest");
+        assert_ne!(id, a.artifact_digest(), "unembed is outside the digest");
         for li in 0..base.shape.n_layers {
             for (name, pick) in [
                 ("wq", 0usize),
@@ -743,29 +873,29 @@ mod tests {
                     _ => &mut l.w_down,
                 };
                 t[0] = t[0].wrapping_add(1);
-                assert_ne!(id, a.execution_class_id(), "layer {li} {name} is outside the digest");
+                assert_ne!(id, a.artifact_digest(), "layer {li} {name} is outside the digest");
                 // And the requantisation, which changes the output without changing a weight.
                 let mut a = base.clone();
                 a.layers[li].requant[pick].shift += 1;
-                assert_ne!(id, a.execution_class_id(), "layer {li} requant[{pick}] is outside the digest");
+                assert_ne!(id, a.artifact_digest(), "layer {li} requant[{pick}] is outside the digest");
             }
         }
         let mut a = base.clone();
         a.norm_requant.multiplier -= 1;
-        assert_ne!(id, a.execution_class_id(), "norm_requant is outside the digest");
+        assert_ne!(id, a.artifact_digest(), "norm_requant is outside the digest");
         let mut a = base.clone();
         a.residual_requant.shift += 1;
-        assert_ne!(id, a.execution_class_id(), "residual_requant is outside the digest");
+        assert_ne!(id, a.artifact_digest(), "residual_requant is outside the digest");
         // The two amplifying scales are the parameters ADR-0040 H added. They move every logit
         // and every gate, so a digest that missed them would let an executor retune the model
         // while still claiming the class.
         for li in 0..base.shape.n_layers {
             let mut a = base.clone();
             a.layers[li].attn_logit_scale.shift += 1;
-            assert_ne!(id, a.execution_class_id(), "layer {li} attn_logit_scale is outside the digest");
+            assert_ne!(id, a.artifact_digest(), "layer {li} attn_logit_scale is outside the digest");
             let mut a = base.clone();
             a.layers[li].ffn_gate_scale.multiplier -= 1;
-            assert_ne!(id, a.execution_class_id(), "layer {li} ffn_gate_scale is outside the digest");
+            assert_ne!(id, a.artifact_digest(), "layer {li} ffn_gate_scale is outside the digest");
         }
     }
 
@@ -778,7 +908,7 @@ mod tests {
         let mut swapped = base.clone();
         let l = &mut swapped.layers[0];
         std::mem::swap(&mut l.wq, &mut l.wk);
-        assert_ne!(base.execution_class_id(), swapped.execution_class_id());
+        assert_ne!(base.artifact_digest(), swapped.artifact_digest());
     }
 
     /// The derived marker is metadata, not an output: it must NOT be in the digest, or the same
@@ -798,7 +928,7 @@ mod tests {
         )
         .unwrap();
         assert!(!carried.is_derived(), "weights supplied by hand are not derived");
-        assert_eq!(derived.execution_class_id(), carried.execution_class_id());
+        assert_eq!(derived.artifact_digest(), carried.artifact_digest());
     }
 
     /// A tensor of the wrong length is refused at construction rather than read past at inference.

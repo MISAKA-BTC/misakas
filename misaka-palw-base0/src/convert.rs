@@ -750,7 +750,7 @@ mod tests {
 
         let a = convert_qwen25(&blob, &plan).expect("a well-formed checkpoint converts");
         let b = convert_qwen25(&blob, &plan).unwrap();
-        assert_eq!(a.execution_class_id(), b.execution_class_id(), "one checkpoint, one class id");
+        assert_eq!(a.artifact_digest(), b.artifact_digest(), "one checkpoint, one class id");
         assert_eq!(a.embed, b.embed);
         assert_eq!(a.layers, b.layers);
         assert!(!a.is_derived(), "a converted artifact is not a derived one");

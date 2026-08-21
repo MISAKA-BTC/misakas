@@ -7,7 +7,7 @@
 //! them.
 //!
 //! The split is deliberate. Nothing here is on the block-validation path: consensus reads a class
-//! by its 64-byte [`artifact::Base0ArtifactV1::execution_class_id`] and never re-derives an
+//! by its 64-byte [`artifact::Base0ArtifactV1::artifact_digest`] and never re-derives an
 //! artifact. Deleting this crate after a class were registered would leave every existing block
 //! valid.
 //!
