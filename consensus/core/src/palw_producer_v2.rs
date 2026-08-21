@@ -1,0 +1,356 @@
+//! **What a block producer must read from chain state, and it reads it derived** (ADR-0042).
+//!
+//! A `ConsensusV2` attempt is refused unless six of its fields equal values the chain already
+//! holds: the class's registered artifact root, the class target the per-class retarget maintains,
+//! the pwu `palw_pwu_v1` computes from that target, the bond's registered verification key, the
+//! operator id minted at registration, and — as a bound rather than an equality — what the bond's
+//! collateral still has room to back. A producer that computes any of them from a second source
+//! computes them wrong the first time the chain moves.
+//!
+//! So it does not compute them. [`PalwProducerFactsV2`] is assembled by the same code paths
+//! admission uses, at the same chain point a block template builds on, and handed over whole. The
+//! producer's only remaining freedom is its EXECUTION — which is the freedom the design means by
+//! "work".
+//!
+//! # Why this is not an RPC type
+//!
+//! It lives beside the state it is read from because the derivation is the contract. Exposing the
+//! ingredients (a target here, a rule there) and letting a miner multiply them would hand every
+//! miner an independent chance to disagree with admission — the same shape of defect the audit
+//! found five times over between the engine, the profile, the inventory and the court, and the
+//! reason ADR-0046 wrote down "derive, never declare".
+
+use crate::palw_admission_v2::PalwAdmissionParamsV2;
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwPwuRuleV2, PalwStateParamsV2};
+use crate::BlockHash;
+use kaspa_hashes::Hash64;
+
+/// The bond half — read only when a producer names the bond it intends to sign under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwProducerBondFactsV2 {
+    /// The ML-DSA-87 verification key the bond registered. Admission item 2 compares the carried
+    /// key against this one, so a producer whose local key does not match it can be told at
+    /// startup instead of after a block dies.
+    pub registered_pubkey: Vec<u8>,
+    /// Minted at registration from the operator key; admission item 3 is an equality.
+    pub operator_id: Hash64,
+    pub collateral: u64,
+    /// What this bond already backs.
+    pub reserved_exposure: u128,
+    /// `collateral × max_exposure_ratio_permille / 1000` — admission item 8's ceiling.
+    pub exposure_ceiling: u128,
+    /// What ONE attempt at [`PalwProducerFactsV2::pwu`] would add to `reserved_exposure`.
+    pub claim_exposure: u128,
+}
+
+impl PalwProducerBondFactsV2 {
+    /// Is there ceiling left for one more claim? Admission item 8 is `reserved + claim <= ceiling`.
+    pub fn has_exposure_room(&self) -> bool {
+        self.reserved_exposure.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+    }
+}
+
+/// Everything a producer needs from the chain, at one chain point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwProducerFactsV2 {
+    /// The block these facts were read at — virtual's selected parent, which is the point a block
+    /// template builds on. A producer that sees this move knows its template is stale without
+    /// having to guess from a timestamp.
+    pub chain_point: BlockHash,
+    pub daa_score: u64,
+    pub class_id: Hash64,
+    /// Admission item 5: equality against the attempt's.
+    pub artifact_root: Hash64,
+    /// Admission item 6b: the attempt's `class_ticket_v2` must land at or under this.
+    pub class_target: u128,
+    /// Admission item 6: an EQUALITY, and both factors are chain state. Derived here so the
+    /// producer cannot pick.
+    pub pwu: u64,
+    pub epoch_index: u64,
+    /// Admission item 7: blocks of this class this epoch may not exceed this.
+    pub epoch_budget_blocks: u64,
+    pub epoch_produced_blocks: u64,
+    pub bond: Option<PalwProducerBondFactsV2>,
+}
+
+impl PalwProducerFactsV2 {
+    /// Is the epoch budget spent? A producer that keeps mining past it produces blocks admission
+    /// refuses — burning an inference each time and learning nothing.
+    pub fn has_epoch_room(&self) -> bool {
+        self.epoch_produced_blocks < self.epoch_budget_blocks
+    }
+
+    /// Every stateful precondition a producer can check BEFORE running an inference, in one
+    /// answer. `Ok(())` is not a promise the block lands — the chain can move underneath it —
+    /// but each `Err` is a reason it certainly would not have.
+    pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
+        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
+        if bond.registered_pubkey != local_pubkey {
+            return Err("the local signing key is not the one this bond registered");
+        }
+        if !self.has_epoch_room() {
+            return Err("this class's epoch budget is already spent");
+        }
+        if !bond.has_exposure_room() {
+            return Err("the bond's exposure ceiling leaves no room for another claim");
+        }
+        Ok(())
+    }
+}
+
+/// Read the facts for `class_id` (and optionally a bond) out of a state snapshot.
+///
+/// `daa_score` is the candidate's, because the epoch index admission uses is the CANDIDATE's, not
+/// the tip's — a producer handed the tip's epoch at an epoch boundary would check its budget
+/// against the wrong epoch and mine into a refusal.
+pub fn palw_producer_facts_v2(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    chain_point: BlockHash,
+    daa_score: u64,
+    class_id: Hash64,
+    bond: Option<&PalwBondKeyV2>,
+) -> Option<PalwProducerFactsV2> {
+    let class = state.class(&class_id)?;
+    let class_target = state.class_target(&class_id)?.target;
+    let pwu = match class.pwu_rule {
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
+        PalwPwuRuleV2::MaxPerAttempt(cap) => cap,
+    };
+    let epoch_index = daa_score / state_params.epoch_length();
+    let epoch_budget_blocks = state
+        .epoch_budgets()
+        .filter(|b| b.epoch_index == epoch_index)
+        .and_then(|b| b.budget_blocks.get(&class_id).copied())
+        .unwrap_or(0);
+    let epoch_produced_blocks = match state.epoch_counter(&class_id) {
+        Some(counter) if counter.epoch_index == epoch_index => counter.produced_blocks,
+        _ => 0,
+    };
+    let bond = bond.and_then(|key| {
+        let bond_state = state.bond(key)?;
+        Some(PalwProducerBondFactsV2 {
+            registered_pubkey: bond_state.pubkey.clone(),
+            operator_id: bond_state.operator_id,
+            collateral: bond_state.collateral,
+            reserved_exposure: state.reserved_exposure(key),
+            exposure_ceiling: (bond_state.collateral as u128)
+                .saturating_mul(admission.max_exposure_ratio_permille() as u128)
+                / 1000,
+            claim_exposure: (pwu as u128).saturating_mul(class.slash_value_per_pwu as u128),
+        })
+    });
+    Some(PalwProducerFactsV2 {
+        chain_point,
+        daa_score,
+        class_id,
+        artifact_root: class.artifact_root,
+        class_target,
+        pwu,
+        epoch_index,
+        epoch_budget_blocks,
+        epoch_produced_blocks,
+        bond,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_admission_v2::check_palw_attempt_admission_v2;
+    use crate::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, class_ticket_v2,
+    };
+    use crate::palw_state_v2::{
+        PalwBlockContextV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_operator_id_v2,
+    };
+    use crate::tx::{TransactionId, TransactionOutpoint};
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    const NET: u64 = 0x4E45_5457;
+
+    fn state_params() -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(500, 100, 100, 100, 100, 1_000, h64(1), 4, 1_000, 1_000, 100, 100).unwrap()
+    }
+
+    fn bond_outpoint() -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }
+    }
+
+    /// One class on the DERIVED pwu rule — because a `MaxPerAttempt` class would let a producer
+    /// guess the pwu and still be admitted, which is precisely the case this contract is not for.
+    fn state() -> PalwChainStateV2 {
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
+                initial_target: u128::MAX / 4,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint()),
+                pubkey: vec![7; 4],
+                operator_pubkey: vec![0x21; 8],
+                collateral: 1_000_000,
+                payout_payload: h64(0x9A11),
+            },
+        ];
+        let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
+        apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx, &objects, None).unwrap().0
+    }
+
+    /// **Build an attempt from NOTHING but the facts, and see whether the chain takes it.**
+    ///
+    /// This is the round trip the audit kept finding defects with: two sides that were reviewed
+    /// separately and asked to agree only here. Every field below is either the producer's own
+    /// (its execution, its keys) or copied straight out of `facts` — nothing is re-derived, so if
+    /// the contract were missing a fact the attempt could not be built at all, and if a fact were
+    /// derived differently from admission's the attempt would be refused.
+    #[test]
+    fn an_attempt_built_only_from_the_facts_is_admitted() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+        let facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+        )
+        .expect("the class is registered, so it has facts");
+
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Ok(()), "the producer is clear to run an inference");
+        assert_eq!(
+            facts.pwu,
+            crate::palw_pwu::palw_pwu_v1(facts.class_target, 7),
+            "the pwu is the derivation, handed over rather than left to be recomputed"
+        );
+
+        let mut env = PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: h64(NET),
+                challenge: challenge_v2(h64(NET), h64(0x5050_4800), 7, 1, facts.class_id, &bond_outpoint()),
+                class_id: facts.class_id,
+                executor_bond: bond_outpoint(),
+                executor_pubkey: facts.bond.as_ref().unwrap().registered_pubkey.clone(),
+                operator_id: facts.bond.as_ref().unwrap().operator_id,
+                artifact_root: facts.artifact_root,
+                // The producer's own: what its execution produced.
+                trace_root: h64(31),
+                output_root: h64(32),
+                execution_root: h64(41),
+                pwu: facts.pwu,
+                trace_manifest_root: h64(33),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+            },
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        // The class lottery, run the way a producer runs it — over its own execution.
+        let mut won = false;
+        for n in 0u64..100_000 {
+            env.attempt.trace_root = h64(0x3100_0000_0000_0000u64.wrapping_add(n));
+            if class_ticket_v2(&env.attempt) <= facts.class_target {
+                won = true;
+                break;
+            }
+        }
+        assert!(won, "a quarter-of-the-space target is winnable in 1e5 tries");
+
+        let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
+        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env).expect("the chain takes it");
+    }
+
+    /// **Every fact is load-bearing.** Move one and admission refuses — which is what makes this a
+    /// contract rather than a convenience: a producer that sourced any of them elsewhere would be
+    /// sourcing the thing that decides whether its block exists.
+    #[test]
+    fn moving_any_single_fact_is_refused() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+        let facts =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
+                .unwrap();
+        let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
+
+        let build = |mutate: &dyn Fn(&mut PalwAttemptUnsignedV2)| {
+            let mut env = PalwAttemptEnvelopeV2 {
+                attempt: PalwAttemptUnsignedV2 {
+                    version: PALW_ATTEMPT_V2_VERSION,
+                    network_domain: h64(NET),
+                    challenge: challenge_v2(h64(NET), h64(0x5050_4800), 7, 1, facts.class_id, &bond_outpoint()),
+                    class_id: facts.class_id,
+                    executor_bond: bond_outpoint(),
+                    executor_pubkey: facts.bond.as_ref().unwrap().registered_pubkey.clone(),
+                    operator_id: facts.bond.as_ref().unwrap().operator_id,
+                    artifact_root: facts.artifact_root,
+                    trace_root: h64(31),
+                    output_root: h64(32),
+                    execution_root: h64(41),
+                    pwu: facts.pwu,
+                    trace_manifest_root: h64(33),
+                    trace_chunk_count: 4,
+                    trace_retention_daa: 999_999,
+                },
+                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            };
+            for n in 0u64..100_000 {
+                env.attempt.trace_root = h64(0x3100_0000_0000_0000u64.wrapping_add(n));
+                mutate(&mut env.attempt);
+                if class_ticket_v2(&env.attempt) <= facts.class_target {
+                    break;
+                }
+            }
+            env
+        };
+
+        // The artifact root, the pwu, and the key: one each, and each refused for its own reason.
+        for (name, mutate) in [
+            ("artifact root", &(|a: &mut PalwAttemptUnsignedV2| a.artifact_root = h64(0xBAD)) as &dyn Fn(&mut _)),
+            ("pwu", &(|a: &mut PalwAttemptUnsignedV2| a.pwu = a.pwu.wrapping_add(1)) as &dyn Fn(&mut _)),
+            ("executor key", &(|a: &mut PalwAttemptUnsignedV2| a.executor_pubkey = vec![9; 4]) as &dyn Fn(&mut _)),
+            ("operator id", &(|a: &mut PalwAttemptUnsignedV2| a.operator_id = palw_operator_id_v2(&[0xEE; 8])) as &dyn Fn(&mut _)),
+        ] {
+            let env = build(mutate);
+            assert!(
+                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env).is_err(),
+                "a producer that got the {name} from anywhere but the facts is a producer with no blocks"
+            );
+        }
+    }
+
+    /// The pre-flight answers are the ones admission would give, not a second opinion: an
+    /// unregistered bond has no facts to be ready with.
+    #[test]
+    fn a_bond_the_chain_does_not_know_is_not_ready() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let stranger = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xDEAD), index: 0 });
+        let facts =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&stranger))
+                .unwrap();
+        assert!(facts.bond.is_none());
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Err("the named bond is not registered on this chain"));
+        // And a class the chain does not know has no facts at all — there is nothing to be told.
+        assert!(
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None)
+                .is_none()
+        );
+    }
+}

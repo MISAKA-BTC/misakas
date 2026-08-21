@@ -1148,6 +1148,14 @@ impl ConsensusApi for Consensus {
         self.lkg_virtual_state.load().daa_score
     }
 
+    fn palw_producer_facts_v2(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2> {
+        self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         self.lkg_virtual_state.load().bits
     }

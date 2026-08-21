@@ -861,6 +861,69 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
 ///
 /// Deliberately uses the DEFAULT fixture, so `palw_v2_test_bundle_funded_for` raising a bond
 /// elsewhere cannot quietly retire this.
+/// **The producer contract reads the LIVE chain, not the genesis bundle** (ADR-0042).
+///
+/// The harness's own carriage builder reads the class target out of the bundle, which is correct
+/// exactly once — at genesis, before anything has been produced. A real producer cannot: the
+/// per-class retarget moves the target, the epoch counter moves under every block it lands, and a
+/// producer that read either from a file would build attempts the chain refuses and be told only
+/// "ticket above target". So the facts come from the state store at virtual's selected parent,
+/// and this asserts they MOVE — four blocks in, the epoch counter says four.
+///
+/// It also asserts the two halves agree on `pwu`, which is the equality admission item 6 turns
+/// into a refusal. Nothing else in the tree compares them; they were written a month apart.
+#[tokio::test]
+async fn palw_v2_producer_facts_track_the_chain_the_blocks_actually_built() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0);
+
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let facts = ctx
+        .consensus
+        .palw_producer_facts_v2(bundle.base_class_id, Some(bond))
+        .expect("a ConsensusV2 network answers for its own base class");
+    assert_eq!(facts.chain_point, ctx.consensus.get_sink(), "the facts are read where a template would build");
+    assert_eq!(facts.epoch_produced_blocks, 4, "the epoch counter moved with the blocks, which a bundle cannot do");
+    assert!(facts.has_epoch_room(), "the floor's budget is not spent by four blocks");
+
+    let bond_facts = facts.bond.as_ref().expect("the genesis bond is registered");
+    assert_eq!(
+        bond_facts.registered_pubkey,
+        crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey(),
+        "the key a producer must sign with is the one the chain registered"
+    );
+    assert_eq!(facts.ready_to_produce(&bond_facts.registered_pubkey.clone()), Ok(()), "a fifth block is producible");
+    assert!(bond_facts.reserved_exposure > 0, "four open claims reserve exposure — the ceiling is a live number");
+
+    // The two halves, on the same number. The harness computes `pwu` from the bundle; the contract
+    // computes it from the state at the tip. On a chain that has not retargeted they must be
+    // equal, and the equality is what admission item 6 enforces on every block.
+    let carriage_pwu = {
+        let header = ctx.build_block_template(0, 0).block.header.clone();
+        let wire = ctx.consensus.palw_v2_test_carriage(&header);
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&wire)
+            .expect("the harness emits a carriage")
+            .attempt
+            .pwu
+    };
+    assert_eq!(facts.pwu, carriage_pwu, "the producer contract and the carriage builder derive one pwu");
+}
+
 #[tokio::test]
 async fn palw_v2_the_exposure_ceiling_bites_when_reservations_are_real() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;

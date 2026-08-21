@@ -3593,6 +3593,35 @@ impl VirtualStateProcessor {
     /// this one is on the block's chain by construction.)
     ///
     /// Built once per block rather than once per spending input.
+    /// The producer contract's chain half (ADR-0042): the facts an attempt is refused for
+    /// getting wrong, read at the point a block template builds on.
+    ///
+    /// **The chain point is virtual's selected parent and the DAA score is the CANDIDATE's.** The
+    /// store tip is the selected parent's state, so the epoch a producer checks its budget against
+    /// must be the one the candidate will be admitted in — reading the tip's would put a producer
+    /// one epoch behind at every boundary, mining into a refusal it could not see the reason for.
+    pub fn palw_producer_facts_v2_impl(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let admission = self.palw_admission_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let virtual_read = self.virtual_stores.read();
+        let candidate_daa = virtual_read.state.get().ok()?.daa_score;
+        drop(virtual_read);
+        kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v2(
+            &state,
+            state_params,
+            admission,
+            chain_point,
+            candidate_daa,
+            class_id,
+            bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
+        )
+    }
+
     pub(super) fn palw_v2_locked_bond_outpoints(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

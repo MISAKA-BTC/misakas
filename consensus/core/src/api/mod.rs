@@ -162,6 +162,21 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **What a `ConsensusV2` block producer must read from chain state** — see
+    /// [`crate::palw_producer_v2`] for why it is one derived answer rather than the ingredients.
+    ///
+    /// `None` on every network that is not `ConsensusV2`, and on one that is but does not know the
+    /// class — which is the honest answer in both cases and not an error: a producer asking a
+    /// hash-only chain for a class target is a producer on the wrong network, and it should be
+    /// able to find that out by asking.
+    fn palw_producer_facts_v2(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+        _bond: Option<crate::tx::TransactionOutpoint>,
+    ) -> Option<crate::palw_producer_v2::PalwProducerFactsV2> {
+        None
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         unimplemented!()
     }
