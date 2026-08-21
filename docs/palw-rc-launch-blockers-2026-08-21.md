@@ -42,9 +42,6 @@ Each was verified by mutation: reverting the fix makes the test fail with the st
 | **Ⅱ.3** | `ClassFrozen`'s contradiction certificate has signatures `check_class_contradiction_shape_v2` defers to "the acceptance layer", which had no arm. A forged one froze a class forever — there is deliberately no `ClassUnfrozen`. | `40002ddd` | Refused at both layers until `adjudicate_class_contradiction_v1` is wired. |
 | **Ⅱ.4** | `CourtOpened` named a challenger bond with **no authorization from it**. Everything `validate_court_opened_v2` checked was a fact *about* the bond, none about who spoke for it — and the transition disarms the claim's final deadline while a session is open. | `4724863a` | Challenger signature over the session id, in its own ML-DSA-87 context. The test asserts the message **and** the context. |
 | **Ⅱ.5** | A stateful lie in a 0x4b transaction **killed the honest block that accepted it**. 0x4b admission is purely stateless, so the transaction relayed and mined freely; the first honest block to accept it was disqualified, and the transaction stayed in the acceptance set for the next candidate. ~100 bytes, one fee, chain stops. | `4724863a` | A failing object is now **dropped** and the block stands. The verdict is a pure function of `(state, params, point, object)`, so every node drops the same ones. |
-| **§1 (import)** | A node joining by pruned IBD had **no PALW state and no way to get one** — no P2P message carried it and `import_pruning_point_utxo_set` wrote no PALW row. | `e52a1234` | Six layers mirroring the overlay sidecar. The root is the gate and runs **before** the write; one forged class share is refused with the reason named and the store stays empty. Verified against the CHILD header — `palw_state_root` commits the state as-of the selected parent, so the pruning point's own header commits a different value and refused every honest carriage until the test caught it. |
-| **§1 (refusal)** | A ConsensusV2 node with **no PALW state ran anyway**, reading absent state as "no policy" — state root unchecked, tips by blue work, any pruning point, deep-reorg comparator skipped. It does not fork, so nothing reported it. | `0cf7ead2` | Refuses at startup. The guard covers the node that did **not** process genesis — the dangerous case — and tells staging apart by its database (`past_pruning_points[0]`) rather than a flag. Two tests: the degraded state is real, and the assertion fires in it. |
-| **§4** | The free-prompt **commitment** signature was verified nowhere. `validate_stateless_v3` said "verified by the caller" and there was no caller; the only `validate_signature_v3` use in the tree was the SPEND envelope's. Any stranger's 0x4a tx created a claim bound to any bond outpoint it named. | `dc8ca79c` | The verifier is now an **argument** to the extraction walk, so "somebody else checks it" is unrepresentable. Tests pin the message (claim id), the key (carried), and the context. |
 | **producer ×4** | `has_epoch_room()` capped the liveness floor that admission exempts, and the budget table is written for the tip's epoch and read for the candidate's — so the producer **refused the first block of every epoch**. Plus: a `trace_retention_daa` promise with the material dropped, `should_mine` bypassed, and a tokio worker pinned. | `2870f1d6` | `the_liveness_floor_is_never_capped_by_an_epoch_budget` asserts a floor with a ZERO budget is still producible. Material is persisted before the block publishes; a write failure aborts the publish. Both CPU phases moved to `spawn_blocking`. |
 | **Ⅳ** | **The court convicted honest executions.** Three divergences from the engine, each invisible without >1 head *and* position >0: SoftMax (engine per head, court once over the concatenation); RoPE (court asked byte offset 0 — always position 0's row — and for the whole row's pairs, not one head's); P·V (V cache is `[position][kv_dim]`, court read `[out_dim][in_dim]` — the transpose, agreeing only at `kv_len == 1`). `map_refutation_outcome` → `ExecutorGuilty` → `void_and_slash` is a live money path, and `CourtClosed` may ride a transaction. | `5cf1a94c` | `the_court_convicts_no_leaf_of_an_honest_execution`: **914 leaves swept, 910 `NoFaultFound`, 0 convicted**, and 16 tampered tiles at the repaired nodes still convicted. Reverting each fix convicts **10 / 32 / 30** honest leaves. |
 
@@ -102,10 +99,19 @@ a `ReceiptLicensed` on a real network however the service is written.
 
 Three pieces, and only the first is purely mechanical:
 
-1. **A trace data-availability transport.** Request/response keyed by `(claim, chunk index)`,
-   served from the producer's retention directory, verified by the fetcher against the claim's own
-   `trace_manifest_root` and `trace_chunk_count` — both already in the attempt. Shaped exactly like
-   §1's pruning-point carriage pair.
+1. **A trace data-availability transport**, and it needs no new format. BASE-0's
+   `trace_chunk_count` is **1** — `base0_execute_for_attempt_v1` says so in as many words: "the
+   whole trace is one object at this class's size" — and the producer already writes exactly that
+   object, `borsh((binding, tiles, generated_token_ids))`, to
+   `<retention_dir>/<attempt_id>.material`. So the request is keyed by the claim id alone and the
+   response is that blob. Note what the fetcher must NOT do: `trace_manifest_root` hashes
+   `(ctx, trace_root, step_merkle_root, count)` and **not the chunk bytes**, so it cannot
+   authenticate a served blob — the check is `base0_material_matches_claim_v1`, which rebuilds the
+   roots the on-chain claim already carries. Shaped like §1's pruning-point carriage pair otherwise.
+
+   Deliberately not built this session: a request/response pair needs a requester that owns the
+   route, and the only requester is (2). Landing the serving half alone would add protocol surface
+   nothing can reach — which is the exact shape of the defects this sweep spent itself finding.
 2. **A panel service in kaspad.** Poll `palw_seat_duties_v2`, fetch, run the material check, sign a
    `PalwSeatReceiptV2`.
 3. **A way to submit it.** `ReceiptLicensed` rides a 0x4b transaction, which needs a funded UTXO and
