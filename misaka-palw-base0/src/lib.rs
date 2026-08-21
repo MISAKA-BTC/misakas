@@ -41,6 +41,7 @@ pub mod artifact;
 pub mod engine;
 pub mod inventory;
 pub mod legs;
+pub mod produce;
 pub mod rc;
 pub mod rope;
 

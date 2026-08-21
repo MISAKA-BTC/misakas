@@ -574,6 +574,53 @@ impl PalwShapeProfileV3 {
 
     /// Resolves a global node slot to `(its node, the layer it belongs to)` (`None` layer for
     /// pre/post nodes).
+    /// **The inverse of [`Self::resolve_node_slot`]** — where a capture must PUT the row it just
+    /// produced.
+    ///
+    /// An executor knows what it computed by table and index ("the second post node"); a leaf
+    /// index is derived from a global slot. Something has to convert, and until this existed the
+    /// only converter was arithmetic written out at the call site — which is how a capture came to
+    /// place every layer's rows on top of layer 0's. Walked the same way `resolve_node_slot`
+    /// walks, so the two cannot drift; `the_slot_walk_inverts_itself` asserts the round trip over
+    /// every slot of a real profile.
+    ///
+    /// `layer` is ignored for `Pre`/`Post`, which have no layer.
+    pub fn global_node_slot(&self, table: PalwStepTableV1, layer: u16, index: usize) -> Option<u32> {
+        match table {
+            PalwStepTableV1::Pre => (index < self.pre_nodes.len()).then(|| index as u32),
+            PalwStepTableV1::Attn | PalwStepTableV1::Gdn => {
+                if layer >= self.layer_count {
+                    return None;
+                }
+                // The layer's own table decides its width, and it must be the table the caller
+                // named: a row captured as `Attn` in a GatedDeltaNet layer is a row about a
+                // different graph.
+                let expected = match self.layer_kind(layer) {
+                    PalwLayerKindV1::Attention => PalwStepTableV1::Attn,
+                    PalwLayerKindV1::GatedDeltaNet => PalwStepTableV1::Gdn,
+                };
+                if expected != table || index >= self.layer_table(layer).len() {
+                    return None;
+                }
+                let mut cursor = self.pre_nodes.len() as u32;
+                for l in 0..layer {
+                    cursor = cursor.checked_add(self.layer_table(l).len() as u32)?;
+                }
+                cursor.checked_add(index as u32)
+            }
+            PalwStepTableV1::Post => {
+                if index >= self.post_nodes.len() {
+                    return None;
+                }
+                let mut cursor = self.pre_nodes.len() as u32;
+                for l in 0..self.layer_count {
+                    cursor = cursor.checked_add(self.layer_table(l).len() as u32)?;
+                }
+                cursor.checked_add(index as u32)
+            }
+        }
+    }
+
     pub fn resolve_node_slot(&self, slot: u32) -> Option<(&PalwStepNodeV1, Option<u16>)> {
         let mut cursor = slot;
         if (cursor as usize) < self.pre_nodes.len() {

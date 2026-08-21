@@ -146,6 +146,20 @@ pub struct ForwardProbe {
     /// `(layer, slot, row)`, in execution order. Values ride as `i32` lanes, which is what a BASE-0
     /// tile leaf carries.
     pub steps: Vec<(u16, u16, Vec<i32>)>,
+    /// **The `Pre` table's rows** — the embedding gather. One node, and it is the input every
+    /// layer's first norm reads.
+    ///
+    /// Kept apart from [`Self::steps`] because a row's TABLE is what decides its global slot:
+    /// `steps` is indexed by `BASE0_LAYER_IR` and these are not. Merging them under one `(layer,
+    /// slot)` pair is exactly the confusion that put every layer's rows on top of layer 0's the
+    /// first time this was tried.
+    pub pre_steps: Vec<(u16, Vec<i32>)>,
+    /// **The `Post` table's rows** — the final norm, its narrowing, and the logits head.
+    ///
+    /// Until these were captured a step leg committed ZERO leaves for all three, so the head — the
+    /// node that decides what the model actually said — was the one part of the graph no
+    /// refutation could open. `(slot, row)`.
+    pub post_steps: Vec<(u16, Vec<i32>)>,
 }
 
 impl ForwardProbe {
@@ -200,6 +214,7 @@ impl<'a> Base0Engine<'a> {
             self.artifact.rope.row(position).ok_or(EngineError::PositionOutOfRange { got: position, max: shape.max_position })?;
 
         let mut h: Vec<i8> = embed_lookup(&self.artifact.embed, shape.vocab, d, token_id)?.to_vec();
+        probe.pre_steps.push((0, h.iter().map(|c| *c as i32).collect()));
 
         for li in 0..shape.n_layers {
             let layer = &self.artifact.layers[li];
@@ -377,8 +392,16 @@ impl<'a> Base0Engine<'a> {
             probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
         }
 
-        let final_state = self.norm_to_code(&h)?;
-        Ok((matmul_quant(&self.artifact.unembed, &final_state, shape.vocab)?, probe))
+        // Inlined rather than `norm_to_code`, because the post table declares the norm and its
+        // narrowing as TWO nodes and a court recomputing the head opens them separately: a capture
+        // that only kept the pair's output could not answer for either.
+        let final_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
+        probe.post_steps.push((0, final_norm_q.clone()));
+        let final_state = requantize_row_uniform(&final_norm_q, self.artifact.norm_requant);
+        probe.post_steps.push((1, final_state.iter().map(|c| *c as i32).collect()));
+        let logits = matmul_quant(&self.artifact.unembed, &final_state, shape.vocab)?;
+        probe.post_steps.push((2, logits.clone()));
+        Ok((logits, probe))
     }
 
     /// `RmsNorm` followed by the narrowing back to activation codes. `rms_norm` returns Qk, so the

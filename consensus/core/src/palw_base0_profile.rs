@@ -591,6 +591,58 @@ mod tests {
     use crate::palw_step::PalwStepTableV1;
     use crate::palw_step_refute::catalogued_kernel_ids_v1;
 
+    /// **The slot walk inverts itself, over every slot of a real profile.**
+    ///
+    /// A capture converts (table, layer, index) into a global slot and the court converts back.
+    /// Two walks that disagree anywhere would put an honest producer's row at a coordinate the
+    /// court does not read — an execution nobody can adjudicate, committed as if it could be.
+    #[test]
+    fn the_slot_walk_inverts_itself() {
+        use crate::palw_step::PalwStepTableV1;
+        let p = base0_profile_v1(geometry()).expect("expressible");
+        let mut seen = 0u32;
+        for slot in 0..p.global_node_count() {
+            let (_, layer) = p.resolve_node_slot(slot).expect("every slot below the count resolves");
+            let table = match layer {
+                None if (slot as usize) < p.pre_nodes.len() => PalwStepTableV1::Pre,
+                None => PalwStepTableV1::Post,
+                Some(l) => match p.layer_kind(l) {
+                    crate::palw_step::PalwLayerKindV1::Attention => PalwStepTableV1::Attn,
+                    crate::palw_step::PalwLayerKindV1::GatedDeltaNet => PalwStepTableV1::Gdn,
+                },
+            };
+            // Recover the intra-table index the same way the forward walk consumed it.
+            let index = match table {
+                PalwStepTableV1::Pre => slot as usize,
+                PalwStepTableV1::Post => {
+                    let mut base = p.pre_nodes.len();
+                    for l in 0..p.layer_count {
+                        base += p.layer_table(l).len();
+                    }
+                    slot as usize - base
+                }
+                _ => {
+                    let l = layer.unwrap();
+                    let mut base = p.pre_nodes.len();
+                    for prev in 0..l {
+                        base += p.layer_table(prev).len();
+                    }
+                    slot as usize - base
+                }
+            };
+            assert_eq!(
+                p.global_node_slot(table, layer.unwrap_or(0), index),
+                Some(slot),
+                "slot {slot} does not come back from ({table:?}, {layer:?}, {index})"
+            );
+            seen += 1;
+        }
+        assert_eq!(seen, p.global_node_count(), "every slot was walked");
+        // And a row claimed for a table that layer does not have is refused, not silently placed.
+        assert!(p.global_node_slot(PalwStepTableV1::Gdn, 0, 0).is_none(), "BASE-0 has no GatedDeltaNet layer");
+        assert!(p.global_node_slot(PalwStepTableV1::Post, 0, p.post_nodes.len()).is_none(), "past the end is not a slot");
+    }
+
     fn geometry() -> PalwBase0GeometryV1 {
         PalwBase0GeometryV1 {
             layer_count: 4,

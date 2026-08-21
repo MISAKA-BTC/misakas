@@ -29,7 +29,7 @@
 //! here invents a coordinate — [`kaspa_consensus_core::palw_step::canonical_step_leaf_index`] is
 //! what says where a tile belongs, so a capture cannot disagree with the profile about that.
 
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, canonical_step_leaf_index};
+use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
     PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_v1,
 };
@@ -39,6 +39,9 @@ use kaspa_hashes::Hash64;
 /// Why a capture cannot become a leg.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LegError {
+    /// A capture that does not cover the step space. Committing it would say "computed zero" about
+    /// every leaf nobody filled, and the court cannot tell that apart from a row that was computed.
+    CaptureIncomplete { filled: u64, expected: u64 },
     /// The profile and the capture disagree about which slots exist.
     UnknownSlot { layer: u16, slot: u16 },
     /// `canonical_step_leaf_index` refused the coordinate — the capture is describing a step this
@@ -52,6 +55,144 @@ pub enum LegError {
 pub struct Base0StepTilesV1 {
     pub leaves: Vec<Hash64>,
     pub tiles: Vec<(u64, PalwStepTileLeafV1)>,
+}
+
+/// One row an execution produced, tagged with the STEP TABLE it belongs to.
+///
+/// The table is not decoration. A global slot is `pre ‖ layer 0 ‖ … ‖ post`, so "the second post
+/// node" and "the second node of layer 0" are different coordinates that an untagged `(layer,
+/// slot)` pair cannot tell apart — and the court reads by global slot. Carrying the table means
+/// the conversion is [`PalwShapeProfileV3::global_node_slot`]'s, which is the inverse of the walk
+/// the court itself uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0CapturedRowV1 {
+    pub table: PalwStepTableV1,
+    /// Ignored for `Pre` and `Post`, which have no layer.
+    pub layer: u16,
+    /// Index WITHIN the table.
+    pub index: usize,
+    pub row: Vec<i32>,
+}
+
+/// Everything one forward call produced, in the form the leg takes.
+///
+/// The engine records the layer tables in `steps` and the other two in `pre_steps`/`post_steps`,
+/// because a row's table decides its slot. This is the one place that fact is turned back into a
+/// flat list, so no caller has to know the split.
+pub fn base0_captured_rows_v1(probe: &crate::engine::ForwardProbe) -> Vec<Base0CapturedRowV1> {
+    let mut rows = Vec::with_capacity(probe.pre_steps.len() + probe.steps.len() + probe.post_steps.len());
+    for (index, row) in &probe.pre_steps {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Pre, layer: 0, index: *index as usize, row: row.clone() });
+    }
+    for (layer, slot, row) in &probe.steps {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Attn, layer: *layer, index: *slot as usize, row: row.clone() });
+    }
+    for (index, row) in &probe.post_steps {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Post, layer: 0, index: *index as usize, row: row.clone() });
+    }
+    rows
+}
+
+/// **A step-leg capture accumulated across a job's CALLS.**
+///
+/// A job is one prefill call over `P` positions plus `D − 1` decode calls, and the step space
+/// covers every one of them. [`base0_step_tiles_v1`] tiles a SINGLE call, so a producer that used
+/// it directly would commit a root over one call's rows and zeros everywhere else — and the zeros
+/// would be indistinguishable, in the commitment, from rows that were computed.
+///
+/// So this accumulates, counts what it has filled, and [`Self::finish`] REFUSES a capture that is
+/// short. An executor must never be the one that emits a commitment over a partial capture: that
+/// object is what the court exists to convict, and the producer would be convicting itself.
+pub struct Base0StepCaptureV1 {
+    leaves: Vec<Hash64>,
+    tiles: Vec<(u64, PalwStepTileLeafV1)>,
+    filled: u64,
+}
+
+impl Base0StepCaptureV1 {
+    pub fn new(leaf_count: u64) -> Result<Self, LegError> {
+        if leaf_count == 0 {
+            return Err(LegError::EmptySpace);
+        }
+        Ok(Self { leaves: vec![Hash64::default(); leaf_count as usize], tiles: Vec::new(), filled: 0 })
+    }
+
+    /// Place one call's rows at the coordinates the PROFILE says they belong to.
+    pub fn push_call(
+        &mut self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        call_index: u32,
+        position: u32,
+        rows: &[Base0CapturedRowV1],
+    ) -> Result<(), LegError> {
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        for row in rows {
+            let global_slot = profile
+                .global_node_slot(row.table, row.layer, row.index)
+                .ok_or(LegError::UnknownSlot { layer: row.layer, slot: row.index as u16 })?;
+            // Checked against the profile's own forward walk rather than trusted: if the inverse
+            // and the walk ever disagreed the capture would be describing a different graph,
+            // silently, and every leaf would land one node off.
+            let (node, resolved_layer) =
+                profile.resolve_node_slot(global_slot).ok_or(LegError::UnknownSlot { layer: row.layer, slot: row.index as u16 })?;
+            if matches!(row.table, PalwStepTableV1::Attn | PalwStepTableV1::Gdn) && resolved_layer != Some(row.layer) {
+                return Err(LegError::UnknownSlot { layer: row.layer, slot: row.index as u16 });
+            }
+            let tile_len = node.tile_len as usize;
+            if tile_len == 0 {
+                return Err(LegError::UnknownSlot { layer: row.layer, slot: row.index as u16 });
+            }
+            for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
+                let coord = PalwStepCoordinateV1 { call_index, node_slot: global_slot, position, tile_index: tile_index as u32 };
+                let index = canonical_step_leaf_index(profile, ctx, &coord).ok_or(LegError::NotACanonicalCoordinate {
+                    layer: row.layer,
+                    slot: row.index as u16,
+                    tile: tile_index as u32,
+                })?;
+                if index as usize >= self.leaves.len() {
+                    return Err(LegError::NotACanonicalCoordinate {
+                        layer: row.layer,
+                        slot: row.index as u16,
+                        tile: tile_index as u32,
+                    });
+                }
+                let leaf = PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord,
+                    value_count: chunk.len() as u32,
+                    values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                };
+                if self.leaves[index as usize] == Hash64::default() {
+                    self.filled += 1;
+                }
+                self.leaves[index as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf);
+                self.tiles.push((index, leaf));
+            }
+        }
+        Ok(())
+    }
+
+    /// How much of the step space this capture has actually filled.
+    pub fn progress(&self) -> (u64, u64) {
+        (self.filled, self.leaves.len() as u64)
+    }
+
+    /// Seal the capture. A short one is refused — see the type's docs.
+    pub fn finish(self) -> Result<Base0StepTilesV1, LegError> {
+        if self.filled != self.leaves.len() as u64 {
+            return Err(LegError::CaptureIncomplete { filled: self.filled, expected: self.leaves.len() as u64 });
+        }
+        Ok(Base0StepTilesV1 { leaves: self.leaves, tiles: self.tiles })
+    }
+
+    /// Seal WITHOUT the completeness check — for measurement and for tests that deliberately
+    /// commit a partial space. Never for a producer: the resulting root says "computed zero" about
+    /// every leaf nobody filled.
+    pub fn finish_partial(self) -> Base0StepTilesV1 {
+        Base0StepTilesV1 { leaves: self.leaves, tiles: self.tiles }
+    }
 }
 
 /// Tile a forward pass's captured rows into the leg's leaves.

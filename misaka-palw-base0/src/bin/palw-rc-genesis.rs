@@ -60,7 +60,8 @@ fn main() {
     println!();
     println!("Derived — identical on every machine, nothing to host or mirror:");
     println!("  base0 seed          0x{PALW_RC_BASE0_SEED:016X}");
-    println!("  geometry            {} layers, hidden {}, ffn {}, heads {}x{}, vocab {}, n_ctx {}, tile {}",
+    println!(
+        "  geometry            {} layers, hidden {}, ffn {}, heads {}x{}, vocab {}, n_ctx {}, tile {}",
         geometry.layer_count,
         geometry.hidden_dim,
         geometry.ffn_dim,
@@ -128,7 +129,10 @@ fn main() {
             println!();
             println!("Paste into `consensus/core/src/config/params.rs`:");
             println!();
-            println!("pub const PALW_RC_GENESIS_ARTIFACT_ROOT: Hash64 = Hash64::from_bytes({});", rust_bytes(artifact_root.as_byte_slice()));
+            println!(
+                "pub const PALW_RC_GENESIS_ARTIFACT_ROOT: Hash64 = Hash64::from_bytes({});",
+                rust_bytes(artifact_root.as_byte_slice())
+            );
             println!("pub const PALW_RC_GENESIS_BOND_INDEX: u32 = {bond_index};");
             println!("pub const PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &{};", rust_bytes(&bond_pubkey));
             println!("pub const PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &{};", rust_bytes(&operator_pubkey));
