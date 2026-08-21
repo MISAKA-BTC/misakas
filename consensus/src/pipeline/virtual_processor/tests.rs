@@ -897,6 +897,93 @@ async fn palw_v2_the_exposure_ceiling_bites_when_reservations_are_real() {
     );
 }
 
+/// **ADR-0042 Decision 3c, re-decided: what P0 changed, and what it did not** (audit item).
+///
+/// The audit reads 3c's deferral as resting on "only the bond holder can mint valid-signature
+/// siblings", and concludes that verifying the signature removed the reason. Reading §A2, the
+/// load-bearing reason is a different one and it **survives**: with identity = `attempt_id`
+/// (signature excluded), any third party flips one signature bit and relays a copy with the SAME
+/// block id and an invalid witness. The first-seen copy fails admission and the id lands in
+/// known-invalid caches, after which the honest block — same id, arriving second — is refused
+/// unseen. One bit censors one block, network-wide, at zero cost.
+///
+/// Verifying the signature does not remove that primitive; it is what ARMS it. An unverified
+/// witness could not fail admission, so the poisoning needed the check to exist. **3c's identity
+/// half therefore stays deferred, and its precondition is unchanged: a pipeline path that rejects
+/// a witness-mutated carrier WITHOUT marking the block id invalid.**
+///
+/// What P0 did change is the residual on the identity the tree actually keeps — raw carrier bytes.
+/// Before it, ANY third party could mint valid siblings of one solved PoW. Now only the bond
+/// holder can, because only it can sign; ML-DSA-87 signing here is hedged with caller-supplied
+/// randomness, so it can mint as many as it likes at one signature each. §A2 asserts the bound on
+/// that — "self-malleation buys DAG spam ..., never a second paid claim" — and nothing measured
+/// it. This does.
+#[tokio::test]
+async fn palw_v2_a_bond_holders_own_resignature_buys_a_block_but_never_a_second_claim() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    // One honest block, and the SAME attempt signed a second time by the same bonded key. The
+    // attempt is untouched, so both carry one `attempt_id` and one solved ticket.
+    let template = ctx.build_block_template(11, ctx.simulated_time + 1);
+    let honest = template.block.clone();
+    let mut sibling = template.block.clone();
+    let mut envelope =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&sibling.header.palw_commitment).unwrap();
+    let attempt_id = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+    envelope.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &TestConsensus::palw_v2_harness_keypair().signing_key,
+        attempt_id.as_byte_slice(),
+        kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        // Different hedging randomness — a DIFFERENT signature over the SAME message, and every
+        // bit of it verifies.
+        [0xA5u8; 32],
+    )
+    .expect("the bond holder can always sign again")
+    .as_ref()
+    .to_vec();
+    let honest_signature =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&honest.header.palw_commitment).unwrap().signature;
+    assert_ne!(envelope.signature, honest_signature, "ML-DSA-87 signing here is hedged — the fixture must actually differ");
+    sibling.header.palw_commitment = envelope.encode_wire();
+    sibling.header.finalize();
+
+    // Raw-carrier-bytes identity: the sibling is a DIFFERENT block, which is the property §A2
+    // chose. (Under 3c's identity half it would share the honest block's id, which is the
+    // censorship shape.)
+    assert_ne!(sibling.header.hash, honest.header.hash, "the signature is inside block identity, by design");
+    let (honest_hash, sibling_hash) = (honest.header.hash, sibling.header.hash);
+
+    ctx.validate_and_insert_block(honest.to_immutable()).await;
+    ctx.validate_and_insert_block(sibling.to_immutable()).await;
+
+    // **The bound, measured.** Two blocks exist; one claim does. The second is refused by
+    // `DuplicateAttempt` / `DuplicateClaim` — the claim is keyed on `attempt_id`, which the
+    // signature is deliberately outside of, so re-signing buys a DAG block and nothing else.
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(state.claim(&attempt_id).is_some(), true, "the attempt did produce its one claim");
+    let for_this_attempt = state.claims_iter().filter(|(id, _)| **id == attempt_id).count();
+    assert_eq!(for_this_attempt, 1, "one attempt, one claim, however many signatures were spent on it");
+
+    // And only one of the two can be the sink, because only one of them carries the claim.
+    let sink = ctx.consensus.get_sink();
+    assert!(sink == honest_hash || sink == sibling_hash);
+}
+
 /// **The attempt's signature is checked on the live path — and one solved PoW is one block.**
 ///
 /// The pipeline called `check_palw_attempt_admission_v2`, which takes no verifier and cannot take

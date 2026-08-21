@@ -210,6 +210,28 @@ identity is `canonical header ‖ attempt_id`.
 > deduplicate at the claim, `claim_id = attempt_id`). 3c lands only together with a
 > mutated-witness path that rejects without caching id-invalidity. See §A2 for the full analysis.
 
+> **Re-decided (2026-08-21), after the signature became verified.** The P0 fix (an attempt's
+> ML-DSA-87 signature is verified on the live path) was read as removing this deferral's reason.
+> It does not. The reason §A2 gives is the CENSORSHIP path, and verification is what arms it: an
+> unverified witness could not fail admission, so the cache-poisoning needed the check to exist.
+> **3c's identity half stays deferred, on the same precondition** — a pipeline path that rejects
+> a witness-mutated carrier without marking the block id invalid.
+>
+> What P0 did change is the residual on the identity the tree keeps. Before it, ANY third party
+> could mint valid-signature siblings from one solved PoW. Now only the bond holder can, and it
+> can mint as many as it likes at one hedged signature each — which §A2 asserts is bounded ("DAG
+> spam ..., never a second paid claim") and which nothing measured. It is measured now:
+> `palw_v2_a_bond_holders_own_resignature_buys_a_block_but_never_a_second_claim` re-signs one
+> attempt with different hedging randomness, gets a second valid block, and gets exactly one
+> claim — because `claim_id = attempt_id` and the signature is deliberately outside it.
+>
+> Nothing enforceable was left on the table. A deterministic signature is not checkable from a
+> public key; folding the signature into the PoW digest would cost one ML-DSA-87 signature per
+> nonce of the class-ticket search; and excluding it from block identity IS 3c, whose blocker is
+> the paragraph above. The byte-level malleability that would otherwise sit on top of the hedging
+> is already closed: `decode_wire` refuses trailing bytes and `validate_shape_v2` pins the
+> signature length.
+
 ### 3d. A new algo id, so no old node re-interprets a V2 block
 
 V2 uses `POW_ALGO_ID_PALW_COMMITTED_V2`, distinct from `POW_ALGO_ID_PALW_LLM` (4) and
