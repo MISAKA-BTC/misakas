@@ -55,7 +55,23 @@ const EPOCH_LENGTH: u64 = 1_000;
 /// source. Low enough that free-prompt work dominates the chain's weight; high enough that
 /// beacons keep arriving (~1 in 7 blocks) and that `max_beacon_gap` below is a promise the lane
 /// can keep.
-const ATTEMPT_SHARE_PERMILLE: u16 = 150;
+/// **The whole cadence, because the attempt lane is the only lane that can produce** (launch
+/// blockers §6).
+///
+/// This was 150‰, leaving 850‰ to the ADR-0044 receipt lane — a lane a `ConsensusV2` network makes
+/// structurally impossible: `algorithm_id` pins the network to algo-6 and the header gate rejects
+/// every algo-7 header before its admission path is reached.
+///
+/// The per-class retarget measures each lane against the COMBINED census, so with the receipt lane
+/// producing nothing `combined` is the attempt lane alone: the floor holds 100% of what happened
+/// while being expected to hold 15% of it. A 6.67x over-producer verdict at EVERY epoch boundary,
+/// each dividing the target by up to `class_daa_max_factor`, with nothing bounding the walk — the
+/// target reaches its floor of 1 and the class lottery then refuses every attempt. A chain that
+/// stops with no path back, roughly 63 epochs in.
+///
+/// `PalwConsensusParamsV2::validate` now refuses any other value while algo-7 is unreachable, so
+/// this cannot drift back without the lane it presumes.
+const ATTEMPT_SHARE_PERMILLE: u16 = 1_000;
 
 /// The panel's anchor delay: 20 DAA after acceptance the claim's beacon slot opens.
 const ANCHOR_DELAY: u64 = 20;
@@ -396,7 +412,13 @@ mod tests {
         assert!(b.freeprompt.receipt_maturity_daa() >= b.reorg_margin_daa, "the draw beacon sits past the reorgable fringe");
         let liability = s.window_bind() + s.window_receipt() + s.window_challenge() + s.window_court() + b.reorg_margin_daa;
         assert!(b.bond.withdrawal_delay_daa() > liability, "a bond cannot leave before its fraud is provable");
-        assert!((1..=999).contains(&s.fp_attempt_share_permille()), "both lanes exist");
+        // The attempt lane holds the whole cadence while algo-7 is unreachable — see
+        // `ATTEMPT_SHARE_PERMILLE` for why any other value stops the chain.
+        assert_eq!(
+            s.fp_attempt_share_permille(),
+            crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR,
+            "an unproducible lane holds no cadence"
+        );
     }
 
     /// The bundle is a *ruleset*: it fingerprints, it demands the V2 attempt id, and it accepts

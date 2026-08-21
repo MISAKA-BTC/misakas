@@ -505,12 +505,32 @@ impl PalwConsensusParamsV2 {
 
         // ---- ADR-0044: the free-prompt lane's startup invariants ----
 
-        // The source split holds BOTH lanes open: a zero attempt share has no beacons (F16), a
-        // full one has no receipts. The split lives in the state params (the retarget consumes
-        // it); this gate is where its live range is enforced.
+        // **The split must match which lanes can actually produce** (launch blockers §6).
+        //
+        // This used to demand `1..=999` unconditionally — "both lanes must exist" — on the reading
+        // that a zero attempt share has no beacons (F16) and a full one has no receipts. That is
+        // right for a network where BOTH lanes are reachable, and this one is not: `algorithm_id`
+        // above pins it to algo-6, and the header gate rejects every algo-7 header before its
+        // admission path is reached. The receipt lane exists on paper and can never produce a block.
+        //
+        // Two rules therefore contradicted each other, and the one that had to give is this one:
+        // holding a lane open in the SPLIT does not make it producible, while giving it a permille
+        // does make the retarget expect blocks from it. The retarget measures each lane against the
+        // COMBINED census, so an unproducible lane's permille stays in the expectation while its
+        // blocks are missing from the total — the attempt lane then holds 100% of what happened
+        // while being expected to hold 15% of it, is judged a 6.67x over-producer at every epoch
+        // boundary, and has its target divided until it reaches the floor of 1, where the class
+        // lottery refuses every attempt. A chain that stops with no path back.
+        //
+        // So: the whole cadence to the attempt lane while algo-7 is unreachable, and the
+        // `1..=999` range the moment it is not. When the receipt lane becomes producible this
+        // becomes a two-sided check again — and it will be a ruleset change, which is where a
+        // change of this shape belongs.
         let split = self.state.fp_attempt_share_permille();
-        if !(1..=999).contains(&split) {
-            return Err(PalwModeV2Error::Invalid("a live FP network needs 1..=999‰ attempt share — both lanes must exist"));
+        if split != crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR {
+            return Err(PalwModeV2Error::Invalid(
+                "the receipt lane holds a cadence share on a network whose algorithm_id makes an algo-7 block                  impossible — every epoch would measure the attempt lane as an over-producer and divide its target                  to the floor, stopping the chain with no path back",
+            ));
         }
 
         // The per-class half of this clause retired with its subject. It used to walk a params
@@ -743,7 +763,7 @@ pub(crate) mod tests {
         // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
         // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
         // check instead of testing the thing the caller named.
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 800, 0)
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 1000, 0)
             .unwrap()
             .with_worker_carve_permille(620)
             .unwrap()
@@ -775,10 +795,11 @@ pub(crate) mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            // Split 800‰: a live FP bundle holds BOTH lanes open (1..=999 is the gate).
+            // Split 1000‰: the attempt lane holds the whole cadence, because `algorithm_id` makes
+            // an algo-7 block impossible and a lane that cannot produce must not be expected to.
             // The carve is set on BOTH, because `validate` requires them equal — the fixture has
             // to be a bundle a node would actually start on, or the tests below prove nothing.
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 800, 0)
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 1000, 0)
                 .unwrap()
                 .with_worker_carve_permille(620)
                 .unwrap()
@@ -1349,6 +1370,30 @@ pub(crate) mod tests {
                 }),
             ),
         ];
+        // **A lane that cannot produce holds no cadence** (launch blockers §6) — asserted here
+        // rather than only in the shipped bundle, so a future edit that reintroduces a receipt
+        // permille fails a test instead of shipping a chain that stops.
+        //
+        // The retarget measures each lane against the COMBINED census. An unproducible lane's
+        // permille stays in the expectation while its blocks are missing from the total, so the
+        // attempt lane holds 100% of what happened while being expected to hold `split` of it —
+        // an over-producer verdict at EVERY epoch boundary, each dividing the target by up to
+        // `class_daa_max_factor`, until it reaches the floor of 1 and the class lottery refuses
+        // every attempt. The shipped bundle carried 150‰ and would have stopped ~63 epochs in.
+        for bad_split in [1u16, 150, 800, 999] {
+            let mut bundle = conforming_bundle();
+            bundle.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, bundle.base_class_id, 4, 1000, 100, bad_split, 0)
+                .unwrap()
+                .with_worker_carve_permille(620)
+                .unwrap()
+                .with_turn_deadline_daa(20)
+                .unwrap();
+            assert!(
+                bundle.validate().is_err(),
+                "a {bad_split}permille attempt share leaves the receipt lane a cadence it can never produce"
+            );
+        }
+
         for (name, mutate) in mutations {
             let mut bundle = conforming_bundle();
             mutate(&mut bundle);
