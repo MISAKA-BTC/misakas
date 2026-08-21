@@ -34,7 +34,7 @@
 
 use kaspa_consensus_core::palw_base0::K;
 use kaspa_consensus_core::palw_base0_ops::{
-    self as ops, PalwBase0OpError, QuantParams, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem,
+    self as ops, PalwBase0OpError, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem,
     requantize_row, requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
 };
 
@@ -43,17 +43,13 @@ use crate::artifact::Base0ArtifactV1;
 /// Fractional bits in an `int8` activation code: 127 ≈ 1.0.
 pub const ACTIVATION_BITS: u8 = 7;
 
-/// Narrowing from Qk back to an activation code — used for the softmax probabilities and the
-/// SiLU output, the two places a Qk value has to become an `int8` operand.
-const QK_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: (K as u8) - ACTIVATION_BITS, zero: 0 };
-
-/// Narrowing of a `DotI8` whose left operand is a Q7 code and whose right operand is an activation
-/// code: the product carries `ACTIVATION_BITS` extra fractional bits.
-const CODE_PRODUCT_TO_CODE: QuantParams = QuantParams { multiplier: i32::MAX, shift: ACTIVATION_BITS, zero: 0 };
-
-/// Identity narrowing: `SRDHM(x, i32::MAX)` is `x` to within a unit, then a zero shift and the
-/// `int8` clamp. Used after `RopeTable`, which returns the same scale it was given.
-const CODE_CLAMP: QuantParams = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
+// **The three narrowings moved into the artifact** (ADR-0049 Decision F, audit C-05/C-06).
+//
+// `BASE0_LAYER_IR` names each of them as a registered tensor, because a parameter the court
+// cannot open is a step it cannot adjudicate — and a `const` in this binary is exactly a
+// parameter nothing can open. `Base0ArtifactV1::CLASS_NARROWINGS` holds the same values, so no
+// activation moved; what changed is that they are now data an inventory carries and an opening
+// addresses. The engine reads them through the artifact so there is one source, not two.
 
 /// Why a forward pass can be refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,7 +230,7 @@ impl<'a> Base0Engine<'a> {
             for head in 0..shape.n_heads {
                 let r = head * shape.d_head..(head + 1) * shape.d_head;
                 let qh: Vec<i32> = q[r].iter().map(|c| *c as i32).collect();
-                q_rot.extend(requantize_row_uniform(&rope_table(&qh, cos_row, sin_row)?, CODE_CLAMP));
+                q_rot.extend(requantize_row_uniform(&rope_table(&qh, cos_row, sin_row)?, self.artifact.rope_clamp()));
             }
             // The KEY heads are rotated over `n_kv_heads`, not `n_heads`: under grouped-query
             // attention there are fewer of them, and rotating `n_heads` of them would read past
@@ -243,7 +239,7 @@ impl<'a> Base0Engine<'a> {
             for head in 0..shape.n_kv_heads {
                 let r = head * shape.d_head..(head + 1) * shape.d_head;
                 let kh: Vec<i32> = k[r].iter().map(|c| *c as i32).collect();
-                k_rot.extend(requantize_row_uniform(&rope_table(&kh, cos_row, sin_row)?, CODE_CLAMP));
+                k_rot.extend(requantize_row_uniform(&rope_table(&kh, cos_row, sin_row)?, self.artifact.rope_clamp()));
             }
 
             probe.steps.push((li as u16, 9, q_rot.iter().map(|c| *c as i32).collect()));
@@ -274,12 +270,12 @@ impl<'a> Base0Engine<'a> {
                 probe.attention_spread.push(probs.iter().max().copied().unwrap_or(0) - probs.iter().min().copied().unwrap_or(0));
                 // Narrowed so the value-weighted sum is an ordinary DotI8 rather than a
                 // mixed-scale reduction with no op in the catalog.
-                let p8 = requantize_row_uniform(&probs, QK_TO_CODE);
+                let p8 = requantize_row_uniform(&probs, self.artifact.qk_to_code());
 
                 for i in 0..shape.d_head {
                     let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
                     let weighted = dot_i8(&p8, &column)?;
-                    attn[off + i] = requantize_row_uniform(&[weighted], CODE_PRODUCT_TO_CODE)[0];
+                    attn[off + i] = requantize_row_uniform(&[weighted], self.artifact.code_product())[0];
                 }
             }
 
@@ -291,14 +287,14 @@ impl<'a> Base0Engine<'a> {
             // ---- SwiGLU feed-forward --------------------------------------------------------
             let normed = self.norm_to_code(&h)?;
             let gate_q = rescale_row(&matmul_quant(&layer.w_gate, &normed, shape.d_ff)?, layer.ffn_gate_scale);
-            let gate = requantize_row_uniform(&silu(&gate_q), QK_TO_CODE);
+            let gate = requantize_row_uniform(&silu(&gate_q), self.artifact.qk_to_code());
             probe.gate_extremes.push((
                 gate.iter().map(|c| *c as i32).min().unwrap_or(0),
                 gate.iter().map(|c| *c as i32).max().unwrap_or(0),
             ));
             let up = requantize_row_uniform(&matmul_quant(&layer.w_up, &normed, shape.d_ff)?, layer.requant[5]);
             probe.steps.push((li as u16, 29, up.iter().map(|c| *c as i32).collect()));
-            let gated = requantize_row_uniform(&mul_elem(&gate, &up)?, CODE_PRODUCT_TO_CODE);
+            let gated = requantize_row_uniform(&mul_elem(&gate, &up)?, self.artifact.code_product());
             probe.steps.push((li as u16, 31, gated.iter().map(|c| *c as i32).collect()));
             let down = requantize_row_uniform(&matmul_quant(&layer.w_down, &gated, d)?, layer.requant[6]);
             h = requantize_row_uniform(&add_elem(&h, &down)?, self.artifact.residual_requant_at(li, 1));
@@ -720,20 +716,22 @@ mod tests {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
             a.artifact_digest().to_string(),
-            // Re-frozen 2026-08-21, four times: the shape digest gained `n_kv_heads`, the
+            // Re-frozen 2026-08-21, five times: the shape digest gained `n_kv_heads`, the
             // artifact digest gained the requantization ZERO POINTS and the per-channel triples
-            // (without which two artifacts whose every bias differs shared one class id), and
-            // then the TOKENIZER commitment (without which two classes computing different things
-            // from the same ids shared one), and then the per-layer residual narrowing. The
-            // LOGITS below have not moved once across the four, which is the assertion that
-            // matters: each was a renaming, not a new model.
-            // The LOGITS below did not, and that is the assertion that matters — the arithmetic is
-            // untouched at `n_kv_heads == n_heads`, which is what every artifact built before
-            // grouped-query attention meant. A class id that moved while the trace held is a
-            // renaming; one where the trace moved too would have been a different model.
+            // (without which two artifacts whose every bias differs shared one class id), then the
+            // TOKENIZER commitment (without which two classes computing different things from the
+            // same ids shared one), then the per-layer residual narrowing, and now the three CLASS
+            // NARROWINGS the engine used to hold as `const` (ADR-0049 F: a parameter the court
+            // cannot open is a step it cannot adjudicate, and a `const` in this binary is exactly
+            // that).
+            //
+            // The LOGITS below have not moved once across the five, which is the assertion that
+            // matters: each was a renaming, not a new model. This one most of all — the narrowings
+            // moved from a `const` to a field holding the same value, so a moved trace would have
+            // meant the move changed the arithmetic.
             concat!(
-                "2be6f6bf4f36637a7f26a37173a88e7352456bf765e41cf6571eb0906adf5b89",
-                "fbda9b4d1f35e5478cf0d111fb17b9543f03991ab6b55af6e2fa7eecc0204868"
+                "a025c296b988ab9eb63ef1f60015bd93f3172aa1cc8c956e9bb96114dcf4eda8",
+                "86cfad66e261b2f0cea9a84dc853f55d4655895d92c9fd268422c8048cc2bda4"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );

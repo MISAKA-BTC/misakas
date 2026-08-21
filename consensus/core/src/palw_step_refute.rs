@@ -583,6 +583,22 @@ fn base0_row(
             .ok_or(PalwStepRefuteError::Unadjudicable)?;
             let row = weights
                 .operand_bytes(name, layer, 0, u32::try_from(byte_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?)
+                // **A narrowing is one block for the whole row, or one block per channel — and
+                // nothing else** (ADR-0049 Decision A, widened where building a real inventory
+                // showed it had to be).
+                //
+                // Asking only for `9 × channels` made a UNIFORM narrowing uncarryable wherever its
+                // row length is not fixed. BASE-0 applies one `qk_to_code` to the softmax output,
+                // whose length is `kv_len` — a function of the position — so no registered tensor
+                // of any fixed size could ever satisfy the request, and the step was
+                // `Unadjudicable` for every real artifact. The two shapes cannot be confused: at
+                // one channel they are the same nine bytes, and above one channel a uniform block
+                // is nine and a per-channel block is more.
+                .or_else(|| {
+                    matches!(op, Base0Op::Requantize).then(|| weights.operand_bytes(name, layer, 0, 9)).flatten().map(|uniform| {
+                        uniform.iter().copied().cycle().take(byte_len).collect::<Vec<u8>>()
+                    })
+                })
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
             match op {
                 Base0Op::Requantize => {

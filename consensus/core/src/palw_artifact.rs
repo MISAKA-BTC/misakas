@@ -110,6 +110,44 @@ pub fn artifact_root_v1(leaves: &[Hash64]) -> Option<Hash64> {
     Some(level[0])
 }
 
+/// **The prover side of [`verify_artifact_opening_v1`]** — build the opening for one leaf.
+///
+/// The verifier existed and the prover did not, so every opening in the tree was hand-assembled by
+/// a test that knew its own three-leaf shape. That is the half of a proof system where a mistake
+/// is invisible: a hand-built path that happens to verify proves the test, not the code, and a
+/// producer with no way to MAKE an opening cannot carry one in a real close (audit C-06).
+///
+/// Promotion is mirrored exactly: a node with no sibling at its level consumes no path element, so
+/// the path this emits is the path the verifier consumes, for any inventory size rather than for
+/// powers of two.
+pub fn open_artifact_leaf_v1(operands: &[PalwArtifactOperandV1], index: u32) -> Option<PalwArtifactOpeningV1> {
+    if operands.is_empty() || index as usize >= operands.len() {
+        return None;
+    }
+    let mut level: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+    let leaf_count = level.len() as u32;
+    let mut at = index as usize;
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+        if !promoted {
+            path.push(if at % 2 == 0 { level[at + 1] } else { level[at - 1] });
+        }
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(node(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        level = next;
+        at /= 2;
+    }
+    Some(PalwArtifactOpeningV1 { operand: operands[index as usize].clone(), leaf_index: index, leaf_count, path })
+}
+
 /// An opening: the operand, its index, the inventory size, and the sibling path.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwArtifactOpeningV1 {
@@ -243,6 +281,30 @@ mod tests {
             PalwArtifactOpeningV1 { operand: inv[index].clone(), leaf_index: index as u32, leaf_count: 3, path },
             root,
         )
+    }
+
+    /// **The prover and the verifier agree, at every inventory size** — including the odd ones,
+    /// where promotion decides whether a level consumes a path element.
+    ///
+    /// The hand-built openings this module tested with knew their own three-leaf shape, so they
+    /// proved the fixture rather than the code, and no producer could build one at all.
+    #[test]
+    fn every_leaf_opens_and_every_opening_verifies() {
+        for count in 1usize..=17 {
+            let inv: Vec<PalwArtifactOperandV1> =
+                (0..count).map(|i| operand("t", Some(i as u16), 0, &[i as u8, 0xAA, 0xBB])).collect();
+            let root = artifact_root_v1(&inv.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).unwrap();
+            for i in 0..count {
+                let opening = open_artifact_leaf_v1(&inv, i as u32).expect("every leaf opens");
+                assert_eq!(verify_artifact_opening_v1(&opening, root), Ok(()), "count {count}, leaf {i}");
+                // …and it proves THAT leaf: the same path with another operand does not verify.
+                let mut forged = opening.clone();
+                forged.operand.bytes[0] ^= 0xFF;
+                assert_eq!(verify_artifact_opening_v1(&forged, root), Err(PalwArtifactError::RootMismatch));
+            }
+            assert!(open_artifact_leaf_v1(&inv, count as u32).is_none(), "an index past the end opens nothing");
+        }
+        assert!(open_artifact_leaf_v1(&[], 0).is_none());
     }
 
     /// The court adjudicates from carried evidence, with no local model.

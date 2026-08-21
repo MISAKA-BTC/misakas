@@ -505,9 +505,10 @@ mod tests {
         // the declared one here understated the floor's own ladder by two rounds and the price of
         // provisioning by the same.
         let floor_worst = worst_case_step_leaf_count_v1(&floor).expect("the floor is inside the cap");
-        // Re-measured when the graph gained the narrowings the engine performs: the layer table
-        // doubled, so the leaf count did too. 184,456 was the eighteen-step graph's figure.
-        assert_eq!(floor_worst, 366_728, "the floor's longest job, measured");
+        // Re-measured twice. The layer table doubling (the narrowings the engine performs) took
+        // 184,456 to 366,728; the post table gaining the narrowing `norm_to_code` performs — which
+        // the hand-written table omitted exactly as the layer table had — adds eight more.
+        assert_eq!(floor_worst, 366_736, "the floor's longest job, measured");
         assert_eq!(rounds(floor_worst), 19);
 
         assert_eq!(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, PALW_STEP_MAX_LEAVES);

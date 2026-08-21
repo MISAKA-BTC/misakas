@@ -289,10 +289,61 @@ pub struct Base0ArtifactV1 {
     /// The shifts are a CALIBRATION output, not a choice: converted once with the global rule,
     /// measured, and re-derived from each layer's own peak.
     pub layer_residual_requant: Option<Vec<[QuantParams; 2]>>,
+    /// **The three narrowings the engine used to hold as `const`** (ADR-0049 Decision F, audit
+    /// C-05/C-06).
+    ///
+    /// `BASE0_LAYER_IR` names each of them as a registered tensor — `qk_to_code.requant`,
+    /// `code_product.requant`, `rope_clamp.requant` — because "the court resolves a node's
+    /// parameters through `PalwWeightOracleV1` and a parameter that cannot be opened is a step
+    /// that cannot be adjudicated". `palw_base0_profile`'s own doc already decided where they
+    /// belong: "A constant the court must reproduce is either part of a kernel's identity or part
+    /// of the artifact, and putting it in the artifact keeps ADR-0040 Decision D's op set at ten
+    /// rather than minting a descriptor per constant."
+    ///
+    /// They lived in the engine, so a real inventory could not carry them and a real opening could
+    /// not prove them. The values are unchanged — [`Base0ArtifactV1::CLASS_NARROWINGS`] is what
+    /// every artifact built before this field meant — but they are now data the artifact root
+    /// covers and an opening can address.
+    ///
+    /// Order: `[qk_to_code, code_product, rope_clamp]`, which is the order the IR names them.
+    pub class_narrowings: [QuantParams; 3],
     derived_seed: Option<u64>,
 }
 
 impl Base0ArtifactV1 {
+    /// Fractional bits in an `int8` activation code: 127 ≈ 1.0. The engine's own `ACTIVATION_BITS`,
+    /// here because the three narrowings below are defined in terms of it and they are artifact
+    /// data now.
+    pub const ACTIVATION_BITS: u8 = 7;
+
+    /// **The three narrowings every BASE-0 artifact carries, at the values the engine used to hold
+    /// as `const`.**
+    ///
+    /// Byte-identical to what the engine computed before they moved: `qk_to_code` narrows a Qk
+    /// value back to an activation code (softmax probabilities and the SiLU output),
+    /// `code_product` narrows a `DotI8` whose left operand is a Q7 code, and `rope_clamp` is the
+    /// identity narrowing after `RopeTable`, which returns the scale it was handed.
+    pub const CLASS_NARROWINGS: [QuantParams; 3] = [
+        QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - Self::ACTIVATION_BITS, zero: 0 },
+        QuantParams { multiplier: i32::MAX, shift: Self::ACTIVATION_BITS, zero: 0 },
+        QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 },
+    ];
+
+    /// The narrowing applied after softmax and after SiLU (`blk.{layer}.qk_to_code.requant`).
+    pub fn qk_to_code(&self) -> QuantParams {
+        self.class_narrowings[0]
+    }
+
+    /// The narrowing applied to a code×code product (`blk.{layer}.code_product.requant`).
+    pub fn code_product(&self) -> QuantParams {
+        self.class_narrowings[1]
+    }
+
+    /// The clamp applied after `RopeTable` (`blk.{layer}.rope_clamp.requant`).
+    pub fn rope_clamp(&self) -> QuantParams {
+        self.class_narrowings[2]
+    }
+
     /// Build from supplied weights. Every length is checked against the shape here, because the
     /// engine indexes with arithmetic that would otherwise read a plausible wrong row.
     pub fn from_parts(
@@ -339,6 +390,7 @@ impl Base0ArtifactV1 {
             layers,
             rope,
             tokenizer_commitment: Hash64::default(),
+            class_narrowings: Self::CLASS_NARROWINGS,
             norm_requant,
             residual_requant,
             layer_residual_requant: None,
@@ -543,6 +595,12 @@ impl Base0ArtifactV1 {
         absorb_tensor(&mut state, b"unembed", &self.unembed);
         absorb_quant(&mut state, &self.norm_requant);
         absorb_quant(&mut state, &self.residual_requant);
+        // The three class narrowings, which used to be engine constants and are artifact data
+        // now (ADR-0049 F): each of them moves every activation that passes through it, so each is
+        // inside the digest by the module's own rule.
+        for narrowing in &self.class_narrowings {
+            absorb_quant(&mut state, narrowing);
+        }
         // Per-layer residual narrowing, presence-tagged and length-prefixed for the same reason
         // the per-channel triples are: `None` and an empty `Some` must be different streams, and
         // a class calibrated per layer is not the class that was not.

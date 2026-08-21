@@ -145,7 +145,13 @@ use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvScaled};
 /// The thirty-six steps, in the engine's own order (`misaka-palw-base0/src/engine.rs`).
 pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     // --- attention ---------------------------------------------------------------------------
-    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "blk.{layer}.attn_norm.weight", Hidden, &[LayerIn]),
+    // **No weight operand, and that is the engine's own shape** (ADR-0049 Decision F, audit
+    // C-05/C-06). `Base0Engine::norm_to_code` is `rms_norm(h, eps_q)` — there is no gain vector in
+    // `Base0ArtifactV1` and none is read. Naming one here made the profile demand a tensor no
+    // honest artifact could carry, so a real inventory could never cover the graph: exactly the
+    // defect this table's own doc says generating it from the IR was meant to end, arriving
+    // through the IR instead of past it.
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "", Hidden, &[LayerIn]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_norm.requant", Hidden, &[Step(0)]),
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_q.weight", Hidden, &[Step(1)]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_q.requant", Hidden, &[Step(2)]),
@@ -174,7 +180,7 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(19), LayerIn]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_residual.requant", Hidden, &[Step(20)]),
     // --- feed-forward ------------------------------------------------------------------------
-    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "blk.{layer}.ffn_norm.weight", Hidden, &[Step(21)]),
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "", Hidden, &[Step(21)]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_norm.requant", Hidden, &[Step(22)]),
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_gate.weight", FfnDim, &[Step(23)]),
     n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_gate.scale", FfnDim, &[Step(24)]),
@@ -231,7 +237,7 @@ pub fn base0_tensor_names_v1() -> Vec<&'static str> {
             names.push(ir.weight);
         }
     }
-    for graph_level in ["output_norm.weight", "output.weight"] {
+    for graph_level in ["output_norm.requant", "output.weight"] {
         if !names.contains(&graph_level) {
             names.push(graph_level);
         }
@@ -341,15 +347,20 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     // index, which silently rewrote two unrelated nodes the moment the graph gained its narrowings.
 
     // --- post: the final norm and the logits ---
+    // The final norm is `Base0Engine::norm_to_code`, which is TWO steps: `rms_norm` (no gain —
+    // BASE-0 carries none) and the narrowing back to activation codes. The table declared the
+    // first and not the second, which is the same omission the layer table carried before it was
+    // generated from the IR: a court recomputing the head would compare a Qk value against a code.
     let post_nodes = vec![
+        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, hidden, vec![PALW_STEP_INPUT_LAYER_IN]),
         weighted(
-            PalwStepOpKindV1::RmsNorm,
-            KDESC_BASE0_RMS_NORM,
-            "output_norm.weight",
+            PalwStepOpKindV1::MulElem,
+            KDESC_BASE0_REQUANTIZE,
+            "output_norm.requant",
             &i8_once,
             PalwStepNodeRoleV1::Plain,
             PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![PALW_STEP_INPUT_LAYER_IN],
+            vec![0],
         ),
         weighted(
             PalwStepOpKindV1::MatMulQuant,
@@ -358,7 +369,7 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
             &i8_once,
             PalwStepNodeRoleV1::Plain,
             PalwStepOutLenV1::Fixed { elements: geometry.vocab_size },
-            vec![0],
+            vec![1],
         ),
     ];
 
@@ -578,11 +589,12 @@ mod tests {
         assert!(p.gdn_nodes.is_empty(), "a plain decoder-only transformer has no GatedDeltaNet arm");
         assert_eq!(p.table_layer_span(PalwStepTableV1::Attn), 4, "every layer is an attention layer");
         assert_eq!(p.table_layer_span(PalwStepTableV1::Gdn), 0);
-        // 1 pre + the IR's own step count per layer x 4 + 2 post. The per-layer figure is the
+        // 1 pre + the IR's own step count per layer x 4 + 3 post. The per-layer figure is the
         // engine's, not a number kept beside it: it was 18 while the graph was hand-written and is
-        // 36 now that every narrowing the engine performs is declared.
+        // 36 now that every narrowing the engine performs is declared. The post table is 3 for the
+        // same reason — `norm_to_code` is a norm AND a narrowing, and only the norm was declared.
         assert_eq!(BASE0_LAYER_IR.len(), 36, "the engine performs thirty-six steps per layer");
-        assert_eq!(p.global_node_count() as usize, 1 + BASE0_LAYER_IR.len() * 4 + 2);
+        assert_eq!(p.global_node_count() as usize, 1 + BASE0_LAYER_IR.len() * 4 + 3);
         // A profile id exists, which is what a class registration commits to.
         assert_ne!(p.shape_profile_id(), Hash64::default());
     }
@@ -609,7 +621,7 @@ mod tests {
                 seen += 1;
             }
         }
-        assert_eq!(seen, 1 + BASE0_LAYER_IR.len() + 2, "the whole graph was checked, not a prefix of it");
+        assert_eq!(seen, 1 + BASE0_LAYER_IR.len() + 3, "the whole graph was checked, not a prefix of it");
     }
 
     /// The float constants are zero and the float tables are empty, and every one of those is a
@@ -783,9 +795,10 @@ mod tests {
                 checked += 1;
             }
         }
-        // 1 pre + 36 layer steps + 2 post. The layer count is the engine's own, since the table is
-        // generated from `BASE0_LAYER_IR`; it was 18 while the graph was written by hand.
-        assert_eq!(checked, 39, "the whole graph was checked, not a prefix");
+        // 1 pre + 36 layer steps + 3 post. Both counts are the engine's own: the layer table is
+        // generated from `BASE0_LAYER_IR` (18 while the graph was written by hand), and the post
+        // table gained the narrowing `norm_to_code` performs and the table did not declare.
+        assert_eq!(checked, 40, "the whole graph was checked, not a prefix");
         assert_eq!(p.attn_nodes.len(), BASE0_LAYER_IR.len(), "the layer table IS the IR");
 
         // The two attention nodes multiply an activation by an opened row at a kv-scaled width —

@@ -39,6 +39,7 @@
 
 pub mod artifact;
 pub mod engine;
+pub mod inventory;
 pub mod legs;
 pub mod rope;
 
