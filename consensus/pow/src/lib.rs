@@ -324,6 +324,16 @@ impl StateLayer0 {
             // Layer-0 digest's own `network_id` binding, and domain-vs-network equality is
             // admission's stateless list (it needs the network's expected domain, which this
             // pure finalizer deliberately does not hold).
+            //
+            // A carriage that does not decode is not a failed tag, it is an unverifiable header:
+            // the shape gate refuses it up-stack, and here a missing envelope is
+            // `PalwV2AttemptMissing` rather than something silently tagged instead.
+            //
+            // This arm used to have a TWIN further down the match — same id, no challenge
+            // recompute — which `match` made dead code. Dead in the safe direction (the strict
+            // arm is first), but only by ordering: deleting the wrong one of two identical
+            // patterns would have removed the position binding and left an attempt re-mountable
+            // at any nonce. One arm, one rule.
             POW_ALGO_ID_PALW_COMMITTED_V2 => {
                 let envelope = self.palw_attempt_v2.as_ref().ok_or(PowLayer0Error::PalwV2AttemptMissing)?;
                 let attempt = &envelope.attempt;
@@ -378,23 +388,6 @@ impl StateLayer0 {
                         Ok(POW_L1_PALW_OUT_BYTES)
                     }
                 }
-            }
-            // ADR-0042 Decision 3a (algo_id = 6, Unit A): the finalizer consumes an EXPANSION of
-            // the attempt's commitment root instead of an inference. One new ticket still costs
-            // one new inference, but that is enforced by the pieces around this arm, not by it:
-            // the commitment root binds the challenge, the challenge binds the header position,
-            // and stateless admission recomputes it — so a miner cannot re-announce one solved
-            // position, and per-bond exposure (stateful) is what prices a FAKE trace root.
-            //
-            // A carriage that does not decode is not a failed tag, it is an unverifiable header:
-            // the shape gate refuses it up-stack, and here it maps to `PalwCarriageMissing` rather
-            // than silently tagging something else.
-            POW_ALGO_ID_PALW_COMMITTED_V2 => {
-                let envelope = self.palw_attempt_v2.as_ref().ok_or(PowLayer0Error::PalwCarriageMissing(self.pow_algo_id))?;
-                let root = kaspa_consensus_core::palw_attempt_v2::commitment_root_v2(&envelope.attempt);
-                let tag = kaspa_consensus_core::palw_attempt_v2::l1_tag_v2(root);
-                buf[..tag.len()].copy_from_slice(&tag);
-                Ok(tag.len())
             }
             // ADR-0044 Decision 6 (algo_id = 7, Unit B): `Expand(spend_id)`. The tag is IDENTITY
             // binding, not a lottery — see `check_pow_layer0`, which is where the difference is
