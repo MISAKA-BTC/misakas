@@ -357,3 +357,53 @@ LAST position, because a digest that missed the tail would be exactly as broken.
 
 Condition 6 asks for the requant parameters to be inside `artifact_root`. Until this commit they
 were not.
+
+## Phase 3 — the probe, and three artifacts that ran without computing (2026-08-21)
+
+Phase 2 ended with a converter whose own test asserted that a converted artifact *runs* and that
+two runs *agree*. `ForwardProbe`'s doc says why that cannot be enough: a degenerate pass still
+returns logits, still returns the same logits every run, and still returns different logits for
+different weights — so a determinism test and a different-artifact test both pass on a model that
+cannot compute.
+
+Probing the converted artifact found it was exactly that. Three parameters the converter chose by
+literal were each wrong, and each in a way no existing test could see:
+
+| probe | before | after | cause |
+|---|---|---|---|
+| `attention_spread` | three of eight heads at **0**, the rest at 2²⁴−2 | 10.8 M – 16.7 M, none at either end | `attn_logit_scale` was `shift: 0`. `ScaleParams` reads its multiplier as a Q31 fraction, so unity is `shift: 31` and **`shift: 0` is a gain of 2³¹** — logits saturated into a hard argmax where they differed at all, and stayed uniform where they did not |
+| `gate_extremes` | `(0, 127)` | `(-36, 127)` | the same 2³¹ on `ffn_gate_scale`: the gate sat on its positive rail, and a SiLU that never floors is not a SiLU |
+| `residual_peak` | 55, 40 | 112, 115 | `norm_requant` was `shift: 24`. `RmsNorm` returns Qk and a `MatMulQuant` operand is a Q7 code, so the narrowing is `K − 7 = 17`; at 24 every normed vector reached the projections with about a bit of range left |
+
+This is ADR-0040 Decision H's failure with the sign of the mistake reversed — Decision H exists
+because `Requantize`'s gain can never exceed 1 and the accumulators arrived at `SoftMax` two to
+three orders of magnitude *below* Qk. Here the repair overshot in the other direction. Both
+amplification points now derive from fan-in through one shared `artifact::amplify_for`, which is
+what stops the next caller from re-discovering it.
+
+The gate's asymmetry after the fix is 36/127 ≈ **28 %**, which is what
+`docs/palw-base0-depth-measurement-2026-08-21.md` measured for a healthy gate at every depth and
+width it swept. Two independent routes to the same number.
+
+`a_converted_artifact_is_probed_not_just_run` is the acceptance gate, mutation-checked: reverting
+any one of the three fixes fails it, each on its own named assertion.
+
+### `residual_requant` is now the caller's decision
+
+It was a literal (`shift: 1`) and it is inside `execution_class_id`, so it froze with the class.
+The depth measurement priced what it decides:
+
+| gain | residual highway | per-layer write |
+|---|---|---|
+| `shift: 1` (halve) | ~7 adds, then the value floors at ±1 and survives as a sign | the full 7 bits |
+| `shift: 0` (unity) | unbounded | 2–3 bits at depth 24–32, and every projection into the residual must be attenuated to match |
+
+Seven adds is three and a half layers. At Qwen2.5-1.5B's 28 layers, halving means a feature written
+by layer 0 arrives at the output as a sign. That may be the right trade — it is not one a literal
+should have been making, so it is a `Qwen25ConvertPlan` field now.
+
+### Still open
+
+`activation_scale` remains the number a real calibration must supply: a forward pass over sample
+inputs, measuring what each projection actually produces. The fixture's value is a fixture's. What
+this phase adds is that an artifact built on a wrong one can now be *detected* rather than shipped.

@@ -38,7 +38,7 @@
 //! real `config.json`, and [`crate::convert::Qwen25ConvertPlan`] carries it.
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1, Base0LayerWeightsV1, Base0ShapeV1};
-use kaspa_consensus_core::palw_base0_ops::{QuantParams, ScaleParams};
+use kaspa_consensus_core::palw_base0_ops::QuantParams;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +219,23 @@ pub struct Qwen25ConvertPlan {
     /// landed on a non-zero `zero`, and a conversion where that count is zero has not carried the
     /// biases at all.
     pub activation_scale: f64,
+    /// **What one residual add does to what is already in the stream** — and the second thing this
+    /// converter must not choose on the caller's behalf.
+    ///
+    /// `AddElem` is `i8 -> i32` by ADR-0040 Decision D, so the residual stream between layers is
+    /// `int8` and this one parameter governs every residual add in the model. It is inside
+    /// `execution_class_id`, so it is frozen when the class is, and
+    /// `docs/palw-base0-depth-measurement-2026-08-21.md` measured the trade it decides:
+    ///
+    /// | gain | residual highway | per-layer write |
+    /// |---|---|---|
+    /// | `shift: 1` (halve) | ~7 adds, then the value floors at ±1 and is a sign | the full 7 bits |
+    /// | `shift: 0` (unity) | unbounded | 2–3 bits at depth 24–32, and every projection into the residual must be attenuated to match or `Saturate8` clips the stream |
+    ///
+    /// Seven adds is three and a half layers. At Qwen2.5-1.5B's 28 layers, `shift: 1` means a
+    /// feature written by layer 0 reaches the output as a sign — which may be the right trade, but
+    /// it is a trade, and it was previously made by a literal in this function.
+    pub residual_requant: QuantParams,
 }
 
 /// Fold a per-channel gain into the COLUMNS of a `[out][in]` row-major matrix.
@@ -370,14 +387,27 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
             ],
-            attn_logit_scale: ScaleParams { multiplier: i32::MAX, shift: 0 },
-            ffn_gate_scale: ScaleParams { multiplier: i32::MAX, shift: 0 },
+            // **Both amplification points, derived from fan-in rather than declared.**
+            // `ScaleParams`'s unity is `shift: 31`, so the `shift: 0` these carried was a gain of
+            // `2^31`: attention saturated into a hard argmax where the logits differed at all and
+            // stayed uniform where they did not, and the SwiGLU gate sat on its positive rail with
+            // `min` exactly 0 — a gate whose SiLU never floors is not a SiLU. Measured by
+            // `a_converted_artifact_is_probed_not_just_run`, which is why the probe exists.
+            attn_logit_scale: crate::artifact::amplify_for(s.d_head),
+            ffn_gate_scale: crate::artifact::amplify_for(d),
         });
     }
 
-    let norm_requant = QuantParams { multiplier: i32::MAX, shift: 24, zero: 0 };
-    let residual_requant = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
-    Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, residual_requant).map_err(ConvertError::Artifact)
+    // `RmsNorm` returns Qk and a `MatMulQuant` operand is a Q7 activation code, so the narrowing
+    // is `K - ACTIVATION_BITS`. At `shift: 24` — which this carried — 1.0 in Qk arrives as ONE
+    // code, so every normed vector reaches the projections with about a bit of range left. The
+    // same off-by-a-scale `palw_base0_ops::rms_norm`'s own doc records an earlier draft making.
+    let norm_requant = QuantParams {
+        multiplier: i32::MAX,
+        shift: (kaspa_consensus_core::palw_base0::K - crate::engine::ACTIVATION_BITS as u32) as u8,
+        zero: 0,
+    };
+    Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, plan.residual_requant).map_err(ConvertError::Artifact)
 }
 
 /// How many q/k/v channels of a converted artifact carry a NON-ZERO bias.
@@ -462,6 +492,9 @@ mod tests {
     /// activation ranges. It is here so the test exercises a CALIBRATED conversion; a real one
     /// gets this number from Phase 3.
     const CALIBRATED_FIXTURE_ACTIVATION_SCALE: f64 = 1.0 / 128.0;
+    /// The residual gain these tests convert at — the behaviour the converter used to hardcode, so
+    /// the tests measure the change this commit made and not a change of regime underneath it.
+    const HALVING_RESIDUAL: QuantParams = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
 
     fn tiny_qwen_shape() -> Base0ShapeV1 {
         // Qwen2.5's structure at a size a test can run: grouped-query attention with a real
@@ -488,7 +521,7 @@ mod tests {
     fn a_checkpoint_converts_reproducibly() {
         let shape = tiny_qwen_shape();
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
 
         let a = convert_qwen25(&blob, &plan).expect("a well-formed checkpoint converts");
         let b = convert_qwen25(&blob, &plan).unwrap();
@@ -527,7 +560,7 @@ mod tests {
         let mut shape = tiny_qwen_shape();
         shape.n_layers = 1;
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
         let a = convert_qwen25(&blob, &plan).unwrap();
 
         let engine = crate::engine::Base0Engine::new(&a);
@@ -539,6 +572,65 @@ mod tests {
         assert_eq!(first.len(), 3);
         assert!(first.iter().all(|l| l.len() == shape.vocab));
         assert_eq!(run(), first, "two runs of a converted artifact agree bit for bit");
+    }
+
+    /// **Phase 3's first measurement: does a converted artifact COMPUTE, or merely run?**
+    ///
+    /// `a_converted_artifact_runs_the_engine` above asserts the pass completes and that two runs
+    /// agree. `ForwardProbe`'s own doc explains why that cannot be enough: *"a degenerate pass
+    /// still returns logits, still returns the same logits every run, and still returns different
+    /// logits for different weights, so determinism tests and different-artifact tests both pass
+    /// on a model that cannot compute."* This is the test that can tell the difference, and when
+    /// it was written the converted artifact failed it on all three channels:
+    ///
+    /// | probe | before | after | what was wrong |
+    /// |---|---|---|---|
+    /// | `attention_spread` | three of eight heads at **0**, the rest at 2^24−2 | 10.8 M – 16.7 M, none at either end | `attn_logit_scale` was `shift: 0`, and `ScaleParams`'s unity is 31 — a gain of `2^31`, so logits either saturated into a hard argmax or stayed uniform |
+    /// | `gate_extremes` | `(0, 127)` | `(-36, 127)` | same `2^31` on `ffn_gate_scale`: the gate sat on its positive rail and its SiLU never floored. A SiLU that never goes negative is not a SiLU |
+    /// | `residual_peak` | 55, 40 | 112, 115 | `norm_requant` was `shift: 24`, so 1.0 in Qk reached the projections as ONE code |
+    ///
+    /// The gate's asymmetry after the fix is `36 / 127` ≈ 28 %, which is what
+    /// `docs/palw-base0-depth-measurement-2026-08-21.md` measured for a healthy gate across every
+    /// depth and width it swept. Two independent routes to the same number.
+    #[test]
+    fn a_converted_artifact_is_probed_not_just_run() {
+        let shape = tiny_qwen_shape();
+        let blob = tiny_checkpoint(&shape);
+        let plan =
+            Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
+        let a = convert_qwen25(&blob, &plan).unwrap();
+        let engine = crate::engine::Base0Engine::new(&a);
+        let mut cache = crate::engine::KvCache::new(&a);
+        let mut probe = None;
+        for p in 0..4usize {
+            probe = Some(engine.forward_token_probed(&mut cache, p + 1, p).expect("the pass completes").1);
+        }
+        let probe = probe.expect("four positions ran");
+
+        // Attention selects. Zero spread is a uniform distribution — a head reading nothing — and
+        // the full 2^24 is a hard argmax, which is a head reading exactly one key however close
+        // the others are. A working head is strictly between.
+        let full = (1i32 << kaspa_consensus_core::palw_base0::K) - 2;
+        for (i, spread) in probe.attention_spread.iter().enumerate() {
+            assert!(*spread > 0, "head {i} has a uniform distribution — attention selects nothing");
+            assert!(*spread < full, "head {i} is a hard argmax — the logits are saturating");
+        }
+
+        // The gate floors. Real SiLU bottoms at −0.278 and passes positives, so a working gate is
+        // ASYMMETRIC; the degenerate linear `x/2` is symmetric, and a saturated one has min 0.
+        for (i, (lo, hi)) in probe.gate_extremes.iter().enumerate() {
+            assert!(*lo < 0, "layer {i}'s gate never goes negative — its SiLU is not a SiLU");
+            assert!(lo.unsigned_abs() < hi.unsigned_abs(), "layer {i}'s gate is symmetric — SiLU has degenerated to x/2");
+        }
+
+        // The residual stream is neither collapsed nor pinned on the `Saturate8` rail.
+        for (i, peak) in probe.residual_peak.iter().enumerate() {
+            assert!(*peak > 0, "layer {i}'s residual stream has collapsed to zero");
+            assert!(*peak < 128, "layer {i}'s residual stream is clipping");
+        }
+
+        // And the narrowing that feeds every projection is Qk -> Q7, not Qk -> one code.
+        assert_eq!(a.norm_requant.shift, 17, "RmsNorm returns Qk and a MatMulQuant operand is Q7");
     }
 
     /// The folds are applied where they belong, and the tests assert the direction — folding a
@@ -568,7 +660,7 @@ mod tests {
 
         let mut wrong = shape;
         wrong.d_ff = 128;
-        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0, activation_scale: 1.0 };
+        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0, activation_scale: 1.0, residual_requant: HALVING_RESIDUAL };
         match convert_qwen25(&blob, &plan) {
             Err(ConvertError::ShapeMismatch { tensor, .. }) => assert!(tensor.contains("gate_proj")),
             other => panic!("a wrong ffn width must be refused by name, got {other:?}"),

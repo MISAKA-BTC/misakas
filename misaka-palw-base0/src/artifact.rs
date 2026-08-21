@@ -51,9 +51,16 @@ pub const LN_THETA_10000_GEN_Q: i128 = 2_592_480_341_699_211;
 /// activations sit near σ = 45, so an `n`-term dot has σ ≈ `√n · 37 · 45`, i.e. `2^(10.7 +
 /// log2(n)/2)`. Target `2^22` — a quarter of Qk, leaving headroom before `rescale_q` saturates.
 ///
-/// Used only by [`Base0ArtifactV1::derive_deterministic`]. A real artifact's scales come from
-/// calibrating against its own activation statistics, which is what this stands in for.
-fn amplify_for(fan_in: usize) -> ScaleParams {
+/// **Public because the converter needs the same physics.** `ScaleParams` reads its multiplier as
+/// a Q31 fraction, so `UNITY_SHIFT` is 31 and `shift: 0` is a gain of `2^31` — not "no
+/// amplification" but twenty-one orders of it. A converter that wrote `shift: 0` here saturated
+/// every attention logit into a hard argmax and every SwiGLU gate into its positive rail, which
+/// is ADR-0040 Decision H's failure with the sign of the mistake reversed. Sharing one derivation
+/// is what stops that from being re-discovered per caller.
+///
+/// This is still a fan-in heuristic standing in for calibration: a real artifact's scales come
+/// from measuring what its own projections produce on real inputs.
+pub fn amplify_for(fan_in: usize) -> ScaleParams {
     let ilog2 = (usize::BITS - 1 - fan_in.leading_zeros()) as i32;
     let bits = (12 - ilog2 / 2).clamp(-31, 31) as i8;
     ScaleParams::gain_pow2(bits).expect("the clamp keeps `bits` inside the representable range")
