@@ -41,7 +41,8 @@ Each was verified by mutation: reverting the fix makes the test fail with the st
 | **Ⅱ.3** | `ClassFrozen`'s contradiction certificate has signatures `check_class_contradiction_shape_v2` defers to "the acceptance layer", which had no arm. A forged one froze a class forever — there is deliberately no `ClassUnfrozen`. | `40002ddd` | Refused at both layers until `adjudicate_class_contradiction_v1` is wired. |
 | **Ⅱ.4** | `CourtOpened` named a challenger bond with **no authorization from it**. Everything `validate_court_opened_v2` checked was a fact *about* the bond, none about who spoke for it — and the transition disarms the claim's final deadline while a session is open. | `4724863a` | Challenger signature over the session id, in its own ML-DSA-87 context. The test asserts the message **and** the context. |
 | **Ⅱ.5** | A stateful lie in a 0x4b transaction **killed the honest block that accepted it**. 0x4b admission is purely stateless, so the transaction relayed and mined freely; the first honest block to accept it was disqualified, and the transaction stayed in the acceptance set for the next candidate. ~100 bytes, one fee, chain stops. | `4724863a` | A failing object is now **dropped** and the block stands. The verdict is a pure function of `(state, params, point, object)`, so every node drops the same ones. |
-| **§1 (half)** | A ConsensusV2 node with **no PALW state ran anyway**, reading absent state as "no policy" — state root unchecked, tips by blue work, any pruning point, deep-reorg comparator skipped. It does not fork, so nothing reported it. | `0cf7ead2` | Refuses at startup. The guard covers the node that did **not** process genesis — the dangerous case — and tells staging apart by its database (`past_pruning_points[0]`) rather than a flag. Two tests: the degraded state is real, and the assertion fires in it. |
+| **§1 (import)** | A node joining by pruned IBD had **no PALW state and no way to get one** — no P2P message carried it and `import_pruning_point_utxo_set` wrote no PALW row. | `e52a1234` | Six layers mirroring the overlay sidecar. The root is the gate and runs **before** the write; one forged class share is refused with the reason named and the store stays empty. Verified against the CHILD header — `palw_state_root` commits the state as-of the selected parent, so the pruning point's own header commits a different value and refused every honest carriage until the test caught it. |
+| **§1 (refusal)** | A ConsensusV2 node with **no PALW state ran anyway**, reading absent state as "no policy" — state root unchecked, tips by blue work, any pruning point, deep-reorg comparator skipped. It does not fork, so nothing reported it. | `0cf7ead2` | Refuses at startup. The guard covers the node that did **not** process genesis — the dangerous case — and tells staging apart by its database (`past_pruning_points[0]`) rather than a flag. Two tests: the degraded state is real, and the assertion fires in it. |
 | **§4** | The free-prompt **commitment** signature was verified nowhere. `validate_stateless_v3` said "verified by the caller" and there was no caller; the only `validate_signature_v3` use in the tree was the SPEND envelope's. Any stranger's 0x4a tx created a claim bound to any bond outpoint it named. | `dc8ca79c` | The verifier is now an **argument** to the extraction walk, so "somebody else checks it" is unrepresentable. Tests pin the message (claim id), the key (carried), and the context. |
 | **producer ×4** | `has_epoch_room()` capped the liveness floor that admission exempts, and the budget table is written for the tip's epoch and read for the candidate's — so the producer **refused the first block of every epoch**. Plus: a `trace_retention_daa` promise with the material dropped, `should_mine` bypassed, and a tokio worker pinned. | `2870f1d6` | `the_liveness_floor_is_never_capped_by_an_epoch_budget` asserts a floor with a ZERO budget is still producible. Material is persisted before the block publishes; a write failure aborts the publish. Both CPU phases moved to `spawn_blocking`. |
 | **Ⅳ** | **The court convicted honest executions.** Three divergences from the engine, each invisible without >1 head *and* position >0: SoftMax (engine per head, court once over the concatenation); RoPE (court asked byte offset 0 — always position 0's row — and for the whole row's pairs, not one head's); P·V (V cache is `[position][kv_dim]`, court read `[out_dim][in_dim]` — the transpose, agreeing only at `kv_len == 1`). `map_refutation_outcome` → `ExecutorGuilty` → `void_and_slash` is a live money path, and `CourtClosed` may ride a transaction. | `5cf1a94c` | `the_court_convicts_no_leaf_of_an_honest_execution`: **914 leaves swept, 910 `NoFaultFound`, 0 convicted**, and 16 tampered tiles at the repaired nodes still convicted. Reverting each fix convicts **10 / 32 / 30** honest leaves. |
@@ -78,17 +79,16 @@ Four independent triggers:
   "Unit D site 2" IBD commit gate is **structurally vacuous** — `decide_ibd_commit_v2` is never
   reached on a real IBD and the commit is authorized unconditionally.
 
-**The refusal half is done** (`0cf7ead2`): a ConsensusV2 consensus resuming a real history with no
+**§1 IS CLOSED** — both halves. The text below is kept because it records what the failure was.
+
+**The refusal half** (`0cf7ead2`): a ConsensusV2 consensus resuming a real history with no
 PALW tip now aborts at startup instead of running permissively. A silent consensus divergence is a
 loud startup message.
 
-**What remains is the half that lets such a node exist at all** — the critic's single
-recommendation: give `PalwChainStateV2` a pruning-point import — a `RequestPruningPointPalwState` /
-`PruningPointPalwState` message pair, a capture in the pruning processor beside the overlay
-snapshot it already takes, and an `import_pruning_point_palw_state` that installs the root-verified
-carriage as the store's tip. Until it exists, a stranger **cannot join** once the pruning point
-leaves genesis — which is a smaller failure than joining wrongly, and is where the refusal buys
-time.
+**The import half** (`e52a1234`) is the critic's single recommendation, built as it described: the
+message pair, the serving flow, the IBD fetch inside the existing all-or-nothing sidecar block, and
+`import_pruning_point_palw_state` installing the root-verified carriage as the store's tip. A peer
+that cannot serve it aborts the IBD on a ConsensusV2 network.
 
 ### 2. The claim lattice has no configuration in which a claim reaches `Final`
 
@@ -210,11 +210,9 @@ from consensus.
 
 ## Reading order for the next session
 
-1. **§1's remaining half — the pruning-point import.** The refusal now makes a stranger's node
-   stop instead of diverge; the import is what lets it join. Still the critic's one recommendation.
-2. **§2 — something has to file a `ReceiptLicensed`**, or the lattice never turns over and every
+1. **§2 — something has to file a `ReceiptLicensed`**, or the lattice never turns over and every
    panel seat is slashed at `ReceiptTimeout`.
-3. **§3 — authorize post-genesis `ClassRegistered`** (or fence it off for t12) and wire the coverage
+2. **§3 — authorize post-genesis `ClassRegistered`** (or fence it off for t12) and wire the coverage
    gate; the two compose into unfalsifiable work.
-4. **§6 — the per-class DAA divides by 4 every epoch** on a network whose receipt lane cannot
+3. **§6 — the per-class DAA divides by 4 every epoch** on a network whose receipt lane cannot
    produce. Latent while other blockers stop the chain first; it goes live the moment they lift.
