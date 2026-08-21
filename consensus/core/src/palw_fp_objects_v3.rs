@@ -58,12 +58,22 @@ pub struct PalwConsensusObjectV3Carrier {
 ///
 /// `network_domain` is the network's own (see `palw_network_domain_v2`); a payload naming another
 /// network produces nothing here, exactly as it would be refused at admission.
-pub fn palw_fp_objects_from_accepted_txs_v3(
+pub fn palw_fp_objects_from_accepted_txs_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
     freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
-) -> PalwFpExtractionV3 {
+    // **The ML-DSA-87 verifier, and it is not optional.** Without it this walk turned any
+    // stranger's 0x4a transaction into a claim bound to any bond outpoint it named — including the
+    // genesis premine bond, a published constant — because the commitment's signature was checked
+    // on no path in the tree. Taking it as an argument rather than leaving it to a caller is what
+    // makes "somebody else verifies it" unrepresentable; the previous arrangement said exactly that
+    // in a doc comment, and nobody did.
+    verify_mldsa87: V,
+) -> PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
@@ -81,6 +91,13 @@ pub fn palw_fp_objects_from_accepted_txs_v3(
         // walk must be total over whatever was accepted.
         if payload.validate_stateless_v3(network_domain, freeprompt.cu_weights()).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
+            continue;
+        }
+        // Who authored this commitment. Skipped rather than fatal, for the reason this whole walk
+        // is total over whatever was accepted: rejecting a peer-supplied payload here would be a
+        // remote denial of service wearing a consensus rule's clothes.
+        if payload.validate_signature_v3(&verify_mldsa87).is_err() {
+            out.skipped.push((id, "commitment signature does not verify under the carried key"));
             continue;
         }
         // The price is re-derived, never read: the payload's `cu` was checked against the shape
@@ -208,7 +225,59 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork, 0, payload_bytes)
     }
 
-    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle
+    /// **A commitment nobody signed for creates no claim** (launch blockers §4).
+    ///
+    /// `validate_stateless_v3`'s own doc said "the signature is verified by the caller" and there
+    /// was no caller: `PalwFreePromptCommitmentEnvelopeV3::validate_signature_v3` had no use
+    /// anywhere in the tree — the one call site of that method name is the SPEND envelope's. So a
+    /// 0x4a transaction from any stranger created a claim bound to any bond outpoint it named,
+    /// including the genesis premine bond pinned in `params.rs`, and the walk dropped
+    /// `executor_pubkey` on the way.
+    ///
+    /// The verifier is an ARGUMENT now, so "somebody else checks it" is no longer expressible.
+    #[test]
+    fn a_commitment_whose_signature_does_not_verify_creates_no_claim() {
+        let fp = freeprompt();
+        let p = payload(96, 256);
+        let carrier = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap());
+
+        // A verifier that answers honestly — this fixture carries no real signature.
+        let refused = palw_fp_objects_from_accepted_txs_v3(&[carrier.clone()], net(), &fp, h64(1), |_, _, _, _| false);
+        assert!(refused.objects.is_empty(), "an unsigned commitment must not become a claim");
+        assert_eq!(refused.skipped.len(), 1, "and it is SKIPPED with a reason, not silently dropped");
+        assert!(refused.skipped[0].1.contains("signature"), "got {}", refused.skipped[0].1);
+
+        // The same carrier with a verifier that accepts still becomes exactly one object, so the
+        // refusal above is the signature and nothing else.
+        assert_eq!(palw_fp_objects_from_accepted_txs_v3(&[carrier], net(), &fp, h64(1), |_, _, _, _| true).objects.len(), 1);
+    }
+
+    /// The signed message is the claim id under the commitment's own context, and the key it is
+    /// checked against is the CARRIED one — whether that key is the named bond's is the stateful
+    /// side's question, against the candidate-chain bond record.
+    #[test]
+    fn the_commitment_signature_is_checked_over_the_claim_id_in_its_own_context() {
+        let fp = freeprompt();
+        let p = payload(96, 256);
+        let seen = std::cell::RefCell::new(Vec::new());
+        let _ = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+            net(),
+            &fp,
+            h64(1),
+            |key, message, _sig, context| {
+                seen.borrow_mut().push((key.to_vec(), message.to_vec(), context.to_vec()));
+                true
+            },
+        );
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 1, "the verifier was consulted exactly once");
+        assert_eq!(seen[0].0, p.commitment.job.executor_pubkey, "under the carried key");
+        assert_eq!(seen[0].1, p.claim_id().as_byte_slice(), "over the claim id");
+        assert_eq!(seen[0].2, crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, "in its own domain");
+    }
+
+    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle
     /// and NOT by the payload's own claim.
     #[test]
     fn an_accepted_commitment_becomes_one_priced_object() {
@@ -218,8 +287,13 @@ mod tests {
         let expected_cu = fp_cu_v3(96, 256, fp.cu_weights());
         let (expected_quanta, expected_pwu) = fp.derive_quanta_and_pwu(expected_cu).unwrap();
 
-        let extracted =
-            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())], net(), &fp, h64(1));
+        let extracted = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+            net(),
+            &fp,
+            h64(1),
+            |_, _, _, _| true,
+        );
         assert_eq!(extracted.objects.len(), 1);
         assert!(extracted.skipped.is_empty());
         match &extracted.objects[0].object {
@@ -243,10 +317,18 @@ mod tests {
         let fp = freeprompt();
         let mut p = payload(96, 256);
         p.commitment.cu *= 10;
-        let extracted =
-            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())], net(), &fp, h64(1));
+        let extracted = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+            net(),
+            &fp,
+            h64(1),
+            |_, _, _, _| true,
+        );
         assert!(extracted.objects.is_empty());
-        assert_eq!(extracted.skipped, vec![(tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap()).id(), "payload is not stateless-admissible")]);
+        assert_eq!(
+            extracted.skipped,
+            vec![(tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap()).id(), "payload is not stateless-admissible")]
+        );
     }
 
     /// Every skip reason is reachable and NAMED, so an operator can see a carrier being dropped:
@@ -256,16 +338,16 @@ mod tests {
         let fp = freeprompt();
 
         let junk = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![0xFF; 32]);
-        let out = palw_fp_objects_from_accepted_txs_v3(&[junk.clone()], net(), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(&[junk.clone()], net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(junk.id(), "payload does not decode")]);
 
         let foreign = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(96, 256)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(&[foreign.clone()], h64(0x99), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(&[foreign.clone()], h64(0x99), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(foreign.id(), "payload is not stateless-admissible")], "a foreign network's payload");
 
         // 8 prompt tokens and 4 decode tokens is far under one quantum.
         let tiny = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(8, 4)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(&[tiny.clone()], net(), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(&[tiny.clone()], net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(tiny.id(), "job earns no quanta")]);
     }
 
@@ -284,7 +366,7 @@ mod tests {
             tx(SUBNETWORK_ID_PALW_COMMITMENT, borsh::to_vec(&first).unwrap()),
             tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&second).unwrap()),
         ];
-        let out = palw_fp_objects_from_accepted_txs_v3(&txs, net(), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(&txs, net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.objects.len(), 2, "two free-prompt carriers, and only those");
         assert!(out.skipped.is_empty());
         let claims: Vec<Hash64> = out
@@ -312,7 +394,9 @@ mod tests {
         let good = borsh::to_vec(&payload(96, 256)).unwrap();
         assert!(validate_palw_fp_commitment_tx(&good).is_ok());
         assert_eq!(
-            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, good)], net(), &fp, h64(1)).objects.len(),
+            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, good)], net(), &fp, h64(1), |_, _, _, _| true)
+                .objects
+                .len(),
             1
         );
 
@@ -332,7 +416,13 @@ mod tests {
         // the door" edit has to argue with it.
         let foreign = borsh::to_vec(&payload(96, 256)).unwrap();
         assert!(validate_palw_fp_commitment_tx(&foreign).is_ok(), "the door cannot know whose network this is");
-        let out = palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, foreign)], h64(0x99), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, foreign)],
+            h64(0x99),
+            &fp,
+            h64(1),
+            |_, _, _, _| true,
+        );
         assert!(out.objects.is_empty(), "but the walk knows, and credits nothing");
         assert_eq!(out.skipped.len(), 1);
 
@@ -340,7 +430,13 @@ mod tests {
         inflated.commitment.cu *= 10;
         let inflated = borsh::to_vec(&inflated).unwrap();
         assert!(validate_palw_fp_commitment_tx(&inflated).is_ok(), "the door cannot price without the bundle's weights");
-        let out = palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, inflated)], net(), &fp, h64(1));
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, inflated)],
+            net(),
+            &fp,
+            h64(1),
+            |_, _, _, _| true,
+        );
         assert!(out.objects.is_empty(), "and the walk re-derives the price rather than reading it");
         assert_eq!(out.skipped.len(), 1);
     }

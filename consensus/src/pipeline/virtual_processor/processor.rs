@@ -4280,6 +4280,9 @@ impl VirtualStateProcessor {
             network_domain,
             freeprompt,
             kaspa_consensus_core::BlockHash::default(),
+            // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
+            // a claim bound to any bond outpoint it named — the genesis premine bond among them.
+            Self::verify_mldsa87_with_context_bool,
         );
         for (carrier, reason) in &extraction.skipped {
             info!("[palw-fp] carrier {carrier} produced no object: {reason}");

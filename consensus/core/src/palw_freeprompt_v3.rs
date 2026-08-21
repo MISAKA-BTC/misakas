@@ -1060,6 +1060,23 @@ impl PalwFpCommitmentTxPayloadV3 {
         self.validate_v3(None, None)
     }
 
+    /// **The signature, on the payload that actually rides a transaction.**
+    ///
+    /// `validate_stateless_v3` says "the signature is verified by the caller" — and there was no
+    /// caller. `PalwFreePromptCommitmentEnvelopeV3::validate_signature_v3` existed and the only use
+    /// of that method name in the tree was the SPEND envelope's. So a 0x4a transaction from any
+    /// stranger created a claim bound to any bond outpoint it named, including the genesis premine
+    /// bond pinned in `params.rs`, with a signature nothing looked at.
+    ///
+    /// Delegates to the envelope so there is one signed message and one context, not two.
+    pub fn validate_signature_v3<V>(&self, verify_mldsa87: V) -> Result<(), PalwFpV3Error>
+    where
+        V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
+        PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() }
+            .validate_signature_v3(verify_mldsa87)
+    }
+
     fn validate_v3(&self, network_domain: Option<Hash64>, weights: Option<&PalwFpCuWeightsV3>) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
