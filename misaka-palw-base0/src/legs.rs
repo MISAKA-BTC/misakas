@@ -52,6 +52,7 @@ pub enum LegError {
 }
 
 /// One captured step row, tiled and placed at its canonical leaf index.
+#[derive(Clone)]
 pub struct Base0StepTilesV1 {
     pub leaves: Vec<Hash64>,
     pub tiles: Vec<(u64, PalwStepTileLeafV1)>,

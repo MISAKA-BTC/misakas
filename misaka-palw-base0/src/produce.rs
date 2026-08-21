@@ -430,6 +430,136 @@ mod tests {
         );
     }
 
+    /// The fixture geometry, as a `PalwBase0GeometryV1` — needed to build the inventory oracle.
+    fn small_geometry() -> kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1 {
+        let mut g = PALW_RC_BASE0_GEOMETRY;
+        g.layer_count = 2;
+        g.hidden_dim = 64;
+        g.ffn_dim = 128;
+        g.attn_heads = 2;
+        g.attn_head_dim = 32;
+        g.vocab_size = 128;
+        g.n_ctx = 32;
+        g.tile_len = 32;
+        g
+    }
+
+    /// **The court must not convict an honest execution — at EVERY leaf, not at a chosen one.**
+    ///
+    /// Three arithmetic divergences between the engine and the adjudicator survived every
+    /// single-coordinate test in this tree, because each needs a geometry with more than one head
+    /// and a position past the first:
+    ///
+    /// * SoftMax — the engine runs one per query head and appends head-major; the court ran ONE
+    ///   over the whole concatenation. Every softmax leaf convicted.
+    /// * RoPE — the court asked the rotary table at byte offset 0, i.e. always position 0's row,
+    ///   and for the whole row's worth of pairs rather than one head's. At one head the widths
+    ///   coincided and it convicted every position but the first; at more than one head the
+    ///   oversized request failed instead, so the wrong-answer bug wore an `Unadjudicable` mask.
+    /// * P·V — the V cache is `[position][kv_dim]` and the court read it as `[out_dim][in_dim]`,
+    ///   the transpose. They agree only at `kv_len == 1`.
+    ///
+    /// `map_refutation_outcome` turns any verdict into `ExecutorGuilty`, so each of these was a
+    /// challenger burning an honest producer's bond by opening a court on a correct step. A sweep
+    /// is the only shape that finds them: it is the difference between "the checker runs" and "the
+    /// checker is right".
+    #[test]
+    fn the_court_convicts_no_leaf_of_an_honest_execution() {
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let leaves = step_leaf_count(&profile, &ctx).expect("the job has a step space");
+        assert!(profile.attn_heads > 1, "a single-head geometry cannot see two of the three defects");
+
+        // One oracle over the WHOLE inventory, proven against its own root — the production path,
+        // not a stub that answers whatever is asked.
+        let inventory = crate::inventory::base0_inventory_v1(&artifact, small_geometry()).expect("a real inventory");
+        let root = inventory.root();
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, root)
+            .expect("the inventory proves against its own root");
+
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut adjudicated = 0usize;
+        let mut unadjudicable = 0usize;
+        let mut convicted: Vec<String> = Vec::new();
+        for leaf in 0..leaves {
+            let Some(coord) = canonical_step_coordinates(&profile, &ctx, leaf) else { continue };
+            let refutation = match crate::legs::base0_refutation_from_capture_v1(
+                &profile,
+                &ctx,
+                &run.tiles,
+                run.binding.clone(),
+                coord,
+                ids.clone(),
+            ) {
+                Ok(r) => r,
+                Err(e) => panic!("leaf {leaf} at {coord:?} could not even be assembled: {e:?}"),
+            };
+            match check_execution_step_refutation_v1(&refutation, &oracle) {
+                Err(PalwStepRefuteError::NoFaultFound) => adjudicated += 1,
+                Err(PalwStepRefuteError::Unadjudicable) => unadjudicable += 1,
+                other => convicted
+                    .push(format!("leaf {leaf} slot {} pos {} tile {}: {other:?}", coord.node_slot, coord.position, coord.tile_index)),
+            }
+        }
+        assert!(
+            convicted.is_empty(),
+            "the court convicted {} honest leaves — a challenger could burn this producer's bond by opening a court on a CORRECT step:\n{}",
+            convicted.len(),
+            convicted.iter().take(12).cloned().collect::<Vec<_>>().join("\n")
+        );
+        // And the sweep has to have actually adjudicated something, or it proves nothing.
+        assert!(adjudicated > 0, "no leaf was adjudicated at all");
+        println!("swept {leaves} leaves: {adjudicated} adjudicated NoFaultFound, {unadjudicable} unadjudicable");
+
+        // **The other half, and without it this test is worthless.** A court that convicts nothing
+        // passes the sweep above by being broken. So one lane of one tile is tampered at each of
+        // the three repaired node kinds, and the court must still convict — the arms were made
+        // CORRECT, not permissive.
+        let mut still_convicts = 0usize;
+        for leaf in 0..leaves {
+            let Some(coord) = canonical_step_coordinates(&profile, &ctx, leaf) else { continue };
+            let Some((_, node_layer)) = profile.resolve_node_slot(coord.node_slot) else { continue };
+            let Some((node, _)) = profile.resolve_node_slot(coord.node_slot) else { continue };
+            let is_repaired = matches!(node.op_kind, PalwStepOpKindV1::SoftMax | PalwStepOpKindV1::RopeImrope)
+                || (node.op_kind == PalwStepOpKindV1::MatMulQuant && node.weight_name.is_empty());
+            // One position past the first, where two of the three defects only appear.
+            if !is_repaired || node_layer != Some(0) || coord.position == 0 {
+                continue;
+            }
+            let mut lying = run.tiles.clone();
+            let index = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&profile, &ctx, &coord).expect("canonical");
+            let Some(slot) = lying.tiles.iter_mut().find(|(i, _)| *i == index) else { continue };
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            let leaf_hash =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), &slot.1);
+            lying.leaves[index as usize] = leaf_hash;
+            let binding =
+                crate::legs::base0_binding_from_capture_v1(&profile, &ctx, &lying, run.trace_root, base0_activation_leg_root_v1(&ctx))
+                    .expect("a tampered capture still commits");
+            let refutation =
+                crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, binding, coord, ids.clone()).expect("assembles");
+            match check_execution_step_refutation_v1(&refutation, &oracle) {
+                Ok(_) => still_convicts += 1,
+                Err(PalwStepRefuteError::NoFaultFound) => {
+                    panic!(
+                        "a tampered {:?} tile at slot {} position {} was NOT convicted — the arm is permissive, not correct",
+                        node.op_kind, coord.node_slot, coord.position
+                    )
+                }
+                Err(PalwStepRefuteError::Unadjudicable) => {}
+                Err(e) => panic!("unexpected: {e:?}"),
+            }
+        }
+        assert!(still_convicts > 0, "no tampered tile was convicted — the sweep above proves nothing");
+        println!("and {still_convicts} tampered tiles at the repaired nodes were convicted");
+    }
+
     /// The roots follow the execution: a different prompt is a different commitment, in every slot
     /// that is supposed to move. A root that did not move would be one an executor could reuse.
     #[test]

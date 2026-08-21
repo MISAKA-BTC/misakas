@@ -349,6 +349,31 @@ fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
 /// conforming implementation runs, not a second transcription of it — a court whose reference
 /// diverges from the class convicts honest producers, which is exactly the false-positive this
 /// class was chosen to make unrepresentable.
+/// The width of one per-head sub-row of a `KvScaled` node, or the whole row for a fixed one.
+///
+/// A `KvScaled { multiplier }` node is `multiplier` sub-rows of `kv_len` laid side by side — the
+/// head-major concatenation the engine builds inside its query-head loop. Reading the multiplier
+/// from the NODE rather than from `profile.attn_heads` is what keeps this correct for a graph whose
+/// scaled nodes are not all per-head.
+fn base0_kv_chunk_width(node: &crate::palw_step::PalwStepNodeV1, kv_len: u64, row_len: usize) -> Result<usize, PalwStepRefuteError> {
+    match node.out_len {
+        crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => {
+            let chunk = usize::try_from(kv_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let expected = chunk.checked_mul(multiplier as usize).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if chunk == 0 || row_len != expected {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("base0 kv-scaled row is not multiplier x kv_len"));
+            }
+            Ok(chunk)
+        }
+        crate::palw_step::PalwStepOutLenV1::Fixed { .. } => {
+            if row_len == 0 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("base0 row is empty"));
+            }
+            Ok(row_len)
+        }
+    }
+}
+
 fn base0_row(
     op: Base0Op,
     node: &crate::palw_step::PalwStepNodeV1,
@@ -389,7 +414,25 @@ fn base0_row(
         }
         Base0Op::Softmax => {
             need(1)?;
-            Ok(out(ops::softmax(&as_i32(&inputs[0])).map_err(shape)?))
+            // **One softmax PER HEAD, because that is what attention is** (false-conviction fix).
+            //
+            // The engine runs `softmax` inside its query-head loop and appends the per-head
+            // distributions head-major into one row; this arm ran ONE softmax over the whole
+            // concatenation. Same declared width, different arithmetic — so at any geometry with
+            // more than one head the court returned `ComputationMismatch` for a perfectly honest
+            // execution, and `map_refutation_outcome` turns that into `ExecutorGuilty`. Measured on
+            // the RC floor (4 heads): all 44 softmax leaves convicted.
+            //
+            // The chunking is DERIVED from the node's own declared width, not from a constant: a
+            // `KvScaled { multiplier }` node is `multiplier` rows of `kv_len` side by side, which is
+            // exactly the per-head concatenation. Anything else is one row and one softmax.
+            let row = as_i32(&inputs[0]);
+            let chunk = base0_kv_chunk_width(node, kv_len, row.len())?;
+            let mut acc = Vec::with_capacity(row.len());
+            for part in row.chunks(chunk) {
+                acc.extend(ops::softmax(part).map_err(shape)?);
+            }
+            Ok(out(acc))
         }
         Base0Op::Silu => {
             need(1)?;
@@ -535,6 +578,64 @@ fn base0_row(
             // SECOND canonical input, which the leg has already opened and the Merkle path has
             // already bound. There is no third case: `kernel_can_serve_node_v1` refuses one at
             // registration, so an unadjudicable class cannot be certified.
+            // **The two attention contractions are not `[out_dim][in_dim] x row`** (false-conviction
+            // fix). A weightless `MatMulQuant` whose second input is a KV sentinel is Q·Kᵀ or P·V,
+            // and its second operand is the CACHE — `[position][kv_dim]`, one row per position,
+            // which is the layout `canonical_input_leaves_v1` concatenates. Reading that as a
+            // `[out_dim][in_dim]` matrix is a transpose: it coincides only at `kv_len == 1`, so
+            // position 0 passed and every later position convicted an honest producer.
+            //
+            // Neither is expressible as `matmul_quant`, because both slice per HEAD with the GQA
+            // group mapping the engine uses. They get their own arms, discriminated by the IR's own
+            // input refs rather than by slot number.
+            let kv_ref = node.input_refs.get(1).copied();
+            if node.weight_name.is_empty()
+                && matches!(kv_ref, Some(crate::palw_step::PALW_STEP_INPUT_KV_K) | Some(crate::palw_step::PALW_STEP_INPUT_KV_V))
+            {
+                need(2)?;
+                let cache = as_i8(&inputs[1])?;
+                let heads = profile.attn_heads as usize;
+                let kv_heads = profile.attn_kv_heads as usize;
+                let head_dim = profile.attn_head_dim as usize;
+                let kv_dim = kv_heads.checked_mul(head_dim).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let history = usize::try_from(kv_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                if heads == 0 || kv_heads == 0 || head_dim == 0 || history == 0 || !heads.is_multiple_of(kv_heads) {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("base0 attention geometry is not expressible"));
+                }
+                if cache.len() != history.checked_mul(kv_dim).ok_or(PalwStepRefuteError::Unadjudicable)? {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("base0 kv cache operand is not kv_len x kv_dim"));
+                }
+                // Contiguous grouping, the same mapping the engine uses: query heads
+                // `[g·group, (g+1)·group)` read kv head `g`.
+                let group = heads / kv_heads;
+                let mut acc = Vec::with_capacity(tile_width);
+                for out_index in tile_start..tile_start + tile_width {
+                    let value = if kv_ref == Some(crate::palw_step::PALW_STEP_INPUT_KV_K) {
+                        // Q·Kᵀ: output is `attn_heads x kv_len`, head-major. Lane `(h, j)` is the
+                        // dot of head `h`'s query slice with position `j`'s key slice.
+                        let (head, j) = (out_index / history, out_index % history);
+                        let kv_off = (head / group) * head_dim;
+                        let q = x.get(head * head_dim..head * head_dim + head_dim).ok_or(
+                            PalwStepRefuteError::InputSetNotCanonical("base0 attention query row is not attn_heads x head_dim"),
+                        )?;
+                        let k = &cache[j * kv_dim + kv_off..j * kv_dim + kv_off + head_dim];
+                        ops::dot_i8(q, k).map_err(shape)?
+                    } else {
+                        // P·V: output is `attn_heads x head_dim`, head-major. Lane `(h, i)` reduces
+                        // head `h`'s probability row against the cache COLUMN at `kv_off + i` —
+                        // a stride walk, which is exactly the transpose the old arm did not do.
+                        let (head, i) = (out_index / head_dim, out_index % head_dim);
+                        let kv_off = (head / group) * head_dim;
+                        let probs = x.get(head * history..head * history + history).ok_or(
+                            PalwStepRefuteError::InputSetNotCanonical("base0 attention probability row is not attn_heads x kv_len"),
+                        )?;
+                        let column: Vec<i8> = (0..history).map(|j| cache[j * kv_dim + kv_off + i]).collect();
+                        ops::dot_i8(probs, &column).map_err(shape)?
+                    };
+                    acc.push(value);
+                }
+                return Ok(out(acc));
+            }
             let w: Vec<i8> = if node.weight_name.is_empty() {
                 need(2)?;
                 let operand = as_i8(&inputs[1])?;
@@ -573,16 +674,42 @@ fn base0_row(
             // The two ops share this site and their parameter blocks do NOT share a width, so the
             // byte count is computed per op before the request. One argument meaning two widths is
             // the defect ADR-0049 Decision A names.
-            let byte_len = match op {
+            // **The rotary table is keyed by POSITION, and a rotation is per HEAD** (false-conviction
+            // fix). This asked for `8 × row_len/2` bytes at offset 0 — the whole concatenated row's
+            // worth of pairs, always from position 0's row.
+            //
+            // Both halves were wrong and the second hid the first. The inventory stores one row per
+            // position, `d_head/2` pairs wide (`rope_row_bytes`), and the engine rotates each head
+            // with the SAME position row. So at one head the widths coincided and the court silently
+            // rotated by position 0 — convicting every honest step except position 0 — while at more
+            // than one head the oversized request simply failed, turning a wrong-answer bug into an
+            // `Unadjudicable` that looked like a different problem.
+            //
+            // The position is `kv_len - 1`: `kv_len` is the candidate's own history length, so the
+            // row being produced is the one at its end. That is already in hand, which is why no new
+            // coordinate plumbing is needed — and why the decode-call case is right for free, where
+            // the coordinate's own `position` field is 0 and the absolute position is not.
+            let rope_pairs = (profile.attn_head_dim as usize) / 2;
+            let (byte_len, byte_offset) = match op {
                 // (multiplier LE, shift, zero LE) per channel.
-                Base0Op::Requantize => 9usize.checked_mul(inputs[0].len()),
-                // cos row then sin row, 4 bytes each, one pair per two lanes.
-                Base0Op::Rope => 8usize.checked_mul(inputs[0].len() / 2),
+                Base0Op::Requantize => (9usize.checked_mul(inputs[0].len()), Some(0usize)),
+                // cos row then sin row, 4 bytes each, one pair per two lanes — for ONE head.
+                Base0Op::Rope => {
+                    let per_row = 8usize.checked_mul(rope_pairs);
+                    let position = usize::try_from(kv_len.saturating_sub(1)).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                    (per_row, per_row.and_then(|w| w.checked_mul(position)))
+                }
                 _ => unreachable!("outer match restricts these three"),
-            }
-            .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            };
+            let byte_len = byte_len.ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let byte_offset = byte_offset.ok_or(PalwStepRefuteError::Unadjudicable)?;
             let row = weights
-                .operand_bytes(name, layer, 0, u32::try_from(byte_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?)
+                .operand_bytes(
+                    name,
+                    layer,
+                    u32::try_from(byte_offset).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
+                    u32::try_from(byte_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
+                )
                 // **A narrowing is one block for the whole row, or one block per channel — and
                 // nothing else** (ADR-0049 Decision A, widened where building a real inventory
                 // showed it had to be).
@@ -630,16 +757,26 @@ fn base0_row(
                     Ok(q.into_iter().map(|v| v as i32 as u32).collect())
                 }
                 Base0Op::Rope => {
-                    // The pinned table: cos row then sin row, 4 bytes each, one pair per two lanes.
-                    let pairs = inputs[0].len() / 2;
-                    if row.len() != 8 * pairs {
-                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rope table is not 8 bytes per pair"));
+                    // ONE position's row: cos then sin, 4 bytes each, one pair per two lanes of a
+                    // HEAD — and it is applied to every head of the row, which is what the engine
+                    // does inside its own head loop.
+                    if rope_pairs == 0 || row.len() != 8 * rope_pairs {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rope table is not one head-row of pairs"));
                     }
                     let read = |o: usize| -> Vec<i32> {
-                        row[o..o + 4 * pairs].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                        row[o..o + 4 * rope_pairs].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
                     };
-                    let (cos_q, sin_q) = (read(0), read(4 * pairs));
-                    Ok(out(ops::rope_table(&as_i32(&inputs[0]), &cos_q, &sin_q).map_err(shape)?))
+                    let (cos_q, sin_q) = (read(0), read(4 * rope_pairs));
+                    let lanes = as_i32(&inputs[0]);
+                    let head_dim = profile.attn_head_dim as usize;
+                    if head_dim == 0 || !lanes.len().is_multiple_of(head_dim) {
+                        return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rope row is not a whole number of heads"));
+                    }
+                    let mut acc = Vec::with_capacity(lanes.len());
+                    for head in lanes.chunks(head_dim) {
+                        acc.extend(ops::rope_table(head, &cos_q, &sin_q).map_err(shape)?);
+                    }
+                    Ok(out(acc))
                 }
                 _ => unreachable!("outer match restricts these three"),
             }
