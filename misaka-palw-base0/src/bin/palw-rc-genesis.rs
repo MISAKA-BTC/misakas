@@ -8,12 +8,26 @@
 //! rather than re-typing parameters — ADR-0042 Decision 11's own requirement.
 //!
 //! ```text
+//! # 1. the operator makes two keys and keeps the secrets (this tool never sees them again)
+//! misaka validator keygen --out /etc/misaka/t12-bond.key
+//! misaka validator keygen --out /etc/misaka/t12-operator.key
+//!
+//! # 2. the card, from the seeds — no hex is typed by hand
 //! cargo run -p misaka-palw-base0 --bin palw-rc-genesis -- \
 //!     --bond-index 0 \
-//!     --bond-pubkey <hex> \
-//!     --operator-pubkey <hex> \
-//!     --payout-payload <64-byte hex>
+//!     --bond-seed /etc/misaka/t12-bond.key \
+//!     --operator-seed /etc/misaka/t12-operator.key \
+//!     --payout-address misakatest:q…
 //! ```
+//!
+//! The raw forms `--bond-pubkey <hex>`, `--operator-pubkey <hex>` and `--payout-payload <hex>` are
+//! still accepted for a card whose keys live somewhere this tool cannot read.
+//!
+//! **`--bond-seed` and `--operator-seed` read SECRET material and print only public values** — the
+//! verification key and the address payload. They exist because the derivation has to be the same
+//! one the producer uses (`ml_dsa_87::generate_key_pair`), and an operator transcribing a 2.6 KiB
+//! hex blob by hand is an operator who will eventually transcribe it wrong. The seed file is read
+//! with the hardened loader: owner-only permissions required, symlinks refused, fail closed.
 //!
 //! Run with no arguments it prints what it CAN derive — the class id, the artifact root, the
 //! geometry — and says which three facts it is waiting on. That is deliberate: a tool that
@@ -50,6 +64,16 @@ fn hex_bytes(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
+}
+
+/// Derive the ML-DSA-87 verification key from a seed file named by `flag`, or `Ok(None)` if the
+/// flag was not given. Reads secret material; returns only the public half.
+fn seed_pubkey(flag: &str) -> Result<Option<Vec<u8>>, String> {
+    let Some(path) = arg(flag) else {
+        return Ok(None);
+    };
+    let seed = kaspa_pq_validator_core::load_validator_seed(&path)?;
+    Ok(Some(kaspa_pq_validator_core::ValidatorKey::from_seed(seed).public_key().to_vec()))
 }
 
 fn main() {
@@ -95,9 +119,15 @@ fn main() {
         match misaka_palw_base0::produce::base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt) {
             Ok(run) => {
                 let elapsed = started.elapsed();
-                println!("One block's work — canonical job ({} prefill, {} decode):", PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+                println!(
+                    "One block's work — canonical job ({} prefill, {} decode):",
+                    PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1
+                );
                 println!("  step leaves         {leaves}");
-                println!("  wall time           {:.3} s  (one inference per template; the nonce grind is free)", elapsed.as_secs_f64());
+                println!(
+                    "  wall time           {:.3} s  (one inference per template; the nonce grind is free)",
+                    elapsed.as_secs_f64()
+                );
                 println!("  execution_root      {}", run.execution_root);
                 println!("  output tokens       {:?}", run.generated_token_ids);
             }
@@ -107,24 +137,64 @@ fn main() {
     }
 
     let bond_index: Option<u32> = arg("--bond-index").and_then(|v| v.parse().ok());
-    let bond_pubkey = arg("--bond-pubkey").and_then(|v| hex_bytes(&v));
-    let operator_pubkey = arg("--operator-pubkey").and_then(|v| hex_bytes(&v));
-    let payout: Option<Hash64> = arg("--payout-payload").and_then(|v| hex_bytes(&v)).and_then(|b| {
-        let bytes: [u8; 64] = b.try_into().ok()?;
-        Some(Hash64::from_bytes(bytes))
-    });
+    // A seed, when given, is the source of truth: deriving beats transcribing, and the derivation
+    // is `ValidatorKey::from_seed`, which is `ml_dsa_87::generate_key_pair` — the same call the
+    // producer makes on the same file, so the key the card registers is the key that will sign.
+    let bond_pubkey = match seed_pubkey("--bond-seed") {
+        Err(e) => {
+            println!("REFUSED: --bond-seed: {e}");
+            return;
+        }
+        Ok(Some(pk)) => Some(pk),
+        Ok(None) => arg("--bond-pubkey").and_then(|v| hex_bytes(&v)),
+    };
+    let operator_pubkey = match seed_pubkey("--operator-seed") {
+        Err(e) => {
+            println!("REFUSED: --operator-seed: {e}");
+            return;
+        }
+        Ok(Some(pk)) => Some(pk),
+        Ok(None) => arg("--operator-pubkey").and_then(|v| hex_bytes(&v)),
+    };
+    let payout: Option<Hash64> = match arg("--payout-address") {
+        Some(a) => match kaspa_addresses::Address::try_from(a.as_str()) {
+            Ok(addr) if addr.version != kaspa_addresses::Version::PubKeyHashMlDsa87 => {
+                println!("REFUSED: --payout-address is not an ML-DSA-87 P2PKH address");
+                return;
+            }
+            Ok(addr) => match <[u8; 64]>::try_from(addr.payload.as_slice()) {
+                Ok(bytes) => Some(Hash64::from_bytes(bytes)),
+                Err(_) => {
+                    println!("REFUSED: --payout-address payload is not 64 bytes");
+                    return;
+                }
+            },
+            Err(e) => {
+                println!("REFUSED: --payout-address: {e}");
+                return;
+            }
+        },
+        None => arg("--payout-payload").and_then(|v| hex_bytes(&v)).and_then(|b| {
+            let bytes: [u8; 64] = b.try_into().ok()?;
+            Some(Hash64::from_bytes(bytes))
+        }),
+    };
 
     let (Some(bond_index), Some(bond_pubkey), Some(operator_pubkey), Some(payout)) =
         (bond_index, bond_pubkey, operator_pubkey, payout)
     else {
         println!("Waiting on the three facts code cannot mint:");
         println!("  --bond-index      which premine output backs the genesis bond (0..=40)");
-        println!("  --bond-pubkey     the ML-DSA-87 VERIFICATION key that signs attempts under it (hex)");
-        println!("  --operator-pubkey the operator identity key (hex) — panel dedup is keyed on it");
-        println!("  --payout-payload  the 64-byte P2PKH-ML-DSA-87 owner payload matured rewards are paid to (hex)");
+        println!("  --bond-seed       path to the bond key's seed (or --bond-pubkey <hex>)");
+        println!("  --operator-seed   path to the operator key's seed (or --operator-pubkey <hex>)");
+        println!("  --payout-address  where matured rewards are paid (or --payout-payload <64-byte hex>)");
         println!();
-        println!("Generate the keys with misaka-cli and keep the secrets there; pass only the");
-        println!("verification keys here. A tool that minted a key would be minting an identity.");
+        println!("  misaka validator keygen --out /etc/misaka/t12-bond.key");
+        println!("  misaka validator keygen --out /etc/misaka/t12-operator.key");
+        println!();
+        println!("The seeds stay where keygen wrote them (0600, owner-only). This tool reads them to");
+        println!("DERIVE public values and prints nothing secret. It mints no key: the whole point of");
+        println!("a bond is that somebody holds one.");
         return;
     };
 

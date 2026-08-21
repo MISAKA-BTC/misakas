@@ -11,6 +11,12 @@ repository.workspace = true
 
 [dependencies]
 kaspa-consensus-core.workspace = true
+# `palw-rc-genesis` only: an operator generates a bond seed with `misaka validator keygen`, and
+# something has to turn that seed into the PUBLIC values the genesis card wants. The derivation
+# must be the same one the producer uses, so it is imported rather than re-implemented.
+kaspa-pq-validator-core.workspace = true
+kaspa-addresses.workspace = true
+faster-hex.workspace = true
 kaspa-hashes.workspace = true
 blake2b_simd.workspace = true
 serde_json.workspace = true

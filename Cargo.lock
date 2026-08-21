@@ -3629,6 +3629,7 @@ dependencies = [
  "kaspa-utils",
  "libcrux-ml-dsa",
  "log",
+ "misaka-palw-base0",
  "once_cell",
  "parking_lot",
  "rand 0.8.6",
@@ -5152,6 +5153,7 @@ dependencies = [
  "log",
  "misaka-endpoints",
  "misaka-palw",
+ "misaka-palw-base0",
  "misaka-palw-pow-driver",
  "num_cpus",
  "rand 0.8.6",
@@ -5846,8 +5848,11 @@ name = "misaka-palw-base0"
 version = "1.1.0"
 dependencies = [
  "blake2b_simd",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-pq-validator-core",
  "serde_json",
 ]
 
