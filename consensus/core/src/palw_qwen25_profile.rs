@@ -111,6 +111,61 @@ pub const QWEN25_3B: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 {
     tile_len: 128,
 };
 
+/// **The (tile, context) pair a given ruleset can actually adjudicate for this model** — audit
+/// H-04's other half.
+///
+/// The two shipped constants above are the MODEL: 4,096 tokens is what Qwen2.5 has, and saying
+/// otherwise would be a constant that lies about the thing it names.
+/// `the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context` pins that neither is
+/// admissible as declared, and the measurement behind it is real — 132.4 M and 219.7 M worst-case
+/// step leaves against a 4,194,304 ladder at `tile_len` 128.
+///
+/// What was missing is the other number: given a court, WHICH pair does this model fit into? It is
+/// not a choice, it is a search, and leaving it as prose is how "either the tile grows or the
+/// context shrinks" stayed a sentence instead of a value. Two ceilings pull against each other —
+/// a bigger tile buys ladder depth and costs opening bytes — so the feasible set is an interval
+/// per tile, and the answer is the pair with the widest context inside it.
+///
+/// Deterministic: tiles are tried in ascending order and the FIRST tile achieving the maximum
+/// context wins, so two nodes computing this reach one geometry. `None` means the court admits
+/// this model at no context at all, which is a real answer about a real ruleset.
+pub fn qwen25_admissible_geometry_v1(
+    model: PalwQwen25GeometryV1,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Option<PalwQwen25GeometryV1> {
+    let fits = |tile: u32, n_ctx: u32| -> bool {
+        let candidate = PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..model };
+        let Ok(profile) = qwen25_profile_v1(candidate) else { return false };
+        // The ladder: the whole context as prefill is the longest job the class admits.
+        if crate::palw_step::worst_case_step_leaf_count_v1(&profile).map(|w| w > court.max_step_leaf_count()).unwrap_or(true) {
+            return false;
+        }
+        // ADR-0049 Decision C: and what prosecuting one of its steps costs.
+        let Ok(cost) = crate::palw_class_admission_v2::derive_court_cost_v1(&profile) else { return false };
+        cost.max_opening_bytes <= court.max_opening_bytes()
+            && cost.max_terminal_macs <= court.max_terminal_macs()
+            && u64::from(cost.max_operand_count) <= u64::from(court.max_operand_count())
+    };
+    let mut best: Option<PalwQwen25GeometryV1> = None;
+    let mut tile = 64u32;
+    while tile <= crate::palw_step::PALW_STEP_MAX_TILE_LEN {
+        if fits(tile, 2) {
+            // Widest context this tile admits. Monotone in `n_ctx` (more context is strictly more
+            // leaves and never fewer opened bytes), so a binary search is exact.
+            let (mut lo, mut hi) = (2u32, model.n_ctx.max(2) + 1);
+            while lo + 1 < hi {
+                let mid = lo + (hi - lo) / 2;
+                if fits(tile, mid) { lo = mid } else { hi = mid }
+            }
+            if best.map(|b| lo > b.n_ctx).unwrap_or(true) {
+                best = Some(PalwQwen25GeometryV1 { n_ctx: lo, tile_len: tile, ..model });
+            }
+        }
+        tile *= 2;
+    }
+    best
+}
+
 /// The tensor names this graph consumes. `{layer}` is substituted with the layer index.
 ///
 /// Compare against the measured safetensors table: the norm gains are ABSENT (G1 folds them), the
@@ -715,5 +770,62 @@ mod tests {
         let mut declared: Vec<&str> = QWEN25_TENSOR_NAMES.to_vec();
         declared.sort_unstable();
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
+    }
+
+    /// **Audit H-04: "either the tile grows or the context shrinks" is a value now, not a
+    /// sentence.**
+    ///
+    /// The shipped constants stay the MODEL — 4,096 tokens is what Qwen2.5 has, and a constant
+    /// that said otherwise would lie about the thing it names. What was missing is the other
+    /// number: given a court, which `(tile_len, n_ctx)` pair does the model actually fit into.
+    /// Two ceilings pull against each other, so it is a search, and leaving it as prose is how the
+    /// pair stayed unstated after the measurement was done.
+    #[test]
+    fn the_admissible_qwen_geometry_is_derived_from_the_court_that_must_adjudicate_it() {
+        let floor_sized = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+
+        // Under the shipped (floor-sized) ceilings, both models fit — at a context that IS the
+        // finding rather than a target.
+        let small = qwen25_admissible_geometry_v1(QWEN25_1_5B, &floor_sized).expect("some pair is admissible");
+        let big = qwen25_admissible_geometry_v1(QWEN25_3B, &floor_sized).expect("some pair is admissible");
+        // Pinned, because these two pairs are the answer a genesis reads. 125 reproduces the
+        // number `DEFAULT_MAX_OPENING_BYTES`' own doc records for 1.5B — the derivation agrees
+        // with the measurement that motivated it — and 79 for 3B had never been stated.
+        assert_eq!((small.tile_len, small.n_ctx), (64, 125), "1.5B under the shipped ceilings");
+        assert_eq!((big.tile_len, big.n_ctx), (64, 79), "3B is deeper, so it buys less context for the same court");
+        for (name, model, found) in [("1.5B", QWEN25_1_5B, small), ("3B", QWEN25_3B, big)] {
+            let profile = qwen25_profile_v1(found).expect("expressible");
+            assert!(
+                crate::palw_step::worst_case_step_leaf_count_v1(&profile).unwrap() <= floor_sized.max_step_leaf_count(),
+                "{name}: the derived pair must fit the ladder"
+            );
+            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&profile).unwrap();
+            assert!(cost.max_opening_bytes <= floor_sized.max_opening_bytes(), "{name}: and the opening ceiling");
+            assert!(cost.max_terminal_macs <= floor_sized.max_terminal_macs(), "{name}: and the MAC ceiling");
+            assert!(found.n_ctx < model.n_ctx, "{name}: the context really did shrink — that is the finding");
+            // Everything except the two knobs is the model's own.
+            assert_eq!(found.layer_count, model.layer_count);
+            assert_eq!(found.hidden_dim, model.hidden_dim);
+            assert_eq!(found.vocab_size, model.vocab_size);
+        }
+
+        // A court with a bigger opening ceiling buys context — which is the trade a genesis makes,
+        // irrevocably, and now it can be priced before it is made instead of after.
+        let generous = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+            32 * 1024 * 1024,
+            1 << 30,
+            8,
+        )
+        .unwrap();
+        let wider = qwen25_admissible_geometry_v1(QWEN25_1_5B, &generous).expect("admissible");
+        assert!(wider.n_ctx > small.n_ctx, "a larger opening ceiling buys context: {} -> {}", small.n_ctx, wider.n_ctx);
+
+        // And a court that admits nothing says so, rather than returning a pair nobody can use.
+        let impossible =
+            crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1, 1, 8).unwrap();
+        assert!(qwen25_admissible_geometry_v1(QWEN25_1_5B, &impossible).is_none());
     }
 }
