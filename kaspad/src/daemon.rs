@@ -116,6 +116,24 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         }
     }
 
+    // **A network with an active EVM lane needs an evm build, and this is where it finds out.**
+    //
+    // `build_block_template` cannot construct a valid template without the feature, and it says so
+    // by PANICKING — at the first template, which is after boot, after IBD, and after an operator
+    // has every reason to believe the node is fine. On testnet-11 and testnet-12 the lane is active
+    // from DAA 0, so that panic is certain rather than conditional. Refusing here turns a late
+    // crash into a startup message naming the fix.
+    //
+    // Read from the network's own params, not from a list of network names: a preset that gains or
+    // loses the lane moves this with it, and the check cannot go stale.
+    #[cfg(not(feature = "evm"))]
+    {
+        let params: kaspa_consensus_core::config::params::Params = args.network().into();
+        if params.evm_activation_daa_score == 0 {
+            return Err(ConfigError::EvmLaneRequiresEvmBuild(params.net.to_string()));
+        }
+    }
+
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
     }
@@ -620,6 +638,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // it to the wrong node — an error that cost a release cut on 2026-08-11. One line here makes
     // "is this binary the release?" answerable without a peer, which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+
     info!("Application directory: {}", app_dir.display());
     info!("Data directory: {}", db_dir.display());
     match runtime.log_dir.as_ref() {

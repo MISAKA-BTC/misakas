@@ -23,11 +23,14 @@ reject each other at the handshake, on purpose.
 
 Two properties worth knowing before anything else:
 
-* **The EVM lane is OFF.** It was on until the first end-to-end production test ran: testnet-12
-  inherited `TESTNET_PARAMS`, which activates the lane at DAA 0, while `MAINNET_PARAMS` never does.
-  A mainnet-candidate ruleset carrying a lane mainnet does not have is not a candidate for the
-  thing it claims to test — and `build_block_template` PANICS when the lane is active on a binary
-  built without `--features evm`, so every producing node would have had to be an evm build.
+* **The EVM lane is ON from DAA 0, and that makes `--features evm` mandatory for the fleet.**
+  testnet-11 carries the lane and the RC is the network t11's traffic moves onto, so the RC carries
+  it too. `MAINNET_PARAMS` never activates it, so the RC and mainnet differ here — a known,
+  deliberate difference rather than an inherited accident.
+  **`build_block_template` cannot construct a valid template without the feature.** A non-evm
+  binary is now refused at STARTUP with the rebuild command rather than panicking at its first
+  template, which is after boot, after IBD, and after an operator has every reason to think the
+  node is fine.
 * **`dns_seeders` is empty and cannot be filled from code.** Inheriting the other testnets' seeders
   would be worse than empty: those records answer with testnet-10/11 nodes, which this network
   rejects, so discovery would look configured and find nobody.
@@ -101,12 +104,14 @@ a fact the **handshake reports** rather than something an operator has to be tru
 ## 2. Build
 
 ```bash
-cargo build --release -p kaspad
+cargo build --release -p kaspad --features evm
 ```
 
-No feature flags. The EVM lane is off (§0), and a `ConsensusV2` node needs no model runtime to
-**verify** — ADR-0042 Decision 4. Only a producing node links the engine, and it links it because
-it is producing.
+**`--features evm` is required** — see §0. A binary without it refuses to start on this network
+rather than failing later.
+
+No other feature flags. A `ConsensusV2` node needs no model runtime to **verify** — ADR-0042
+Decision 4. Only a producing node links the engine, and it links it because it is producing.
 
 ---
 

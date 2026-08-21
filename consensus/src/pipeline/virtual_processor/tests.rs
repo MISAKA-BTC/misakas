@@ -899,7 +899,21 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("palw_rc_params_from_artifacts must yield a ConsensusV2 network"),
     };
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    // The shipped RC activates the EVM lane at DAA 0 (inherited from `TESTNET_PARAMS` and kept
+    // deliberately — testnet-11 carries it and the RC is the network t11's traffic moves onto). A
+    // template cannot be built for an active lane by a binary without the feature, so a non-evm
+    // test build disables it HERE and asserts what it disabled. The lane is orthogonal to what
+    // this test measures — a real execution producing an accepted block — and stating the
+    // divergence is better than a test that silently runs on a different ruleset.
+    assert_eq!(params.evm_activation_daa_score, 0, "the shipped RC carries the EVM lane");
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
     let facts = ctx

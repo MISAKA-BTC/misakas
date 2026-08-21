@@ -193,10 +193,13 @@ What remains is not implementation:
       a genesis and no second block, and no test said so. The producer is now in the node, because
       `challenge_v2` binds the nonce and so the carriage build and the nonce search are one loop.
       Third-party mining needs those facts on the RPC wire and is its own work.
-    * *The RC was carrying a lane mainnet does not have.* testnet-12 inherited `TESTNET_PARAMS`'s
-      EVM activation at DAA 0 while `MAINNET_PARAMS` never activates it — signed into
-      `consensus_params_id`, and a panic in `build_block_template` on any non-`evm` build. The
-      first end-to-end production test found it in one run.
+    * *The RC carries the EVM lane, and that is a fleet build requirement.* testnet-12 inherits
+      `TESTNET_PARAMS`'s EVM activation at DAA 0 while `MAINNET_PARAMS` never activates it. Turning
+      it off looked right for a mainnet-candidate ruleset and was overruled: testnet-11 carries the
+      lane and the RC is the network t11's traffic moves onto. The cost is real —
+      `build_block_template` cannot build a template without `--features evm` — so a non-evm binary
+      is now refused at startup with the rebuild command instead of panicking at its first
+      template. The first end-to-end production test is what surfaced the whole question.
 
   Still operational and unchanged: the bond keys, seeds and public entry, the calibration-gated
   binary, and a soak whose clock survives redeployment.

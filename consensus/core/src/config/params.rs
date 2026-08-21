@@ -2456,18 +2456,20 @@ pub fn palw_rc_base_params() -> Params {
     params.pow_palw_activation = ForkActivation::never();
     params.pow_palw_ollama_activation = ForkActivation::never();
     params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
-    // **The EVM lane is OFF, and inheriting it on was an accident with two costs.**
+    // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
-    // `TESTNET_PARAMS` activates the lane at DAA 0; `MAINNET_PARAMS` never does. ADR-0042 calls
-    // this network the mainnet-CANDIDATE ruleset, so a lane mainnet does not have is a lane the
-    // candidate is not a candidate for — and it is signed into `consensus_params_id`, so the
-    // difference is not cosmetic.
+    // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
+    // lane and ADR-0042 calls this the mainnet-CANDIDATE ruleset. That reasoning is now overruled
+    // by an operator decision: testnet-11 carries the lane, and the RC is meant to be the network
+    // t11's traffic moves onto — an RC without it would be a testnet the existing lane's users
+    // cannot follow, which is a worse mismatch than the one with mainnet.
     //
-    // The second cost is the one that surfaced it: `build_block_template` PANICS when the lane is
-    // active and the binary was built without `--features evm`, so every node that produced a
-    // block would have had to be an evm build, and the default build would have died at its first
-    // template rather than at startup. The first end-to-end production test found that in one run.
-    params.evm_activation_daa_score = u64::MAX;
+    // It is not free, and the cost is a build requirement rather than a rule:
+    // `build_block_template` cannot construct a valid template when the lane is active and the
+    // binary lacks `--features evm`. **Every node that builds blocks on this network must be an
+    // evm build.** `kaspad` refuses at STARTUP with that message rather than dying at its first
+    // template — see `daemon.rs` — because a node that boots, syncs, and then cannot produce is
+    // the most expensive way to learn this.
     params
 }
 
