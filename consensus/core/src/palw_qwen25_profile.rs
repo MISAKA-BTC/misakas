@@ -359,21 +359,13 @@ mod tests {
     #[test]
     fn the_coverage_gate_passes_on_the_whole_graph() {
         let p = qwen25_profile_v1(QWEN25_1_5B).unwrap();
-        // **ADR-0049 Decision D, and the blocker it surfaced.** Node coverage passes; COORDINATE
-        // coverage does not, because the embedding gather has no adjudicable token at a decode
-        // position and this class's canonical job decodes. Every kernel is catalogued and every
-        // node servable, which is exactly why the kernel-id gate reported 100% on a class with a
-        // whole call class it could not police.
-        //
-        // This asserts the refusal rather than the pass, and flips the moment ADR-0049 Decision E
-        // lands — pinning the decode token to the previous position's committed logits, so a
-        // challenger naming it freely is refuted by an opening instead of believed.
-        let coordinate = verify_profile_coverage_v1(&p)
-            .expect_err("Qwen2.5 gathers at decode, so coverage over coordinates fails");
-        assert!(
-            matches!(coordinate, crate::palw_catalog_coverage::PalwCoverageError::CoordinateNotAdjudicable { call_class: "decode", .. }),
-            "got {coordinate:?}"
-        );
+        // **Coverage over COORDINATES, not kernel ids** (ADR-0049 Decision D) — and it passes only
+        // because Decision E landed with it. The gate swept prefill and decode, the embedding
+        // gather refused every decode position, and this class's canonical job decodes; the tripwire
+        // here asserted that refusal for exactly as long as it was true. What made it false is that
+        // a decode token is now pinned by the claim's own `full_logits_trace_root` — which already
+        // bound `output_token_ids_hash_v2` — rather than by nothing.
+        verify_profile_coverage_v1(&p).expect("every reachable coordinate class adjudicates, decode included");
 
         let catalogued = catalogued_kernel_ids_v1();
         let mut checked = 0;
@@ -648,6 +640,7 @@ mod tests {
                 },
                 inputs,
                 prompt_token_ids: Vec::new(),
+                decode_tokens: None,
             };
             // The class's registered inventory, and the opening that proves this block belongs.
             let operands = vec![
