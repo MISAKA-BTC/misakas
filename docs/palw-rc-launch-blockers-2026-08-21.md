@@ -164,27 +164,32 @@ from consensus.
 
 ---
 
-## Open observation — the integration crate has never passed a full workspace run
+## The integration crate had never run — and running it earned its keep immediately
 
-Not a consensus finding; recorded so it is not rediscovered.
+Not one finding but three, peeled in order, recorded so none is rediscovered.
 
-`cargo test --workspace --lib` reports **2044 passed / 0 failed across 41 crates**, and
-`kaspa-testing-integration` is the 42nd: it does not report a result at all, because the test
-process dies or hangs partway.
+`cargo test --workspace --lib` reports **2044 passed / 0 failed across 41 crates**;
+`kaspa-testing-integration` is the 42nd and had never completed a workspace run.
 
-* **Before `d0727415`** it aborted at the FIRST daemon test: the daemon tests boot a real kaspad on
-  **devnet**, devnet activates the EVM lane at DAA 0, and the startup refusal added with the RC's
-  lane decision (`740ed99e`) exits the process — taking the harness with it. Fixed by defaulting the
-  crate to the `evm` feature, which is how the binary those tests start must be built.
-* **After it**, `daemon_integration_tests` pass **in isolation** (3/3, 16.8 s, with
-  `MISAKA_PALW_POW_FIXTURE=1`), but a single-threaded run of the WHOLE crate spins at 99% CPU inside
-  `daemon_cleaning_test` — the upstream test that asserts `ConsensusManager` / `AsyncRuntime` /
-  `Core` all reach a strong count of 0 after `shutdown()`. Something started earlier in the process
-  keeps a reference or a loop alive.
-
-What is NOT known: whether the hang predates this session. It cannot be compared directly, because
-before the feature default the same test killed the process at startup — so the crate failed the
-workspace run either way, and only the reason changed.
+1. **It aborted at the first daemon test** (before `d0727415`): the daemon tests boot a real kaspad
+   on devnet, devnet activates the EVM lane at DAA 0, and the startup refusal added with the RC's
+   lane decision (`740ed99e`) exits the process — taking the harness with it. Fixed by the `evm`
+   default (now on kaspad itself, `7b6412e7`).
+2. **Then two IBD tests failed deterministically** — and this was a REAL §1 BUG, not the suite.
+   `e52a1234` wired the request, the serving flow and the IBD-side handler, and missed the fourth
+   wiring point: the IBD flow's **subscription list**. The `PruningPointPalwState` reply arrived at
+   a router with no route for it → protocol error → connection closed → **every pruned IBD on every
+   network failed**, because the request was sent unconditionally. The §1 import had been verified
+   at the consensus layer only; the first real-TCP IBD ever run with this code in the binary found
+   it within minutes. Fixed twice over: the subscription is registered (round trip proven on a live
+   IBD, 142 s green), and the request is now sent **only under a ConsensusV2 ruleset** — the pair
+   rode into protocol version 103 without a bump, so an old 103 leader has no flow for the request
+   and would close the connection from its side; on a V2 network every peer is a new binary by
+   construction (the ruleset is in the consensus fingerprint).
+3. **Still open**: a single-threaded run of the WHOLE crate spins at 99% CPU inside
+   `daemon_cleaning_test` (the upstream shutdown-refcount assertion) even though the daemon tests
+   pass 3/3 in isolation — something an earlier test starts keeps a reference alive. Whether it
+   predates this session cannot be compared: before item 1 the crate died earlier either way.
 
 Reproduction:
 
@@ -192,8 +197,7 @@ Reproduction:
 MISAKA_PALW_POW_FIXTURE=1 cargo test -p kaspa-testing-integration --lib -- --test-threads=1
 ```
 
-Both environment requirements are real and neither is new: the fixture variable is the model-free
-devnet PALW path (a non-evm concern), and the feature is the lane.
+The fixture variable is the model-free devnet PALW path; both requirements predate this session.
 
 ---
 

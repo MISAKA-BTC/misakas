@@ -62,6 +62,15 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 // kaspa-pq ADR-0022: pruned-IBD EVM + overlay snapshot responses.
                 KaspadMessagePayloadType::PruningPointEvmState,
                 KaspadMessagePayloadType::PruningPointOverlaySnapshot,
+                // Launch blockers §1: the pruned-IBD PALW state response. The REQUEST was wired,
+                // the serving flow was wired, and this subscription was not — so the reply arrived
+                // at a router with no route for it, which is a protocol error, which closed the
+                // connection, which failed EVERY pruned IBD (the request was then sent on every
+                // network; it is now sent only under a ConsensusV2 ruleset). Found by the first
+                // integration run that actually performed a real-TCP IBD with this code in the
+                // binary. The subscription stays unconditional: routing a type is free, and a
+                // subscription that tracked the ruleset would re-create this bug the other way.
+                KaspadMessagePayloadType::PruningPointPalwState,
             ]),
             relay_receiver,
             body_only_ibd_permitted,

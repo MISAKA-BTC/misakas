@@ -2298,6 +2298,17 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             self.ctx.config.params.palw_consensus_mode,
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
         );
+        // **No wire traffic on a network with no V2 ruleset** — which is every network with old
+        // binaries on it. The overlay sibling above asks unconditionally and may, because its
+        // message pair has been in every fleet binary for a long time; this pair rode into
+        // protocol version 103 without a bump, so an old 103 leader has no flow registered for the
+        // REQUEST and its router closes the connection — the requester's own IBD dies on the
+        // serving side. On a ConsensusV2 network every peer is a new binary by construction (the
+        // ruleset is inside the consensus fingerprint, and mismatched fingerprints refuse the
+        // handshake), so there the request is always answerable.
+        if !palw_active {
+            return Ok(());
+        }
         self.router
             .enqueue(make_message!(
                 Payload::RequestPruningPointPalwState,
@@ -2306,12 +2317,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             .await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
         if !msg.found {
-            if palw_active {
-                return Err(ProtocolError::Other(
-                    "peer cannot serve the pruning point PALW state required for pruned IBD on this network",
-                ));
-            }
-            return Ok(()); // no V2 ruleset — nothing to import.
+            return Err(ProtocolError::Other(
+                "peer cannot serve the pruning point PALW state required for pruned IBD on this network",
+            ));
         }
         // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
         // and claims, far smaller than the EVM state.
