@@ -637,11 +637,20 @@ mod tests {
             };
             // The class's registered inventory, and the opening that proves this block belongs.
             let operands = vec![
+                // **ADR-0049 Decision B, and the reason this test's name is now true.** It opened
+                // the whole `hidden x q_dim` block and called itself "from one tile". The step
+                // reduces over the challenged tile's output rows alone, so that is what the
+                // refutation carries: `width * q_dim` bytes at the tile's own offset. At
+                // Qwen2.5-1.5B's real unembed the same change is ~223 MiB down to 192 KiB.
                 PalwArtifactOperandV1 {
                     tensor_name: "blk.{layer}.attn_output.weight".to_string(),
                     layer: Some(0),
-                    row_start: 0,
-                    bytes: weights.iter().map(|v| *v as u8).collect(),
+                    row_start: (coord.tile_index as usize * p.attn_nodes[out_slot as usize].tile_len as usize * q_dim) as u32,
+                    bytes: weights[coord.tile_index as usize * p.attn_nodes[out_slot as usize].tile_len as usize * q_dim..]
+                        [..width * q_dim]
+                        .iter()
+                        .map(|v| *v as u8)
+                        .collect(),
                 },
                 PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![1, 2, 3] },
             ];

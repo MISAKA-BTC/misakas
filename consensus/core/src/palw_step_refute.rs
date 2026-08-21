@@ -461,7 +461,33 @@ fn base0_row(
             if out_dim == 0 {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul output width is zero"));
             }
-            let wanted = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // **ADR-0049 Decision B: the challenged TILE, not the whole matrix.**
+            //
+            // This computed `wanted = out_dim * in_len` — every weight the node has — opened all
+            // of it and recomputed every output row before the caller compared one tile. Measured:
+            // BASE-0's 4096x256 output projection is 1.0 MiB against 16 KiB for the tile actually
+            // disputed, and Qwen2.5-1.5B's 151,936x1,536 unembed is ~223 MiB against 192 KiB.
+            // ADR-0046 budgets a court close under 152 KB, so the terminal adjudication grew with
+            // the model — the one property ADR-0038 W1 promised it would not.
+            //
+            // Output channel `j` reduces over the whole input row and over weight row `j` ALONE,
+            // so a tile of output channels needs a contiguous slice of weight rows and nothing
+            // else. That is the whole of the fix.
+            let (tile_start, tile_width) = {
+                let tile_len = node.tile_len as usize;
+                if tile_len == 0 {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul node declares a zero tile length"));
+                }
+                let start = (gather.0.tile_index as usize).checked_mul(tile_len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if start >= out_dim {
+                    // The coordinate names a tile the node does not have. Malformed refutation,
+                    // never a conviction.
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul tile index is past the output width"));
+                }
+                (start, tile_len.min(out_dim - start))
+            };
+            let wanted = tile_width.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let byte_offset = tile_start.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
 
             // **The second operand: a registered weight, or a second opened row (G5).**
             //
@@ -479,19 +505,23 @@ fn base0_row(
             let w: Vec<i8> = if node.weight_name.is_empty() {
                 need(2)?;
                 let operand = as_i8(&inputs[1])?;
-                // The opened row must be exactly the matrix the declared shape needs. A shorter
-                // one is a producer that committed a different graph, not a challenger's fault.
-                if operand.len() != wanted {
+                // The opened row is the whole matrix — it rides the leg, already Merkle-bound, so
+                // narrowing WHICH tiles a refutation must open is the leg's decision and not this
+                // arm's. What this arm must not do is recompute rows outside the challenged tile,
+                // so it takes the same contiguous slice the oracle path opens.
+                let full = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if operand.len() != full {
                     return Err(PalwStepRefuteError::InputSetNotCanonical("base0 matmul operand row is not out_dim x in_dim"));
                 }
-                operand
+                operand[byte_offset..byte_offset + wanted].to_vec()
             } else {
                 let row = weights
                     .operand_bytes(
                         node.weight_name.as_str(),
                         layer,
-                        0,
-                        // `int8` weights: one byte per value.
+                        // `int8` weights: one byte per value, so the tile's row range IS its byte
+                        // range. This is the opening that used to be the whole matrix.
+                        u32::try_from(byte_offset).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
                         u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
                     )
                     .ok_or(PalwStepRefuteError::Unadjudicable)?;
@@ -502,7 +532,7 @@ fn base0_row(
                 }
                 row.iter().map(|b| *b as i8).collect()
             };
-            Ok(out(ops::matmul_quant(&w, &x, out_dim).map_err(shape)?))
+            Ok(out(ops::matmul_quant(&w, &x, tile_width).map_err(shape)?))
         }
         Base0Op::Requantize | Base0Op::Rope => {
             need(1)?;
@@ -940,7 +970,7 @@ pub fn check_execution_step_refutation_v1(
     {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried prompt ids are not the ones the job context commits to"));
     }
-    let recomputed_row = run_program(
+    let (recomputed_row, row_offset) = run_program(
         program,
         node,
         layer,
@@ -955,8 +985,11 @@ pub fn check_execution_step_refutation_v1(
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
     let committed: Vec<u32> =
         refutation.output_preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect();
+    // `run_program` says where its slice starts, so a kernel that recomputed only the tile is not
+    // sliced a second time (ADR-0049 Decision B). Whole-row kernels report 0 and behave as before.
+    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let recomputed = recomputed_row
-        .get(tile_start..tile_start + committed.len())
+        .get(local_start..local_start + committed.len())
         .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
     if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
         let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
@@ -995,8 +1028,18 @@ fn run_program(
     // G5d: the challenged position and the carried, hash-checked prompt ids. Only the gather
     // reads them; every other kernel is a function of its opened rows and its weights.
     gather: (&PalwStepCoordinateV1, &[u32]),
-) -> Result<Vec<u32>, PalwStepRefuteError> {
-    match program {
+    // **The index in the node's output row at which the returned slice begins** (ADR-0049
+    // Decision B). Every kernel but the BASE-0 matmul recomputes the whole row and returns it at
+    // offset 0; the matmul opens only the challenged tile's weight rows, so it can only return
+    // that tile and says so here rather than leaving the caller to assume.
+) -> Result<(Vec<u32>, usize), PalwStepRefuteError> {
+    // Only the BASE-0 matmul narrows what it computes to the challenged tile; every other kernel
+    // is elementwise or a whole-row reduction and returns the row it recomputed, at offset 0.
+    let row_offset = match program {
+        KernelProgram::Base0(Base0Op::MatMul) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
+        _ => 0,
+    };
+    let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
@@ -1052,7 +1095,8 @@ fn run_program(
             }
             gdn_core_genesis_replay(profile, &narrowed, dot)
         }
-    }
+    }?;
+    Ok((row, row_offset))
 }
 
 /// `l2_norm` (ops.cpp): double sum of squares ascending, `scale = 1/max(sqrtf(sum), eps)`,
@@ -1874,12 +1918,22 @@ pub(crate) mod tests {
         let (binding, material, rows) = base0_honest_execution();
         let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 1 };
         let refutation = build_refutation(&binding, &material, &rows, coord);
+        // **ADR-0049 Decision B: the CHALLENGED TILE's weight rows, not the matrix.** The
+        // coordinate is tile 1 of a 16-wide tiling over a 32x32 matmul, so the step reduces over
+        // output rows 16..32 and nothing else — bytes 512..1024. Half the matrix at this fixture's
+        // size; one part in 1,187 of Qwen2.5-1.5B's unembed, which is the difference between a
+        // court close that fits a transaction and one that does not.
+        const IN_LEN: usize = 32;
+        const TILE_START_ROW: usize = 16;
+        const TILE_WIDTH: usize = 16;
+        let all_weights = base0_matmul_weights();
+        let byte_offset = TILE_START_ROW * IN_LEN;
         let operands = vec![
             PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
-                row_start: 0,
-                bytes: base0_matmul_weights().iter().map(|v| *v as u8).collect(),
+                row_start: byte_offset as u32,
+                bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
             PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
         ];
@@ -1970,12 +2024,22 @@ pub(crate) mod tests {
         // The class's registered artifact inventory, and the opening that proves this weight
         // block belongs to it. This is the whole "no model" mechanism: the court never reads a
         // GGUF, it reads bytes a Merkle path binds to the root the class registered.
+        // **ADR-0049 Decision B: the CHALLENGED TILE's weight rows, not the matrix.** The
+        // coordinate is tile 1 of a 16-wide tiling over a 32x32 matmul, so the step reduces over
+        // output rows 16..32 and nothing else — bytes 512..1024. Half the matrix at this fixture's
+        // size; one part in 1,187 of Qwen2.5-1.5B's unembed, which is the difference between a
+        // court close that fits a transaction and one that does not.
+        const IN_LEN: usize = 32;
+        const TILE_START_ROW: usize = 16;
+        const TILE_WIDTH: usize = 16;
+        let all_weights = base0_matmul_weights();
+        let byte_offset = TILE_START_ROW * IN_LEN;
         let operands = vec![
             PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
-                row_start: 0,
-                bytes: base0_matmul_weights().iter().map(|v| *v as u8).collect(),
+                row_start: byte_offset as u32,
+                bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
             PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
         ];
