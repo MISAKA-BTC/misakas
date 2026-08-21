@@ -24,7 +24,9 @@
 //! who wants a fresh bond key makes it there, keeps the secret, and passes only the verification
 //! key here.
 
-use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, palw_rc_base0_registration_v1};
+use kaspa_consensus_core::palw_base0_profile::{
+    PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, palw_rc_base0_registration_v1,
+};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::rc::{PALW_RC_BASE0_SEED, palw_rc_base0_artifact_root_v1};
@@ -74,6 +76,35 @@ fn main() {
     println!("  execution_class_id  {}", profile.shape_profile_id());
     println!("  artifact_root       {artifact_root}");
     println!();
+
+    // **What one block costs.** A `ConsensusV2` block is one inference plus a free nonce grind, so
+    // this number and the target block time are the same question: if the job does not fit inside
+    // the cadence, the network cannot hold it however fast the hashing is. Measured rather than
+    // asserted, because the floor's geometry is the one thing an operator may not change.
+    if arg("--skip-cost").is_none() {
+        let (job, prompt) = misaka_palw_base0::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x5041_4C57_5F43_4F53),
+            geometry.vocab_size as usize,
+            PALW_RC_BASE0_CANONICAL.0,
+            PALW_RC_BASE0_CANONICAL.1,
+        );
+        let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("the floor's artifact derives");
+        let leaves = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &job).expect("the job has a step space");
+        let started = std::time::Instant::now();
+        match misaka_palw_base0::produce::base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt) {
+            Ok(run) => {
+                let elapsed = started.elapsed();
+                println!("One block's work — canonical job ({} prefill, {} decode):", PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+                println!("  step leaves         {leaves}");
+                println!("  wall time           {:.3} s  (one inference per template; the nonce grind is free)", elapsed.as_secs_f64());
+                println!("  execution_root      {}", run.execution_root);
+                println!("  output tokens       {:?}", run.generated_token_ids);
+            }
+            Err(e) => println!("One block's work: REFUSED — {e}"),
+        }
+        println!();
+    }
 
     let bond_index: Option<u32> = arg("--bond-index").and_then(|v| v.parse().ok());
     let bond_pubkey = arg("--bond-pubkey").and_then(|v| hex_bytes(&v));

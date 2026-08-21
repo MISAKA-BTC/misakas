@@ -2456,6 +2456,18 @@ pub fn palw_rc_base_params() -> Params {
     params.pow_palw_activation = ForkActivation::never();
     params.pow_palw_ollama_activation = ForkActivation::never();
     params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+    // **The EVM lane is OFF, and inheriting it on was an accident with two costs.**
+    //
+    // `TESTNET_PARAMS` activates the lane at DAA 0; `MAINNET_PARAMS` never does. ADR-0042 calls
+    // this network the mainnet-CANDIDATE ruleset, so a lane mainnet does not have is a lane the
+    // candidate is not a candidate for — and it is signed into `consensus_params_id`, so the
+    // difference is not cosmetic.
+    //
+    // The second cost is the one that surfaced it: `build_block_template` PANICS when the lane is
+    // active and the binary was built without `--features evm`, so every node that produced a
+    // block would have had to be an evm build, and the default build would have died at its first
+    // template rather than at startup. The first end-to-end production test found that in one run.
+    params.evm_activation_daa_score = u64::MAX;
     params
 }
 

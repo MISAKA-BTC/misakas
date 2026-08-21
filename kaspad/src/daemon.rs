@@ -1167,6 +1167,49 @@ Do you confirm? (y/n)";
 
     // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
     // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
+    // ADR-0042: the in-process PALW-RC producer. Everything it needs that is not chain state comes
+    // from the operator — a key it did not generate, the bond that key signs for, and where the
+    // reward goes. A missing one is a startup refusal rather than a producer that runs and cannot
+    // publish; a hash-only network is a refusal for a different reason, and both say which.
+    let palw_producer_service = if args.palw_produce {
+        let base_class_id = match &config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+            _ => None,
+        };
+        match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &args.palw_producer_pay_address) {
+            (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
+                Some(Arc::new(crate::palw_producer::PalwProducerService::new(
+                    crate::palw_producer::PalwProducerConfig {
+                        key_path: key_path.clone(),
+                        bond: bond.clone(),
+                        pay_address: pay_address.clone(),
+                        address_prefix: config.prefix(),
+                        network_id: config.params.net.to_string(),
+                        class_id,
+                    },
+                    consensus_manager.clone(),
+                    mining_manager.clone(),
+                    flow_context.clone(),
+                )))
+            }
+            (None, _, _, _) => {
+                warn!(
+                    "--palw-produce was given but {} declares no ConsensusV2 ruleset — nothing to produce, producer not started",
+                    config.params.net
+                );
+                None
+            }
+            _ => {
+                warn!(
+                    "--palw-produce needs --palw-producer-key, --palw-producer-bond and --palw-producer-pay-address — producer not started"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
         Some(v) => Some(v.clone()),
         None => None,
@@ -1230,6 +1273,12 @@ Do you confirm? (y/n)";
     async_runtime.register(consensus_monitor);
     if let Some(validator_service) = validator_service {
         async_runtime.register(validator_service)
+    };
+    // ADR-0042: the PALW-RC block producer. Registered only when it was asked for AND the network
+    // actually has a ConsensusV2 lane — a producer on a hash-only chain would build templates for
+    // an algo nobody declares and log a refusal every few hundred milliseconds.
+    if let Some(palw_producer_service) = palw_producer_service {
+        async_runtime.register(palw_producer_service)
     };
     // kaspa-pq EVM Lane (ADR-0020 §16): the Ethereum JSON-RPC adapter, enabled by
     // `--evm-rpc-listen` (evm builds only; the default node never links it).

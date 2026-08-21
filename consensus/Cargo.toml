@@ -66,6 +66,10 @@ flate2.workspace = true
 rand_distr.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-addresses.workspace = true
+# ADR-0042: the PALW-RC producer's execution half lives here, and the only test that proves a
+# testnet-12 block can be produced at all needs both halves in one process. Dev-only — a node's
+# consensus never links a model runtime (ADR-0042 Decision 4).
+misaka-palw-base0.workspace = true
 
 [[bench]]
 name = "parallel_muhash"

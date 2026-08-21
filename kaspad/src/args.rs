@@ -199,6 +199,12 @@ pub struct Args {
     // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
     pub enable_validator: bool,
     pub validator_key: Option<String>,
+    /// ADR-0042: run the in-process PALW-RC block producer. Only a `ConsensusV2` network has
+    /// anything for it to do, and it says so and stops otherwise.
+    pub palw_produce: bool,
+    pub palw_producer_key: Option<String>,
+    pub palw_producer_bond: Option<String>,
+    pub palw_producer_pay_address: Option<String>,
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
     pub evm_fee_recipient: Option<String>,
@@ -327,6 +333,10 @@ impl Default for Args {
             clear_quarantine: false,
             enable_validator: false,
             validator_key: None,
+            palw_produce: false,
+            palw_producer_key: None,
+            palw_producer_bond: None,
+            palw_producer_pay_address: None,
             evm_fee_recipient: None,
             stake_bond: None,
             validator_mode: None,
@@ -757,6 +767,34 @@ pub fn cli() -> Command {
                 .env("KASPAD_CLEAR_QUARANTINE"),
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
+        .arg(
+            arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key, --palw-producer-bond and --palw-producer-pay-address. Only a ConsensusV2 network can use it. Default off.")
+                .env("KASPAD_PALW_PRODUCE"),
+        )
+        .arg(
+            Arg::new("palw-producer-key")
+                .long("palw-producer-key")
+                .env("KASPAD_PALW_PRODUCER_KEY")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW: path to the 32-byte hex ML-DSA-87 seed whose VERIFICATION key the genesis bond registered. Generate it with misaka-cli; this never creates one."),
+        )
+        .arg(
+            Arg::new("palw-producer-bond")
+                .long("palw-producer-bond")
+                .env("KASPAD_PALW_PRODUCER_BOND")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW: <txid>:<index> of the bond output this node signs attempts under — the one the genesis card names."),
+        )
+        .arg(
+            Arg::new("palw-producer-pay-address")
+                .long("palw-producer-pay-address")
+                .env("KASPAD_PALW_PRODUCER_PAY_ADDRESS")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW: where produced blocks pay their reward. Must be an ML-DSA-87 P2PKH address — PQ-only consensus rejects anything else, and the block would be dead on arrival."),
+        )
         .arg(
             Arg::new("evm-fee-recipient")
                 .long("evm-fee-recipient")
@@ -1201,6 +1239,13 @@ impl Args {
             ),
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
+            palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
+            palw_producer_key: m.get_one::<String>("palw-producer-key").cloned().or(defaults.palw_producer_key),
+            palw_producer_bond: m.get_one::<String>("palw-producer-bond").cloned().or(defaults.palw_producer_bond),
+            palw_producer_pay_address: m
+                .get_one::<String>("palw-producer-pay-address")
+                .cloned()
+                .or(defaults.palw_producer_pay_address),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
             stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),

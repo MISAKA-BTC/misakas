@@ -166,6 +166,7 @@ kaspa-wrpc-wasm = { version = "1.1.0", path = "rpc/wrpc/wasm" }
 kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/subscriber" }
 kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
+misaka-palw-base0 = { version = "1.0.1", path = "misaka-palw-base0" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

@@ -861,6 +861,131 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
 ///
 /// Deliberately uses the DEFAULT fixture, so `palw_v2_test_bundle_funded_for` raising a bond
 /// elsewhere cannot quietly retire this.
+/// **A block produced the way the RC will produce blocks, accepted by consensus.**
+///
+/// Everything else about `ConsensusV2` was tested against `palw_v2_test_carriage`, a harness that
+/// reads its class facts out of the genesis bundle and invents its roots. This runs the REAL path
+/// end to end on the REAL ruleset: `palw_rc_params_from_artifacts` builds the network,
+/// `palw_producer_facts_v2` supplies the six chain facts, `base0_execute_for_attempt_v1` runs an
+/// actual BASE-0 inference over the job the template anchors, and the attempt is signed with an
+/// ML-DSA-87 key the genesis bond registered. If it lands, testnet-12 can make blocks.
+///
+/// Before this, nothing could: `misaminer` and `pq-miner` both branch on algo 4 and 5 only, and the
+/// one algo-6 carriage builder in the tree was a `pub(crate)` test helper. The network had a
+/// genesis and no second block, and no test said so.
+#[tokio::test]
+async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
+
+    // The operator half of the genesis card, generated here the way an operator generates it.
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]);
+    let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(0));
+    let artifact_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
+    let params = kaspa_consensus_core::config::params::palw_rc_params_from_artifacts(
+        artifact_root,
+        bond_key,
+        keypair.verification_key.as_ref().to_vec(),
+        vec![21u8; 8],
+        kaspa_hashes::Hash64::from_u64_word(0x9A11),
+    )
+    .expect("the RC genesis card assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("palw_rc_params_from_artifacts must yield a ConsensusV2 network"),
+    };
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let facts = ctx
+        .consensus
+        .palw_producer_facts_v2(bundle.base_class_id, Some(bond_key.0))
+        .expect("the RC network answers for its own floor");
+    assert_eq!(
+        facts.ready_to_produce(keypair.verification_key.as_ref()),
+        Ok(()),
+        "the genesis bond, this key, and an untouched epoch budget"
+    );
+    assert_eq!(facts.artifact_root, artifact_root, "the class registered the artifact the producer will name");
+
+    // The template. Its pre-pow hash anchors the job, so one template is one inference.
+    let timestamp = config.params.genesis.timestamp + config.params.target_time_per_block();
+    let mut block = ctx.build_block_template(0, timestamp).block;
+    assert_eq!(
+        block.header.pow_algo_id,
+        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+        "a ConsensusV2 network declares the attempt lane"
+    );
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0);
+
+    // The work. A real inference, over the job this template names.
+    let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph is expressible");
+    let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("derives");
+    let (job, prompt) = base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let run = base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt).expect("the floor runs its own job");
+
+    let mut attempt = PalwAttemptUnsignedV2 {
+        version: PALW_ATTEMPT_V2_VERSION,
+        network_domain,
+        challenge: kaspa_hashes::Hash64::default(),
+        class_id: facts.class_id,
+        executor_bond: bond_key.0,
+        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+        operator_id: facts.bond.as_ref().unwrap().operator_id,
+        artifact_root: facts.artifact_root,
+        trace_root: run.trace_root,
+        output_root: run.output_root,
+        execution_root: run.execution_root,
+        pwu: facts.pwu,
+        trace_manifest_root: run.trace_manifest_root,
+        trace_chunk_count: run.trace_chunk_count,
+        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+    };
+    // The class lottery: the nonce moves the challenge, the challenge moves the commitment root,
+    // and the root moves the ticket. One inference, a free nonce search — which is the whole reason
+    // `l1_tag_v2` is a CPU expansion rather than a second inference.
+    let mut won = None;
+    for nonce in 0u64..1_000_000 {
+        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond_key.0);
+        if class_ticket_v2(&attempt) <= facts.class_target {
+            won = Some(nonce);
+            break;
+        }
+    }
+    let nonce = won.expect("the floor's genesis target is winnable");
+
+    // Signed ONCE, after the search, over the attempt id — the signature is outside the commitment
+    // root, so signing per nonce would be an ML-DSA-87 operation thrown away every try.
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        attempt_id_v2(&attempt).as_byte_slice(),
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        [0x5Au8; 32],
+    )
+    .expect("ML-DSA-87 sign")
+    .as_ref()
+    .to_vec();
+    block.header.nonce = nonce;
+    block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+    block.header.finalize();
+    let hash = block.header.hash;
+
+    ctx.validate_and_insert_block(block.to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), hash, "the block a real execution produced is the chain");
+
+    // And the chain moved because of it: the floor's epoch counter is the producer's own receipt.
+    let after = ctx.consensus.palw_producer_facts_v2(bundle.base_class_id, Some(bond_key.0)).expect("still a V2 network");
+    assert_eq!(after.epoch_produced_blocks, 1, "one block of this class, counted");
+    assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
+}
+
 /// **The producer contract reads the LIVE chain, not the genesis bundle** (ADR-0042).
 ///
 /// The harness's own carriage builder reads the class target out of the bundle, which is correct

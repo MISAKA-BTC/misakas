@@ -210,6 +210,16 @@ impl ConsensusSessionOwned {
         self.consensus.get_virtual_daa_score()
     }
 
+    /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
+    /// snapshot read like the virtual fields above.
+    pub fn palw_producer_facts_v2(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2> {
+        self.consensus.palw_producer_facts_v2(class_id, bond)
+    }
+
     pub fn get_virtual_bits(&self) -> u32 {
         // Accessing cached virtual fields is lock-free and does not require spawn_blocking
         self.consensus.get_virtual_bits()

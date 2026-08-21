@@ -20,9 +20,9 @@
 //! found five times over between the engine, the profile, the inventory and the court, and the
 //! reason ADR-0046 wrote down "derive, never declare".
 
+use crate::BlockHash;
 use crate::palw_admission_v2::PalwAdmissionParamsV2;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwPwuRuleV2, PalwStateParamsV2};
-use crate::BlockHash;
 use kaspa_hashes::Hash64;
 
 /// The bond half — read only when a producer names the bond it intends to sign under.
@@ -70,6 +70,11 @@ pub struct PalwProducerFactsV2 {
     /// Admission item 7: blocks of this class this epoch may not exceed this.
     pub epoch_budget_blocks: u64,
     pub epoch_produced_blocks: u64,
+    /// How long a producer must promise to keep its trace. Derived from the lattice windows this
+    /// network runs, because a promise shorter than the challenge-plus-court span is a promise to
+    /// discard the evidence before anyone can ask for it — and nothing at admission catches that,
+    /// so it is the producer's to get right and this is where it gets it.
+    pub min_trace_retention_daa: u64,
     pub bond: Option<PalwProducerBondFactsV2>,
 }
 
@@ -135,13 +140,16 @@ pub fn palw_producer_facts_v2(
             operator_id: bond_state.operator_id,
             collateral: bond_state.collateral,
             reserved_exposure: state.reserved_exposure(key),
-            exposure_ceiling: (bond_state.collateral as u128)
-                .saturating_mul(admission.max_exposure_ratio_permille() as u128)
-                / 1000,
+            exposure_ceiling: (bond_state.collateral as u128).saturating_mul(admission.max_exposure_ratio_permille() as u128) / 1000,
             claim_exposure: (pwu as u128).saturating_mul(class.slash_value_per_pwu as u128),
         })
     });
     Some(PalwProducerFactsV2 {
+        min_trace_retention_daa: state_params
+            .window_bind()
+            .saturating_add(state_params.window_receipt())
+            .saturating_add(state_params.window_challenge())
+            .saturating_add(state_params.window_court()),
         chain_point,
         daa_score,
         class_id,
@@ -162,9 +170,7 @@ mod tests {
     use crate::palw_attempt_v2::{
         PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, class_ticket_v2,
     };
-    use crate::palw_state_v2::{
-        PalwBlockContextV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_operator_id_v2,
-    };
+    use crate::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_operator_id_v2};
     use crate::tx::{TransactionId, TransactionOutpoint};
 
     fn h64(v: u64) -> Hash64 {
@@ -220,16 +226,9 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let bond_key = PalwBondKeyV2(bond_outpoint());
-        let facts = palw_producer_facts_v2(
-            &state,
-            &params,
-            &admission,
-            crate::BlockHash::from_u64_word(1),
-            101,
-            h64(1),
-            Some(&bond_key),
-        )
-        .expect("the class is registered, so it has facts");
+        let facts =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
+                .expect("the class is registered, so it has facts");
 
         assert_eq!(facts.ready_to_produce(&[7; 4]), Ok(()), "the producer is clear to run an inference");
         assert_eq!(
@@ -349,8 +348,7 @@ mod tests {
         assert_eq!(facts.ready_to_produce(&[7; 4]), Err("the named bond is not registered on this chain"));
         // And a class the chain does not know has no facts at all — there is nothing to be told.
         assert!(
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None)
-                .is_none()
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None).is_none()
         );
     }
 }
