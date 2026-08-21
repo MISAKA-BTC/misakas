@@ -59,6 +59,8 @@ pub enum KaspadMessagePayloadType {
     PruningPointOverlaySnapshot,
     RequestPruningPointPalwState,
     PruningPointPalwState,
+    PalwTraceMaterialBroadcast,
+    PalwSeatReceiptBroadcast,
     // kaspa-pq EVM Lane v0.4 (§14.2): pending EVM deposit-claim relay (protocol ≥ 101).
     InvEvmDepositClaims,
     RequestEvmDepositClaims,
@@ -135,6 +137,8 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::PruningPointOverlaySnapshot(_) => KaspadMessagePayloadType::PruningPointOverlaySnapshot,
             KaspadMessagePayload::RequestPruningPointPalwState(_) => KaspadMessagePayloadType::RequestPruningPointPalwState,
             KaspadMessagePayload::PruningPointPalwState(_) => KaspadMessagePayloadType::PruningPointPalwState,
+            KaspadMessagePayload::PalwTraceMaterialBroadcast(_) => KaspadMessagePayloadType::PalwTraceMaterialBroadcast,
+            KaspadMessagePayload::PalwSeatReceiptBroadcast(_) => KaspadMessagePayloadType::PalwSeatReceiptBroadcast,
             KaspadMessagePayload::InvEvmDepositClaims(_) => KaspadMessagePayloadType::InvEvmDepositClaims,
             KaspadMessagePayload::RequestEvmDepositClaims(_) => KaspadMessagePayloadType::RequestEvmDepositClaims,
             KaspadMessagePayload::EvmDepositClaim(_) => KaspadMessagePayloadType::EvmDepositClaim,

@@ -325,6 +325,11 @@ pub struct FlowContextInner {
 
     // Mining rule engine
     mining_rule_engine: Arc<MiningRuleEngine>,
+
+    /// ADR-0042 Decision 7 transport: the PALW material/receipt gossip's dedup, caps and inbox.
+    /// Present on every node (the state is a few KB); active only where the flow feeds it, and the
+    /// flow refuses everything on a network with no ConsensusV2 ruleset.
+    palw_gossip: crate::palw_gossip::PalwGossipCenter,
 }
 
 #[derive(Clone)]
@@ -427,6 +432,7 @@ impl FlowContext {
             inner: Arc::new(FlowContextInner {
                 node_id: Uuid::new_v4().into(),
                 consensus_manager,
+                palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
                 orphans_pool: AsyncRwLock::new(OrphanBlocksPool::new(max_orphans)),
                 shared_block_requests: Arc::new(Mutex::new(HashMap::new())),
                 transactions_spread: AsyncRwLock::new(TransactionsSpread::new(hub.clone())),
@@ -491,6 +497,44 @@ impl FlowContext {
 
     pub fn consensus(&self) -> ConsensusInstance {
         self.consensus_manager.consensus()
+    }
+
+    pub fn palw_gossip(&self) -> &crate::palw_gossip::PalwGossipCenter {
+        &self.palw_gossip
+    }
+
+    /// Whether this network runs the PALW ConsensusV2 ruleset — the gate on every PALW gossip
+    /// message, in and out. On any other network the band does not exist on the wire.
+    pub fn palw_v2_active(&self) -> bool {
+        matches!(self.config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+    }
+
+    /// Broadcast a claim's execution material to every peer, marking it seen so the echo is not a
+    /// second inbox event. The producer calls this after publishing (and periodically while its
+    /// claim is unresolved); the bytes prove themselves against the claim's committed roots.
+    pub async fn broadcast_palw_material(&self, claim: kaspa_hashes::Hash64, bytes: Vec<u8>) {
+        if !self.palw_v2_active() {
+            return;
+        }
+        self.palw_gossip.mark_own_material(claim, &bytes);
+        let msg = kaspa_p2p_lib::make_message!(
+            kaspa_p2p_lib::pb::kaspad_message::Payload::PalwTraceMaterialBroadcast,
+            kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }
+        );
+        self.hub().broadcast(msg, None).await;
+    }
+
+    /// Broadcast one signed seat receipt (borsh(`PalwSeatReceiptV2`)) to every peer.
+    pub async fn broadcast_palw_seat_receipt(&self, bytes: Vec<u8>) {
+        if !self.palw_v2_active() {
+            return;
+        }
+        self.palw_gossip.mark_own_receipt(&bytes);
+        let msg = kaspa_p2p_lib::make_message!(
+            kaspa_p2p_lib::pb::kaspad_message::Payload::PalwSeatReceiptBroadcast,
+            kaspa_p2p_lib::pb::PalwSeatReceiptBroadcastMessage { receipt: bytes }
+        );
+        self.hub().broadcast(msg, None).await;
     }
 
     pub fn hub(&self) -> &Hub {

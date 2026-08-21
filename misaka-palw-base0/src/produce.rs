@@ -63,6 +63,9 @@ pub enum ProduceError {
         token: usize,
         vocab: usize,
     },
+    /// A codec failure with a fixed description — serialization is infallible for honest data, so
+    /// hitting this on the encode side is a bug and on the decode side is a peer's garbage.
+    Internal(&'static str),
 }
 
 impl std::fmt::Display for ProduceError {
@@ -76,6 +79,7 @@ impl std::fmt::Display for ProduceError {
                 write!(f, "the prompt has {prompt} tokens and the context declares {declared} — a different job")
             }
             Self::TokenOutOfVocab { token, vocab } => write!(f, "token {token} is outside a vocabulary of {vocab}"),
+            Self::Internal(what) => write!(f, "{what}"),
         }
     }
 }
@@ -464,6 +468,30 @@ mod tests {
     /// is the only shape that finds them: it is the difference between "the checker runs" and "the
     /// checker is right".
     #[test]
+    #[ignore]
+    fn measure_retained_material_size() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let bytes = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids)).unwrap();
+        println!("small_job material = {} bytes over {} tiles", bytes.len(), run.tiles.tiles.len());
+        let rc_artifact = crate::rc::palw_rc_base0_artifact_v1().expect("derives");
+        let rc_profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+        )
+        .expect("expressible");
+        let (rc_job, rc_prompt) = base0_rc_job_v1(
+            &rc_profile,
+            kaspa_hashes::Hash64::from_u64_word(7),
+            rc_artifact.shape.vocab,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
+        );
+        let rc_run = base0_execute_for_attempt_v1(&rc_artifact, &rc_profile, &rc_job, &rc_prompt).expect("the floor runs");
+        let rc_bytes = borsh::to_vec(&(&rc_run.binding, &rc_run.tiles.tiles, &rc_run.generated_token_ids)).unwrap();
+        println!("RC floor material = {} bytes over {} tiles", rc_bytes.len(), rc_run.tiles.tiles.len());
+    }
+
+    #[test]
     fn the_court_convicts_no_leaf_of_an_honest_execution() {
         use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
         use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
@@ -663,6 +691,20 @@ mod tests {
 ///
 /// `(binding, tiles, generated ids)` — everything a seat needs to decide whether the producer
 /// committed to what it actually computed, and everything a refutation is assembled from later.
+/// The canonical wire/disk encoding of the retained material — one codec, used by the producer's
+/// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
+/// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
+pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
+    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids))
+        .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
+}
+
+/// Decode what [`base0_material_encode_v1`] produced. `Err` is a seat's honest `Unavailable` —
+/// bytes that do not decode are bytes that were not served.
+pub fn base0_material_decode_v1(bytes: &[u8]) -> Result<Base0RetainedMaterialV1, ProduceError> {
+    borsh::from_slice(bytes).map_err(|_| ProduceError::Internal("the served material does not decode"))
+}
+
 pub type Base0RetainedMaterialV1 = (
     kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,

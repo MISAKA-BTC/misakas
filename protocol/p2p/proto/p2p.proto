@@ -446,3 +446,19 @@ message PruningPointPalwStateMessage{
   bool found = 1;
   bytes palwState = 2; // borsh(PalwStateCarriageV2)
 }
+
+// ADR-0042 Decision 7 data availability, transport half (launch blockers: "what is still missing").
+// The producer broadcasts the retained material behind a claim; panel seats verify it against the
+// claim's own committed roots (`base0_material_matches_claim_v1`) — the bytes prove themselves, so
+// this message carries no authentication of its own.
+message PalwTraceMaterialBroadcastMessage{
+  Hash claimId = 1;
+  bytes material = 2; // base0_material_encode_v1 bytes
+}
+
+// One seat's signed receipt (borsh(PalwSeatReceiptV2)), gossiped so whoever assembles the quorum —
+// the producer for `ReceiptLicensed`, any funded seat for `ProducerDefaulted` — can hear it. The
+// signature inside is the authentication; the transport adds none.
+message PalwSeatReceiptBroadcastMessage{
+  bytes receipt = 1;
+}

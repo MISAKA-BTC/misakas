@@ -79,6 +79,8 @@ message KaspadMessage {
     // "no policy" — silently disabling every PALW consensus rule.
     RequestPruningPointPalwStateMessage requestPruningPointPalwState = 73;
     PruningPointPalwStateMessage pruningPointPalwState = 74;
+    PalwTraceMaterialBroadcastMessage palwTraceMaterialBroadcast = 75;
+    PalwSeatReceiptBroadcastMessage palwSeatReceiptBroadcast = 76;
   }
 }
 

@@ -3921,6 +3921,81 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// **Assemble the largest lifecycle object this node's receipt pool supports** (launch
+    /// blockers: "what is still missing", piece 3's consensus half).
+    ///
+    /// Takes whatever receipts gossip delivered — unverified, possibly garbage, possibly for the
+    /// wrong claim — and answers with the object a block would ACCEPT, or `None` if no quorum is
+    /// assemblable yet. It reuses `validate_receipt_quorum_v2` itself, growing the set one receipt
+    /// at a time and dropping any candidate the validator refuses, so the submitter and the
+    /// acceptance layer cannot disagree about what a quorum is: the object this returns is checked
+    /// by the same function that will check it on-chain, at the same state.
+    ///
+    /// Greedy-incremental rather than power-set: the validator refuses a SET for the first bad
+    /// member, so a single poisoned receipt among honest ones must not sink the assembly. Order
+    /// within the pool is the caller's arrival order; a duplicate seat's second receipt is dropped
+    /// by the same rule the chain would drop it with.
+    ///
+    /// The evaluation point is the current sink — where the carrying transaction would be
+    /// accepted. A quorum that assembles here can still lapse before inclusion (the receipt
+    /// window is checked against the ACCEPTING block's DAA); that is the submitter's race to
+    /// lose, not a soundness gap.
+    pub fn palw_v2_receipt_quorum_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::{PalwReceiptQuorumV2 as Q, validate_receipt_quorum_v2};
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let panel_params = self.palw_panel_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        // The evaluation point is VIRTUAL's — where the carrying transaction will actually be
+        // accepted — not the sink's own. The difference is one DAA, and it bites: a receipt signed
+        // "now" carries virtual's daa, and a point at the sink's daa refuses it as "signed after
+        // the block carrying it". Found by this function returning None on a set the validator
+        // itself called `Licensed`.
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
+            Self::verify_mldsa87_with_context_bool(key, message, sig, context)
+        };
+
+        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
+        let mut verdict: Option<Q> = None;
+        for candidate in candidates {
+            let mut attempt = kept.clone();
+            attempt.push(candidate.clone());
+            match validate_receipt_quorum_v2(&state, panel_params, state_params, &point, network_domain, &claim, &attempt, verify) {
+                Ok(q) => {
+                    kept = attempt;
+                    verdict = Some(q);
+                }
+                Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => {
+                    // The set is clean but not yet a quorum — keep the receipt, keep collecting.
+                    kept.push(candidate.clone());
+                }
+                Err(_) => {
+                    // This candidate poisons the set (bad signature, not a seat, duplicate,
+                    // outside a window, wrong claim) — drop IT, keep what already stood.
+                }
+            }
+        }
+        match verdict? {
+            Q::Licensed { .. } => {
+                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept })
+            }
+            Q::ProducerUnavailable { .. } => {
+                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ProducerDefaulted { claim, receipts: kept })
+            }
+        }
+    }
+
     pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

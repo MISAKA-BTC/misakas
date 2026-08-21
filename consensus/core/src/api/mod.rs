@@ -511,6 +511,19 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **Assemble a lifecycle object from a receipt pool** — the largest set of gossip-delivered
+    /// receipts the acceptance validator itself accepts for `claim`, as the object a block would
+    /// take (`ReceiptLicensed` on a Licensed quorum, `ProducerDefaulted` on an Unavailable one), or
+    /// `None` while no quorum is assemblable. Garbage candidates are dropped, never fatal: the
+    /// submitter's whole job is to keep working next to a poisoned pool.
+    fn palw_v2_receipt_quorum_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        unimplemented!()
+    }
+
     /// **The seat duties this node holds** (launch blockers §2) — the claims whose panels name a
     /// bond in `mine`, with the roots each seat must decide against.
     fn palw_seat_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {

@@ -95,7 +95,7 @@ pub struct PalwProducerService {
 }
 
 /// `<txid>:<index>`, the same spelling `--stake-bond` uses.
-fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
+pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
     let (txid, index) = s.split_once(':').ok_or_else(|| format!("'{s}' is not <txid>:<index>"))?;
     let transaction_id: kaspa_consensus_core::tx::TransactionId =
         txid.parse().map_err(|e| format!("'{txid}' is not a transaction id: {e}"))?;
@@ -163,17 +163,49 @@ impl PalwProducerService {
         &self,
         attempt_id: Hash64,
         run: &misaka_palw_base0::produce::Base0ExecutionV1,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<u8>, String> {
         std::fs::create_dir_all(&self.config.retention_dir)
             .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
         let path = self.config.retention_dir.join(format!("{attempt_id}.material"));
-        let bytes = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids))
-            .map_err(|e| format!("the execution material is not serializable: {e}"))?;
+        // The ONE codec (`base0_material_encode_v1`): the retention file, the gossip broadcast and
+        // the seat's decode all read these exact bytes, so the three cannot drift.
+        let bytes = misaka_palw_base0::produce::base0_material_encode_v1(run).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("material.partial");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
         // Rename last: a reader never sees a half-written obligation.
         std::fs::rename(&tmp, &path).map_err(|e| format!("cannot publish {}: {e}", path.display()))?;
-        Ok(())
+        Ok(bytes)
+    }
+
+    /// **Discharge the data-availability obligation in the open** (launch blockers: "what is
+    /// still missing", piece 1). Re-broadcast every retained material younger than the lattice's
+    /// own horizon, so seats that connected after the original broadcast — or missed it — still
+    /// hear it. Peers deduplicate by digest, so a re-broadcast they have seen costs one message
+    /// and no relay.
+    async fn rebroadcast_retained(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.config.retention_dir) else { return };
+        let now = std::time::SystemTime::now();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some(stem) = name.strip_suffix(".material") else { continue };
+            let Ok(claim) = stem.parse::<Hash64>() else { continue };
+            // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of
+            // re-serving covers every claim that can still be licensed, and stops for the rest.
+            let fresh = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .map(|age| age < std::time::Duration::from_secs(48 * 3600))
+                .unwrap_or(false);
+            if !fresh {
+                continue;
+            }
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.flow_context.broadcast_palw_material(claim, bytes).await;
+            }
+        }
     }
 
     fn verification_key(&self) -> Vec<u8> {
@@ -193,8 +225,14 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;
+        let mut ticks = 0u64;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            ticks += 1;
+            if ticks % 300 == 0 {
+                // Every ~60 s: re-serve the retained material of still-licensable claims.
+                self.rebroadcast_retained().await;
+            }
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
@@ -358,7 +396,10 @@ impl PalwProducerService {
             .as_ref()
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
-            self.retain_execution(message, &run)?;
+            let material = self.retain_execution(message, &run)?;
+            // And SERVED, not just kept: the panel's seats verify these bytes against the claim's
+            // committed roots, and a receipt cannot be filed about material nobody has.
+            self.flow_context.broadcast_palw_material(message, material).await;
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
             template.block.header.finalize();

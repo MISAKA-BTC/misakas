@@ -1784,6 +1784,105 @@ async fn palw_v2_an_unsigned_receipt_set_cannot_slash_anyone() {
     assert!(err.contains("owner authorization"), "got {err}");
 }
 
+/// **A gossiped receipt pool assembles into exactly the object a block accepts** (launch
+/// blockers: "what is still missing" — the submitter's consensus half, end to end).
+///
+/// The correspondence that must hold: `palw_v2_receipt_quorum_assemble` is what the panel service
+/// submits, `palw_v2_validate_objects` is what the chain runs on the carried object, and both are
+/// fed here from the same state — receipts signed with the REAL registry keys, polluted the way a
+/// real gossip pool is (garbage signature, duplicate seat), against a claim whose panel the chain
+/// derived itself. If the assembled object were ever one acceptance refuses, the submitter would
+/// burn fees on transactions the chain drops; this is the test that says it cannot.
+#[tokio::test]
+async fn palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts() {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{
+        PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2, validate_palw_lifecycle_tx,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_panel_v2::{
+        PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+    };
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwConsensusObjectV2};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    // One claim, then enough chain for its anchor (accepted + 20) to pass and the DERIVED panel
+    // binding to fire — the same automatic binding a real network runs.
+    for _ in 0..26 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let (claim_id, _) = state
+        .claims_iter()
+        .find(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
+        .expect("an early claim's panel has bound by now");
+    let claim_id = *claim_id;
+    let panel = state.panel(&claim_id).expect("a bound claim has a panel");
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let signed_daa = ctx.consensus.get_virtual_daa_score();
+
+    // Sign with the registry keys, resolved the way a seat resolves its own: by matching the
+    // bond's REGISTERED key — never by assuming seat order.
+    let sign_seat = |seat: &kaspa_consensus_core::palw_state_v2::PalwPanelSeatV2, verdict: PalwReceiptVerdictV2| {
+        let bond = state.bond(&seat.bond).expect("a seat's bond is registered");
+        let kp = (0..16u64)
+            .map(TestConsensus::palw_v2_registry_keypair)
+            .find(|kp| kp.verification_key.as_ref() == bond.pubkey.as_slice())
+            .expect("a registry seat signs with a registry key");
+        let message = palw_receipt_message_v2(network_domain, claim_id, verdict, signed_daa);
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_RECEIPT_V2_MLDSA87_CONTEXT, [0u8; 32])
+                .expect("ML-DSA-87 sign")
+                .as_ref()
+                .to_vec();
+        PalwSeatReceiptV2 { claim: claim_id, verdict, seat_bond: seat.bond, signed_daa, signature }
+    };
+    let honest: Vec<PalwSeatReceiptV2> = panel.seats.iter().take(3).map(|s| sign_seat(s, PalwReceiptVerdictV2::Valid)).collect();
+
+    // The pool as gossip delivers it: a forged receipt first (so a naive assembler chokes on it),
+    // a duplicate of an honest seat, then the three honest ones.
+    let mut forged = honest[0].clone();
+    forged.signature = vec![0u8; forged.signature.len()];
+    let pool = vec![forged, honest[0].clone(), honest[0].clone(), honest[1].clone(), honest[2].clone()];
+
+    let object = vp.palw_v2_receipt_quorum_assemble_impl(claim_id, &pool).expect("three honest receipts are a quorum");
+    let PalwConsensusObjectV2::ReceiptLicensed { claim, receipts } = &object else {
+        panic!("a Valid quorum licenses; got {object:?}");
+    };
+    assert_eq!(*claim, claim_id);
+    assert_eq!(receipts.len(), 3, "the forged receipt and the duplicate were dropped, the quorum kept");
+
+    // The carrier the submitter builds is admissible at the transaction gate…
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap();
+    validate_palw_lifecycle_tx(&payload).expect("the assembled object may ride a 0x4b transaction");
+
+    // …and the OBJECT passes the acceptance validator at the same state — the correspondence.
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: signed_daa,
+        blue_score: 27,
+        subsidy: 0,
+    };
+    vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&object))
+        .expect("what the assembler builds is what acceptance takes");
+
+    // Below quorum: two honest receipts assemble nothing, however clean.
+    assert!(
+        vp.palw_v2_receipt_quorum_assemble_impl(claim_id, &honest[..2]).is_none(),
+        "two receipts are not a quorum and must not become an object"
+    );
+}
+
 /// **The producer contract reads the LIVE chain, not the genesis bundle** (ADR-0042).
 ///
 /// The harness's own carriage builder reads the class target out of the bundle, which is correct

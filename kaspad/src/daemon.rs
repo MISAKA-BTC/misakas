@@ -1244,6 +1244,9 @@ Do you confirm? (y/n)";
     // service just below.
     #[cfg(feature = "evm")]
     let flow_context_for_eth = flow_context.clone();
+    // Kept for the PALW panel service below — `rpc_core_service` consumes the originals.
+    let flow_context_for_palw_panel = flow_context.clone();
+    let config_for_palw_panel = config.clone();
     let rpc_core_service = Arc::new(RpcCoreService::new(
         consensus_manager.clone(),
         notify_service.notifier(),
@@ -1300,6 +1303,45 @@ Do you confirm? (y/n)";
     // ADR-0042: the PALW-RC block producer. Registered only when it was asked for AND the network
     // actually has a ConsensusV2 lane — a producer on a hash-only chain would build templates for
     // an algo nobody declares and log a refusal every few hundred milliseconds.
+    // ADR-0042 Decision 7: the panel service — a bonded node's seat duties, and (funded) the
+    // submitter that carries the assembled quorum to the chain. Deliberately independent of
+    // --palw-produce: a validator that never mines still judges.
+    let palw_panel_service = if args.palw_panel {
+        let v2 = matches!(
+            config_for_palw_panel.params.palw_consensus_mode,
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
+        );
+        match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
+            (true, Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
+                crate::palw_panel::PalwPanelConfig {
+                    key_path: key_path.clone(),
+                    bond: bond.clone(),
+                    fee_outpoint: args.palw_fee_outpoint.clone(),
+                    state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
+                },
+                consensus_manager.clone(),
+                flow_context_for_palw_panel.clone(),
+                config_for_palw_panel.clone(),
+            ))),
+            (false, _, _) => {
+                warn!(
+                    "--palw-panel was given but {} declares no ConsensusV2 ruleset — no panels exist here, service not started",
+                    config_for_palw_panel.params.net
+                );
+                None
+            }
+            _ => {
+                warn!("--palw-panel needs --palw-producer-key and --palw-producer-bond (the seat identity) — service not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(palw_panel_service) = palw_panel_service {
+        async_runtime.register(palw_panel_service);
+    }
     if let Some(palw_producer_service) = palw_producer_service {
         async_runtime.register(palw_producer_service)
     };

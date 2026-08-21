@@ -210,6 +210,34 @@ impl ConsensusSessionOwned {
         self.consensus.get_virtual_daa_score()
     }
 
+    /// The seat duties this node's bonds hold (launch blockers §2). Same store-tip read profile
+    /// as `palw_producer_facts_v2` below.
+    pub fn palw_seat_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        self.consensus.palw_seat_duties_v2(mine)
+    }
+
+    /// Assemble the lifecycle object a gossip-delivered receipt pool supports, using the
+    /// acceptance validator itself (launch blockers: "what is still missing"). ML-DSA-87
+    /// verification per receipt — a few ms; acceptable on the caller's cadence.
+    pub fn palw_v2_receipt_quorum_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.consensus.palw_v2_receipt_quorum_assemble(claim, candidates)
+    }
+
+    /// One virtual-UTXO point lookup — the fee-outpoint resolution the PALW panel submitter runs.
+    pub fn get_virtual_utxo_entry(
+        &self,
+        outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Option<kaspa_consensus_core::tx::UtxoEntry> {
+        self.consensus.get_virtual_utxo_entry(outpoint)
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

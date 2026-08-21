@@ -205,6 +205,8 @@ pub struct Args {
     pub palw_producer_key: Option<String>,
     pub palw_producer_bond: Option<String>,
     pub palw_producer_pay_address: Option<String>,
+    pub palw_panel: bool,
+    pub palw_fee_outpoint: Option<String>,
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
     pub evm_fee_recipient: Option<String>,
@@ -337,6 +339,8 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_producer_pay_address: None,
+            palw_panel: false,
+            palw_fee_outpoint: None,
             evm_fee_recipient: None,
             stake_bond: None,
             validator_mode: None,
@@ -796,6 +800,18 @@ pub fn cli() -> Command {
                 .help("PALW: where produced blocks pay their reward. Must be an ML-DSA-87 P2PKH address — PQ-only consensus rejects anything else, and the block would be dead on arrival."),
         )
         .arg(
+            arg!(--"palw-panel" "PALW ADR-0042 Decision 7: run the in-process panel service — verify gossiped claim material against the claims this node's bond is seated on, sign and broadcast receipts, and (when --palw-fee-outpoint is set) submit the assembled quorum to the chain. Uses --palw-producer-key and --palw-producer-bond for the seat identity; --palw-produce is NOT required. Only a ConsensusV2 network can use it. Default off.")
+                .env("KASPAD_PALW_PANEL"),
+        )
+        .arg(
+            Arg::new("palw-fee-outpoint")
+                .long("palw-fee-outpoint")
+                .env("KASPAD_PALW_FEE_OUTPOINT")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW: <txid>:<index> of a UTXO paying to the bond key's own P2PKH address, spent to carry lifecycle submissions (ReceiptLicensed / ProducerDefaulted). Change returns to the same address and the rolling outpoint is persisted, so one funding covers many submissions. Without it the panel signs receipts but submits nothing."),
+        )
+        .arg(
             Arg::new("evm-fee-recipient")
                 .long("evm-fee-recipient")
                 .env("KASPAD_EVM_FEE_RECIPIENT")
@@ -1240,6 +1256,8 @@ impl Args {
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
+            palw_panel: arg_match_unwrap_or::<bool>(&m, "palw-panel", defaults.palw_panel),
+            palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
             palw_producer_key: m.get_one::<String>("palw-producer-key").cloned().or(defaults.palw_producer_key),
             palw_producer_bond: m.get_one::<String>("palw-producer-bond").cloned().or(defaults.palw_producer_bond),
             palw_producer_pay_address: m

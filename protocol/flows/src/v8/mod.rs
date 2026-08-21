@@ -14,6 +14,7 @@ use crate::v7::{
     txrelay::flow::{RelayTransactionsFlow, RequestTransactionsFlow},
 };
 pub(crate) mod claimrelay_evm;
+pub(crate) mod palw_gossip_flow;
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
@@ -136,6 +137,16 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointOverlaySnapshot]),
+        )),
+        // ADR-0042 Decision 7's transport: PALW material + seat-receipt gossip. Registered for
+        // every peer; the flow itself refuses everything on a network with no V2 ruleset.
+        Box::new(crate::v8::palw_gossip_flow::PalwGossipFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![
+                KaspadMessagePayloadType::PalwTraceMaterialBroadcast,
+                KaspadMessagePayloadType::PalwSeatReceiptBroadcast,
+            ]),
         )),
         Box::new(RequestPruningPointPalwStateFlow::new(
             ctx.clone(),
