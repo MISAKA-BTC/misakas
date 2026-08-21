@@ -465,9 +465,22 @@ mod tests {
 
         // 8. A frozen class admits no new blocks — certified receipts included; the freeze is
         //    the chain saying this class's arithmetic is in doubt.
-        let freeze = crate::palw_state_v2::tests::freeze(h64(1));
-        let (frozen, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[freeze], None).unwrap();
-        assert_eq!(admit(&frozen, &ctx(7, 135, 7), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::ClassFrozen(h64(1)));
+        //    The floor itself may not be frozen (ADR-0039 W6′ — that would end the chain), so the
+        //    class under test is registered as an entrant and the claim is made against it.
+        let entrant = crate::palw_state_v2::tests::entrant_class(h64(2), 500);
+        let freeze = crate::palw_state_v2::tests::freeze(h64(2));
+        let (with_entrant, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[entrant], None).unwrap();
+        let (frozen, _) = apply_palw_transition_v2(&with_entrant, &p, &ctx(7, 131, 7), &[freeze], None).unwrap();
+        assert_eq!(
+            frozen.class(&h64(2)).map(|c| matches!(c.status, crate::palw_state_v2::PalwClassStatusV2::Frozen { .. })),
+            Some(true),
+            "the entrant is frozen, which is the state the admission item reads"
+        );
+        // And the floor is refused outright rather than frozen.
+        assert!(matches!(
+            apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[crate::palw_state_v2::tests::freeze(h64(1))], None),
+            Err(crate::palw_state_v2::PalwStateV2Error::BaseClassMayNotFreeze(_))
+        ));
     }
 
     /// The composed entry point runs stateless first: a foreign-network spend never reaches a

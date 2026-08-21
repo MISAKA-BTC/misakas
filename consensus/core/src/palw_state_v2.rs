@@ -1103,6 +1103,8 @@ pub enum PalwStateV2Error {
     FrozenClass(Hash64),
     #[error("class {0} is not frozen")]
     ClassNotFrozen(Hash64),
+    #[error("class {0} is the liveness floor and may not be frozen (ADR-0039 W6′) — freezing it ends the chain")]
+    BaseClassMayNotFreeze(Hash64),
     #[error("claim {0} does not exist at this chain point")]
     MissingClaim(Hash64),
     #[error("claim {0} already exists (one attempt id, one claim)")]
@@ -2448,20 +2450,48 @@ fn granted_share_table_v2(
 /// (ADR-0045's amendment defect (e)).
 pub fn derive_epoch_budgets_v2(
     shares: &BTreeMap<Hash64, u16>,
+    frozen: &BTreeSet<Hash64>,
+    competing: &BTreeSet<Hash64>,
     epoch_length: u64,
     tolerance_permille: u32,
     epoch_index: u64,
 ) -> PalwEpochBudgetsV2 {
+    // ADR-0045 Decision 2's fallback denominator: "an empty census (fresh chain, gap epochs)
+    // competes everyone unfrozen". A frozen class keeps its permille in the table ("freeze and
+    // unfreeze move no share"), so the fold is over the table MINUS the frozen set, not over the
+    // table.
+    let all_unfrozen: u64 = shares.iter().filter(|(id, _)| !frozen.contains(*id)).map(|(_, s)| u64::from(*s)).sum();
+    let census: u64 = competing.iter().filter_map(|id| shares.get(id)).map(|s| u64::from(*s)).sum();
     let budget_blocks = shares
         .iter()
         .map(|(class_id, share)| {
-            // `epoch_length · share / 1000 · tolerance / 1000`, in u128 so the two permille
-            // multiplications cannot overflow before the divisions bring it back down.
-            let expected = (epoch_length as u128) * (*share as u128) / 1000;
-            let with_tolerance = expected * (tolerance_permille as u128) / 1000;
+            // **ADR-0045 Decision 2, with the denominator the Decision specifies.**
+            //
+            //     budget_c(e) = ⌊ tol‰ · E · s_c / (1000 · denom_c) ⌋
+            //
+            // `denom_c = Σ shares over the competing set`: the closed epoch's producers among
+            // unfrozen share-bearing classes; a non-producer that re-enters is measured against
+            // the set plus itself; an empty census competes everyone unfrozen.
+            //
+            // This code read `denom_c = 1000‰` — the whole table, always — which is the H1 defect
+            // the Decision explicitly imports the census to close: "a class whose permille sits
+            // idle must not strangle the classes that are actually producing, and a cap that
+            // ignored absence would reintroduce H1's unbounded walk as a hard refusal instead of a
+            // slow one." A hard refusal is worse than the slow one, because on a `ConsensusV2`
+            // network the attempt lane is the ONLY block type
+            // (`required_algo_id_for_mode` demands `algorithm_id` of every header), so refusing
+            // every attempt stops the chain — and DAA advances only with blocks, so the epoch that
+            // would refill the budget never ends. The retarget got this fix; its second consumer
+            // did not.
+            let denom = if competing.contains(class_id) { census } else { census.saturating_add(u64::from(*share)) };
+            let denom = if census == 0 { all_unfrozen } else { denom };
+            // A denominator of zero is not a division, it is "nothing bears share on this chain" —
+            // which the grant floor makes unreachable, and which the whole-table reading covers.
+            let denom = if denom == 0 { 1000 } else { denom };
+            let scaled = (epoch_length as u128) * (*share as u128) * (tolerance_permille as u128) / (1000u128 * denom as u128);
             // Never zero: a class with a share is a class that may produce, and a zero budget
             // would freeze it under the name of a cap. One block is the floor.
-            (*class_id, with_tolerance.max(1).min(u64::MAX as u128) as u64)
+            (*class_id, scaled.max(1).min(u64::MAX as u128) as u64)
         })
         .collect();
     PalwEpochBudgetsV2 { epoch_index, budget_blocks }
@@ -2519,8 +2549,33 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         // budget over an empty table is not "no budget", it is a fact that does not exist yet.
         return;
     }
+    // The H1 census, for the budget's denominator (ADR-0045 Decision 2). Same rule the retarget
+    // applies one step earlier in this transition, on the same counters: the classes that produced
+    // in the CLOSED epoch — the parent's — among the unfrozen ones. The attempt lane specifically,
+    // because the budget caps attempt blocks and reads the attempt counter; a class that produced
+    // only receipts is not in this lane's span and is measured against the set plus itself.
+    let closed_epoch = builder.state.last_point.map(|point| point.daa_score / builder.params.epoch_length);
+    let frozen: BTreeSet<Hash64> = builder
+        .state
+        .classes
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let competing: BTreeSet<Hash64> = match closed_epoch {
+        None => BTreeSet::new(),
+        Some(closed) => builder
+            .state
+            .epoch_counters
+            .iter()
+            .filter(|(id, counter)| counter.epoch_index == closed && counter.produced_blocks > 0 && !frozen.contains(*id))
+            .map(|(id, _)| *id)
+            .collect(),
+    };
     let budgets = derive_epoch_budgets_v2(
         &builder.state.class_shares,
+        &frozen,
+        &competing,
         builder.params.epoch_length,
         builder.params.budget_tolerance_permille,
         epoch_index,
@@ -2861,6 +2916,16 @@ fn apply_object(
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
             if let PalwClassStatusV2::Frozen { .. } = record.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
+            }
+            // **ADR-0039 W6′: the liveness floor may never be absent.** Nothing refused freezing
+            // it, and on a `ConsensusV2` network the consequence is total: the attempt lane is the
+            // only block type, admission refuses a frozen class, and BASE-0 is the class every
+            // operator can run — so one accepted `ClassFrozen` naming the floor ends the chain,
+            // with no path back because the object that would unfreeze it needs a block. A
+            // contradiction certificate against the floor is real evidence and it belongs on
+            // chain, but its remedy is a new ruleset, not a switch any block may throw.
+            if *class_id == builder.params.base_class_id {
+                return Err(PalwStateV2Error::BaseClassMayNotFreeze(*class_id));
             }
             // The structural half of the proof, checked HERE because it is the half a pure
             // transition can decide. Signatures are the acceptance layer's, the same split
@@ -3699,6 +3764,19 @@ pub(crate) mod tests {
             attestation_a: att(h64(0x1A)),
             attestation_b: att(h64(0x2B)),
             job_context: ctx,
+        }
+    }
+
+    /// An entrant class — what a test freezes now that ADR-0039 W6′ refuses freezing the floor.
+    pub(crate) fn entrant_class(class_id: Hash64, share_permille: u16) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille,
+            activation_daa: 0,
         }
     }
 
@@ -4778,10 +4856,13 @@ pub(crate) mod tests {
             Err(PalwStateV2Error::DuplicateBond(_))
         ));
 
-        // Frozen class refuses the attempt.
-        let (frozen, _) = apply(&s1, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
+        // Frozen class refuses the attempt — an ENTRANT, because ADR-0039 W6′ refuses freezing
+        // the liveness floor (on a V2 network that would end the chain).
+        let (with_entrant, _) = apply(&s1, &p, &ctx(2, 101, 2), &[entrant_class(h64(2), 500)], None);
+        let (frozen, _) = apply(&with_entrant, &p, &ctx(3, 102, 3), &[freeze(h64(2))], None);
+        let entrant_attempt = attempt_for_class(40, 1, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
         assert!(matches!(
-            apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1))),
+            apply_palw_transition_v2(&frozen, &p, &ctx(4, 103, 4), &[], Some(&entrant_attempt)),
             Err(PalwStateV2Error::FrozenClass(_))
         ));
 
@@ -5028,7 +5109,9 @@ pub(crate) mod tests {
         let (with_claim, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
         let (with_retire, _) =
             apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1) }], None);
-        let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
+        // The freeze rides an entrant (the floor may not be frozen), which is still a distinct
+        // surface: the registration alone and the registration-plus-freeze must differ.
+        let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[entrant_class(h64(2), 500), freeze(h64(2))], None);
         let (position_only, _) = apply(&base, &p, &ctx(2, 101, 2), &[], None);
 
         let roots = [
@@ -5673,59 +5756,70 @@ pub(crate) mod tests {
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
-        // (a) Evidence about ANOTHER class cannot freeze this one. This is the liveness-floor
-        //     attack in its cheapest form: manufacture a real contradiction inside a disposable
-        //     class, then quote it at BASE-0.
-        let cross = PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: contradiction(h64(2)) };
+        // (a) Evidence about ANOTHER class cannot freeze this one — manufacture a real
+        //     contradiction inside a disposable class, then quote it at the class you want
+        //     stopped. Aimed at the entrant here; aimed at BASE-0 it does not even reach this
+        //     rule, because (f) refuses a floor freeze whatever the evidence says.
+        let cross = PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: contradiction(h64(3)) };
         let err = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[cross], None);
         assert!(
-            matches!(err, Err(PalwStateV2Error::ContradictionNamesAnotherClass { frozen, evidenced }) if frozen == h64(1) && evidenced == h64(2)),
+            matches!(err, Err(PalwStateV2Error::ContradictionNamesAnotherClass { frozen, evidenced }) if frozen == h64(2) && evidenced == h64(3)),
             "got {err:?}"
         );
 
         // (b) Two attestations that AGREE are a class working correctly. Freezing on them would
         //     let anyone halt a class by quoting it agreeing with itself.
-        let mut agreeing = contradiction(h64(1));
+        let mut agreeing = contradiction(h64(2));
         agreeing.attestation_b = agreeing.attestation_a.clone();
         let err = apply_palw_transition_v2(
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: agreeing }],
+            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: agreeing }],
             None,
         );
         assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
 
         // (c) An attestation that binds a different job context is a second fact, not a
         //     contradiction.
-        let mut foreign_job = contradiction(h64(1));
+        let mut foreign_job = contradiction(h64(2));
         foreign_job.attestation_b.job_context_hash = h64(0xDEAD);
         let err = apply_palw_transition_v2(
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(1), certificate: foreign_job }],
+            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: foreign_job }],
             None,
         );
         assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
 
         // (d) The real thing freezes, and the freeze is what every consumer already reads: the
-        //     class stops producing, stops being retargeted, and stops admitting attempts.
-        let (frozen, _) = apply(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
-        assert!(matches!(frozen.class(&h64(1)).unwrap().status, PalwClassStatusV2::Frozen { since_daa: 101 }));
-        let refused = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1)));
-        assert!(matches!(refused, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(1)), "got {refused:?}");
+        //     class stops producing, stops being retargeted, and stops admitting attempts. An
+        //     entrant (already registered above), because (f) refuses freezing the floor at all.
+        let (frozen, _) = apply(&base, &p, &ctx(2, 101, 2), &[freeze(h64(2))], None);
+        assert!(matches!(frozen.class(&h64(2)).unwrap().status, PalwClassStatusV2::Frozen { since_daa: 101 }));
+        let entrant_attempt = attempt_for_class(40, 1, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
+        let refused = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[], Some(&entrant_attempt));
+        assert!(matches!(refused, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(2)), "got {refused:?}");
 
         // (e) One-way. There is no edge back to Active anywhere in this machine — a chain-level
         //     unfreeze would turn an objective, permanent consequence into a temporary one, which
         //     is precisely what an attacker holding the emit path would want. Freezing again is
         //     refused rather than being a no-op, so a second certificate cannot quietly restamp
         //     `since_daa` and move the record's own history.
-        let again = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[freeze(h64(1))], None);
-        assert!(matches!(again, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(1)), "got {again:?}");
+        let again = apply_palw_transition_v2(&frozen, &p, &ctx(3, 102, 3), &[freeze(h64(2))], None);
+        assert!(matches!(again, Err(PalwStateV2Error::FrozenClass(id)) if id == h64(2)), "got {again:?}");
         // The share stays where it was: ADR-0045 Decision 3 keeps the table the allocation of
         // record, and absence is the census's business.
-        assert_eq!(frozen.class_share_permille(&h64(1)), base.class_share_permille(&h64(1)));
+        assert_eq!(frozen.class_share_permille(&h64(2)), base.class_share_permille(&h64(2)));
+
+        // (f) **The liveness floor may not be frozen at all (ADR-0039 W6′).** A `ClassFrozen`
+        //     naming BASE-0 was accepted, and on a `ConsensusV2` network the consequence is
+        //     terminal: the attempt lane is the only block type, admission refuses a frozen
+        //     class, and the floor is the class every operator can run — so one object ends the
+        //     chain, with no path back, because the object that would undo it needs a block.
+        let floor = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
+        assert!(matches!(floor, Err(PalwStateV2Error::BaseClassMayNotFreeze(id)) if id == h64(1)), "got {floor:?}");
     }
 
     /// **A free-prompt claim the court could never bind a refutation to is refused (audit C3,
