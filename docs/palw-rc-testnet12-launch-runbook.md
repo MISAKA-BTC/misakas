@@ -186,7 +186,7 @@ and that costs a full inference per try, which is the price the design means to 
 it has neither seeders nor explicit peers rather than sitting alone in silence.
 
 ```bash
-kaspad --testnet --netsuffix=12 --addpeer=<producer-host>:16311 --utxoindex
+kaspad --testnet --netsuffix=12 --addpeer=<producer-host>:26411 --utxoindex
 ```
 
 Adding seeders later is a plain edit, not a flag day: `dns_seeders` is deliberately **outside**
@@ -214,14 +214,31 @@ outside your own network before announcing anything.
 
 > **The complete, evidenced list is
 > [palw-rc-launch-blockers-2026-08-21.md](palw-rc-launch-blockers-2026-08-21.md).** This section is
-> the short form. As of 2026-08-21 that document's §1 (a node joining by pruned sync silently runs
-> with NO PALW rules) and §2 (nothing ever files a `ReceiptLicensed`, so no claim reaches `Final`)
-> mean **this runbook cannot yet produce a working public network** — follow it to stand up a
-> private fleet, not to invite strangers.
+> the short form; that document is the authority on current state.
 >
-> **§4's port is wrong in this revision**: testnet-12 listens on **26411**, not 16311. With
-> `dns_seeders` empty, `--addpeer` is the only discovery path, so the published number has to be the
-> real one.
+> **Status 2026-08-22 (`9d8c7645`): the consensus blockers this section used to warn about are
+> CLOSED.** Named, because each once made this runbook unable to produce a working network:
+> * *pruned-sync fail-open* — a joining node ran with NO PALW rules; now it imports the
+>   root-verified state at the pruning point (`e52a1234`) and refuses to run without one
+>   (`0cf7ead2`), and the reply's missing wire route — which killed every pruned IBD — is fixed
+>   and drilled over real TCP (`bce0f4e4`).
+> * *pruning-point import* — the state transfer itself: message pair, serving flow, all-or-nothing
+>   IBD fetch, root verified against the child header before any write.
+> * *the unauthenticated lifecycle doors* — `ProducerDefaulted`/`ReceiptLicensed` with empty
+>   receipt sets, bond retirement, forged class freezes, courts nobody authorized: all refused at
+>   both layers (`40002ddd`, `4724863a`), and class registration now demands its registrant's
+>   signature and a servable coverage profile (`cb131570`).
+> * *no claim could reach `Final`* — the whole seat/receipt/quorum subsystem now exists
+>   (`9d8c7645`): material broadcast, `--palw-panel`, and the funded submitter whose object comes
+>   from the acceptance validator itself.
+>
+> What still stands between this runbook and a public weight-bearing network is OPERATIONAL: the
+> multi-node drill (§ below), the genesis re-mint the ruleset-id change forces (settle M-02 first),
+> and fleet deployment.
+>
+> §4's port reads **26411** and matches `NetworkId::default_p2p_port` (`network.rs:280`); an
+> earlier revision said 16311, and with `dns_seeders` empty `--addpeer` is the only discovery
+> path — the published number has to be the real one.
 
 
 * **Third-party mining does not work.** `misaminer` and `pq-miner` branch on algo 4 and 5 only.
