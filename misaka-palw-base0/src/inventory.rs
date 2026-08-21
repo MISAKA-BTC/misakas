@@ -201,7 +201,15 @@ pub fn base0_inventory_v1(
         ] {
             rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: quant_bytes(params) });
         }
-        for (suffix, params) in [("attn_logit.scale", layer.attn_logit_scale), ("ffn_gate.scale", layer.ffn_gate_scale)] {
+        for (suffix, params) in [
+            ("attn_logit.scale", layer.attn_logit_scale),
+            ("ffn_gate.scale", layer.ffn_gate_scale),
+            // ADR-0050 Decision D: the residual gains are TENSORS, not struct fields, because the
+            // court resolves a `Rescale` node's parameters through the weight oracle — a gain that
+            // cannot be opened against `artifact_root` is a step that is `Unadjudicable`.
+            ("attn_residual.scale", artifact.residual_scale_at(li, 0)),
+            ("ffn_residual.scale", artifact.residual_scale_at(li, 1)),
+        ] {
             rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: scale_bytes(params) });
         }
         // The rotary table, one row per position — what a rotation at position `p` opens.

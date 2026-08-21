@@ -329,42 +329,51 @@ impl<'a> Base0Engine<'a> {
             probe.steps.push((li as u16, 19, projected.iter().map(|c| *c as i32).collect()));
             let residual = add_elem(&h, &projected)?;
             probe.steps.push((li as u16, 20, residual.clone()));
-            h = requantize_row_uniform(&residual, self.artifact.residual_requant_at(li, 0));
-            probe.steps.push((li as u16, 21, h.iter().map(|c| *c as i32).collect()));
+            // **ADR-0050 Decision B: the residual may amplify.** A requantization can only reduce,
+            // so a stream that has decayed has nothing to be given — measured on the real
+            // checkpoint at 5 of 127, with every layer already at `shift = 0`. Unity when the
+            // artifact declares no gain, which is what BASE-0's own class is: the arithmetic does
+            // not move until a calibration sets one.
+            let lifted = rescale_row(&residual, self.artifact.residual_scale_at(li, 0));
+            probe.steps.push((li as u16, 21, lifted.clone()));
+            h = requantize_row_uniform(&lifted, self.artifact.residual_requant_at(li, 0));
+            probe.steps.push((li as u16, 22, h.iter().map(|c| *c as i32).collect()));
 
             // ---- SwiGLU feed-forward --------------------------------------------------------
             let ffn_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
-            probe.steps.push((li as u16, 22, ffn_norm_q.clone()));
+            probe.steps.push((li as u16, 23, ffn_norm_q.clone()));
             let normed = requantize_row_uniform(&ffn_norm_q, self.artifact.norm_requant);
-            probe.steps.push((li as u16, 23, normed.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 24, normed.iter().map(|c| *c as i32).collect()));
             let gate_acc = matmul_quant(&layer.w_gate, &normed, shape.d_ff)?;
-            probe.steps.push((li as u16, 24, gate_acc.clone()));
+            probe.steps.push((li as u16, 25, gate_acc.clone()));
             let gate_q = rescale_row(&gate_acc, layer.ffn_gate_scale);
-            probe.steps.push((li as u16, 25, gate_q.clone()));
+            probe.steps.push((li as u16, 26, gate_q.clone()));
             let activated = silu(&gate_q);
-            probe.steps.push((li as u16, 26, activated.clone()));
+            probe.steps.push((li as u16, 27, activated.clone()));
             let gate = requantize_row_uniform(&activated, self.artifact.qk_to_code());
-            probe.steps.push((li as u16, 27, gate.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 28, gate.iter().map(|c| *c as i32).collect()));
             probe.gate_extremes.push((
                 gate.iter().map(|c| *c as i32).min().unwrap_or(0),
                 gate.iter().map(|c| *c as i32).max().unwrap_or(0),
             ));
             let up_acc = matmul_quant(&layer.w_up, &normed, shape.d_ff)?;
-            probe.steps.push((li as u16, 28, up_acc.clone()));
+            probe.steps.push((li as u16, 29, up_acc.clone()));
             let up = requantize_row_uniform(&up_acc, layer.requant[5]);
-            probe.steps.push((li as u16, 29, up.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 30, up.iter().map(|c| *c as i32).collect()));
             let product = mul_elem(&gate, &up)?;
-            probe.steps.push((li as u16, 30, product.clone()));
+            probe.steps.push((li as u16, 31, product.clone()));
             let gated = requantize_row_uniform(&product, self.artifact.code_product());
-            probe.steps.push((li as u16, 31, gated.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 32, gated.iter().map(|c| *c as i32).collect()));
             let down_acc = matmul_quant(&layer.w_down, &gated, d)?;
-            probe.steps.push((li as u16, 32, down_acc.clone()));
+            probe.steps.push((li as u16, 33, down_acc.clone()));
             let down = requantize_row_uniform(&down_acc, layer.requant[6]);
-            probe.steps.push((li as u16, 33, down.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 34, down.iter().map(|c| *c as i32).collect()));
             let ffn_residual = add_elem(&h, &down)?;
-            probe.steps.push((li as u16, 34, ffn_residual.clone()));
-            h = requantize_row_uniform(&ffn_residual, self.artifact.residual_requant_at(li, 1));
-            probe.steps.push((li as u16, 35, h.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 35, ffn_residual.clone()));
+            let ffn_lifted = rescale_row(&ffn_residual, self.artifact.residual_scale_at(li, 1));
+            probe.steps.push((li as u16, 36, ffn_lifted.clone()));
+            h = requantize_row_uniform(&ffn_lifted, self.artifact.residual_requant_at(li, 1));
+            probe.steps.push((li as u16, 37, h.iter().map(|c| *c as i32).collect()));
             probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
         }
 
@@ -783,22 +792,23 @@ mod tests {
         let a = Base0ArtifactV1::derive_deterministic(shape(), 20_260_817).unwrap();
         assert_eq!(
             a.artifact_digest().to_string(),
-            // Re-frozen 2026-08-21, five times: the shape digest gained `n_kv_heads`, the
+            // Re-frozen 2026-08-21, six times: the shape digest gained `n_kv_heads`, the
             // artifact digest gained the requantization ZERO POINTS and the per-channel triples
             // (without which two artifacts whose every bias differs shared one class id), then the
             // TOKENIZER commitment (without which two classes computing different things from the
             // same ids shared one), then the per-layer residual narrowing, and now the three CLASS
             // NARROWINGS the engine used to hold as `const` (ADR-0049 F: a parameter the court
             // cannot open is a step it cannot adjudicate, and a `const` in this binary is exactly
-            // that).
+            // that), and now the RESIDUAL GAINS (ADR-0050 B) — `None`, which is unity, so the
+            // arithmetic does not move until a calibration sets one.
             //
-            // The LOGITS below have not moved once across the five, which is the assertion that
+            // The LOGITS below have not moved once across the six, which is the assertion that
             // matters: each was a renaming, not a new model. This one most of all — the narrowings
             // moved from a `const` to a field holding the same value, so a moved trace would have
             // meant the move changed the arithmetic.
             concat!(
-                "a025c296b988ab9eb63ef1f60015bd93f3172aa1cc8c956e9bb96114dcf4eda8",
-                "86cfad66e261b2f0cea9a84dc853f55d4655895d92c9fd268422c8048cc2bda4"
+                "59359ac199a78c23c5888a7229f0e31e24a773e318bd9313edc4d9c6db81bd5d",
+                "e6a97dc89fbedb4244bf3f6e58864a5526b326d6897d0c6df7faab08770f8410"
             ),
             "the artifact itself changed, so the trace below is about a different model"
         );

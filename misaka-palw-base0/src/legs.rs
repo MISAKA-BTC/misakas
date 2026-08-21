@@ -461,9 +461,9 @@ mod tests {
         };
 
         // A step with real inputs and a real weight operand: the FFN down projection's narrowing
-        // (slot 33 of layer 0), which reads the accumulator the step before it produced.
+        // (slot 34 of layer 0), which reads the accumulator the step before it produced.
         let target =
-            PalwStepCoordinateV1 { call_index: 0, node_slot: profile.pre_nodes.len() as u32 + 33, position: 0, tile_index: 0 };
+            PalwStepCoordinateV1 { call_index: 0, node_slot: profile.pre_nodes.len() as u32 + 34, position: 0, tile_index: 0 };
         let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new())
             .expect("a capture assembles");
 
@@ -491,7 +491,7 @@ mod tests {
         // Tampered: one value of the challenged tile changed, re-tiled, re-rooted — the producer
         // committed a row its own inputs do not produce, and the court says so.
         let mut lying = probe.steps.clone();
-        let (_, _, row) = lying.iter_mut().find(|(l, slot, _)| *l == 0 && *slot == 33).expect("the step is captured");
+        let (_, _, row) = lying.iter_mut().find(|(l, slot, _)| *l == 0 && *slot == 34).expect("the step is captured");
         row[0] = row[0].wrapping_add(1);
         let lying_tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &lying).expect("the rows tile");
         let lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");

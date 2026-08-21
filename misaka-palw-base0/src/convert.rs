@@ -603,9 +603,11 @@ pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Res
 /// needs AMPLIFICATION, and that is `Rescale` (ADR-0040 Decision H), the op that exists precisely
 /// because "requantize cannot: its gain is at most 1 at every parameter".
 ///
-/// So the residual peak still reaches 5 of 127 at its worst. Closing that means an amplifying
+/// So the residual peak still reaches 5 of 127 at its worst. Closing that needs an amplifying
 /// residual — a `Rescale` before the narrowing, per layer — which is a change to BASE-0's own
-/// residual arithmetic and therefore an ADR decision rather than a calibration constant.
+/// residual arithmetic. **ADR-0050 made that decision and it is implemented**, so this loop now
+/// sets a GAIN as well as a shift: when a layer's stream is below the target the narrowing has
+/// nothing left to give (`shift = 0` is its floor) and the gain lifts it instead.
 ///
 /// **This is calibration, and its output is part of the class identity** — `artifact_root` covers
 /// the per-layer table, so a class calibrated on one prompt set is a different class from one
@@ -621,6 +623,10 @@ pub fn calibrate_layer_residuals(
     let n = artifact.shape.n_layers;
     let mut current = artifact.clone();
     let mut shifts: Vec<[u8; 2]> = (0..n).map(|_| [artifact.residual_requant.shift; 2]).collect();
+    // ADR-0050 B: the amplification a decayed layer needs, in bits. `ScaleParams`' gain is
+    // `multiplier · 2^-shift` with the multiplier read as a Q31 fraction, so `UNITY_SHIFT - g` is
+    // a gain of `2^g` and 31 is unity.
+    let mut gains: Vec<[u8; 2]> = (0..n).map(|_| [0u8; 2]).collect();
 
     for _ in 0..rounds.max(1) {
         let health = measure_depth_health(&current, prompt)?;
@@ -638,9 +644,20 @@ pub fn calibrate_layer_residuals(
                 continue;
             }
             for site in 0..2 {
-                let next = (shifts[layer][site] as i32 + delta).clamp(0, 31) as u8;
+                let wanted = shifts[layer][site] as i32 + delta;
+                let next = wanted.clamp(0, 31) as u8;
                 if next != shifts[layer][site] {
                     shifts[layer][site] = next;
+                    moved = true;
+                }
+                // **What the narrowing could not give, the gain gives.** `wanted < 0` is the
+                // measured case: the layer asked for more bits than `shift = 0` has, and before
+                // ADR-0050 the request was simply clamped away. Capped so an amplifying residual
+                // cannot itself rail the stream — a gain that overshoots is a different failure
+                // with the same symptom.
+                let deficit = (-wanted).clamp(0, 8) as u8;
+                if deficit != gains[layer][site] {
+                    gains[layer][site] = deficit;
                     moved = true;
                 }
             }
@@ -658,6 +675,16 @@ pub fn calibrate_layer_residuals(
             })
             .collect();
         current = current.with_layer_residual_requant(table).expect("one pair per layer, by construction");
+        let scales: Vec<[ScaleParams; 2]> = gains
+            .iter()
+            .map(|pair| {
+                [
+                    ScaleParams { multiplier: i32::MAX, shift: ScaleParams::UNITY_SHIFT - pair[0] },
+                    ScaleParams { multiplier: i32::MAX, shift: ScaleParams::UNITY_SHIFT - pair[1] },
+                ]
+            })
+            .collect();
+        current = current.with_layer_residual_scale(scales).expect("one pair per layer, by construction");
     }
     Ok(current)
 }
@@ -934,5 +961,61 @@ mod tests {
         assert_eq!(quantize(1.4, 1.0), 1);
         assert_eq!(quantize(1_000.0, 1.0), 127);
         assert_eq!(quantize(-1_000.0, 1.0), -127);
+    }
+
+    /// **Audit H-05 / ADR-0050: what the narrowing could not give, the gain gives.**
+    ///
+    /// The measured failure on the real checkpoint was not that the calibration was wrong — it was
+    /// that it had nothing left to spend. A requantization's gain is `multiplier / 2^shift` with
+    /// the multiplier at most 1.0, so every setting ATTENUATES; the calibrated table came out
+    /// `[1, 0, 1, 1, …]` with every decayed layer already at `shift = 0` and the residual peak
+    /// still at 5 of 127. `Rescale` is the op that exists because "requantize cannot", and
+    /// ADR-0050 put one at each residual site.
+    ///
+    /// This asserts the loop now spends it: a layer that asks for more bits than the shift floor
+    /// has gets the remainder as amplification instead of having the request clamped away.
+    #[test]
+    fn a_decayed_layer_gets_amplification_the_narrowing_cannot_give() {
+        use kaspa_consensus_core::palw_base0_ops::ScaleParams;
+
+        let shape = tiny_qwen_shape();
+        let blob = tiny_checkpoint(&shape);
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+        let mut base = convert_qwen25(&blob, &plan).expect("a well-formed checkpoint converts");
+        assert!(base.layer_residual_scale.is_none(), "an uncalibrated artifact declares no gain, which is unity");
+        assert_eq!(base.residual_scale_at(0, 0), Base0ArtifactV1::UNITY_SCALE);
+        // A deliberately over-attenuated residual, which is the shape the real checkpoint measured:
+        // the stream collapses, and the narrowing has nothing to give it back because `shift = 0`
+        // is its floor. The fixture's own weights do not decay, so the condition has to be created
+        // for the remedy to be observable at all.
+        base.residual_requant.shift = 8;
+
+        let calibrated = calibrate_layer_residuals(&base, &[1, 2, 3], 3).expect("the loop runs");
+        let scales = calibrated.layer_residual_scale.as_ref().expect("calibration sets a table");
+        assert_eq!(scales.len(), shape.n_layers, "one pair per layer, always — an omission would be silent");
+
+        // Every gain is amplifying-or-unity and inside the cap: `UNITY_SHIFT - g` with `g` in
+        // `0..=8`, so a gain can lift by at most 256× and can never attenuate. An amplifying
+        // residual that overshoots is a different failure with the same symptom, which is what the
+        // cap is for.
+        for pair in scales {
+            for site in pair {
+                assert!(
+                    site.shift <= ScaleParams::UNITY_SHIFT && site.shift >= ScaleParams::UNITY_SHIFT - 8,
+                    "a residual gain must amplify within the cap, got shift {}",
+                    site.shift
+                );
+                assert_eq!(site.multiplier, i32::MAX, "the gain is a power of two — the multiplier is unity");
+            }
+        }
+
+        // The identity moves with it, because `artifact_root` covers the table: a class calibrated
+        // on one prompt set is a different class from one calibrated on another, which is exactly
+        // what makes calibration a registration input rather than a detail.
+        assert_ne!(calibrated.artifact_digest(), base.artifact_digest());
+        // And it still runs: an amplifying residual is arithmetic the engine performs, not a
+        // parameter it ignores.
+        let engine = crate::engine::Base0Engine::new(&calibrated);
+        assert!(engine.generate(&[1, 2, 3], 2).is_ok(), "the calibrated class executes");
     }
 }

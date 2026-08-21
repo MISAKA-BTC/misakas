@@ -289,6 +289,19 @@ pub struct Base0ArtifactV1 {
     /// The shifts are a CALIBRATION output, not a choice: converted once with the global rule,
     /// measured, and re-derived from each layer's own peak.
     pub layer_residual_requant: Option<Vec<[QuantParams; 2]>>,
+    /// **The residual gains (ADR-0050 Decision B), per layer and per site.**
+    ///
+    /// `Rescale` sits between the residual add and its narrowing so a DECAYED stream can be lifted
+    /// before it is re-quantized. That is the structural gap the real checkpoint measured: a
+    /// requantization can only reduce — `QuantParams`' gain is `multiplier / 2^shift` with the
+    /// multiplier at most 1.0 — so a stream that has fallen to 5 of 127 has nothing to be given,
+    /// and the calibrated table came out `[1, 0, 1, 1, …]` with every layer already at the floor.
+    ///
+    /// `None` is unity at every site, which is what every artifact built before this field meant
+    /// and what BASE-0's own class is: the arithmetic does not move until a calibration sets a
+    /// gain. Two entries per layer, in the order the engine applies them — after the attention
+    /// residual, then after the FFN residual.
+    pub layer_residual_scale: Option<Vec<[ScaleParams; 2]>>,
     /// **The three narrowings the engine used to hold as `const`** (ADR-0049 Decision F, audit
     /// C-05/C-06).
     ///
@@ -323,6 +336,10 @@ impl Base0ArtifactV1 {
     /// value back to an activation code (softmax probabilities and the SiLU output),
     /// `code_product` narrows a `DotI8` whose left operand is a Q7 code, and `rope_clamp` is the
     /// identity narrowing after `RopeTable`, which returns the scale it was handed.
+    /// The gain that changes nothing: `multiplier / 2^31` at `multiplier = i32::MAX` is 1.0 to
+    /// within a unit, which is `ScaleParams::UNITY_SHIFT`'s own definition.
+    pub const UNITY_SCALE: ScaleParams = ScaleParams { multiplier: i32::MAX, shift: ScaleParams::UNITY_SHIFT };
+
     pub const CLASS_NARROWINGS: [QuantParams; 3] = [
         QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - Self::ACTIVATION_BITS, zero: 0 },
         QuantParams { multiplier: i32::MAX, shift: Self::ACTIVATION_BITS, zero: 0 },
@@ -390,6 +407,7 @@ impl Base0ArtifactV1 {
             layers,
             rope,
             tokenizer_commitment: Hash64::default(),
+            layer_residual_scale: None,
             class_narrowings: Self::CLASS_NARROWINGS,
             norm_requant,
             residual_requant,
@@ -471,6 +489,25 @@ impl Base0ArtifactV1 {
             return Err(ArtifactError::WeightLen { tensor: "layer_residual_requant", want: self.shape.n_layers, got: per_layer.len() });
         }
         self.layer_residual_requant = Some(per_layer);
+        Ok(self)
+    }
+
+    /// The GAIN for `layer`'s attention (`site` 0) or FFN (`site` 1) residual (ADR-0050 B).
+    /// Unity when the artifact declares none, which is arithmetically what "no gain" means.
+    pub fn residual_scale_at(&self, layer: usize, site: usize) -> ScaleParams {
+        match &self.layer_residual_scale {
+            Some(per) => per.get(layer).map(|pair| pair[site]).unwrap_or(Self::UNITY_SCALE),
+            None => Self::UNITY_SCALE,
+        }
+    }
+
+    /// Declare the per-layer residual gains. Rejected unless there is one pair per layer: a table
+    /// that covers some layers is a table whose omissions are silent.
+    pub fn with_layer_residual_scale(mut self, per_layer: Vec<[ScaleParams; 2]>) -> Result<Self, ArtifactError> {
+        if per_layer.len() != self.shape.n_layers {
+            return Err(ArtifactError::WeightLen { tensor: "layer_residual_scale", want: self.shape.n_layers, got: per_layer.len() });
+        }
+        self.layer_residual_scale = Some(per_layer);
         Ok(self)
     }
 
@@ -601,6 +638,20 @@ impl Base0ArtifactV1 {
         for narrowing in &self.class_narrowings {
             absorb_quant(&mut state, narrowing);
         }
+        // The residual GAINS (ADR-0050 B), presence-tagged and length-prefixed for the same reason
+        // the per-layer narrowings are: `None` and an empty `Some` must be different streams.
+        match &self.layer_residual_scale {
+            None => state.update(&[0u8]),
+            Some(per) => {
+                state.update(&[1u8]);
+                state.update(&(per.len() as u64).to_le_bytes());
+                for pair in per {
+                    absorb_scale(&mut state, pair[0].multiplier, pair[0].shift);
+                    absorb_scale(&mut state, pair[1].multiplier, pair[1].shift);
+                }
+                &mut state
+            }
+        };
         // Per-layer residual narrowing, presence-tagged and length-prefixed for the same reason
         // the per-channel triples are: `None` and an empty `Some` must be different streams, and
         // a class calibrated per layer is not the class that was not.

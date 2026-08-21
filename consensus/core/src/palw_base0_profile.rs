@@ -198,22 +198,28 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_output.requant", Hidden, &[Step(18)]),
     // The residual, and the narrowing that was never declared.
     n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(19), LayerIn]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_residual.requant", Hidden, &[Step(20)]),
+    // **ADR-0050 Decision A/B: the residual site is Add → Rescale → Requantize.** The gain exists
+    // so a decayed stream can be LIFTED before it is re-quantized; a requantization can only
+    // reduce, which is why the calibrated table on the real checkpoint came out with every layer
+    // already at `shift = 0` and the stream still at 5 of 127.
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.attn_residual.scale", Hidden, &[Step(20)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_residual.requant", Hidden, &[Step(21)]),
     // --- feed-forward ------------------------------------------------------------------------
-    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "", Hidden, &[Step(21)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_norm.requant", Hidden, &[Step(22)]),
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_gate.weight", FfnDim, &[Step(23)]),
-    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_gate.scale", FfnDim, &[Step(24)]),
-    n(PalwStepOpKindV1::Silu, KDESC_BASE0_SILU, "", FfnDim, &[Step(25)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", FfnDim, &[Step(26)]),
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_up.weight", FfnDim, &[Step(23)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_up.requant", FfnDim, &[Step(28)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, "", FfnDim, &[Step(27), Step(29)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", FfnDim, &[Step(30)]),
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_down.weight", Hidden, &[Step(31)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_down.requant", Hidden, &[Step(32)]),
-    n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(33), Step(21)]),
-    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_residual.requant", Hidden, &[Step(34)]),
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "", Hidden, &[Step(22)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_norm.requant", Hidden, &[Step(23)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_gate.weight", FfnDim, &[Step(24)]),
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_gate.scale", FfnDim, &[Step(25)]),
+    n(PalwStepOpKindV1::Silu, KDESC_BASE0_SILU, "", FfnDim, &[Step(26)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", FfnDim, &[Step(27)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_up.weight", FfnDim, &[Step(24)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_up.requant", FfnDim, &[Step(29)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, "", FfnDim, &[Step(28), Step(30)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", FfnDim, &[Step(31)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_down.weight", Hidden, &[Step(32)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_down.requant", Hidden, &[Step(33)]),
+    n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(34), Step(22)]),
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_residual.scale", Hidden, &[Step(35)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_residual.requant", Hidden, &[Step(36)]),
 ];
 
 /// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
@@ -611,10 +617,11 @@ mod tests {
         assert_eq!(p.table_layer_span(PalwStepTableV1::Attn), 4, "every layer is an attention layer");
         assert_eq!(p.table_layer_span(PalwStepTableV1::Gdn), 0);
         // 1 pre + the IR's own step count per layer x 4 + 3 post. The per-layer figure is the
-        // engine's, not a number kept beside it: it was 18 while the graph was hand-written and is
-        // 36 now that every narrowing the engine performs is declared. The post table is 3 for the
-        // same reason — `norm_to_code` is a norm AND a narrowing, and only the norm was declared.
-        assert_eq!(BASE0_LAYER_IR.len(), 36, "the engine performs thirty-six steps per layer");
+        // engine's, not a number kept beside it: 18 while the graph was hand-written, 36 once every
+        // narrowing the engine performs was declared, and 38 with ADR-0050's two residual gains.
+        // The post table is 3 for the same reason — `norm_to_code` is a norm AND a narrowing, and
+        // only the norm was declared.
+        assert_eq!(BASE0_LAYER_IR.len(), 38, "the engine performs thirty-eight steps per layer");
         assert_eq!(p.global_node_count() as usize, 1 + BASE0_LAYER_IR.len() * 4 + 3);
         // A profile id exists, which is what a class registration commits to.
         assert_ne!(p.shape_profile_id(), Hash64::default());
@@ -816,10 +823,11 @@ mod tests {
                 checked += 1;
             }
         }
-        // 1 pre + 36 layer steps + 3 post. Both counts are the engine's own: the layer table is
-        // generated from `BASE0_LAYER_IR` (18 while the graph was written by hand), and the post
-        // table gained the narrowing `norm_to_code` performs and the table did not declare.
-        assert_eq!(checked, 40, "the whole graph was checked, not a prefix");
+        // 1 pre + 38 layer steps + 3 post. Both counts are the engine's own: the layer table is
+        // generated from `BASE0_LAYER_IR` (18 while the graph was written by hand, 36 with its
+        // narrowings, 38 with ADR-0050's residual gains), and the post table gained the narrowing
+        // `norm_to_code` performs and the table did not declare.
+        assert_eq!(checked, 42, "the whole graph was checked, not a prefix");
         assert_eq!(p.attn_nodes.len(), BASE0_LAYER_IR.len(), "the layer table IS the IR");
 
         // The two attention nodes multiply an activation by an opened row at a kv-scaled width —
