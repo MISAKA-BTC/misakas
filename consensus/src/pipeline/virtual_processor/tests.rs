@@ -1017,7 +1017,119 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
-/// **A panel really binds, and a signed quorum really licenses the claim** (launch blockers §2).
+/// **Nobody can register a class without a bond that signed for it** (launch blockers §3).
+///
+/// ADR-0049 Decision H made post-genesis registration a live path and nothing signed it. A
+/// registration takes a permille from EVERY incumbent through largest-remainder donation, and the
+/// share field's own doc says "whoever may register a class may fund it, and nobody else may move a
+/// permille" — there was no `whoever`. Any stranger could move the cadence table for a transaction
+/// fee.
+#[tokio::test]
+async fn palw_v2_a_class_registration_needs_a_bond_that_signed_for_it() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2, PalwConsensusObjectV2 as Obj,
+        PalwPwuRuleV2, palw_class_registration_message_v2,
+    };
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    let vp = ctx.consensus.virtual_processor();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: tip,
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 2,
+        subsidy: 0,
+    };
+
+    // A Qwen-shaped entrant, admissible on its own merits — so what decides this test is the
+    // authority and nothing else.
+    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_profile_v1(
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            tile_len: 16_384,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
+    )
+    .expect("expressible");
+    let class_id = profile.shape_profile_id();
+    let share = bundle.state.min_grantable_share_permille();
+    let registrant = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+        0,
+    ));
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let message = palw_class_registration_message_v2(network_domain, class_id, share, 0, &registrant);
+    let sign = |kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair| {
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &kp.signing_key,
+            message.as_byte_slice(),
+            PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+            [7u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec()
+    };
+    let make = |bond: PalwBondKeyV2, signature: Vec<u8>| Obj::ClassRegistered {
+        class_id,
+        artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
+        slash_value_per_pwu: 1,
+        pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1 },
+        initial_target: u128::MAX / 2,
+        share_permille: share,
+        activation_daa: 0,
+        admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+            profile: profile.clone(),
+            canonical: kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, 8, 4),
+            registrant_bond: bond,
+            signature,
+        })),
+    };
+
+    // **Unsigned: refused.** This is the attack — a stranger moving the cadence table.
+    let err = vp
+        .palw_v2_validate_objects(&state, &bundle.state, &point, &[make(registrant, Vec::new())])
+        .expect_err("an unsigned registration must not move a permille");
+    assert!(err.contains("not signed by the bond it names"), "got {err}");
+
+    // Signed by the WRONG key under a real bond: also refused. Holding a bond is not enough.
+    let wrong = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(3);
+    let err = vp
+        .palw_v2_validate_objects(&state, &bundle.state, &point, &[make(registrant, sign(wrong))])
+        .expect_err("a signature from another key is not this bond's authority");
+    assert!(err.contains("not signed by the bond it names"), "got {err}");
+
+    // Naming a bond the chain does not have: refused before any signature is looked at.
+    let stranger = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xDEAD),
+        0,
+    ));
+    let err = vp
+        .palw_v2_validate_objects(&state, &bundle.state, &point, &[make(stranger, Vec::new())])
+        .expect_err("a bond this chain does not have is nobody");
+    assert!(err.contains("does not have"), "got {err}");
+
+    // And the real holder's signature passes the authority check — whatever the graph gates then
+    // say is a different question, and it is not "who".
+    let kp = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair();
+    let outcome = vp.palw_v2_validate_objects(&state, &bundle.state, &point, &[make(registrant, sign(kp))]);
+    if let Err(e) = &outcome {
+        assert!(!e.contains("not signed by the bond it names") && !e.contains("does not have"), "authority must pass: {e}");
+    }
+}
+
+/// **A panel really binds, and a signed quorum really licenses the claim** (launch blockers §2)./// **A panel really binds, and a signed quorum really licenses the claim** (launch blockers §2).
 ///
 /// Nothing in the tree ever filed a `ReceiptLicensed`, so no claim could reach `Final`: every panel
 /// voided at `ReceiptTimeout` with all its seats slashed, `safe_weight` stayed zero forever, and

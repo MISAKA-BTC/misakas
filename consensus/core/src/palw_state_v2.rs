@@ -953,6 +953,45 @@ pub struct PalwClassAdmissionCarriageV2 {
     /// The job the class is paid per, from which `pwu_per_inference` is counted rather than
     /// believed.
     pub canonical: crate::palw_v2::PalwJobContextV2,
+    /// **Who is registering this class** (launch blockers §3).
+    ///
+    /// ADR-0049 Decision H made post-genesis registration a live path, and nothing signed it: a
+    /// registration takes a permille from EVERY incumbent through largest-remainder donation, so an
+    /// unauthenticated one let any stranger move the cadence table. "Whoever may register a class
+    /// may fund it, and nobody else may move a permille" — the share's own doc says so, and there
+    /// was no `whoever`.
+    ///
+    /// A registrant must hold an Active bond on this chain. That is not a permission system; it is
+    /// the smallest answer to "who", denominated in the collateral every other authority here is
+    /// denominated in.
+    pub registrant_bond: PalwBondKeyV2,
+    /// ML-DSA-87 over [`palw_class_registration_message_v2`], verified by the acceptance layer
+    /// under `registrant_bond`'s registered key.
+    pub signature: Vec<u8>,
+}
+
+pub const PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-registration-v2/mldsa87/v1";
+pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registration-v2/message/v1";
+
+/// What a registrant signs: the class it is registering and the share it is taking.
+///
+/// The class id is its graph, so signing the id signs the graph; the share is signed because it is
+/// the thing taken from everyone else, and a signature over the class alone would let the share be
+/// swapped underneath it.
+pub fn palw_class_registration_message_v2(
+    network_domain: Hash64,
+    class_id: Hash64,
+    share_permille: u16,
+    activation_daa: u64,
+    registrant_bond: &PalwBondKeyV2,
+) -> Hash64 {
+    let mut state = keyed(PALW_CLASS_REGISTRATION_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(class_id.as_byte_slice());
+    state.update(&share_permille.to_le_bytes());
+    state.update(&activation_daa.to_le_bytes());
+    state.update(&borsh::to_vec(registrant_bond).expect("a bond key is borsh-serializable"));
+    finish(state)
 }
 
 /// The consensus objects a block can carry into the state, in the block's deterministic

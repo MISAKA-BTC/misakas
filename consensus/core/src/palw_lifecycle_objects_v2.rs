@@ -370,6 +370,10 @@ mod tests {
         let carriage = PalwClassAdmissionCarriageV2 {
             canonical: rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1),
             profile: profile.clone(),
+            // The ride list checks SHAPE only; who signed is the acceptance layer's, where the
+            // registrant bond is resolved against chain state.
+            registrant_bond: bond(1),
+            signature: Vec::new(),
         };
         let registration = |admission: Option<Box<PalwClassAdmissionCarriageV2>>| PalwConsensusObjectV2::ClassRegistered {
             class_id: profile.shape_profile_id(),

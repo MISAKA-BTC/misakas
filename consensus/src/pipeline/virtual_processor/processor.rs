@@ -3898,7 +3898,7 @@ impl VirtualStateProcessor {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
                 }
-                Obj::ClassRegistered { class_id, share_permille, admission, .. } => {
+                Obj::ClassRegistered { class_id, share_permille, admission, activation_daa, .. } => {
                     // **ADR-0049 Decision H: the gate, where the refusal used to be.**
                     //
                     // A class registration is the one object whose validity is an arithmetic fact
@@ -3931,6 +3931,38 @@ impl VirtualStateProcessor {
                         return Err(format!(
                             "class {class_id} registers at {share_permille}‰; a post-genesis entrant joins at the                              minimum grantable share ({floor}‰) — ADR-0049 Decision H"
                         ));
+                    }
+                    // **And WHO is registering it** (launch blockers §3). Everything above is a
+                    // fact about the graph and the share; none of it is a fact about the sender.
+                    // A registration takes a permille from EVERY incumbent through
+                    // largest-remainder donation, and the share's own doc says "whoever may
+                    // register a class may fund it, and nobody else may move a permille" — there
+                    // was no `whoever`. Any stranger could move the cadence table for a fee.
+                    //
+                    // The registrant must hold an ACTIVE bond and have signed the class it is
+                    // registering together with the share it is taking. Not a permission system:
+                    // the smallest answer to "who", denominated in the collateral every other
+                    // authority on this chain is denominated in.
+                    let registrant = state
+                        .bond(&carriage.registrant_bond)
+                        .ok_or_else(|| format!("class {class_id} is registered under a bond this chain does not have"))?;
+                    if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err(format!("class {class_id} is registered under a bond that is not Active"));
+                    }
+                    let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        *class_id,
+                        *share_permille,
+                        *activation_daa,
+                        &carriage.registrant_bond,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &registrant.pubkey,
+                        message.as_byte_slice(),
+                        &carriage.signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("class {class_id}'s registration is not signed by the bond it names"));
                     }
                     kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
                         bundle,

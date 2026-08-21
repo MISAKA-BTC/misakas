@@ -270,6 +270,20 @@ pub fn verify_class_admission_v2(
     // `verify_catalog_coverage_v1` compares against — asserted here so a future refactor that
     // pointed the gate at a hand-kept list fails a test rather than certifying quietly.
     debug_assert!(kernel_ids.is_subset(&catalogued_kernel_ids_v1()), "coverage passed against a set that is not the table");
+    // **And the STRONG gate, which had no non-test caller at all** (audit H-02).
+    //
+    // The id check above is set inclusion: it asks whether every kernel this profile names is in
+    // the table. It cannot ask whether the adjudicator has an arm for the SHAPE each node wants —
+    // an op needs operands of a particular arity and width, so a node can name a catalogued id
+    // while asking for something nothing can produce. `verify_profile_coverage_v1` asks the
+    // adjudicator itself, node by node and for both call classes.
+    //
+    // Near-inert while classes could only come from genesis; ADR-0049 Decision H made post-genesis
+    // registration a live, permissionless path, and then a stranger could register a class whose
+    // every dispute ends `Unadjudicable` — rejected but UNSLASHED, which is unfalsifiable work on a
+    // chain where bonds are supposed to be at risk. The BASE-0 profile shipped 2026-08-20 did
+    // exactly this at two nodes per layer and passed the id gate.
+    crate::palw_catalog_coverage::verify_profile_coverage_v1(profile).map_err(|_| PalwClassAdmissionError::CoverageGap)?;
 
     let worst = worst_case_step_leaf_count_v1(profile).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
     let ladder = bundle.court.max_step_leaf_count();
@@ -319,8 +333,8 @@ pub fn verify_class_admission_v2(
 mod tests {
     use super::*;
     use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
-    use crate::palw_qwen25_profile::{QWEN25_1_5B, QWEN25_3B, PalwQwen25GeometryV1, qwen25_profile_v1};
     use crate::palw_mode_v2::{PalwCourtParamsV2, tests::conforming_bundle};
+    use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
     use crate::palw_step::PALW_STEP_MAX_LEAVES;
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
@@ -433,6 +447,55 @@ mod tests {
             .expect("admissible");
         assert_eq!(base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("re-derives").shape_profile_id(), before);
         assert_ne!(before, big.shape_profile_id(), "two geometries are two classes");
+    }
+
+    /// **A class whose kernel ids are all catalogued but whose SHAPE nothing can adjudicate is
+    /// refused at registration** (audit H-02).
+    ///
+    /// The id gate is set inclusion: it asks whether every kernel a profile names is in the table.
+    /// It cannot ask whether the adjudicator has an arm for the shape each node wants — an op needs
+    /// operands of a particular arity, so a node can name a catalogued id while asking for
+    /// something nothing can produce. `verify_profile_coverage_v1` asks the adjudicator itself, and
+    /// until now had NO non-test caller.
+    ///
+    /// Near-inert while classes came only from genesis; ADR-0049 Decision H made post-genesis
+    /// registration a live, permissionless path, and then this is a stranger registering a class
+    /// whose every dispute ends `Unadjudicable` — rejected but UNSLASHED, which is unfalsifiable
+    /// work on a chain where bonds are supposed to be at risk.
+    #[test]
+    fn a_class_the_adjudicator_cannot_serve_is_refused_even_when_every_id_is_catalogued() {
+        let bundle = conforming_bundle();
+        let good = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor is expressible");
+        let canonical = context(&good, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+
+        // Strip a node's operands: same catalogued kernel id, a shape the adjudicator refuses. This
+        // is the exact defect the BASE-0 profile shipped on 2026-08-20 at its attention matmuls.
+        let mut lame = good.clone();
+        let victim = lame.attn_nodes.iter_mut().find(|n| n.input_refs.len() >= 2).expect("a binary node exists");
+        victim.input_refs.truncate(1);
+
+        // Its kernel ids are unchanged, so the WEAK gate still passes…
+        let ids = reachable_kernels_v1(&lame);
+        assert!(
+            verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: lame.shape_profile_id(), kernel_ids: ids })
+                .is_ok(),
+            "every id it names is still catalogued — which is why the id gate alone certified this"
+        );
+
+        // …and admission refuses it anyway, now that the strong gate is wired.
+        let reg = registration(lame.shape_profile_id(), 1);
+        let lame_ctx = context(&lame, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+        assert!(
+            matches!(verify_class_admission_v2(&bundle, &lame, &lame_ctx, &reg), Err(PalwClassAdmissionError::CoverageGap)),
+            "a class the adjudicator cannot serve must not be registrable"
+        );
+
+        // And the honest floor still admits, so the gate is a bound rather than a blanket refusal.
+        let ok = registration(good.shape_profile_id(), 7_900);
+        assert!(
+            !matches!(verify_class_admission_v2(&bundle, &good, &canonical, &ok), Err(PalwClassAdmissionError::CoverageGap)),
+            "the floor's own graph is servable"
+        );
     }
 
     /// A ladder provisioned for the floor alone refuses the bigger class — which is exactly why
@@ -617,10 +680,7 @@ mod tests {
                 "a shipped Qwen geometry became admissible — update this tripwire and the sizing table with it"
             );
         }
-        assert!(
-            worst_case_step_leaf_count_v1(&qwen_admissible()).is_ok(),
-            "1.5B at tile_len 16_384 admits its declared 4096 context"
-        );
+        assert!(worst_case_step_leaf_count_v1(&qwen_admissible()).is_ok(), "1.5B at tile_len 16_384 admits its declared 4096 context");
         let three_b = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 65_536, ..QWEN25_3B }).expect("expressible");
         assert!(worst_case_step_leaf_count_v1(&three_b).is_ok(), "3B needs the maximum legal tile to admit 4096");
     }
