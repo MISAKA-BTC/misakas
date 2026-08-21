@@ -1111,6 +1111,10 @@ impl VirtualStateProcessor {
                     // same parent state and for the same reason.
                     ctx.palw_v2_locked_bonds =
                         palw_state.as_ref().map(|s| self.palw_v2_locked_bond_outpoints(s, pov_daa_score)).unwrap_or_default();
+                    // ADR-0042 Decision 10: and what the selected parent's own claim already
+                    // spent of its worker reward, so this coinbase does not pay it twice.
+                    ctx.palw_v2_escrow_withheld =
+                        palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent)).unwrap_or(0);
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
@@ -3590,6 +3594,28 @@ impl VirtualStateProcessor {
             })
             .map(|(key, _)| key.0)
             .collect()
+    }
+
+    /// **ADR-0042 Decision 10, the funding side: what `block`'s own worker reward owes its claim.**
+    ///
+    /// The Decision says the PALW reward is "a carve of the fixed subsidy ... never an addition to
+    /// it — the schedule is never exceeded (I6/I15)". Only the release half existed: escrows were
+    /// appended to the coinbase and nothing was taken out to fund them, so every finalized claim
+    /// minted its whole carve above the emission schedule. This is the deduction.
+    ///
+    /// Summed over the claims `block` itself accepted rather than derived from the subsidy, so the
+    /// number withheld is the number that will be paid — by construction, from the same record.
+    /// Today that is at most one claim (an attempt IS its block, and a free-prompt claim escrows
+    /// nothing), but summing makes the identity hold whatever a later lane does.
+    pub(super) fn palw_v2_escrow_withheld_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
+    ) -> u64 {
+        state
+            .claims_iter()
+            .filter(|(_, claim)| claim.accepted_block == block)
+            .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
     }
 
     fn palw_v2_payout_outputs(
@@ -8874,6 +8900,16 @@ impl VirtualStateProcessor {
                 .unwrap_or_default();
             validator_reward_outputs.extend(payouts);
         }
+        // ADR-0042 Decision 10's funding side, construction path. The tip IS the block being built
+        // on, so its escrow is the one the validating walk will withhold. Computed from the same
+        // state the payouts came from, so the two halves cannot disagree.
+        let palw_escrow_withheld = self
+            .palw_state_params_v2
+            .as_ref()
+            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
+            .map(|(block, state)| self.palw_v2_escrow_withheld_at(&state, block))
+            .unwrap_or(0);
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -8885,6 +8921,7 @@ impl VirtualStateProcessor {
                 &validator_reward_outputs,
                 carve,
                 (newly_included_stake, expected_stake),
+                palw_escrow_withheld,
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

@@ -618,6 +618,30 @@ impl Params {
         if self.blockrate.target_time_per_block != bundle.cadence_target_time_per_block_ms {
             return Err(PalwModeV2Error::Invalid("the network's cadence is not the one its ruleset id commits to"));
         }
+        // **ADR-0042 Decision 10: the carve must FIT inside the share it is carved from.**
+        //
+        // "PALW reward is a carve of the fixed subsidy ... never an addition to it — the schedule
+        // is never exceeded (I6/I15)." An attempt-lane block's escrow is withheld from that
+        // block's §F worker BASE share, so a bundle whose `worker_carve_permille` exceeds
+        // `subsidy_worker_base_bps` would escrow more than the block earns. The coinbase's
+        // `saturating_sub` would floor the withholding at the worker share while the release still
+        // paid the whole escrow, and the difference would be minted above the schedule — the same
+        // over-issuance this Decision forbids, arriving through a parameter instead of a missing
+        // line.
+        //
+        // Checked here rather than in `PalwConsensusParamsV2::validate` because the two numbers
+        // live in different objects: the carve is the bundle's, the share is the network's
+        // `dns_params`, and only `Params` holds both. A network with no `dns_params` performs no
+        // §F carve at all, so the whole subsidy is the worker's and any permille fits.
+        if let Some(dns) = self.dns_params.as_ref() {
+            let carve_bps = u32::from(bundle.state.worker_carve_permille()) * 10;
+            let worker_base_bps = u32::from(dns.reward_params.fee_split.subsidy_worker_base_bps);
+            if carve_bps > worker_base_bps {
+                return Err(PalwModeV2Error::Invalid(
+                    "the PALW worker carve exceeds the network's own worker share — the escrow could not be funded from the block it is carved from",
+                ));
+            }
+        }
         Ok(())
     }
 

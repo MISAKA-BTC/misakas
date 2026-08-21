@@ -146,6 +146,17 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// is a committed fact, while this block's own transition has not run yet). Empty on every
     /// network without a V2 bundle, which is every shipped preset.
     pub palw_v2_locked_bonds: std::collections::HashSet<TransactionOutpoint>,
+    /// **ADR-0042 Decision 10's other half: the escrow WITHHELD from the selected parent.**
+    ///
+    /// The releases in `palw_v2_payout_outputs` were appended to the coinbase with nothing taken
+    /// out to fund them, so every finalized claim minted its carve on top of the emission
+    /// schedule — the exact opposite of the Decision's "a carve of the fixed subsidy, never an
+    /// addition to it". This is the deduction that makes the sentence true.
+    ///
+    /// Set from the SELECTED PARENT's state, like the two fields above it: a claim is created by
+    /// the transition, which runs only for chain blocks, and the selected parent is the one block
+    /// of the mergeset that is one.
+    pub palw_v2_escrow_withheld: u64,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -165,6 +176,7 @@ impl<'a> UtxoProcessingContext<'a> {
             reserve_balance_after: 0,
             palw_v2_payout_outputs: Vec::new(),
             palw_v2_locked_bonds: Default::default(),
+            palw_v2_escrow_withheld: 0,
         }
     }
 
@@ -876,6 +888,7 @@ impl VirtualStateProcessor {
             &validator_reward_outputs,
             carve,
             (newly_included_stake, expected_stake),
+            ctx.palw_v2_escrow_withheld,
         )?;
 
         // Verify the header pruning point
@@ -921,6 +934,9 @@ impl VirtualStateProcessor {
         // kaspa-pq Phase 13 (ADR-0018 §D): `(newly_included_stake, expected_stake)`,
         // threaded to `expected_coinbase_transaction` for the inclusion bounty.
         inclusion: (u128, u128),
+        // ADR-0042 Decision 10: the selected parent's escrowed worker reward, withheld from its
+        // payout. `0` on every network without a V2 bundle.
+        palw_escrow_withheld: u64,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -935,6 +951,7 @@ impl VirtualStateProcessor {
                 validator_reward_outputs,
                 carve,
                 inclusion,
+                palw_escrow_withheld,
             )
             .unwrap()
             .tx;

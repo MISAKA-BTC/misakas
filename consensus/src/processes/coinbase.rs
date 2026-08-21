@@ -139,9 +139,35 @@ impl CoinbaseManager {
         // miner (the includer), unspent remainder burned. `(0, _)` → no bounty. Ignored
         // when `carve` is `None`.
         inclusion: (u128, u128),
+        // **MISAKA ADR-0042 Decision 10: the PALW escrow WITHHELD from the selected parent's
+        // worker reward.**
+        //
+        // Decision 10 states the rule this argument enforces: "PALW reward is a carve of the fixed
+        // subsidy ... never an addition to it — the schedule is never exceeded (I6/I15)." The
+        // escrow releases were already appended to `validator_reward_outputs`, and nothing was
+        // ever taken out to fund them, so every finalized claim minted its whole carve ON TOP of
+        // the emission schedule. Both halves have to exist or the sentence is false in one
+        // direction or the other.
+        //
+        // It is the SELECTED PARENT's escrow specifically: a claim is created by the PALW
+        // transition, which runs only for chain blocks, and exactly one block of any mergeset is a
+        // chain block — the selected parent. A merge-blue attempt-lane block that never joined the
+        // chain created no claim and is paid in full, correctly.
+        //
+        // `0` on every network without a V2 bundle, which is every shipped preset.
+        palw_escrow_withheld: u64,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
+        // The withholding must LAND, or an escrow would be released that was never funded. The only
+        // mergeset member that can be both the selected parent and non-DAA is genesis — the window
+        // manager inserts it explicitly, because its timestamp is fixed — and genesis registers
+        // rather than works: it creates no claim and escrows nothing. Asserted rather than assumed,
+        // because the assumption is what the whole "never an addition to the schedule" rule rests on.
+        debug_assert!(
+            palw_escrow_withheld == 0 || !mergeset_non_daa.contains(&ghostdag_data.selected_parent),
+            "a selected parent that escrowed a reward must be inside the DAA window, or its escrow is unfunded"
+        );
         let mut worker_inclusion_pool = 0u64;
         let mut outputs = Vec::with_capacity(ghostdag_data.mergeset_blues.len() + 1); // + 1 for possible red reward
         let mut miner_script_output_indices = Vec::with_capacity(2); // red reward + optional inclusion bounty
@@ -167,6 +193,16 @@ impl CoinbaseManager {
                 }
                 None => reward_data.subsidy + reward_data.total_fees,
             };
+            // ADR-0042 Decision 10: an attempt-lane chain block's worker reward is ESCROWED, not
+            // paid — it becomes spendable when its claim reaches `Final`, and is burned by
+            // don't-mint if the claim voids. Withheld here, from the one block of the mergeset
+            // whose transition could have created a claim.
+            //
+            // `saturating_sub` rather than an assert: the escrow is bounded by the worker base
+            // share at bundle construction (`Params::validate_palw_v2`), so this cannot bite on a
+            // network a node will start on — and if a future split made it bite, under-paying the
+            // miner is the direction that does not mint.
+            let value = if *blue == ghostdag_data.selected_parent { value.saturating_sub(palw_escrow_withheld) } else { value };
             if value > 0 {
                 outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
             }

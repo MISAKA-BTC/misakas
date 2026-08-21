@@ -723,6 +723,83 @@ async fn palw_v2_an_attempt_block_creates_its_claim() {
     );
 }
 
+/// **ADR-0042 Decision 10: the PALW reward is a CARVE, and now it is actually carved.**
+///
+/// The Decision is explicit — "PALW reward is a **carve of the fixed subsidy** ..., never an
+/// addition to it — the schedule is never exceeded (I6/I15)" — and only the release half was
+/// built. Escrows were appended to `validator_reward_outputs` and nothing anywhere was taken out
+/// to fund them: the accepting block's miner was paid its whole worker share, the same sompi were
+/// escrowed against the claim, and every finalized claim minted its carve a second time, above the
+/// emission schedule. `coinbase.rs` contained no PALW arithmetic at all, which is why reading it
+/// could not settle the question either way.
+///
+/// This pins the funding side, which is the half that is observable on a three-block chain: the
+/// coinbase that pays an attempt-lane block pays its worker share MINUS the escrow that block's
+/// own claim took. The release side is the queue the same state carries, and the two are the same
+/// number by construction — `palw_v2_escrow_withheld_at` sums the very field
+/// `palw_v2_payout_outputs` later renders.
+#[tokio::test]
+async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::dns_finality::split_block_subsidy;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let fee_split = config.params.dns_params.as_ref().expect("the fixture network carves").reward_params.fee_split.clone();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let tip = ctx.consensus.get_sink();
+    let selected_parent = vp.headers_store.get_header(tip).unwrap().direct_parents()[0];
+    let sp_daa = vp.headers_store.get_header(selected_parent).unwrap().daa_score;
+
+    // What the emission schedule allots the selected parent, and what its own claim escrowed.
+    let sp_subsidy = vp.coinbase_manager.calc_block_subsidy(sp_daa);
+    let sp_worker_share = split_block_subsidy(sp_subsidy, &fee_split).worker_base_sompi;
+    let (_, sp_state) = vp
+        .palw_state_v2_store
+        .read()
+        .load_tip(&bundle.state)
+        .unwrap()
+        .map(|(b, s)| (b, s))
+        .filter(|(b, _)| *b == tip)
+        .expect("the walk's tip is the sink");
+    let escrow = vp.palw_v2_escrow_withheld_at(&sp_state, selected_parent);
+    assert!(escrow > 0, "an attempt-lane block escrows its worker carve — otherwise this proves nothing");
+    // Measured: 370,468,345 subsidy → 229,690,375 worker share → 229,690,373 escrow. The carve
+    // permille (620) and `subsidy_worker_base_bps` (6200) are the same number expressed twice, so
+    // an attempt-lane block's ENTIRE worker reward is escrowed and the miner keeps only the
+    // rounding difference — which is exactly Decision 10's "block accepted → reward escrow →
+    // Final → spendable". `validate_palw_v2` refuses a bundle where the carve is the larger of the
+    // two, because then the escrow could not be funded from the block it is carved from.
+    assert!(escrow <= sp_worker_share, "the carve must fit inside the share it is carved from");
+
+    // The coinbase that pays the selected parent pays exactly the difference. Not `<=`: an
+    // inequality would also hold if the escrow were withheld twice, or from the wrong block.
+    let coinbase = &ctx.consensus.get_block(tip).unwrap().transactions[0];
+    let paid: u64 = coinbase.outputs.iter().map(|o| o.value).sum();
+    assert_eq!(
+        paid,
+        sp_worker_share - escrow,
+        "the tip's coinbase must pay its selected parent's worker share LESS the escrow that block's claim took"
+    );
+
+    // And the whole coinbase stays inside what the schedule allows the block to mint. This is the
+    // I6/I15 statement, in one line, on a real chain.
+    assert!(paid <= sp_subsidy, "a block may never mint more than the subsidy of what it merges");
+}
+
 /// **Audit C-08's lock, resolved from a real chain's registry.**
 ///
 /// A `PalwBondKeyV2` is the outpoint holding the bond's collateral, and nothing kept the money
@@ -1297,7 +1374,7 @@ async fn finality_fee_bridge_tx_pays_validator_primary_split() {
     assert_eq!(subsidy_a, subsidy_b, "identical chain shape ⇒ identical lock-block subsidy");
 
     let dns = MAINNET_PARAMS.dns_params.clone().unwrap();
-    let fs = &dns.reward_params.fee_split;
+    let fs = &dns.reward_params.fee_split.clone();
     let worker_base = split_block_subsidy(subsidy_a, fs).worker_base_sompi;
     assert_eq!(
         worker_active,
@@ -1332,7 +1409,7 @@ async fn finality_fee_inert_on_evm_inert_net() {
     // §F fence ACTIVE (0, the production value) but the EVM lane INERT.
     let (worker_out, subsidy) = finality_fee_bridge_scenario(0, false).await;
     let dns = MAINNET_PARAMS.dns_params.clone().unwrap();
-    let fs = &dns.reward_params.fee_split;
+    let fs = &dns.reward_params.fee_split.clone();
     assert_eq!(
         worker_out,
         split_block_subsidy(subsidy, fs).worker_base_sompi + split_normal_tx_fees(100_000, fs).worker_sompi,

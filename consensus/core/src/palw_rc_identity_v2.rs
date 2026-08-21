@@ -501,6 +501,53 @@ mod tests {
         assert!(matches!(err, PalwGenesisV2Error::BondCollateralNotHeld { .. }), "got {err:?}");
     }
 
+    /// **ADR-0042 Decision 10: a carve that does not fit is not a carve.**
+    ///
+    /// "PALW reward is a carve of the fixed subsidy ... never an addition to it — the schedule is
+    /// never exceeded (I6/I15)." An attempt-lane block's escrow is withheld from that block's §F
+    /// worker BASE share, so a bundle whose `worker_carve_permille` exceeds
+    /// `subsidy_worker_base_bps` would escrow more than the block earns: the withholding would
+    /// floor at the worker share while the release still paid the whole escrow, and the difference
+    /// would be minted above the schedule — the same over-issuance, arriving through a parameter
+    /// instead of a missing line.
+    ///
+    /// The two numbers live in different objects (the carve is the bundle's, the share is the
+    /// network's `dns_params`), so only `Params` can compare them, and it does so before a node
+    /// starts.
+    #[test]
+    fn a_worker_carve_larger_than_the_networks_worker_share_is_refused() {
+        use crate::palw_state_v2::PalwBondKeyV2;
+
+        let mut params = crate::config::params::palw_rc_params_from_artifacts(
+            h64(0xA7),
+            PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
+            vec![7; 32],
+            vec![21; 8],
+            h64(0x9A11),
+        )
+        .expect("the RC artifacts assemble");
+        let worker_base_permille =
+            u32::from(params.dns_params.as_ref().expect("the RC net carves").reward_params.fee_split.subsidy_worker_base_bps) / 10;
+        let PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else { panic!("not V2") };
+        assert_eq!(
+            u32::from(bundle.state.worker_carve_permille()),
+            worker_base_permille,
+            "the shipped bundle sits exactly at the boundary — the carve IS the worker share"
+        );
+
+        // At the boundary it holds; one permille past it does not.
+        for (permille, must_boot) in [(worker_base_permille as u16, true), (worker_base_permille as u16 + 1, false)] {
+            let mut b = bundle.clone();
+            b.state = b.state.clone().with_worker_carve_permille(permille).expect("a legal permille");
+            params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(b);
+            assert_eq!(
+                params.validate_palw_v2().is_ok(),
+                must_boot,
+                "carve {permille}‰ against a {worker_base_permille}‰ worker share"
+            );
+        }
+    }
+
     /// **Nothing here ships a preset.** The assembly exists so the RC genesis is a checked
     /// artifact, not so a network quietly acquires one — every shipped preset is still fence-free.
     #[test]
