@@ -363,6 +363,18 @@ impl PalwConsensusParamsV2 {
     /// half-flip with a friendlier name.
     pub fn validate(&self) -> Result<(), PalwModeV2Error> {
         self.validate_ruleset_shape()?;
+        // **A network that never retires a claim has an unbounded state** (launch blockers §8,
+        // third bullet). The claim map grows by one entry per attempt-lane block, `state_root`
+        // re-hashes every collection on every block and the tip row re-serializes the registry on
+        // every walk — so with retirement off the per-block cost grows with the chain and never
+        // comes down (`measure_claim_growth_cost`: 8.2 ms/5.4 MB at 10k claims, 467 ms/538 MB at
+        // 1M). It is a runnable-network property, so it is checked where every other one is,
+        // rather than left to whoever writes the next bundle.
+        if self.state.claim_retirement_daa() == 0 {
+            return Err(PalwModeV2Error::Invalid(
+                "a ConsensusV2 ruleset must retire terminal claims — with no retirement span the PALW state grows by one claim per block forever",
+            ));
+        }
         // **Audit C1 — last, because it is about this BINARY rather than the ruleset.**
         //
         // Four pipeline gates now demand `algorithm_id` on a `ConsensusV2` network. Nothing
@@ -759,6 +771,19 @@ pub(crate) mod tests {
         Hash64::from_u64_word(v)
     }
 
+    /// **The gate fires** (launch blockers §8, third bullet). A guard nothing has been shown to
+    /// refuse is a comment; the bundle every other test in this module uses is the one that must
+    /// still pass.
+    #[test]
+    fn a_ruleset_that_never_retires_a_claim_is_refused() {
+        let good = conforming_bundle();
+        good.validate().expect("the conforming bundle retires and boots");
+        let mut bad = conforming_bundle();
+        bad.state = bad.state.clone().with_claim_retirement_daa(0).unwrap();
+        let err = bad.validate().expect_err("a ruleset with no retirement span is not runnable");
+        assert!(format!("{err}").contains("retire terminal claims"), "and it says why: {err}");
+    }
+
     fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
         // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
         // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
@@ -768,6 +793,9 @@ pub(crate) mod tests {
             .with_worker_carve_permille(620)
             .unwrap()
             .with_turn_deadline_daa(20)
+            .unwrap()
+            // §8: a runnable ruleset retires terminal claims; a fixture is one a node starts on.
+            .with_claim_retirement_daa(200)
             .unwrap()
     }
 
@@ -804,6 +832,8 @@ pub(crate) mod tests {
                 .with_worker_carve_permille(620)
                 .unwrap()
                 .with_turn_deadline_daa(20)
+                .unwrap()
+                .with_claim_retirement_daa(200)
                 .unwrap(),
             admission: PalwAdmissionParamsV2::new(500).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
@@ -874,7 +904,10 @@ pub(crate) mod tests {
                 // enforces another — the C5 disagreement shape, applied to the base id.
                 "base id disagreement",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800, 0).unwrap();
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800, 0)
+                        .unwrap()
+                        .with_claim_retirement_daa(200)
+                        .unwrap();
                 }),
             ),
             (
@@ -884,7 +917,10 @@ pub(crate) mod tests {
                 // subject (shares are chain state now); the split is still a params fact.
                 "one-lane split (1000‰ has no receipts)",
                 Box::new(|b| {
-                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap();
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                        .unwrap()
+                        .with_claim_retirement_daa(200)
+                        .unwrap();
                 }),
             ),
             (
@@ -1387,6 +1423,8 @@ pub(crate) mod tests {
                 .with_worker_carve_permille(620)
                 .unwrap()
                 .with_turn_deadline_daa(20)
+                .unwrap()
+                .with_claim_retirement_daa(200)
                 .unwrap();
             assert!(
                 bundle.validate().is_err(),

@@ -1163,6 +1163,22 @@ impl VirtualStateProcessor {
                     // spent of its worker reward, so this coinbase does not pay it twice.
                     ctx.palw_v2_escrow_withheld =
                         palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent)).unwrap_or(0);
+                    // Launch blockers §8: and which of the OTHER merged blues this block may not
+                    // pay at all, from the same parent state and for the same reason.
+                    ctx.palw_v2_unentitled_blues = palw_state
+                        .as_ref()
+                        .map(|s| {
+                            // The same non-DAA set `verify_expected_utxo_state` reads a few frames
+                            // down, from the same store — the two must agree or the coinbase this
+                            // computes is not the coinbase that is checked.
+                            use crate::model::stores::daa::DaaStoreReader;
+                            let non_daa = self
+                                .daa_excluded_store
+                                .get_mergeset_non_daa(current)
+                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa)
+                        })
+                        .unwrap_or_default();
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
@@ -1332,6 +1348,17 @@ impl VirtualStateProcessor {
                                 ) {
                                     Ok((next, delta)) => {
                                         *state = next;
+                                        // Launch blockers §8: say it out loud. A voided claim's
+                                        // escrow is burned by don't-mint (Decision 10), and a
+                                        // network whose panels never bind burns the whole worker
+                                        // carve of every block while looking exactly like one that
+                                        // pays it.
+                                        let destroyed = kaspa_consensus_core::palw_state_v2::palw_escrow_destroyed_by_delta_v2(&delta);
+                                        if destroyed > 0 {
+                                            warn!(
+                                                "PALW: block {current} voided claims holding {destroyed} sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)"
+                                            );
+                                        }
                                         Some((state.state_root(), delta))
                                     }
                                     Err(palw_error) => {
@@ -3734,6 +3761,72 @@ impl VirtualStateProcessor {
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
             .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
+    }
+
+    /// **Launch blockers §8: which merged blues this block's coinbase may not pay.**
+    ///
+    /// The subsidy is what PALW work is paid with, so the chain has to be able to say the producer
+    /// did PALW work under a bond. For the selected parent it can — the transition admitted it in
+    /// full. For every other merged blue it never asked: the stateful half of admission runs on
+    /// the selected chain only, and the coinbase paid the rest of the mergeset anyway. A miner
+    /// with no bond at all could therefore collect the worker share on nothing but a solved hash,
+    /// which is the opposite of ADR-0038.
+    ///
+    /// Only the ENTITLEMENT items (bond present and not retiring, its key and operator, the class
+    /// registered and unfrozen) — see `check_palw_producer_entitlement_v2` for why the resource
+    /// items are excluded. The stateless half is already true of every relayed block, so between
+    /// the two a paid blue has a verified signature from a bonded key of a live class.
+    ///
+    /// Evaluated against `state`, which is the state AT THE SELECTED PARENT — the same state the
+    /// escrow and the payouts are read from, so a node building a template and a node validating
+    /// it ask the identical question. Empty on every network without a V2 bundle.
+    pub(super) fn palw_v2_unentitled_blues(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        mergeset_non_daa: &BlockHashSet,
+    ) -> BlockHashSet {
+        use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
+        let mut unentitled = BlockHashSet::default();
+        if self.palw_state_params_v2.is_none() {
+            return unentitled;
+        }
+        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+            // The selected parent went through the full admission on its way to becoming a chain
+            // block, and its reward is escrowed rather than paid. Re-deciding it here could only
+            // ever disagree with the transition that already accepted it.
+            if *blue == ghostdag_data.selected_parent {
+                continue;
+            }
+            let Ok(header) = self.headers_store.get_header(*blue) else {
+                // A blue whose header this node cannot read is one it cannot vouch for. It never
+                // happens — the block is in the mergeset — and if it did, not paying is the side
+                // that does not mint.
+                unentitled.insert(*blue);
+                continue;
+            };
+            // A non-attempt-lane block on a V2 network is not a block this chain accepted work
+            // from. The header gate already refuses the algorithm, so this is the same fact read
+            // a second time rather than a new rule.
+            if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+                unentitled.insert(*blue);
+                continue;
+            }
+            match PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) {
+                Ok(envelope) => {
+                    if let Err(e) =
+                        kaspa_consensus_core::palw_admission_v2::check_palw_producer_entitlement_v2(state, &envelope.attempt)
+                    {
+                        debug!("merged blue {blue} is not paid a worker share: {e}");
+                        unentitled.insert(*blue);
+                    }
+                }
+                Err(_) => {
+                    unentitled.insert(*blue);
+                }
+            }
+        }
+        unentitled
     }
 
     /// **Audit C-08's third part: what a RELEASED bond's collateral still owes the burn.**
@@ -9285,6 +9378,16 @@ impl VirtualStateProcessor {
             .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
             .map(|(block, state)| self.palw_v2_escrow_withheld_at(&state, block))
             .unwrap_or(0);
+        // Launch blockers §8, construction side: the merged blues this template may not pay. Same
+        // state, same question, same answer as the validating walk — a template that disagreed
+        // would mine blocks its own node rejects.
+        let palw_unentitled_blues = self
+            .palw_state_params_v2
+            .as_ref()
+            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
+            .map(|(_, state)| self.palw_v2_unentitled_blues(&state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa))
+            .unwrap_or_default();
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -9297,6 +9400,7 @@ impl VirtualStateProcessor {
                 carve,
                 (newly_included_stake, expected_stake),
                 palw_escrow_withheld,
+                &palw_unentitled_blues,
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

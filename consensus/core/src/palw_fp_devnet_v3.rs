@@ -158,6 +158,18 @@ const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 /// loop needs a fresh reservation per attempt rather than recycling one.
 const FP_ABANDON_HOLD: u64 = WINDOW_BIND;
 
+/// **How long a terminal claim is kept before it is removed** (launch blockers §8, third bullet).
+///
+/// Set to the court window, which is the longest single window on the lattice, so a claim stays
+/// inspectable for as long as the slowest dispute it could have been part of would have taken.
+///
+/// What it buys is a BOUND. A claim's whole live span is at most
+/// `bind + receipt + challenge + court` = 4,800 blocks, so with this the claim map settles at
+/// ~7,200 entries instead of growing by one per block forever: ~3.8 MB of tip row and ~6 ms of
+/// `state_root` per block at the frozen 120 s cadence, flat, rather than 54 MB and 49 ms after
+/// four months and no ceiling after that.
+const CLAIM_RETIREMENT: u64 = WINDOW_COURT;
+
 /// The worker share of the fixed subsidy (a carve, never an addition).
 const WORKER_CARVE_PERMILLE: u16 = 620;
 
@@ -280,7 +292,8 @@ pub fn palw_fp_devnet_bundle_v3(
     // readers. `COURT_TURN_DEADLINE` here is what turns the interactive ladder ON: it is strictly
     // inside `WINDOW_COURT`, which is what makes a rung deadline able to fire at all.
     .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
-    .with_turn_deadline_daa(COURT_TURN_DEADLINE)?;
+    .with_turn_deadline_daa(COURT_TURN_DEADLINE)?
+    .with_claim_retirement_daa(CLAIM_RETIREMENT)?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.

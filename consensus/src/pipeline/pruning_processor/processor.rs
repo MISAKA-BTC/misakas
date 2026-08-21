@@ -630,6 +630,21 @@ impl PruningProcessor {
                 // (recent) selected parent, so pruning deep blocks never breaks it.
                 self.reserve_balance_store.delete_batch(&mut batch, current).unwrap();
                 self.block_transactions_store.delete_batch(&mut batch, current).unwrap();
+                // **ADR-0042 Unit C: the PALW V2 delta row of a pruned block** (launch blockers §8,
+                // third bullet). One row per chain block, written by `commit_utxo_state` and never
+                // deleted — on a V2 network that is unbounded growth of the one store nothing ever
+                // reclaimed.
+                //
+                // Safe for the same reason the UTXO diffs above are: the only reader is the state
+                // walk, and it never descends below the finality point, which is at or above the
+                // pruning point. A row this loop deletes can never be asked for again — and if the
+                // arithmetic behind that sentence were ever wrong, `palw_state_walk` refuses a
+                // missing delta by name rather than reading it as nothing (Decision 5), so the
+                // failure is a named refusal and not a silently lighter chain.
+                //
+                // A no-op (delete-of-absent) on every network without a V2 bundle, which is every
+                // shipped preset.
+                self.palw_state_v2_store.write().delete_delta_batch(&mut batch, current).unwrap();
                 // kaspa-pq ADR-0020 (EVM lane): prune this pruned block's per-block
                 // EVM data (audit H-01 — without this the EVM stores grew O(state ×
                 // blocks) and were never reclaimed). All keyed by the L1 block hash;

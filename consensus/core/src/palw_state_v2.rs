@@ -221,6 +221,24 @@ pub struct PalwStateParamsV2 {
     /// [`PalwStateParamsV2::with_turn_deadline_daa`]. It is never zero, because a zero window
     /// defaults whichever party the block order happens to reach first.
     turn_deadline_daa: u64,
+
+    /// **How long a terminal claim stays in the state before it is removed** (launch blockers §8,
+    /// third bullet). `0` — the default — means never, which is what every state before this
+    /// param did.
+    ///
+    /// A claim is created by every attempt-lane block and, once `Final` or `Voided`, is read by
+    /// nothing: `safe_weight` is a running total updated at the finalize, the payout is a row in
+    /// its own map, the frontier counts only unresolved claims, and the no-duplicate rule cannot
+    /// bite because `attempt_id_v2` hashes the attempt's `challenge`, which binds the header's
+    /// own position — a second block can never present the same id. So the record is kept for
+    /// exactly one reason, which is that somebody might want to look at it.
+    ///
+    /// Measured cost of keeping it forever, in release, at the frozen 120 s cadence: a claim is
+    /// 530 bytes, `state_root` re-hashes every collection on EVERY block, and the tip row
+    /// serializes the whole registry on every walk. 10k claims (≈14 days) is 8.2 ms and a 5.4 MB
+    /// row per block; 100k (≈139 days) is 49 ms and 54 MB; 1M is 467 ms and 538 MB. It does not
+    /// plateau — see `measure_claim_growth_cost`.
+    claim_retirement_daa: u64,
     /// **The producer's carve of a block's subsidy, in permille — what a claim ESCROWS.**
     ///
     /// It lives here, in the state machine's own parameters, because it decides STATE: the
@@ -322,6 +340,7 @@ impl PalwStateParamsV2 {
             // The whole session as one rung: the identity that leaves the backstop as the only
             // clock. See the field doc.
             turn_deadline_daa: window_court,
+            claim_retirement_daa: 0,
         })
     }
 
@@ -341,6 +360,21 @@ impl PalwStateParamsV2 {
 
     pub fn turn_deadline_daa(&self) -> u64 {
         self.turn_deadline_daa
+    }
+
+    /// Set the retirement span. Must sit strictly above the abandon hold when both are on: the two
+    /// are the only deadlines a terminal claim can own, and ordering them is what makes the index
+    /// recomputable from the record — the hold entry first, the retirement entry after it.
+    pub fn with_claim_retirement_daa(mut self, claim_retirement_daa: u64) -> Result<Self, PalwStateV2Error> {
+        if claim_retirement_daa > 0 && self.fp_abandon_hold_daa > 0 && claim_retirement_daa <= self.fp_abandon_hold_daa {
+            return Err(PalwStateV2Error::InvalidParams("the claim retirement span must outlast the abandon hold"));
+        }
+        self.claim_retirement_daa = claim_retirement_daa;
+        Ok(self)
+    }
+
+    pub fn claim_retirement_daa(&self) -> u64 {
+        self.claim_retirement_daa
     }
 
     /// Set the producer carve (ADR-0042 Decision 10). Consuming-builder rather than a `new`
@@ -1354,6 +1388,18 @@ pub struct PalwChainStateV2 {
     safe_frontier: BlockHash,
     last_point: Option<PalwBlockContextV2>,
 
+    /// **The `safe_weight` that belongs to claims this state no longer holds** (launch blockers
+    /// §8, third bullet).
+    ///
+    /// `safe_weight` is a running total, but the consistency check re-derives it by summing the
+    /// `Final` claims — which is a real check and worth keeping, so retiring a `Final` claim has
+    /// to say where its contribution went rather than let the identity quietly become an
+    /// inequality. `safe_weight == retired_safe_weight + Σ Final claims` is the same statement the
+    /// check made before, with the retired claims named.
+    ///
+    /// Zero on every state of a network that does not retire.
+    retired_safe_weight: u128,
+
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
@@ -1390,6 +1436,7 @@ impl PalwChainStateV2 {
             safe_frontier_blue_score: 0,
             safe_frontier: ZERO_HASH64,
             last_point: None,
+            retired_safe_weight: 0,
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             open_courts_by_claim: BTreeMap::new(),
@@ -1533,6 +1580,7 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
         state.update(collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters).as_byte_slice());
         state.update(&self.safe_weight.to_le_bytes());
+        state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -1653,9 +1701,10 @@ impl PalwChainStateV2 {
         if exposure != self.reserved_exposure {
             return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the claims it summarizes".into()));
         }
+        let safe = safe.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
         if safe != self.safe_weight {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
-                "safe_weight {} differs from the Final claims' sum {safe}",
+                "safe_weight {} differs from the Final claims' sum plus the retired total {safe}",
                 self.safe_weight
             )));
         }
@@ -1695,7 +1744,14 @@ impl PalwChainStateV2 {
         // `BindTimeout`-voided free-prompt claim owns a deadline while its hold runs and none
         // afterwards, and without params this check cannot tell which. The exact count is the
         // parameterized check's business; here the abandoned claims are the slack.
-        let holdable = self.claims.values().filter(|c| abandon_hold_may_hold_a_deadline(c)).count();
+        // The slack is exactly the set of claims that MAY own a terminal deadline. With retirement
+        // on that is every terminal claim; with it off it is only the abandon holds, so a network
+        // that does not retire keeps the tight bound it had.
+        let holdable = if params.claim_retirement_daa > 0 {
+            self.claims.values().filter(|c| c.phase.is_terminal()).count()
+        } else {
+            self.claims.values().filter(|c| abandon_hold_may_hold_a_deadline(c)).count()
+        };
         let low = expected_deadlines.len();
         let high = low + holdable;
         if self.deadlines.len() < low || self.deadlines.len() > high {
@@ -1748,21 +1804,16 @@ impl PalwChainStateV2 {
                     }
                     expected.insert(*stored);
                 }
-                // Audit C5's abandon hold: the ONE terminal phase that owes a deadline. It is
-                // `voided_daa + hold`, derived from the record exactly as `void_claim` armed it —
-                // which is what keeps the index rebuildable from the claims alone.
-                PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout }
-                    if params.fp_abandon_hold_daa > 0 && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) =>
-                {
-                    let release_at =
-                        voided_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
-                    // Swept holds leave no entry: after the release block the claim is an ordinary
-                    // terminal record. `last_point` is what says whether the sweep has happened.
-                    if self.last_point.as_ref().is_none_or(|point| point.daa_score <= release_at) {
-                        expected.insert((release_at, *id));
+                // Audit C5's abandon hold and launch blockers §8's retirement: the two deadlines a
+                // terminal record can own, both derived from the record exactly as they were
+                // armed — which is what keeps the index rebuildable from the claims alone. Swept
+                // holds leave no entry, and a swept retirement leaves no CLAIM, so a terminal
+                // record that is still here owes at most one.
+                PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
+                    if let Some(at) = terminal_deadline_of(claim, params, self.last_point.as_ref())? {
+                        expected.insert((at, *id));
                     }
                 }
-                PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {}
             }
         }
         if expected != self.deadlines {
@@ -1792,6 +1843,43 @@ fn expected_deadline(claim: &PalwClaimStateV2, open_courts: u32) -> Option<u64> 
 fn abandon_hold_may_hold_a_deadline(claim: &PalwClaimStateV2) -> bool {
     matches!(claim.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. })
         && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+}
+
+/// The DAA at which a claim became terminal, or `None` while it is still live.
+fn terminal_daa_of(claim: &PalwClaimStateV2) -> Option<u64> {
+    match claim.phase {
+        PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
+        PalwClaimPhaseV2::Voided { voided_daa, .. } => Some(voided_daa),
+        _ => None,
+    }
+}
+
+/// The deadline entry a still-present terminal claim owes, recomputed from the record alone
+/// (launch blockers §8).
+///
+/// Two entries are possible and they are ordered by `with_claim_retirement_daa`: the abandon hold
+/// first, the retirement after it. Which one is live is decided the same way the hold's own arm
+/// decides it — by `last_point`, the only thing in the state that says how far the sweep has run.
+///
+/// `None` when retirement is off, which is every state that predates the param.
+fn terminal_deadline_of(
+    claim: &PalwClaimStateV2,
+    params: &PalwStateParamsV2,
+    last_point: Option<&PalwBlockContextV2>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    let Some(terminal_daa) = terminal_daa_of(claim) else {
+        return Ok(None);
+    };
+    if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
+        let release_at = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+        if last_point.is_none_or(|point| point.daa_score <= release_at) {
+            return Ok(Some(release_at));
+        }
+    }
+    if params.claim_retirement_daa == 0 {
+        return Ok(None);
+    }
+    Ok(Some(terminal_daa.checked_add(params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?))
 }
 
 /// Placeholder anchor for the shape-level count (the parameterless check counts entries; the
@@ -1846,6 +1934,7 @@ pub enum PalwDeltaEntryV2 {
     Epoch { key: Hash64, old: Option<PalwEpochCounterV2>, new: Option<PalwEpochCounterV2> },
     ReceiptEpoch { key: Hash64, old: Option<PalwEpochCounterV2>, new: Option<PalwEpochCounterV2> },
     Weights { old: (u128, u128), new: (u128, u128) },
+    RetiredWeight { old: u128, new: u128 },
     Frontier { old: (u64, BlockHash), new: (u64, BlockHash) },
     LastPoint { old: Option<PalwBlockContextV2>, new: Option<PalwBlockContextV2> },
 }
@@ -1858,6 +1947,37 @@ pub enum PalwDeltaEntryV2 {
 pub struct PalwStateDeltaV2 {
     pub point: PalwBlockContextV2,
     pub entries: Vec<PalwDeltaEntryV2>,
+}
+
+/// **The escrow this block destroyed** (launch blockers §8, second bullet).
+///
+/// ADR-0042 Decision 10 withholds a producer's worker share at acceptance and pays it out when the
+/// claim reaches `Final`. `Voided` is the other terminal, and there the withheld value is simply
+/// never minted — burned by don't-mint, deliberately. What was missing is that nothing anywhere
+/// said so: a network whose panels are not being bound voids every claim it creates, burns the
+/// whole worker carve of every block, and looks from the outside exactly like a network paying
+/// it. An operator cannot debug a number nobody prints.
+///
+/// Read off the delta rather than accounted in the state, because it is a fact ABOUT a transition
+/// and not a fact the transition needs: adding a running total to `PalwChainStateV2` would move
+/// `state_root`, which is the ruleset identity every bonded party has already committed to.
+///
+/// Counts only claims that ENTER `Voided` from a non-terminal phase — a delta that rewrites a
+/// voided claim for its abandon-hold release did not destroy anything a second time.
+pub fn palw_escrow_destroyed_by_delta_v2(delta: &PalwStateDeltaV2) -> u64 {
+    delta
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            PalwDeltaEntryV2::Claim { old: Some(old), new: Some(new), .. }
+                if matches!(new.phase, PalwClaimPhaseV2::Voided { .. })
+                    && !matches!(old.phase, PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::Final { .. }) =>
+            {
+                Some(new.escrowed_reward)
+            }
+            _ => None,
+        })
+        .fold(0u64, |acc, v| acc.saturating_add(v))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2166,8 +2286,9 @@ impl<'a> TransitionBuilder<'a> {
         }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
-        self.write_claim(id, Some(finalized));
+        self.write_claim(id, Some(finalized.clone()));
         self.disarm_deadline(id);
+        self.arm_retirement(id, &finalized)?;
         Ok(())
     }
 
@@ -2206,8 +2327,45 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         self.release_for_claim(claim)?;
-        self.write_claim(id, Some(voided));
+        self.write_claim(id, Some(voided.clone()));
         self.disarm_deadline(id);
+        self.arm_retirement(id, &voided)?;
+        Ok(())
+    }
+
+    /// Arm a terminal claim's retirement, if this network retires claims at all.
+    ///
+    /// A no-op when `claim_retirement_daa` is 0 — which is every network before the param — so a
+    /// state that never retires is byte-for-byte the state it was.
+    fn arm_retirement(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        if self.params.claim_retirement_daa == 0 {
+            return Ok(());
+        }
+        let terminal_daa = terminal_daa_of(claim).expect("arm_retirement is called on a terminal claim");
+        let at = terminal_daa.checked_add(self.params.claim_retirement_daa).ok_or(PalwStateV2Error::Overflow("claim retirement"))?;
+        self.arm_deadline(at, id);
+        Ok(())
+    }
+
+    /// **Remove a terminal claim and everything keyed to it** (launch blockers §8, third bullet).
+    ///
+    /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
+    /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
+    fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
+        // running total does not move here — the claim's contribution is simply carried by a
+        // different name, so the consistency identity stays an equality rather than degrading to
+        // "at least".
+        if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            let old = self.state.retired_safe_weight;
+            let new = old.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
+            self.state.retired_safe_weight = new;
+            self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
+        }
+        self.write_claim(id, None);
+        if self.state.panels.contains_key(&id) {
+            self.write_panel(id, None);
+        }
         Ok(())
     }
 
@@ -2894,6 +3052,15 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                     "the hold's own deadline fired while the record still says it is held"
                 );
                 builder.release_abandon_hold(&claim)?;
+                // The hold is over; the record now owes its retirement entry, which is strictly
+                // later (`with_claim_retirement_daa` enforces the ordering) so this loop still
+                // terminates. A no-op on a network that does not retire.
+                builder.arm_retirement(claim_id, &claim)?;
+            }
+            PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } if builder.params.claim_retirement_daa > 0 => {
+                // Launch blockers §8: the retirement. Nothing reads a terminal claim, and keeping
+                // it costs a re-hash and a re-serialization of the whole registry on every block.
+                builder.retire_claim(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
                 // Any other terminal claim owns no deadline; finding one is index corruption.
@@ -3509,6 +3676,16 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::Court { key, old, new } => swap_write!(state.court_sessions, key, old, new),
         PalwDeltaEntryV2::Epoch { key, old, new } => swap_write!(state.epoch_counters, key, old, new),
         PalwDeltaEntryV2::ReceiptEpoch { key, old, new } => swap_write!(state.receipt_epoch_counters, key, old, new),
+        // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
+        // component of `Weights`, because it moves on a different event (a retirement sweep) than
+        // the two that ride together (a maturation).
+        PalwDeltaEntryV2::RetiredWeight { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.retired_safe_weight != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("retired weight does not match the delta's expectation"));
+            }
+            state.retired_safe_weight = *install;
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -3577,15 +3754,12 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
                     *id,
                 ));
             }
-            PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout }
-                if params.fp_abandon_hold_daa > 0 && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) =>
-            {
-                // Audit C5's abandon hold, rebuilt on the same rule `void_claim` armed and
-                // `assert_deadline_consistency` recomputes.
-                let release_at =
-                    voided_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
-                if state.last_point.as_ref().is_none_or(|point| point.daa_score <= release_at) {
-                    deadlines.insert((release_at, *id));
+            PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
+                // Audit C5's abandon hold and launch blockers §8's retirement, rebuilt on the same
+                // rule `void_claim`/`finalize_claim` armed and `assert_deadline_consistency`
+                // recomputes — one helper, so the three cannot drift.
+                if let Some(at) = terminal_deadline_of(claim, params, state.last_point.as_ref())? {
+                    deadlines.insert((at, *id));
                 }
             }
             PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => {}
@@ -3606,7 +3780,6 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
                 let last_daa = state.last_point.map(|p| p.daa_score).unwrap_or(0);
                 deadlines.insert((floor.max(last_daa), *id));
             }
-            PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {}
         }
     }
     state.deadlines = deadlines;
@@ -3642,6 +3815,9 @@ pub struct PalwStateCarriageV2 {
     pub epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
     pub receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
     pub safe_weight: u128,
+    /// Launch blockers §8: the `safe_weight` of retired claims. Primary data — it is not
+    /// derivable from the claims, precisely because the claims it summarizes are gone.
+    pub retired_safe_weight: u128,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
     pub safe_frontier: BlockHash,
@@ -3667,6 +3843,7 @@ impl PalwStateCarriageV2 {
             epoch_counters: state.epoch_counters.clone(),
             receipt_epoch_counters: state.receipt_epoch_counters.clone(),
             safe_weight: state.safe_weight,
+            retired_safe_weight: state.retired_safe_weight,
             bounded_immature: state.bounded_immature,
             safe_frontier_blue_score: state.safe_frontier_blue_score,
             safe_frontier: state.safe_frontier,
@@ -3717,6 +3894,7 @@ impl PalwStateCarriageV2 {
             epoch_counters: self.epoch_counters,
             receipt_epoch_counters: self.receipt_epoch_counters,
             safe_weight: self.safe_weight,
+            retired_safe_weight: self.retired_safe_weight,
             bounded_immature: self.bounded_immature,
             safe_frontier_blue_score: self.safe_frontier_blue_score,
             safe_frontier: self.safe_frontier,
@@ -4168,8 +4346,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) =
-            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         assert!(s4.pending_payouts_iter().next().is_none(), "still nothing payable while the claim is refutable");
 
         // The sweep that makes it Final. Note the subsidy here is 9_999_999 and DIFFERENT from the
@@ -4336,6 +4519,158 @@ pub(crate) mod tests {
         // confers no frontier. A chain whose only claim was thrown out has done no provable work
         // and must not outrank one that has — the frontier stays where it started.
         assert_eq!(s3.safe_frontier(), PalwChainStateV2::genesis().safe_frontier(), "a voided claim matures nothing");
+    }
+
+    #[test]
+    #[ignore]
+    fn measure_claim_growth_cost() {
+        use std::time::Instant;
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let mut state = s1;
+        // Terminal claims, so nothing sweeps them and the map only grows — the shipped behaviour.
+        let template = state.claims.clone();
+        assert!(template.is_empty());
+        let env = attempt(40, 1);
+        let (s2, _) = apply(
+            &state,
+            &p,
+            &PalwBlockContextV2 { block: block(2), daa_score: 101, blue_score: 2, subsidy: 1_000_000 },
+            &[],
+            Some(&env),
+        );
+        let one = s2.claims.values().next().unwrap().clone();
+        let key0 = *s2.claims.keys().next().unwrap();
+        let bytes = borsh::to_vec(&one).unwrap().len() + borsh::to_vec(&key0).unwrap().len();
+        state = s2;
+        for n in [10_000usize, 100_000, 1_000_000] {
+            while state.claims.len() < n {
+                let k = Hash64::from_u64_word(state.claims.len() as u64 + 1_000_000);
+                let mut c = one.clone();
+                c.phase = PalwClaimPhaseV2::Final { final_daa: 1 };
+                state.claims.insert(k, c);
+            }
+            let t = Instant::now();
+            let _ = state.state_root();
+            let root_ms = t.elapsed().as_secs_f64() * 1000.0;
+            let t = Instant::now();
+            let carriage = PalwStateCarriageV2::from_state(&state);
+            let carriage_bytes = borsh::to_vec(&carriage).unwrap().len();
+            let ser_ms = t.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "claims={n} per_claim_bytes={bytes} state_root={root_ms:.1}ms carriage={carriage_bytes}B serialize={ser_ms:.1}ms"
+            );
+        }
+    }
+
+    /// **A terminal claim is removed, and everything keyed to it goes with it** (launch blockers
+    /// §8, third bullet).
+    ///
+    /// `state_root` re-hashes every collection on every block and the tip row re-serializes the
+    /// whole registry on every walk, so a map that grows by one entry per block is a cost that
+    /// grows with the chain and never comes back down — see `measure_claim_growth_cost` for the
+    /// numbers. Nothing reads a terminal claim, so nothing is lost by retiring it; what must
+    /// survive is the accounting it already folded into the running totals.
+    #[test]
+    fn a_retired_claim_leaves_the_state_without_taking_its_weight() {
+        let p = params().with_claim_retirement_daa(50).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        assert!(s3.panels.contains_key(&claim_id), "the panel is keyed on the claim");
+        let (s4, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        assert_eq!(s5.safe_weight(), 40);
+        let frontier_before = s5.safe_frontier();
+
+        // Final at 124, retirement span 50 → the entry is at 174, and the first block past it
+        // sweeps. A block at 174 must NOT (the sweep is strictly-before, like every other).
+        let (s6, _) = apply(&s5, &p, &ctx(6, 174, 6), &[], None);
+        assert!(s6.claim(&claim_id).is_some(), "the retirement deadline itself does not sweep");
+
+        let (s7, retire) = apply(&s6, &p, &ctx(7, 175, 7), &[], None);
+        assert!(s7.claim(&claim_id).is_none(), "the claim is gone");
+        assert!(!s7.panels.contains_key(&claim_id), "and its panel with it");
+        assert_eq!(s7.safe_weight(), 40, "the weight it earned stays — it is a running total, not a sum over claims");
+        assert_eq!(s7.safe_frontier(), frontier_before, "and the frontier does not move backwards");
+        assert_eq!(palw_escrow_destroyed_by_delta_v2(&retire), 0, "retiring a FINAL claim burns nothing");
+
+        // Reverting the retirement puts it back, byte for byte — which is what makes a reorg
+        // across a retirement safe.
+        let restored = revert_delta_v2(&s7, &retire, &p).expect("the retirement reverts");
+        assert_eq!(restored.state_root(), s6.state_root(), "the revert reproduces the state before the sweep");
+    }
+
+    /// The same, for the claim that never made it: a voided claim is retired too, and its bind
+    /// deadline does not linger in the index after the record is gone.
+    #[test]
+    fn a_voided_claim_is_retired_and_the_state_returns_to_its_pre_claim_size() {
+        let p = params().with_claim_retirement_daa(50).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let root_before_any_claim = s1.state_root();
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        // Bind window 10 from 101 → voids at 112.
+        let (s3, _) = apply(&s2, &p, &ctx(3, 112, 3), &[], None);
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+        // Voided at 112 + 50 = 162; 163 sweeps it.
+        let (s4, _) = apply(&s3, &p, &ctx(4, 163, 4), &[], None);
+        assert!(s4.claim(&claim_id).is_none(), "the voided claim is retired");
+        assert_eq!(s4.claims.len(), 0, "the map is back where it started");
+
+        // The state root differs only by the chain point the last block wrote — the CLAIM's
+        // contribution is gone, which is the whole point.
+        assert_ne!(s4.state_root(), root_before_any_claim, "last_point moved, so the roots differ");
+        assert_eq!(
+            collection_root(b"claims", &s4.claims),
+            collection_root(b"claims", &s1.claims),
+            "but the claims collection hashes to exactly what it did before the claim existed"
+        );
+    }
+
+    /// **The burn is countable** (launch blockers §8, second bullet).
+    ///
+    /// Decision 10 destroys a voided claim's escrow on purpose. Nothing said so — not the state,
+    /// not the delta, not a log line — so a network whose panels are never bound burns the whole
+    /// worker carve of every block and is indistinguishable from one paying it. The number is read
+    /// off the delta so that saying it costs no change to `state_root`.
+    #[test]
+    fn a_voided_claim_reports_the_escrow_it_destroyed() {
+        // The shipped RC carve is 620‰; the fixture's default is 0, which would make the whole
+        // assertion vacuous.
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        // A block with a real subsidy, so the claim escrows a real amount.
+        let subsidy = 1_000_000u64;
+        let (s2, create) =
+            apply(&s1, &p, &PalwBlockContextV2 { block: block(2), daa_score: 101, blue_score: 2, subsidy }, &[], Some(&env));
+        let escrowed = s2.claim(&claim_id).unwrap().escrowed_reward;
+        assert_eq!(escrowed, worker_carve_v2(&p, subsidy), "the claim escrowed this block's worker carve");
+        assert!(escrowed > 0, "the fixture must escrow something for the count to mean anything");
+        assert_eq!(palw_escrow_destroyed_by_delta_v2(&create), 0, "creating a claim destroys nothing");
+
+        // The sweep that voids it is the block that destroys the escrow.
+        let (s3, sweep) = apply(&s2, &p, &ctx(3, 112, 3), &[], None);
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+        assert_eq!(palw_escrow_destroyed_by_delta_v2(&sweep), escrowed, "the void reports what it burned");
+
+        // And it reports it exactly once: the claim is terminal, so no later block destroys it again.
+        let (_, after) = apply(&s3, &p, &ctx(4, 400, 4), &[], None);
+        assert_eq!(palw_escrow_destroyed_by_delta_v2(&after), 0, "a burn is counted at the block that burns it");
     }
 
     #[test]
@@ -6667,6 +7002,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::EpochBudgets { .. } => "epoch_budgets",
                     PalwDeltaEntryV2::ReceiptTarget { .. } => "receipt_target",
                     PalwDeltaEntryV2::Capability { .. } => "capability",
+                    PalwDeltaEntryV2::RetiredWeight { .. } => "retired_weight",
                     PalwDeltaEntryV2::Claim { .. } => "claim",
                     PalwDeltaEntryV2::Payout { .. } => "payout",
                     PalwDeltaEntryV2::Panel { .. } => "panel",

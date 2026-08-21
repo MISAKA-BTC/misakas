@@ -156,6 +156,23 @@ impl CoinbaseManager {
         //
         // `0` on every network without a V2 bundle, which is every shipped preset.
         palw_escrow_withheld: u64,
+        // **ADR-0038: the mergeset blues whose producer this chain cannot show is bonded** —
+        // launch blockers §8, first bullet.
+        //
+        // The subsidy pays for PALW work. On a `ConsensusV2` network the attempt's stateless half
+        // (shape, the challenge against the header's own position, the executor signature) is
+        // checked for EVERY block before GHOSTDAG, but the stateful half — the named bond exists,
+        // is not retiring, holds the carried key and operator, and the class is registered and
+        // unfrozen — runs only where there is chain state to run it against, which is the selected
+        // chain. Every other merged blue was paid its full worker share anyway, so a block that
+        // never joined the chain collected the subsidy on a solved hash and an unbonded key.
+        //
+        // These are the blues that failed that check against the accepting block's own state.
+        // They are not rejected — DAG membership must not depend on state their miner could not
+        // have known — they are simply not paid, and the value is not minted elsewhere either.
+        //
+        // Empty on every network without a V2 bundle, which is every shipped preset.
+        palw_unentitled_blues: &BlockHashSet,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
@@ -175,6 +192,11 @@ impl CoinbaseManager {
         // Add an output for each mergeset blue block (∩ DAA window), paying to the script reported by the block.
         // Note that combinatorically it is nearly impossible for a blue block to be non-DAA
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+            // Not paid, and nothing is redistributed: the share is simply not minted. Placed
+            // before the reward lookup so an unentitled blue costs nothing to skip.
+            if palw_unentitled_blues.contains(blue) {
+                continue;
+            }
             let reward_data = mergeset_rewards.get(blue).unwrap();
             // §F carve: pay the Worker share EXCLUDING the §D worker-inclusion sub-pool
             // (carved into `worker_inclusion_pool`, paid to the includer below); else full.

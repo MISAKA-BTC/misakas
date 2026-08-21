@@ -123,19 +123,27 @@ pub enum PalwAdmissionV2Error {
     ClassNotYetActive { class_id: Hash64, activation_daa: u64 },
 }
 
-/// The stateful admission verdict for one attempt against one candidate chain point.
+/// **Items 1–5 alone: is the party behind this attempt entitled to produce at all?**
 ///
-/// Returns the attempt id — the identity every accepted consumer keys on — so a caller that
-/// admits and then applies cannot recompute a different one in between.
-pub fn check_palw_attempt_admission_v2(
+/// The split exists because the subsidy and the claim are two different questions asked at two
+/// different places. `check_palw_attempt_admission_v2` below answers "does this candidate chain
+/// accept this claim", which is a chain-block question and includes the resource items — the
+/// epoch budget, the class lottery, the exposure ceiling, the no-duplicate rule. A merged blue
+/// block asks something narrower and is asked it by the COINBASE: this block is being paid a
+/// worker share, so is its producer a bonded, registered, unfrozen participant, or is it a
+/// stranger who solved a hash?
+///
+/// Running the full list there would be wrong in the other direction: a resource item can refuse
+/// an honest merged blue for reasons that belong to the chain block (the chain block spent the
+/// epoch's budget, the same attempt is already claimed) and it would go unpaid for someone else's
+/// consumption. Entitlement is exactly the part that is about the producer.
+///
+/// Items 1–5 verbatim, and the composed admission below calls THIS rather than restating them —
+/// two copies of "who may produce" is how the two answers drift apart.
+pub fn check_palw_producer_entitlement_v2(
     state: &PalwChainStateV2,
-    state_params: &PalwStateParamsV2,
-    admission: &PalwAdmissionParamsV2,
-    ctx: &PalwBlockContextV2,
-    envelope: &PalwAttemptEnvelopeV2,
-) -> Result<Hash64, PalwAdmissionV2Error> {
-    let attempt = &envelope.attempt;
-
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+) -> Result<(), PalwAdmissionV2Error> {
     // 1 + 9. The bond, at the candidate point, in one status read.
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
     let bond = state.bond(&bond_key).ok_or(PalwAdmissionV2Error::BondMissing(bond_key))?;
@@ -172,6 +180,28 @@ pub fn check_palw_attempt_admission_v2(
     if class.artifact_root != attempt.artifact_root {
         return Err(PalwAdmissionV2Error::ArtifactRootMismatch);
     }
+
+    Ok(())
+}
+
+/// The stateful admission verdict for one attempt against one candidate chain point.
+///
+/// Returns the attempt id — the identity every accepted consumer keys on — so a caller that
+/// admits and then applies cannot recompute a different one in between.
+pub fn check_palw_attempt_admission_v2(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    ctx: &PalwBlockContextV2,
+    envelope: &PalwAttemptEnvelopeV2,
+) -> Result<Hash64, PalwAdmissionV2Error> {
+    let attempt = &envelope.attempt;
+
+    // Items 1–5: the producer's entitlement, shared verbatim with the coinbase's question.
+    check_palw_producer_entitlement_v2(state, attempt)?;
+    let bond_key = PalwBondKeyV2(attempt.executor_bond);
+    let bond = state.bond(&bond_key).expect("entitlement resolved this bond");
+    let class = state.class(&attempt.class_id).expect("entitlement resolved this class");
 
     // 6. The pwu claim against the class rule (pwu ≥ 1 is stateless).
     match class.pwu_rule {

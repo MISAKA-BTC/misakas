@@ -595,6 +595,80 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
 }
 
+/// **A merged blue is paid only if this chain can show its producer is bonded** (launch blockers
+/// §8, first bullet).
+///
+/// The subsidy pays for PALW work, but the stateful half of admission runs only on the selected
+/// chain — so every other merged blue in the DAA window was paid its full worker share without the
+/// chain ever asking whether the key that signed it belongs to a live bond. A miner with no bond
+/// at all collected on a solved hash.
+///
+/// Both directions, because a filter that refuses everything would also make the first assertion
+/// pass: the honest chain's blues are all entitled and all paid, and the predicate that decides it
+/// really does refuse an attempt whose bond this chain does not hold.
+#[tokio::test]
+async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
+    use crate::model::stores::daa::DaaStoreReader;
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 16);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink = ctx.consensus.get_sink();
+    let ghostdag_data = vp.ghostdag_store.get_data(sink).unwrap();
+    assert!(ghostdag_data.mergeset_blues.len() > 1, "the fixture must merge a blue besides the selected parent");
+    let non_daa = vp.daa_excluded_store.get_mergeset_non_daa(sink).unwrap();
+
+    // The state AT the sink's selected parent — the one the coinbase is computed against.
+    let (tip_block, tip_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip_block, sink, "the walk left the tip at the sink");
+    let parent_state = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(sink).expect("the sink has a delta");
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&tip_state, &delta, &bundle.state).expect("the sink's delta reverts")
+    };
+
+    // Honest chain: nothing is withheld. A filter that dropped an honest miner's subsidy would be
+    // a worse bug than the one it closes.
+    let unentitled = vp.palw_v2_unentitled_blues(&parent_state, &ghostdag_data, &non_daa);
+    assert!(unentitled.is_empty(), "every blue of an honest V2 chain is bonded and paid, got {unentitled:?}");
+
+    // And the predicate really separates: the same attempt, naming a bond this chain does not hold.
+    let blue = *ghostdag_data
+        .mergeset_blues
+        .iter()
+        .find(|h| **h != ghostdag_data.selected_parent && !non_daa.contains(h))
+        .expect("a merged blue that is not the selected parent");
+    let header = vp.headers_store.get_header(blue).expect("the blue's header");
+    let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).expect("a V2 block carries an attempt");
+    kaspa_consensus_core::palw_admission_v2::check_palw_producer_entitlement_v2(&parent_state, &envelope.attempt)
+        .expect("the real attempt is entitled");
+    let mut forged = envelope.attempt.clone();
+    forged.executor_bond = kaspa_consensus_core::tx::TransactionOutpoint {
+        transaction_id: kaspa_consensus_core::tx::TransactionId::from_u64_word(0xDEAD),
+        index: 7,
+    };
+    assert!(
+        kaspa_consensus_core::palw_admission_v2::check_palw_producer_entitlement_v2(&parent_state, &forged).is_err(),
+        "an attempt naming a bond this chain does not hold is not entitled to the subsidy"
+    );
+}
+
 /// **An unclean shutdown between the PALW tip batch and the virtual-state commit is repaired, not
 /// fatal** (launch blockers §7, fourth bullet).
 ///

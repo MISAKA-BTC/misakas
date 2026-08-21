@@ -157,6 +157,12 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// the transition, which runs only for chain blocks, and the selected parent is the one block
     /// of the mergeset that is one.
     pub palw_v2_escrow_withheld: u64,
+
+    /// ADR-0038 / launch blockers §8: the mergeset blues whose producer this chain cannot show is
+    /// bonded, computed from the SAME selected-parent state the escrow above is. Empty on every
+    /// network without a V2 bundle. See `expected_coinbase_transaction`'s parameter for why these
+    /// go unpaid rather than rejected.
+    pub palw_v2_unentitled_blues: BlockHashSet,
     /// **Audit C-08 part three: what a released bond's spend must destroy, per outpoint.**
     ///
     /// The lock keeps a live bond's collateral unspendable; this is the other end. A bond that was
@@ -185,6 +191,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_payout_outputs: Vec::new(),
             palw_v2_locked_bonds: Default::default(),
             palw_v2_escrow_withheld: 0,
+            palw_v2_unentitled_blues: BlockHashSet::default(),
             palw_v2_bond_burns: Default::default(),
         }
     }
@@ -918,6 +925,7 @@ impl VirtualStateProcessor {
             carve,
             (newly_included_stake, expected_stake),
             ctx.palw_v2_escrow_withheld,
+            &ctx.palw_v2_unentitled_blues,
         )?;
 
         // Verify the header pruning point
@@ -966,6 +974,9 @@ impl VirtualStateProcessor {
         // ADR-0042 Decision 10: the selected parent's escrowed worker reward, withheld from its
         // payout. `0` on every network without a V2 bundle.
         palw_escrow_withheld: u64,
+        // ADR-0038 / launch blockers §8: the merged blues this chain will not pay, threaded to
+        // `expected_coinbase_transaction`. Empty on every current network.
+        palw_unentitled_blues: &BlockHashSet,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -981,6 +992,7 @@ impl VirtualStateProcessor {
                 carve,
                 inclusion,
                 palw_escrow_withheld,
+                palw_unentitled_blues,
             )
             .unwrap()
             .tx;
