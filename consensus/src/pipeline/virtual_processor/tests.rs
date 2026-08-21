@@ -648,9 +648,37 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     liar.header.palw_commitment = envelope.encode_wire();
     liar.header.finalize();
     let liar_hash = liar.header.hash;
-    ctx.validate_and_insert_block(liar.to_immutable()).await;
+    // `pwu` is inside `attempt_id_v2`, so moving it also breaks the signature — and since launch
+    // blockers §5 the relay path verifies that, so this lie is now refused at the DOOR rather than
+    // surviving to the chain walk. Both refusals are the point: the door one is what stops a
+    // forgery from costing every peer storage, and the pwu equality below is what stops it from
+    // ever being chain.
+    let outcome = ctx.consensus.validate_and_insert_block(liar.to_immutable()).virtual_state_task.await;
+    assert!(outcome.is_err(), "an attempt whose carriage was edited after signing does not enter the DAG");
     assert_eq!(ctx.consensus.get_sink(), sink_before, "an attempt claiming a pwu it did not derive cannot become the sink");
     assert_ne!(liar_hash, sink_before);
+
+    // And a lie that keeps its signature honest — re-signed by the real bond holder — still loses
+    // on the pwu clause itself, which is the equality this test is named for.
+    let mut resigned = template.block.clone();
+    let mut env2 =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&resigned.header.palw_commitment).unwrap();
+    env2.attempt.pwu += 1;
+    env2.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair().signing_key,
+        kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&env2.attempt).as_byte_slice(),
+        kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        [0x5Au8; 32],
+    )
+    .expect("sign")
+    .as_ref()
+    .to_vec();
+    resigned.header.palw_commitment = env2.encode_wire();
+    resigned.header.finalize();
+    let resigned_hash = resigned.header.hash;
+    ctx.validate_and_insert_block(resigned.to_immutable()).await;
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "a correctly-signed pwu lie is still refused by the equality");
+    assert_ne!(resigned_hash, sink_before);
 }
 
 /// **Unit C step 4's missing half: the block's own work reaches the state machine.**
@@ -1748,8 +1776,20 @@ async fn palw_v2_a_forged_attempt_signature_cannot_become_the_sink() {
         "the forgery moves no priced field — only the signature, which is what makes it free"
     );
 
-    ctx.validate_and_insert_block(forger.to_immutable()).await;
-    assert_eq!(ctx.consensus.get_sink(), sink_before, "an attempt whose signature does not verify cannot become the sink");
+    // **It is refused at the DOOR now, not at the chain walk** (launch blockers §5).
+    //
+    // The chain-walk check kept a forgery from becoming the sink, and that was thought sufficient.
+    // It was not: the block was still valid to relay, so every peer accepted, stored and forwarded
+    // it — and since the signature sits outside `commitment_root_v2` while the block-identity
+    // digest hashes the raw carrier bytes, ONE solved proof of work minted an unbounded number of
+    // distinct such blocks, a byte flip apiece. Never chain, and never free for anybody else.
+    let outcome = ctx.consensus.validate_and_insert_block(forger.to_immutable()).virtual_state_task.await;
+    let err = outcome.expect_err("a forged signature must not even enter the DAG");
+    assert!(
+        format!("{err}").contains("signature"),
+        "and the refusal must name the signature rather than a digest mismatch: {err}"
+    );
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "the sink is untouched");
     assert_ne!(forged_hash, sink_before);
 }
 
