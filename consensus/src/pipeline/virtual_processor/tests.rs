@@ -723,6 +723,57 @@ async fn palw_v2_an_attempt_block_creates_its_claim() {
     );
 }
 
+/// **Audit C-08's lock, resolved from a real chain's registry.**
+///
+/// A `PalwBondKeyV2` is the outpoint holding the bond's collateral, and nothing kept the money
+/// there: the owner could spend that output in block 1 and every exposure ceiling, every slash and
+/// Decision 7's Sybil bound would have been denominated in a balance the bond no longer had.
+///
+/// This pins the resolver — the seam between the V2 registry and the UTXO spend filter — against a
+/// state a real chain produced, at the two DAA scores that matter. What it does NOT do is spend
+/// the output: the fixture's genesis bond names an outpoint no test key can open (a genesis
+/// premine output needs its vault's ML-DSA key, and no harness holds one), so the last link is
+/// covered where it can be — `BondSpendFilter`'s own unit test, over the set this function returns.
+#[tokio::test]
+async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let registered: Vec<_> = state.bonds_iter().map(|(key, _)| key.0).collect();
+    assert_eq!(registered.len(), 1, "the fixture registers exactly one bond at genesis");
+
+    // The genesis bond is Active and backing three claims: locked at every score.
+    for daa in [0, 1, 1_000_000, u64::MAX] {
+        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa);
+        assert!(locked.contains(&registered[0]), "an Active bond's collateral must be locked at daa {daa}");
+        assert_eq!(locked.len(), 1, "and nothing else is");
+    }
+
+    // A network with no V2 bundle locks nothing here — the filter stays inert where it always was.
+    let plain = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let plain_consensus = TestConsensus::new(&plain);
+    let _lt = plain_consensus.init();
+    assert!(
+        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).is_empty(),
+        "no bundle, no bond policy, nothing locked — every shipped preset is unchanged"
+    );
+}
+
 /// **The measurement that proves the reservations are real: the ceiling can now be hit.**
 ///
 /// The bundle's default bond funds four concurrent claims (`MIN_COLLATERAL_SOMPI`, whose own

@@ -356,6 +356,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
     /// ADR-0042 Decision 6's params, `Some` on the same networks as `palw_state_params_v2`.
     pub(super) palw_admission_params_v2: Option<kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2>,
+    /// The V2 bond policy — read for one thing: the withdrawal delay a retiring bond's collateral
+    /// stays locked for (audit C-08's spend gate).
+    pub(super) palw_bond_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwBondParamsV2>,
     /// Decision 7's panel constants. Decision 10's producer carve is NOT here: it moved into
     /// `palw_state_params_v2`, because the escrow it decides is written into claim state at
     /// acceptance, and a number two structs can disagree about is a number the chain enforces
@@ -664,6 +667,10 @@ impl VirtualStateProcessor {
             },
             palw_admission_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.admission.clone()),
+                _ => None,
+            },
+            palw_bond_params_v2: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.bond),
                 _ => None,
             },
             palw_panel_params_v2: match &params.palw_consensus_mode {
@@ -1100,6 +1107,10 @@ impl VirtualStateProcessor {
                     // transition below has not run yet. Set before `calculate_utxo_state` because
                     // that is where the coinbase is verified against it.
                     ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).unwrap_or_default();
+                    // Audit C-08: and the collateral this block may not let anyone spend, from the
+                    // same parent state and for the same reason.
+                    ctx.palw_v2_locked_bonds =
+                        palw_state.as_ref().map(|s| self.palw_v2_locked_bond_outpoints(s, pov_daa_score)).unwrap_or_default();
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
@@ -2213,6 +2224,18 @@ impl VirtualStateProcessor {
         let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
         let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
+
+        // Audit C-08: virtual acceptance runs the same bond-spend filter the chain walk runs, or
+        // the template would build on a UTXO view that includes a spend every validating node
+        // skips. Read from the store tip, which IS virtual's selected parent — and only when the
+        // tip really names it, because a tip on another branch is not this candidate's registry.
+        ctx.palw_v2_locked_bonds = self
+            .palw_state_params_v2
+            .as_ref()
+            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
+            .map(|(_, state)| self.palw_v2_locked_bond_outpoints(&state, virtual_daa_window.daa_score))
+            .unwrap_or_default();
 
         // Calc virtual UTXO state relative to selected parent
         self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
@@ -3534,6 +3557,41 @@ impl VirtualStateProcessor {
     ///
     /// Scripts are DERIVED from the payload, never carried — see `PalwBondStateV2::payout_payload`
     /// for why a registrant may not write a coinbase script.
+    /// **Audit C-08: the bond collateral outpoints this block may not let anyone spend.**
+    ///
+    /// A `PalwBondKeyV2` is the outpoint holding the collateral, and until this existed nothing
+    /// kept the money there: the genesis gate could check that an outpoint held what a bond
+    /// declared, and the owner could spend it in block 1. Every exposure ceiling and every slash
+    /// was then denominated in a balance the bond no longer had — which is the whole of C-08.
+    ///
+    /// `state` is the SELECTED PARENT's, exactly like `palw_v2_payout_outputs` beside it: the
+    /// registry it reads is a committed fact of the block's own past, so two nodes validating the
+    /// same block resolve the same set however their virtual tips are placed. (That placement is
+    /// what made the audit-call gate a partition risk before it was moved onto the block's chain;
+    /// this one is on the block's chain by construction.)
+    ///
+    /// Built once per block rather than once per spending input.
+    pub(super) fn palw_v2_locked_bond_outpoints(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        now_daa: u64,
+    ) -> std::collections::HashSet<TransactionOutpoint> {
+        let Some(bond_params) = self.palw_bond_params_v2.as_ref() else {
+            return Default::default();
+        };
+        state
+            .bonds_iter()
+            .filter(|(_, record)| {
+                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
+                    record,
+                    now_daa,
+                    bond_params.withdrawal_delay_daa(),
+                )
+            })
+            .map(|(key, _)| key.0)
+            .collect()
+    }
+
     fn palw_v2_payout_outputs(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

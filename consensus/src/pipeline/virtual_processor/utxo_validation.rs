@@ -139,6 +139,13 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// is fixed before its transition. Empty on every network without a V2 bundle, and on most
     /// blocks of one.
     pub palw_v2_payout_outputs: Vec<TransactionOutput>,
+    /// **MISAKA audit C-08: the PALW V2 bond collateral outpoints that may not be spent.**
+    ///
+    /// Set by the virtual walk from the SELECTED PARENT's V2 state (the same read that supplies
+    /// `palw_v2_payout_outputs`, one line above it, and for the same reason: the parent's registry
+    /// is a committed fact, while this block's own transition has not run yet). Empty on every
+    /// network without a V2 bundle, which is every shipped preset.
+    pub palw_v2_locked_bonds: std::collections::HashSet<TransactionOutpoint>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -157,6 +164,7 @@ impl<'a> UtxoProcessingContext<'a> {
             reserve_accrual: 0,
             reserve_balance_after: 0,
             palw_v2_payout_outputs: Vec::new(),
+            palw_v2_locked_bonds: Default::default(),
         }
     }
 
@@ -175,20 +183,33 @@ impl<'a> UtxoProcessingContext<'a> {
 /// `bond_view` is the **post-acceptance** view (selected-parent bonds + every bond freshly inserted
 /// anywhere in this block's mergeset), a deterministic function of the shared inputs, so the rule is
 /// construction == validation. Cheap to `Copy` (a shared ref + a u64); `Sync` for the parallel walk.
+///
+/// **Two bond models, one filter (audit C-08).** The DNS overlay's bonds live in `bond_view`; the
+/// PALW V2 registry's live in `palw_locked`, resolved once per block from the selected parent's
+/// state rather than per input. They are kept in one filter because they answer the same question
+/// about the same input, and a second `Option` threaded through three signatures is a second place
+/// for one of them to be forgotten. Either side may be inert: a network with no V2 bundle has an
+/// empty `palw_locked`, and a network below the DNS mergeset fence has `bond_view: None`.
 #[derive(Clone, Copy)]
 pub(crate) struct BondSpendFilter<'a> {
-    bond_view: &'a ActiveBondView,
+    bond_view: Option<&'a ActiveBondView>,
     daa_score: u64,
+    palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
 }
 
 impl BondSpendFilter<'_> {
     /// `true` iff `outpoint` is a known bond that is NOT releasable at `self.daa_score` (i.e. its
     /// locked output-0 must not be spent). Mirrors the legacy [`bond_spend_gate`] releasable test.
     fn locks(&self, outpoint: &TransactionOutpoint) -> bool {
-        self.bond_view.get(outpoint).is_some_and(|bond| {
-            let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbonding
-                && bond_release_daa_score(bond).is_some_and(|release| self.daa_score >= release);
-            !releasable
+        if self.palw_locked.contains(outpoint) {
+            return true;
+        }
+        self.bond_view.is_some_and(|view| {
+            view.get(outpoint).is_some_and(|bond| {
+                let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbonding
+                    && bond_release_daa_score(bond).is_some_and(|release| self.daa_score >= release);
+                !releasable
+            })
         })
     }
 }
@@ -287,7 +308,14 @@ impl VirtualStateProcessor {
             // the selected parent's body, also accepted here) against the post-acceptance view, so a
             // merge-blue spend of a non-releasable bond's output-0 is skipped. `None` (inert) below
             // the fence. The spend-skip is independent of `SkipScriptChecks`.
-            let bond_filter = bond_gate_view.as_ref().map(|view| BondSpendFilter { bond_view: view, daa_score: pov_daa_score });
+            // Built when EITHER model has something to lock: the DNS view above the mergeset fence,
+            // or a non-empty PALW V2 registry (audit C-08). `None` only when both are inert, which
+            // keeps every shipped network byte-identical to the legacy own-body-only gate.
+            let bond_filter = (bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty()).then(|| BondSpendFilter {
+                bond_view: bond_gate_view.as_ref(),
+                daa_score: pov_daa_score,
+                palw_locked: &ctx.palw_v2_locked_bonds,
+            });
             let (validated_transactions, inner_multiset) =
                 self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
 
@@ -3683,12 +3711,45 @@ mod tests {
             releasable.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
 
             let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
-            let filter = BondSpendFilter { bond_view: &view, daa_score: DAA };
+            let empty = std::collections::HashSet::new();
+            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
             assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
             assert!(!filter.locks(&releasable_op), "a releasable (Unbonding past release) bond is spendable");
             assert!(!filter.locks(&outpoint(9)), "a non-bond outpoint is never locked");
+        }
+
+        /// **Audit C-08: the second bond model in the same filter, and each side inert alone.**
+        ///
+        /// The DNS overlay and the PALW V2 registry lock different outpoints for different
+        /// reasons, and one filter answers for both. What matters is that neither side leaks into
+        /// the other's answer: a network with no V2 bundle must behave exactly as it did, and a V2
+        /// network with the DNS mergeset gate closed must still lock its own bonds.
+        #[test]
+        fn the_palw_registry_locks_its_own_bonds_and_neither_model_answers_for_the_other() {
+            let dns_op = outpoint(1);
+            let palw_op = outpoint(7);
+            let view = ActiveBondView::from_records([(dns_op, bond(dns_op))]);
+            let palw: std::collections::HashSet<_> = [palw_op].into_iter().collect();
+            let empty = std::collections::HashSet::new();
+
+            // Both models live: each locks its own, and nothing else.
+            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw };
+            assert!(both.locks(&dns_op));
+            assert!(both.locks(&palw_op));
+            assert!(!both.locks(&outpoint(9)));
+
+            // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
+            // outpoint.
+            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty };
+            assert!(dns_only.locks(&dns_op));
+            assert!(!dns_only.locks(&palw_op));
+
+            // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
+            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw };
+            assert!(palw_only.locks(&palw_op));
+            assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
         }
     }
 

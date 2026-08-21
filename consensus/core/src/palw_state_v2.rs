@@ -539,6 +539,44 @@ pub enum PalwBondStatusV2 {
     },
 }
 
+/// **Audit C-08, second half: may this bond's collateral outpoint be spent at `now_daa`?**
+///
+/// A `PalwBondKeyV2` IS the outpoint holding the collateral (the genesis gate checks that it
+/// really holds it, `palw_genesis_v2`). Existence is not custody, though: without this predicate
+/// nothing stopped the owner spending that output in the very next block, so the chain's whole
+/// notion of stake was "an outpoint that held the money once". Every ceiling, every slash and
+/// Decision 7's Sybil bound would have been denominated in a balance the bond no longer had.
+///
+/// Locked, in three cases, and the third is the one that makes a slash cost something:
+///
+/// * **`Active`** — the bond is backing claims and may take more. Nothing to argue about.
+/// * **`Retiring`, inside the withdrawal delay** — the delay exists so a bond cannot leave before
+///   its fraud is provable (`palw_fp_devnet_v3` asserts the delay exceeds that liability), and a
+///   delay whose collateral is spendable throughout is a delay that delays nothing.
+/// * **anything with `slashed > 0`, forever (for now)** — `PalwBondStateV2::slashed` is documented
+///   as burned, "it leaves `collateral` and enters circulation nowhere". That sentence is only
+///   true if the sompi cannot be spent, and the transaction shape that would BURN the slashed part
+///   and return the remainder does not exist yet. Refusing the whole spend is the fail-closed
+///   reading — the same one `palw_audit_bond_spend_gate` takes for `SlashFlowOnly`, in the same
+///   words: refuse everything until the flow that could be right exists.
+///
+///   It over-punishes, deliberately and visibly: a bond slashed by one sompi cannot withdraw the
+///   rest. The alternative is under-punishing to exactly zero, which is the defect. The remainder
+///   is frozen, not confiscated, and the burn rule is what unfreezes it.
+pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
+    if bond.slashed > 0 {
+        return true;
+    }
+    match bond.status {
+        PalwBondStatusV2::Active => true,
+        PalwBondStatusV2::Retiring { since_daa } => match since_daa.checked_add(withdrawal_delay_daa) {
+            // An overflowing delay never elapses, which is the safe direction.
+            None => true,
+            Some(release_at) => now_daa < release_at,
+        },
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBondStateV2 {
     /// The key admission verifies commitment signatures under (Decision 6 item 2).
@@ -3593,6 +3631,49 @@ pub(crate) mod tests {
         // base = h64(1), max_factor = 4, tolerance = 1000‰ (grant floor: 1‰ at E = 1000),
         // fp split = 1000 (pure-attempt: the receipt lane measures nothing — the V1 identity).
         PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
+    }
+
+    /// **Audit C-08's lock, in every state a bond can be in.**
+    ///
+    /// Nothing about a slash cost anything while this was missing: the collateral outpoint was
+    /// spendable throughout, so `slashed` — documented as "it leaves `collateral` and enters
+    /// circulation nowhere" — described a field and not a sompi.
+    #[test]
+    fn a_bonds_collateral_is_locked_while_the_bond_can_still_lose_it() {
+        const DELAY: u64 = 6_000;
+        let base = PalwBondStateV2 {
+            pubkey: vec![7; 4],
+            operator_id: h64(0xE0),
+            collateral: 400_000,
+            slashed: 0,
+            status: PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: h64(0x9A11),
+        };
+
+        // Active: locked at every score, because it is backing claims and may take more.
+        for now in [0, 1, 10_000, u64::MAX] {
+            assert!(palw_bond_collateral_is_locked_v2(&base, now, DELAY), "an Active bond is locked at {now}");
+        }
+
+        // Retiring: locked until the withdrawal delay elapses, and the release side is inclusive —
+        // the delay is over AT `since + delay`.
+        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base.clone() };
+        assert!(palw_bond_collateral_is_locked_v2(&retiring, 1_000, DELAY));
+        assert!(palw_bond_collateral_is_locked_v2(&retiring, 6_999, DELAY));
+        assert!(!palw_bond_collateral_is_locked_v2(&retiring, 7_000, DELAY), "the delay is over at since + delay");
+        assert!(!palw_bond_collateral_is_locked_v2(&retiring, u64::MAX, DELAY));
+
+        // A delay that would overflow never elapses — the safe direction, not a wrap.
+        let late = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: u64::MAX - 1 }, ..base.clone() };
+        assert!(palw_bond_collateral_is_locked_v2(&late, u64::MAX, DELAY));
+
+        // **Slashed: locked, and this is the fail-closed arm.** Releasing it would put the slashed
+        // sompi back into circulation, and the transaction shape that burns them and returns the
+        // remainder does not exist yet. One sompi of slash freezes the whole collateral —
+        // deliberately, because the alternative is freezing none of it.
+        let slashed = PalwBondStateV2 { slashed: 1, status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base };
+        assert!(palw_bond_collateral_is_locked_v2(&slashed, u64::MAX, DELAY), "a slashed bond never releases (yet)");
     }
 
     /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the
