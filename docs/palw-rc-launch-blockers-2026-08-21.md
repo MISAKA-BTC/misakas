@@ -125,7 +125,14 @@ the retirement change already forces (settle M-02 first — one flag day, not tw
 
 ## The integration crate had never run — and running it earned its keep immediately
 
-Not one finding but three, peeled in order, recorded so none is rediscovered.
+> **Final state (2026-08-22, `4b5d8451`):** `MISAKA_PALW_POW_FIXTURE=1 cargo test --workspace
+> --lib` is **fully green — 68 crates, 2428 passed, 0 failed**, the integration crate itself
+> reporting `33 passed / 0 failed / 18 ignored` with the daemon tests included. The first complete
+> workspace pass in this repo's recorded history. The serial-mode (`--test-threads=1`) spin in
+> `daemon_cleaning_test` remains reproducible and remains item 3 below; the default mode a
+> workspace run actually uses does not hit it.
+
+Not one finding but FOUR, peeled in order, recorded so none is rediscovered.
 
 `cargo test --workspace --lib` reports **2044 passed / 0 failed across 41 crates**;
 `kaspa-testing-integration` is the 42nd and had never completed a workspace run.
@@ -146,7 +153,11 @@ Not one finding but three, peeled in order, recorded so none is rediscovered.
    and would close the connection from its side; on a V2 network every peer is a new binary by
    construction (the ruleset is in the consensus fingerprint). With the fix (`bce0f4e4`) the crate
    minus the daemon tests is green in one serial run: **30 passed / 0 failed / 17 ignored**, 812 s.
-3. **Still open**: a single-threaded run of the WHOLE crate spins at 99% CPU inside
+3. **Then the wallet aborted on testnet-12** (`4b5d8451`) — consensus gained `Some(12)` when the
+   RC network was named and the wallet's suffix table did not, the exact t11 incident replayed. The
+   behaviour-comparison test written after t11 caught it — on its FIRST workspace run, because
+   `cargo test` used to die at this crate before ever reaching the wallet's turn.
+4. **Still open, serial mode only**: a single-threaded run of the WHOLE crate spins at 99% CPU inside
    `daemon_cleaning_test` (the upstream shutdown-refcount assertion) even though the daemon tests
    pass 3/3 in isolation — something an earlier test starts keeps a reference alive. Whether it
    predates this session cannot be compared: before item 1 the crate died earlier either way.
