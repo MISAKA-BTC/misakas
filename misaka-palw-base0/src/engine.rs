@@ -136,6 +136,16 @@ pub struct ForwardProbe {
     /// real SiLU is its **asymmetry**: it floors at −0.278 while passing positives through, so a
     /// working gate has `|min| ≪ max` and a degenerate one has `|min| ≈ max`.
     pub gate_extremes: Vec<(i32, i32)>,
+    /// **The step rows this pass produced, by `BASE0_LAYER_IR` slot** (C-01).
+    ///
+    /// The court adjudicates a tile of one node's output at one coordinate, and until something
+    /// captured those rows there was no path from an execution to a step leg — the worker's own
+    /// comments said so, and every leg in the tree was synthesised by a test. These are the whole-row
+    /// steps: the ones the engine computes as a row rather than inside a per-head loop.
+    ///
+    /// `(layer, slot, row)`, in execution order. Values ride as `i32` lanes, which is what a BASE-0
+    /// tile leaf carries.
+    pub steps: Vec<(u16, u16, Vec<i32>)>,
 }
 
 impl ForwardProbe {
@@ -196,6 +206,7 @@ impl<'a> Base0Engine<'a> {
 
             // ---- attention ------------------------------------------------------------------
             let normed = self.norm_to_code(&h)?;
+            probe.steps.push((li as u16, 1, normed.iter().map(|c| *c as i32).collect()));
             // Per-channel when the artifact supplies it — that is where a projection BIAS lives,
             // in the `zero` of each channel's triple — and tensor-wide otherwise, which is what
             // every artifact built before grouped-query attention meant.
@@ -207,8 +218,11 @@ impl<'a> Base0Engine<'a> {
             };
             let kv = shape.kv_dim();
             let q = narrow(&matmul_quant(&layer.wq, &normed, d)?, 0)?;
+            probe.steps.push((li as u16, 3, q.iter().map(|c| *c as i32).collect()));
             let k = narrow(&matmul_quant(&layer.wk, &normed, kv)?, 1)?;
+            probe.steps.push((li as u16, 5, k.iter().map(|c| *c as i32).collect()));
             let v = narrow(&matmul_quant(&layer.wv, &normed, kv)?, 2)?;
+            probe.steps.push((li as u16, 7, v.iter().map(|c| *c as i32).collect()));
 
             // Rotate each head's q and k in place. `RopeTable` preserves the scale it is handed,
             // so the widening here is a reinterpretation and the narrowing after is only a clamp.
@@ -228,6 +242,8 @@ impl<'a> Base0Engine<'a> {
                 k_rot.extend(requantize_row_uniform(&rope_table(&kh, cos_row, sin_row)?, CODE_CLAMP));
             }
 
+            probe.steps.push((li as u16, 9, q_rot.iter().map(|c| *c as i32).collect()));
+            probe.steps.push((li as u16, 11, k_rot.iter().map(|c| *c as i32).collect()));
             cache.keys[li].push(k_rot);
             cache.values[li].push(v);
             let history = cache.keys[li].len();
@@ -264,7 +280,9 @@ impl<'a> Base0Engine<'a> {
             }
 
             let projected = requantize_row_uniform(&matmul_quant(&layer.wo, &attn, d)?, layer.requant[3]);
+            probe.steps.push((li as u16, 19, projected.iter().map(|c| *c as i32).collect()));
             h = requantize_row_uniform(&add_elem(&h, &projected)?, self.artifact.residual_requant_at(li, 0));
+            probe.steps.push((li as u16, 21, h.iter().map(|c| *c as i32).collect()));
 
             // ---- SwiGLU feed-forward --------------------------------------------------------
             let normed = self.norm_to_code(&h)?;
@@ -275,7 +293,9 @@ impl<'a> Base0Engine<'a> {
                 gate.iter().map(|c| *c as i32).max().unwrap_or(0),
             ));
             let up = requantize_row_uniform(&matmul_quant(&layer.w_up, &normed, shape.d_ff)?, layer.requant[5]);
+            probe.steps.push((li as u16, 29, up.iter().map(|c| *c as i32).collect()));
             let gated = requantize_row_uniform(&mul_elem(&gate, &up)?, CODE_PRODUCT_TO_CODE);
+            probe.steps.push((li as u16, 31, gated.iter().map(|c| *c as i32).collect()));
             let down = requantize_row_uniform(&matmul_quant(&layer.w_down, &gated, d)?, layer.requant[6]);
             h = requantize_row_uniform(&add_elem(&h, &down)?, self.artifact.residual_requant_at(li, 1));
             probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
