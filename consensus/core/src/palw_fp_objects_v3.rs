@@ -115,6 +115,27 @@ pub fn palw_fp_objects_from_accepted_txs_v3(
     out
 }
 
+/// **Transaction-level admission for [`SUBNETWORK_ID_PALW_FP_COMMITMENT`] (0x4a).**
+///
+/// Until this existed the id was DEFINED but not ROUTED: `check_transaction_subnetwork` fell
+/// through to the blanket `SubnetworksDisabled`, so no block could carry a free-prompt
+/// commitment, no claim of that source could ever be created, and the whole receipt lane was
+/// unreachable on a live network — the extraction walk beside it was a total function over a set
+/// that was always empty.
+///
+/// Context-free by construction, because isolation validation is: the payload must decode, and it
+/// must pass the shape half of its own stateless rules. The two checks it does NOT run here — the
+/// network domain and the derived CU price — need the network's bundle, which isolation has no
+/// access to, and both are re-run by [`palw_fp_objects_from_accepted_txs_v3`] where a failure
+/// SKIPS the carrier instead of rejecting the block. That asymmetry is the safe direction: this
+/// gate is strictly weaker than the walk, so it can never reject something the walk would have
+/// accepted, and it cannot admit anything the walk will silently credit.
+pub fn validate_palw_fp_commitment_tx(payload: &[u8]) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    let payload: PalwFpCommitmentTxPayloadV3 =
+        borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
+    payload.validate_shape_v3()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +296,52 @@ mod tests {
             })
             .collect();
         assert_eq!(claims, vec![first.claim_id(), second.claim_id()], "acceptance order is preserved");
+    }
+
+    /// **The door in front of the walk (0x4a's routing).**
+    ///
+    /// Admission is context-free, so it is deliberately WEAKER than the walk: it must never
+    /// reject a carrier the walk would have credited, and everything it lets through that the
+    /// walk refuses is skipped with a named reason rather than credited. Both directions are
+    /// asserted, because only one of them is safe to get wrong.
+    #[test]
+    fn admission_never_refuses_what_the_walk_would_credit() {
+        let fp = freeprompt();
+
+        // A payload the walk credits is admitted.
+        let good = borsh::to_vec(&payload(96, 256)).unwrap();
+        assert!(validate_palw_fp_commitment_tx(&good).is_ok());
+        assert_eq!(
+            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, good)], net(), &fp, h64(1)).objects.len(),
+            1
+        );
+
+        // Undecodable bytes are refused at the door — the one shape failure that needs no
+        // parameters at all.
+        assert_eq!(validate_palw_fp_commitment_tx(&[0xFF; 32]), Err(crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
+
+        // A shape failure the walk would skip is refused at the door instead, which is the same
+        // answer reached earlier.
+        let mut zero_decode = payload(96, 256);
+        zero_decode.commitment.decode_tokens_executed = 0;
+        assert!(validate_palw_fp_commitment_tx(&borsh::to_vec(&zero_decode).unwrap()).is_err());
+
+        // The two checks the door CANNOT run: a foreign network domain and an inflated price.
+        // Both are admitted here — this node has no bundle in isolation — and both are skipped by
+        // the walk, never credited. That is the deliberate asymmetry, pinned so a later "tighten
+        // the door" edit has to argue with it.
+        let foreign = borsh::to_vec(&payload(96, 256)).unwrap();
+        assert!(validate_palw_fp_commitment_tx(&foreign).is_ok(), "the door cannot know whose network this is");
+        let out = palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, foreign)], h64(0x99), &fp, h64(1));
+        assert!(out.objects.is_empty(), "but the walk knows, and credits nothing");
+        assert_eq!(out.skipped.len(), 1);
+
+        let mut inflated = payload(96, 256);
+        inflated.commitment.cu *= 10;
+        let inflated = borsh::to_vec(&inflated).unwrap();
+        assert!(validate_palw_fp_commitment_tx(&inflated).is_ok(), "the door cannot price without the bundle's weights");
+        let out = palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, inflated)], net(), &fp, h64(1));
+        assert!(out.objects.is_empty(), "and the walk re-derives the price rather than reading it");
+        assert_eq!(out.skipped.len(), 1);
     }
 }

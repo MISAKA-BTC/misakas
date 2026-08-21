@@ -635,6 +635,8 @@ pub enum PalwFpV3Error {
     SpendChallengeMismatch,
     #[error("the header carriage does not decode: {0}")]
     CarriageUndecodable(&'static str),
+    #[error("the transaction payload does not decode as a free-prompt commitment")]
+    PayloadUndecodable,
     #[error("beacon at daa {beacon_daa} sits before the draw slot {slot}")]
     BeaconBeforeSlot { beacon_daa: u64, slot: u64 },
     #[error("an attempt-class block at daa {prev_attempt_daa} already occupies the slot {slot} — the named beacon is not the first")]
@@ -646,12 +648,36 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// The CU claim is recomputed under the bundle's weights and a mismatch is named — never
     /// clamped, never trusted (invariant F7).
     pub fn validate_stateless_v3(&self, network_domain: Hash64, weights: &PalwFpCuWeightsV3) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), Some(weights))
+    }
+
+    /// **The half a context-free caller can run: everything except the two checks that need the
+    /// network's own parameters.**
+    ///
+    /// The transaction validator admits a free-prompt carrier in ISOLATION — no header, no chain
+    /// state, and (by the same rule that keeps isolation re-usable across DAA scores) no
+    /// per-network bundle. It therefore cannot ask "is this MY network's domain" or "is the
+    /// carried cu the price MY weights derive"; both are the extraction walk's, which holds the
+    /// bundle and re-derives the price rather than reading it.
+    ///
+    /// Deliberately the SAME code, parameterized, rather than a second copy of the shape rules:
+    /// a divergence between the admission check and the walk's would admit carriers the walk
+    /// then silently drops, which is exactly the "reads as nothing" failure this family keeps
+    /// closing. The refusal ORDER is preserved too — the omitted checks are skipped in place,
+    /// not moved — so a payload wrong in several ways names the same error either way.
+    pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, None)
+    }
+
+    fn validate_v3(&self, network_domain: Option<Hash64>, weights: Option<&PalwFpCuWeightsV3>) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: job.version, expected: PALW_FP_V3_VERSION });
         }
-        if job.network_domain != network_domain {
+        if let Some(network_domain) = network_domain
+            && job.network_domain != network_domain
+        {
             return Err(PalwFpV3Error::NetworkDomainMismatch);
         }
         if job.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
@@ -692,9 +718,11 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if !canonical {
             return Err(PalwFpV3Error::NonCanonicalStopReason { executed: c.decode_tokens_executed, limit: job.decode_token_limit });
         }
-        let derived = fp_cu_v3(job.prompt_tokens, c.decode_tokens_executed, weights);
-        if c.cu != derived {
-            return Err(PalwFpV3Error::CuMismatch { claimed: c.cu, derived });
+        if let Some(weights) = weights {
+            let derived = fp_cu_v3(job.prompt_tokens, c.decode_tokens_executed, weights);
+            if c.cu != derived {
+                return Err(PalwFpV3Error::CuMismatch { claimed: c.cu, derived });
+            }
         }
         if c.trace_chunk_count == 0 {
             return Err(PalwFpV3Error::ZeroTraceChunks);
@@ -1023,12 +1051,22 @@ impl PalwFpCommitmentTxPayloadV3 {
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
     pub fn validate_stateless_v3(&self, network_domain: Hash64, weights: &PalwFpCuWeightsV3) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), Some(weights))
+    }
+
+    /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
+    /// why the transaction validator can only run this one.
+    pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, None)
+    }
+
+    fn validate_v3(&self, network_domain: Option<Hash64>, weights: Option<&PalwFpCuWeightsV3>) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope =
             PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_stateless_v3(network_domain, weights)?;
+        envelope.validate_v3(network_domain, weights)?;
         if self.prompt_token_ids.len() != self.commitment.job.prompt_tokens as usize {
             return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt length is not the committed prompt length"));
         }

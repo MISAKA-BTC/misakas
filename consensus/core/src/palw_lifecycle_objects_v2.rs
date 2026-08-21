@@ -143,6 +143,40 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
     out
 }
 
+/// Why a lifecycle carrier was refused at ADMISSION. Distinct from the walk's `skipped` strings
+/// because a rejection is a fact about a transaction and has to name itself in a block-rule
+/// error, while a skip is a note in a log.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwLifecycleTxError {
+    #[error("the payload does not decode as a lifecycle carriage")]
+    Undecodable,
+    #[error("the payload names wire version {got}, not {expected}")]
+    UnsupportedVersion { got: u16, expected: u16 },
+    #[error("this object kind may not ride a transaction: {0}")]
+    ObjectMayNotRide(&'static str),
+}
+
+/// **Transaction-level admission for [`SUBNETWORK_ID_PALW_LIFECYCLE`] (0x4b).**
+///
+/// The module doc above explains what the extractor is for; this is the gate that lets a carrier
+/// reach it. Without it the id was defined, tested and unreachable: `check_transaction_subnetwork`
+/// had no arm for 0x4b, so every lifecycle transaction was `SubnetworksDisabled` at admission and
+/// the liveness hole the extractor was written to close stayed exactly as open as before — a
+/// claim still could not be licensed, no court move could be filed, and PALW weight was still
+/// permanently zero. An extractor with no door in front of it extracts nothing.
+///
+/// The rules are the walk's own, in the walk's order, so admission and extraction cannot
+/// disagree: decode, wire version, and the may-ride table. Everything past that — that the claim
+/// exists, that it is in the right phase, that a court close adjudicates — is stateful and stays
+/// where it is, in the transition and its acceptance checks.
+pub fn validate_palw_lifecycle_tx(payload: &[u8]) -> Result<(), PalwLifecycleTxError> {
+    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(payload).map_err(|_| PalwLifecycleTxError::Undecodable)?;
+    if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
+        return Err(PalwLifecycleTxError::UnsupportedVersion { got: payload.version, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+    }
+    palw_lifecycle_object_may_ride_v2(&payload.object).map_err(PalwLifecycleTxError::ObjectMayNotRide)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +313,55 @@ mod tests {
         let out = palw_lifecycle_objects_from_accepted_txs_v2(&[misrouted]);
         assert!(out.objects.is_empty(), "this walk reads its own band and nothing else");
         assert!(out.skipped.is_empty(), "and a foreign band is not even a skip — it is not addressed to us");
+    }
+
+    /// **Admission and extraction must give ONE answer.**
+    ///
+    /// The transaction validator decides what may be in a block; this walk decides what a block's
+    /// contents mean. If the two disagreed in the permissive direction a carrier would be admitted
+    /// and then silently dropped (the "reads as nothing" failure); in the strict direction a
+    /// carrier the walk would have credited could never reach a block at all. Both are closed by
+    /// running one table from one place — asserted here over every case the pair can see, rather
+    /// than left to the fact that today they call the same function.
+    #[test]
+    fn admission_accepts_exactly_what_the_walk_extracts() {
+        let cases: Vec<Vec<u8>> = vec![
+            // Rides.
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 {
+                version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC1), receipts: Vec::new() },
+            })
+            .unwrap(),
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 {
+                version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) },
+            })
+            .unwrap(),
+            // Does not ride: the chain derives panel bindings.
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: panel_bound() }).unwrap(),
+            // Does not ride: a declared collateral nothing on this path locks.
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 {
+                version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object: PalwConsensusObjectV2::BondRegistered {
+                    bond: bond(9),
+                    pubkey: vec![3u8; 8],
+                    operator_pubkey: vec![5u8; 8],
+                    collateral: 1_000_000,
+                    payout_payload: h64(0x1234),
+                },
+            })
+            .unwrap(),
+            // Wrong wire version.
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: 99, object: panel_bound() }).unwrap(),
+            // Undecodable.
+            vec![0xFF; 8],
+        ];
+        for payload in cases {
+            let admitted = validate_palw_lifecycle_tx(&payload).is_ok();
+            let extracted = !palw_lifecycle_objects_from_accepted_txs_v2(&[carrier(SUBNETWORK_ID_PALW_LIFECYCLE, payload.clone())])
+                .objects
+                .is_empty();
+            assert_eq!(admitted, extracted, "admission and extraction disagree on {payload:?}");
+        }
     }
 }

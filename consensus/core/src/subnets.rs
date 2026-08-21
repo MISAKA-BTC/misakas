@@ -357,6 +357,11 @@ mod tests {
             ("PALW_FP_COMMITMENT", SUBNETWORK_ID_PALW_FP_COMMITMENT),
             ("PALW_REFUTATION", SUBNETWORK_ID_PALW_REFUTATION),
             ("PALW_EVIDENCE_CHUNK", SUBNETWORK_ID_PALW_EVIDENCE_CHUNK),
+            ("PALW_EQUIVOCATION", SUBNETWORK_ID_PALW_EQUIVOCATION),
+            ("PALW_STEP_CONVICTION", SUBNETWORK_ID_PALW_STEP_CONVICTION),
+            ("PALW_BISECT_MOVE", SUBNETWORK_ID_PALW_BISECT_MOVE),
+            ("PALW_RECEIPT", SUBNETWORK_ID_PALW_RECEIPT),
+            ("PALW_LIFECYCLE", SUBNETWORK_ID_PALW_LIFECYCLE),
         ];
         for (i, (a_name, a)) in all.iter().enumerate() {
             for (b_name, b) in all.iter().skip(i + 1) {

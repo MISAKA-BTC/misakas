@@ -122,6 +122,21 @@ pub enum TxRuleError {
     #[error("transaction has an invalid PALW carriage payload: {0}")]
     InvalidPalwCarriagePayload(crate::palw_carriage::PalwCarriageError),
 
+    /// ADR-0044: a transaction on the free-prompt commitment subnetwork (0x4a) carried a payload
+    /// that failed the context-free half of its stateless rules. The network-dependent half — the
+    /// domain binding and the derived CU price — is the extraction walk's, which holds the bundle
+    /// and skips rather than rejects; see `palw_fp_objects_v3::validate_palw_fp_commitment_tx`.
+    #[error("transaction has an invalid PALW free-prompt payload: {0}")]
+    InvalidPalwFpPayload(crate::palw_freeprompt_v3::PalwFpV3Error),
+
+    /// ADR-0042 Decisions 7/8: a transaction on the claim-lifecycle subnetwork (0x4b) carried a
+    /// payload that does not decode, names another wire version, or carries an object kind that
+    /// may not enter a chain through a transaction at all (a bond registration, a class
+    /// registration, a derived panel binding, or a free-prompt commitment — each excluded for its
+    /// own reason, see `palw_lifecycle_objects_v2`).
+    #[error("transaction has an invalid PALW lifecycle payload: {0}")]
+    InvalidPalwLifecyclePayload(crate::palw_lifecycle_objects_v2::PalwLifecycleTxError),
+
     /// [`TxRuleError::FeerateTooLow`] is not a consensus error but a mempool error triggered by the
     /// fee/mass RBF validation rule
     #[error("fee rate per contextual mass gram is not greater than the fee rate of the replaced transaction")]

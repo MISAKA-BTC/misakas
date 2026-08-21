@@ -7,7 +7,11 @@ use kaspa_consensus_core::dns_finality::{
     validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
-use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
+use kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx;
+use kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx;
+use kaspa_consensus_core::subnets::{
+    SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
+};
 use kaspa_consensus_core::token::{validate_token_burn_payload, validate_token_transfer_payload};
 use kaspa_consensus_core::tx::Transaction;
 use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
@@ -309,6 +313,27 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // `SubnetworksDisabled`, so a block carrying one splits an unupgraded fleet. Shipping
         // this arm IS the release artifact, not a live activation.
         validate_palw_carriage_stage1_tx(kind, &tx.payload, &tx.outputs).map_err(TxRuleError::InvalidPalwCarriagePayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_FP_COMMITMENT {
+        // ADR-0044 free-prompt commitment (0x4a). Its own id rather than a carriage kind, because
+        // the codec and the signing context are the free-prompt family's, and routing one band's
+        // payload through the other band's validator is what separate ids exist to prevent.
+        //
+        // **This arm and the one below it are why a V2 network can produce weight at all.** Both
+        // ids were defined, both had extractors, both had tests — and neither had a route, so
+        // `check_transaction_subnetwork` reached the blanket reject below and every carrier of
+        // either kind was refused at admission. A commitment could not be published, a claim could
+        // not be licensed, a court could not be opened; every claim that did exist voided at
+        // `BindTimeout` and PALW weight stayed permanently zero.
+        validate_palw_fp_commitment_tx(&tx.payload).map_err(TxRuleError::InvalidPalwFpPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
+        // ADR-0042 Decisions 7/8 claim lifecycle (0x4b): the licensing, the producer default and
+        // the four court moves. The kinds that may NOT ride — bond and class registration, the
+        // chain-derived panel binding, the free-prompt commitment that has its own id — are
+        // refused here by the same table the extraction walk applies, so admission and extraction
+        // give one answer.
+        validate_palw_lifecycle_tx(&tx.payload).map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
         Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
@@ -676,10 +701,24 @@ mod tests {
         tx.subnetwork_id = SubnetworkId::from_byte(0x49);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
 
-        // The hard edge moved with it: 0x4A (one past the band) is NOT routed and still rejects
-        // with the blanket `SubnetworksDisabled` — an unknown id stays a coordinated-release matter.
+        // 0x4A and 0x4B are routed too, but NOT as carriage kinds — they are the free-prompt
+        // commitment and the claim lifecycle, each with its own codec, so an attestation body on
+        // either lands in that band's own validator and is refused by that band's own error. The
+        // error type IS the assertion: a `InvalidPalwCarriagePayload` here would mean one band's
+        // payload had reached another band's validator, which is what separate ids prevent.
         let mut tx = base.clone();
         tx.subnetwork_id = SubnetworkId::from_byte(0x4A);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwFpPayload(_)));
+
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x4B);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
+
+        // The hard edge moved with them: 0x4C (one past the last routed id) is NOT routed and
+        // still rejects with the blanket `SubnetworksDisabled` — an unknown id stays a
+        // coordinated-release matter.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x4C);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
 
         // Stage-0 carriage is untouched: the SAME object with its magic envelope on the NATIVE
