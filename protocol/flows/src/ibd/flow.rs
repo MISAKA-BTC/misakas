@@ -889,16 +889,26 @@ impl IbdFlow {
                     // The adoption happened, so now it is a switch. Counting here rather than above
                     // is the fix: `reserve_preferred_ibd_candidate` returning false means no chain
                     // was abandoned, and a count of abandonments must not include it.
-                    {
+                    // Counted against the budget only if it is a DIFFERENT lineage — following one
+                    // chain as it grows abandons nothing (see `note_adoption`).
+                    let counted = {
                         let mut registry = self.ctx.ibd_candidates().write();
-                        registry.note_switch();
+                        registry.note_adoption(id.pruning_point)
+                    };
+                    if counted {
+                        self.ctx.chain_participation().record_switch(switch_number);
+                        warn!(
+                            "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving \
+                             the next IBD for it and handing over. (switch {} of {})",
+                            id.virtual_selected_parent, verified_blue_work, ours, switch_number, MAX_CHAIN_SWITCHES
+                        );
+                    } else {
+                        info!(
+                            "Candidate {} is a longer version of the chain this node already adopted (same pruning point {}); \
+                             re-syncing to it without spending switch budget.",
+                            id.virtual_selected_parent, id.pruning_point
+                        );
                     }
-                    self.ctx.chain_participation().record_switch(switch_number);
-                    warn!(
-                        "Candidate {} has a VALIDATED blue work of {} at its pruning point against this node's {}. Reserving \
-                         the next IBD for it and handing over. (switch {} of {})",
-                        id.virtual_selected_parent, verified_blue_work, ours, switch_number, MAX_CHAIN_SWITCHES
-                    );
                 }
             }
         }
@@ -1300,7 +1310,9 @@ impl IbdFlow {
                 // Fold in anything carried over from a previous run before counting this one, so the
                 // cap bounds the node's history rather than this process's.
                 registry.resume_switches(self.ctx.chain_participation().restored_switches());
-                registry.note_switch();
+                // Same rule as the nomination path: a longer version of the lineage already
+                // adopted is not an abandonment, so it does not spend budget.
+                registry.note_adoption(candidate.pruning_point);
                 registry.switches()
             };
             self.ctx.chain_participation().record_switch(switches);

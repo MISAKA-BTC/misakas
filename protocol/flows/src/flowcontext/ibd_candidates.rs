@@ -373,6 +373,20 @@ pub struct IbdCandidateRegistry {
     peer_proof_failures: HashMap<PeerKey, (u32, Instant)>,
     /// Syncs abandoned in favour of a verified-better candidate, since the node started.
     switches: u32,
+    /// The pruning point of the lineage this node last adopted, if any.
+    ///
+    /// **Following one chain as it GROWS is not abandoning a chain.** The cap exists to stop two
+    /// chains trading the latch forever; a node that keeps re-syncing to a longer version of the
+    /// chain it is already on has abandoned nothing, and counting those is how a node that merely
+    /// runs slower than the network gets quarantined for keeping up. Measured on testnet-12's
+    /// first launch: host B adopted the producer's single chain five times as it advanced — five
+    /// different tips, one lineage — hit `MAX_CHAIN_SWITCHES` and quarantined itself while
+    /// perfectly healthy.
+    ///
+    /// The pruning point is the lineage key because it is what a candidate's proof is rooted at:
+    /// two tips of one growing chain share it until the chain prunes, and two genuinely different
+    /// chains do not share it at all.
+    last_adopted_lineage: Option<BlockHash>,
 }
 
 impl IbdCandidateRegistry {
@@ -544,8 +558,21 @@ impl IbdCandidateRegistry {
         self.switches
     }
 
-    pub fn note_switch(&mut self) {
+    /// Record an adoption. Returns whether it COUNTED as a switch — a continuation of the lineage
+    /// already adopted does not.
+    pub fn note_adoption(&mut self, lineage: BlockHash) -> bool {
+        let same_lineage = self.last_adopted_lineage == Some(lineage);
+        self.last_adopted_lineage = Some(lineage);
+        if same_lineage {
+            return false;
+        }
         self.switches = self.switches.saturating_add(1);
+        true
+    }
+
+    /// The lineage this node last adopted, for callers that report on the decision.
+    pub fn last_adopted_lineage(&self) -> Option<BlockHash> {
+        self.last_adopted_lineage
     }
 
     /// Adopt a switch count carried over from a previous run, so the cap is not per-process.
@@ -1119,9 +1146,32 @@ mod tests {
     fn switches_are_counted_so_two_branches_cannot_trade_the_latch_forever() {
         let mut r = IbdCandidateRegistry::default();
         assert_eq!(r.switches(), 0);
-        r.note_switch();
-        r.note_switch();
+        assert!(r.note_adoption(BlockHash::from_u64_word(1)));
+        assert!(r.note_adoption(BlockHash::from_u64_word(2)));
         assert_eq!(r.switches(), 2, "a node cannot tell 'I keep finding better chains' from 'I am being played'");
+    }
+
+    /// **Following one chain as it grows is not abandoning a chain** (testnet-12 launch, 2026-08-22).
+    ///
+    /// The counter fix that came before this one stopped counting ENCOUNTERS and started counting
+    /// adoptions — correct, and still not enough. Host B adopted the producer's single chain five
+    /// times as it advanced: five different tips, one lineage, one pruning point. That spent the
+    /// whole budget and quarantined a node whose only fault was validating slower than the network
+    /// produces — which on PALW, where a header costs an inference to check, is every node that
+    /// falls behind at all. There is no reset path an operator can reach (`--clear-quarantine`
+    /// deliberately keeps the count), so it is permanent.
+    #[test]
+    fn re_syncing_to_a_longer_version_of_the_same_chain_spends_no_budget() {
+        let mut r = IbdCandidateRegistry::default();
+        assert!(r.note_adoption(BlockHash::from_u64_word(1)), "the first adoption of a lineage is a switch");
+        for _ in 0..20 {
+            assert!(!r.note_adoption(BlockHash::from_u64_word(1)), "the same lineage, further along, is not a second abandonment");
+        }
+        assert_eq!(r.switches(), 1, "twenty re-syncs to one chain cost one switch");
+        assert!(r.note_adoption(BlockHash::from_u64_word(2)), "a genuinely different lineage still counts");
+        assert_eq!(r.switches(), 2);
+        assert!(r.note_adoption(BlockHash::from_u64_word(1)), "and switching BACK is a switch — that is the ping-pong the cap exists for");
+        assert_eq!(r.switches(), 3);
     }
 
     #[test]
@@ -1819,8 +1869,8 @@ mod switch_persistence_tests {
         // Folding in a previous run's count must not be able to *reset* this process's, or a node
         // that switched twice since starting would forget by resuming an older, smaller figure.
         let mut r = IbdCandidateRegistry::default();
-        r.note_switch();
-        r.note_switch();
+        r.note_adoption(BlockHash::from_u64_word(1));
+        r.note_adoption(BlockHash::from_u64_word(2));
         r.resume_switches(1);
         assert_eq!(r.switches(), 2, "resuming an older count must not lower the current one");
         r.resume_switches(7);
