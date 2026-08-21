@@ -181,8 +181,25 @@ What remains is not implementation:
   and the plumbing exist (ADR-0050: the residual may amplify, and the gain is a committed tensor);
   the gains that make Qwen worth carrying weight are a converter output, and the class stays
   weightless until they justify activation.
-* **Gate 4** — operational, and unchanged: genesis artifact, seeds, public entry, the
-  calibration-gated binary, and a soak whose clock survives redeployment.
+* **Gate 4** — **the code half closed after this was written; what is left is operational.** See
+  [the launch runbook](palw-rc-testnet12-launch-runbook.md). Three things changed the shape of this
+  gate:
+    * *The genesis artifact is derived, not hosted.* "The one input code cannot mint" was half
+      wrong — BASE-0 has no file, it is a specification, so its artifact is produced by a rule and
+      `artifact_root` is a re-derivable constant. What genuinely cannot be minted is the bond: a
+      premine index and two ML-DSA-87 verification keys, and those ship UNSET on purpose.
+    * *Nobody could produce a block.* `misaminer` and `pq-miner` branch on algo 4 and 5 only, and
+      the sole algo-6 carriage builder was a `pub(crate)` test helper — a `ConsensusV2` network had
+      a genesis and no second block, and no test said so. The producer is now in the node, because
+      `challenge_v2` binds the nonce and so the carriage build and the nonce search are one loop.
+      Third-party mining needs those facts on the RPC wire and is its own work.
+    * *The RC was carrying a lane mainnet does not have.* testnet-12 inherited `TESTNET_PARAMS`'s
+      EVM activation at DAA 0 while `MAINNET_PARAMS` never activates it — signed into
+      `consensus_params_id`, and a panic in `build_block_template` on any non-`evm` build. The
+      first end-to-end production test found it in one run.
+
+  Still operational and unchanged: the bond keys, seeds and public entry, the calibration-gated
+  binary, and a soak whose clock survives redeployment.
 * **Gate 5** — Qwen3.6 is still its own ADR, and Gate 0 closing is what makes it worth writing.
 
 Two things a reader should carry forward from how these closed, because both recurred:
@@ -193,7 +210,12 @@ Two things a reader should carry forward from how these closed, because both rec
    that cannot fail is indistinguishable from a check that passes.
 2. **Correspondence defects are found by round trips, not by reading.** Five divergences between
    the engine, the profile, the inventory and the court survived every review; each one surfaced
-   the moment two sides were asked to agree on a real object.
+   the moment two sides were asked to agree on a real object. Building the producer added four
+   more, all of the same kind: the post table — including the LOGITS HEAD — was never captured, so
+   the node that decides what the model said was the one part of the graph no refutation could
+   open; a capture had no way to span a job's calls; `rc_job_context` is a yardstick and not a job,
+   so the first honest execution run against it produced evidence the court refused; and the two
+   float-runtime legs cannot be produced by an integer class at all.
 
 ## What was safe to say before this session
 
