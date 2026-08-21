@@ -413,7 +413,9 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
-            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            // Six chain blocks is six concurrent claims; the default bond backs four. Funded for
+            // the chain it mines — see `palw_v2_test_bundle_funded_for`.
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -543,7 +545,9 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
-            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            // Five wide rows is five chain blocks, so five concurrent claims — one more than the
+            // bundle's default bond can back. Funded for the chain it mines; see the fixture.
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
         })
         .build();
     // A V2 network orders tips by PALW — not by the V1 fence, which it does not and may not set.
@@ -643,6 +647,126 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     ctx.validate_and_insert_block(liar.to_immutable()).await;
     assert_eq!(ctx.consensus.get_sink(), sink_before, "an attempt claiming a pwu it did not derive cannot become the sink");
     assert_ne!(liar_hash, sink_before);
+}
+
+/// **Unit C step 4's missing half: the block's own work reaches the state machine.**
+///
+/// `palw_v2_check_attempt_admission` validated the carried envelope and then the caller passed
+/// `None` to the transition. Everything downstream of a claim therefore had nothing to act on:
+/// no `PanelBound` could be derived (there was no `Provisional` claim to bind), nothing could be
+/// licensed or challenged, no escrow was ever funded, the safe frontier never moved off the zero
+/// point, and `bounded_immature` — the quantity the per-bond exposure ceiling is measured in —
+/// stayed at zero on a chain of admissible attempts. PALW weight, which is this network's entire
+/// fork choice, was structurally unreachable.
+///
+/// What this asserts is the seam, not the arithmetic: one attempt-lane chain block, one claim,
+/// attributed to that block, in `Provisional`, with real reserved exposure behind it.
+#[tokio::test]
+async fn palw_v2_an_attempt_block_creates_its_claim() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let genesis_hash = config.params.genesis.hash;
+    let consensus = TestConsensus::new(&config);
+
+    // The zero point: genesis registers a class and a bond and creates no claim.
+    {
+        let store = consensus.virtual_processor().palw_state_v2_store.read();
+        let (_, state) = store.load_tip(&bundle.state).unwrap().expect("the genesis tip loads");
+        assert_eq!(state.claims_iter().count(), 0, "genesis registers; it does not work");
+        assert_eq!(state.bounded_immature(), 0);
+    }
+
+    let mut ctx = TestContext::new(consensus);
+    const BLOCKS: usize = 3;
+    for _ in 0..BLOCKS {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let store = vp.palw_state_v2_store.read();
+    let tip = store.tip_record().unwrap().expect("the walk wrote a tip");
+    assert_ne!(tip.block, genesis_hash, "the chain really advanced");
+    let (_, state) = store.load_tip(&bundle.state).unwrap().expect("the tip loads");
+
+    // One chain block, one claim — the claim IS the block's work.
+    let claims: Vec<_> = state.claims_iter().collect();
+    assert_eq!(claims.len(), BLOCKS, "every attempt-lane chain block created exactly one claim");
+    let chain: Vec<_> = vp
+        .reachability_service
+        .default_backward_chain_iterator(tip.block)
+        .take_while(|h| *h != kaspa_consensus_core::blockhash::ORIGIN)
+        .collect();
+    for (id, claim) in &claims {
+        assert_eq!(claim.source, PalwClaimSourceV2::Attempt, "an algo-6 block's work is an attempt");
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional), "a fresh claim starts unbound");
+        assert!(chain.contains(&claim.accepted_block), "claim {id} names a block on this chain");
+        assert!(claim.reserved > 0, "and it reserves real collateral against its bond");
+    }
+
+    // The exposure the ceiling is measured in is no longer decorative.
+    assert!(state.bounded_immature() > 0, "immature weight accumulated — it could not before");
+    let bond = claims[0].1.bond;
+    assert_eq!(
+        state.reserved_exposure(&bond),
+        claims.iter().map(|(_, c)| c.reserved).sum::<u128>(),
+        "the bond carries exactly the sum of what its claims reserved"
+    );
+}
+
+/// **The measurement that proves the reservations are real: the ceiling can now be hit.**
+///
+/// The bundle's default bond funds four concurrent claims (`MIN_COLLATERAL_SOMPI`, whose own
+/// doc comment does the arithmetic). While the transition never saw a block's work, `reserved`
+/// stayed at zero forever and a single bond could have backed an unbounded chain — the P0-10
+/// check was wired, ran on every block, and could not fail. The fifth chain block is refused now,
+/// which is the ceiling doing what it exists to do.
+///
+/// Deliberately uses the DEFAULT fixture, so `palw_v2_test_bundle_funded_for` raising a bond
+/// elsewhere cannot quietly retire this.
+#[tokio::test]
+async fn palw_v2_the_exposure_ceiling_bites_when_reservations_are_real() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // Four fit.
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let sink_after_four = ctx.consensus.get_sink();
+    {
+        let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+        let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+        assert_eq!(state.claims_iter().count(), 4, "four claims, all still open — nothing has matured to release one");
+    }
+
+    // The fifth does not: its claim would push the bond past `collateral × 500‰`, and no claim
+    // has resolved to give the room back. The block exists in the DAG; it is not the chain.
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    assert_eq!(
+        ctx.consensus.get_sink(),
+        sink_after_four,
+        "a fifth concurrent claim exceeds the bond's exposure ceiling, so its block cannot become the sink"
+    );
 }
 
 /// **The attempt's signature is checked on the live path — and one solved PoW is one block.**
@@ -754,6 +878,48 @@ fn palw_v2_test_bundle(
     )
     .expect("the devnet bundle validates");
     b.class_catalog_root = catalog.root();
+    b
+}
+
+/// The same fixture with a bond sized for a LONGER chain.
+///
+/// The bundle's own `MIN_COLLATERAL_SOMPI` funds four concurrent claims, which is the ruleset's
+/// deliberate rate limit and not a number to edit. It only became visible once the pipeline
+/// started folding each block's attempt into the state: until then no claim was ever created, so
+/// nothing was ever reserved, so the per-bond exposure ceiling could not be reached however long
+/// a fixture mined. The first test to mine five chain blocks found it immediately.
+///
+/// A test that wants a chain longer than four blocks therefore has to fund it, exactly as an
+/// operator would. `palw_v2_the_exposure_ceiling_bites_when_reservations_are_real` keeps the
+/// default and asserts the refusal, so raising it here hides nothing.
+fn palw_v2_test_bundle_funded_for(
+    catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
+    concurrent_claims: u64,
+) -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
+    let mut b = palw_v2_test_bundle(catalog);
+    // Read off the bundle's OWN class registration rather than typed, so a ruleset change moves
+    // the fixture with it instead of silently under-funding it. At the genesis target
+    // (`u128::MAX / 2`) the derivation yields `pwu = 2 × pwu_per_inference`, and a claim reserves
+    // `pwu × slash_value_per_pwu`.
+    let reserve_per_claim = b
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered {
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
+                slash_value_per_pwu,
+                ..
+            } => Some(2 * pwu_per_inference * slash_value_per_pwu),
+            _ => None,
+        })
+        .expect("the fixture bundle registers its class with a derived pwu rule");
+    // The ceiling is `collateral × 500‰`, so N concurrent claims need `2 × N × reserve`.
+    for object in b.genesis_objects.iter_mut() {
+        if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
+            *collateral = 2 * concurrent_claims * reserve_per_claim;
+        }
+    }
     b
 }
 

@@ -1195,20 +1195,60 @@ impl VirtualStateProcessor {
                                 // derived from this candidate's own chain, never read off the
                                 // spending block. A block that supplied its own beacon would be
                                 // choosing the randomness that decides whether it wins.
-                                if let Err(adm_error) = self.palw_v2_check_attempt_admission(&header, state, state_params, &point) {
-                                    info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, adm_error);
-                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                    chain_disqualified_counter += 1;
-                                    continue;
-                                }
-                                if let Err(fp_error) = self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
-                                    info!("Block {} is disqualified from virtual chain (PALW receipt spend): {}", current, fp_error);
-                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                    chain_disqualified_counter += 1;
-                                    continue;
-                                }
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
-                                    state, state_params, &point, &objects, None,
+                                let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point) {
+                                    Ok(attempt) => attempt,
+                                    Err(adm_error) => {
+                                        info!(
+                                            "Block {} is disqualified from virtual chain (PALW admission): {}",
+                                            current, adm_error
+                                        );
+                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                        chain_disqualified_counter += 1;
+                                        continue;
+                                    }
+                                };
+                                let receipt_spend = match self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
+                                    Ok(spend) => spend,
+                                    Err(fp_error) => {
+                                        info!(
+                                            "Block {} is disqualified from virtual chain (PALW receipt spend): {}",
+                                            current, fp_error
+                                        );
+                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                        chain_disqualified_counter += 1;
+                                        continue;
+                                    }
+                                };
+                                // **The block's own work, carried into the fold.**
+                                //
+                                // This was `None`, unconditionally, and it is the reason a V2
+                                // network could not mint weight: the two checks above admitted an
+                                // attempt or a spend and then threw the object away, so the
+                                // transition folded a block that — as far as the state machine
+                                // could tell — had done no work at all. `apply_attempt` never ran,
+                                // so no claim was ever created; `apply_receipt_spend` never ran,
+                                // so no certified quantum was ever burned and `safe_weight` never
+                                // moved off zero. Every downstream mechanism (panel binding,
+                                // licensing, courts, payouts, the safe frontier, fork choice)
+                                // reads claims, and there were none.
+                                //
+                                // At most one arm can be `Some`: the lane is chosen by the
+                                // header's single declared `pow_algo_id`, and the two constants
+                                // differ. The match is written total anyway rather than asserted,
+                                // because a panic here would be a remote one.
+                                let work = match (attempt.as_ref(), receipt_spend.as_ref()) {
+                                    (Some(envelope), _) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+                                    (None, Some(spend)) => {
+                                        kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(&spend.spend)
+                                    }
+                                    (None, None) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+                                };
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+                                    state,
+                                    state_params,
+                                    &point,
+                                    &objects,
+                                    work,
                                 ) {
                                     Ok((next, delta)) => {
                                         *state = next;
@@ -3699,18 +3739,25 @@ impl VirtualStateProcessor {
     /// the pwu is the derivation and not a claim, the epoch budget still has room, the class
     /// lottery admits the ticket, and the bond's immature exposure stays under its ceiling.
     ///
-    /// `Ok(())` on every block that is not an attempt-lane block, which is every block of every
+    /// `Ok(None)` on every block that is not an attempt-lane block, which is every block of every
     /// network that exists today — the arm is chosen by the header's declared algorithm.
+    ///
+    /// **The validated envelope is RETURNED, not discarded.** It is the block's own work, and the
+    /// transition needs it to create the claim: for as long as this returned `()` the caller had
+    /// nothing to pass and passed `None`, so a network could admit a perfectly valid attempt and
+    /// then fold a transition that had never heard of it. No claim was created, so nothing could
+    /// be bound, licensed, challenged or finalized, and `safe_weight` never left zero. Handing the
+    /// envelope back is what makes the check and the fold speak about the same object.
     fn palw_v2_check_attempt_admission(
         &self,
         header: &Header,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> Result<(), String> {
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
-            return Ok(());
+            return Ok(None);
         }
         let Some(admission) = self.palw_admission_params_v2.as_ref() else {
             return Err("an attempt-lane block on a network with no V2 admission params".to_string());
@@ -3747,26 +3794,32 @@ impl VirtualStateProcessor {
             &envelope,
             |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
         )
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        Ok(Some(envelope))
     }
 
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
     /// this node DERIVED from the candidate's chain rather than one the block asserted.
     ///
-    /// `Ok(())` on every block that is not a receipt-lane block, which is every block of every
+    /// `Ok(None)` on every block that is not a receipt-lane block, which is every block of every
     /// network that exists today — the arm is selected by the header's own declared algorithm, so
     /// "is this a spend" is a fact about the header rather than a discovery.
+    ///
+    /// Returns the validated envelope for the same reason the attempt arm does: the spend is the
+    /// block's work, and `apply_receipt_spend` is what turns a certified quantum into chain
+    /// weight. Checked-then-dropped, a receipt-lane block burned its quantum nowhere — the ledger
+    /// never recorded the spend, so the same quantum stayed spendable forever and the weight it
+    /// was supposed to add never arrived.
     fn palw_v2_check_receipt_spend(
         &self,
         header: &Header,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-    ) -> Result<(), String> {
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>, String> {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwReceiptSpendEnvelopeV3, fp_draw_slot_v3};
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
-            return Ok(());
+            return Ok(None);
         }
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Err("a receipt-lane block on a network with no free-prompt bundle".to_string());
@@ -3794,10 +3847,9 @@ impl VirtualStateProcessor {
             &beacon,
             &envelope,
         )
-        .map(|_| ())
         .map_err(|e| e.to_string())?;
         let _ = (state_params, network_domain);
-        Ok(())
+        Ok(Some(envelope))
     }
 
     /// ADR-0044 / Unit C step 4: the beacon fact for `slot`, derived from THIS candidate's own
