@@ -123,11 +123,11 @@ the retirement change already forces (settle M-02 first — one flag day, not tw
 
 ---
 
-## Launching it found six more — the class of defect only a real network has
+## Launching it found eight more — the class of defect only a real network has
 
 Recorded because the pattern is the finding: **every one of these is invisible to a test suite,
 because a suite always starts from a chain that already exists and a binary somebody already built
-correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would.
+correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would: six before the first block, two that only a running chain could show.
 
 | # | what | why no test could see it | fix |
 |---|---|---|---|
@@ -137,6 +137,17 @@ correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an
 | 4 | **The payout could be an address nobody holds.** With no default, the obvious move is to paste some address; the obvious mistake is one whose key nobody on this network has — an unspendable payout, discovered a settlement window after launch. Caught mid-launch: the first row took its payout from a throwaway keygen probe. | There is no wrong answer to test against; the defect is a missing default. | `e76de592` — defaults to the bond key's own address |
 | 5 | **The tool printed a params id no node would ever log.** `From<NetworkId>` wraps its match in `with_registered_models`; `palw_rc_params_from_artifacts` — documented as "the call a node makes at boot" — did not. Same registry, `c4a381f6…` from the tool against `9d0cc709…` from the node, on the one value the handshake turns on. | Both sides were self-consistent. The divergence exists only between two programs nobody had run against each other. | `b8a06cf1` — applied at the source, idempotent |
 | 6 | **`--skip-cost` had never worked**, and `--emit-row` would not have either: `arg()` returns the value AFTER a flag, so a bare boolean at the end of the line reads as absent. | A flag that silently does nothing produces no failure to observe. | `1e258704` — `has_flag` |
+
+### The two the chain itself found, after it started
+
+Both needed a chain that had been running for a while — the first for 600 blocks, the second for
+five re-syncs. Neither is reachable by any test, because a test would have to run the real thing
+for real time.
+
+| # | what | fix |
+|---|---|---|
+| 7 | **The exposure ceiling was one claim short of the bind window.** `palw_v2_collateral_for_bind_window_v1` sized collateral for exactly `window_bind` concurrent claims — which moved the genesis deadlock from block 2 to block 600 rather than removing it. Measured: 600 blocks, then `holding: the bond's exposure ceiling leaves no room for another claim`, forever. Admission runs against the PARENT state, so producing block `window_bind + 1` needs room for `window_bind + 1` live claims, and the first void is not swept until block `window_bind + 2` — which the chain can no longer reach. DAA advances only when blocks are produced, so no timeout helps. | `2b1097f3` |
+| 8 | **Following one chain as it grows counted as abandoning it.** Host B adopted the producer's single chain five times as it advanced — five tips, one lineage, one pruning point — spent `MAX_CHAIN_SWITCHES` and quarantined itself while perfectly healthy. The earlier fix to this counter (count adoptions, not encounters) was right and insufficient. On PALW, where checking a header costs an inference, *every* node that falls behind hits this; `--clear-quarantine` deliberately keeps the count, so it is permanent. | `73c35c6d` |
 
 Operational facts the launch also settled, which no amount of code reading would have produced:
 host A cannot reach any fleet member on 26411 (its egress is selectively filtered; it reaches
