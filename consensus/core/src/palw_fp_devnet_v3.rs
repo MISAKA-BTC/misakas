@@ -158,6 +158,75 @@ const GENESIS_CLASS_TARGET: u128 = u128::MAX / 2;
 /// Slashable value per pwu — what an exposure ceiling is measured in.
 const SLASH_VALUE_PER_PWU: u64 = 5;
 
+/// One bond in a genesis registry.
+///
+/// A registry, not a bond: `derive_panel_v2` excludes a claim's own executor by bond, by operator
+/// and by key, and seats one bond per OPERATOR — so a `seat_count`-seat panel needs `seat_count + 1`
+/// distinct operators and `BondRegistered` may not ride a transaction. The registry is fixed at
+/// genesis and there is no later repair, which is why this is a list and why
+/// `verify_palw_genesis_v2` refuses a list too short to seat the panel it ships with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGenesisBondSpecV1 {
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub pubkey: Vec<u8>,
+    pub operator_pubkey: Vec<u8>,
+    /// Where this bond's matured rewards are paid — the 64-byte P2PKH-ML-DSA-87 owner payload. A
+    /// field rather than a value derived from `operator_pubkey`, because paying rewards to a
+    /// different key than the one that signs is an ordinary operational choice (a cold payout
+    /// address), and deriving it would quietly forbid it.
+    pub payout_payload: Hash64,
+}
+
+/// **The collateral a bond must declare to survive its own bind window.**
+///
+/// Every ConsensusV2 block is an attempt, so every block creates a claim reserving
+/// `pwu × slash_value_per_pwu` until `BindTimeout` at `+window_bind`; and DAA advances only when
+/// blocks are produced. A bond whose ceiling admits fewer concurrent claims than the window is long
+/// therefore deadlocks: the producer fills the ceiling and then needs DAA it can only get by
+/// producing. Derived rather than declared so a change to the window, the target, the class or the
+/// exposure ratio moves the requirement with it — the shipped bundle carried a hand-written
+/// 400,000 against a requirement of 94,800,000 and stopped at block two.
+pub fn palw_v2_collateral_for_bind_window_v1(pwu_per_inference: u64) -> u64 {
+    let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
+    let per_claim = (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1);
+    let ceiling = per_claim.saturating_mul(WINDOW_BIND as u128);
+    let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
+    collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
+}
+
+/// The panel's seats and quorum.
+///
+/// Public because a genesis registry has to be SIZED against them — `derive_panel_v2` excludes a
+/// claim's executor by bond, by operator and by key and seats one bond per operator, so a registry
+/// needs `PALW_V2_PANEL_SEATS + 1` distinct operators or no claim is ever licensed.
+/// `verify_palw_genesis_v2` refuses a shorter one; before it did, the shipped RC bundle carried a
+/// single bond and would have produced blocks that carried no weight, forever, silently.
+pub const PALW_V2_PANEL_SEATS: u16 = 5;
+pub const PALW_V2_PANEL_QUORUM: u16 = 3;
+
+/// How many distinct-operator bonds a genesis registry needs: the seats, plus the executor that
+/// never sits on its own panel.
+pub const fn palw_v2_min_genesis_bonds_v1() -> usize {
+    PALW_V2_PANEL_SEATS as usize + 1
+}
+
+/// A seatable registry from one deterministic seed — the fixture shape every caller needs now that
+/// a registry too small to seat a panel is refused. Each row gets its own outpoint, key AND
+/// operator, because a registry of clones is one operator however long it is.
+pub fn palw_devnet_bond_registry_v1(count: usize) -> Vec<PalwGenesisBondSpecV1> {
+    (0..count as u64)
+        .map(|n| PalwGenesisBondSpecV1 {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_u64_word(0xB0 + n),
+                index: 0,
+            }),
+            pubkey: vec![7u8.wrapping_add(n as u8); 4],
+            operator_pubkey: vec![21u8, n as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: Hash64::from_u64_word(0x9A11 + n),
+        })
+        .collect()
+}
+
 pub fn palw_fp_devnet_bundle_v3(
     base_class_id: Hash64,
     class_catalog_root: Hash64,
@@ -166,15 +235,13 @@ pub fn palw_fp_devnet_bundle_v3(
     // `verify_palw_genesis_v2` demands the registration declare.
     genesis_pwu_per_inference: u64,
     genesis_artifact_root: Hash64,
-    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
-    genesis_bond_pubkey: Vec<u8>,
-    genesis_operator_pubkey: Vec<u8>,
-    // Where the genesis bond's matured rewards are paid — the 64-byte P2PKH-ML-DSA-87 owner
-    // payload. An argument rather than a value derived from `genesis_operator_pubkey`, because
-    // paying rewards to a different key than the one that signs is an ordinary operational
-    // choice (a cold payout address), and deriving it would quietly forbid it.
-    genesis_payout_payload: Hash64,
+    // The whole registry, because a panel is seated out of it — see `PalwGenesisBondSpecV1`.
+    genesis_bonds: Vec<PalwGenesisBondSpecV1>,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    // Derived, not declared: see `palw_v2_collateral_for_bind_window_v1`. Applied to the policy
+    // minimum as well as to every registration, so "the minimum collateral" means "the smallest
+    // stake that can carry a claim through the bind window" rather than a number chosen earlier.
+    let genesis_collateral = palw_v2_collateral_for_bind_window_v1(genesis_pwu_per_inference);
     // ADR-0045 Decision 3: no share table here. The chain grants shares at registration — the
     // first registration on the chain must be `base_class_id` at the whole 1000‰, which is the
     // single-class devnet shape this bundle used to spell out as a params constant.
@@ -222,8 +289,13 @@ pub fn palw_fp_devnet_bundle_v3(
         court_catalog_root,
         state,
         admission,
-        panel: PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY)?,
+        panel: PalwPanelParamsV2::new(PALW_V2_PANEL_SEATS, PALW_V2_PANEL_QUORUM, ANCHOR_DELAY)?,
         reward: PalwRewardParamsV2::new(WORKER_CARVE_PERMILLE)?,
+        // The POLICY floor, deliberately not the derived one. `palw_v2_collateral_for_bind_window_v1`
+        // is what a bond must declare to keep a chain moving, and `verify_palw_genesis_v2` enforces
+        // it on the registrations themselves; this is the smaller "a bond is not nothing" bar, and
+        // keeping the two apart is what lets a fixture build a deliberately thin network to watch
+        // the exposure ceiling bite.
         bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, WITHDRAWAL_DELAY)?,
         freeprompt,
         reorg_margin_daa: REORG_MARGIN,
@@ -250,14 +322,16 @@ pub fn palw_fp_devnet_bundle_v3(
                 activation_daa: 0,
                 admission: None,
             },
-            crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
-                bond: genesis_bond,
-                pubkey: genesis_bond_pubkey,
-                operator_pubkey: genesis_operator_pubkey,
-                collateral: MIN_COLLATERAL_SOMPI,
-                payout_payload: genesis_payout_payload,
-            },
-        ],
+        ]
+        .into_iter()
+        .chain(genesis_bonds.into_iter().map(|b| crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
+            bond: b.bond,
+            pubkey: b.pubkey,
+            operator_pubkey: b.operator_pubkey,
+            collateral: genesis_collateral,
+            payout_payload: b.payout_payload,
+        }))
+        .collect(),
     };
     // Validated HERE, so the constructor cannot hand back a bundle that would refuse to boot:
     // a caller holding an `Ok` holds a bundle a node will start on.
@@ -281,13 +355,7 @@ pub(crate) fn palw_fp_devnet_bundle_for_tests(
         court_catalog_root,
         4_096,
         Hash64::from_u64_word(0xA7),
-        crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
-            transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
-            index: 0,
-        }),
-        vec![7; 4],
-        vec![21; 8],
-        Hash64::from_u64_word(0x9A11),
+        palw_devnet_bond_registry_v1(palw_v2_min_genesis_bonds_v1()),
     )
 }
 
@@ -307,14 +375,9 @@ mod tests {
             h64(0xC0757),
             4_096,
             h64(0xA7),
-            crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
-                transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
-                index: 0,
-            }),
-            vec![7; 4],
-            vec![21; 8],
-            h64(0x9A11),
-        ).expect("the devnet bundle validates")
+            palw_devnet_bond_registry_v1(palw_v2_min_genesis_bonds_v1()),
+        )
+        .expect("the devnet bundle validates")
     }
 
     /// **The interlock exists.** Every Decision-1 and ADR-0044 startup invariant holds on one

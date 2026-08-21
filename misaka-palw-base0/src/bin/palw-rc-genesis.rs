@@ -199,13 +199,18 @@ fn main() {
     };
 
     let bond = PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(bond_index));
-    match kaspa_consensus_core::config::params::palw_rc_params_from_artifacts(
-        artifact_root,
+    // ONE bond is not a registry. `derive_panel_v2` excludes a claim's own executor by bond, by
+    // operator and by key and seats one bond per operator, so a `seat_count`-seat panel needs
+    // `seat_count + 1` DISTINCT operators — and `BondRegistered` may not ride a transaction, so a
+    // registry too small has no later repair. This tool takes one row today; the gate below is what
+    // says so out loud instead of minting a network that makes two blocks and stops.
+    let registry = vec![kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
         bond,
-        bond_pubkey.clone(),
-        operator_pubkey.clone(),
-        payout,
-    ) {
+        pubkey: bond_pubkey.clone(),
+        operator_pubkey: operator_pubkey.clone(),
+        payout_payload: payout,
+    }];
+    match kaspa_consensus_core::config::params::palw_rc_params_from_artifacts(artifact_root, registry) {
         Err(e) => {
             println!("REFUSED: {e}");
             println!();

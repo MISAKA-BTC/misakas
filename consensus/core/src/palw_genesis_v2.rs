@@ -72,6 +72,19 @@ pub enum PalwGenesisV2Error {
     #[error("genesis registers class {0} twice")]
     DuplicateRegistration(Hash64),
     #[error(
+        "genesis bond {bond:?} can back {supported} concurrent claims but this ruleset holds a claim for {window_bind} DAA          before `BindTimeout` releases it — and on a ConsensusV2 network DAA only advances when blocks are produced, so          the chain stops after {supported} blocks and can never restart. Declare at least {needed_collateral} sompi"
+    )]
+    BondCannotSustainBindWindow {
+        bond: crate::palw_state_v2::PalwBondKeyV2,
+        supported: u128,
+        window_bind: u64,
+        needed_collateral: u128,
+    },
+    #[error(
+        "genesis registers {operators} distinct bond operator(s); a {seat_count}-seat panel needs {needed} because a claim's          own executor is excluded from its panel and one seat is one operator. No claim could ever be licensed: every one          would void at `BindTimeout`, `safe_weight` would stay zero, and every block's escrowed worker carve would be burned"
+    )]
+    PanelCannotBeSeated { operators: usize, seat_count: u16, needed: usize },
+    #[error(
         "genesis bond {bond:?} declares {declared} sompi of collateral, but its outpoint holds no genesis output at all \
          — a bond whose collateral nothing locks is a number, not a stake"
     )]
@@ -126,14 +139,20 @@ pub fn verify_palw_genesis_v2(
     bundle.verify_against_catalog(catalog).map_err(|e| PalwGenesisV2Error::Ruleset(e.to_string()))?;
 
     let mut registered: Vec<Hash64> = Vec::new();
+    // Bonds are collected as they are walked so the two whole-registry gates below — can this
+    // registry sustain its own bind window, and can it seat a panel — can be answered once the
+    // walk has seen all of it. Both are properties of the SET, which is why neither could be
+    // stated inside the per-object loop that used to be all there was here.
+    let mut bonds: Vec<(crate::palw_state_v2::PalwBondKeyV2, u64, Hash64)> = Vec::new();
     for object in registrations {
-        if let PalwConsensusObjectV2::BondRegistered { bond, collateral, .. } = object {
+        if let PalwConsensusObjectV2::BondRegistered { bond, collateral, operator_pubkey, .. } = object {
             let Some(held) = genesis_output_value(&bond.0) else {
                 return Err(PalwGenesisV2Error::BondOutpointIsNotAGenesisUtxo { bond: *bond, declared: *collateral });
             };
             if held < *collateral {
                 return Err(PalwGenesisV2Error::BondCollateralNotHeld { bond: *bond, declared: *collateral, held });
             }
+            bonds.push((*bond, *collateral, crate::palw_state_v2::palw_operator_id_v2(operator_pubkey)));
             continue;
         }
         let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, .. } = object else {
@@ -175,6 +194,72 @@ pub fn verify_palw_genesis_v2(
     let first = *registered.first().ok_or(PalwGenesisV2Error::NoRegistrations)?;
     if first != bundle.base_class_id {
         return Err(PalwGenesisV2Error::FirstClassIsNotTheBase { first, base: bundle.base_class_id });
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The two gates that decide whether this registry can run a chain at all.
+    //
+    // Everything above checks one object against the catalog. These check the SET against the
+    // ruleset's own clock and its own panel, and they exist because a bundle can pass every
+    // per-object check and still describe a network that stops at block two — which is what the
+    // shipped RC bundle did, silently, with no test able to say so.
+    // ------------------------------------------------------------------------------------------
+
+    // **Gate 1 — the bind window.** A claim reserves `pwu × slash_value_per_pwu` against its bond
+    // and holds it until `BindTimeout` at `accepted_daa + window_bind`. On a ConsensusV2 network
+    // EVERY block is an attempt, so every block creates a claim, and DAA advances only when blocks
+    // are produced. If a bond's ceiling admits fewer concurrent claims than the window is long,
+    // the producer fills the ceiling and then needs DAA it can only get by producing — a deadlock
+    // with no timeout, no operator action, and no error message. The chain simply stops.
+    let base = registrations
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, initial_target, .. }
+                if *class_id == bundle.base_class_id =>
+            {
+                Some((*slash_value_per_pwu, pwu_rule, *initial_target))
+            }
+            _ => None,
+        })
+        .ok_or(PalwGenesisV2Error::FirstClassIsNotTheBase { first, base: bundle.base_class_id })?;
+    let (slash_value_per_pwu, pwu_rule, initial_target) = base;
+    let pwu = match pwu_rule {
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(initial_target, *pwu_per_inference),
+        // A value network cannot register one of these (checked above); the arm keeps the match total.
+        PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
+    };
+    let per_claim = (pwu as u128).saturating_mul(slash_value_per_pwu as u128).max(1);
+    let window_bind = bundle.state.window_bind();
+    let ratio = bundle.admission.max_exposure_ratio_permille() as u128;
+    for (bond, collateral, _) in &bonds {
+        let ceiling = (*collateral as u128).saturating_mul(ratio) / 1000;
+        let supported = ceiling / per_claim;
+        if supported < window_bind as u128 {
+            // The collateral that WOULD carry the window, rounded up through the same permille.
+            let needed_ceiling = per_claim.saturating_mul(window_bind as u128);
+            let needed_collateral = needed_ceiling.saturating_mul(1000).div_ceil(ratio.max(1));
+            return Err(PalwGenesisV2Error::BondCannotSustainBindWindow { bond: *bond, supported, window_bind, needed_collateral });
+        }
+    }
+
+    // **Gate 2 — the panel.** `derive_panel_v2` excludes a claim's own executor by bond, by
+    // operator and by key, and seats at most one bond per operator. So a `seat_count`-seat panel
+    // needs `seat_count + 1` DISTINCT operators in the registry, and `BondRegistered` may not ride
+    // a transaction (`palw_lifecycle_objects_v2`: "bonds come from genesis") — which makes this a
+    // property of the genesis artifact and of nothing else. Below it, no claim is ever licensed:
+    // every one voids at `BindTimeout`, `safe_weight` stays zero, and the escrowed worker carve of
+    // every block is burned. The chain produces blocks and carries no weight, which is the one
+    // failure mode a weight-bearing network must not be able to ship in.
+    let mut operators: Vec<Hash64> = bonds.iter().map(|(_, _, op)| *op).collect();
+    operators.sort();
+    operators.dedup();
+    let needed = bundle.panel.seat_count() as usize + 1;
+    if operators.len() < needed {
+        return Err(PalwGenesisV2Error::PanelCannotBeSeated {
+            operators: operators.len(),
+            seat_count: bundle.panel.seat_count(),
+            needed,
+        });
     }
     Ok(())
 }
@@ -230,28 +315,51 @@ mod tests {
         }
     }
 
+    /// Enough to carry the bind window, which the registry gate now requires — see
+    /// `a_registry_that_cannot_outlast_its_own_bind_window_is_refused` for the arithmetic.
+    const FIXTURE_COLLATERAL: u64 = 4_000_000;
+
     fn a_bond() -> PalwConsensusObjectV2 {
+        bond_n(1)
+    }
+
+    /// The `n`-th fixture bond: its own outpoint, its own key, and its own OPERATOR — because a
+    /// panel seats one bond per operator and excludes the executor's, so a registry of clones
+    /// seats nobody however many of them there are.
+    fn bond_n(n: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::BondRegistered {
-            bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }),
-            pubkey: vec![7; 4],
-            operator_pubkey: vec![21; 8],
-            collateral: 100_000,
+            bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(n), index: 0 }),
+            pubkey: vec![n as u8; 4],
+            operator_pubkey: vec![0x21, n as u8, 0, 0, 0, 0, 0, 0],
+            collateral: FIXTURE_COLLATERAL,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
         }
     }
 
-    /// The fixture's genesis UTXO set: `a_bond()`'s outpoint, holding more than it declares.
+    /// A registry big enough to seat the fixture bundle's panel — `seat_count + 1` operators,
+    /// because a claim's own executor never sits on its own panel.
+    fn a_seatable_registry(bundle: &PalwConsensusParamsV2) -> Vec<PalwConsensusObjectV2> {
+        (1..=(bundle.panel.seat_count() as u64 + 1)).map(bond_n).collect()
+    }
+
+    /// The fixture's genesis UTXO set: every `bond_n` outpoint holds more than it declares.
     /// Everything else resolves to nothing, which is what a bond pointing at no money looks like.
     fn funded(outpoint: &TransactionOutpoint) -> Option<u64> {
-        let PalwConsensusObjectV2::BondRegistered { bond, .. } = a_bond() else { unreachable!() };
-        (*outpoint == bond.0).then_some(1_000_000)
+        (1..=64u64)
+            .any(|n| {
+                let PalwConsensusObjectV2::BondRegistered { bond, .. } = bond_n(n) else { unreachable!() };
+                *outpoint == bond.0
+            })
+            .then_some(1_000_000_000)
     }
 
     #[test]
     fn an_honest_genesis_artifact_loads() {
         let catalog = catalog();
-        let objects = vec![registration(h64(1), CANONICAL), a_bond()];
-        verify_palw_genesis_v2(&bundle(&catalog), &catalog, &objects, funded).expect("the honest artifact loads");
+        let b = bundle(&catalog);
+        let mut objects = vec![registration(h64(1), CANONICAL)];
+        objects.extend(a_seatable_registry(&b));
+        verify_palw_genesis_v2(&b, &catalog, &objects, funded).expect("the honest artifact loads");
     }
 
     /// **Audit C-08, first half: a bond has to point at money that exists.**
@@ -280,9 +388,13 @@ mod tests {
             verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), a_bond()], |_| Some(short)).unwrap_err();
         assert_eq!(err, PalwGenesisV2Error::BondCollateralNotHeld { bond, declared: collateral, held: short });
 
-        // Exactly the declaration is enough; more is fine (the surplus is simply not staked).
+        // Exactly the declaration is enough; more is fine (the surplus is simply not staked). The
+        // registry has to be seatable for the load to get this far, so this is the whole artifact
+        // rather than one bond — which is the point of the two registry gates below it.
+        let mut objects = vec![registration(h64(1), CANONICAL)];
+        objects.extend(a_seatable_registry(&bundle));
         for held in [collateral, collateral + 1] {
-            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), a_bond()], |_| Some(held))
+            verify_palw_genesis_v2(&bundle, &catalog, &objects, |_| Some(held))
                 .unwrap_or_else(|e| panic!("holding {held} against a declared {collateral} must load, got {e}"));
         }
     }
@@ -305,7 +417,114 @@ mod tests {
             );
         }
         // …and the exact count loads, so the rule is equality and not a bound in either direction.
-        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL)], funded).expect("the counted value loads");
+        let mut ok_objects = vec![registration(h64(1), CANONICAL)];
+        ok_objects.extend(a_seatable_registry(&bundle));
+        verify_palw_genesis_v2(&bundle, &catalog, &ok_objects, funded).expect("the counted value loads");
+    }
+
+    /// **A registry that cannot outlast its own bind window is refused** — the defect that made
+    /// the shipped RC bundle stop at block two.
+    ///
+    /// Every ConsensusV2 block is an attempt, so every block creates a claim that reserves
+    /// `pwu × slash_value_per_pwu` until `BindTimeout` at `+window_bind`. DAA advances only when
+    /// blocks are produced. A ceiling admitting fewer concurrent claims than the window is long is
+    /// therefore a deadlock with no timeout and no message: the producer fills the ceiling and then
+    /// needs DAA it can only get by producing.
+    ///
+    /// Measured on the SHIPPED numbers this gate would have caught: collateral 400,000 at 500‰ is a
+    /// ceiling of 200,000; the floor's claim reserves 15,800 pwu × 5 = 79,000; 200,000 / 79,000 = 2
+    /// concurrent claims against a 600-DAA window. Two blocks, then nothing, forever.
+    #[test]
+    fn a_registry_that_cannot_outlast_its_own_bind_window_is_refused() {
+        let catalog = catalog();
+        let bundle = bundle(&catalog);
+        let window = bundle.state.window_bind();
+        let ratio = bundle.admission.max_exposure_ratio_permille() as u128;
+        // What one claim of the fixture floor reserves, computed the way admission computes it.
+        let pwu = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, CANONICAL);
+        let per_claim = (pwu as u128) * 5;
+        let need = (per_claim * window as u128) * 1000 / ratio;
+
+        // One sompi under the requirement is a chain that stops.
+        let thin = |collateral: u64| {
+            let mut objects = vec![registration(h64(1), CANONICAL)];
+            for (i, o) in a_seatable_registry(&bundle).into_iter().enumerate() {
+                let PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, .. } = o else {
+                    unreachable!()
+                };
+                // Only the first bond is thinned, so the failure names a bond rather than the set.
+                let c = if i == 0 { collateral } else { FIXTURE_COLLATERAL };
+                objects.push(PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral: c, payout_payload });
+            }
+            verify_palw_genesis_v2(&bundle, &catalog, &objects, |_| Some(u64::MAX))
+        };
+        let err = thin((need as u64) - 1).unwrap_err();
+        match err {
+            PalwGenesisV2Error::BondCannotSustainBindWindow { supported, window_bind, needed_collateral, .. } => {
+                assert!(supported < window as u128, "it must report FEWER claims than the window is long");
+                assert_eq!(window_bind, window);
+                assert_eq!(needed_collateral, need, "the message names the collateral that would carry the window");
+            }
+            other => panic!("a registry that stops the chain must be refused for that reason, got {other}"),
+        }
+        // Exactly the requirement loads — the gate is a bound, not a preference.
+        thin(need as u64).expect("a bond sized to its own bind window is accepted");
+    }
+
+    /// **A registry that cannot seat a panel is refused** — the other half of the same artifact.
+    ///
+    /// `derive_panel_v2` excludes a claim's executor by bond, by operator AND by key, and seats one
+    /// bond per operator. So `seat_count` seats need `seat_count + 1` distinct operators, and
+    /// `BondRegistered` may not ride a transaction — the registry is fixed at genesis and there is
+    /// no later repair. Below the bar every claim voids at `BindTimeout`: the chain makes blocks,
+    /// `safe_weight` stays zero, and each block's escrowed worker carve is burned. A network that
+    /// produces blocks and carries no weight is the one failure a weight-bearing chain must not be
+    /// able to ship in — and nothing else in the tree could say so.
+    #[test]
+    fn a_registry_that_cannot_seat_a_panel_is_refused() {
+        let catalog = catalog();
+        let bundle = bundle(&catalog);
+        let seats = bundle.panel.seat_count() as u64;
+
+        // One operator short, every other check satisfied.
+        let mut short = vec![registration(h64(1), CANONICAL)];
+        short.extend((1..=seats).map(bond_n));
+        assert_eq!(
+            verify_palw_genesis_v2(&bundle, &catalog, &short, funded).unwrap_err(),
+            PalwGenesisV2Error::PanelCannotBeSeated {
+                operators: seats as usize,
+                seat_count: seats as u16,
+                needed: seats as usize + 1
+            }
+        );
+
+        // **Clones do not count.** A registry of N bonds sharing ONE operator seats nobody, which
+        // is the trap an operator bootstrapping alone walks into first.
+        let mut clones = vec![registration(h64(1), CANONICAL)];
+        for n in 1..=(seats + 1) {
+            let PalwConsensusObjectV2::BondRegistered { bond, pubkey, collateral, payout_payload, .. } = bond_n(n) else {
+                unreachable!()
+            };
+            clones.push(PalwConsensusObjectV2::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey: vec![21; 8],
+                collateral,
+                payout_payload,
+            });
+        }
+        assert!(
+            matches!(
+                verify_palw_genesis_v2(&bundle, &catalog, &clones, funded).unwrap_err(),
+                PalwGenesisV2Error::PanelCannotBeSeated { operators: 1, .. }
+            ),
+            "one operator with many bonds is one operator"
+        );
+
+        // And one more operator loads.
+        let mut enough = vec![registration(h64(1), CANONICAL)];
+        enough.extend(a_seatable_registry(&bundle));
+        verify_palw_genesis_v2(&bundle, &catalog, &enough, funded).expect("seat_count + 1 operators seats a panel");
     }
 
     /// The catalog cannot be swapped for a friendlier one: its root is what the ruleset committed
@@ -373,8 +592,9 @@ mod tests {
                 .unwrap_err(),
             PalwGenesisV2Error::FirstClassIsNotTheBase { first: h64(2), base: h64(1) }
         );
-        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(2), CANONICAL)], funded)
-            .expect("base first, then the entrant");
+        let mut base_then_entrant = vec![registration(h64(1), CANONICAL), registration(h64(2), CANONICAL)];
+        base_then_entrant.extend(a_seatable_registry(&bundle));
+        verify_palw_genesis_v2(&bundle, &catalog, &base_then_entrant, funded).expect("base first, then the entrant");
         assert_eq!(
             verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(1), CANONICAL)], funded)
                 .unwrap_err(),

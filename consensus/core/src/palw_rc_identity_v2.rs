@@ -141,6 +141,35 @@ pub fn assemble_palw_rc_identity_v2(
 
 #[cfg(test)]
 mod tests {
+    /// A registry that can seat the RC panel — required since `verify_palw_genesis_v2` refuses one
+    /// that cannot, and every assembly below goes through that gate.
+    fn seatable() -> Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
+        seatable_from(0)
+    }
+
+    /// The same registry, starting at premine index `first` — the outpoints must be REAL genesis
+    /// outputs because `verify_palw_genesis_v2` resolves each against this network's premine set.
+    fn seatable_from(first: u32) -> Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
+        (first..first + crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+            .map(|i| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+                bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(i)),
+                pubkey: vec![7u8.wrapping_add(i as u8); 32],
+                operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+                payout_payload: h64(0x9A11 + i as u64),
+            })
+            .collect()
+    }
+
+    /// The registry with ONE row replaced, so a refusal names that row rather than the set.
+    fn seatable_but(
+        index: usize,
+        f: impl Fn(&mut crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1),
+    ) -> Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
+        let mut r = seatable();
+        f(&mut r[index]);
+        r
+    }
+
     use super::*;
     use crate::Hash64;
     use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwCourtParamsV2};
@@ -198,14 +227,20 @@ mod tests {
                 activation_daa: 0,
                 admission: None,
             },
-            PalwConsensusObjectV2::BondRegistered {
-                bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }),
-                pubkey: vec![7; 4],
-                operator_pubkey: vec![21; 8],
-                collateral: 100_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
         ]
+        .into_iter()
+        // A registry, sized to seat the fixture bundle's panel and to carry a claim through its
+        // bind window — the two properties `verify_palw_genesis_v2` now refuses an artifact for
+        // lacking. One bond at 100,000 sompi was both too few operators and too little stake, and
+        // nothing said so.
+        .chain((1..=(crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS as u64 + 1)).map(|n| PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(n), index: 0 }),
+            pubkey: vec![7u8.wrapping_add(n as u8); 4],
+            operator_pubkey: vec![21u8, n as u8, 0, 0, 0, 0, 0, 0],
+            collateral: 4_000_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + n),
+        }))
+        .collect()
     }
 
     fn ctx() -> PalwBlockContextV2 {
@@ -215,7 +250,9 @@ mod tests {
     /// The fixture's genesis UTXO set: `genesis_objects()`'s bond outpoint, funded past what it
     /// declares. Gate 2 reads this — a bond pointing anywhere else points at no money.
     fn funded(outpoint: &TransactionOutpoint) -> Option<u64> {
-        (*outpoint == TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }).then_some(1_000_000)
+        (1..=64u64)
+            .any(|n| *outpoint == TransactionOutpoint { transaction_id: TransactionId::from_u64_word(n), index: 0 })
+            .then_some(1_000_000_000)
     }
 
     /// A base at the frozen cadence and a proportionate depth — the network identity ADR-0036
@@ -305,10 +342,7 @@ mod tests {
             *pwu_rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: CANONICAL * 10 };
         }
         let err = assemble_palw_rc_identity_v2(&base(), bundle(&catalog), &catalog, &lying, &ctx(), funded).unwrap_err();
-        assert!(
-            matches!(err, PalwRcIdentityError::Genesis(PalwGenesisV2Error::PwuPerInferenceMismatch { .. })),
-            "got {err:?}"
-        );
+        assert!(matches!(err, PalwRcIdentityError::Genesis(PalwGenesisV2Error::PwuPerInferenceMismatch { .. })), "got {err:?}");
     }
 
     /// Registrations that pass every static check and cannot APPLY are caught here rather than by
@@ -350,18 +384,8 @@ mod tests {
         // A real testnet-12 genesis output: the RC bond's collateral is a premine vault the
         // operator locks, not a number the artifact asserts (audit C-08).
         let bond = PalwBondKeyV2(crate::config::premine::premine_outpoint(0));
-        let params = crate::config::params::palw_rc_params(
-            h64(1),
-            catalog.root(),
-            h64(0xC0757),
-            CANONICAL,
-            h64(0xA7),
-            bond,
-            vec![7; 32],
-            vec![21; 8],
-            h64(0x9A11),
-        )
-        .expect("the RC network is a runnable ruleset");
+        let params = crate::config::params::palw_rc_params(h64(1), catalog.root(), h64(0xC0757), CANONICAL, h64(0xA7), seatable())
+            .expect("the RC network is a runnable ruleset");
 
         // A new identity, and both reasons it had to be one.
         assert_eq!(params.net.to_string(), "testnet-12");
@@ -413,7 +437,7 @@ mod tests {
 
         let artifact_root = h64(0xA7);
         let bond = PalwBondKeyV2(crate::config::premine::premine_outpoint(0));
-        let params = crate::config::params::palw_rc_params_from_artifacts(artifact_root, bond, vec![7; 32], vec![21; 8], h64(0x9A11))
+        let params = crate::config::params::palw_rc_params_from_artifacts(artifact_root, seatable())
             .expect("the RC network derives and validates");
 
         assert_eq!(params.net.to_string(), "testnet-12");
@@ -432,8 +456,7 @@ mod tests {
         // `pwu_per_inference` is the COUNTED canonical leaf count, and the genesis loader checks
         // exactly that — so the declaration and the measurement are one number.
         let entry = catalog.entries().first().unwrap();
-        let PalwConsensusObjectV2::ClassRegistered { pwu_rule, class_id, artifact_root: registered, .. } =
-            &bundle.genesis_objects[0]
+        let PalwConsensusObjectV2::ClassRegistered { pwu_rule, class_id, artifact_root: registered, .. } = &bundle.genesis_objects[0]
         else {
             panic!("the first genesis object registers the class")
         };
@@ -450,15 +473,11 @@ mod tests {
         assert!(entry.reachable_kernels.is_subset(&crate::palw_step_refute::catalogued_kernel_ids_v1()));
 
         // Same artifact root, same network: the identity is a function of its inputs.
-        let again =
-            crate::config::params::palw_rc_params_from_artifacts(artifact_root, bond, vec![7; 32], vec![21; 8], h64(0x9A11))
-                .unwrap();
+        let again = crate::config::params::palw_rc_params_from_artifacts(artifact_root, seatable()).unwrap();
         assert_eq!(again.consensus_params_id(), params.consensus_params_id());
         // A different artifact root is a different network, because the weights are part of what
         // the class IS.
-        let other =
-            crate::config::params::palw_rc_params_from_artifacts(h64(0xA8), bond, vec![7; 32], vec![21; 8], h64(0x9A11))
-                .unwrap();
+        let other = crate::config::params::palw_rc_params_from_artifacts(h64(0xA8), seatable()).unwrap();
         assert_ne!(other.consensus_params_id(), params.consensus_params_id());
 
         // **Audit C-08 on the path that ships.** The genesis gate is not merely unit-tested: this
@@ -467,8 +486,8 @@ mod tests {
         // contain is refused here, with the artifact named, rather than producing a network whose
         // stake is a number.
         let unfunded = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0));
-        let err = crate::config::params::palw_rc_params_from_artifacts(artifact_root, unfunded, vec![7; 32], vec![21; 8], h64(0x9A11))
-            .unwrap_err();
+        let err =
+            crate::config::params::palw_rc_params_from_artifacts(artifact_root, seatable_but(0, |b| b.bond = unfunded)).unwrap_err();
         assert!(
             matches!(err, PalwModeV2Error::Genesis(crate::palw_genesis_v2::PalwGenesisV2Error::BondOutpointIsNotAGenesisUtxo { .. })),
             "got {err:?}"
@@ -483,10 +502,7 @@ mod tests {
             crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
             entry.canonical_step_leaf_count,
             artifact_root,
-            bond,
-            vec![7; 32],
-            vec![21; 8],
-            h64(0x9A11),
+            seatable(),
         )
         .expect("the lower entry point does not hold the catalog preimage, so it cannot gate");
         let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(overstated.net);
@@ -519,14 +535,8 @@ mod tests {
     fn a_worker_carve_larger_than_the_networks_worker_share_is_refused() {
         use crate::palw_state_v2::PalwBondKeyV2;
 
-        let mut params = crate::config::params::palw_rc_params_from_artifacts(
-            h64(0xA7),
-            PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
-            vec![7; 32],
-            vec![21; 8],
-            h64(0x9A11),
-        )
-        .expect("the RC artifacts assemble");
+        let mut params =
+            crate::config::params::palw_rc_params_from_artifacts(h64(0xA7), seatable()).expect("the RC artifacts assemble");
         let worker_base_permille =
             u32::from(params.dns_params.as_ref().expect("the RC net carves").reward_params.fee_split.subsidy_worker_base_bps) / 10;
         let PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else { panic!("not V2") };
@@ -571,14 +581,8 @@ mod tests {
 
         // And the card assembles the moment it is filled: the same four values `palw-rc-genesis`
         // prints, through the same function the network id calls.
-        let filled = crate::config::params::palw_rc_params_from_artifacts(
-            PALW_RC_GENESIS_ARTIFACT_ROOT,
-            PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
-            vec![7; 32],
-            vec![21; 8],
-            h64(0x9A11),
-        )
-        .expect("the pinned artifact root assembles against a real premine bond");
+        let filled = crate::config::params::palw_rc_params_from_artifacts(PALW_RC_GENESIS_ARTIFACT_ROOT, seatable())
+            .expect("the pinned artifact root assembles against a seatable premine registry");
         assert!(matches!(filled.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)));
         assert_ne!(
             filled.consensus_params_id(),
@@ -591,7 +595,7 @@ mod tests {
     /// artifact, not so a network quietly acquires one — every shipped preset is still fence-free.
     #[test]
     fn assembling_an_identity_installs_no_fence_on_any_shipped_preset() {
-        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET11_PARAMS, TESTNET_PARAMS};
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
         let catalog = catalog();
         let _ = assemble_palw_rc_identity_v2(&base(), bundle(&catalog), &catalog, &genesis_objects(), &ctx(), funded).unwrap();
         for (name, params) in [

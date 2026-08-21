@@ -2299,10 +2299,7 @@ pub const TESTNET11_PARAMS: Params = Params {
 /// lock exists (`palw_lifecycle_objects_v2`).
 pub fn palw_rc_params_from_artifacts(
     base0_artifact_root: crate::Hash64,
-    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
-    genesis_bond_pubkey: Vec<u8>,
-    genesis_operator_pubkey: Vec<u8>,
-    genesis_payout_payload: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let (profile, catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(base0_artifact_root)
         .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("BASE-0's registration does not derive"))?;
@@ -2314,10 +2311,7 @@ pub fn palw_rc_params_from_artifacts(
         crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
         entry.canonical_step_leaf_count,
         base0_artifact_root,
-        genesis_bond,
-        genesis_bond_pubkey,
-        genesis_operator_pubkey,
-        genesis_payout_payload,
+        genesis_bonds,
     )?;
     // **The genesis gate, on the path that can actually run it.**
     //
@@ -2371,20 +2365,35 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// identity, and a placeholder key would be an identity nobody holds the secret for — which is
 /// strictly worse than no network, because it looks like one.
 ///
-/// `palw-rc-genesis` turns an operator's four values into this block. Until they are pasted,
+/// `palw-rc-genesis` turns an operator's values into this block. Until they are pasted,
 /// `Params::from(testnet-12)` yields the bundle-free base identity and `kaspad` says so at startup.
-pub const PALW_RC_GENESIS_BOND_INDEX: u32 = 0;
-pub const PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[];
-pub const PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &[];
-pub const PALW_RC_GENESIS_PAYOUT_PAYLOAD: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+///
+/// **It is a REGISTRY, not a bond, and that is the correction that matters.** The shipped card
+/// carried exactly one bond; `derive_panel_v2` excludes a claim's own executor by bond, by operator
+/// AND by key and seats one bond per operator, so a 5-seat panel needs SIX distinct operators — and
+/// `BondRegistered` may not ride a transaction, so a registry too small has no later repair. With
+/// one bond no claim could ever be licensed: every one would void at `BindTimeout`, `safe_weight`
+/// would stay zero, and each block's escrowed worker carve would be burned. `verify_palw_genesis_v2`
+/// now refuses such a registry outright, which is why this is a list.
+pub struct PalwRcGenesisBondCard {
+    /// Which premine output backs this bond (0..=40). It is LOCKED while the bond is not retired.
+    pub premine_index: u32,
+    /// The ML-DSA-87 verification key that signs attempts under this bond.
+    pub bond_pubkey: &'static [u8],
+    /// The operator identity key. **One seat is one operator**, so every row here must carry a
+    /// DIFFERENT one — a registry of clones seats nobody however long it is.
+    pub operator_pubkey: &'static [u8],
+    /// The 64-byte P2PKH-ML-DSA-87 owner payload this bond's matured rewards are paid to.
+    pub payout_payload: [u8; 64],
+}
 
-/// Is the genesis card filled in? Both keys and a payout payload, or the network has no bond — and
-/// a `ConsensusV2` network with no bond boots and then cannot make a block, because admission
-/// refuses an attempt naming a bond the chain does not have.
+pub const PALW_RC_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[];
+
+/// Is the genesis card filled in? An empty registry is the shipped state: a `ConsensusV2` network
+/// with no bond boots and then cannot make a block, because admission refuses an attempt naming a
+/// bond the chain does not have.
 pub fn palw_rc_genesis_card_is_set() -> bool {
-    !PALW_RC_GENESIS_BOND_PUBKEY.is_empty()
-        && !PALW_RC_GENESIS_OPERATOR_PUBKEY.is_empty()
-        && PALW_RC_GENESIS_PAYOUT_PAYLOAD != crate::Hash64::from_bytes([0u8; 64])
+    !PALW_RC_GENESIS_BONDS.is_empty()
 }
 
 /// **The RC network as it ships: the base identity, plus the bundle when the card is set.**
@@ -2400,10 +2409,15 @@ pub fn palw_rc_shipped_params() -> Params {
     }
     palw_rc_params_from_artifacts(
         PALW_RC_GENESIS_ARTIFACT_ROOT,
-        crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(PALW_RC_GENESIS_BOND_INDEX)),
-        PALW_RC_GENESIS_BOND_PUBKEY.to_vec(),
-        PALW_RC_GENESIS_OPERATOR_PUBKEY.to_vec(),
-        PALW_RC_GENESIS_PAYOUT_PAYLOAD,
+        PALW_RC_GENESIS_BONDS
+            .iter()
+            .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+                bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+                pubkey: c.bond_pubkey.to_vec(),
+                operator_pubkey: c.operator_pubkey.to_vec(),
+                payout_payload: crate::Hash64::from_bytes(c.payout_payload),
+            })
+            .collect(),
     )
     // A card that is set and does not assemble is a binary that would boot a network its own
     // genesis gate refuses. Failing at startup with the gate's own message is the only honest
@@ -2479,10 +2493,7 @@ pub fn palw_rc_params(
     court_catalog_root: crate::Hash64,
     genesis_pwu_per_inference: u64,
     genesis_artifact_root: crate::Hash64,
-    genesis_bond: crate::palw_state_v2::PalwBondKeyV2,
-    genesis_bond_pubkey: Vec<u8>,
-    genesis_operator_pubkey: Vec<u8>,
-    genesis_payout_payload: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base_class_id,
@@ -2490,10 +2501,7 @@ pub fn palw_rc_params(
         court_catalog_root,
         genesis_pwu_per_inference,
         genesis_artifact_root,
-        genesis_bond,
-        genesis_bond_pubkey,
-        genesis_operator_pubkey,
-        genesis_payout_payload,
+        genesis_bonds,
     )?;
     // The identity is the base's, in ONE place: `Params::from(testnet-12)` and this must not be
     // able to disagree about which genesis, cadence or activation set the RC network has — a
@@ -3134,10 +3142,16 @@ mod fingerprint_probe {
         // and activations, so the two forms cannot come to disagree about which network they are.
         let bundled = palw_rc_params_from_artifacts(
             crate::Hash64::from_u64_word(0xA7),
-            crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
-            vec![7; 32],
-            vec![21; 8],
-            crate::Hash64::from_u64_word(0x9A11),
+            // A registry sized to seat the panel and to outlast the bind window, because the
+            // genesis gate refuses anything less — the probe measures the identity, not the card.
+            (0..crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+                .map(|i| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+                    bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(i)),
+                    pubkey: vec![7u8.wrapping_add(i as u8); 32],
+                    operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+                    payout_payload: crate::Hash64::from_u64_word(0x9A11 + i as u64),
+                })
+                .collect(),
         )
         .expect("the RC artifacts assemble");
         assert_eq!(bundled.net, base.net);

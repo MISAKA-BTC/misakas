@@ -458,10 +458,7 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
     // A slot past the tip has no beacon yet, and that is a REFUSAL rather than a zero. A
     // derivation that invented one would be a draw nobody made.
     let err = vp.palw_beacon_fact_of_candidate(sink, sink_daa + 1).unwrap_err();
-    assert!(
-        matches!(err, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error::NoBeaconYet { .. }),
-        "got {err:?}"
-    );
+    assert!(matches!(err, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error::NoBeaconYet { .. }), "got {err:?}");
 }
 
 /// **Unit D: one authority, and it is the candidate's — not the sink's.**
@@ -600,7 +597,14 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     // The genesis list is the only place a V2 network gets a class and a bond. Without it every
     // attempt names a bond the chain does not have and the network cannot make its first block —
     // which is what the harness measured the moment admission was wired.
-    assert_eq!(bundle.genesis_objects.len(), 2, "the bundle registers exactly its class and its bond");
+    // One class and a REGISTRY of bonds: a panel seats one bond per operator and never the
+    // claim's own executor, so `seat_count + 1` of them is the smallest registry that can license
+    // anything — `verify_palw_genesis_v2` refuses a shorter one.
+    assert_eq!(
+        bundle.genesis_objects.len(),
+        1 + kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+        "the bundle registers its class and a seatable bond registry"
+    );
     assert!(bundle.genesis_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { .. })));
     assert!(bundle.genesis_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::BondRegistered { .. })));
 
@@ -832,13 +836,20 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     let vp = ctx.consensus.virtual_processor();
     let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
     let registered: Vec<_> = state.bonds_iter().map(|(key, _)| key.0).collect();
-    assert_eq!(registered.len(), 1, "the fixture registers exactly one bond at genesis");
+    assert_eq!(
+        registered.len(),
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+        "the fixture registers a seatable bond registry at genesis"
+    );
 
-    // The genesis bond is Active and backing three claims: locked at every score.
+    // EVERY Active bond's collateral is locked at every score — the panel's seats included, since
+    // a seat that could spend its stake out from under a claim is a seat with nothing at risk.
     for daa in [0, 1, 1_000_000, u64::MAX] {
         let locked = vp.palw_v2_locked_bond_outpoints(&state, daa);
-        assert!(locked.contains(&registered[0]), "an Active bond's collateral must be locked at daa {daa}");
-        assert_eq!(locked.len(), 1, "and nothing else is");
+        for outpoint in &registered {
+            assert!(locked.contains(outpoint), "an Active bond's collateral must be locked at daa {daa}");
+        }
+        assert_eq!(locked.len(), registered.len(), "and nothing else is");
     }
 
     // A network with no V2 bundle locks nothing here — the filter stays inert where it always was.
@@ -887,14 +898,22 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]);
     let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(0));
     let artifact_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
-    let params = kaspa_consensus_core::config::params::palw_rc_params_from_artifacts(
-        artifact_root,
-        bond_key,
-        keypair.verification_key.as_ref().to_vec(),
-        vec![21u8; 8],
-        kaspa_hashes::Hash64::from_u64_word(0x9A11),
-    )
-    .expect("the RC genesis card assembles");
+    // The registry, not a bond: row 0 is the producer's, and the rest are the panel's. A registry
+    // that cannot seat a panel — or that cannot carry a claim through the bind window — is refused
+    // by `verify_palw_genesis_v2`, which is what stops a network from shipping in a state where it
+    // makes two blocks and stops.
+    let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
+                kaspa_consensus_core::config::premine::premine_outpoint(i),
+            ),
+            pubkey: if i == 0 { keypair.verification_key.as_ref().to_vec() } else { vec![7u8.wrapping_add(i as u8); 32] },
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_from_artifacts(artifact_root, registry)
+        .expect("the RC genesis card assembles");
     let bundle = match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("palw_rc_params_from_artifacts must yield a ConsensusV2 network"),
@@ -1068,7 +1087,7 @@ async fn palw_v2_the_exposure_ceiling_bites_when_reservations_are_real() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
     let catalog = palw_v2_test_catalog();
-    let bundle = palw_v2_test_bundle(&catalog);
+    let bundle = palw_v2_test_bundle_at_min_collateral(&catalog);
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
@@ -1282,16 +1301,19 @@ fn palw_v2_test_bundle(
         kaspa_hashes::Hash64::from_u64_word(0xC0757),
         4_096,
         kaspa_hashes::Hash64::from_u64_word(0xA7),
-        kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
-            kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
-            0,
-        )),
-        // The harness's REAL verification key: admission item 2 compares the attempt's carried
-        // key against this registration's, and the signature check behind it is only meaningful if
-        // the key it authorises is the one the chain registered.
-        crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey(),
-        vec![21u8; 8],
-        kaspa_hashes::Hash64::from_u64_word(0x9A11),
+        {
+            // Row 0 is the harness's own bond, carrying its REAL verification key: admission item 2
+            // compares the attempt's carried key against this registration's, and the signature
+            // check behind it is only meaningful if the key it authorises is the one the chain
+            // registered. The rest are the panel's — a registry that cannot seat one is refused by
+            // `verify_palw_genesis_v2`, and with one bond no claim could ever be licensed.
+            let mut registry = kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+                kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+            );
+            registry[0].pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+            registry[0].operator_pubkey = vec![21u8; 8];
+            registry
+        },
     )
     .expect("the devnet bundle validates");
     b.class_catalog_root = catalog.root();
@@ -1309,6 +1331,26 @@ fn palw_v2_test_bundle(
 /// A test that wants a chain longer than four blocks therefore has to fund it, exactly as an
 /// operator would. `palw_v2_the_exposure_ceiling_bites_when_reservations_are_real` keeps the
 /// default and asserts the refusal, so raising it here hides nothing.
+/// The fixture with every bond at the POLICY FLOOR rather than the derived bind-window figure.
+///
+/// `palw_fp_devnet_bundle_v3` now sizes a genesis bond to carry a claim through `window_bind`,
+/// because a bond that cannot is a chain that stops — but a test that wants to WATCH the exposure
+/// ceiling refuse a block needs a deliberately thin one. The floor is a legal declaration (it is
+/// `PalwBondParamsV2`'s own minimum), so this is a thin network rather than an invalid one.
+fn palw_v2_test_bundle_at_min_collateral(
+    catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
+) -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    let mut b = palw_v2_test_bundle(catalog);
+    let floor = b.bond.min_collateral_sompi();
+    for object in b.genesis_objects.iter_mut() {
+        if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
+            *collateral = floor;
+        }
+    }
+    b
+}
+
 fn palw_v2_test_bundle_funded_for(
     catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
     concurrent_claims: u64,
