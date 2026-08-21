@@ -77,6 +77,17 @@ pub struct PalwProducerConfig {
     /// Where the execution material behind each published attempt is kept for as long as its
     /// `trace_retention_daa` promises. See `retain_execution` for why this is not optional.
     pub retention_dir: std::path::PathBuf,
+    /// **The operator's `--enable-unsynced-mining`, threaded to the producer** — the same escape
+    /// the RPC mining path honours (`rpc/service`: `!enable_unsynced_mining && !is_synced` ⇒
+    /// refuse). Without it a PALW network cannot be BORN: `should_mine` requires the sink to be
+    /// "nearly synced", which means a sink timestamp within a quarter of the difficulty window of
+    /// now — and a genesis timestamp is by definition in the past, so on a fresh chain the answer
+    /// is false for every node at once and nobody may produce block 1. Measured on testnet-12's
+    /// first launch: two peers connected, participation open, and the producer held silently.
+    ///
+    /// The gate's other two clauses — chain participation and peer connectivity — are NOT waived
+    /// by this. They are the ones that stop a node extending a chain it has no business on.
+    pub enable_unsynced_mining: bool,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -242,9 +253,22 @@ impl PalwProducerService {
             // chain-participation gate was closed: none of which the RPC mining path allows, and
             // all of which put blocks on a chain this node has no business extending.
             if !self.flow_context.should_mine(&session).await {
-                trace!("[{PALW_PRODUCER}] holding: the mining rule engine says this node should not mine");
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                continue;
+                // The operator's explicit escape, and ONLY it: peer connectivity and chain
+                // participation are checked separately below, so `--enable-unsynced-mining` buys
+                // exactly the "my sink is older than the window" waiver a network's first block
+                // needs — never permission to mine alone or on a quarantined chain.
+                let peers_and_participation =
+                    self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed();
+                if !(self.config.enable_unsynced_mining && peers_and_participation) {
+                    trace!("[{PALW_PRODUCER}] holding: the mining rule engine says this node should not mine");
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                if produced == 0 {
+                    info!(
+                        "[{PALW_PRODUCER}] the sink is older than the sync window (a fresh chain always is) and --enable-unsynced-mining is set: producing anyway, with peers connected and participation open"
+                    );
+                }
             }
             let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
                 trace!("[{PALW_PRODUCER}] this network has no ConsensusV2 facts — nothing to produce");

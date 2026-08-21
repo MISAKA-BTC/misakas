@@ -1208,6 +1208,9 @@ Do you confirm? (y/n)";
                         // is a data-availability obligation for `trace_retention_daa`, so it has to
                         // outlive a restart the way the chain it answers to does.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        // A fresh network's genesis is always "too old" for the sync rule; the
+                        // operator's flag is the only thing that can say "start anyway".
+                        enable_unsynced_mining: args.enable_unsynced_mining,
                         class_id,
                     },
                     consensus_manager.clone(),
