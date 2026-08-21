@@ -309,6 +309,11 @@ impl Consensus {
         // Ensure that some pruning point is registered
         virtual_processor.init();
 
+        // Does this database already carry a chain? `past_pruning_points[0]` is written by
+        // `process_genesis` and never pruned — it is the pruning-proof anchor — so its presence is
+        // what separates "a node resuming its own history" from "a fresh or staging database".
+        let db_has_history = storage.past_pruning_points_store.get(0).is_ok();
+
         // Ensure that genesis was processed
         if config.process_genesis {
             header_processor.process_genesis();
@@ -328,6 +333,48 @@ impl Consensus {
                 "consensus DB genesis {stored_genesis} does not match the configured genesis {} — this \
                  data directory belongs to a different chain; wipe it to re-genesis onto the new chain",
                 config.genesis.hash
+            );
+        }
+
+        // **A ConsensusV2 node with no PALW state must not run** (launch blockers §1).
+        //
+        // `PalwChainStateV2` is written only by `process_genesis`. Absent state was read as "no
+        // policy", and every PALW authority then failed OPEN: `palw_state_root` unchecked, no
+        // transition applied, tips ordered by blue work alone, any pruning point allowed, the
+        // deep-reorg comparator skipped, any staged chain accepted at IBD. It does not fork — it is
+        // strictly MORE permissive — so nothing warned anyone, and such a node would follow the
+        // blue-work-heaviest chain that the frontier-first ordering exists to refuse.
+        //
+        // Four ways to get there, and only the first is exotic: joining by pruned IBD; starting on
+        // a datadir that predates the bundle (bundle-free and bundled testnet-12 share a genesis,
+        // so the re-genesis guard above cannot see the difference); a schema-version bump, which
+        // `reindex_if_stale` answers by deleting the tip with nothing that rebuilds it; and the
+        // staging consensus, built with `.skip_adding_genesis()`.
+        //
+        // Refusing is not the whole fix — a node that CANNOT install the state still cannot join,
+        // which is what the pruning-point import is for — but it converts a silent consensus
+        // divergence into a startup message, and that is the half that must never be missing.
+        //
+        // **It must cover the node that did NOT process genesis**, because that is exactly where
+        // the danger is: the pruned join and the pre-bundle datadir never process genesis, which is
+        // WHY they have no state. Gating on `process_genesis` alone would have excluded them.
+        //
+        // The one legitimate stateless case is a STAGING consensus — built with
+        // `.skip_adding_genesis()` on a fresh database, holding nothing until it is promoted. It is
+        // told apart by its database, not by a flag: staging has no history, while a node resuming
+        // its own chain has `past_pruning_points[0]`. So the guard runs when this consensus either
+        // installed genesis itself or is resuming a real history.
+        if (config.process_genesis || db_has_history)
+            && matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+        {
+            let installed = storage.palw_state_v2_store.read().tip_record().ok().flatten().is_some();
+            assert!(
+                installed,
+                "this is a PALW ConsensusV2 network ({}) and the PALW state store holds no tip — every PALW consensus rule \
+                 would be silently disabled on this node (state root unchecked, tips ordered by blue work, any pruning point \
+                 accepted) and it would NOT fork, so nothing would report it. Wipe the data directory to re-genesis, or wait \
+                 for a build that can import the state at a pruning point",
+                config.params.net
             );
         }
 

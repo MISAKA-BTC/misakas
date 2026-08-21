@@ -206,6 +206,16 @@ impl DbPalwStateV2Store {
         }
     }
 
+    /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a
+    /// schema bump) leaves behind: a live ConsensusV2 bundle with no PALW state under it. Test-only,
+    /// because nothing in production should ever reach that state deliberately — the startup guard
+    /// in `Consensus::new` refuses to run in it.
+    #[cfg(test)]
+    pub fn delete_tip_for_tests(&mut self) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.tip.remove(DirectDbWriter::new(&self.db))
+    }
+
     /// Load and REBUILD the tip state, demanding the recorded root — index rebuild, internal
     /// consistency, deadline consistency and the root equality all run (`into_state`), so what
     /// this returns is a state the machine would have produced, or an error naming why not.

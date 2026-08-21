@@ -1017,7 +1017,109 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
-/// **Audit M-01: one unauthenticated transaction used to slash a producer and every panel seat.**
+/// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1).
+///
+/// Absent state was read as "no policy", and every PALW authority then failed OPEN: the state root
+/// unchecked, no transition applied, tips ordered by blue work alone, any pruning point allowed,
+/// the deep-reorg comparator skipped. It does not FORK — it is strictly more permissive — so a node
+/// in that state follows the blue-work-heaviest chain that frontier-first ordering exists to refuse,
+/// and nothing anywhere reports it.
+///
+/// Four ways in: pruned IBD, a datadir predating the bundle (bundle-free and bundled testnet-12
+/// share a genesis, so the re-genesis guard cannot see the difference), a schema bump that
+/// `reindex_if_stale` answers by deleting the tip, and the staging consensus.
+///
+/// This drives the same construction path a node takes, with the store emptied — the state a
+/// pruned join lands in. Deleting the guard makes it build happily, which is the point.
+#[tokio::test]
+async fn palw_v2_a_node_with_no_palw_state_refuses_to_run() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+
+    // A healthy node installs the tip at genesis and runs.
+    let tc = TestConsensus::new(&config);
+    let _lt = tc.init();
+    assert!(
+        tc.virtual_processor().palw_state_v2_store.read().tip_record().unwrap().is_some(),
+        "a genesis-processed ConsensusV2 node holds a PALW tip"
+    );
+
+    // Now the state a pruned join lands in: the store emptied under a live bundle. Every PALW leg
+    // reads `None` and becomes a no-op — the silent-downgrade the guard exists to make impossible.
+    let vp = tc.virtual_processor();
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("the fixture can empty its own store");
+    }
+    assert!(
+        vp.palw_state_v2_store.read().tip_record().unwrap().is_none(),
+        "and with the tip gone every PALW authority would silently fail open"
+    );
+
+    // Every PALW leg is now a no-op on this node, which is the silent downgrade itself: the
+    // pruning ceiling allows anything, and the candidate order has no authority to express.
+    assert!(
+        vp.palw_pruning_point_allowed_v2(tc.get_sink()),
+        "with no state the pruning ceiling permits any point — the fail-open the guard exists to stop"
+    );
+}
+
+/// **And the guard actually refuses** — a ConsensusV2 consensus cannot be constructed over an empty
+/// PALW store.
+///
+/// The test above proves the DEGRADED STATE is real; this proves the startup assertion fires in it.
+/// Both halves are needed: a guard whose precondition is unreachable is decoration, and a
+/// precondition with no guard is the bug.
+#[test]
+#[should_panic(expected = "PALW state store holds no tip")]
+fn palw_v2_constructing_a_bundled_consensus_over_an_empty_store_panics() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+
+    // One database, opened twice. The first build installs genesis AND the PALW tip; the store is
+    // then emptied the way a pruned join or a `reindex_if_stale` leaves it. The second open is a
+    // RESTART — `process_genesis` is off, but the database carries `past_pruning_points[0]`, so
+    // this is a node resuming its own chain with its PALW state missing. It must refuse.
+    let (_lifetime, db) = kaspa_database::create_temp_db!(kaspa_database::prelude::ConnBuilder::default().with_files_limit(10));
+    let (sender, _r) = async_channel::unbounded();
+    let first = crate::consensus::test_consensus::TestConsensus::with_db(db.clone(), &config, sender.clone());
+    let _lt = first.init();
+    {
+        let mut store = first.virtual_processor().palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("empty the store the way a pruned join leaves it");
+    }
+    drop(first);
+
+    let resumed = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .skip_adding_genesis()
+        .build();
+    let _reopened = crate::consensus::test_consensus::TestConsensus::with_db(db, &resumed, sender);
+}
+
+/// **Audit M-01: one unauthenticated transaction used to slash a producer and every panel seat.**/// **Audit M-01: one unauthenticated transaction used to slash a producer and every panel seat.**
 ///
 /// `ProducerDefaulted { claim, receipts: [] }` carried no signature of any kind, the acceptance
 /// match had no arm for it (`_ => {}`), and the transition folded it — charging every seat
