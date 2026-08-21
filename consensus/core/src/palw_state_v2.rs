@@ -1075,6 +1075,9 @@ pub enum PalwConsensusObjectV2 {
         /// derivation — they are declared for the transition to build from, not trusted.
         space: crate::palw_bisect::PalwBisectSpaceV1,
         space_size: u64,
+        /// The challenger's signature over `session_id` (audit M-01). Without it anyone could
+        /// nominate a stranger's bond and freeze the claim it disputes.
+        signature: Vec<u8>,
     },
     CourtClosed {
         session_id: Hash64,
@@ -3062,7 +3065,7 @@ fn apply_object(
                 builder.arm_deadline(deadline, *claim_id);
             }
         }
-        PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size } => {
+        PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size, signature: _ } => {
             if builder.state.court_sessions.contains_key(session_id) {
                 return Err(PalwStateV2Error::DuplicateSession(*session_id));
             }
@@ -3910,6 +3913,7 @@ pub(crate) mod tests {
             challenger_bond: challenger,
             space: SPACE,
             space_size: SIZE,
+            signature: Vec::new(),
         }
     }
 
@@ -3932,6 +3936,7 @@ pub(crate) mod tests {
             challenger_bond: challenger,
             space: SPACE,
             space_size: SIZE,
+            signature: Vec::new(),
         }
     }
 

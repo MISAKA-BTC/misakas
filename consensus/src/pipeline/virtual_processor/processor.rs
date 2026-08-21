@@ -1210,13 +1210,27 @@ impl VirtualStateProcessor {
                                 // that does not exist yet.
                                 let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data, state, current);
                                 // Decisions 7/8: every lifecycle object meets its own validator
-                                // before the transition folds it.
-                                if let Err(obj_error) = self.palw_v2_validate_objects(state, state_params, &point, &objects) {
-                                    info!("Block {} is disqualified from virtual chain (PALW object): {}", current, obj_error);
-                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                    chain_disqualified_counter += 1;
-                                    continue;
-                                }
+                                // before the transition folds it — and an object that FAILS is
+                                // dropped rather than fatal to the block that accepted it.
+                                //
+                                // **Audit M-01's other half.** This used to disqualify the block.
+                                // Admission on the 0x4b band is purely stateless (decode, version,
+                                // may-ride), so a transaction carrying a stateful lie — a bad
+                                // signature, a claim that does not exist — relays and mines freely;
+                                // the first honest block to accept it lost its candidacy, and the
+                                // transaction stayed in the acceptance set for the next candidate
+                                // to die on. One ~100-byte transaction, one ordinary fee, and the
+                                // chain stops. The module beside this one states the rule already:
+                                // "a walk that could panic or reject on a peer-supplied payload
+                                // would be a remote denial of service wearing a consensus rule's
+                                // clothes" — it just stopped at the malformed carrier and left
+                                // every stateful check fatal.
+                                //
+                                // Dropping is deterministic: the verdict is a pure function of
+                                // (state, params, point, object), so every node drops the same
+                                // ones. A dropped object simply does not fold, which is what "the
+                                // transaction was invalid" ought to mean.
+                                let objects = self.palw_v2_accepted_objects(state, state_params, &point, objects, current);
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -3734,6 +3748,29 @@ impl VirtualStateProcessor {
     ///
     /// A network with no V2 bundle has no objects to check (extraction yields none), so this is
     /// `Ok(())` everywhere today.
+    /// [`Self::palw_v2_validate_objects`] as a FILTER: the objects that passed, in order, with the
+    /// rejected ones logged by their own reason. See the call site for why a rejection drops the
+    /// object instead of the block.
+    fn palw_v2_accepted_objects(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        block: BlockHash,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        objects
+            .into_iter()
+            .filter(|object| match self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+                Ok(()) => true,
+                Err(why) => {
+                    info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                    false
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -3764,7 +3801,7 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                Obj::CourtOpened { session_id, claim, challenger_bond, space, space_size } => {
+                Obj::CourtOpened { session_id, claim, challenger_bond, space, space_size, signature } => {
                     // The object now DECLARES the space, because the transition opens a ladder
                     // from it — but the ruleset still DECIDES it. H2's rule is unchanged: a space
                     // the accuser chose is a ladder depth the accuser chose, so a declaration that
@@ -3788,6 +3825,13 @@ impl VirtualStateProcessor {
                         challenger_bond,
                         kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
                         court.max_step_leaf_count(),
+                        // The challenger's own signature over the session id (audit M-01). Without
+                        // it every check above is a fact ABOUT the bond and none about who spoke
+                        // for it, so anyone could prosecute under a stranger's identity — and the
+                        // transition disarms the claim's final deadline while a session is open,
+                        // which turns that into a freeze of an honest producer's claim.
+                        signature,
+                        Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| e.to_string())?;
                 }

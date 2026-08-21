@@ -69,6 +69,16 @@ pub const PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT: &[u8] = b"misaka-palw/court-
 /// its own disclosure be replayed as the challenger's verdict.
 pub const PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT: &[u8] = b"misaka-palw/court-v2/verdict/mldsa87/v1";
 
+/// What a CHALLENGER signs to open a session (audit M-01).
+///
+/// `CourtOpened` carried no signature and `validate_court_opened_v2` verified none: it checked the
+/// claim's phase, the window, that the challenger bond exists and that the session id derives — all
+/// facts about the bond, none about who spoke for it. So anyone could nominate a stranger's bond as
+/// challenger, and the transition then disarms the claim's final deadline, freezing an honest
+/// producer's path to `Final` under an identity that never agreed to prosecute. Its own domain, so
+/// an opening cannot be replayed as a disclosure or a verdict.
+pub const PALW_COURT_V2_MLDSA87_OPEN_CONTEXT: &[u8] = b"misaka-palw/court-v2/open/mldsa87/v1";
+
 pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] =
     &[PALW_COURT_V2_DOMAIN_PARTY_ID, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT];
 
@@ -160,6 +170,11 @@ pub fn validate_court_opened_v2(
     challenger_bond: &PalwBondKeyV2,
     space: PalwBisectSpaceV1,
     space_size: u64,
+    // The challenger's ML-DSA-87 signature over `session_id`, under
+    // `PALW_COURT_V2_MLDSA87_OPEN_CONTEXT`. The id already binds the claim, the trace root, both
+    // bonds and the space, so signing it is signing the whole opening.
+    signature: &[u8],
+    verify_mldsa87: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<(), PalwCourtV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwCourtV2Error::MissingClaim(*claim_id))?;
     let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else {
@@ -186,6 +201,14 @@ pub fn validate_court_opened_v2(
     let derived = court_session_id_v2(claim_id, &claim.trace_root, &claim.bond, challenger_bond, space, space_size);
     if derived != *session_id {
         return Err(PalwCourtV2Error::SessionIdMismatch);
+    }
+    // **Who spoke for this bond** (audit M-01). Everything above is a fact ABOUT the challenger
+    // bond and none of it is a fact about the sender. Without this, opening a court under a
+    // stranger's identity costs one transaction fee and freezes an honest claim: the transition
+    // disarms the claim's final deadline while a session is open.
+    let challenger = state.bond(challenger_bond).ok_or(PalwCourtV2Error::ChallengerMissing(*challenger_bond))?;
+    if !verify_mldsa87(&challenger.pubkey, session_id.as_byte_slice(), signature, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) {
+        return Err(PalwCourtV2Error::RungSignatureInvalid);
     }
     Ok(())
 }
@@ -421,21 +444,7 @@ mod tests {
     }
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            h64(1),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn bond_key(v: u64) -> PalwBondKeyV2 {
@@ -485,8 +494,20 @@ mod tests {
                 activation_daa: 0,
                 admission: None,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(0x21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8; 4], operator_pubkey: op_key(0x22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(0x21),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(0x22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let env = attempt(40, 1);
@@ -501,9 +522,14 @@ mod tests {
             None,
         )
         .unwrap();
-        let (s4, _) =
-            apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None)
-                .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
         (s4, claim_id)
     }
 
@@ -516,13 +542,81 @@ mod tests {
 
         // Conforming: inside the window (licensed 103 + 20 = 123), real challenger, exact id.
         assert!(
-            validate_court_opened_v2(&state, &p, &ctx(5, 123, 5), &sid, &claim_id, &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64)
-                .is_ok(),
+            validate_court_opened_v2(
+                &state,
+                &p,
+                &ctx(5, 123, 5),
+                &sid,
+                &claim_id,
+                &bond_key(2),
+                PalwBisectSpaceV1::StepLeaves,
+                64,
+                &[],
+                |_, _, _, _| true
+            )
+            .is_ok(),
             "the last block AT the deadline can still open"
         );
+
+        // **Audit M-01: who SPOKE for the challenger bond.** Everything above is a fact about the
+        // bond — it exists, it is not the claim's own, the id derives — and none of it is a fact
+        // about the sender. Unsigned, opening a court under a stranger's identity cost one
+        // transaction fee, and the transition disarms the claim's final deadline while a session is
+        // open: an honest producer's claim frozen by an accuser who never agreed to accuse.
+        assert!(
+            matches!(
+                validate_court_opened_v2(
+                    &state,
+                    &p,
+                    &ctx(5, 123, 5),
+                    &sid,
+                    &claim_id,
+                    &bond_key(2),
+                    PalwBisectSpaceV1::StepLeaves,
+                    64,
+                    &[],
+                    // The verifier that actually answers, rather than the fixture's `true`.
+                    |_, _, _, _| false,
+                ),
+                Err(PalwCourtV2Error::RungSignatureInvalid)
+            ),
+            "an opening nobody signed is an opening nobody authorised"
+        );
+        // And the signature is over the SESSION ID under the opening's own context, so an opening
+        // cannot be replayed as a disclosure or a verdict.
+        let seen: std::cell::RefCell<Option<(Vec<u8>, Vec<u8>)>> = std::cell::RefCell::new(None);
+        let _ = validate_court_opened_v2(
+            &state,
+            &p,
+            &ctx(5, 123, 5),
+            &sid,
+            &claim_id,
+            &bond_key(2),
+            PalwBisectSpaceV1::StepLeaves,
+            64,
+            &[9; 4],
+            |_key, message, _sig, context| {
+                *seen.borrow_mut() = Some((message.to_vec(), context.to_vec()));
+                true
+            },
+        );
+        let (message, context) = seen.into_inner().expect("the verifier was consulted");
+        assert_eq!(message, sid.as_byte_slice(), "the challenger signs the session id");
+        assert_eq!(context, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, "in its own domain");
         // Window lapsed.
         assert!(matches!(
-            validate_court_opened_v2(&state, &p, &ctx(5, 124, 5), &sid, &claim_id, &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64),
+            validate_court_opened_v2(
+                &state,
+                &p,
+                &ctx(5, 124, 5),
+                &sid,
+                &claim_id,
+                &bond_key(2),
+                PalwBisectSpaceV1::StepLeaves,
+                64,
+                &[],
+                |_, _, _, _| true
+            ),
             Err(PalwCourtV2Error::NotChallengeable { .. })
         ));
         // Self-challenge.
@@ -537,23 +631,58 @@ mod tests {
                 &claim_id,
                 &bond_key(1),
                 PalwBisectSpaceV1::StepLeaves,
-                64
+                64,
+                &[],
+                |_, _, _, _| true,
             ),
             Err(PalwCourtV2Error::SelfChallenge)
         ));
         // Unregistered challenger.
         assert!(matches!(
-            validate_court_opened_v2(&state, &p, &ctx(5, 110, 5), &sid, &claim_id, &bond_key(9), PalwBisectSpaceV1::StepLeaves, 64),
+            validate_court_opened_v2(
+                &state,
+                &p,
+                &ctx(5, 110, 5),
+                &sid,
+                &claim_id,
+                &bond_key(9),
+                PalwBisectSpaceV1::StepLeaves,
+                64,
+                &[],
+                |_, _, _, _| true
+            ),
             Err(PalwCourtV2Error::ChallengerMissing(_))
         ));
         // Space too small to bisect.
         assert!(matches!(
-            validate_court_opened_v2(&state, &p, &ctx(5, 110, 5), &sid, &claim_id, &bond_key(2), PalwBisectSpaceV1::StepLeaves, 1),
+            validate_court_opened_v2(
+                &state,
+                &p,
+                &ctx(5, 110, 5),
+                &sid,
+                &claim_id,
+                &bond_key(2),
+                PalwBisectSpaceV1::StepLeaves,
+                1,
+                &[],
+                |_, _, _, _| true
+            ),
             Err(PalwCourtV2Error::SpaceTooSmall(1))
         ));
         // Announced id from a different space size: not this dispute.
         assert!(matches!(
-            validate_court_opened_v2(&state, &p, &ctx(5, 110, 5), &sid, &claim_id, &bond_key(2), PalwBisectSpaceV1::StepLeaves, 65),
+            validate_court_opened_v2(
+                &state,
+                &p,
+                &ctx(5, 110, 5),
+                &sid,
+                &claim_id,
+                &bond_key(2),
+                PalwBisectSpaceV1::StepLeaves,
+                65,
+                &[],
+                |_, _, _, _| true
+            ),
             Err(PalwCourtV2Error::SessionIdMismatch)
         ));
         // A merely-Provisional claim is not in its challenge surface.
@@ -569,7 +698,18 @@ mod tests {
             64,
         );
         assert!(matches!(
-            validate_court_opened_v2(&with_prov, &p, &ctx(6, 105, 6), &sid2, &claim2, &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64),
+            validate_court_opened_v2(
+                &with_prov,
+                &p,
+                &ctx(6, 105, 6),
+                &sid2,
+                &claim2,
+                &bond_key(2),
+                PalwBisectSpaceV1::StepLeaves,
+                64,
+                &[],
+                |_, _, _, _| true
+            ),
             Err(PalwCourtV2Error::NotChallengeable { .. })
         ));
     }
@@ -644,6 +784,7 @@ mod tests {
                 challenger_bond: bond_key(2),
                 space: PalwBisectSpaceV1::StepLeaves,
                 space_size: 64,
+                signature: Vec::new(),
             }],
             None,
         )
@@ -665,7 +806,10 @@ mod tests {
         assert_eq!(claim.execution_root, h64(41), "the state carries the execution root the court binds");
         assert!(check_execution_root_binding(claim.execution_root, claim.execution_root).is_ok());
         assert!(
-            matches!(check_execution_root_binding(claim.execution_root, claim.trace_root), Err(PalwCourtV2Error::ExecutionRootMismatch)),
+            matches!(
+                check_execution_root_binding(claim.execution_root, claim.trace_root),
+                Err(PalwCourtV2Error::ExecutionRootMismatch)
+            ),
             "the public trace root must not stand in for the executor's execution commitment"
         );
         assert!(matches!(
@@ -788,6 +932,7 @@ mod tests {
                 challenger_bond: bond_key(2),
                 space: PalwBisectSpaceV1::StepLeaves,
                 space_size: 64,
+                signature: Vec::new(),
             }],
             None,
         )
@@ -907,6 +1052,7 @@ mod tests {
                 challenger_bond: bond_key(2),
                 space: PalwBisectSpaceV1::StepLeaves,
                 space_size: 64,
+                signature: Vec::new(),
             }],
             None,
         )
@@ -972,6 +1118,7 @@ mod tests {
                 challenger_bond: bond_key(2),
                 space: PalwBisectSpaceV1::StepLeaves,
                 space_size: 64,
+                signature: Vec::new(),
             }],
             None,
         )
@@ -1047,15 +1194,9 @@ mod tests {
         };
 
         // A tiny court, so the fixture states the rule rather than the shipped numbers.
-        let tight = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
-            crate::palw_step::PALW_STEP_MAX_LEAVES,
-            4,
-            2,
-            1_024,
-            1_000,
-            2,
-        )
-        .unwrap();
+        let tight =
+            crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1_024, 1_000, 2)
+                .unwrap();
 
         // Too many openings — refused by count, whatever they contain.
         let many = proof(vec![opening(1, 0), opening(1, 0), opening(1, 0)]);
