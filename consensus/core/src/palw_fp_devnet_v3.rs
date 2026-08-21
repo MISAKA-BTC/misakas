@@ -214,10 +214,28 @@ pub struct PalwGenesisBondSpecV1 {
 /// producing. Derived rather than declared so a change to the window, the target, the class or the
 /// exposure ratio moves the requirement with it — the shipped bundle carried a hand-written
 /// 400,000 against a requirement of 94,800,000 and stopped at block two.
+///
+/// **The window is not the count; the count is the window PLUS ONE, and the difference is a
+/// permanent wedge.** Sizing to exactly `window_bind` moved the deadlock from block 2 to block 600
+/// rather than removing it, which is what testnet-12's first run measured: 600 blocks produced,
+/// then `holding: the bond's exposure ceiling leaves no room for another claim`, forever.
+///
+/// The arithmetic, with one claim per block and DAA advancing one per block. A claim accepted in
+/// block `k` carries deadline `k + window_bind`, and the sweep voids deadlines STRICTLY before the
+/// block's DAA — so claim 1 is swept while block `window_bind + 2` is applied. But admission runs
+/// against the PARENT state, before that block's own sweep, so producing block `window_bind + 1`
+/// requires room for `window_bind + 1` live claims. One short is not a near miss: the chain cannot
+/// produce the block that would have released the room, and there is no timeout that helps,
+/// because DAA only advances when blocks are produced.
+///
+/// This is the structural minimum, not a safety margin. A network that wants slack against DAA
+/// advancing more slowly than one per block (parallel producers sharing a DAA score) must fund
+/// beyond it — the ceiling is per BOND, so a bond that produces in parallel with itself needs a
+/// multiple.
 pub fn palw_v2_collateral_for_bind_window_v1(pwu_per_inference: u64) -> u64 {
     let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
     let per_claim = (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1);
-    let ceiling = per_claim.saturating_mul(WINDOW_BIND as u128);
+    let ceiling = per_claim.saturating_mul(WINDOW_BIND as u128 + 1);
     let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
     collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
 }
@@ -390,6 +408,32 @@ pub(crate) fn palw_fp_devnet_bundle_for_tests(
 
 #[cfg(test)]
 mod tests {
+
+    /// **The ceiling must admit the window PLUS ONE claim, and one short is a permanent wedge.**
+    ///
+    /// Measured on testnet-12's first run: sized to exactly `window_bind`, the chain produced 600
+    /// blocks and then held forever on `the bond's exposure ceiling leaves no room for another
+    /// claim`. Admission runs against the PARENT state, so block `window_bind + 1` needs room for
+    /// `window_bind + 1` live claims — and the first void is not swept until block
+    /// `window_bind + 2`, which the chain can no longer reach.
+    #[test]
+    fn the_collateral_admits_one_more_claim_than_the_bind_window_is_long() {
+        let pwu_per_inference = 7_900;
+        let collateral = palw_v2_collateral_for_bind_window_v1(pwu_per_inference);
+        let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
+        let per_claim = (pwu as u128) * (SLASH_VALUE_PER_PWU as u128);
+        // The ceiling admission actually enforces: collateral × ratio / 1000.
+        let ceiling = (collateral as u128) * (MAX_EXPOSURE_RATIO_PERMILLE as u128) / 1000;
+        let admits = ceiling / per_claim;
+        assert!(
+            admits >= WINDOW_BIND as u128 + 1,
+            "the ceiling admits {admits} concurrent claims; producing block {} needs {}",
+            WINDOW_BIND + 1,
+            WINDOW_BIND + 1
+        );
+        // And not wastefully more — this is a floor with a stated reason, not a round number.
+        assert!(admits < WINDOW_BIND as u128 + 8, "the derivation should not quietly inflate: admits {admits}");
+    }
     use super::*;
     use crate::palw_mode_v2::{PalwConsensusMode, palw_ruleset_id_v2};
 
