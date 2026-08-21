@@ -2332,7 +2332,15 @@ pub fn palw_rc_params_from_artifacts(
     crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
     })?;
-    Ok(params)
+    // **The last transform a booting node applies, applied here too.**
+    //
+    // `From<NetworkId> for Params` wraps its whole match in `with_registered_models`, so a node's
+    // params — and therefore its `consensus_params_id` — carry the model cost table. This function
+    // is documented as "the call a node makes at boot" and every caller trusts that: the genesis
+    // TOOL printed an id no node would ever log (`c4a381f6…` against the node's `9d0cc709…`), which
+    // an operator comparing the two reads as a fleet mismatch. Idempotent by construction — the
+    // wrapper fills the table only when it is empty — so the outer application stays a no-op.
+    Ok(with_registered_models(params))
 }
 
 // ---------------------------------------------------------------------------------------------
