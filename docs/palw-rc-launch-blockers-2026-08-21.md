@@ -123,6 +123,29 @@ the retirement change already forces (settle M-02 first — one flag day, not tw
 
 ---
 
+## Launching it found six more — the class of defect only a real network has
+
+Recorded because the pattern is the finding: **every one of these is invisible to a test suite,
+because a suite always starts from a chain that already exists and a binary somebody already built
+correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would.
+
+| # | what | why no test could see it | fix |
+|---|---|---|---|
+| 1 | **A PALW network could not be born.** `should_mine` demands a sink "nearly synced" — a timestamp within a quarter of the difficulty window of now — and a genesis timestamp is by definition in the past. On a fresh chain the clause is false for EVERY node at once, so nobody may produce block 1, ever. The RPC mining path has always had the `--enable-unsynced-mining` escape; the in-node producer consulted `should_mine` alone and inherited none of it. | Every test runs on a chain with blocks in it. The genesis instant is the one moment this bites, and nothing re-enters it. | `65a848f6` — the flag waives the SYNC clause only; peers and participation are re-checked explicitly, so it never buys mining alone or on a quarantined chain |
+| 2 | **The genesis tool could only build a card its own gate refuses.** It assembled ONE row; `verify_palw_genesis_v2` needs six distinct operators. Every invocation ended in `PanelCannotBeSeated`. | The gate and the tool were each tested against their own fixtures. Nobody ran the tool and fed its output to the gate. | `1e258704` — `--emit-row` / `--rows`, split along the secrecy line |
+| 3 | **No key-length validation anywhere.** The genesis loader stores what it is handed, so a truncated paste mints a bond nobody can sign for — and `BondRegistered` may not ride a transaction, so the only repair is a flag-day relaunch. | Fixtures always carry well-formed keys. | `1e258704` — both sides demand exactly 2,592 bytes |
+| 4 | **The payout could be an address nobody holds.** With no default, the obvious move is to paste some address; the obvious mistake is one whose key nobody on this network has — an unspendable payout, discovered a settlement window after launch. Caught mid-launch: the first row took its payout from a throwaway keygen probe. | There is no wrong answer to test against; the defect is a missing default. | `e76de592` — defaults to the bond key's own address |
+| 5 | **The tool printed a params id no node would ever log.** `From<NetworkId>` wraps its match in `with_registered_models`; `palw_rc_params_from_artifacts` — documented as "the call a node makes at boot" — did not. Same registry, `c4a381f6…` from the tool against `9d0cc709…` from the node, on the one value the handshake turns on. | Both sides were self-consistent. The divergence exists only between two programs nobody had run against each other. | `b8a06cf1` — applied at the source, idempotent |
+| 6 | **`--skip-cost` had never worked**, and `--emit-row` would not have either: `arg()` returns the value AFTER a flag, so a bare boolean at the end of the line reads as absent. | A flag that silently does nothing produces no failure to observe. | `1e258704` — `has_flag` |
+
+Operational facts the launch also settled, which no amount of code reading would have produced:
+host A cannot reach any fleet member on 26411 (its egress is selectively filtered; it reaches
+1.1.1.1:443 fine), so the fleet is ibm-as-hub with B and C; C's ufw has no 26411 rule and that is
+the operator's to open; and `pgrep -f <pattern>` matches the ssh command line carrying the pattern,
+which reported two dead nodes as running until a listening-socket check replaced it.
+
+---
+
 ## The integration crate had never run — and running it earned its keep immediately
 
 > **Final state (2026-08-22, `4b5d8451`):** `MISAKA_PALW_POW_FIXTURE=1 cargo test --workspace
