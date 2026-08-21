@@ -549,6 +549,44 @@ mod tests {
         }
     }
 
+    /// **The shipped genesis card, in the state it ships in.**
+    ///
+    /// `Params::from(testnet-12)` returns the bundle-free base until an operator pastes the bond
+    /// facts, and that is the correct shipped state rather than a gap: a binary cannot invent an
+    /// ML-DSA-87 identity, and a placeholder key would be one nobody holds the secret for — which
+    /// looks like a network and is not. What the binary CAN carry is pinned already: the artifact
+    /// root, because the floor's weights are a derivation rather than a file.
+    #[test]
+    fn the_shipped_rc_card_is_unset_and_says_so_by_being_bundle_free() {
+        use crate::config::params::{PALW_RC_GENESIS_ARTIFACT_ROOT, palw_rc_genesis_card_is_set, palw_rc_shipped_params};
+
+        assert!(!palw_rc_genesis_card_is_set(), "no bond key ships, and none should");
+        let shipped = palw_rc_shipped_params();
+        assert!(
+            !matches!(shipped.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)),
+            "an unset card yields the base identity, not a network with a bond nobody can sign for"
+        );
+        assert_eq!(shipped.net.to_string(), "testnet-12", "it is still the RC identity");
+        assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, Hash64::default(), "the half code CAN mint is minted");
+
+        // And the card assembles the moment it is filled: the same four values `palw-rc-genesis`
+        // prints, through the same function the network id calls.
+        let filled = crate::config::params::palw_rc_params_from_artifacts(
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
+            vec![7; 32],
+            vec![21; 8],
+            h64(0x9A11),
+        )
+        .expect("the pinned artifact root assembles against a real premine bond");
+        assert!(matches!(filled.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)));
+        assert_ne!(
+            filled.consensus_params_id(),
+            shipped.consensus_params_id(),
+            "a filled card is a different ruleset from an empty one, visibly, at the handshake"
+        );
+    }
+
     /// **Nothing here ships a preset.** The assembly exists so the RC genesis is a checked
     /// artifact, not so a network quietly acquires one — every shipped preset is still fence-free.
     #[test]

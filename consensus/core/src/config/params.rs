@@ -1262,7 +1262,7 @@ impl From<NetworkId> for Params {
                 // holds, so it is installed on top (`palw_rc_params`) and its absence is visible
                 // in `consensus_params_id` rather than silent. Before this arm existed, naming the
                 // suffix `palw_rc_params` itself stamps aborted the process.
-                Some(12) => palw_rc_base_params(),
+                Some(12) => palw_rc_shipped_params(),
                 Some(x) => panic!("Testnet suffix {} is not supported (this build knows 10, 11 and 12)", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -2339,6 +2339,77 @@ pub fn palw_rc_params_from_artifacts(
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
     })?;
     Ok(params)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The PALW-RC (testnet-12) genesis card — road-map Gate 4
+// ---------------------------------------------------------------------------------------------
+
+/// **`artifact_root` for the RC's liveness floor — derived, not hosted.**
+///
+/// The road map called the genesis artifact "the one input code cannot mint". Half of that stopped
+/// being true: `palw_base0_profile`'s own doc says "BASE-0 has no file: it is a specification", and
+/// a specification's artifact can be PRODUCED by a rule instead of downloaded. It is —
+/// `misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1` derives every weight byte from one
+/// pinned seed and takes the Merkle root over the canonical inventory — so this constant is
+/// re-derivable by anyone, in any language, rather than being a 4.5 MiB blob every participant has
+/// to be handed a correct copy of.
+///
+/// `the_pinned_rc_artifact_root_is_the_one_the_floor_derives` (in `misaka-palw-base0`, which is the
+/// only crate that can hold both sides) fails if either side moves.
+pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
+    0x20, 0x4f, 0xea, 0x77, 0x88, 0xfd, 0x4c, 0x2d, 0xc2, 0x08, 0x12, 0xd0, 0xc0, 0x7e, 0x0a, 0xa3, 0xb9, 0xed, 0xea, 0x60, 0xba,
+    0xa7, 0xc8, 0x9f, 0x74, 0x1b, 0xf9, 0x95, 0xbc, 0x60, 0x44, 0xab, 0x13, 0x0c, 0xe2, 0x5c, 0xe6, 0xce, 0x55, 0x64, 0x54, 0xac,
+    0xf7, 0x96, 0xa7, 0x6e, 0xa0, 0xbc, 0x75, 0xe8, 0xd1, 0xc0, 0x8c, 0xd6, 0xf4, 0xde, 0xcc, 0x8c, 0xd9, 0xaa, 0xac, 0x66, 0xaf,
+    0xfd,
+]);
+
+/// **The genesis bond — the three facts code cannot mint, and does not pretend to.**
+///
+/// Which premine output backs the bond, and the ML-DSA-87 keys that sign under it. An empty
+/// verification key is the UNSET state and it is the shipped one: a binary cannot invent an
+/// identity, and a placeholder key would be an identity nobody holds the secret for — which is
+/// strictly worse than no network, because it looks like one.
+///
+/// `palw-rc-genesis` turns an operator's four values into this block. Until they are pasted,
+/// `Params::from(testnet-12)` yields the bundle-free base identity and `kaspad` says so at startup.
+pub const PALW_RC_GENESIS_BOND_INDEX: u32 = 0;
+pub const PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[];
+pub const PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &[];
+pub const PALW_RC_GENESIS_PAYOUT_PAYLOAD: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+
+/// Is the genesis card filled in? Both keys and a payout payload, or the network has no bond — and
+/// a `ConsensusV2` network with no bond boots and then cannot make a block, because admission
+/// refuses an attempt naming a bond the chain does not have.
+pub fn palw_rc_genesis_card_is_set() -> bool {
+    !PALW_RC_GENESIS_BOND_PUBKEY.is_empty()
+        && !PALW_RC_GENESIS_OPERATOR_PUBKEY.is_empty()
+        && PALW_RC_GENESIS_PAYOUT_PAYLOAD != crate::Hash64::from_bytes([0u8; 64])
+}
+
+/// **The RC network as it ships: the base identity, plus the bundle when the card is set.**
+///
+/// This is what `Params::from(NetworkId testnet-12)` returns, so a node's ruleset is a property of
+/// its BINARY rather than of a file it was pointed at — which is the only shape that keeps
+/// ADR-0042 Decision 11's promise ("it reads the RC's canonical ruleset bytes rather than a human
+/// re-typing parameters"). A per-node config file would make every operator's ruleset a local
+/// decision, and the handshake would be the first place anyone found out.
+pub fn palw_rc_shipped_params() -> Params {
+    if !palw_rc_genesis_card_is_set() {
+        return palw_rc_base_params();
+    }
+    palw_rc_params_from_artifacts(
+        PALW_RC_GENESIS_ARTIFACT_ROOT,
+        crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(PALW_RC_GENESIS_BOND_INDEX)),
+        PALW_RC_GENESIS_BOND_PUBKEY.to_vec(),
+        PALW_RC_GENESIS_OPERATOR_PUBKEY.to_vec(),
+        PALW_RC_GENESIS_PAYOUT_PAYLOAD,
+    )
+    // A card that is set and does not assemble is a binary that would boot a network its own
+    // genesis gate refuses. Failing at startup with the gate's own message is the only honest
+    // outcome; silently falling back to the bundle-free base would put a node on a chain it
+    // cannot join and tell it nothing.
+    .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}"))
 }
 
 /// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
