@@ -723,6 +723,7 @@ pub(crate) mod tests {
                     pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                     initial_target: u128::MAX / 2,
                     share_permille: 1000,
+                    activation_daa: 0,
                 },
                 crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
                     bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {

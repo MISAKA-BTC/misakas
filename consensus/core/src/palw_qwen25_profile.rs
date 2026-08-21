@@ -415,6 +415,275 @@ mod tests {
         assert_eq!(p.attn_nodes.iter().filter(|n| n.role == PalwStepNodeRoleV1::KCacheWrite).count(), 1);
     }
 
+    /// A Qwen-shaped geometry small enough to commit a whole step leg for.
+    ///
+    /// The STRUCTURE is the real thing — grouped-query attention with a real group, the cache
+    /// role on the rotated key, kv-scaled scores — because that is what conditions 9 and 10 are
+    /// about. The dimensions are not: a leg over 28 layers and a 151,936-wide vocabulary is not a
+    /// thing a test commits.
+    fn probe_geometry() -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
+            layer_count: 1,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 48,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1 << 8,
+            tile_len: 16,
+        }
+    }
+
+    fn probe_context(profile: &PalwShapeProfileV3) -> crate::palw_v2::PalwJobContextV2 {
+        let mut ctx = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"qwen25-probe".to_vec(),
+            job_id: Hash64::from_u64_word(1),
+            job_nullifier: Hash64::from_u64_word(2),
+            assignment_id: Hash64::from_u64_word(3),
+            execution_seed: [5; 32],
+            model_profile_id: Hash64::from_u64_word(4),
+            runtime_manifest_hash: Hash64::from_u64_word(5),
+            runtime_class_id: Hash64::from_u64_word(6),
+            shape_profile_id: profile.shape_profile_id(),
+            trace_scheme_id: Hash64::default(),
+            cu_ruleset_id: Hash64::from_u64_word(9),
+            tokenizer_id: Hash64::from_u64_word(10),
+            prompt_token_ids_hash: Hash64::default(),
+            declared_prefill_tokens: 2,
+            exact_decode_tokens: 2,
+            max_context_tokens: profile.n_ctx,
+        };
+        ctx.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
+        ctx
+    }
+
+    /// **Condition 9: a Qwen-shaped execution commits a step trace with a Merkle root.**
+    ///
+    /// Every leaf is a canonical coordinate of THIS profile, in canonical order, and the builder
+    /// refuses anything else — so the root commits to the graph, not merely to some bytes.
+    #[test]
+    fn a_qwen_execution_commits_a_step_leg() {
+        use crate::palw_step::{canonical_step_coordinates, step_leaf_count};
+        use crate::palw_step_leg::PalwStepLegBuilderV1;
+        let p = qwen25_profile_v1(probe_geometry()).unwrap();
+        let ctx = probe_context(&p);
+
+        let expected = step_leaf_count(&p, &ctx).expect("the leaf space is countable");
+        assert!(expected > 0);
+        let mut builder = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).expect("a Qwen profile builds a leg");
+        assert_eq!(builder.expected_main_leaves(), expected, "the builder and the counter agree");
+
+        // Deterministic filler: a court reads ONE step, so the other tiles are opaque bytes to it.
+        // What matters here is that every coordinate is canonical and the order is enforced.
+        for i in 0..expected {
+            let coord = canonical_step_coordinates(&p, &ctx, i).expect("every index is a coordinate");
+            let (node, _) = p.resolve_node_slot(coord.node_slot).unwrap();
+            let width = builder_tile_width(&p, &ctx, &coord);
+            let values: Vec<u32> = (0..width).map(|j| ((i * 7 + j as u64 + 1) % 97) as i32 as u32).collect();
+            builder.push_step_tile(coord, &values).unwrap_or_else(|e| panic!("leaf {i} ({:?}): {e:?}", node.op_kind));
+        }
+        let material = builder.finish().expect("the leg closes");
+        assert_eq!(material.leaf_count, expected);
+        assert_ne!(material.merkle_root, Hash64::default(), "and it has a root to commit");
+
+        // Out of order is refused, which is what makes the root a commitment to the ORDER too.
+        let mut wrong = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+        let second = canonical_step_coordinates(&p, &ctx, 1).unwrap();
+        let width = builder_tile_width(&p, &ctx, &second);
+        assert!(wrong.push_step_tile(second, &vec![0u32; width as usize]).is_err(), "leaf 1 cannot be pushed first");
+    }
+
+    /// **Condition 10: the court adjudicates a Qwen step from ONE tile opening and no model.**
+    ///
+    /// The node challenged is `attn_output` — a weighted matmul, so the court needs weights, and
+    /// the ONLY weights it gets are the bytes a Merkle path binds to the class's registered
+    /// artifact root. No checkpoint is opened, no model is loaded, and the 1.5B artifact is
+    /// nowhere near this test.
+    ///
+    /// Both directions are asserted from the same fixture: the honest commitment recomputes to
+    /// `NoFaultFound`, and one corrupted value convicts with `ComputationMismatch` at exactly
+    /// that value's index. A court that only ever produced one of the two would be useless in a
+    /// different way each time.
+    #[test]
+    fn a_qwen_step_is_adjudicated_from_one_tile_and_no_model() {
+        use crate::palw_artifact::{PalwArtifactOperandV1, PalwProvenOperandsV1, artifact_leaf_v1, artifact_root_v1};
+        use crate::palw_step::{PalwStepCoordinateV1, canonical_step_coordinates, canonical_step_leaf_index};
+        use crate::palw_step_leg::{
+            PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepLegBuilderV1, PalwStepTileLeafV1, checkpoint_empty_root_v2,
+            checkpoint_leg_root_v2, execution_commitment_root_v2, step_leg_root_v1, step_opening_v1,
+        };
+        use crate::palw_legs::PalwCheckpointProfileV1;
+        let g = probe_geometry();
+        let p = qwen25_profile_v1(g).unwrap();
+        let ctx = probe_context(&p);
+        let total = crate::palw_step::step_leaf_count(&p, &ctx).unwrap();
+
+        // The challenged node: `attn_output`, slot 14 of the attention table, +1 for the pre node.
+        let out_slot = 1 + 14u32;
+        assert_eq!(p.attn_nodes[14].weight_name, "blk.{layer}.attn_output.weight");
+        let in_slot = 1 + 13u32; // its one input, the P.V result
+
+        // The weight block the class registered, and the input row a producer committed.
+        let hidden = g.hidden_dim as usize;
+        let q_dim = (g.attn_heads as u32 * g.attn_head_dim) as usize;
+        let weights: Vec<i8> = (0..hidden * q_dim).map(|i| (((i * 5) % 11) as i32 - 5) as i8).collect();
+        let input: Vec<u32> = (0..q_dim).map(|i| ((i % 7) as i32 - 3) as u32).collect();
+        let x: Vec<i8> = input.iter().map(|v| *v as i32 as i8).collect();
+        let honest_out: Vec<u32> =
+            crate::palw_base0_ops::matmul_quant(&weights, &x, hidden).unwrap().into_iter().map(|v| v as u32).collect();
+
+        // Build the leg. Every leaf is canonical filler EXCEPT the challenged node's input row and
+        // its output row — a court reads one step, so the rest are opaque bytes to it. That IS the
+        // condition: adjudication from one opening, not from a model.
+        let build = |corrupt: bool| {
+            let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+            for i in 0..total {
+                let coord = canonical_step_coordinates(&p, &ctx, i).unwrap();
+                let width = builder_tile_width(&p, &ctx, &coord) as usize;
+                let start = coord.tile_index as usize * p.attn_nodes[0].tile_len as usize;
+                let values: Vec<u32> = if coord.node_slot == in_slot && coord.call_index == 1 {
+                    input[start..start + width].to_vec()
+                } else if coord.node_slot == out_slot && coord.call_index == 1 {
+                    let mut row = honest_out[start..start + width].to_vec();
+                    if corrupt && coord.tile_index == 0 {
+                        row[3] = (row[3] as i32).wrapping_add(1) as u32;
+                    }
+                    row
+                } else {
+                    (0..width).map(|j| ((i * 3 + j as u64 + 1) % 61) as i32 as u32).collect()
+                };
+                b.push_step_tile(coord, &values).unwrap();
+            }
+            b.finish().unwrap()
+        };
+
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = p.shape_profile_id();
+        let ckpt = PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 8,
+            state_layout_id: Hash64::from_u64_word(0x55),
+        };
+        let adjudicate = |corrupt: bool| {
+            let material = build(corrupt);
+            let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
+            let ckpt_root = checkpoint_leg_root_v2(
+                &ctx_hash,
+                &ckpt.profile_hash(),
+                &Hash64::default(),
+                1,
+                0,
+                &checkpoint_empty_root_v2(&ctx_hash),
+            );
+            let binding = crate::palw_step_leg::PalwStepBindingV2 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                job_context: ctx.clone(),
+                shape_profile: p.clone(),
+                checkpoint_profile: ckpt.clone(),
+                state_chunk_map_id: Hash64::default(),
+                full_logits_trace_root: Hash64::from_u64_word(0xAA),
+                activation_leg_root: Hash64::from_u64_word(0xBB),
+                step_leaf_count: material.leaf_count,
+                step_merkle_root: material.merkle_root,
+                checkpoint_count: 0,
+                checkpoint_merkle_root: checkpoint_empty_root_v2(&ctx_hash),
+                committed_execution_root: execution_commitment_root_v2(
+                    &ctx_hash,
+                    &Hash64::from_u64_word(0xAA),
+                    &Hash64::from_u64_word(0xBB),
+                    &ckpt_root,
+                    &step_root,
+                ),
+            };
+            let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: out_slot, position: 0, tile_index: 0 };
+            let out_idx = canonical_step_leaf_index(&p, &ctx, &coord).unwrap();
+            let width = builder_tile_width(&p, &ctx, &coord) as usize;
+            let mut committed = honest_out[..width].to_vec();
+            if corrupt {
+                committed[3] = (committed[3] as i32).wrapping_add(1) as u32;
+            }
+            let inputs = (0..(q_dim as u32).div_ceil(p.attn_nodes[13].tile_len))
+                .map(|t| {
+                    let c = PalwStepCoordinateV1 { call_index: 1, node_slot: in_slot, position: 0, tile_index: t };
+                    let idx = canonical_step_leaf_index(&p, &ctx, &c).unwrap();
+                    let w = builder_tile_width(&p, &ctx, &c) as usize;
+                    let start = t as usize * p.attn_nodes[13].tile_len as usize;
+                    crate::palw_step_refute::PalwStepInputOpeningV1 {
+                        opening: step_opening_v1(&material.leaf_hashes, idx).unwrap(),
+                        preimage: PalwStepTileLeafV1 {
+                            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                            coord: c,
+                            value_count: w as u32,
+                            values_le: input[start..start + w].iter().flat_map(|v| v.to_le_bytes()).collect(),
+                        },
+                    }
+                })
+                .collect();
+            let refutation = crate::palw_step_refute::PalwExecutionStepRefutationV1 {
+                binding,
+                output_opening: step_opening_v1(&material.leaf_hashes, out_idx).unwrap(),
+                output_preimage: PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord,
+                    value_count: width as u32,
+                    values_le: committed.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                },
+                inputs,
+                prompt_token_ids: Vec::new(),
+            };
+            // The class's registered inventory, and the opening that proves this block belongs.
+            let operands = vec![
+                PalwArtifactOperandV1 {
+                    tensor_name: "blk.{layer}.attn_output.weight".to_string(),
+                    layer: Some(0),
+                    row_start: 0,
+                    bytes: weights.iter().map(|v| *v as u8).collect(),
+                },
+                PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![1, 2, 3] },
+            ];
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let root = artifact_root_v1(&leaves).unwrap();
+            let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
+                operand: operands[0].clone(),
+                leaf_index: 0,
+                leaf_count: 2,
+                path: vec![leaves[1]],
+            }];
+            let proven = PalwProvenOperandsV1::from_openings_v1(&openings, root).expect("the opening proves");
+            crate::palw_step_refute::check_execution_step_refutation_v1(&refutation, &proven)
+        };
+
+        // Honest: recomputed and found correct.
+        assert_eq!(
+            adjudicate(false),
+            Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound),
+            "an honest Qwen step is NoFault"
+        );
+        // Fraudulent: convicted at the value that was moved, from the same one opening.
+        let verdict = adjudicate(true).expect("a wrong Qwen matmul convicts");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index: 3 });
+    }
+
+    /// The canonical tile width at a coordinate — the ragged last tile included."""
+    fn builder_tile_width(p: &PalwShapeProfileV3, ctx: &crate::palw_v2::PalwJobContextV2, coord: &crate::palw_step::PalwStepCoordinateV1) -> u32 {
+        let (node, _) = p.resolve_node_slot(coord.node_slot).unwrap();
+        let kv_len = if coord.call_index == 0 {
+            coord.position as u64 + 1
+        } else {
+            ctx.declared_prefill_tokens as u64 + coord.call_index as u64
+        };
+        let len = match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => elements as u64,
+            PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+        };
+        let start = coord.tile_index as u64 * node.tile_len as u64;
+        (len - start).min(node.tile_len as u64) as u32
+    }
+
     /// The graph consumes exactly the declared inventory, so an artifact cannot be built over a
     /// different set than the one the court will open against.
     #[test]

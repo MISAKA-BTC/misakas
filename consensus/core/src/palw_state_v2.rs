@@ -576,6 +576,21 @@ pub struct PalwBondStateV2 {
 pub enum PalwClassStatusV2 {
     Active,
     Frozen { since_daa: u64 },
+    /// **Registered, adjudicable, and carrying no weight yet (conditions 12 and 13).**
+    ///
+    /// A class used to become `Active` the instant it was registered, which took cadence share
+    /// from every incumbent at that instant — including from the liveness floor. There was no way
+    /// to put a class on a chain, watch it, and only then let it carry weight; and a soak that
+    /// cannot be run before activation is a soak that proves nothing.
+    ///
+    /// So a registration can name a future DAA score. Until then the class is in the registry and
+    /// in the catalog — its artifact is committed and a dispute against it adjudicates exactly as
+    /// one against an active class — but it holds NO share, and admission refuses its attempts. At
+    /// the score, the transition grants `pending_share_permille` and the class becomes `Active`.
+    ///
+    /// The flip is a CLOCK, not an object. Nobody submits it, so there is nothing to forge and no
+    /// authority question — the same shape the rung no-show uses, and the reason both are safe.
+    Registered { activation_daa: u64, pending_share_permille: u16 },
 }
 
 /// The class's PWU rule — what Decision 6 item 6 checks an attempt's claimed `pwu` against.
@@ -888,6 +903,13 @@ pub enum PalwConsensusObjectV2 {
         /// at the whole 1000‰. The share rides the same authorized object the class does:
         /// whoever may register a class may fund it, and nobody else may move a permille.
         share_permille: u16,
+        /// The DAA score at which the share is actually granted (conditions 12/13).
+        ///
+        /// `0` means "now", which is what every registration meant before this field and what the
+        /// genesis floor still means. A future score registers the class WEIGHTLESS — adjudicable,
+        /// disputable, and holding no cadence — so it can be soaked on a live chain before it
+        /// takes a permille from anyone. See [`PalwClassStatusV2::Registered`].
+        activation_daa: u64,
     },
     /// **The emergency off-switch, and it carries its own proof (gate item 12).**
     ///
@@ -1443,12 +1465,23 @@ impl PalwChainStateV2 {
             *open_courts.entry(session.claim).or_insert(0) += 1;
         }
         // ADR-0045 Decision 3: the share table's invariants hold at EVERY state, not once at
-        // boot. Registration grants and nothing revokes, so classes and shares are the same key
-        // set; the donation arithmetic conserves the denominator, so a populated table sums to
-        // exactly 1000‰. A state failing either was not built by the transition.
-        if !self.classes.keys().eq(self.class_shares.keys()) {
+        // boot. The donation arithmetic conserves the denominator, so a populated table sums to
+        // exactly 1000‰, and every share names a class.
+        //
+        // The key sets are NOT equal, and the difference is exactly the weightless registrations
+        // (conditions 12/13): a class awaiting its activation edge is in the registry — it is
+        // adjudicable, and a dispute against it must resolve — while holding no permille. What
+        // must hold is the two directions separately: every SHARE names a class, and every
+        // ACTIVE-or-FROZEN class holds a share. A `Registered` one holds none, by construction.
+        let share_bearing: BTreeSet<&Hash64> = self
+            .classes
+            .iter()
+            .filter(|(_, c)| !matches!(c.status, PalwClassStatusV2::Registered { .. }))
+            .map(|(id, _)| id)
+            .collect();
+        if !self.class_shares.keys().collect::<BTreeSet<_>>().eq(&share_bearing) {
             return Err(PalwStateV2Error::CarriageInconsistent(
-                "the class set and the share table disagree — a registered class holds a share, a share names a registered class".into(),
+                "the class set and the share table disagree — every share names a class, and every class past its activation edge holds a share".into(),
             ));
         }
         if !self.class_shares.is_empty() {
@@ -2097,6 +2130,12 @@ pub fn apply_palw_transition_v3(
         apply_object(&mut builder, ctx, object)?;
     }
 
+    // 3a. Condition 12/13: any class whose activation score this block reaches becomes `Active`
+    //     and takes its share. A CLOCK, not an object — nobody submits it, so there is nothing to
+    //     forge and no authority question. Runs before the budgets, because a class that becomes
+    //     active in this block must be in the share table the budgets derive from.
+    activate_due_classes(&mut builder, ctx)?;
+
     // 3b. ADR-0045 Decision 2's epoch budgets, in blocks. AFTER the objects, because the genesis
     //     block's own registrations are what create the share table this derives from — deriving
     //     before them would give the first epoch an empty budget map, which refuses every attempt
@@ -2398,6 +2437,40 @@ pub fn derive_epoch_budgets_v2(
 /// have derived. Running it everywhere is what gives epoch 0 a budget, which a
 /// boundary-only rule cannot: no boundary has been crossed when the first block lands, and a
 /// missing budget refuses every attempt.
+/// Flip every `Registered` class whose activation score this block has reached (condition 13).
+///
+/// The share is granted at the edge, by the same `granted_share_table_v2` a registration would
+/// have used — so a class that soaked weightless enters the table exactly as it would have on day
+/// one, funded by donation from every incumbent.
+///
+/// Ordered by class id, because two classes activating in one block must be granted in an order
+/// every node reproduces: the second grant is computed against the table the first left behind.
+fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let due: Vec<(Hash64, u16)> = builder
+        .state
+        .classes
+        .iter()
+        .filter_map(|(id, record)| match record.status {
+            PalwClassStatusV2::Registered { activation_daa, pending_share_permille } if activation_daa <= ctx.daa_score => {
+                Some((*id, pending_share_permille))
+            }
+            _ => None,
+        })
+        .collect();
+    for (class_id, share) in due {
+        let table = granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share)?;
+        for (id, granted) in table {
+            if builder.state.class_shares.get(&id).copied() != Some(granted) {
+                builder.write_share(id, Some(granted));
+            }
+        }
+        let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
+        record.status = PalwClassStatusV2::Active;
+        builder.write_class(class_id, Some(record));
+    }
+    Ok(())
+}
+
 fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
     if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
@@ -2670,7 +2743,15 @@ fn apply_object(
                 }
             }
         }
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille } => {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+        } => {
             if builder.state.classes.contains_key(class_id) {
                 return Err(PalwStateV2Error::DuplicateClass(*class_id));
             }
@@ -2697,13 +2778,22 @@ fn apply_object(
                 }
                 _ => {}
             }
-            // ADR-0045 Decision 3: the share table mutates HERE and nowhere else. The first
-            // class funds the liveness floor whole; every later entrant is funded by donation,
-            // and the writes below are the only way a permille moves.
+            // **A registration with a future activation takes no share yet (condition 12).**
+            //
+            // The share table is validated here either way — a registration whose share could
+            // never be granted must fail at registration, not silently at the activation edge
+            // where nobody is watching — but it is only WRITTEN when the class becomes active.
             let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
-            for (id, share) in table {
-                if builder.state.class_shares.get(&id).copied() != Some(share) {
-                    builder.write_share(id, Some(share));
+            let weightless = *activation_daa > ctx.daa_score;
+            if !weightless {
+                // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
+                // and nowhere else. The first class funds the liveness floor whole; every later
+                // entrant is funded by donation, and these writes are the only way a permille
+                // moves.
+                for (id, share) in table {
+                    if builder.state.class_shares.get(&id).copied() != Some(share) {
+                        builder.write_share(id, Some(share));
+                    }
                 }
             }
             builder.write_class(
@@ -2712,7 +2802,14 @@ fn apply_object(
                     artifact_root: *artifact_root,
                     slash_value_per_pwu: *slash_value_per_pwu,
                     pwu_rule: *pwu_rule,
-                    status: PalwClassStatusV2::Active,
+                    status: if weightless {
+                        PalwClassStatusV2::Registered {
+                            activation_daa: *activation_daa,
+                            pending_share_permille: *share_permille,
+                        }
+                    } else {
+                        PalwClassStatusV2::Active
+                    },
                     registered_daa: ctx.daa_score,
                 }),
             );
@@ -3615,6 +3712,7 @@ pub(crate) mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
         ]
@@ -4089,6 +4187,99 @@ pub(crate) mod tests {
         // …and the next block past the re-armed deadline finals the claim.
         let (s8, _) = apply(&s7, &p, &ctx(8, 606, 8), &[], None);
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the freeze ended with the challenge");
+    }
+
+    // ---- conditions 12/13: a class registers weightless, soaks, then carries weight ----
+
+    /// **A second class can be registered without taking a permille from the floor.**
+    ///
+    /// A class used to become `Active` the instant it was registered, which moved cadence share
+    /// at that instant — including away from BASE-0, the liveness floor. So there was no way to
+    /// put a class on a chain, watch it, and only then let it carry weight; and a soak that
+    /// cannot run before activation proves nothing about what activation will do.
+    ///
+    /// This walks the whole arrangement: the floor keeps the whole table while the entrant is
+    /// weightless, the entrant's attempts are refused with a reason that names the edge, and at
+    /// the edge — reached by a CLOCK, with no object and nobody to authorise it — the share moves
+    /// and the class becomes active.
+    #[test]
+    fn palw_v2_a_class_registers_weightless_and_activates_on_a_clock() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let entrant = h64(0x9E1);
+
+        // Genesis: the floor at the whole table, plus a second class that activates at daa 500.
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: entrant,
+            artifact_root: h64(0xA7),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 300,
+            activation_daa: 500,
+        });
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+
+        // Registered, adjudicable, and holding nothing.
+        assert!(s1.class(&entrant).is_some(), "the class is in the registry");
+        assert_eq!(
+            s1.class(&entrant).unwrap().status,
+            PalwClassStatusV2::Registered { activation_daa: 500, pending_share_permille: 300 }
+        );
+        assert_eq!(s1.class_share_permille(&entrant), None, "and no share at all");
+        assert_eq!(s1.class_share_permille(&h64(1)), Some(1000), "the floor keeps the whole table");
+        // Its target and its receipt target ARE seeded, because a weightless class is still a
+        // class: a dispute against it must adjudicate exactly as one against an active class.
+        assert!(s1.class_target(&entrant).is_some());
+
+        // Its attempts are refused, and the refusal names the edge rather than reading as a
+        // missing budget three checks later.
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let mut env = attempt(40, 1);
+        env.attempt.class_id = entrant;
+        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env)
+            .expect_err("a weightless class admits nothing");
+        assert!(
+            matches!(err, crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { activation_daa: 500, .. }),
+            "got {err:?}"
+        );
+
+        // Blocks pass. Still weightless at 499 — the edge is `>=`, and one DAA short is short.
+        let (s2, _) = apply(&s1, &p, &ctx(2, 499, 2), &[], None);
+        assert_eq!(s2.class_share_permille(&entrant), None, "one DAA short of the edge is short");
+
+        // And at the edge the clock does it: no object, nobody to authorise, nothing to forge.
+        let (s3, _) = apply(&s2, &p, &ctx(3, 500, 3), &[], None);
+        assert_eq!(s3.class(&entrant).unwrap().status, PalwClassStatusV2::Active);
+        assert_eq!(s3.class_share_permille(&entrant), Some(300), "the entrant takes its share");
+        assert_eq!(s3.class_share_permille(&h64(1)), Some(700), "funded by donation from the incumbent");
+        // The table is exactly 1000 through the move — that is the invariant, not an assertion
+        // about these two numbers.
+        let total: u32 = [h64(1), entrant].iter().filter_map(|id| s3.class_share_permille(id)).map(|s| s as u32).sum();
+        assert_eq!(total, 1000);
+
+        // …and now it admits. The class had to become active for this to change, which is what
+        // makes the refusal above a real gate rather than an unrelated failure.
+        assert!(
+            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env).is_ok()
+                || !matches!(
+                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env),
+                    Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
+                ),
+            "after activation the class is no longer refused FOR BEING INACTIVE"
+        );
+    }
+
+    /// `activation_daa: 0` is "now", which is what every registration meant before the field
+    /// existed and what the genesis floor still means. Without this the addition would have made
+    /// every existing registration weightless.
+    #[test]
+    fn palw_v2_a_zero_activation_is_immediate() {
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        assert_eq!(s1.class(&h64(1)).unwrap().status, PalwClassStatusV2::Active);
+        assert_eq!(s1.class_share_permille(&h64(1)), Some(1000));
     }
 
     // ---- P0-11: the lifecycle objects reach a chain through transactions ----
@@ -4749,6 +4940,7 @@ pub(crate) mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 500,
+                activation_daa: 0,
             }],
             None,
         );
@@ -5000,6 +5192,7 @@ pub(crate) mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
             share_permille: 500,
+            activation_daa: 0,
         });
         objects.push(freeze(h64(2)));
         let (s1, _) = apply(&genesis, &p_half, &ctx(1, 100, 1), &objects, None);
@@ -5055,6 +5248,7 @@ pub(crate) mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
             share_permille: 400,
+            activation_daa: 0,
         });
         let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
         assert_eq!(state.class_share_permille(&h64(1)), Some(600), "the grant is funded by donation");
@@ -5095,6 +5289,7 @@ pub(crate) mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: boot,
             share_permille: 500,
+            activation_daa: 0,
         });
         objects.push(PalwConsensusObjectV2::BondRegistered {
             bond: bond_key(2),
@@ -5393,6 +5588,7 @@ pub(crate) mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
             initial_target: u128::MAX / 2,
             share_permille: 100,
+            activation_daa: 0,
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
@@ -5655,6 +5851,7 @@ pub(crate) mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
             initial_target: u128::MAX / 2,
             share_permille: share,
+            activation_daa: 0,
         };
 
         // The first class must be the base, at the whole 1000‰.
@@ -5705,6 +5902,7 @@ pub(crate) mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
                 initial_target: 0,
                 share_permille: 1000,
+                activation_daa: 0,
             }],
             None,
         );
@@ -5727,6 +5925,7 @@ pub(crate) mod tests {
                     pwu_rule: rule,
                     initial_target: u128::MAX / 2,
                     share_permille: 1000,
+                    activation_daa: 0,
                 }],
                 None,
             );

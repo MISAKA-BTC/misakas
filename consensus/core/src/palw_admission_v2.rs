@@ -119,6 +119,8 @@ pub enum PalwAdmissionV2Error {
     DuplicateAttempt(Hash64),
     #[error("arithmetic overflow in {0}")]
     Overflow(&'static str),
+    #[error("class {class_id} is registered but weightless until DAA {activation_daa} — it holds no cadence share yet")]
+    ClassNotYetActive { class_id: Hash64, activation_daa: u64 },
 }
 
 /// The stateful admission verdict for one attempt against one candidate chain point.
@@ -153,8 +155,17 @@ pub fn check_palw_attempt_admission_v2(
 
     // 4. The class, at the candidate point.
     let class = state.class(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassMissing(attempt.class_id))?;
-    if let PalwClassStatusV2::Frozen { .. } = class.status {
-        return Err(PalwAdmissionV2Error::ClassFrozen(attempt.class_id));
+    match class.status {
+        PalwClassStatusV2::Active => {}
+        PalwClassStatusV2::Frozen { .. } => return Err(PalwAdmissionV2Error::ClassFrozen(attempt.class_id)),
+        // Condition 12: registered, adjudicable, and carrying no weight yet. It holds no cadence
+        // share, so an attempt of it would be a block whose class was granted no permille — and
+        // the epoch budget, which is derived FROM the share table, would have no entry for it
+        // either. Refusing at the class rather than letting it fall through to a missing budget
+        // says which of the two facts is the reason.
+        PalwClassStatusV2::Registered { activation_daa, .. } => {
+            return Err(PalwAdmissionV2Error::ClassNotYetActive { class_id: attempt.class_id, activation_daa });
+        }
     }
 
     // 5. The artifact the trace claims to open against is the one the class registered.
@@ -355,6 +366,7 @@ mod tests {
                 // The class lottery has its own test below, where the target is the variable.
                 initial_target: u128::MAX,
                 share_permille: 1000,
+                activation_daa: 0,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -503,6 +515,7 @@ mod tests {
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                     initial_target: target,
                     share_permille: 1000,
+                    activation_daa: 0,
                 },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -578,6 +591,7 @@ mod tests {
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
             initial_target,
             share_permille: 100,
+            activation_daa: 0,
         }];
         let (state, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
         // One block past the epoch boundary (epoch_length 1000), because ADR-0045 Decision 2's

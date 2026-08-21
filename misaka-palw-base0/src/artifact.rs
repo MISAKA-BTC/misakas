@@ -40,6 +40,8 @@ use crate::rope::{RopeGenError, RopeTableV1};
 /// Domain separator for the artifact digest. Distinct from every block-commitment domain so an
 /// artifact digest can never be replayed as a commitment or a challenge.
 pub const PALW_BASE0_ARTIFACT_DOMAIN: &[u8] = b"MISAKA/PALW/BASE0/ARTIFACT/V1\0\0\0";
+/// Its own key, so a tokenizer commitment can never collide with an artifact digest.
+pub const PALW_BASE0_TOKENIZER_DOMAIN: &[u8] = b"MISAKA/PALW/BASE0/TOKENIZER/V1\0\0";
 
 /// `ln 10000` at `rope::GEN_Q` — the conventional RoPE base, carried as the default.
 pub const LN_THETA_10000_GEN_Q: i128 = 2_592_480_341_699_211;
@@ -51,16 +53,16 @@ pub const LN_THETA_10000_GEN_Q: i128 = 2_592_480_341_699_211;
 /// activations sit near σ = 45, so an `n`-term dot has σ ≈ `√n · 37 · 45`, i.e. `2^(10.7 +
 /// log2(n)/2)`. Target `2^22` — a quarter of Qk, leaving headroom before `rescale_q` saturates.
 ///
-/// **Public because the converter needs the same physics.** `ScaleParams` reads its multiplier as
-/// a Q31 fraction, so `UNITY_SHIFT` is 31 and `shift: 0` is a gain of `2^31` — not "no
-/// amplification" but twenty-one orders of it. A converter that wrote `shift: 0` here saturated
-/// every attention logit into a hard argmax and every SwiGLU gate into its positive rail, which
-/// is ADR-0040 Decision H's failure with the sign of the mistake reversed. Sharing one derivation
-/// is what stops that from being re-discovered per caller.
+/// Used by [`Base0ArtifactV1::derive_deterministic`]. A real artifact's scales come from measuring
+/// what its own projections produce, which is what `convert` does.
 ///
-/// This is still a fan-in heuristic standing in for calibration: a real artifact's scales come
-/// from measuring what its own projections produce on real inputs.
-pub fn amplify_for(fan_in: usize) -> ScaleParams {
+/// **`shift: 0` is not "no amplification" here — it is a gain of `2^31`.** `ScaleParams` reads its
+/// multiplier as a Q31 fraction, so `UNITY_SHIFT` is 31 and anything below it amplifies. A
+/// converter that wrote `shift: 0` at these two sites saturated every attention logit into a hard
+/// argmax and every SwiGLU gate onto its positive rail — ADR-0040 Decision H's failure with the
+/// sign of the mistake reversed, and invisible to a determinism test. Recorded here because the
+/// trap is in the type, not in any one caller.
+fn amplify_for(fan_in: usize) -> ScaleParams {
     let ilog2 = (usize::BITS - 1 - fan_in.leading_zeros()) as i32;
     let bits = (12 - ilog2 / 2).clamp(-31, 31) as i8;
     ScaleParams::gain_pow2(bits).expect("the clamp keeps `bits` inside the representable range")
@@ -143,24 +145,39 @@ impl Base0ShapeV1 {
         {
             return Err(ArtifactError::BadShape);
         }
-        // Bound every dimension BEFORE any product is formed. `d_model()` is `n_heads · d_head` and
-        // the weight lengths are `vocab · d_model` / `d_ff · d_model`; on a shape supplied as data
-        // those multiplications overflow `usize` and wrap to a small number, which would then pass
-        // the reduction bound below and mis-size every tensor check in `from_parts`. Refusing
-        // absurd dimensions outright is cheaper than auditing each product (audit 2.4). No real
-        // shape approaches this: MAX_DOT_LEN is 131_071 and every dimension must fit under it.
+        // **`MAX_DOT_LEN` bounds REDUCTIONS, and only reductions.**
+        //
+        // It is the length past which an `i32` accumulator can overflow, which is why ADR-0040
+        // Decision E's free reduction order is a premise rather than a gift. So it belongs on the
+        // dimensions that are summed over — `d_model` for every projection, `d_ff` for the
+        // down-projection, `d_head` for attention — and on nothing else.
+        //
+        // It used to bound every dimension including `vocab`, on the reasoning that refusing
+        // absurd numbers is cheaper than auditing each product. That reasoning was right about
+        // the products and wrong about the bound: **`vocab` is an OUTPUT width, never a reduction
+        // length**, and at 131_071 the rule excludes every real vocabulary — Qwen2.5's is
+        // 151_936, Llama-3's 128_256. The unembedding matmul reduces over `d_model` and produces
+        // `vocab` values; the vocabulary never enters an accumulator.
+        //
+        // The products are audited instead of proxied. Each weight tensor's length is formed with
+        // `checked_mul`, so a shape that would wrap is refused for wrapping rather than for being
+        // large.
         let bound = kaspa_consensus_core::palw_base0::MAX_DOT_LEN;
-        for got in [self.n_layers, self.n_heads, self.n_kv_heads, self.d_head, self.d_ff, self.vocab, self.max_position] {
+        for got in [self.d_head, self.d_ff] {
             if got > bound {
                 return Err(ArtifactError::DotTooLong { got });
             }
         }
-        // The longest reduction in the graph. `d_ff` feeds the down-projection, `d_model` feeds
-        // every other matmul, and attention reduces over `d_head`.
-        let longest = self.d_model().max(self.d_ff);
-        if longest > bound {
-            return Err(ArtifactError::DotTooLong { got: longest });
+        let d_model = self.n_heads.checked_mul(self.d_head).ok_or(ArtifactError::BadShape)?;
+        if d_model > bound {
+            return Err(ArtifactError::DotTooLong { got: d_model });
         }
+        // Every tensor length the artifact will form, checked here so `from_parts` compares
+        // against numbers that did not wrap on their way in.
+        for (a, b) in [(self.vocab, d_model), (self.d_ff, d_model), (d_model, self.d_ff), (self.n_layers, d_model)] {
+            a.checked_mul(b).ok_or(ArtifactError::BadShape)?;
+        }
+        self.max_position.checked_mul(self.d_head).ok_or(ArtifactError::BadShape)?;
         Ok(())
     }
 
@@ -226,12 +243,40 @@ pub struct Base0ArtifactV1 {
     pub unembed: Vec<i8>,
     pub layers: Vec<Base0LayerWeightsV1>,
     pub rope: RopeTableV1,
+    /// **What the token ids MEAN (condition 6's tokenizer/vocab commitment).**
+    ///
+    /// A class's execution is a function of token ids, and an id is only a token because some
+    /// tokenizer says so. Two nodes running identical weights under different tokenizers agree on
+    /// every step and disagree about what was computed — and the court, which adjudicates
+    /// arithmetic, would see nothing wrong. So the tokenizer is part of the class identity, and it
+    /// enters as a commitment rather than as a file: consensus never runs a tokenizer, it only
+    /// needs to know that everyone used the same one.
+    ///
+    /// `Hash64::default()` means a class that declares none — legal for a derived artifact, which
+    /// has no tokenizer at all, and refused for a registered one by the layer that registers it.
+    pub tokenizer_commitment: Hash64,
     /// Requantisation for the embedding-normalisation step and for the final norm.
     pub norm_requant: QuantParams,
     /// Narrowing applied after each residual add. `AddElem` widens two `int8` codes to `i32`, so
     /// something must bring the stream back to `int8`; this is the parameter that says by how
     /// much, rather than leaving it to an implicit cast.
     pub residual_requant: QuantParams,
+    /// **Per-layer residual narrowing (Phase 3's contingency, triggered by measurement).**
+    ///
+    /// `residual_requant` above is ONE parameter for the whole stack, and on the real
+    /// Qwen2.5-1.5B that is not enough: measured at 28 layers the residual peak reaches 11 out of
+    /// 127, so the stream occupies under a tenth of the int8 range, its effective precision is
+    /// around 3.5 bits, and quantization noise dominates what the layers compute — the argmax
+    /// degenerates to a single constant token. A global shift cannot hold the stream up as the
+    /// projections' gains vary from layer to layer, because there is only one of it.
+    ///
+    /// Two entries per layer, in the order the engine applies them: after the attention residual,
+    /// then after the FFN residual. `None` means "use the global one at every site", which is
+    /// what every artifact built before this field meant.
+    ///
+    /// The shifts are a CALIBRATION output, not a choice: converted once with the global rule,
+    /// measured, and re-derived from each layer's own peak.
+    pub layer_residual_requant: Option<Vec<[QuantParams; 2]>>,
     derived_seed: Option<u64>,
 }
 
@@ -275,7 +320,18 @@ impl Base0ArtifactV1 {
             }
         }
         let rope = RopeTableV1::generate(shape.d_head, shape.max_position, shape.ln_theta_gen_q)?;
-        Ok(Self { shape, embed, unembed, layers, rope, norm_requant, residual_requant, derived_seed: None })
+        Ok(Self {
+            shape,
+            embed,
+            unembed,
+            layers,
+            rope,
+            tokenizer_commitment: Hash64::default(),
+            norm_requant,
+            residual_requant,
+            layer_residual_requant: None,
+            derived_seed: None,
+        })
     }
 
     /// A concrete artifact derived from `seed` alone, for exercising the engine and the digest.
@@ -342,6 +398,47 @@ impl Base0ArtifactV1 {
         Ok(artifact)
     }
 
+    /// Install per-layer residual narrowing (see the field).
+    ///
+    /// Refuses a list that is not one pair per layer: a shorter one would leave later layers
+    /// silently on the global rule, which is the arrangement this exists to replace.
+    pub fn with_layer_residual_requant(mut self, per_layer: Vec<[QuantParams; 2]>) -> Result<Self, ArtifactError> {
+        if per_layer.len() != self.shape.n_layers {
+            return Err(ArtifactError::WeightLen { tensor: "layer_residual_requant", want: self.shape.n_layers, got: per_layer.len() });
+        }
+        self.layer_residual_requant = Some(per_layer);
+        Ok(self)
+    }
+
+    /// The narrowing for `layer`'s attention (`site` 0) or FFN (`site` 1) residual.
+    pub fn residual_requant_at(&self, layer: usize, site: usize) -> QuantParams {
+        match &self.layer_residual_requant {
+            Some(per) => per.get(layer).map(|pair| pair[site]).unwrap_or(self.residual_requant),
+            None => self.residual_requant,
+        }
+    }
+
+    /// Declare which tokenizer this class's token ids belong to.
+    ///
+    /// The commitment is over the tokenizer's own bytes — `tokenizer.json` as shipped — so a
+    /// verifier checks it by hashing the file rather than by re-deriving a vocabulary, which no
+    /// two implementations would agree on.
+    pub fn with_tokenizer_commitment(mut self, commitment: Hash64) -> Self {
+        self.tokenizer_commitment = commitment;
+        self
+    }
+
+    /// The commitment for a tokenizer file's bytes.
+    pub fn tokenizer_commitment_of(tokenizer_bytes: &[u8]) -> Hash64 {
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_TOKENIZER_DOMAIN).to_state();
+        state.update(&(tokenizer_bytes.len() as u64).to_le_bytes());
+        state.update(tokenizer_bytes);
+        let out = state.finalize();
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(out.as_bytes());
+        Hash64::from_bytes(bytes)
+    }
+
     /// True when the weights came from [`derive_deterministic`] rather than from a real model.
     /// Load-bearing: a derived artifact must never be reported as a registered class.
     pub fn is_derived(&self) -> bool {
@@ -361,10 +458,29 @@ impl Base0ArtifactV1 {
         let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_ARTIFACT_DOMAIN).to_state();
         state.update(&self.shape.digest_bytes());
         state.update(&self.rope.digest_bytes());
+        // The tokenizer, inside the identity: two classes with identical weights and different
+        // tokenizers compute different things while agreeing on every arithmetic step.
+        state.update(self.tokenizer_commitment.as_byte_slice());
         absorb_tensor(&mut state, b"embed", &self.embed);
         absorb_tensor(&mut state, b"unembed", &self.unembed);
         absorb_quant(&mut state, &self.norm_requant);
         absorb_quant(&mut state, &self.residual_requant);
+        // Per-layer residual narrowing, presence-tagged and length-prefixed for the same reason
+        // the per-channel triples are: `None` and an empty `Some` must be different streams, and
+        // a class calibrated per layer is not the class that was not.
+        match &self.layer_residual_requant {
+            None => {
+                state.update(&[0u8]);
+            }
+            Some(per) => {
+                state.update(&[1u8]);
+                state.update(&(per.len() as u64).to_le_bytes());
+                for pair in per {
+                    absorb_quant(&mut state, &pair[0]);
+                    absorb_quant(&mut state, &pair[1]);
+                }
+            }
+        };
         for (i, l) in self.layers.iter().enumerate() {
             state.update(&(i as u64).to_le_bytes());
             for (label, w) in [
@@ -452,6 +568,37 @@ fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
 
 #[cfg(test)]
 mod tests {
+    /// **Condition 6: the tokenizer is inside the class identity.**
+    ///
+    /// A class's execution is a function of token ids, and an id is only a token because some
+    /// tokenizer says so. Two nodes with identical weights and different tokenizers agree on every
+    /// arithmetic step and disagree about what was computed — and the court, which adjudicates
+    /// arithmetic, would see nothing wrong at all. So the commitment has to be in the id.
+    #[test]
+    fn the_tokenizer_is_part_of_the_class() {
+        let base = Base0ArtifactV1::derive_deterministic(tiny(), 11).unwrap();
+        assert_eq!(base.tokenizer_commitment, Hash64::default(), "a derived artifact declares none");
+
+        let a = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"a\"}"));
+        let b = base.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"b\"}"));
+        assert_ne!(a.execution_class_id(), b.execution_class_id(), "two tokenizers are two classes");
+        assert_ne!(a.execution_class_id(), base.execution_class_id(), "and declaring one is not declaring none");
+
+        // The commitment is over the FILE's bytes, so a verifier checks it by hashing what it
+        // downloaded rather than by re-deriving a vocabulary — which no two implementations would
+        // agree on.
+        assert_eq!(
+            Base0ArtifactV1::tokenizer_commitment_of(b"abc"),
+            Base0ArtifactV1::tokenizer_commitment_of(b"abc"),
+            "the same bytes commit the same way"
+        );
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"abc"), Base0ArtifactV1::tokenizer_commitment_of(b"abd"));
+        // Length-prefixed, so no two files concatenate into a third's commitment.
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"ab"), Base0ArtifactV1::tokenizer_commitment_of(b"a"));
+        // …and its own domain key, so it cannot collide with an artifact digest.
+        assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.execution_class_id());
+    }
+
     /// **Condition 6: the requant parameters are inside `artifact_root`, biases included.**
     ///
     /// They were not. `absorb_scale` wrote a multiplier and a shift, so the zero point — the

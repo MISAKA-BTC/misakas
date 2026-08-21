@@ -326,21 +326,28 @@ order; this one has nothing to pin.
 gain folds into the lm_head and not into the gather, so the two matrices differ by `diag(g)`
 afterwards and the artifact carries both. A real consequence, not a packing choice.
 
-### Blocker — activation calibration (量子化品質)
+### The "calibration blocker" was mine, and it is withdrawn
 
-A bias enters as the `zero` of a requantization triple, and `zero` is in units of the OUTPUT
-ACTIVATION CODE — so placing it needs `scale_out = scale_weight × scale_activation × 2^shift`.
-Two of those are properties of tensors the converter reads. **The third is a property of the data
-the model runs on**, and deriving it is calibration: a forward pass over sample inputs, measuring
-the range each projection actually produces. That is Phase 3's measurement.
+The first version of this section said placing a bias needs `scale_activation`, that
+`scale_activation` is a property of the DATA, and that deriving it is Phase 3 calibration. **That
+is wrong**, and the correction matters because it removes a blocker that was never there.
 
-It is carried as `Qwen25ConvertPlan::activation_scale` so the pipeline is complete and the missing
-number is named rather than guessed inside a formula.
+A bias's `zero` is in units of the output activation code, so it needs the activation's step —
+and the matmul's input is the output of an **RMS norm, whose RMS is 1 by construction**. Its range
+is set by the requantization that narrows Qk to a code, not by the model and not by the data.
+`rms_norm` returns Qk (`K = 24` fractional bits) and `norm_requant` shifts it down, so one code is
+worth `2^(shift − K)`. `activation_scale_of` computes exactly that.
 
-**An uncalibrated value drops every bias silently**, and that was measured rather than predicted:
-with the norm gain folded in, the weight scale rises by the gain's magnitude, so a bias comparable
-to the weights before the fold rounds to zero after it. `biased_channel_count` exists so that
-failure is a number somebody reads instead of a model that runs and is quietly wrong.
+What actually happened is that the converter set `norm_requant` to a shift of `K`, where a
+normalized value of 1.0 lands on **1** instead of 127 — the collapse `derive_deterministic`'s own
+comment warns about ("1.0 must land on 127, not on 1") — and a bias measured against that step
+rounded away. The bug was a wrong constant in code I had just written, and the bias arithmetic is
+what made it visible. Fixed by using the established `shift = K − 7`.
+
+`biased_channel_count` stays: a conversion whose biases all round to zero is a model that runs and
+is quietly wrong, and the count makes that a number somebody reads.
+
+**Category correction:** not 量子化品質, and not a blocker. 実装不足, in my own converter, closed.
 
 ### A consensus-safety defect the converter's own test found
 
@@ -358,52 +365,165 @@ LAST position, because a digest that missed the tail would be exactly as broken.
 Condition 6 asks for the requant parameters to be inside `artifact_root`. Until this commit they
 were not.
 
-## Phase 3 — the probe, and three artifacts that ran without computing (2026-08-21)
 
-Phase 2 ended with a converter whose own test asserted that a converted artifact *runs* and that
-two runs *agree*. `ForwardProbe`'s doc says why that cannot be enough: a degenerate pass still
-returns logits, still returns the same logits every run, and still returns different logits for
-different weights — so a determinism test and a different-artifact test both pass on a model that
-cannot compute.
+---
 
-Probing the converted artifact found it was exactly that. Three parameters the converter chose by
-literal were each wrong, and each in a way no existing test could see:
+## Phase 3 — the depth sweep, measured (2026-08-21)
 
-| probe | before | after | cause |
-|---|---|---|---|
-| `attention_spread` | three of eight heads at **0**, the rest at 2²⁴−2 | 10.8 M – 16.7 M, none at either end | `attn_logit_scale` was `shift: 0`. `ScaleParams` reads its multiplier as a Q31 fraction, so unity is `shift: 31` and **`shift: 0` is a gain of 2³¹** — logits saturated into a hard argmax where they differed at all, and stayed uniform where they did not |
-| `gate_extremes` | `(0, 127)` | `(-36, 127)` | the same 2³¹ on `ffn_gate_scale`: the gate sat on its positive rail, and a SiLU that never floors is not a SiLU |
-| `residual_peak` | 55, 40 | 112, 115 | `norm_requant` was `shift: 24`. `RmsNorm` returns Qk and a `MatMulQuant` operand is a Q7 code, so the narrowing is `K − 7 = 17`; at 24 every normed vector reached the projections with about a bit of range left |
+The failure mode an int8 residual stack has and a float one does not is **silent collapse**: each
+residual add halves the stream, so after enough layers every code reaches zero, every downstream
+projection reads zeros, and the model still runs and still produces logits. `DepthHealthV1` and
+`measure_depth_health` report the numbers that separate "deep" from "dead".
 
-This is ADR-0040 Decision H's failure with the sign of the mistake reversed — Decision H exists
-because `Requantize`'s gain can never exceed 1 and the accumulators arrived at `SoftMax` two to
-three orders of magnitude *below* Qk. Here the repair overshot in the other direction. Both
-amplification points now derive from fan-in through one shared `artifact::amplify_for`, which is
-what stops the next caller from re-discovering it.
+Measured on converted artifacts at 1, 4, 8 and 12 layers:
 
-The gate's asymmetry after the fix is 36/127 ≈ **28 %**, which is what
-`docs/palw-base0-depth-measurement-2026-08-21.md` measured for a healthy gate at every depth and
-width it swept. Two independent routes to the same number.
+| depth | residual peaks | gate peaks | min attention spread |
+| --- | --- | --- | --- |
+| 1 | `[96]` | `[91]` | 1,788,600 |
+| 4 | `[96, 70, 68, 71]` | `[91, 46, 43, 39]` | 274,624 |
+| 8 | `[96, 70, 68, 71, 73, 71, 71, 88]` | `[91, …, 48]` | 28,936 |
+| 12 | `[96, …, 92, 75]` | `[91, …, 43, 58]` | 28,936 |
 
-`a_converted_artifact_is_probed_not_just_run` is the acceptance gate, mutation-checked: reverting
-any one of the three fixes fails it, each on its own named assertion.
+The shape of the curve is the finding: the residual peak **stabilises in a 56–96 band** rather
+than walking to zero, the gate peak drops sharply from layer 1 to layer 2 (91 → 46) and then
+holds in 39–58, and the attention spread falls with depth but stays far above uniform. None of
+the three is a collapse. **`global residual_requant` did not break**, so the per-layer requant
+extension Phase 3 held in reserve is not needed at these depths.
 
-### `residual_requant` is now the caller's decision
+### Two converter defects the sweep found
 
-It was a literal (`shift: 1`) and it is inside `execution_class_id`, so it froze with the class.
-The depth measurement priced what it decides:
+* **The amplifying gains were unset.** `attn_logit_scale` and `ffn_gate_scale` were
+  `{multiplier: i32::MAX, shift: 0}` — no amplification — which is precisely the state ADR-0040 H
+  warns about: an attention logit arrives at `SoftMax` around 0.002 in Qk and the distribution is
+  uniform, and the SwiGLU gate degenerates to the linear `x/2`. Measured before the fix: gate
+  extremes `(0, 127)` (symmetric, i.e. degenerate) and residual peak 128 (railed).
+  `amplification_for` derives both from data the converter already has — **σ_w measured from the
+  quantized weights as an exact integer sum of squares** (order-independent, so two converters
+  agree, which a float RMS would not have given) and **σ_x a construction constant**, because the
+  other operand is an RMS-normed activation whose RMS is 1 by definition. After: `(-30, 91)` and
+  96.
+* Not a defect but worth recording: `derive_deterministic`'s `amplify_for` says "a real
+  artifact's scales come from calibrating against its own activation statistics". That is the
+  calibration point — the amplification, not the bias scale.
 
-| gain | residual highway | per-layer write |
-|---|---|---|
-| `shift: 1` (halve) | ~7 adds, then the value floors at ±1 and survives as a sign | the full 7 bits |
-| `shift: 0` (unity) | unbounded | 2–3 bits at depth 24–32, and every projection into the residual must be attenuated to match |
+### Three metrics of mine that were wrong, and what each taught
 
-Seven adds is three and a half layers. At Qwen2.5-1.5B's 28 layers, halving means a feature written
-by layer 0 arrives at the output as a sign. That may be the right trade — it is not one a literal
-should have been making, so it is a `Qwen25ConvertPlan` field now.
+Each was caught by the measurement disagreeing with a model that was fine, which is the useful
+direction for a metric to fail in:
 
-### Still open
+1. **Saturation measured on the logits.** Logits are raw `i32` accumulators out of the unembedding
+   matmul and are naturally in the thousands, so `|v| >= 127` reported every model as railed at
+   depth 1. It belongs on the residual stream, where int8 codes actually live.
+2. **Attention spread including position 0.** That position has exactly one key, so its
+   distribution is `[1.0]` and its spread is necessarily zero — a statement about the metric, not
+   the model.
+3. **Gate asymmetry at `|min| · 2 < max`.** As depth grows the positive peak decays while SiLU's
+   floor stays put, so the tight ratio reports signal DECAY as gate degeneracy. The property that
+   actually separates SiLU from its degenerate form is `|min| < max`; the decay is real and is
+   reported separately by `gate_peak_decay`.
 
-`activation_scale` remains the number a real calibration must supply: a forward pass over sample
-inputs, measuring what each projection actually produces. The fixture's value is a fixture's. What
-this phase adds is that an artifact built on a wrong one can now be *detected* rather than shipped.
+### And one thing the fixture cannot answer
+
+`a_deep_converted_class_is_reproducible` first asserted that the argmax varies with position.
+Under the fixture's RANDOM weights it does not — the argmax is pinned to whichever vocabulary row
+has the largest norm, whatever the prompt — and that is expected rather than a defect. The
+property worth asserting is that the model reads its input at all, so the check is on a digest of
+each position's full logit row. **Top-k agreement against the float model (condition 7's
+neighbour) needs the real checkpoint and is not answerable from a derived fixture.**
+
+
+---
+
+## Phase 4 — the real checkpoint (2026-08-21)
+
+`Qwen2.5-1.5B` was downloaded and converted. The file matches Phase 0's readings exactly: 338
+tensors, every one BF16, `lm_head.weight` absent, `k_proj.bias` present at [256].
+
+```
+config: hidden 1536, heads 12/2 kv, d_head 128, ffn 8960, layers 28/28, vocab 151936
+converted in 3.4 s        int8 weights 1694 MiB      biased channels 51,328
+class id 3bdf60fa5586991c…886719f8
+forward 4 tokens in 4.0 s   alive true   railed layers 0/28   reproducible true
+```
+
+**Condition 8 is met**: the full 28-layer forward runs, completes, collapses nowhere, rails
+nowhere, and two runs agree bit for bit.
+
+### A structural bound that excluded every real vocabulary
+
+`Base0ShapeV1::validate` bounded EVERY dimension by `MAX_DOT_LEN` (131,071), including `vocab`.
+Qwen2.5's is 151,936, so the real checkpoint was refused with `DotTooLong { got: 151936 }`.
+
+`MAX_DOT_LEN` is the length past which an `i32` accumulator can overflow — which is why ADR-0040
+Decision E's free reduction order is a *premise* rather than a gift — so it belongs on the
+dimensions that are SUMMED OVER and on nothing else. **`vocab` is an output width, never a
+reduction length**: the unembedding matmul reduces over `d_model` and produces `vocab` values, and
+the vocabulary never enters an accumulator. The blanket bound was a proxy for "no product wraps",
+and at that value it excludes Llama-3 (128,256) as well.
+
+*Category:* **実装不足**, closed. The reduction dimensions keep the bound; the products are
+audited with `checked_mul` instead of proxied, so a shape that would wrap is refused for wrapping
+rather than for being large.
+
+### 量子化品質 — the depth sweep on the real model
+
+| layers | residual peak | gate peak | attention spread | argmax |
+| --- | --- | --- | --- | --- |
+| 1 | 24 | 113 | 111,401 | `[9707, 11, 1879, 0]` |
+| 4 | 15–37 | 78–113 | 63,616 | `[8834, 8834, 90176, 115922]` |
+| 8 | 15–37 | 78–127 | 47,204 | `[18574, 29685, 38230, 38230]` |
+| 16 | 11–37 | 56–127 | 26,576 | `[20434, 61092, 61092, 61092]` |
+| 28 | 11–38 | 54–127 | 2,855 | `[11, 11, 11, 11]` |
+
+The structural health is good at every depth — nothing collapses and nothing rails. **The output
+quality is not.** The argmax degenerates as layers accumulate: distinct at 4 and 8, mostly
+repeating by 16, and a single constant token at the full depth. Attention selectivity falls ~40×
+from depth 1 to depth 28.
+
+The diagnosis is in the residual column. A peak of **11 out of 127** means the stream occupies
+under a tenth of the int8 range, so its effective precision is around 3.5 bits and quantization
+noise dominates what the layers compute. The cause is `residual_requant`: one global
+`{shift: 1}`, applied twice per layer — the standard int8-residual halving — with nothing
+per-layer to hold the stream up as the projections' gains vary.
+
+*Category:* **量子化品質**, open. This is precisely the contingency Phase 3 named — "global
+`residual_requant` で破綻する場合は per-layer requant に拡張する" — and it is now triggered by
+measurement rather than anticipated. The remedy is a per-layer residual requantization whose
+shift is chosen from each layer's measured signal, which is a calibration loop: convert, measure,
+adjust, re-convert.
+
+**What this does and does not block.** Conditions 8, 9 and 10 stand — the model runs
+deterministically and a court adjudicates its steps from one opening. Condition 13 does not: a
+class whose argmax is a constant is not a *practical* weight-bearing class, and this is exactly
+what a soak is for. **The class must not be activated on these numbers.**
+
+
+### Phase 3's contingency, implemented and measured
+
+`calibrate_layer_residuals` converts once with the global rule, runs a pass, and re-derives each
+layer's residual shift from the peak that layer actually produced, iterating because changing
+layer 3's shift changes what layer 4 sees.
+
+On the real checkpoint it helps, measurably:
+
+| | global | calibrated |
+| --- | --- | --- |
+| argmax | `[11, 11, 11, 11]` | `[476, 854, 2878, 854]` |
+| attention spread | 2,855 | 8,442 |
+| residual peak (max) | 38 | 56 |
+
+**And it is not the whole fix, for a structural reason.** A requantization can only REDUCE:
+`QuantParams`' gain is `multiplier / 2^shift` with the multiplier at most 1.0, so every setting
+attenuates and the most a decayed layer can be given is `shift = 0`. The calibrated table came out
+`[1, 0, 1, 1, …]` — layer 1 took the one bit available and every other layer was already at the
+floor. The residual peak still reaches 5 of 127 at its worst.
+
+A stream that has decayed needs **amplification**, which is exactly what `Rescale` exists for
+(ADR-0040 Decision H: "requantize cannot: its gain is at most 1 at every parameter"). Closing the
+gap means an amplifying residual — a per-layer `Rescale` before the narrowing — which changes
+BASE-0's own residual arithmetic and is therefore an ADR decision, not a calibration constant.
+
+*Category:* **量子化品質**, improved and still open. The class runs deterministically and its
+steps adjudicate; it is not yet a model whose output is worth carrying weight. **It must not be
+activated on these numbers**, which is what conditions 12 and 13 are arranged for: register
+weightless, soak, and activate only on numbers that justify it.

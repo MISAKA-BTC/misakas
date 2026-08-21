@@ -258,6 +258,7 @@ mod tests {
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
             initial_target: 1,
             share_permille: 1,
+            activation_daa: 0,
         }
     }
 

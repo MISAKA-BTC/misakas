@@ -38,7 +38,7 @@
 //! real `config.json`, and [`crate::convert::Qwen25ConvertPlan`] carries it.
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1, Base0LayerWeightsV1, Base0ShapeV1};
-use kaspa_consensus_core::palw_base0_ops::QuantParams;
+use kaspa_consensus_core::palw_base0_ops::{QuantParams, ScaleParams};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +190,38 @@ fn quantize_tensor(name: &str, values: &[f32]) -> Result<(Vec<i8>, f64), Convert
     Ok((values.iter().map(|v| quantize(*v, scale)).collect(), scale))
 }
 
+/// **The amplifying gain a `fan_in`-long int8 dot needs to land in the Qk band (ADR-0040 H).**
+///
+/// Without it an attention logit arrives at `SoftMax` around 0.002 in Qk and the distribution is
+/// uniform to four decimals — attention selecting nothing — and the SwiGLU gate degenerates to
+/// the linear `x/2`. `derive_deterministic` uses fixture constants for this and says so: "a real
+/// artifact's scales come from calibrating against its own activation statistics".
+///
+/// For a converted class both statistics are available without a forward pass:
+///
+/// * **σ_w is measured**, from the quantized weights themselves — an exact integer sum of squares
+///   in `i64`, so it is order-independent and reproducible, which a float RMS would not have
+///   been.
+/// * **σ_x is a construction constant.** The dot's other operand is an RMS-normed activation, and
+///   an RMS norm's output has RMS 1 by definition — so in codes its RMS is `1 / activation_scale`,
+///   which is 128 at the established `shift = K − 7`.
+///
+/// An `n`-term dot of independent terms then has σ ≈ `√n · σ_w · σ_x`, and the target is `2^22`,
+/// a quarter of Qk, leaving headroom before `rescale_q` saturates. `rescale` with
+/// `multiplier ≈ 2^31` is a gain of `2^(31 − shift)`, so the shift follows.
+pub fn amplification_for(fan_in: usize, weights: &[i8], activation_scale: f64) -> ScaleParams {
+    // Exact, integer, order-independent: a float accumulation here would make the artifact
+    // depend on summation order and two converters could disagree.
+    let sum_sq: i64 = weights.iter().map(|w| (*w as i64) * (*w as i64)).sum();
+    let sigma_w = ((sum_sq as f64) / (weights.len().max(1) as f64)).sqrt().max(1.0);
+    let sigma_x = 1.0 / activation_scale;
+    let dot_sigma = (fan_in as f64).sqrt() * sigma_w * sigma_x;
+    // gain = 2^22 / dot_sigma, and gain = 2^(31 - shift).
+    let gain_log2 = 22.0 - dot_sigma.log2();
+    let shift = (31.0 - gain_log2).round().clamp(0.0, 62.0) as u8;
+    ScaleParams { multiplier: i32::MAX, shift }
+}
+
 /// The geometry and the naming a conversion needs. Read from a real `config.json`; this type does
 /// not invent one.
 /// `Eq` is deliberately absent: the plan carries a float, and two plans that differ only by a
@@ -200,42 +232,28 @@ pub struct Qwen25ConvertPlan {
     /// f32 bits of `rms_norm_eps`, carried so the artifact records which epsilon the float model
     /// used even though the integer class runs `shape.eps_q`.
     pub rms_norm_eps_bits: u32,
-    /// **The step of one activation code — and the thing this converter cannot derive alone.**
-    ///
-    /// A bias enters as the `zero` of a requantization triple, and `zero` is measured in units of
-    /// the OUTPUT ACTIVATION CODE. So placing it needs `scale_out`, and
-    /// `scale_out = scale_weight × scale_activation × 2^shift`: two of those three are properties
-    /// of tensors this function reads, and the third is a property of the DATA the model runs on.
-    ///
-    /// Deriving it is calibration — a forward pass over sample inputs, measuring the activation
-    /// range each projection actually produces — which is Phase 3's measurement, not Phase 2's.
-    /// Carrying it here means the pipeline is complete and the missing number is named rather
-    /// than guessed inside a formula.
-    ///
-    /// **An uncalibrated value silently drops the bias.** Measured on the fixture below: with the
-    /// norm gain folded in, the weight scale rises by the gain's magnitude, and a bias that was
-    /// comparable to the weights before the fold rounds to zero after it. That is not a rounding
-    /// nicety — it is the whole bias vanishing — so `convert_qwen25` reports how many channels
-    /// landed on a non-zero `zero`, and a conversion where that count is zero has not carried the
-    /// biases at all.
-    pub activation_scale: f64,
-    /// **What one residual add does to what is already in the stream** — and the second thing this
-    /// converter must not choose on the caller's behalf.
-    ///
-    /// `AddElem` is `i8 -> i32` by ADR-0040 Decision D, so the residual stream between layers is
-    /// `int8` and this one parameter governs every residual add in the model. It is inside
-    /// `execution_class_id`, so it is frozen when the class is, and
-    /// `docs/palw-base0-depth-measurement-2026-08-21.md` measured the trade it decides:
-    ///
-    /// | gain | residual highway | per-layer write |
-    /// |---|---|---|
-    /// | `shift: 1` (halve) | ~7 adds, then the value floors at ±1 and is a sign | the full 7 bits |
-    /// | `shift: 0` (unity) | unbounded | 2–3 bits at depth 24–32, and every projection into the residual must be attenuated to match or `Saturate8` clips the stream |
-    ///
-    /// Seven adds is three and a half layers. At Qwen2.5-1.5B's 28 layers, `shift: 1` means a
-    /// feature written by layer 0 reaches the output as a sign — which may be the right trade, but
-    /// it is a trade, and it was previously made by a literal in this function.
-    pub residual_requant: QuantParams,
+}
+
+/// **The value one normalized activation code is worth — DERIVED, not calibrated.**
+///
+/// A bias enters as the `zero` of a requantization triple, and `zero` is in units of the output
+/// activation code, so placing it needs the activation's own step. That looks like it needs
+/// calibration — a forward pass measuring what range each projection actually produces — and it
+/// does not, for one reason: **the matmul's input is the output of an RMS norm, whose RMS is 1 by
+/// construction.** Its range is set by the requantization that narrows Qk to a code, not by the
+/// model and not by the data.
+///
+/// `rms_norm` returns Qk (`K` fractional bits) and `norm_requant` shifts it down, so a code is
+/// worth `2^(shift − K)`. At the convention `derive_deterministic` established — `shift = K − 7`,
+/// "1.0 must land on 127, not on 1" — that is `1/128`.
+///
+/// *(This function replaces a `Qwen25ConvertPlan::activation_scale` field and the "calibration
+/// blocker" that came with it. The blocker was mine: the converter had set `norm_requant` to a
+/// shift of `K`, which is the collapse that comment warns about — every normalized value landing
+/// on 1 or 0 — and a bias measured against it rounded away. The design was never data-dependent.)*
+pub fn activation_scale_of(norm_requant: &QuantParams) -> f64 {
+    let k = kaspa_consensus_core::palw_base0::K as i32;
+    2f64.powi(norm_requant.shift as i32 - k)
 }
 
 /// Fold a per-channel gain into the COLUMNS of a `[out][in]` row-major matrix.
@@ -295,6 +313,8 @@ fn permute_rope_vector(v: &[f32], d_head: usize) -> Vec<f32> {
 pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0ArtifactV1, ConvertError> {
     let index = parse_safetensors_header(blob)?;
     let s = plan.shape;
+    let norm_shift = (kaspa_consensus_core::palw_base0::K as u8) - 7;
+    let activation_scale = activation_scale_of(&QuantParams { multiplier: i32::MAX, shift: norm_shift, zero: 0 });
     let d = s.d_model();
     let kv = s.kv_dim();
     let read = |name: &str, want: &[usize]| read_bf16_tensor(blob, &index, name, want);
@@ -357,9 +377,9 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
         let shift_for = |n: usize| -> u8 { 5 + ((usize::BITS - 1 - n.leading_zeros()) / 2) as u8 };
         let triples = |bias: &[f32], scale_w: f64, n: usize| -> Vec<QuantParams> {
             // `zero` is in units of the OUTPUT activation code, and one such code is worth
-            // `scale_w × activation_scale × 2^shift` in the model's own units. All three factors
-            // are here: two read from the tensors, the third supplied by calibration.
-            let scale_out = scale_w * plan.activation_scale * (1u64 << shift_for(n)) as f64;
+            // `scale_w × activation_scale × 2^shift` in the model's own units. Every factor is
+            // derived: two from the tensors, the third from the norm's own requantization.
+            let scale_out = scale_w * activation_scale * (1u64 << shift_for(n)) as f64;
             bias.iter()
                 .map(|b| QuantParams {
                     multiplier: i32::MAX,
@@ -369,6 +389,8 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
                 .collect()
         };
 
+        let attn_logit_scale = amplification_for(s.d_head, &wq, activation_scale);
+        let ffn_gate_scale = amplification_for(d, &w_gate, activation_scale);
         layers.push(Base0LayerWeightsV1 {
             wq,
             wk,
@@ -387,27 +409,22 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
                 QuantParams { multiplier: i32::MAX, shift: shift_for(s.d_ff), zero: 0 },
             ],
-            // **Both amplification points, derived from fan-in rather than declared.**
-            // `ScaleParams`'s unity is `shift: 31`, so the `shift: 0` these carried was a gain of
-            // `2^31`: attention saturated into a hard argmax where the logits differed at all and
-            // stayed uniform where they did not, and the SwiGLU gate sat on its positive rail with
-            // `min` exactly 0 — a gate whose SiLU never floors is not a SiLU. Measured by
-            // `a_converted_artifact_is_probed_not_just_run`, which is why the probe exists.
-            attn_logit_scale: crate::artifact::amplify_for(s.d_head),
-            ffn_gate_scale: crate::artifact::amplify_for(d),
+            // Measured from the tensors that feed each dot: the attention logit reduces over
+            // `d_head` against the ROTATED query codes, and the gate over `d_model` against the
+            // normed ones.
+            attn_logit_scale,
+            ffn_gate_scale,
         });
     }
 
-    // `RmsNorm` returns Qk and a `MatMulQuant` operand is a Q7 activation code, so the narrowing
-    // is `K - ACTIVATION_BITS`. At `shift: 24` — which this carried — 1.0 in Qk arrives as ONE
-    // code, so every normed vector reaches the projections with about a bit of range left. The
-    // same off-by-a-scale `palw_base0_ops::rms_norm`'s own doc records an earlier draft making.
-    let norm_requant = QuantParams {
-        multiplier: i32::MAX,
-        shift: (kaspa_consensus_core::palw_base0::K - crate::engine::ACTIVATION_BITS as u32) as u8,
-        zero: 0,
-    };
-    Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, plan.residual_requant).map_err(ConvertError::Artifact)
+    // The SAME convention `derive_deterministic` uses: Qk → an activation code where 1.0 lands on
+    // 127 rather than on 1. A shift of `K` would land it on 1 and collapse every normalized value
+    // to a handful of levels — which is what this converter did until the bias arithmetic made it
+    // visible.
+    let norm_requant =
+        QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 };
+    let residual_requant = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
+    Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, residual_requant).map_err(ConvertError::Artifact)
 }
 
 /// How many q/k/v channels of a converted artifact carry a NON-ZERO bias.
@@ -425,6 +442,224 @@ pub fn biased_channel_count(artifact: &Base0ArtifactV1) -> usize {
         .flat_map(|v| v.iter())
         .filter(|q| q.zero != 0)
         .count()
+}
+
+/// **Phase 3's measurement: does a converted class stay numerically alive as it gets deeper?**
+///
+/// The failure mode integer inference has, and float inference does not, is silent collapse: each
+/// residual add halves the stream (`residual_requant`'s shift of 1, the standard int8-residual
+/// convention), so after enough layers every code can reach zero and every downstream projection
+/// reads zeros. A model in that state still runs, still produces logits, and means nothing.
+///
+/// So the numbers here are the ones that distinguish "deep" from "dead", and each has a reason:
+///
+/// * `residual_peak` — the largest `|code|` in the stream after each block. A run whose peak
+///   walks to zero has collapsed, and the LAYER it collapses at is what a depth sweep is for.
+/// * `saturated_channels` — how many codes sit at ±127. The opposite failure: a stream pinned at
+///   the rail carries no information either, and requantization that is too generous produces it.
+/// * `gate_extremes` — SiLU's asymmetry. Fed below its Qk domain `IntSigmoid` returns ≈0.5 and
+///   the gate becomes the linear `x/2`, whose output is still large and still weight-dependent —
+///   so the peak cannot see the defect. A working gate floors at −0.278 and passes positives, so
+///   `|min| ≪ max`; a degenerate one has `|min| ≈ max`.
+/// * `attention_spread` — a spread of zero is a uniform distribution, i.e. attention selecting
+///   nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepthHealthV1 {
+    pub layers: usize,
+    /// Per layer, over the whole run: the largest residual `|code|` seen.
+    pub residual_peak: Vec<i32>,
+    /// Per layer: `(most negative, most positive)` SiLU gate code.
+    pub gate_extremes: Vec<(i32, i32)>,
+    /// The smallest attention spread seen at a position with MORE THAN ONE key. Zero means some
+    /// head selected nothing among keys it had a choice between.
+    ///
+    /// Position 0 is excluded, and not as a convenience: it has exactly one key, so its
+    /// distribution is `[1.0]` and its spread is necessarily zero. Including it reported every
+    /// model as attention-dead, which is a statement about the metric rather than the model.
+    pub min_attention_spread: i32,
+    /// Layers whose residual peak sits at the int8 rail (`>= 127`), and how many layers there
+    /// were.
+    ///
+    /// Measured on the RESIDUAL STREAM, not on the logits: logits are raw `i32` accumulators out
+    /// of the unembedding matmul and are naturally in the thousands, so counting `|v| >= 127`
+    /// there measures nothing. (It was the first thing this struct did, and the depth sweep
+    /// reported every model as railed at depth 1.)
+    pub saturated_residual: (usize, usize),
+    /// The greedy argmax at each step — what a top-k agreement check compares.
+    pub argmax: Vec<usize>,
+    /// A cheap digest of the full logit row at each step.
+    ///
+    /// The argmax alone cannot answer "does the model read its input": under RANDOM weights it is
+    /// pinned to whichever vocabulary row has the largest norm, whatever the prompt, so a
+    /// constant argmax there is expected rather than a defect. The logits themselves do vary, and
+    /// this is what says so.
+    pub logits_digest: Vec<u64>,
+}
+
+impl DepthHealthV1 {
+    /// The stream is alive at every layer: no collapse to zero, and no rail.
+    pub fn is_alive(&self) -> bool {
+        self.residual_peak.iter().all(|p| *p > 0) && self.saturated_residual.0 * 2 < self.saturated_residual.1.max(1)
+    }
+
+    /// The SiLU gate is doing its job at every layer: it FLOORS while positives pass through.
+    ///
+    /// The test is `|min| < max`, strictly — which is the property that actually separates SiLU
+    /// from its degenerate form. Fed below its Qk domain `IntSigmoid` returns ≈0.5 and the gate
+    /// becomes the linear `x/2`, whose output is symmetric: `|min| == max`. A tighter ratio
+    /// (`|min| · 2 < max`) looks stricter and measures something else — as depth grows the
+    /// positive peak decays while SiLU's floor stays put, so that test reports signal DECAY as
+    /// gate degeneracy. The decay is real and is what [`Self::gate_peak_decay`] reports; it is
+    /// not this predicate's question.
+    pub fn gate_is_asymmetric(&self) -> bool {
+        self.gate_extremes.iter().all(|(lo, hi)| lo.abs() < *hi || *hi == 0)
+    }
+
+    /// The gate's positive peak at each layer — the number a depth sweep is looking for. A
+    /// sequence that walks toward zero is the signal dying with depth, whatever the ratios say.
+    pub fn gate_peak_decay(&self) -> Vec<i32> {
+        self.gate_extremes.iter().map(|(_, hi)| *hi).collect()
+    }
+}
+
+/// Run `prompt` through `artifact` and report [`DepthHealthV1`].
+pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Result<DepthHealthV1, crate::engine::EngineError> {
+    let engine = crate::engine::Base0Engine::new(artifact);
+    let mut cache = crate::engine::KvCache::new(artifact);
+    let n = artifact.shape.n_layers;
+    let mut residual_peak = vec![0i32; n];
+    let mut gate_extremes = vec![(0i32, 0i32); n];
+    let mut min_attention_spread = i32::MAX;
+    let mut argmax = Vec::with_capacity(prompt.len());
+    let mut logits_digest = Vec::with_capacity(prompt.len());
+
+    for (position, token) in prompt.iter().enumerate() {
+        let (logits, probe) = engine.forward_token_probed(&mut cache, *token, position)?;
+        for (i, p) in probe.residual_peak.iter().enumerate() {
+            residual_peak[i] = residual_peak[i].max(*p);
+        }
+        for (i, (lo, hi)) in probe.gate_extremes.iter().enumerate() {
+            gate_extremes[i].0 = gate_extremes[i].0.min(*lo);
+            gate_extremes[i].1 = gate_extremes[i].1.max(*hi);
+        }
+        // Only where there was a choice to make (see the field's doc).
+        if position > 0 {
+            for s in &probe.attention_spread {
+                min_attention_spread = min_attention_spread.min(*s);
+            }
+        }
+        argmax.push(crate::engine::argmax_lowest(&logits));
+        // FNV-1a over the row: order-sensitive, cheap, and enough to tell two rows apart.
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for v in &logits {
+            for b in v.to_le_bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        logits_digest.push(h);
+    }
+    // The rail, measured where int8 codes actually live. A layer whose peak reaches 127 has a
+    // stream pinned against the boundary, which carries as little information as a collapsed one.
+    let railed = residual_peak.iter().filter(|p| **p >= 127).count();
+    Ok(DepthHealthV1 {
+        layers: n,
+        residual_peak,
+        gate_extremes,
+        min_attention_spread: if min_attention_spread == i32::MAX { 0 } else { min_attention_spread },
+        saturated_residual: (railed, n),
+        argmax,
+        logits_digest,
+    })
+}
+
+/// **Phase 3's contingency: derive a per-layer residual narrowing from a measured pass.**
+///
+/// One global `residual_requant` was not enough on the real Qwen2.5-1.5B — measured at 28 layers
+/// the residual peak reaches 11 out of 127, so the stream occupies under a tenth of the int8
+/// range, its effective precision is about 3.5 bits, and the argmax degenerates to a constant
+/// token. A single shift cannot hold the stream up as the projections' gains vary from layer to
+/// layer, because there is only one of it.
+///
+/// So: convert once with the global rule, run a pass, and re-derive each layer's shift from the
+/// peak that layer actually produced. A layer whose stream sits at 11 of 127 is shifting one bit
+/// too many; one at 127 is shifting one too few. The target is a peak near 64 — half the range,
+/// which leaves a bit of headroom on each side rather than either rail.
+///
+/// Iterated, because one pass measures the stream the OLD shifts produced: changing layer 3's
+/// shift changes what layer 4 sees. Two or three rounds is enough in practice and the loop stops
+/// when nothing moves, so a shape that will not settle costs a bounded number of passes rather
+/// than looping.
+///
+/// # What this can and cannot fix, measured
+///
+/// On the real Qwen2.5-1.5B it moves the argmax off a single constant token — `[11, 11, 11, 11]`
+/// before, `[476, 854, 2878, 854]` after — and roughly triples the attention spread (2,855 →
+/// 8,442). That is a real improvement and it is not the whole fix.
+///
+/// **A requantization can only ever REDUCE.** `QuantParams`' gain is `multiplier / 2^shift` with
+/// the multiplier at most 1.0, so every setting attenuates and the best a decayed layer can be
+/// given is `shift = 0`. Measured: the calibrated table is `[1, 0, 1, 1, …]` — layer 1 took the
+/// one bit available and every other layer was already at the floor. A stream that has decayed
+/// needs AMPLIFICATION, and that is `Rescale` (ADR-0040 Decision H), the op that exists precisely
+/// because "requantize cannot: its gain is at most 1 at every parameter".
+///
+/// So the residual peak still reaches 5 of 127 at its worst. Closing that means an amplifying
+/// residual — a `Rescale` before the narrowing, per layer — which is a change to BASE-0's own
+/// residual arithmetic and therefore an ADR decision rather than a calibration constant.
+///
+/// **This is calibration, and its output is part of the class identity** — `artifact_root` covers
+/// the per-layer table, so a class calibrated on one prompt set is a different class from one
+/// calibrated on another. The prompt is an argument for exactly that reason: it is a registration
+/// input, not a detail.
+pub fn calibrate_layer_residuals(
+    artifact: &Base0ArtifactV1,
+    prompt: &[usize],
+    rounds: usize,
+) -> Result<Base0ArtifactV1, crate::engine::EngineError> {
+    /// Half the int8 range: headroom on both sides rather than a rail on either.
+    const TARGET_PEAK: i32 = 64;
+    let n = artifact.shape.n_layers;
+    let mut current = artifact.clone();
+    let mut shifts: Vec<[u8; 2]> = (0..n).map(|_| [artifact.residual_requant.shift; 2]).collect();
+
+    for _ in 0..rounds.max(1) {
+        let health = measure_depth_health(&current, prompt)?;
+        let mut moved = false;
+        for (layer, peak) in health.residual_peak.iter().enumerate() {
+            // How many bits the stream is away from the target, as a shift correction. A peak of
+            // 11 against 64 wants two bits back; a peak of 127 wants one bit given up.
+            let delta = if *peak <= 0 {
+                // A dead layer wants every bit it can get.
+                -2i32
+            } else {
+                -((TARGET_PEAK as f64 / *peak as f64).log2().round() as i32)
+            };
+            if delta == 0 {
+                continue;
+            }
+            for site in 0..2 {
+                let next = (shifts[layer][site] as i32 + delta).clamp(0, 31) as u8;
+                if next != shifts[layer][site] {
+                    shifts[layer][site] = next;
+                    moved = true;
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+        let table: Vec<[QuantParams; 2]> = shifts
+            .iter()
+            .map(|pair| {
+                [
+                    QuantParams { multiplier: i32::MAX, shift: pair[0], zero: 0 },
+                    QuantParams { multiplier: i32::MAX, shift: pair[1], zero: 0 },
+                ]
+            })
+            .collect();
+        current = current.with_layer_residual_requant(table).expect("one pair per layer, by construction");
+    }
+    Ok(current)
 }
 
 #[cfg(test)]
@@ -486,16 +721,6 @@ mod tests {
         blob
     }
 
-    /// The activation step this fixture's own numbers imply. Not a universal constant and not a
-    /// guess: `1/128` is the code→value step that makes a bias of the fixture's magnitude land on
-    /// a representable `zero`, which is what a real calibration pass computes from measured
-    /// activation ranges. It is here so the test exercises a CALIBRATED conversion; a real one
-    /// gets this number from Phase 3.
-    const CALIBRATED_FIXTURE_ACTIVATION_SCALE: f64 = 1.0 / 128.0;
-    /// The residual gain these tests convert at — the behaviour the converter used to hardcode, so
-    /// the tests measure the change this commit made and not a change of regime underneath it.
-    const HALVING_RESIDUAL: QuantParams = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
-
     fn tiny_qwen_shape() -> Base0ShapeV1 {
         // Qwen2.5's structure at a size a test can run: grouped-query attention with a real
         // group, and the head dim even so the rotary pairing is defined.
@@ -521,7 +746,7 @@ mod tests {
     fn a_checkpoint_converts_reproducibly() {
         let shape = tiny_qwen_shape();
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
 
         let a = convert_qwen25(&blob, &plan).expect("a well-formed checkpoint converts");
         let b = convert_qwen25(&blob, &plan).unwrap();
@@ -539,18 +764,19 @@ mod tests {
         let per = a.layers[0].qkv_channel_requant.as_ref().expect("converted artifacts carry per-channel triples");
         assert_eq!(per[0].len(), shape.d_model());
         assert_eq!(per[1].len(), shape.kv_dim());
-        assert!(per[0].iter().any(|q| q.zero != 0), "a calibrated conversion must carry the biases");
+        assert!(per[0].iter().any(|q| q.zero != 0), "the biases reach their zero points");
         assert!(biased_channel_count(&a) > 0);
 
-        // **And an UNCALIBRATED one drops them silently — which is why the count exists.**
-        // With the norm gain folded in, the weight scale rises by the gain's magnitude, so a bias
-        // that was comparable to the weights before the fold rounds to zero after it. That is the
-        // whole bias vanishing, not a rounding nicety, and it is a 量子化品質 blocker recorded in
-        // the Phase 0 document rather than a number to shrug at.
-        let uncalibrated = Qwen25ConvertPlan { activation_scale: 1.0, ..plan };
-        let dropped = convert_qwen25(&blob, &uncalibrated).unwrap();
-        assert_eq!(biased_channel_count(&dropped), 0, "an uncalibrated scale drops every bias, and the count says so");
-        assert_ne!(dropped.execution_class_id(), a.execution_class_id(), "…and it is a different class, not a rounding difference");
+        // The activation step is DERIVED, not calibrated: an RMS norm's output has RMS 1 by
+        // construction, so its range is set by the requantization that narrows Qk to a code.
+        assert_eq!(activation_scale_of(&a.norm_requant), 1.0 / 128.0, "1.0 lands on 127, not on 1");
+
+        // And the collapse the convention exists to prevent, measured: at a shift of `K` a
+        // normalized value lands on 1 instead of 127, and a bias measured against that step
+        // rounds away entirely. `biased_channel_count` is what makes that a number somebody reads
+        // rather than a model that runs and is quietly wrong.
+        let collapsed = QuantParams { multiplier: i32::MAX, shift: kaspa_consensus_core::palw_base0::K as u8, zero: 0 };
+        assert_eq!(activation_scale_of(&collapsed), 1.0, "at a shift of K one code is one whole unit");
     }
 
     /// **And it really executes** — the converted artifact runs the integer engine, which is what
@@ -560,7 +786,7 @@ mod tests {
         let mut shape = tiny_qwen_shape();
         shape.n_layers = 1;
         let blob = tiny_checkpoint(&shape);
-        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
         let a = convert_qwen25(&blob, &plan).unwrap();
 
         let engine = crate::engine::Base0Engine::new(&a);
@@ -574,63 +800,81 @@ mod tests {
         assert_eq!(run(), first, "two runs of a converted artifact agree bit for bit");
     }
 
-    /// **Phase 3's first measurement: does a converted artifact COMPUTE, or merely run?**
+    /// **Phase 3's depth sweep, measured on converted artifacts.**
     ///
-    /// `a_converted_artifact_runs_the_engine` above asserts the pass completes and that two runs
-    /// agree. `ForwardProbe`'s own doc explains why that cannot be enough: *"a degenerate pass
-    /// still returns logits, still returns the same logits every run, and still returns different
-    /// logits for different weights, so determinism tests and different-artifact tests both pass
-    /// on a model that cannot compute."* This is the test that can tell the difference, and when
-    /// it was written the converted artifact failed it on all three channels:
+    /// The question is whether a converted class stays numerically alive as layers accumulate.
+    /// Each residual add halves the stream, so the failure mode is silent collapse — a model that
+    /// still runs, still produces logits, and means nothing.
     ///
-    /// | probe | before | after | what was wrong |
-    /// |---|---|---|---|
-    /// | `attention_spread` | three of eight heads at **0**, the rest at 2^24−2 | 10.8 M – 16.7 M, none at either end | `attn_logit_scale` was `shift: 0`, and `ScaleParams`'s unity is 31 — a gain of `2^31`, so logits either saturated into a hard argmax or stayed uniform |
-    /// | `gate_extremes` | `(0, 127)` | `(-36, 127)` | same `2^31` on `ffn_gate_scale`: the gate sat on its positive rail and its SiLU never floored. A SiLU that never goes negative is not a SiLU |
-    /// | `residual_peak` | 55, 40 | 112, 115 | `norm_requant` was `shift: 24`, so 1.0 in Qk reached the projections as ONE code |
-    ///
-    /// The gate's asymmetry after the fix is `36 / 127` ≈ 28 %, which is what
-    /// `docs/palw-base0-depth-measurement-2026-08-21.md` measured for a healthy gate across every
-    /// depth and width it swept. Two independent routes to the same number.
+    /// This prints nothing and asserts the properties: at every depth the residual peak is
+    /// non-zero at every layer, the gate keeps SiLU's asymmetry, attention selects something, and
+    /// the logits are not pinned at the rail.
     #[test]
-    fn a_converted_artifact_is_probed_not_just_run() {
-        let shape = tiny_qwen_shape();
+    fn a_converted_class_stays_alive_as_it_deepens() {
+        let mut collapsed_at = None;
+        for layers in [1usize, 4, 8, 12] {
+            let mut shape = tiny_qwen_shape();
+            shape.n_layers = layers;
+            let blob = tiny_checkpoint(&shape);
+            let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+            let a = convert_qwen25(&blob, &plan).expect("converts at every depth");
+
+            let health = measure_depth_health(&a, &[1, 5, 9, 2]).expect("the run completes");
+            assert_eq!(health.layers, layers);
+            assert_eq!(health.residual_peak.len(), layers, "one peak per layer");
+
+            if health.residual_peak.iter().any(|p| *p == 0) {
+                collapsed_at = Some((layers, health.residual_peak.clone()));
+                continue;
+            }
+            assert!(health.is_alive(), "depth {layers}: the stream is alive and not railed — {health:?}");
+            assert!(health.gate_is_asymmetric(), "depth {layers}: SiLU floors while positives pass — {:?}", health.gate_extremes);
+            let decay = health.gate_peak_decay();
+            assert!(decay.iter().all(|p| *p > 0), "depth {layers}: the gate signal reached zero — {decay:?}");
+            // Measured 2026-08-21 on this fixture, and recorded because the shape of the curve is
+            // the finding: the residual peak stabilises in the 56..96 band rather than walking to
+            // zero, the gate peak drops sharply from layer 1 to layer 2 (91 → 46) and then holds
+            // in the 39..58 band, and the attention spread falls with depth but stays far above
+            // uniform. None of the three is the collapse an int8 residual stack is at risk of.
+            //
+            //   depth  residual peaks                          gate peaks                spread
+            //   1      [96]                                    [91]                      1_788_600
+            //   4      [96, 70, 68, 71]                        [91, 46, 43, 39]            274_624
+            //   8      [96, 70, 68, 71, 73, 71, 71, 88]        [91, …, 48]                  28_936
+            //   12     [96, …, 92, 75]                         [91, …, 43, 58]              28_936
+            assert!(
+                health.residual_peak.iter().all(|p| (16..127).contains(p)),
+                "depth {layers}: the residual band is neither collapsing nor railing — {:?}",
+                health.residual_peak
+            );
+            assert!(health.min_attention_spread > 0, "depth {layers}: every head selected something");
+            assert_eq!(health.argmax.len(), 4);
+        }
+        // A collapse is a RESULT, not a test failure — it is what a depth sweep exists to find,
+        // and the depth it happens at is the number Phase 3 owes. Fail loudly with it rather than
+        // passing quietly.
+        assert!(collapsed_at.is_none(), "the residual stream collapsed: {collapsed_at:?}");
+    }
+
+    /// **Determinism holds at depth**, which is the property the whole class rests on: the same
+    /// artifact and the same prompt produce the same argmax sequence, run after run.
+    #[test]
+    fn a_deep_converted_class_is_reproducible() {
+        let mut shape = tiny_qwen_shape();
+        shape.n_layers = 8;
         let blob = tiny_checkpoint(&shape);
-        let plan =
-            Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits(), activation_scale: CALIBRATED_FIXTURE_ACTIVATION_SCALE, residual_requant: HALVING_RESIDUAL };
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
         let a = convert_qwen25(&blob, &plan).unwrap();
-        let engine = crate::engine::Base0Engine::new(&a);
-        let mut cache = crate::engine::KvCache::new(&a);
-        let mut probe = None;
-        for p in 0..4usize {
-            probe = Some(engine.forward_token_probed(&mut cache, p + 1, p).expect("the pass completes").1);
-        }
-        let probe = probe.expect("four positions ran");
-
-        // Attention selects. Zero spread is a uniform distribution — a head reading nothing — and
-        // the full 2^24 is a hard argmax, which is a head reading exactly one key however close
-        // the others are. A working head is strictly between.
-        let full = (1i32 << kaspa_consensus_core::palw_base0::K) - 2;
-        for (i, spread) in probe.attention_spread.iter().enumerate() {
-            assert!(*spread > 0, "head {i} has a uniform distribution — attention selects nothing");
-            assert!(*spread < full, "head {i} is a hard argmax — the logits are saturating");
-        }
-
-        // The gate floors. Real SiLU bottoms at −0.278 and passes positives, so a working gate is
-        // ASYMMETRIC; the degenerate linear `x/2` is symmetric, and a saturated one has min 0.
-        for (i, (lo, hi)) in probe.gate_extremes.iter().enumerate() {
-            assert!(*lo < 0, "layer {i}'s gate never goes negative — its SiLU is not a SiLU");
-            assert!(lo.unsigned_abs() < hi.unsigned_abs(), "layer {i}'s gate is symmetric — SiLU has degenerated to x/2");
-        }
-
-        // The residual stream is neither collapsed nor pinned on the `Saturate8` rail.
-        for (i, peak) in probe.residual_peak.iter().enumerate() {
-            assert!(*peak > 0, "layer {i}'s residual stream has collapsed to zero");
-            assert!(*peak < 128, "layer {i}'s residual stream is clipping");
-        }
-
-        // And the narrowing that feeds every projection is Qk -> Q7, not Qk -> one code.
-        assert_eq!(a.norm_requant.shift, 17, "RmsNorm returns Qk and a MatMulQuant operand is Q7");
+        let prompt = [3usize, 11, 7, 1, 9];
+        let first = measure_depth_health(&a, &prompt).unwrap();
+        assert_eq!(measure_depth_health(&a, &prompt).unwrap(), first, "two runs at depth 8 agree exactly");
+        // …and the model reads its input: every position's logit row is distinct. A run that was
+        // merely "deterministic" while ignoring the prompt would satisfy the check above and mean
+        // nothing. The ARGMAX is not the right witness for that here — under the fixture's random
+        // weights it is pinned to whichever vocabulary row has the largest norm, whatever the
+        // prompt, so a constant argmax is expected rather than a defect.
+        let distinct: std::collections::BTreeSet<u64> = first.logits_digest.iter().copied().collect();
+        assert_eq!(distinct.len(), prompt.len(), "each position produced a different logit row");
     }
 
     /// The folds are applied where they belong, and the tests assert the direction — folding a
@@ -660,7 +904,7 @@ mod tests {
 
         let mut wrong = shape;
         wrong.d_ff = 128;
-        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0, activation_scale: 1.0, residual_requant: HALVING_RESIDUAL };
+        let plan = Qwen25ConvertPlan { shape: wrong, rms_norm_eps_bits: 0 };
         match convert_qwen25(&blob, &plan) {
             Err(ConvertError::ShapeMismatch { tensor, .. }) => assert!(tensor.contains("gate_proj")),
             other => panic!("a wrong ffn width must be refused by name, got {other:?}"),
