@@ -502,7 +502,22 @@ mod tests {
             };
             match check_execution_step_refutation_v1(&refutation, &oracle) {
                 Err(PalwStepRefuteError::NoFaultFound) => adjudicated += 1,
-                Err(PalwStepRefuteError::Unadjudicable) => unadjudicable += 1,
+                Err(PalwStepRefuteError::Unadjudicable) => {
+                    unadjudicable += 1;
+                    // The only known-open unadjudicable is a DECODE-call embedding gather, and it
+                    // is unadjudicable (cannot check) rather than mis-convicted (safe). Its token
+                    // is a generated id whose BASE-0 commitment rides `base0_logits_trace_root_v1`,
+                    // the integer trace root, while the court's decode-token check recomputes the
+                    // v2 event-tree root — the integer-leg dispatch, a separate item. Pinning it
+                    // means a NEW hole (an attention node, say) fails this test rather than hiding
+                    // in a loose count.
+                    let (n, _) = profile.resolve_node_slot(coord.node_slot).unwrap();
+                    assert!(
+                        n.op_kind == PalwStepOpKindV1::EmbedLookup && coord.call_index > 0,
+                        "an unexpected leaf is unadjudicable — {:?} at call {} pos {} tile {}; only decode-embed is known-open",
+                        n.op_kind, coord.call_index, coord.position, coord.tile_index
+                    );
+                }
                 other => convicted
                     .push(format!("leaf {leaf} slot {} pos {} tile {}: {other:?}", coord.node_slot, coord.position, coord.tile_index)),
             }
