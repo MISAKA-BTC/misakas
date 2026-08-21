@@ -17,7 +17,11 @@
 //!   locks a UTXO behind that number. A transaction that says "I have staked a million" would
 //!   stake a million, and every exposure ceiling, every slash and Decision 7's whole Sybil bound
 //!   are denominated in it. Bonds come from the genesis registration list until a collateral
-//!   lock exists — which is the coinbase/UTXO gate, not this seam.
+//!   lock exists — which is the coinbase/UTXO gate, not this seam. (Audit C-08 closed the GENESIS
+//!   half of that: `verify_palw_genesis_v2` now demands a registered bond's outpoint be a real
+//!   genesis output holding at least what it declares. The transaction path stays shut until the
+//!   lock and the burn exist, because a registration in a block has no genesis set to be checked
+//!   against.)
 //! * **`ClassRegistered` may not.** A class entering a live chain moves the share table
 //!   (ADR-0045 Decision 3 funds an entrant by donation from every incumbent) and brings its own
 //!   `pwu_rule`. `verify_palw_genesis_v2` refuses `MaxPerAttempt` at genesis precisely because a

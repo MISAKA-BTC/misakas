@@ -173,6 +173,17 @@ fn main_address_for(net: NetworkId) -> &'static str {
 /// = 13B KAS, all single-key ML-DSA-87 P2PKH and spendable from block 0
 /// (`is_coinbase: false`, no maturity delay). The vault payloads are network-independent;
 /// the 9B main wallet is per-network (see [`main_address`]).
+/// The outpoint of premine vault `index` (`0..VAULT_COUNT`), or the 9B main wallet at
+/// `VAULT_COUNT`.
+///
+/// Every genesis UTXO on every network sits at a distinct index on one fixed txid, so an
+/// outpoint is fully determined by its index — and a caller that needs to NAME one (a PALW-RC
+/// genesis bond locking a vault as its collateral, audit C-08) should not have to rebuild the
+/// whole set and search it, nor re-derive the txid and get it subtly wrong.
+pub fn premine_outpoint(index: u32) -> TransactionOutpoint {
+    TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index }
+}
+
 pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
     // `NetworkId::new` PANICS on a type that requires a suffix (testnet does), and this entry
     // point takes only the type — so the suffix-less answer is expressed directly rather than

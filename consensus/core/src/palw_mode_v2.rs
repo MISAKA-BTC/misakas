@@ -287,6 +287,13 @@ pub enum PalwModeV2Error {
     FreePrompt(#[from] PalwFpV3Error),
     #[error("invalid V2 bundle: {0}")]
     Panel(#[from] crate::palw_panel_v2::PalwPanelV2Error),
+    /// The genesis ARTIFACT is the thing at fault, not the bundle: the catalog does not match the
+    /// root, a registration disagrees with the catalog, or a bond names collateral the genesis
+    /// UTXO set does not hold. Carried whole rather than flattened to a `&'static str`, because
+    /// every one of these failures is an operator holding two artifacts who needs to be told which
+    /// of them is wrong.
+    #[error("the genesis artifact does not load: {0}")]
+    Genesis(#[from] crate::palw_genesis_v2::PalwGenesisV2Error),
 }
 
 /// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —

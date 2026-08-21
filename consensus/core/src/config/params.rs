@@ -2284,7 +2284,7 @@ pub fn palw_rc_params_from_artifacts(
         .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("BASE-0's registration does not derive"))?;
     let class_id = profile.shape_profile_id();
     let entry = catalog.entries().first().expect("the RC catalog has its one class");
-    palw_rc_params(
+    let params = palw_rc_params(
         class_id,
         catalog.root(),
         crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
@@ -2294,7 +2294,27 @@ pub fn palw_rc_params_from_artifacts(
         genesis_bond_pubkey,
         genesis_operator_pubkey,
         genesis_payout_payload,
-    )
+    )?;
+    // **The genesis gate, on the path that can actually run it.**
+    //
+    // `verify_palw_genesis_v2` is the boot gate for a `ConsensusV2` artifact, and it needs the
+    // catalog PREIMAGE — which is exactly what this entry point derives and `palw_rc_params`
+    // (which takes only a root) cannot. So it ran nowhere outside its own tests, and the checks it
+    // holds — the catalog is the committed one, every registration agrees with it, and now that a
+    // registered bond's collateral is money the genesis UTXO set really holds (audit C-08) —
+    // gated nothing that ships.
+    //
+    // The outpoint resolver is THIS network's genesis set, so "the bond holds its collateral" is
+    // a statement about the same UTXO commitment the genesis block carries, not about a set
+    // supplied alongside it.
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(params.net);
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("palw_rc_params installs a ConsensusV2 bundle or returns Err");
+    };
+    crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
+        genesis_utxos.get(outpoint).map(|entry| entry.amount)
+    })?;
+    Ok(params)
 }
 
 /// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
@@ -3005,7 +3025,7 @@ mod fingerprint_probe {
         // and activations, so the two forms cannot come to disagree about which network they are.
         let bundled = palw_rc_params_from_artifacts(
             crate::Hash64::from_u64_word(0xA7),
-            crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0)),
+            crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(0)),
             vec![7; 32],
             vec![21; 8],
             crate::Hash64::from_u64_word(0x9A11),

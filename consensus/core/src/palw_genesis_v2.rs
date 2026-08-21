@@ -47,7 +47,7 @@ use crate::Hash64;
 use crate::palw_mode_v2::{PalwClassCatalogV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
 
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwGenesisV2Error {
     #[error("the ruleset refuses its own catalog: {0}")]
     Ruleset(String),
@@ -71,15 +71,45 @@ pub enum PalwGenesisV2Error {
     FirstClassIsNotTheBase { first: Hash64, base: Hash64 },
     #[error("genesis registers class {0} twice")]
     DuplicateRegistration(Hash64),
+    #[error(
+        "genesis bond {bond:?} declares {declared} sompi of collateral, but its outpoint holds no genesis output at all \
+         — a bond whose collateral nothing locks is a number, not a stake"
+    )]
+    BondOutpointIsNotAGenesisUtxo { bond: crate::palw_state_v2::PalwBondKeyV2, declared: u64 },
+    #[error(
+        "genesis bond {bond:?} declares {declared} sompi of collateral but its outpoint holds only {held} \
+         — the chain cannot take what is not there"
+    )]
+    BondCollateralNotHeld { bond: crate::palw_state_v2::PalwBondKeyV2, declared: u64, held: u64 },
 }
 
 /// Verify a `ConsensusV2` genesis artifact: the bundle, the catalog preimage behind its
 /// `class_catalog_root`, and the consensus objects the genesis block registers.
 ///
 /// `registrations` is the genesis block's object list in its own canonical order — the same slice
-/// the first [`crate::palw_state_v2::apply_palw_transition_v2`] will fold. Non-`ClassRegistered`
-/// objects are ignored here: bonds are checked by the transition (which is where collateral and
-/// operator identity live), and this gate is about the class set alone.
+/// the first [`crate::palw_state_v2::apply_palw_transition_v2`] will fold.
+///
+/// `genesis_output_value` resolves an outpoint against the network's OWN genesis UTXO set (for a
+/// shipped network, `config::premine::genesis_premine_utxos_for`), returning the sompi it holds.
+///
+/// # Why a bond has to point at money (audit C-08, first half)
+///
+/// A `BondRegistered` object DECLARES `collateral`, and every ceiling, every slash and Decision
+/// 7's whole Sybil bound is denominated in that number. Nothing anywhere locked a UTXO behind it:
+/// the transition checked `collateral >= min_collateral_sompi`, which compares one declaration
+/// against one constant, so a genesis artifact saying "this bond has staked a million" gave the
+/// chain a bond with a million of nothing. Slashing it reduced a field. No coin moved, no
+/// spendable balance shrank, and a liar paid what a liar had put up, which was zero.
+///
+/// The half that closes HERE is existence: a genesis bond's key is an outpoint (that is what
+/// `PalwBondKeyV2` is), so the gate demands the outpoint be a real genesis output holding at
+/// least the declared collateral. The declaration stops being self-certifying, exactly as
+/// `pwu_per_inference` did one field above.
+///
+/// What this alone does NOT do — and the reason it is a half — is keep the money there: nothing
+/// yet stops the owner spending that output in block 1, and a slash still moves no coin. Those
+/// are the spend gate and the burn, and they are consensus rules rather than a boot gate.
+/// Existence first, because a lock on an outpoint that holds nothing locks nothing.
 ///
 /// Returns `Ok` only if the node may start. Every failure names the disagreement rather than a
 /// position, because the operator fixing it is holding two artifacts and needs to know which one
@@ -88,6 +118,7 @@ pub fn verify_palw_genesis_v2(
     bundle: &PalwConsensusParamsV2,
     catalog: &PalwClassCatalogV2,
     registrations: &[PalwConsensusObjectV2],
+    genesis_output_value: impl Fn(&crate::tx::TransactionOutpoint) -> Option<u64>,
 ) -> Result<(), PalwGenesisV2Error> {
     // Root, coverage, and the court's depth against the catalog's — the bundle's own gate, run
     // first so a catalog that is not even the committed one fails before anything is read out of
@@ -96,6 +127,15 @@ pub fn verify_palw_genesis_v2(
 
     let mut registered: Vec<Hash64> = Vec::new();
     for object in registrations {
+        if let PalwConsensusObjectV2::BondRegistered { bond, collateral, .. } = object {
+            let Some(held) = genesis_output_value(&bond.0) else {
+                return Err(PalwGenesisV2Error::BondOutpointIsNotAGenesisUtxo { bond: *bond, declared: *collateral });
+            };
+            if held < *collateral {
+                return Err(PalwGenesisV2Error::BondCollateralNotHeld { bond: *bond, declared: *collateral, held });
+            }
+            continue;
+        }
         let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, .. } = object else {
             continue;
         };
@@ -199,12 +239,51 @@ mod tests {
         }
     }
 
+    /// The fixture's genesis UTXO set: `a_bond()`'s outpoint, holding more than it declares.
+    /// Everything else resolves to nothing, which is what a bond pointing at no money looks like.
+    fn funded(outpoint: &TransactionOutpoint) -> Option<u64> {
+        let PalwConsensusObjectV2::BondRegistered { bond, .. } = a_bond() else { unreachable!() };
+        (*outpoint == bond.0).then_some(1_000_000)
+    }
+
     #[test]
     fn an_honest_genesis_artifact_loads() {
         let catalog = catalog();
-        // Bonds ride the same object list and are none of this gate's business.
         let objects = vec![registration(h64(1), CANONICAL), a_bond()];
-        verify_palw_genesis_v2(&bundle(&catalog), &catalog, &objects).expect("the honest artifact loads");
+        verify_palw_genesis_v2(&bundle(&catalog), &catalog, &objects, funded).expect("the honest artifact loads");
+    }
+
+    /// **Audit C-08, first half: a bond has to point at money that exists.**
+    ///
+    /// `collateral` is the denominator of every exposure ceiling, every slash and Decision 7's
+    /// Sybil bound, and the only thing that had ever checked it was `collateral >=
+    /// min_collateral_sompi` — one declaration against one constant. A genesis artifact could
+    /// register a bond staking a million with nothing behind it, and slashing that bond reduced a
+    /// field while no coin moved and no spendable balance shrank.
+    ///
+    /// The bond KEY is an outpoint, so the gate has something to ask: does that output exist in
+    /// this network's genesis set, and does it hold what the bond says it holds.
+    #[test]
+    fn a_bond_must_name_a_genesis_output_that_holds_its_collateral() {
+        let catalog = catalog();
+        let bundle = bundle(&catalog);
+        let PalwConsensusObjectV2::BondRegistered { bond, collateral, .. } = a_bond() else { unreachable!() };
+
+        // An outpoint the genesis set does not contain at all — the "declares a million" case.
+        let err = verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), a_bond()], |_| None).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::BondOutpointIsNotAGenesisUtxo { bond, declared: collateral });
+
+        // An outpoint that exists but holds less than the declaration.
+        let short = collateral - 1;
+        let err =
+            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), a_bond()], |_| Some(short)).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::BondCollateralNotHeld { bond, declared: collateral, held: short });
+
+        // Exactly the declaration is enough; more is fine (the surplus is simply not staked).
+        for held in [collateral, collateral + 1] {
+            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), a_bond()], |_| Some(held))
+                .unwrap_or_else(|e| panic!("holding {held} against a declared {collateral} must load, got {e}"));
+        }
     }
 
     /// **The H2 / ADR-0045 Decision 1 defect, by name.** An overstated `pwu_per_inference` is a
@@ -217,7 +296,7 @@ mod tests {
         let bundle = bundle(&catalog);
 
         for declared in [CANONICAL * 10, CANONICAL + 1, CANONICAL - 1, 1] {
-            let err = verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), declared)]).unwrap_err();
+            let err = verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), declared)], funded).unwrap_err();
             assert_eq!(
                 err,
                 PalwGenesisV2Error::PwuPerInferenceMismatch { class_id: h64(1), declared, counted: CANONICAL },
@@ -225,7 +304,7 @@ mod tests {
             );
         }
         // …and the exact count loads, so the rule is equality and not a bound in either direction.
-        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL)]).expect("the counted value loads");
+        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL)], funded).expect("the counted value loads");
     }
 
     /// The catalog cannot be swapped for a friendlier one: its root is what the ruleset committed
@@ -240,7 +319,7 @@ mod tests {
         let generous = PalwClassCatalogV2::new(vec![generous_entry]).expect("well-formed, just not the committed one");
         assert_ne!(generous.root(), honest.root(), "the fixture must actually differ");
 
-        let err = verify_palw_genesis_v2(&bundle, &generous, &[registration(h64(1), CANONICAL * 10)]).unwrap_err();
+        let err = verify_palw_genesis_v2(&bundle, &generous, &[registration(h64(1), CANONICAL * 10)], funded).unwrap_err();
         assert!(matches!(err, PalwGenesisV2Error::Ruleset(_)), "got {err:?}");
     }
 
@@ -252,7 +331,7 @@ mod tests {
         let bundle = bundle(&catalog);
 
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(9), CANONICAL)]).unwrap_err(),
+            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(9), CANONICAL)], funded).unwrap_err(),
             PalwGenesisV2Error::ClassNotInCatalog(h64(9))
         );
 
@@ -261,7 +340,7 @@ mod tests {
             *artifact_root = h64(0xBAD);
         }
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[wrong_artifact]).unwrap_err(),
+            verify_palw_genesis_v2(&bundle, &catalog, &[wrong_artifact], funded).unwrap_err(),
             PalwGenesisV2Error::ArtifactRootMismatch { class_id: h64(1), declared: h64(0xBAD), catalogued: h64(0xA7) }
         );
 
@@ -270,7 +349,7 @@ mod tests {
             *pwu_rule = PalwPwuRuleV2::MaxPerAttempt(1_000_000);
         }
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[undrived]).unwrap_err(),
+            verify_palw_genesis_v2(&bundle, &catalog, &[undrived], funded).unwrap_err(),
             PalwGenesisV2Error::ClassIsNotDerived(h64(1))
         );
     }
@@ -284,19 +363,19 @@ mod tests {
         let bundle = bundle(&catalog);
 
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[a_bond()]).unwrap_err(),
+            verify_palw_genesis_v2(&bundle, &catalog, &[a_bond()], funded).unwrap_err(),
             PalwGenesisV2Error::NoRegistrations,
             "a network with no class cannot produce a block"
         );
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(2), CANONICAL), registration(h64(1), CANONICAL)])
+            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(2), CANONICAL), registration(h64(1), CANONICAL)], funded)
                 .unwrap_err(),
             PalwGenesisV2Error::FirstClassIsNotTheBase { first: h64(2), base: h64(1) }
         );
-        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(2), CANONICAL)])
+        verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(2), CANONICAL)], funded)
             .expect("base first, then the entrant");
         assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(1), CANONICAL)])
+            verify_palw_genesis_v2(&bundle, &catalog, &[registration(h64(1), CANONICAL), registration(h64(1), CANONICAL)], funded)
                 .unwrap_err(),
             PalwGenesisV2Error::DuplicateRegistration(h64(1))
         );
