@@ -9618,6 +9618,83 @@ impl VirtualStateProcessor {
     /// block's existing coinbase/overlay `c == v` re-derives this state and checks it
     /// against the committed `overlay_commitment_root`; a wrong snapshot disqualifies that
     /// block and the (staging) IBD is discarded.
+    /// **Install the PALW V2 state at a pruning point** (launch blockers §1, the import half).
+    ///
+    /// `PalwChainStateV2` was written only by `process_genesis`, so a node joining by pruned IBD
+    /// had none — and absent state was read as "no policy", silently disabling every PALW rule.
+    /// The startup guard in `Consensus::new` now refuses to RUN in that state; this is what lets
+    /// such a node exist at all.
+    ///
+    /// **The root is the gate, and it runs before the write.** `into_state` rebuilds the carriage
+    /// and demands `state_root` back, so a peer that forges one byte of bonds, class shares or
+    /// claims produces a state whose root is not the one the header committed — and it is refused
+    /// here, not detected later. Detection after a durable write is not a defence: forged bonds are
+    /// block-production rights and forged claims are `safe_weight`.
+    ///
+    /// The expected root comes from the pruning point's OWN header, never from the peer's message.
+    pub fn import_pruning_point_palw_state(
+        &self,
+        pruning_point: BlockHash,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else {
+            return Ok(()); // not a ConsensusV2 network — nothing reads this store.
+        };
+        // **Which header commits this state.** `Header::palw_state_root` commits the root of the
+        // state as-of the block's SELECTED PARENT — the chain walk compares exactly that
+        // (`header.palw_state_root != parent_root` disqualifies). This carriage is the state as-of
+        // `pruning_point`, so the header that commits it is any child whose selected parent IS the
+        // pruning point. The pruning point's OWN header commits its parent's state, which is a
+        // different value and would refuse every honest carriage.
+        //
+        // Headers are synced before the utxoset sidecars in every IBD path, so such a child
+        // normally exists by now, and it arrived under PoW plus the headers proof.
+        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
+            .map(|c| c.read().iter().copied().collect())
+            .unwrap_or_default();
+        let mut expected_root = None;
+        for child in children {
+            let Ok(header) = self.headers_store.get_header(child) else { continue };
+            if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
+                continue; // commits a different parent's state — not this one
+            }
+            expected_root = Some(header.palw_state_root);
+            break;
+        }
+        // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
+        // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
+        // child header is in hand.
+        let expected_root = expected_root.ok_or(PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
+        let state = carriage
+            .into_state(params, Some(expected_root))
+            .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
+        // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
+        // so what becomes durable is a function of what was verified, and a caller cannot store a
+        // snapshot under a root it did not compute. The peer's bytes never reach the database.
+        let mut batch = WriteBatch::default();
+        {
+            let mut store = self.palw_state_v2_store.write();
+            store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+        }
+        self.db.write(batch).unwrap();
+        Ok(())
+    }
+
+    /// The PALW state this node holds AT `pruning_point`, for a peer syncing from it.
+    ///
+    /// Served only when the stored tip really names that block: the store holds ONE materialized
+    /// snapshot, and answering with a different point's state would hand a peer a carriage whose
+    /// root its header does not commit — which the importer would refuse anyway, but the honest
+    /// answer to "I do not have that" is `None`.
+    pub fn pruning_point_palw_state(
+        &self,
+        pruning_point: BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        let (block, state) = self.palw_state_v2_store.read().load_tip(params).ok().flatten()?;
+        (block == pruning_point).then(|| kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state))
+    }
+
     pub fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,

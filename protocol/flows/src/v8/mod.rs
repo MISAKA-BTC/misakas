@@ -28,7 +28,9 @@ use crate::ibd::IbdFlow;
 use kaspa_p2p_lib::{KaspadMessagePayloadType, Router, SharedIncomingRoute, convert::header::HeaderFormat};
 use kaspa_utils::channel;
 use request_block_bodies::HandleBlockBodyRequests;
-use request_pruning_point_snapshots::{RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow};
+use request_pruning_point_snapshots::{
+    RequestPruningPointEvmStateFlow, RequestPruningPointOverlaySnapshotFlow, RequestPruningPointPalwStateFlow,
+};
 use std::sync::Arc;
 
 pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) -> Vec<Box<dyn Flow>> {
@@ -125,6 +127,11 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointOverlaySnapshot]),
+        )),
+        Box::new(RequestPruningPointPalwStateFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router.subscribe(vec![KaspadMessagePayloadType::RequestPruningPointPalwState]),
         )),
         Box::new(HandleIbdBlockRequests::new(
             ctx.clone(),

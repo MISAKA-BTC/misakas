@@ -39,7 +39,8 @@ use kaspa_p2p_lib::{
     pb::{
         RequestAntipastMessage, RequestBlockBodiesMessage, RequestHeadersMessage, RequestIbdBlocksMessage,
         RequestPruningPointAndItsAnticoneMessage, RequestPruningPointEvmStateMessage, RequestPruningPointOverlaySnapshotMessage,
-        RequestPruningPointProofMessage, RequestPruningPointUtxoSetMessage, kaspad_message::Payload,
+        RequestPruningPointPalwStateMessage, RequestPruningPointProofMessage, RequestPruningPointUtxoSetMessage,
+        kaspad_message::Payload,
     },
 };
 use kaspa_utils::channel::JobReceiver;
@@ -2090,6 +2091,7 @@ impl IbdFlow {
         if pruning_point != self.ctx.config.genesis.hash {
             self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
             self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
+            self.sync_pruning_point_palw_state(consensus, pruning_point).await?;
         }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         consensus.async_set_pruning_utxoset_stable().await;
@@ -2269,6 +2271,58 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             .map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot(pruning_point, snapshot)).await?;
         info!("imported the overlay snapshot of the pruning point {}", pruning_point);
+        Ok(())
+    }
+
+    /// **Fetch and install the pruning point's PALW V2 chain state** (launch blockers §1).
+    ///
+    /// `PalwChainStateV2` is written only by `process_genesis`, so before this a node joining after
+    /// the pruning point left genesis had none — and absent state was read as "no policy", silently
+    /// disabling every PALW consensus rule: state root unchecked, tips ordered by blue work alone,
+    /// any pruning point allowed, the deep-reorg comparator skipped. It did not fork, so nothing
+    /// reported it.
+    ///
+    /// **A peer that cannot serve it aborts the IBD on a ConsensusV2 network**, exactly as the
+    /// overlay does: joining without the state is the failure this exists to prevent, so falling
+    /// back to "carry on without it" would reintroduce it through the front door. On a network with
+    /// no V2 ruleset the lane is dormant and a not-found is simply nothing to import.
+    ///
+    /// The carriage is verified against the pruning point's OWN header inside
+    /// `import_pruning_point_palw_state`, before anything is written.
+    async fn sync_pruning_point_palw_state(
+        &mut self,
+        consensus: &ConsensusProxy,
+        pruning_point: BlockHash,
+    ) -> Result<(), ProtocolError> {
+        let palw_active = matches!(
+            self.ctx.config.params.palw_consensus_mode,
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
+        );
+        self.router
+            .enqueue(make_message!(
+                Payload::RequestPruningPointPalwState,
+                RequestPruningPointPalwStateMessage { pruning_point_hash: Some(pruning_point.into()) }
+            ))
+            .await?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
+        if !msg.found {
+            if palw_active {
+                return Err(ProtocolError::Other(
+                    "peer cannot serve the pruning point PALW state required for pruned IBD on this network",
+                ));
+            }
+            return Ok(()); // no V2 ruleset — nothing to import.
+        }
+        // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
+        // and claims, far smaller than the EVM state.
+        const MAX_PALW_STATE_BYTES: usize = 64 << 20; // 64 MiB
+        if msg.palw_state.len() > MAX_PALW_STATE_BYTES {
+            return Err(ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"));
+        }
+        let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 = borsh::from_slice(&msg.palw_state)
+            .map_err(|_| ProtocolError::Other("invalid PALW state carriage in PruningPointPalwState"))?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state(pruning_point, carriage)).await?;
+        info!("imported the PALW state of the pruning point {}", pruning_point);
         Ok(())
     }
 

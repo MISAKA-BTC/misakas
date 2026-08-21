@@ -74,6 +74,11 @@ message KaspadMessage {
     // exists to prevent, and it is why competing chains used to be discarded unseen.
     RequestIbdCandidateSummaryMessage requestIbdCandidateSummary = 71;
     IbdCandidateSummaryMessage ibdCandidateSummary = 72;
+    // PALW ADR-0042: pruned-IBD PALW V2 chain-state transfer. Without it a node joining after the
+    // pruning point leaves genesis has no PALW state at all, and absent state used to be read as
+    // "no policy" — silently disabling every PALW consensus rule.
+    RequestPruningPointPalwStateMessage requestPruningPointPalwState = 73;
+    PruningPointPalwStateMessage pruningPointPalwState = 74;
   }
 }
 

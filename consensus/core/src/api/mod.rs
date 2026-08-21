@@ -511,6 +511,27 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Import: install the pruning point's PALW V2 chain state (launch blockers §1).
+    ///
+    /// The carriage is REBUILT and its `state_root` demanded back against the pruning point's own
+    /// header before anything is written — a peer that forges one byte of bonds, shares or claims
+    /// produces a different root and is refused here, not detected after a durable write.
+    fn import_pruning_point_palw_state(
+        &self,
+        pruning_point: BlockHash,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, carriage);
+        unimplemented!()
+    }
+
+    /// Export: the pruning point's PALW V2 chain state, for a peer syncing from it. `None` on a
+    /// network with no V2 ruleset, or when this node holds no state at that point.
+    fn pruning_point_palw_state(&self, pruning_point: BlockHash) -> Option<crate::palw_state_v2::PalwStateCarriageV2> {
+        let _ = pruning_point;
+        None
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,

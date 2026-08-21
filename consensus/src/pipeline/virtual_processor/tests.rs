@@ -1017,7 +1017,87 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
-/// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1).
+/// **The pruning-point PALW import installs a real state and REFUSES a forged one** (launch
+/// blockers §1, the import half).
+///
+/// `PalwChainStateV2` was written only by `process_genesis`, so a node joining by pruned IBD had
+/// none. The startup guard now stops such a node from running; this is what lets it exist at all.
+///
+/// The gate is the ROOT, and it runs before the write: `into_state` rebuilds the carriage and
+/// demands back the root the pruning point's own header commits. A peer that forges one byte of
+/// bonds, shares or claims produces a different root and is refused HERE — not detected after a
+/// durable write, which would be no defence at all, since forged bonds are block-production rights
+/// and forged claims are `safe_weight`.
+#[tokio::test]
+async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    // The import verifies against the CHILD header — `palw_state_root` commits the state as-of the
+    // block's selected parent — so the point being imported has to be one with a child on the
+    // chain. The store's tip has none yet, so walk back one: the tip's selected parent is a chain
+    // block whose child (the tip) commits its state.
+    let (tip, _) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = {
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        vp.ghostdag_store.get_selected_parent(tip).expect("the tip has a selected parent")
+    };
+    let state = {
+        // The state AT `point`, rebuilt the way the chain walk rebuilds it.
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(tip).expect("the tip has a delta");
+        let (_, tip_state) = store.load_tip(&bundle.state).unwrap().unwrap();
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&tip_state, &delta, &bundle.state)
+            .expect("reverting the tip's own delta yields its parent's state")
+    };
+    let honest = PalwStateCarriageV2::from_state(&state);
+
+    // What a peer would serve for this point, through the production exporter.
+    let served = vp.pruning_point_palw_state(tip).expect("this node holds the state at its own tip");
+    assert_eq!(served, PalwStateCarriageV2::from_state(&vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap().1));
+    assert!(vp.pruning_point_palw_state(kaspa_consensus_core::BlockHash::from_u64_word(0xBAD)).is_none(), "and nothing else");
+
+    // Empty the store the way a pruned join leaves it, then import what the peer served.
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("empty the store");
+    }
+    assert!(vp.palw_state_v2_store.read().tip_record().unwrap().is_none());
+
+    // **A forged carriage is refused, and the store stays empty.** One extra bond is all it takes:
+    // bonds are block-production rights, so this is the exact lie the gate exists to stop.
+    let mut forged = honest.clone();
+    forged.class_shares.insert(kaspa_hashes::Hash64::from_u64_word(0x5EED), 1);
+    let err = vp.import_pruning_point_palw_state(point, forged).expect_err("a forged carriage must not install");
+    assert!(format!("{err}").contains("does not rebuild to the root"), "and the refusal names the reason: {err}");
+    assert!(
+        vp.palw_state_v2_store.read().tip_record().unwrap().is_none(),
+        "the refusal happens BEFORE the write — detection afterwards would be no defence"
+    );
+
+    // The honest one installs, and what lands is the state the chain had.
+    vp.import_pruning_point_palw_state(point, honest).expect("the honest carriage installs");
+    let (imported_block, imported) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("installed");
+    assert_eq!(imported_block, point);
+    assert_eq!(imported.state_root(), state.state_root(), "and it is the same state, root for root");
+}
+
+/// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1)./// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1).
 ///
 /// Absent state was read as "no policy", and every PALW authority then failed OPEN: the state root
 /// unchecked, no transition applied, tips ordered by blue work alone, any pruning point allowed,

@@ -114,6 +114,18 @@ pub enum PruningImportError {
     #[error("imported overlay snapshot for pruning point {0} has commitment {1} but the L1 header commits {2}")]
     ImportedOverlayCommitmentMismatch(BlockHash, Hash64, Hash64),
 
+    /// The PALW state a peer served for a pruning point does not rebuild to the root the pruning
+    /// point's own header commits. Refused BEFORE the write: forged bonds are block-production
+    /// rights and forged claims are `safe_weight`, so detecting this after a durable write would
+    /// not be a defence.
+    #[error("imported PALW state for pruning point {0} does not rebuild to the root its header commits ({1}): {2}")]
+    ImportedPalwStateInvalid(BlockHash, Hash64, String),
+
+    /// The pruning point's header could not be read while importing PALW state — the headers proof
+    /// should have installed it first, so this is an ordering fault rather than a peer's lie.
+    #[error("no header for pruning point {0} while importing PALW state")]
+    ImportedPalwStateHeaderMissing(BlockHash),
+
     #[error("imported overlay bond {0} references an outpoint absent from the imported UTXO set")]
     ImportedOverlayBondMissingUtxo(BlockHash),
 }

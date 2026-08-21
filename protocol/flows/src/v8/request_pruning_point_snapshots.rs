@@ -10,7 +10,7 @@ use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
     dequeue, make_message,
-    pb::{PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, kaspad_message::Payload},
+    pb::{PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, PruningPointPalwStateMessage, kaspad_message::Payload},
 };
 use std::sync::Arc;
 
@@ -97,6 +97,55 @@ impl RequestPruningPointOverlaySnapshotFlow {
                 _ => PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] },
             };
             self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, reply)).await?;
+        }
+    }
+}
+
+/// **Serve the pruning point's PALW V2 chain state** (launch blockers §1).
+///
+/// A node joining by pruned IBD had no `PalwChainStateV2` at all — `process_genesis` is its only
+/// writer — and absent state was read as "no policy", silently disabling every PALW consensus rule.
+/// This is the half that lets such a node acquire it.
+///
+/// Served only when the stored tip really names the requested point: the store holds ONE
+/// materialized snapshot, and the requester verifies the carriage against that point's own header,
+/// so a mismatched answer would be refused there anyway. `found: false` is the honest reply, and on
+/// a network with no V2 ruleset it is the only one.
+pub struct RequestPruningPointPalwStateFlow {
+    ctx: FlowContext,
+    router: Arc<Router>,
+    incoming_route: IncomingRoute,
+}
+
+#[async_trait::async_trait]
+impl Flow for RequestPruningPointPalwStateFlow {
+    fn router(&self) -> Option<Arc<Router>> {
+        Some(self.router.clone())
+    }
+    async fn start(&mut self) -> Result<(), ProtocolError> {
+        self.start_impl().await
+    }
+}
+
+impl RequestPruningPointPalwStateFlow {
+    pub fn new(ctx: FlowContext, router: Arc<Router>, incoming_route: IncomingRoute) -> Self {
+        Self { ctx, router, incoming_route }
+    }
+
+    async fn start_impl(&mut self) -> Result<(), ProtocolError> {
+        loop {
+            let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointPalwState)?;
+            let pp = req_pruning_point(msg.pruning_point_hash)?;
+            let session = self.ctx.consensus().unguarded_session();
+            let carriage = session.spawn_blocking(move |c| c.pruning_point_palw_state(pp)).await;
+            let reply = match carriage {
+                Some(c) => PruningPointPalwStateMessage {
+                    found: true,
+                    palw_state: borsh::to_vec(&c).expect("PalwStateCarriageV2 borsh is infallible"),
+                },
+                None => PruningPointPalwStateMessage { found: false, palw_state: vec![] },
+            };
+            self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }
     }
 }

@@ -437,3 +437,12 @@ message PruningPointOverlaySnapshotMessage{
   bool found = 1;
   bytes overlaySnapshot = 2; // borsh(OverlaySnapshot)
 }
+
+message RequestPruningPointPalwStateMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointPalwStateMessage{
+  bool found = 1;
+  bytes palwState = 2; // borsh(PalwStateCarriageV2)
+}

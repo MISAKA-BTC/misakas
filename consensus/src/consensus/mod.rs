@@ -2117,6 +2117,18 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_overlay_snapshot()
     }
 
+    fn import_pruning_point_palw_state(
+        &self,
+        pruning_point: BlockHash,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.import_pruning_point_palw_state(pruning_point, carriage)
+    }
+
+    fn pruning_point_palw_state(&self, pruning_point: BlockHash) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2> {
+        self.virtual_processor.pruning_point_palw_state(pruning_point)
+    }
+
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
