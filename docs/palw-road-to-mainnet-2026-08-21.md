@@ -203,6 +203,12 @@ What remains is not implementation:
 
   Still operational and unchanged: the bond keys, seeds and public entry, the calibration-gated
   binary, and a soak whose clock survives redeployment.
+
+  **What actually stops the launch is now tracked in its own document:**
+  [palw-rc-launch-blockers-2026-08-21.md](palw-rc-launch-blockers-2026-08-21.md) — a 36-agent
+  verification of the external audit's 19 findings plus eight launch dimensions, with what has since
+  been closed (and the mutation measurement that says so) and what has not. Read it before planning
+  any t12 work; this road map records the SHAPE of the gates, that one records their state.
 * **Gate 5** — Qwen3.6 is still its own ADR, and Gate 0 closing is what makes it worth writing.
 
 Two things a reader should carry forward from how these closed, because both recurred:

@@ -210,6 +210,18 @@ outside your own network before announcing anything.
 
 ## 6. What is NOT in place, and should be said out loud
 
+> **The complete, evidenced list is
+> [palw-rc-launch-blockers-2026-08-21.md](palw-rc-launch-blockers-2026-08-21.md).** This section is
+> the short form. As of 2026-08-21 that document's §1 (a node joining by pruned sync silently runs
+> with NO PALW rules) and §2 (nothing ever files a `ReceiptLicensed`, so no claim reaches `Final`)
+> mean **this runbook cannot yet produce a working public network** — follow it to stand up a
+> private fleet, not to invite strangers.
+>
+> **§4's port is wrong in this revision**: testnet-12 listens on **26411**, not 16311. With
+> `dns_seeders` empty, `--addpeer` is the only discovery path, so the published number has to be the
+> real one.
+
+
 * **Third-party mining does not work.** `misaminer` and `pq-miner` branch on algo 4 and 5 only.
   Making an external miner possible needs the class target, the pwu and the bond registration on
   the RPC wire — a protocol change, and its own piece of work. Until then the producing node is the
