@@ -205,6 +205,39 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
 /// So the adjudicator states, next to the code that does the serving, which node shapes it can
 /// serve. Anything it cannot is a registration-time refusal rather than a dispute-time
 /// `Unadjudicable`.
+/// **Can this node be adjudicated at this CALL CLASS?** (ADR-0049 Decision D.)
+///
+/// `kernel_can_serve_node_v1` asks whether the adjudicator can serve a node's SHAPE, and
+/// `verify_catalog_coverage_v1` asks whether its kernel id is catalogued. Neither asks the question
+/// A4 actually needs, which is whether every reachable COORDINATE adjudicates — and a coordinate has
+/// a call index as well as a node slot.
+///
+/// The gap is not hypothetical. Every kernel `PALW-BASE-0` reaches is catalogued and every node it
+/// declares is servable, and its embedding gather still refuses at `call_index != 0`
+/// (`base0_row`'s `Embed` arm) while its own canonical job is prefill 8 / **decode 4**. Coverage
+/// reported 100 % on a class with a whole call class it could not police.
+pub fn kernel_can_serve_call_class_v1(
+    node: &crate::palw_step::PalwStepNodeV1,
+    call_is_decode: bool,
+) -> Result<(), &'static str> {
+    let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {
+        return Err("no program in this build resolves the node's kernel id");
+    };
+    if !call_is_decode {
+        return Ok(());
+    }
+    match program {
+        // A decode token is whatever the model generated, so it is not in the prompt and the
+        // adjudicator has nothing that pins it. A challenger naming it freely would convict an
+        // honest producer, which is why the arm refuses rather than guesses — and why a class whose
+        // graph gathers at decode is not adjudicable until the token is pinned by the claim.
+        KernelProgram::Base0(Base0Op::Embed) => {
+            Err("the embedding gather has no adjudicable token at a decode position (ADR-0049 Decision E)")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_is_pre: bool) -> Result<(), &'static str> {
     use crate::palw_step::PalwStepOutLenV1;
     let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {

@@ -106,6 +106,10 @@ pub struct PalwCatalogCoverageCertificateV1 {
 pub enum PalwCoverageError {
     #[error("the reachable set is empty — unknown reachability is not coverage (I7), nothing activates on a vacuous pass")]
     EmptyReachableSet,
+    /// ADR-0049 Decision D: a coordinate class the adjudicator refuses. The kernel is catalogued
+    /// and the node is servable; what is not adjudicable is this node AT THIS CALL CLASS.
+    #[error("the {table} table's node {slot} cannot be adjudicated at a {call_class} position: {why}")]
+    CoordinateNotAdjudicable { table: &'static str, slot: u32, call_class: &'static str, why: &'static str },
     #[error("{} reachable kernel(s) are not in the court's catalog — A4 fails, the class must not activate", missing.len())]
     CoverageGap {
         /// EVERY missing id, ascending — a truncated list would read as "covered" when it isn't.
@@ -152,6 +156,16 @@ pub fn verify_profile_coverage_v1(
         for (slot, node) in nodes.iter().enumerate() {
             if let Err(why) = crate::palw_step_refute::kernel_can_serve_node_v1(node, table == "pre") {
                 return Err(PalwCoverageError::NodeNotServable { table, slot: slot as u32, why });
+            }
+            // **The coordinate dimension** (ADR-0049 Decision D). A coordinate is
+            // `(call, node_slot, position, tile)`, and adjudicability varies with the call class in
+            // a way the kernel id cannot express. Positions and tiles do not need enumerating —
+            // they change a step's operands, not whether the adjudicator has an arm for it — but
+            // prefill and decode do.
+            for (call_is_decode, call_class) in [(false, "prefill"), (true, "decode")] {
+                if let Err(why) = crate::palw_step_refute::kernel_can_serve_call_class_v1(node, call_is_decode) {
+                    return Err(PalwCoverageError::CoordinateNotAdjudicable { table, slot: slot as u32, call_class, why });
+                }
             }
         }
     }

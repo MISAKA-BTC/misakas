@@ -766,7 +766,21 @@ mod tests {
         use crate::palw_step_refute::kernel_can_serve_node_v1;
         let p = base0_profile_v1(geometry()).unwrap();
 
-        verify_profile_coverage_v1(&p).expect("100% coverage: every node of BASE-0's graph is servable");
+        // **ADR-0049 Decision D, and the blocker it surfaced.** Node coverage passes; COORDINATE
+        // coverage does not, because the embedding gather has no adjudicable token at a decode
+        // position and this class's canonical job decodes. Every kernel is catalogued and every
+        // node servable, which is exactly why the kernel-id gate reported 100% on a class with a
+        // whole call class it could not police.
+        //
+        // This asserts the refusal rather than the pass, and flips the moment ADR-0049 Decision E
+        // lands — pinning the decode token to the previous position's committed logits, so a
+        // challenger naming it freely is refuted by an opening instead of believed.
+        let coordinate = verify_profile_coverage_v1(&p)
+            .expect_err("BASE-0 gathers at decode, so coverage over coordinates fails");
+        assert!(
+            matches!(coordinate, crate::palw_catalog_coverage::PalwCoverageError::CoordinateNotAdjudicable { call_class: "decode", .. }),
+            "got {coordinate:?}"
+        );
         let mut checked = 0;
         for (name, nodes) in [("pre", &p.pre_nodes), ("gdn", &p.gdn_nodes), ("attn", &p.attn_nodes), ("post", &p.post_nodes)] {
             for node in nodes {
