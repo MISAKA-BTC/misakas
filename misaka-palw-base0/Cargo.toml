@@ -11,6 +11,7 @@ repository.workspace = true
 
 [dependencies]
 borsh.workspace = true
+kaspa-txscript.workspace = true
 kaspa-consensus-core.workspace = true
 # `palw-rc-genesis` only: an operator generates a bond seed with `misaka validator keygen`, and
 # something has to turn that seed into the PUBLIC values the genesis card wants. The derivation
