@@ -26,6 +26,11 @@ already makes.
 
 ## Where the work stands
 
+> **Update 2026-08-21 (later the same day).** Gates 0, 1 and 2 are closed in code. Every item in
+> the tables below that is not marked otherwise has landed on `palw-base0-depth`; the summary is at
+> the end of this section, and each entry names the property that was measured rather than the
+> work that was done.
+
 **Landed this session**, each mutation-checked:
 
 | | what | evidence it was real |
@@ -59,6 +64,22 @@ time. Adding classes before it closes makes unconnected parts more impressive, n
 attempt, a challenger disputes one tile, and a node holding no model closes the court — with no
 synthetic leaf anywhere in the chain of custody.
 
+> **Closed.** `a_capture_becomes_a_refutation_the_court_adjudicates_both_ways` runs the integer
+> engine, tiles every one of the thirty-eight steps a layer performs, assembles the binding and the
+> refutation with the producer-side functions that did not exist (`canonical_input_leaves_v1`,
+> `base0_binding_from_capture_v1`, `base0_refutation_from_capture_v1`,
+> `open_artifact_leaf_v1`), and hands it to the court against the PRODUCTION inventory proven
+> against its own artifact root. An honest capture is `NoFaultFound`; one changed value is
+> `ComputationMismatch`. No synthetic leaf anywhere.
+>
+> **Five graph/engine divergences fell out of building it**, none of which any gate could see: three
+> phantom norm-gain tensor families the engine never reads; the post table's missing narrowing; the
+> four attention nodes declared once per LAYER while the engine runs them once per HEAD (so the step
+> space did not contain the second head's softmax at all); the attention output declared `KvDim`
+> where the engine writes `d_model`; and the inventory naming layers by substitution where the court
+> asks by template. `the_engine_performs_exactly_the_graph_the_profile_declares` is what fails
+> loudly on the sixth.
+
 ## Gate 1 — the chain can actually run the class
 
 Three verified wiring breaks. Small, independent of Gate 0, and each fatal on day one.
@@ -72,6 +93,16 @@ Three verified wiring breaks. Small, independent of Gate 0, and each fatal on da
 1.1 and 1.2 each independently force PALW weight to zero. Fixing one without the other changes
 nothing observable, which is why they belong in one gate.
 
+> **Closed, all three.** 1.1's fix made the per-bond exposure ceiling fire for the first time — it
+> could not fail before, because `reserved` never left zero however long a chain grew. 1.2 routed
+> both ids with the walk's own table. 1.3 returns the RC identity without the bundle, and an
+> artifact-less node is refused at the handshake rather than joining silently.
+>
+> **A fourth wiring break was found beside them** (audit lane #3): the epoch budget could stop the
+> chain, and the epoch could not end. Three causes, all real — the census denominator ADR-0045
+> specifies was hard-wired to 1000‰, the liveness floor was subject to the cap, and the floor could
+> be FROZEN by one accepted object with no path back.
+
 ## Gate 2 — the bounds and the money are real
 
 | # | item | why |
@@ -81,6 +112,20 @@ nothing observable, which is why they belong in one gate.
 | 2.3 | **settle the escrow/subsidy question** | **Unverified.** `coinbase.rs` contains zero PALW arithmetic and the V2 escrow releases are appended to `validator_reward_outputs` (`utxo_validation.rs:835`) alongside a carve. Whether that rides the existing carve budget or adds to it decides between "the payout is wired" and "every finalized claim mints above the emission schedule". Settle it before anything carries value. |
 | 2.4 | **re-decide ADR-0042 Decision 3c** | Its deferral rested on "only the bond holder can mint valid-signature siblings" — a statement about a signature somebody checks. P0 removed the exploit; the design question is open. |
 
+> **Closed.** 2.2 landed in three parts — the genesis bond must SHOW its collateral, nobody may
+> MOVE it while the bond lives, and a released bond's spend must DESTROY what the bond lost (with
+> the block's fee pool losing it too, or the burn would be a redirection to the miner).
+>
+> 2.3 was the unverified one and it was **real**: the escrow was an ADDITION to the emission
+> schedule, which ADR-0042 Decision 10 forbids in as many words. Measured on a live chain — subsidy
+> 370,468,345 → worker share 229,690,375 → escrow 229,690,373 — and the carve now comes out of the
+> block that earned it.
+>
+> 2.4's premise was **wrong**, and that is the finding. §A2's load-bearing reason is the
+> cache-poisoning censorship path, not "nobody checks the signature", and verification ARMS it
+> rather than removing it. 3c stays deferred on an unchanged precondition; what P0 narrowed is the
+> residual, which is now measured instead of asserted.
+
 ## Gate 3 — the second class, weight-bearing
 
 Only after Gates 0–2. Qwen2.5-1.5B is the proving ground and the plan for it is already recorded
@@ -88,10 +133,14 @@ Only after Gates 0–2. Qwen2.5-1.5B is the proving ground and the plan for it i
 
 * its shipped geometries are **inadmissible at their declared `n_ctx`** — 132.4 M and 219.7 M leaves
   against a 4,194,304 cap. `tile_len` 16,384 for 1.5B and 65,536 for 3B, the latter being
-  `PALW_STEP_MAX_TILE_LEN` exactly. Either the tile grows or the context shrinks;
-* post-genesis registration is **deliberately refused** by `palw_lifecycle_objects_v2`, and the
+  `PALW_STEP_MAX_TILE_LEN` exactly. Either the tile grows or the context shrinks — and that
+  sentence is a function now: `qwen25_admissible_geometry_v1` derives the pair against a given
+  court, measuring **1.5B at `(64, 125)` and 3B at `(64, 79)`** under the shipped ceilings;
+* post-genesis registration was **deliberately refused** by `palw_lifecycle_objects_v2`, and the
   reason given ("moves the share table, brings its own pwu rule") is exactly what
-  `verify_class_admission_v2` checks. ADR-0049 H replaces the refusal with the gate;
+  `verify_class_admission_v2` checks. ADR-0049 H replaced the refusal with the gate, and it has
+  landed: the object carries its shape profile and canonical job, acceptance runs the four checks,
+  and an entrant joins at `min_grantable_share_permille` and no more;
 * 0‰ is impossible by construction (`min_grantable_share_permille` ≥ 1). "Weightless" is the
   **minimum grantable share**, and a class holding 1‰ produces — which is better, because a class
   that produces can be watched before it is grown.
@@ -123,7 +172,30 @@ therefore inside the network's identity:
 2. **the four cost ceilings** (2.1) — not yet gated. Too small forecloses classes; too large admits
    a proof nobody can verify in time.
 
-## What is safe to say today
+## What is safe to say today, revised
+
+Gates 0, 1 and 2 are closed in code and covered by tests that fail when the property is removed.
+What remains is not implementation:
+
+* **Gate 3** — the second class needs calibrated numbers, which need the real checkpoint. The site
+  and the plumbing exist (ADR-0050: the residual may amplify, and the gain is a committed tensor);
+  the gains that make Qwen worth carrying weight are a converter output, and the class stays
+  weightless until they justify activation.
+* **Gate 4** — operational, and unchanged: genesis artifact, seeds, public entry, the
+  calibration-gated binary, and a soak whose clock survives redeployment.
+* **Gate 5** — Qwen3.6 is still its own ADR, and Gate 0 closing is what makes it worth writing.
+
+Two things a reader should carry forward from how these closed, because both recurred:
+
+1. **The gates that never fired were the dangerous ones.** The exposure ceiling, the genesis
+   loader, the court's cost ceilings and `op 9` had all been written, reviewed and tested — and
+   none of them could refuse anything, because the thing they guarded never reached them. A check
+   that cannot fail is indistinguishable from a check that passes.
+2. **Correspondence defects are found by round trips, not by reading.** Five divergences between
+   the engine, the profile, the inventory and the court survived every review; each one surfaced
+   the moment two sides were asked to agree on a real object.
+
+## What was safe to say before this session
 
 > The PALW ConsensusV2 state machine, integer primitives, step dispute and class economy are
 > implemented and under internal shadow testing.
