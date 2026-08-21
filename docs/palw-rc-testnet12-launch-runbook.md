@@ -73,6 +73,27 @@ The half that really cannot be minted is the **bond**:
 | `--operator-pubkey` | the operator identity key — panel dedup is keyed on it | `misaka-cli` |
 | `--payout-payload` | the 64-byte P2PKH-ML-DSA-87 owner payload matured rewards pay to | you |
 
+> ### It is a REGISTRY, and one bond is not a network
+>
+> `PALW_RC_GENESIS_BONDS` is a **list**, and the genesis gate refuses a list that cannot run a
+> chain. Two properties, both checked at assembly rather than discovered at block three:
+>
+> * **`seat_count + 1` distinct operators.** A panel seats one bond per OPERATOR and never the
+>   claim's own executor, so a 5-seat panel needs six. Below that no claim is ever licensed: every
+>   one voids at `BindTimeout`, `safe_weight` stays zero forever, and each block's escrowed worker
+>   carve is burned. `BondRegistered` may not ride a transaction, so there is no later repair — the
+>   registry you ship is the registry the network has for its whole life.
+>   **A registry of clones is one operator however long it is**: each row needs its own
+>   `--operator-seed`.
+> * **Collateral that outlasts the bind window.** A claim holds its reservation for `window_bind`
+>   (600 DAA) and DAA advances only when blocks are produced, so a ceiling admitting fewer
+>   concurrent claims than the window is long is a deadlock with no timeout. The requirement is
+>   derived (`palw_v2_collateral_for_bind_window_v1`) and the gate names the number if you are
+>   short.
+>
+> The shipped bundle failed both: one bond, 400,000 sompi, `supported: 2`. It would have made two
+> blocks and stopped.
+
 **Generate the keys with `misaka-cli` and keep the secrets there.** `palw-rc-genesis` generates no
 keys and touches no key material: a tool that minted a key would be minting an identity, and the
 whole point of a bond is that somebody holds one. Pass only verification keys.
