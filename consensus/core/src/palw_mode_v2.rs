@@ -115,6 +115,32 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 /// NAMED fact with a place to be checked: the leaf count is a property of the registered class
 /// catalog, which the RC genesis loader verifies against the catalog preimage, and the turn
 /// deadline is a protocol constant a reader can compare against the ladder's own measurement.
+/// **Sized from the liveness floor, with headroom — not from a class that does not fit.**
+///
+/// Measured by `derive_court_cost_v1`: `PALW_RC_BASE0_GEOMETRY` at its own `tile_len` of 64 opens
+/// **32 KiB** for its most expensive step. This default is 1 MiB, thirty-two times that, so the
+/// floor and any class of a similar shape pass without the ceiling being a formality.
+///
+/// **What it admits of a Qwen-scale class is a 125-token context, and that is the finding.**
+/// Measured: Qwen2.5-1.5B opens 560 KiB at `tile_len` 64 (adjudicable `n_ctx` 125) — inside this
+/// ceiling — 1.09 MiB at 128, and 24 MiB at the 16,384 its declared 4,096-token context requires.
+/// So `tile_len` does trade context against court cost, and at the floor's ceiling the window is
+/// one tile wide and buys a toy context. A network intending to carry Qwen at a real context
+/// chooses a ceiling twenty-four times larger, at genesis and irrevocably, or reduces the opening
+/// by bisecting WITHIN a step's reduction as well as across its output tiles — which would be its
+/// own ADR and is the only route that does not make court proofs multi-megabyte.
+///
+/// ADR-0046 budgets a court close under 152 KB. Qwen exceeds that at every tile length; its
+/// cheapest step is nearly four times it.
+pub const DEFAULT_MAX_OPENING_BYTES: u64 = 1024 * 1024;
+/// The floor's widest step is 32,768 multiply-accumulates. This is 512 times that: generous for a
+/// class of the floor's shape, and still milliseconds of scalar `int8` CPU, which is the budget the
+/// court was always sized for. Qwen2.5-1.5B needs 3.1 M at `tile_len` 64 and 75 M at 16,384.
+pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
+/// A step reads its `input_refs` and at most one weight operand. Eight is well past any node in the
+/// BASE-0 or Qwen graphs (the widest is the gated-delta-net recurrence's five rows).
+pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
+
 /// One opaque number becomes three checkable ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtParamsV2 {
@@ -125,10 +151,47 @@ pub struct PalwCourtParamsV2 {
     turn_deadline_daa: u64,
     /// Rounds beyond the bisection itself: the terminal one-step adjudication and its opening.
     terminal_rounds: u32,
+    /// **ADR-0049 Decision C: what one round may COST.** `max_step_leaf_count` bounds how many
+    /// rounds a dispute takes and nothing bounded the size of a round, so the terminal
+    /// adjudication's price was the model's — ~223 MiB of opening for Qwen2.5-1.5B's unembed
+    /// against ADR-0046's 152 KB court-close budget. These three are compared against
+    /// `palw_class_admission_v2::derive_court_cost_v1`, which reads them off a class's graph.
+    ///
+    /// They are here, inside `palw_ruleset_id_v2`, for the same reason the ladder is: a class that
+    /// exceeds them cannot join a running chain, so the ceiling is chosen once, at genesis, for
+    /// every class the network ever intends to admit.
+    max_opening_bytes: u64,
+    max_terminal_macs: u64,
+    max_operand_count: u32,
 }
 
 impl PalwCourtParamsV2 {
+    /// The pre-Decision-C constructor, kept so existing callers state only what they meant to.
+    /// It installs the DEFAULT cost ceilings, which are deliberately generous rather than absent:
+    /// a zero ceiling would refuse every class, and no ceiling is what this ADR exists to end.
     pub fn new(max_step_leaf_count: u64, turn_deadline_daa: u64, terminal_rounds: u32) -> Result<Self, PalwModeV2Error> {
+        Self::with_cost_ceilings(
+            max_step_leaf_count,
+            turn_deadline_daa,
+            terminal_rounds,
+            DEFAULT_MAX_OPENING_BYTES,
+            DEFAULT_MAX_TERMINAL_MACS,
+            DEFAULT_MAX_OPERAND_COUNT,
+        )
+    }
+
+    /// Every court parameter, including ADR-0049 Decision C's three cost ceilings.
+    pub fn with_cost_ceilings(
+        max_step_leaf_count: u64,
+        turn_deadline_daa: u64,
+        terminal_rounds: u32,
+        max_opening_bytes: u64,
+        max_terminal_macs: u64,
+        max_operand_count: u32,
+    ) -> Result<Self, PalwModeV2Error> {
+        if max_opening_bytes == 0 || max_terminal_macs == 0 || max_operand_count == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero court cost ceiling admits no class at all"));
+        }
         if max_step_leaf_count < 2 {
             return Err(PalwModeV2Error::Invalid("a trace with fewer than two step leaves cannot be bisected"));
         }
@@ -138,7 +201,19 @@ impl PalwCourtParamsV2 {
         if terminal_rounds == 0 {
             return Err(PalwModeV2Error::Invalid("the terminal adjudication is a round; zero of them never reaches a verdict"));
         }
-        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds })
+        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds, max_opening_bytes, max_terminal_macs, max_operand_count })
+    }
+
+    pub fn max_opening_bytes(&self) -> u64 {
+        self.max_opening_bytes
+    }
+
+    pub fn max_terminal_macs(&self) -> u64 {
+        self.max_terminal_macs
+    }
+
+    pub fn max_operand_count(&self) -> u32 {
+        self.max_operand_count
     }
 
     pub fn max_step_leaf_count(&self) -> u64 {

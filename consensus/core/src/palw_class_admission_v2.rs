@@ -82,6 +82,109 @@ use crate::palw_v2::PalwJobContextV2;
 /// refuses it).
 pub const PALW_RC_COURT_MAX_STEP_LEAF_COUNT: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 
+/// **What one terminal adjudication of this class costs, derived from its graph** (ADR-0049
+/// Decision C).
+///
+/// The ladder bounds how many rounds a dispute takes. Nothing bounded what a round COSTS, and the
+/// answer used to be the model's size: the matmul arm opened `out_dim x in_len` — the whole matrix —
+/// which is ~223 MiB for Qwen2.5-1.5B's unembed against a court-close budget of 152 KB. Decision B
+/// made the opening tile-local; this is what turns "small" into "bounded", so a class cannot be
+/// admitted whose disputes are unprosecutable in a transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCourtCostV1 {
+    /// Bytes a refutation must open from the artifact for the most expensive single step.
+    pub max_opening_bytes: u64,
+    /// Multiply-accumulates a full node performs to recompute that step — its own CPU, on
+    /// peer-supplied input.
+    pub max_terminal_macs: u64,
+    /// Rows a single step reads: its `input_refs` plus at most one weight operand. Bounds
+    /// deserialization work before any arithmetic runs.
+    pub max_operand_count: u32,
+}
+
+/// Widths a node can produce, worst case, from the profile's own geometry.
+///
+/// `KvScaled` is resolved at the CONTEXT maximum rather than at some typical position, because a
+/// ceiling that held for a typical job and not for the longest one would admit a class an attacker
+/// picks the job length for — the same rule `worst_case_step_leaf_count_v1` states.
+fn node_out_width_v1(node: &crate::palw_step::PalwStepNodeV1, profile: &PalwShapeProfileV3) -> Option<u64> {
+    match node.out_len {
+        crate::palw_step::PalwStepOutLenV1::Fixed { elements } => Some(elements as u64),
+        crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => (multiplier as u64).checked_mul(profile.n_ctx as u64),
+    }
+}
+
+/// The width of one input reference: a sentinel's own width, or an earlier node's output.
+fn input_width_v1(r: u16, table: &[crate::palw_step::PalwStepNodeV1], profile: &PalwShapeProfileV3) -> Option<u64> {
+    use crate::palw_step::{PALW_STEP_INPUT_CHECKPOINT_STATE, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN};
+    let kv_dim = (profile.attn_kv_heads as u64).checked_mul(profile.attn_head_dim as u64)?;
+    match r {
+        PALW_STEP_INPUT_LAYER_IN => Some(profile.hidden_dim as u64),
+        PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => kv_dim.checked_mul(profile.n_ctx as u64),
+        // The recurrent state chunk. Bounded by the widest state a GDN head can carry; a profile
+        // with no GDN reaches this only if it names the sentinel, and then zero is the honest width.
+        PALW_STEP_INPUT_CHECKPOINT_STATE => {
+            (profile.gdn_heads as u64).checked_mul(profile.gdn_head_k_dim as u64)?.checked_mul(profile.gdn_head_v_dim as u64)
+        }
+        // An intra-table index: references are backwards, so the node exists by validation.
+        i => table.get(i as usize).and_then(|n| node_out_width_v1(n, profile)),
+    }
+}
+
+/// The cost of the most expensive step this profile can be challenged at.
+///
+/// Every quantity is read off the graph. Nothing is declared, so a registration cannot understate
+/// what prosecuting it will cost — which is the same reason `pwu_per_inference` is checked against
+/// a count rather than trusted.
+pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
+    use crate::palw_step::PalwStepOpKindV1 as Op;
+    let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
+    let mut cost = PalwCourtCostV1 { max_opening_bytes: 0, max_terminal_macs: 0, max_operand_count: 0 };
+
+    for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
+        for node in table.iter() {
+            let out_w = node_out_width_v1(node, profile).ok_or_else(over)?;
+            let tile = (node.tile_len as u64).min(out_w.max(1));
+            let in_w = match node.input_refs.first() {
+                Some(r) => input_width_v1(*r, table, profile).ok_or_else(over)?,
+                None => 0,
+            };
+
+            // The artifact bytes this node's parameters occupy, per catalogued kernel. A node with
+            // no weight operand opens nothing from the artifact — its inputs ride the leg.
+            let opening = if node.weight_name.is_empty() {
+                0
+            } else {
+                match node.op_kind {
+                    // Tile-local since Decision B: the tile's own weight rows, one byte per int8.
+                    Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                    // (multiplier LE, shift, zero LE) per channel.
+                    Op::MulElem => 9u64.checked_mul(out_w).ok_or_else(over)?,
+                    // cos then sin, four bytes each, one pair per two lanes.
+                    Op::RopeImrope => 8u64.checked_mul(out_w / 2).ok_or_else(over)?,
+                    // One (multiplier, shift) for the whole node.
+                    Op::Scale => 5,
+                    // A gather opens the row it gathers; a norm's gain is one value per channel.
+                    Op::EmbedLookup => out_w,
+                    _ => 4u64.checked_mul(out_w).ok_or_else(over)?,
+                }
+            };
+
+            // Recomputation. Only a reduction is quadratic in the row; everything else is a pass.
+            let macs = match node.op_kind {
+                Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                _ => out_w,
+            };
+
+            let operands = node.input_refs.len() as u32 + u32::from(!node.weight_name.is_empty());
+            cost.max_opening_bytes = cost.max_opening_bytes.max(opening);
+            cost.max_terminal_macs = cost.max_terminal_macs.max(macs);
+            cost.max_operand_count = cost.max_operand_count.max(operands);
+        }
+    }
+    Ok(cost)
+}
+
 /// Why a class may not join.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwClassAdmissionError {
@@ -103,6 +206,11 @@ pub enum PalwClassAdmissionError {
     /// job length for.
     #[error("the class's worst-case trace is deeper than the court's ladder: {worst} > {ladder}")]
     DeeperThanTheLadder { worst: u64, ladder: u64 },
+    /// ADR-0049 Decision C. A class whose cheapest prosecutable step still costs more than the
+    /// ruleset allows is a class whose disputes nobody can raise — coverage-clean, ladder-deep
+    /// enough, and unpolicable.
+    #[error("the class's {what} of {got} exceeds the ruleset's ceiling of {ceiling}")]
+    CourtCostExceedsCeiling { what: &'static str, got: u64, ceiling: u64 },
     /// A network that carries value registers only derived classes (the genesis loader's rule,
     /// restated: `MaxPerAttempt` bounds rather than checks, which makes PALW weight a collateral
     /// measure instead of a work measure).
@@ -167,6 +275,22 @@ pub fn verify_class_admission_v2(
     let ladder = bundle.court.max_step_leaf_count();
     if worst > ladder {
         return Err(PalwClassAdmissionError::DeeperThanTheLadder { worst, ladder });
+    }
+
+    // **Decision C: what prosecuting this class costs, against what the ruleset allows.**
+    //
+    // Ordered after the ladder because the two answer different halves of one question — the ladder
+    // bounds how many rounds a dispute takes, these bound what a round costs — and a class that
+    // fails both should be told about the deeper problem first.
+    let cost = derive_court_cost_v1(profile)?;
+    for (what, got, ceiling) in [
+        ("terminal opening", cost.max_opening_bytes, bundle.court.max_opening_bytes()),
+        ("terminal multiply-accumulates", cost.max_terminal_macs, bundle.court.max_terminal_macs()),
+        ("operand count", cost.max_operand_count as u64, bundle.court.max_operand_count() as u64),
+    ] {
+        if got > ceiling {
+            return Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling });
+        }
     }
 
     let counted = step_leaf_count(profile, canonical).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
@@ -250,6 +374,16 @@ mod tests {
         bundle
     }
 
+    /// A network that has DECIDED, at genesis, to carry a Qwen-scale class and to pay for its
+    /// courts. The ceilings are the measured cost of that class rather than a round number, which
+    /// is the only honest way to choose a value that is inside the ruleset id forever.
+    fn bundle_that_pays_for_qwen() -> PalwConsensusParamsV2 {
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(PALW_STEP_MAX_LEAVES, 20, 2, 32 * 1024 * 1024, 128 * 1024 * 1024, 8)
+            .expect("a court sized for a 1.5B class is legal, and expensive on purpose");
+        bundle
+    }
+
     fn registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -272,12 +406,12 @@ mod tests {
         let canonical = context(&profile, 64, 64);
         let counted = step_leaf_count(&profile, &canonical).expect("the canonical job counts");
         let entry = verify_class_admission_v2(
-            &bundle_with_full_ladder(),
+            &bundle_that_pays_for_qwen(),
             &profile,
             &canonical,
             &registration(profile.shape_profile_id(), counted),
         )
-        .expect("the measured Qwen2.5-1.5B class is admissible at an admitting tile_len");
+        .expect("the measured Qwen2.5-1.5B class is admissible on a network that pays for its courts");
 
         assert_eq!(entry.class_id, profile.shape_profile_id(), "a class is its graph");
         assert_eq!(entry.canonical_step_leaf_count, counted);
@@ -294,7 +428,7 @@ mod tests {
         let big = qwen_admissible();
         let canonical = context(&big, 64, 64);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
-        verify_class_admission_v2(&bundle_with_full_ladder(), &big, &canonical, &registration(big.shape_profile_id(), counted))
+        verify_class_admission_v2(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect("admissible");
         assert_eq!(base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("re-derives").shape_profile_id(), before);
         assert_ne!(before, big.shape_profile_id(), "two geometries are two classes");
@@ -381,6 +515,79 @@ mod tests {
         // so a class the ladder cannot reach is a class that was already inadmissible.
         let big = qwen_admissible();
         assert!(worst_case_step_leaf_count_v1(&big).expect("inside the cap") <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
+    }
+
+    /// **ADR-0049 Decision C: at the floor's ceiling a Qwen class fits only at 125 tokens of context.**
+    ///
+    /// `tile_len` trades adjudicable context against court cost, and the window this leaves is the
+    /// number a genesis has to look at. Measured with `derive_court_cost_v1` against the
+    /// floor-derived 1 MiB default:
+    ///
+    /// | `tile_len` | opening | adjudicable `n_ctx` | fits the default |
+    /// |---|---|---|---|
+    /// | 64 | 560 KiB | **125** | yes |
+    /// | 128 | 1.09 MiB | 244 | no |
+    /// | 16,384 | 24 MiB | 4,838 | no, by 24x |
+    ///
+    /// So a network on the floor's own ceiling can carry Qwen2.5-1.5B with a 125-token context and
+    /// nothing longer. Its declared 4,096 needs a ceiling twenty-four times larger, chosen at
+    /// genesis and unchangeable after. ADR-0046's 152 KB court-close budget admits it at no tile
+    /// length at all — its cheapest step is nearly four times that.
+    ///
+    /// A first draft of this test asserted "refused at EVERY tile length" and failed on tile 64,
+    /// which is the assertion doing its job: the claim was one measurement short.
+    #[test]
+    fn a_qwen_class_fits_the_floors_ceiling_only_at_a_toy_context() {
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        let floor_cost = derive_court_cost_v1(&floor).expect("derivable");
+        assert_eq!(floor_cost.max_opening_bytes, 32 * 1024, "the floor's widest step opens 32 KiB");
+        assert!(floor_cost.max_opening_bytes * 32 <= crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES, "the default is floor-derived");
+
+        // Each tile is priced at the LONGEST context it can adjudicate, because that is the class a
+        // network would actually register — a tile bought for its context and then not used for it
+        // is a ceiling question nobody is asking.
+        let widest_adjudicable_ctx = |tile: u32| -> u32 {
+            let fits = |n_ctx: u32| {
+                qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..QWEN25_1_5B })
+                    .ok()
+                    .and_then(|p| worst_case_step_leaf_count_v1(&p).ok())
+                    .is_some()
+            };
+            let (mut lo, mut hi) = (2u32, 1u32 << 16);
+            while lo + 1 < hi {
+                let mid = lo + (hi - lo) / 2;
+                if fits(mid) { lo = mid } else { hi = mid }
+            }
+            lo
+        };
+
+        let default_bundle = bundle_with_full_ladder();
+        let mut fits: Vec<u32> = Vec::new();
+        for tile in [64u32, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384] {
+            let n_ctx = widest_adjudicable_ctx(tile);
+            let p = qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..QWEN25_1_5B }).expect("expressible");
+            let cost = derive_court_cost_v1(&p).expect("derivable");
+            let canonical = context(&p, 8, 4);
+            let Ok(counted) = step_leaf_count(&p, &canonical) else { continue };
+            match verify_class_admission_v2(&default_bundle, &p, &canonical, &registration(p.shape_profile_id(), counted)) {
+                Ok(_) => {
+                    assert!(cost.max_opening_bytes <= crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES);
+                    fits.push(tile);
+                }
+                Err(PalwClassAdmissionError::CourtCostExceedsCeiling { .. }) => {
+                    assert!(cost.max_opening_bytes > crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES);
+                }
+                Err(e) => panic!("tile {tile}: unexpected {e:?}"),
+            }
+        }
+        assert_eq!(fits, vec![64], "only the smallest tile fits a floor-sized court, and it buys 125 tokens of context");
+
+        // The declared 4,096-token context, priced. This is the number a genesis chooses against.
+        let full_ctx = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 16_384, ..QWEN25_1_5B }).expect("expressible");
+        assert!(widest_adjudicable_ctx(64) < 200, "the tile that fits a floor-sized court buys a toy context");
+        assert!(worst_case_step_leaf_count_v1(&full_ctx).is_ok(), "16,384 is what makes 4,096 adjudicable");
+        let full_cost = derive_court_cost_v1(&full_ctx).expect("derivable");
+        assert_eq!(full_cost.max_opening_bytes, 24 * 1024 * 1024, "and it costs 24 MiB an opening");
     }
 
     /// **The shipped Qwen geometries do not admit their own declared context**, and coverage
