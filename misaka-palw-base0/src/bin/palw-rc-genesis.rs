@@ -218,10 +218,23 @@ fn main() {
                 return;
             }
         },
-        None => arg("--payout-payload").and_then(|v| hex_bytes(&v)).and_then(|b| {
+        None => match arg("--payout-payload").and_then(|v| hex_bytes(&v)).and_then(|b| {
             let bytes: [u8; 64] = b.try_into().ok()?;
             Some(Hash64::from_bytes(bytes))
-        }),
+        }) {
+            Some(explicit) => Some(explicit),
+            // **Default: the bond key's own address.** Matured rewards belong to the party that
+            // staked, and the bond key is the one identity this row already proves the operator
+            // holds — so the safe default needs no second key, no transcription and no third
+            // party. It is the same derivation `ValidatorKey::funding_address` makes
+            // (`blake2b_512` over the verification key), which is what makes the printed address
+            // spendable by the seed that emitted the row.
+            //
+            // Without this the obvious move is to paste SOME address, and the obvious mistake is
+            // to paste one whose key nobody on this network holds — a payout output nobody can
+            // ever spend, discovered a settlement window after launch.
+            None => bond_pubkey.as_ref().map(|pk| Hash64::from_bytes(kaspa_hashes::blake2b_512_address_payload(pk).as_bytes())),
+        },
     };
 
     let (Some(bond_index), Some(bond_pubkey), Some(operator_pubkey), Some(payout)) =
@@ -233,7 +246,8 @@ fn main() {
         println!("      --bond-index      which premine output backs this bond (0..=40)");
         println!("      --bond-seed       path to the bond key's seed (or --bond-pubkey <hex>)");
         println!("      --operator-seed   path to the operator key's seed (or --operator-pubkey <hex>)");
-        println!("      --payout-address  where matured rewards are paid (or --payout-payload <64-byte hex>)");
+        println!("      --payout-address  where matured rewards are paid — DEFAULTS to the bond key's");
+        println!("                        own address (or --payout-payload <64-byte hex>)");
         println!();
         println!("  --rows <file>  ANYWHERE. Assembles collected rows into the card and runs the gate.");
         println!();
@@ -260,6 +274,15 @@ fn main() {
     println!("Your row — send this LINE (public values only) to whoever assembles the card:");
     println!();
     println!("row {bond_index} {} {} {}", hex_of(&bond_pubkey), hex_of(&operator_pubkey), hex_of(payout.as_byte_slice()));
+    println!();
+    println!(
+        "  payout address    {}",
+        kaspa_addresses::Address::new(
+            kaspa_addresses::Prefix::Testnet,
+            kaspa_addresses::Version::PubKeyHashMlDsa87,
+            payout.as_byte_slice(),
+        )
+    );
     println!();
     println!("Collect {} such rows (one per operator, all different) into a file and run:", min_bonds());
     println!("  palw-rc-genesis --rows <file>");
