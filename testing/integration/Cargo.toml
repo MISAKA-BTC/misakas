@@ -75,9 +75,16 @@ tokio = { workspace = true, features = ["rt", "macros", "process"] }
 kaspa-txscript-errors.workspace = true
 
 [features]
+default = ["evm"]
 heap = ["dhat"]
 html_reports = []
 devnet-prealloc = ["kaspad/devnet-prealloc"]
+# The daemon tests boot a real kaspad on DEVNET, and devnet activates the EVM lane at DAA 0 — so a
+# binary built without this feature refuses to start there (`EvmLaneRequiresEvmBuild`, added with
+# the RC's lane decision) and takes the whole test process with it. Default-on, because the harness
+# has to be built the way the networks it starts require; the alternative is a workspace test run
+# that aborts on its first daemon test.
+evm = ["kaspad/evm", "kaspa-consensus/evm"]
 
 [lints]
 workspace = true

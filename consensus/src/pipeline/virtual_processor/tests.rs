@@ -115,6 +115,35 @@ impl TestContext {
         parents[0]
     }
 
+    /// A template with the timestamp the BUILDER chose, which is what a real miner mines.
+    ///
+    /// `build_block_template` below re-stamps, and on a network whose EVM lane is active that is
+    /// silently fatal: `evm_commitment_root` is computed during the build over
+    /// `EvmBlockInput { header_timestamp_ms, .. }`, so moving the timestamp afterwards leaves the
+    /// header committing a root for a block that no longer exists and every such block is
+    /// disqualified at `evm_commitment_root mismatch`. It went unnoticed because the lane is inert
+    /// (`u64::MAX`) on every network the harness builds against except the RC's — and because
+    /// `kaspa-consensus` had never been compiled with `--features evm`.
+    ///
+    /// `kaspad`'s own producer reads `template.block.header.timestamp` and never writes it, so
+    /// this is the harness diverging from the miner, not the miner from the chain.
+    pub fn build_block_template_keeping_time(&self, nonce: u64) -> BlockTemplate {
+        let mut t = self
+            .consensus
+            .build_block_template(
+                self.miner_data.clone(),
+                Box::new(OnetimeTxSelector::new(Default::default())),
+                TemplateBuildMode::Standard,
+            )
+            .unwrap();
+        t.block.header.nonce = nonce;
+        if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            t.block.header.palw_commitment = self.consensus.palw_v2_test_carriage(&t.block.header);
+        }
+        t.block.header.finalize();
+        t
+    }
+
     pub fn build_block_template(&self, nonce: u64, timestamp: u64) -> BlockTemplate {
         let mut t = self
             .consensus
@@ -124,6 +153,13 @@ impl TestContext {
                 TemplateBuildMode::Standard,
             )
             .unwrap();
+        // See `build_block_template_keeping_time`: moving the timestamp after the build breaks
+        // `evm_commitment_root`, so the re-stamp is only legal while the lane is inert. Asserted
+        // rather than assumed — a silently invalid block is the failure this whole method caused.
+        assert!(
+            !self.consensus.params().is_evm_active(t.block.header.daa_score),
+            "re-stamping a template whose EVM lane is active invalidates its evm_commitment_root — use build_block_template_keeping_time"
+        );
         t.block.header.timestamp = timestamp;
         t.block.header.nonce = nonce;
         // ADR-0042 Decision 3a: the template DECLARES algo-6 on a `ConsensusV2` network but does
@@ -1190,8 +1226,10 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert_eq!(facts.artifact_root, artifact_root, "the class registered the artifact the producer will name");
 
     // The template. Its pre-pow hash anchors the job, so one template is one inference.
-    let timestamp = config.params.genesis.timestamp + config.params.target_time_per_block();
-    let mut block = ctx.build_block_template(0, timestamp).block;
+    // The builder's own timestamp, not one stamped over it: the RC's EVM lane is active at DAA 0
+    // and `evm_commitment_root` is computed during the build against the header's timestamp.
+    let mut block = ctx.build_block_template_keeping_time(0).block;
+    let timestamp = block.header.timestamp;
     assert_eq!(
         block.header.pow_algo_id,
         kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
