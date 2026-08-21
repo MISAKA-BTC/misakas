@@ -185,7 +185,8 @@ Not one finding but three, peeled in order, recorded so none is rediscovered.
    IBD, 142 s green), and the request is now sent **only under a ConsensusV2 ruleset** — the pair
    rode into protocol version 103 without a bump, so an old 103 leader has no flow for the request
    and would close the connection from its side; on a V2 network every peer is a new binary by
-   construction (the ruleset is in the consensus fingerprint).
+   construction (the ruleset is in the consensus fingerprint). With the fix (`bce0f4e4`) the crate
+   minus the daemon tests is green in one serial run: **30 passed / 0 failed / 17 ignored**, 812 s.
 3. **Still open**: a single-threaded run of the WHOLE crate spins at 99% CPU inside
    `daemon_cleaning_test` (the upstream shutdown-refcount assertion) even though the daemon tests
    pass 3/3 in isolation — something an earlier test starts keeps a reference alive. Whether it
