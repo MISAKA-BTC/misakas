@@ -821,6 +821,22 @@ pub struct PalwClaimStateV2 {
 /// `PalwSeatReceiptV2` and are checked there. What crosses into the transition is the pair the
 /// accounting needs — a seat and its verdict — so that a minority which reported against the
 /// quorum can be charged for it.
+/// The accounting pairs a signed receipt set reduces to.
+///
+/// The transition charges a seat for CONTRADICTING its own panel's quorum, and for saying nothing
+/// at all; neither needs the signature, which the acceptance layer has already verified. Keeping
+/// the reduction in one function is what stops the two readers from disagreeing about what
+/// "served" means.
+pub fn palw_seat_verdicts_of_v2(receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2]) -> Vec<PalwSeatVerdictV2> {
+    receipts
+        .iter()
+        .map(|r| PalwSeatVerdictV2 {
+            seat_bond: r.seat_bond,
+            served: matches!(r.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid),
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwSeatVerdictV2 {
     pub seat_bond: PalwBondKeyV2,
@@ -1034,14 +1050,20 @@ pub enum PalwConsensusObjectV2 {
         anchor: Hash64,
         seats: Vec<PalwPanelSeatV2>,
     },
-    /// Carries the receipt set the acceptance layer validated (audit C5). The transition does
-    /// not re-verify signatures — that is `palw_panel_v2`'s job and the module boundary is
-    /// deliberate — but it READS the verdicts, because a seat that reported the opposite of what
-    /// the panel concluded is contradicted by the panel's own quorum, and a contradiction with
-    /// no cost is an invitation.
+    /// Carries the SIGNED receipt set, and the acceptance layer validates it (audit C5, M-01).
+    ///
+    /// It used to carry `PalwSeatVerdictV2` — a seat and a bool, no signature — and this doc said
+    /// "the receipt set the acceptance layer validated". The acceptance layer had no arm for this
+    /// object, and could not have had one: nothing in the object was signed, so there was nothing
+    /// to validate. `ProducerDefaulted { receipts: [] }` from any stranger slashed the producer's
+    /// bond and every panel seat, and `validate_receipt_quorum_v2` — which checks seat membership,
+    /// the ML-DSA-87 signature, dedup, the window and the quorum — had no caller in the tree.
+    ///
+    /// The transition still does not re-verify signatures; that boundary was right. What changed is
+    /// that the signatures now REACH the boundary.
     ReceiptLicensed {
         claim: Hash64,
-        receipts: Vec<PalwSeatVerdictV2>,
+        receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
     },
     CourtOpened {
         session_id: Hash64,
@@ -1089,9 +1111,12 @@ pub enum PalwConsensusObjectV2 {
         signature: Vec<u8>,
     },
     /// Decision 7's producer default: a data obligation missed its deadline.
+    ///
+    /// Signed receipts, for the same reason as [`Self::ReceiptLicensed`] — this is the arm that
+    /// TAKES the producer's stake, so it is the one an unauthenticated object was worst on.
     ProducerDefaulted {
         claim: Hash64,
-        receipts: Vec<PalwSeatVerdictV2>,
+        receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
     },
     /// ADR-0044 (FP-03): a free-prompt execution commitment, accepted on chain. Creates a claim
     /// at `Provisional` with `source: FreePrompt` — from there the lattice runs unmodified
@@ -3021,9 +3046,10 @@ fn apply_object(
             // rather than a disagreement: both verdicts cannot reach quorum, so exactly one of
             // them is refuted by the record. It pays what it tried to take: the same `reserved`
             // the producer would have lost.
-            builder.slash_dissenting_seats(&claim, receipts, true)?;
+            let verdicts = palw_seat_verdicts_of_v2(receipts);
+            builder.slash_dissenting_seats(&claim, &verdicts, true)?;
             // …and the seats that said nothing while their panel concluded without them (P0-7).
-            builder.slash_silent_seats(claim_id, &claim, receipts)?;
+            builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             let mut licensed = claim;
             licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
             builder.write_claim(*claim_id, Some(licensed));
@@ -3135,8 +3161,9 @@ fn apply_object(
             // Symmetric to the licensing arm: here the quorum says the producer withheld, so a
             // seat that signed `Valid` is the contradicted one. Punishing only one direction
             // would make the cheap lie obvious.
-            builder.slash_dissenting_seats(&claim, receipts, false)?;
-            builder.slash_silent_seats(claim_id, &claim, receipts)?;
+            let verdicts = palw_seat_verdicts_of_v2(receipts);
+            builder.slash_dissenting_seats(&claim, &verdicts, false)?;
+            builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             // Decision 7's default is the producer's fault by construction — the panel answered
             // and it did not — so this void takes the stake, unlike the two timeouts, which void
             // a claim nobody was in a position to blame the producer for.
@@ -3920,8 +3947,36 @@ pub(crate) mod tests {
     /// The fixtures used to license with `receipts: Vec::new()` — a panel concluding without a
     /// word from the seat it bound. That is now a no-show and costs the seat its stake (P0-7), so
     /// the fixtures say what a real licensing says: the seat that was assigned answered.
-    fn seat_says(served: bool) -> Vec<PalwSeatVerdictV2> {
-        vec![PalwSeatVerdictV2 { seat_bond: bond_key(1), served }]
+    /// A receipt set the TRANSITION can read. The transition never verifies signatures — that is
+    /// the acceptance layer's, and the boundary is deliberate — so these fixtures carry no real
+    /// one. `palw_v2_a_receipt_set_without_a_quorum_cannot_slash_anyone` is where the signature
+    /// actually has to hold, on the path that checks it.
+    fn seat_receipt(seat: PalwBondKeyV2, served: bool) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
+        crate::palw_panel_v2::PalwSeatReceiptV2 {
+            claim: Hash64::default(),
+            verdict: if served {
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Valid
+            } else {
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 0 }
+            },
+            seat_bond: seat,
+            signed_daa: 0,
+            signature: Vec::new(),
+        }
+    }
+
+    fn seat_says(served: bool) -> Vec<crate::palw_panel_v2::PalwSeatReceiptV2> {
+        vec![crate::palw_panel_v2::PalwSeatReceiptV2 {
+            claim: Hash64::default(),
+            verdict: if served {
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Valid
+            } else {
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 0 }
+            },
+            seat_bond: bond_key(1),
+            signed_daa: 0,
+            signature: Vec::new(),
+        }]
     }
 
     fn register_class_and_bond() -> Vec<PalwConsensusObjectV2> {
@@ -4633,10 +4688,7 @@ pub(crate) mod tests {
             &ctx(4, 103, 4),
             &[PalwConsensusObjectV2::ReceiptLicensed {
                 claim: claim_id,
-                receipts: vec![
-                    PalwSeatVerdictV2 { seat_bond: bond_key(1), served: true },
-                    PalwSeatVerdictV2 { seat_bond: bond_key(2), served: false },
-                ],
+                receipts: vec![seat_receipt(bond_key(1), true), seat_receipt(bond_key(2), false)],
             }],
             None,
         );
@@ -4660,10 +4712,7 @@ pub(crate) mod tests {
             &ctx(4, 103, 4),
             &[PalwConsensusObjectV2::ProducerDefaulted {
                 claim: claim_id,
-                receipts: vec![
-                    PalwSeatVerdictV2 { seat_bond: bond_key(1), served: false },
-                    PalwSeatVerdictV2 { seat_bond: bond_key(2), served: false },
-                ],
+                receipts: vec![seat_receipt(bond_key(1), false), seat_receipt(bond_key(2), false)],
             }],
             None,
         );
@@ -5760,7 +5809,7 @@ pub(crate) mod tests {
         );
 
         // The quorum said the data WAS served; seat 9 said it was withheld.
-        let dissent = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: false }];
+        let dissent = vec![seat_receipt(bond_key(9), false)];
         let (licensed, _) = apply(
             &s3,
             &p,
@@ -5774,7 +5823,7 @@ pub(crate) mod tests {
         // Symmetric: on a producer default, a seat that insisted the data was served is the
         // contradicted one — and the producer is charged too, because Decision 7's default IS
         // the producer's fault by construction.
-        let agreeing = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: true }];
+        let agreeing = vec![seat_receipt(bond_key(9), true)];
         let (defaulted, _) = apply(
             &s3,
             &p,
@@ -5786,7 +5835,7 @@ pub(crate) mod tests {
         assert_eq!(defaulted.bond(&bond_key(1)).unwrap().slashed, reserved, "and the producer pays for withholding");
 
         // A seat that voted WITH the quorum is untouched, in both directions.
-        let concurring = vec![PalwSeatVerdictV2 { seat_bond: bond_key(9), served: true }];
+        let concurring = vec![seat_receipt(bond_key(9), true)];
         let (clean, _) = apply(
             &s3,
             &p,

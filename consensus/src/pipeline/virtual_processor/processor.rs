@@ -3734,7 +3734,7 @@ impl VirtualStateProcessor {
     ///
     /// A network with no V2 bundle has no objects to check (extraction yields none), so this is
     /// `Ok(())` everywhere today.
-    fn palw_v2_validate_objects(
+    pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
@@ -3884,10 +3884,90 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
-                _ => {}
+                // **The receipt quorum, verified where the design always said it was** (audit
+                // M-01). `PalwConsensusObjectV2::ReceiptLicensed`'s own doc said it carried "the
+                // receipt set the acceptance layer validated" — and this match had no arm for it,
+                // so nothing ever did. `ProducerDefaulted { receipts: [] }` from any stranger
+                // reached `slash_silent_seats` (every seat charged `claim.reserved`) and
+                // `void_and_slash` (the producer's bond debited), on a transaction that carried no
+                // signature at all. `validate_receipt_quorum_v2` was written, tested, and had no
+                // caller anywhere in the tree.
+                //
+                // The quorum's DIRECTION is checked against the object, not just its existence: a
+                // `Licensed` quorum cannot default a producer and an `Unavailable` quorum cannot
+                // license one. The majority invariant (`2·quorum > seat_count`) is what makes the
+                // two provably disjoint, so exactly one of these objects can ever be acceptable
+                // for a given receipt set.
+                Obj::ReceiptLicensed { claim, receipts } | Obj::ProducerDefaulted { claim, receipts } => {
+                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        claim,
+                        receipts,
+                        |key, message, sig, context| Self::verify_mldsa87_with_context_bool(key, message, sig, context),
+                    )
+                    .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
+                    use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
+                    match (object, quorum) {
+                        (Obj::ReceiptLicensed { .. }, Q::Licensed { .. })
+                        | (Obj::ProducerDefaulted { .. }, Q::ProducerUnavailable { .. }) => {}
+                        (Obj::ReceiptLicensed { .. }, Q::ProducerUnavailable { .. }) => {
+                            return Err(format!("claim {claim} is licensed by a quorum that says the producer withheld"));
+                        }
+                        (Obj::ProducerDefaulted { .. }, Q::Licensed { .. }) => {
+                            return Err(format!("claim {claim} is defaulted by a quorum that verified its trace"));
+                        }
+                        _ => unreachable!("the outer arm matched exactly these two object kinds"),
+                    }
+                }
+                // **Everything below carries no authorization this layer can check, and is
+                // therefore refused on the transaction path** (audit M-01).
+                //
+                // Each of these folds into consensus state and each was reachable by any stranger
+                // for one ordinary transaction fee:
+                //
+                // * `BondRetireRequested { bond }` names a PUBLIC premine outpoint and flips that
+                //   bond to `Retiring`. There is no inverse and no owner binding, so one
+                //   transaction permanently stops any producer — including, on the RC, the only
+                //   one. Re-admitting it needs an owner signature over the bond key.
+                // * `ClassFrozen` carries a contradiction certificate whose signatures
+                //   `check_class_contradiction_shape_v2` explicitly defers to "the acceptance
+                //   layer" — which had no arm for it. `adjudicate_class_contradiction_v1`, the
+                //   version that takes a verifier, is wired only into the other band. A forged
+                //   certificate freezes a class permanently (there is deliberately no
+                //   `ClassUnfrozen`); inert today only because the liveness floor is exempt, and
+                //   armed the moment a second class exists.
+                // * `PanelBound` and `BondRegistered` were already refused here, for reasons the
+                //   ride list states.
+                //
+                // Refusing is not the final answer for either — a bond must eventually be able to
+                // retire and an emergency freeze must eventually be pullable — but a door that
+                // cannot be authenticated is better shut than open, and `palw_lifecycle_objects_v2`
+                // refuses them at admission for the same reason. This arm is the second lock.
+                Obj::BondRetireRequested { .. } => {
+                    return Err("a bond retirement carries no owner authorization; the object is refused".to_string());
+                }
+                Obj::ClassFrozen { .. } => {
+                    return Err("a class freeze carries no verified contradiction; the object is refused".to_string());
+                }
+                // Objects the ride list already refuses, and objects with nothing to check here.
+                // **This match is EXHAUSTIVE on purpose**: the `_ => {}` it replaces is what let
+                // four money-moving object kinds through in silence, and an exhaustive match makes
+                // adding a fifth a decision somebody has to write down.
+                Obj::BondRegistered { .. } | Obj::PanelBound { .. } => {}
+                Obj::FreePromptCommitted { .. } => {}
             }
         }
         Ok(())
+    }
+
+    /// `verify_mldsa87_with_context` as a `bool`, which is the shape every PALW verifier callback
+    /// takes — one place, so two call sites cannot disagree about what an error means.
+    fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
+        verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     }
 
     /// The panel's anchor, derived from THIS candidate's chain (Decision 7's sortition input).

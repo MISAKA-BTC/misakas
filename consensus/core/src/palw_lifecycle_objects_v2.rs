@@ -99,9 +99,28 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtOpened { .. }
         | PalwConsensusObjectV2::CourtClosed { .. }
         | PalwConsensusObjectV2::CourtDisclosed { .. }
-        | PalwConsensusObjectV2::CourtVerdictPosted { .. }
-        | PalwConsensusObjectV2::BondRetireRequested { .. }
-        | PalwConsensusObjectV2::ClassFrozen { .. } => Ok(()),
+        | PalwConsensusObjectV2::CourtVerdictPosted { .. } => Ok(()),
+        // **Audit M-01: a door nobody can authenticate is shut.**
+        //
+        // `BondRetireRequested { bond }` carried no signature and no owner binding, and a bond key
+        // IS a premine outpoint — a public constant. One ordinary transaction from any stranger
+        // flipped any bond to `Retiring`, with no inverse; on a network with one producer that is a
+        // permanent halt for a transaction fee. `ClassFrozen`'s contradiction certificate has
+        // signatures that `check_class_contradiction_shape_v2` explicitly defers to "the acceptance
+        // layer", which had no arm for this object — so a forged certificate froze a class forever,
+        // and there is deliberately no `ClassUnfrozen`.
+        //
+        // Both belong on chain eventually and neither can be re-admitted without carrying its own
+        // authorization: an owner signature over the bond key, and a contradiction adjudicated by
+        // `adjudicate_class_contradiction_v1` (which takes a verifier, and is wired only into the
+        // other band today). Until then they are refused here AND at acceptance — one lock is a
+        // lock somebody removes while refactoring.
+        PalwConsensusObjectV2::BondRetireRequested { .. } => Err(
+            "a bond retirement carries no owner authorization — anyone could retire anyone's bond, and a bond key is a public outpoint",
+        ),
+        PalwConsensusObjectV2::ClassFrozen { .. } => Err(
+            "a class freeze carries a contradiction certificate no layer verifies — a forged one freezes a class permanently, and there is no unfreeze",
+        ),
         // **ADR-0049 Decision H: a class MAY register post-genesis — gated, not forbidden.**
         //
         // The objection this refusal carried is correct and it is a statement about CHECKING: a
@@ -240,7 +259,7 @@ mod tests {
     #[test]
     fn a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order() {
         let first = lifecycle_tx(PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC1), receipts: Vec::new() });
-        let second = lifecycle_tx(PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) });
+        let second = lifecycle_tx(PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC2), receipts: Vec::new() });
         let unrelated = carrier(crate::subnets::SUBNETWORK_ID_NATIVE, Vec::new());
         let out = palw_lifecycle_objects_from_accepted_txs_v2(&[first.clone(), unrelated, second.clone()]);
 
@@ -254,6 +273,32 @@ mod tests {
         assert_eq!(out.objects[0].carrier, first.id(), "attributed to the transaction that carried it");
         // Acceptance ORDER is consensus: the transition folds them in this sequence.
         assert_eq!(out.objects[1].carrier, second.id());
+    }
+
+    /// **Audit M-01: the two doors nobody could authenticate are shut, and say so.**
+    ///
+    /// `BondRetireRequested` names a bond key — a PUBLIC premine outpoint — and carried no owner
+    /// signature, so one ordinary transaction from any stranger retired any bond, permanently and
+    /// with no inverse. `ClassFrozen`'s contradiction certificate has signatures the shape check
+    /// explicitly defers to "the acceptance layer", which had no arm for the object at all.
+    #[test]
+    fn the_two_unauthenticated_objects_may_not_ride() {
+        for (object, needle) in [
+            (PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) }, "owner authorization"),
+            (
+                PalwConsensusObjectV2::ClassFrozen {
+                    class_id: h64(1),
+                    certificate: crate::palw_state_v2::tests::contradiction(h64(1)),
+                },
+                "no layer verifies",
+            ),
+        ] {
+            let err = palw_lifecycle_object_may_ride_v2(&object).unwrap_err();
+            assert!(err.contains(needle), "the refusal must say why: got {err}");
+            let out = palw_lifecycle_objects_from_accepted_txs_v2(&[lifecycle_tx(object)]);
+            assert!(out.objects.is_empty(), "and it must not reach the transition");
+            assert_eq!(out.skipped.len(), 1, "skipped with its reason, not silently dropped");
+        }
     }
 
     /// The three kinds that may not ride, each for its own reason, each skipped with that reason

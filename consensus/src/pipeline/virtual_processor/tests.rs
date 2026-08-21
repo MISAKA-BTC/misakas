@@ -904,9 +904,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     // makes two blocks and stops.
     let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
         .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
-            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
-                kaspa_consensus_core::config::premine::premine_outpoint(i),
-            ),
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(i)),
             pubkey: if i == 0 { keypair.verification_key.as_ref().to_vec() } else { vec![7u8.wrapping_add(i as u8); 32] },
             operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
@@ -1017,6 +1015,66 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     let after = ctx.consensus.palw_producer_facts_v2(bundle.base_class_id, Some(bond_key.0)).expect("still a V2 network");
     assert_eq!(after.epoch_produced_blocks, 1, "one block of this class, counted");
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
+}
+
+/// **Audit M-01: one unauthenticated transaction used to slash a producer and every panel seat.**
+///
+/// `ProducerDefaulted { claim, receipts: [] }` carried no signature of any kind, the acceptance
+/// match had no arm for it (`_ => {}`), and the transition folded it — charging every seat
+/// `claim.reserved` through `slash_silent_seats` and debiting the producer's bond through
+/// `void_and_slash`. `validate_receipt_quorum_v2` — which checks seat membership, the ML-DSA-87
+/// signature, dedup, the window AND the quorum — was written, tested, and had no caller anywhere.
+///
+/// This drives the acceptance layer directly, because that is the layer that was empty. Deleting
+/// either half of the fix makes it pass again: the arm, or the exhaustive match that stops a new
+/// object kind from slipping past without a decision.
+#[tokio::test]
+async fn palw_v2_an_unsigned_receipt_set_cannot_slash_anyone() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let claim = *state.claims_iter().next().expect("two blocks made two claims").0;
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: tip,
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 3,
+        subsidy: 0,
+    };
+
+    // The attack, verbatim: name a real claim, carry nothing.
+    for object in [Obj::ProducerDefaulted { claim, receipts: Vec::new() }, Obj::ReceiptLicensed { claim, receipts: Vec::new() }] {
+        let err = vp
+            .palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&object))
+            .expect_err("an unsigned receipt set must not be able to move a claim");
+        assert!(err.contains("quorum"), "and the refusal must name the missing quorum: got {err}");
+    }
+
+    // The two doors that cannot be authenticated at all are shut here too, so removing the ride
+    // list's refusal alone does not re-open them.
+    let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+        0,
+    ));
+    let err = vp
+        .palw_v2_validate_objects(&state, &bundle.state, &point, &[Obj::BondRetireRequested { bond }])
+        .expect_err("anyone could retire anyone's bond");
+    assert!(err.contains("owner authorization"), "got {err}");
 }
 
 /// **The producer contract reads the LIVE chain, not the genesis bundle** (ADR-0042).

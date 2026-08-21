@@ -884,7 +884,13 @@ mod tests {
             &ctx(4, 103, 4),
             &[PalwConsensusObjectV2::ReceiptLicensed {
                 claim: claim_id,
-                receipts: vec![crate::palw_state_v2::PalwSeatVerdictV2 { seat_bond: bond_key(2), served: true }],
+                receipts: vec![crate::palw_panel_v2::PalwSeatReceiptV2 {
+                    claim: Hash64::default(),
+                    verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                    seat_bond: bond_key(2),
+                    signed_daa: 0,
+                    signature: Vec::new(),
+                }],
             }],
             None,
         )
