@@ -504,12 +504,14 @@ mod tests {
         // the declared one here understated the floor's own ladder by two rounds and the price of
         // provisioning by the same.
         let floor_worst = worst_case_step_leaf_count_v1(&floor).expect("the floor is inside the cap");
-        assert_eq!(floor_worst, 184_456, "the floor's longest job, measured");
-        assert_eq!(rounds(floor_worst), 18);
+        // Re-measured when the graph gained the narrowings the engine performs: the layer table
+        // doubled, so the leaf count did too. 184,456 was the eighteen-step graph's figure.
+        assert_eq!(floor_worst, 366_728, "the floor's longest job, measured");
+        assert_eq!(rounds(floor_worst), 19);
 
         assert_eq!(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, PALW_STEP_MAX_LEAVES);
         assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT), 22);
-        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT) - rounds(floor_worst), 4, "the price of the whole step space");
+        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT) - rounds(floor_worst), 3, "the price of the whole step space");
 
         // And it really is every class: the cap is what `worst_case_step_leaf_count_v1` enforces,
         // so a class the ladder cannot reach is a class that was already inadmissible.

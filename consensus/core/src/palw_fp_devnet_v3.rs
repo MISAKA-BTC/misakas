@@ -75,11 +75,19 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 /// gate demands `window_court > this`, so the constant is what a fleet measurement replaces, and
 /// until it does, the ratio here (2400 vs 1200) is the safety factor.
 /// The court's SHAPE, from which `worst_case_duration_daa` is derived (ADR-0042 Decision 8:
-/// `(ceil(log2(leaves)) + terminal) × turn_deadline`). 2^16 leaves = 16 bisection rounds, +2
-/// terminal, × 60 DAA per turn = 1,080 — inside `WINDOW_COURT` (2,400) with room to spare. The
-/// leaf count is a property of the registered class catalog; the RC genesis loader is where it
-/// gets checked against the catalog preimage rather than asserted.
-const COURT_MAX_STEP_LEAVES: u64 = 1 << 16;
+/// `(ceil(log2(leaves)) + terminal) × turn_deadline`).
+///
+/// **The whole step space, not a number sized for today's catalog** (ADR-0049 Decision C,
+/// `assemble_palw_rc_identity_v2` gate 5). This was `1 << 16`, chosen when BASE-0's graph was
+/// eighteen steps per layer; declaring the narrowings the engine performs took its longest job to
+/// 366,728 leaves and the ladder could no longer reach its own liveness floor. Sizing a ladder to
+/// the class set of the day is how that happens, and the value is inside `palw_ruleset_id_v2`, so
+/// it cannot be raised afterwards.
+///
+/// 2^22 leaves = 22 bisection rounds, +2 terminal, × 60 DAA per turn = 1,440 — still inside
+/// `WINDOW_COURT` (2,400). Nothing deeper than the cap is admissible at all, so this ladder cannot
+/// fail to reach a class that exists.
+const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 const COURT_TURN_DEADLINE: u64 = 60;
 const COURT_TERMINAL_ROUNDS: u32 = 2;
 

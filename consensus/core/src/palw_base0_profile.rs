@@ -50,7 +50,7 @@ use crate::palw_step::{
 };
 use crate::palw_step_refute::{
     KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE,
-    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
 };
 use crate::{Hash64, palw_step::PalwStepError};
 
@@ -78,25 +78,166 @@ pub struct PalwBase0GeometryV1 {
     pub tile_len: u32,
 }
 
+/// **The BASE-0 layer graph, as the engine performs it** (ADR-0049 Decision F, ADR-0050 Decision A).
+///
+/// # Why this exists
+///
+/// The profile used to be written by hand beside an engine written by hand, and the two described
+/// different computations. Measured: the engine performs **thirty-six** steps per layer and the
+/// profile declared **eighteen** — every arithmetic op and not one of the narrowings that follow
+/// them, plus no rotation of K at all.
+///
+/// That is not a cosmetic gap. `base0_row`'s `RmsNorm` and `AddElem` arms read their inputs through
+/// `as_i8`, which is `i8::try_from`. A declared `RmsNorm` returns Qk and a declared `AddElem`
+/// returns the `i32` sum of two `int8` codes, range `[-256, 254]`. So on the declared graph the
+/// first projection of every layer and both residual sites were `InputSetNotCanonical` — the class
+/// could not be adjudicated anywhere the values left the `int8` lane, which is everywhere they
+/// carry signal.
+///
+/// # What a narrowing needs
+///
+/// Every `Requantize` node names a registered tensor, because the court resolves a node's
+/// parameters through `PalwWeightOracleV1` and a parameter that cannot be opened is a step that
+/// cannot be adjudicated. That includes the three the engine holds as constants —
+/// `QK_TO_CODE`, `CODE_CLAMP`, `CODE_PRODUCT_TO_CODE`. A constant the court must reproduce is
+/// either part of a kernel's identity or part of the artifact, and putting it in the artifact keeps
+/// ADR-0040 Decision D's op set at ten rather than minting a descriptor per constant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0IrWidthV1 {
+    Hidden,
+    KvDim,
+    FfnDim,
+    HeadDim,
+    /// `multiplier x kv_len(position)` — attention scores and their softmax.
+    KvScaled(u32),
+}
+
+/// Where a step's operand comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0IrInputV1 {
+    /// An earlier step of this layer, by IR index.
+    Step(u16),
+    LayerIn,
+    CachedK,
+    CachedV,
+}
+
+/// One step, named the way the engine names it.
+#[derive(Clone, Copy, Debug)]
+pub struct Base0IrNodeV1 {
+    pub op: PalwStepOpKindV1,
+    /// Which cache, if any, this step's output is written to. **On the ROTATED key**, because that
+    /// is what a later position's attention reads — a court recomputing against unrotated keys
+    /// convicts every honest producer. The hand-written table carried the role on the raw
+    /// projection.
+    pub role: PalwStepNodeRoleV1,
+    pub kernel: &'static str,
+    /// The registered tensor this step reads its weight or parameters from; empty means the step
+    /// reads only its opened inputs.
+    pub weight: &'static str,
+    pub out: Base0IrWidthV1,
+    pub inputs: &'static [Base0IrInputV1],
+}
+
+use Base0IrInputV1::{CachedK, CachedV, LayerIn, Step};
+use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvScaled};
+
+/// The thirty-six steps, in the engine's own order (`misaka-palw-base0/src/engine.rs`).
+pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
+    // --- attention ---------------------------------------------------------------------------
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "blk.{layer}.attn_norm.weight", Hidden, &[LayerIn]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_norm.requant", Hidden, &[Step(0)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_q.weight", Hidden, &[Step(1)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_q.requant", Hidden, &[Step(2)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_k.weight", KvDim, &[Step(1)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_k.requant", KvDim, &[Step(4)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_v.weight", KvDim, &[Step(1)]),
+    c(PalwStepOpKindV1::MulElem, PalwStepNodeRoleV1::VCacheWrite, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_v.requant", KvDim, &[Step(6)]),
+    // The rotation of Q **and of K**. The engine rotates both; the declared graph rotated neither's
+    // narrowing and K not at all, so a court recomputing attention read unrotated keys — which
+    // convicts every honest producer, the one failure this court may never have.
+    n(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", Hidden, &[Step(3)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.rope_clamp.requant", Hidden, &[Step(8)]),
+    n(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", KvDim, &[Step(5)]),
+    c(PalwStepOpKindV1::MulElem, PalwStepNodeRoleV1::KCacheWrite, KDESC_BASE0_REQUANTIZE, "blk.{layer}.rope_clamp.requant", KvDim, &[Step(10)]),
+    // Scores, amplified into the Qk band SoftMax is defined on, then narrowed back to codes so the
+    // value-weighted sum is an ordinary DotI8 (ADR-0040 Decision H).
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", KvScaled(1), &[Step(9), CachedK]),
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.attn_logit.scale", KvScaled(1), &[Step(12)]),
+    n(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, "", KvScaled(1), &[Step(13)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", KvScaled(1), &[Step(14)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "", KvDim, &[Step(15), CachedV]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", KvDim, &[Step(16)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_output.weight", Hidden, &[Step(17)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_output.requant", Hidden, &[Step(18)]),
+    // The residual, and the narrowing that was never declared.
+    n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(19), LayerIn]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_residual.requant", Hidden, &[Step(20)]),
+    // --- feed-forward ------------------------------------------------------------------------
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "blk.{layer}.ffn_norm.weight", Hidden, &[Step(21)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_norm.requant", Hidden, &[Step(22)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_gate.weight", FfnDim, &[Step(23)]),
+    n(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_gate.scale", FfnDim, &[Step(24)]),
+    n(PalwStepOpKindV1::Silu, KDESC_BASE0_SILU, "", FfnDim, &[Step(25)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.qk_to_code.requant", FfnDim, &[Step(26)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_up.weight", FfnDim, &[Step(23)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_up.requant", FfnDim, &[Step(28)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, "", FfnDim, &[Step(27), Step(29)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.code_product.requant", FfnDim, &[Step(30)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_down.weight", Hidden, &[Step(31)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_down.requant", Hidden, &[Step(32)]),
+    n(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, "", Hidden, &[Step(33), Step(21)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_residual.requant", Hidden, &[Step(34)]),
+];
+
+/// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
+const fn n(
+    op: PalwStepOpKindV1,
+    kernel: &'static str,
+    weight: &'static str,
+    out: Base0IrWidthV1,
+    inputs: &'static [Base0IrInputV1],
+) -> Base0IrNodeV1 {
+    Base0IrNodeV1 { op, role: PalwStepNodeRoleV1::Plain, kernel, weight, out, inputs }
+}
+
+/// The same, for a step whose output is a cache write.
+const fn c(
+    op: PalwStepOpKindV1,
+    role: PalwStepNodeRoleV1,
+    kernel: &'static str,
+    weight: &'static str,
+    out: Base0IrWidthV1,
+    inputs: &'static [Base0IrInputV1],
+) -> Base0IrNodeV1 {
+    Base0IrNodeV1 { op, role, kernel, weight, out, inputs }
+}
+
+/// Unused placeholder so `HeadDim` is not an unreachable variant while the IR is per-row.
+const _: Base0IrWidthV1 = HeadDim;
+
 /// The tensor names BASE-0's registration inventory must contain, with `{layer}` standing for the
 /// layer index. Public because the inventory is built from them and `verify_palw_genesis_v2`'s
 /// artifact root is over that inventory — one list, not two.
-pub const BASE0_TENSOR_NAMES: &[&str] = &[
-    "token_embd.weight",
-    "blk.{layer}.attn_norm.weight",
-    "blk.{layer}.attn_q.weight",
-    "blk.{layer}.attn_k.weight",
-    "blk.{layer}.attn_v.weight",
-    "blk.{layer}.attn_output.weight",
-    "blk.{layer}.attn_output.requant",
-    "blk.{layer}.rope_table",
-    "blk.{layer}.ffn_norm.weight",
-    "blk.{layer}.ffn_gate.weight",
-    "blk.{layer}.ffn_up.weight",
-    "blk.{layer}.ffn_down.weight",
-    "output_norm.weight",
-    "output.weight",
-];
+/// **Derived from the graph, not maintained beside it** (ADR-0049 Decision F).
+///
+/// Every tensor the layer IR names, deduplicated and in first-use order, plus the graph-level ones
+/// the pre and post tables read. Maintaining this list by hand is how it came to omit every
+/// narrowing's parameters while listing three norm gains the engine never reads.
+pub fn base0_tensor_names_v1() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = vec!["token_embd.weight"];
+    for ir in BASE0_LAYER_IR {
+        if !ir.weight.is_empty() && !names.contains(&ir.weight) {
+            names.push(ir.weight);
+        }
+    }
+    for graph_level in ["output_norm.weight", "output.weight"] {
+        if !names.contains(&graph_level) {
+            names.push(graph_level);
+        }
+    }
+    names
+}
 
 /// ADR-0040 Decision D's graph, for `geometry`.
 ///
@@ -117,6 +258,7 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     let kv_dim = geometry.attn_heads as u32 * geometry.attn_head_dim;
 
     // A node with no weight operand.
+    #[allow(unused_variables)]
     let plain = |kind: PalwStepOpKindV1, desc: &str, elements: u32, refs: Vec<u16>| PalwStepNodeV1 {
         op_kind: kind,
         role: PalwStepNodeRoleV1::Plain,
@@ -161,137 +303,42 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     )];
 
     // --- the per-layer template. Slot numbers are intra-table indices; `input_refs` uses them. ---
-    let attn_nodes = vec![
-        // 0: pre-attention norm over the layer input.
-        weighted(
-            PalwStepOpKindV1::RmsNorm,
-            KDESC_BASE0_RMS_NORM,
-            "blk.{layer}.attn_norm.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![PALW_STEP_INPUT_LAYER_IN],
-        ),
-        // 1..=3: Q, K, V projections. K and V are the cache writes — the role is what makes a
-        // later position's attention able to name them as inputs.
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.attn_q.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: kv_dim },
-            vec![0],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.attn_k.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::KCacheWrite,
-            PalwStepOutLenV1::Fixed { elements: kv_dim },
-            vec![0],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.attn_v.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::VCacheWrite,
-            PalwStepOutLenV1::Fixed { elements: kv_dim },
-            vec![0],
-        ),
-        // 4: rotary, by the PINNED TABLE — ADR-0040 Decision D's central absence. The angles
-        // depend only on (position, dimension), both bounded by this shape, so they are a
-        // registration artifact and `sinf`/`cosf` are not in the class at all.
-        weighted(
-            PalwStepOpKindV1::RopeImrope,
-            KDESC_BASE0_ROPE,
-            "blk.{layer}.rope_table",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: kv_dim },
-            vec![1],
-        ),
-        // 5: attention scores — one per cached key, so the width scales with the TRUE kv length
-        // of the position (never the padded cache length). Its second operand is the K SERIES,
-        // not a registered weight: the rotated query row multiplies the cached keys. That shape
-        // was unadjudicable until G5 was closed, and `kernel_can_serve_node_v1` is what now says
-        // so at registration rather than at the first dispute.
-        plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, 0, vec![4, PALW_STEP_INPUT_KV_K]),
-        // 6: the softmax over those scores, same width.
-        plain(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, 0, vec![5]),
-        // 7: the weighted sum of values — probabilities against the V series, same two-operand
-        // shape.
-        plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, kv_dim, vec![6, PALW_STEP_INPUT_KV_V]),
-        // 8: output projection, 9: back to int8, 10: the residual add.
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.attn_output.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![7],
-        ),
-        weighted(
-            PalwStepOpKindV1::MulElem,
-            KDESC_BASE0_REQUANTIZE,
-            "blk.{layer}.attn_output.requant",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![8],
-        ),
-        plain(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, hidden, vec![9, PALW_STEP_INPUT_LAYER_IN]),
-        // 11: the FFN norm, 12/13: gate and up, 14: SiLU, 15: the gating multiply,
-        // 16: down projection, 17: the second residual.
-        weighted(
-            PalwStepOpKindV1::RmsNorm,
-            KDESC_BASE0_RMS_NORM,
-            "blk.{layer}.ffn_norm.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![10],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.ffn_gate.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: geometry.ffn_dim },
-            vec![11],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.ffn_up.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: geometry.ffn_dim },
-            vec![11],
-        ),
-        plain(PalwStepOpKindV1::Silu, KDESC_BASE0_SILU, geometry.ffn_dim, vec![12]),
-        plain(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, geometry.ffn_dim, vec![14, 13]),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "blk.{layer}.ffn_down.weight",
-            &i8_per_layer,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![15],
-        ),
-        plain(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, hidden, vec![16, 10]),
-    ];
+    // **Generated from `BASE0_LAYER_IR`, which is the engine's own step order** (ADR-0049
+    // Decision F). This table used to be written here by hand beside an engine written by hand,
+    // and that is how it came to declare eighteen of the engine's thirty-six steps — every
+    // arithmetic op and not one of the narrowings — with K never rotated and the cache role on the
+    // raw projection instead of the rotated key.
+    let attn_nodes: Vec<PalwStepNodeV1> = BASE0_LAYER_IR
+        .iter()
+        .map(|ir| PalwStepNodeV1 {
+            op_kind: ir.op,
+            role: ir.role,
+            weight_name: ir.weight.to_string(),
+            weight_dtypes: if ir.weight.is_empty() { Vec::new() } else { i8_per_layer.clone() },
+            out_len: match ir.out {
+                Hidden => PalwStepOutLenV1::Fixed { elements: hidden },
+                KvDim => PalwStepOutLenV1::Fixed { elements: kv_dim },
+                FfnDim => PalwStepOutLenV1::Fixed { elements: geometry.ffn_dim },
+                HeadDim => PalwStepOutLenV1::Fixed { elements: geometry.attn_head_dim },
+                KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
+            },
+            tile_len: tile,
+            kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
+            input_refs: ir
+                .inputs
+                .iter()
+                .map(|r| match r {
+                    Step(k) => *k,
+                    LayerIn => PALW_STEP_INPUT_LAYER_IN,
+                    CachedK => PALW_STEP_INPUT_KV_K,
+                    CachedV => PALW_STEP_INPUT_KV_V,
+                })
+                .collect(),
+        })
+        .collect();
 
-    // The two `KvScaled` widths, patched in after construction so the slot comments above read as
-    // the graph rather than as a list of exceptions.
-    let mut attn_nodes = attn_nodes;
-    attn_nodes[5].out_len = PalwStepOutLenV1::KvScaled { multiplier: 1 };
-    attn_nodes[6].out_len = PalwStepOutLenV1::KvScaled { multiplier: 1 };
+    // The `KvScaled` widths come from the IR now. They used to be patched in here by slot
+    // index, which silently rewrote two unrelated nodes the moment the graph gained its narrowings.
 
     // --- post: the final norm and the logits ---
     let post_nodes = vec![
@@ -528,8 +575,11 @@ mod tests {
         assert!(p.gdn_nodes.is_empty(), "a plain decoder-only transformer has no GatedDeltaNet arm");
         assert_eq!(p.table_layer_span(PalwStepTableV1::Attn), 4, "every layer is an attention layer");
         assert_eq!(p.table_layer_span(PalwStepTableV1::Gdn), 0);
-        // 1 pre + 18 per layer x 4 + 2 post.
-        assert_eq!(p.global_node_count(), 1 + 18 * 4 + 2);
+        // 1 pre + the IR's own step count per layer x 4 + 2 post. The per-layer figure is the
+        // engine's, not a number kept beside it: it was 18 while the graph was hand-written and is
+        // 36 now that every narrowing the engine performs is declared.
+        assert_eq!(BASE0_LAYER_IR.len(), 36, "the engine performs thirty-six steps per layer");
+        assert_eq!(p.global_node_count() as usize, 1 + BASE0_LAYER_IR.len() * 4 + 2);
         // A profile id exists, which is what a class registration commits to.
         assert_ne!(p.shape_profile_id(), Hash64::default());
     }
@@ -556,7 +606,7 @@ mod tests {
                 seen += 1;
             }
         }
-        assert_eq!(seen, 21, "the whole graph was checked, not a prefix of it");
+        assert_eq!(seen, 1 + BASE0_LAYER_IR.len() + 2, "the whole graph was checked, not a prefix of it");
     }
 
     /// The float constants are zero and the float tables are empty, and every one of those is a
@@ -611,7 +661,7 @@ mod tests {
             }
         }
         used.sort_unstable();
-        let mut declared: Vec<&str> = BASE0_TENSOR_NAMES.to_vec();
+        let mut declared: Vec<&str> = base0_tensor_names_v1();
         declared.sort_unstable();
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
     }
@@ -724,26 +774,47 @@ mod tests {
                 checked += 1;
             }
         }
-        assert_eq!(checked, 21, "the whole graph was checked, not a prefix");
+        // 1 pre + 36 layer steps + 2 post. The layer count is the engine's own, since the table is
+        // generated from `BASE0_LAYER_IR`; it was 18 while the graph was written by hand.
+        assert_eq!(checked, 39, "the whole graph was checked, not a prefix");
+        assert_eq!(p.attn_nodes.len(), BASE0_LAYER_IR.len(), "the layer table IS the IR");
 
         // The two attention nodes multiply an activation by an opened row at a kv-scaled width —
-        // the shape that was structurally unadjudicable before G5a/b/c.
-        for slot in [5usize, 7] {
+        // the shape that was structurally unadjudicable before G5a/b/c. Their slots moved with the
+        // narrowings, so they are found by shape rather than by index.
+        let two_operand: Vec<usize> = p
+            .attn_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.weight_name.is_empty() && n.input_refs.len() == 2 && matches!(n.op_kind, PalwStepOpKindV1::MatMulQuant))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(two_operand.len(), 2, "Q.K^T and P.V are the graph's two weightless matmuls");
+        for slot in two_operand.iter().copied() {
             let node = &p.attn_nodes[slot];
             assert!(node.weight_name.is_empty(), "slot {slot} multiplies by an opened row, not a weight");
             assert_eq!(node.input_refs.len(), 2, "so it names the row it multiplies by");
         }
-        assert!(matches!(p.attn_nodes[5].out_len, PalwStepOutLenV1::KvScaled { .. }), "scores are kv-wide");
+        // Q.K^T is kv-wide (one score per cached key); P.V is not (it is a head-width sum over the
+        // value series). The two used to sit at fixed slots; they are found by shape now, because
+        // the IR moved them when it declared the narrowings between them.
+        let scores = two_operand[0];
+        assert!(matches!(p.attn_nodes[scores].out_len, PalwStepOutLenV1::KvScaled { .. }), "scores are kv-wide");
+        let weighted_values = two_operand[1];
+        assert!(
+            matches!(p.attn_nodes[weighted_values].out_len, PalwStepOutLenV1::Fixed { .. }),
+            "the value-weighted sum is head-width, not kv-width"
+        );
         // The gather takes no opened row and names its table.
         assert!(p.pre_nodes[0].input_refs.is_empty(), "a gather's operands are the table and the token id");
         assert_eq!(p.pre_nodes[0].weight_name, "token_embd.weight");
 
         // And the gate still refuses each shape it names, so the 100% above is a measurement
         // rather than a gate that stopped asking.
-        let mut orphan = p.attn_nodes[5].clone();
-        orphan.input_refs = vec![4];
+        let mut orphan = p.attn_nodes[scores].clone();
+        orphan.input_refs = vec![0];
         assert!(kernel_can_serve_node_v1(&orphan, false).is_err(), "a weightless matmul with one input has nothing to multiply");
-        let mut oracle_kv = p.attn_nodes[8].clone();
+        let mut oracle_kv = p.attn_nodes[2].clone();
         oracle_kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 1 };
         assert!(kernel_can_serve_node_v1(&oracle_kv, false).is_err(), "a kv-scaled weight matmul names no matrix the oracle holds");
         let mut fed_gather = p.pre_nodes[0].clone();
