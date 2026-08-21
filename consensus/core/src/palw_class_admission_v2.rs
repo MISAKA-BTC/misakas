@@ -393,6 +393,7 @@ mod tests {
             initial_target: 1,
             share_permille: 1,
             activation_daa: 0,
+            admission: None,
         }
     }
 

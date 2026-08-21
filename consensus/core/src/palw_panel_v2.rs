@@ -559,6 +559,7 @@ mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             register(1, 7, 0x21), // executor
             register(2, 8, 0x22),

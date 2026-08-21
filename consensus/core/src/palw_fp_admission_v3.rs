@@ -242,6 +242,7 @@ mod tests {
                 initial_target,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),

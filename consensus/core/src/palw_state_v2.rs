@@ -907,6 +907,23 @@ pub struct PalwBlockContextV2 {
     pub subsidy: u64,
 }
 
+/// **The material a post-genesis class registration must carry** (ADR-0049 Decision H).
+///
+/// The graph says what the class computes; the canonical job says what one unit of its work is.
+/// `verify_class_admission_v2` needs both and can derive neither: the profile id IS the class id,
+/// so a chain that did not hold the profile could not tell whether the id was earned, and the
+/// canonical job is the registrant's own declaration of what it is paid per.
+///
+/// Boxed inside the object because it is by far the largest thing a lifecycle transaction carries.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassAdmissionCarriageV2 {
+    /// The class's graph. `shape_profile_id()` must equal the registration's `class_id`.
+    pub profile: crate::palw_step::PalwShapeProfileV3,
+    /// The job the class is paid per, from which `pwu_per_inference` is counted rather than
+    /// believed.
+    pub canonical: crate::palw_v2::PalwJobContextV2,
+}
+
 /// The consensus objects a block can carry into the state, in the block's deterministic
 /// acceptance order. ACCEPTANCE (who may say this, with what proof) belongs to later PRs; the
 /// transition enforces referential integrity and the lattice.
@@ -948,6 +965,25 @@ pub enum PalwConsensusObjectV2 {
         /// disputable, and holding no cadence — so it can be soaked on a live chain before it
         /// takes a permille from anyone. See [`PalwClassStatusV2::Registered`].
         activation_daa: u64,
+        /// **What a POST-GENESIS registration must carry to be checkable (ADR-0049 Decision H).**
+        ///
+        /// Three policies coexisted: the lifecycle carriage refused `ClassRegistered` outright,
+        /// `verify_class_admission_v2` would have admitted it at the minimum grantable share, and
+        /// the state machine implements a weightless activation clock. Consensus does not benefit
+        /// from three answers, and the carriage's objection was the correct one — but it is a
+        /// statement about CHECKING, not about forbidding: a class entering a live chain moves the
+        /// share table and brings its own `pwu_rule`, and nothing checked either. Decisions C and D
+        /// are that check, so the refusal is replaced by the gate rather than removed.
+        ///
+        /// `None` is a GENESIS registration, whose class is checked against the catalog the ruleset
+        /// id commits to (`verify_palw_genesis_v2`) — the catalog IS the profile in committed form,
+        /// so carrying it again would be a second copy to disagree with.
+        ///
+        /// `Some` is a registration on a running chain, where there is no catalog to check
+        /// against: the object carries the graph and the canonical job, and
+        /// `verify_class_admission_v2` decides. It has to carry them anyway — nothing else on a
+        /// running chain can tell the court what the class computes.
+        admission: Option<Box<PalwClassAdmissionCarriageV2>>,
     },
     /// **The emergency off-switch, and it carries its own proof (gate item 12).**
     ///
@@ -2844,6 +2880,12 @@ fn apply_object(
             initial_target,
             share_permille,
             activation_daa,
+            // The admission carriage is the ACCEPTANCE layer's (ADR-0049 Decision H): running
+            // `verify_class_admission_v2` here would put a graph walk inside a pure transition,
+            // which is the same boundary `BondRegistered` draws for signatures. The transition
+            // enforces referential integrity and the lattice; the gate decides whether the object
+            // may be folded at all.
+            admission: _,
         } => {
             if builder.state.classes.contains_key(class_id) {
                 return Err(PalwStateV2Error::DuplicateClass(*class_id));
@@ -3777,6 +3819,7 @@ pub(crate) mod tests {
             initial_target: u128::MAX / 2,
             share_permille,
             activation_daa: 0,
+            admission: None,
         }
     }
 
@@ -3872,6 +3915,7 @@ pub(crate) mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
         ]
@@ -4377,6 +4421,7 @@ pub(crate) mod tests {
             initial_target: u128::MAX / 2,
             share_permille: 300,
             activation_daa: 500,
+            admission: None,
         });
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
 
@@ -5103,6 +5148,7 @@ pub(crate) mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 500,
                 activation_daa: 0,
+                admission: None,
             }],
             None,
         );
@@ -5357,6 +5403,7 @@ pub(crate) mod tests {
             initial_target: boot,
             share_permille: 500,
             activation_daa: 0,
+            admission: None,
         });
         objects.push(freeze(h64(2)));
         let (s1, _) = apply(&genesis, &p_half, &ctx(1, 100, 1), &objects, None);
@@ -5413,6 +5460,7 @@ pub(crate) mod tests {
             initial_target: boot,
             share_permille: 400,
             activation_daa: 0,
+            admission: None,
         });
         let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
         assert_eq!(state.class_share_permille(&h64(1)), Some(600), "the grant is funded by donation");
@@ -5454,6 +5502,7 @@ pub(crate) mod tests {
             initial_target: boot,
             share_permille: 500,
             activation_daa: 0,
+            admission: None,
         });
         objects.push(PalwConsensusObjectV2::BondRegistered {
             bond: bond_key(2),
@@ -5753,6 +5802,7 @@ pub(crate) mod tests {
             initial_target: u128::MAX / 2,
             share_permille: 100,
             activation_daa: 0,
+            admission: None,
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
@@ -6027,6 +6077,7 @@ pub(crate) mod tests {
             initial_target: u128::MAX / 2,
             share_permille: share,
             activation_daa: 0,
+            admission: None,
         };
 
         // The first class must be the base, at the whole 1000‰.
@@ -6078,6 +6129,7 @@ pub(crate) mod tests {
                 initial_target: 0,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             }],
             None,
         );
@@ -6101,6 +6153,7 @@ pub(crate) mod tests {
                     initial_target: u128::MAX / 2,
                     share_permille: 1000,
                     activation_daa: 0,
+                    admission: None,
                 }],
                 None,
             );

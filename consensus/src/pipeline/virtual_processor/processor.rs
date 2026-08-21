@@ -359,6 +359,11 @@ pub struct VirtualStateProcessor {
     /// The V2 bond policy — read for one thing: the withdrawal delay a retiring bond's collateral
     /// stays locked for (audit C-08's spend gate).
     pub(super) palw_bond_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwBondParamsV2>,
+    /// The whole ruleset, kept because `verify_class_admission_v2` takes the bundle rather than a
+    /// slice of it (ADR-0049 Decision H): the court's ladder, its three cost ceilings and the
+    /// base class id are all consulted in one gate, and handing it four fields would be four
+    /// places for one ruleset to be assembled differently.
+    pub(super) palw_v2_bundle: Option<kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2>,
     /// Decision 7's panel constants. Decision 10's producer carve is NOT here: it moved into
     /// `palw_state_params_v2`, because the escrow it decides is written into claim state at
     /// acceptance, and a number two structs can disagree about is a number the chain enforces
@@ -671,6 +676,10 @@ impl VirtualStateProcessor {
             },
             palw_bond_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.bond),
+                _ => None,
+            },
+            palw_v2_bundle: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
                 _ => None,
             },
             palw_panel_params_v2: match &params.palw_consensus_mode {
@@ -3764,24 +3773,47 @@ impl VirtualStateProcessor {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
                 }
-                Obj::ClassRegistered { class_id, .. } => {
-                    // **Refused, and the refusal is the wiring.** A class registration is the one
-                    // object whose validity is an arithmetic fact about a GRAPH — that every
-                    // kernel it reaches is adjudicable (ADR-0038 A4), that its longest job fits
-                    // the ruleset's ladder, and that its declared `pwu_per_inference` is the
-                    // counted one rather than a number that multiplies its own fork-choice
-                    // weight. `palw_class_admission_v2::verify_class_admission_v2` performs all
-                    // three, and it needs the shape profile and the canonical job to do it.
+                Obj::ClassRegistered { class_id, share_permille, admission, .. } => {
+                    // **ADR-0049 Decision H: the gate, where the refusal used to be.**
                     //
-                    // Neither rides this object. Until a carrier carries them, the honest answer
-                    // is no: the catch-all below used to let this through unchecked, which would
-                    // have installed a class whose disputes end `Unadjudicable` — rejected but
-                    // unslashed, the exact hole coverage exists to close. Genesis registrations
-                    // do not reach here; they are checked by `verify_palw_genesis_v2` against the
-                    // catalog the ruleset id commits to.
-                    return Err(format!(
-                        "class {class_id} cannot be registered on a running chain: the object carries no shape profile,                          so coverage, ladder depth and pwu cannot be checked (palw_class_admission_v2)"
-                    ));
+                    // A class registration is the one object whose validity is an arithmetic fact
+                    // about a GRAPH — that every kernel it reaches is adjudicable (ADR-0038 A4),
+                    // that its longest job fits the ruleset's ladder, that prosecuting it costs
+                    // what the ruleset allows (Decision C), and that its declared
+                    // `pwu_per_inference` is the COUNTED one rather than a number that multiplies
+                    // its own fork-choice weight. `verify_class_admission_v2` performs all four,
+                    // and it needs the shape profile and the canonical job to do it.
+                    //
+                    // Neither used to ride the object, so the honest answer was no. Both ride it
+                    // now, so the honest answer is "let the gate decide" — and the refusal that
+                    // stood here was never a policy, it was the absence of a check. Genesis
+                    // registrations do not reach this path at all; they are checked by
+                    // `verify_palw_genesis_v2` against the catalog the ruleset id commits to.
+                    let Some(bundle) = self.palw_v2_bundle.as_ref() else {
+                        return Err(format!("class {class_id} registered on a network with no V2 bundle"));
+                    };
+                    let Some(carriage) = admission.as_ref() else {
+                        return Err(format!(
+                            "class {class_id} carries no shape profile, so coverage, ladder depth, court cost and pwu                              cannot be checked (ADR-0049 Decision H)"
+                        ));
+                    };
+                    // Decision H's share rule: an entrant joins at the MINIMUM grantable share and
+                    // no more. A registrant that could name its own permille would be donating
+                    // itself an arbitrary slice of every incumbent's cadence, which is the share
+                    // table's own conservation rule read backwards.
+                    let floor = state_params.min_grantable_share_permille();
+                    if *share_permille != floor {
+                        return Err(format!(
+                            "class {class_id} registers at {share_permille}‰; a post-genesis entrant joins at the                              minimum grantable share ({floor}‰) — ADR-0049 Decision H"
+                        ));
+                    }
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
+                        bundle,
+                        &carriage.profile,
+                        &carriage.canonical,
+                        object,
+                    )
+                    .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
                 _ => {}
             }

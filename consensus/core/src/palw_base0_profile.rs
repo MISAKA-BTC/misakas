@@ -520,7 +520,10 @@ pub fn palw_rc_base0_registration_v1(
 /// Only the shape fields matter to `step_leaf_count`; the identity fields are fixed so two nodes
 /// deriving the RC's catalog reach the same numbers. It is not an execution — nothing runs this
 /// context — it is the yardstick the class is measured with.
-fn rc_job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> crate::palw_v2::PalwJobContextV2 {
+/// The RC's own job context, at a given `(prefill, decode)`. Public because a post-genesis
+/// registration must CARRY its canonical job (ADR-0049 Decision H) and there is one way to build
+/// the floor's — two would be two declarations of what one unit of its work is.
+pub fn rc_job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> crate::palw_v2::PalwJobContextV2 {
     let mut ctx = crate::palw_v2::PalwJobContextV2 {
         version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
         network_id: b"misaka-palw-rc".to_vec(),

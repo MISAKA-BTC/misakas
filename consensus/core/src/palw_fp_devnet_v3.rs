@@ -248,6 +248,7 @@ pub fn palw_fp_devnet_bundle_v3(
                 initial_target: GENESIS_CLASS_TARGET,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
                 bond: genesis_bond,

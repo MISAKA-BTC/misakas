@@ -392,6 +392,7 @@ mod tests {
                 initial_target: u128::MAX,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -468,6 +469,7 @@ mod tests {
                 initial_target: u128::MAX,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(2),
@@ -477,6 +479,7 @@ mod tests {
                 initial_target: u128::MAX,
                 share_permille: 500,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(bond_outpoint(2)),
@@ -592,6 +595,7 @@ mod tests {
                     initial_target: target,
                     share_permille: 1000,
                     activation_daa: 0,
+                    admission: None,
                 },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: PalwBondKeyV2(bond_outpoint(1)),
@@ -668,6 +672,7 @@ mod tests {
             initial_target,
             share_permille: 100,
             activation_daa: 0,
+            admission: None,
         }];
         let (state, _) = apply_palw_transition_v2(&base_state(), &state_params(), &ctx(2, 101, 2), &objects, None).unwrap();
         // One block past the epoch boundary (epoch_length 1000), because ADR-0045 Decision 2's

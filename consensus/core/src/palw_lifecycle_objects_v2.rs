@@ -22,12 +22,15 @@
 //!   genesis output holding at least what it declares. The transaction path stays shut until the
 //!   lock and the burn exist, because a registration in a block has no genesis set to be checked
 //!   against.)
-//! * **`ClassRegistered` may not.** A class entering a live chain moves the share table
+//! * **`ClassRegistered` may, but only carrying what makes it checkable** (ADR-0049 Decision H —
+//!   this used to be an outright refusal). A class entering a live chain moves the share table
 //!   (ADR-0045 Decision 3 funds an entrant by donation from every incumbent) and brings its own
-//!   `pwu_rule`. `verify_palw_genesis_v2` refuses `MaxPerAttempt` at genesis precisely because a
-//!   ceiling makes weight a measure of collateral rather than of work; letting a class in through
-//!   a transaction would route around that check. Keeping classes to genesis closes the H3 tail
-//!   structurally instead of with a second copy of the same rule.
+//!   `pwu_rule`, and nothing checked either — which was the real objection, and it is a statement
+//!   about CHECKING rather than about forbidding. So the object must carry its shape profile and
+//!   canonical job, and `verify_class_admission_v2` decides at acceptance: coverage over
+//!   coordinates, the four cost bounds, the ladder, and the derived-pwu rule the genesis loader
+//!   already enforces. A registration WITHOUT that material is still refused here, because there
+//!   is nothing to check it with.
 //! * **`FreePromptCommitted` may not.** It has its own subnetwork, its own codec and its own
 //!   pricing rules; accepting it here would be a second path into one object with one of them
 //!   unpriced.
@@ -99,14 +102,23 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtVerdictPosted { .. }
         | PalwConsensusObjectV2::BondRetireRequested { .. }
         | PalwConsensusObjectV2::ClassFrozen { .. } => Ok(()),
+        // **ADR-0049 Decision H: a class MAY register post-genesis — gated, not forbidden.**
+        //
+        // The objection this refusal carried is correct and it is a statement about CHECKING: a
+        // class entering a live chain moves the share table and brings its own `pwu_rule`, and
+        // nothing checked either. Decisions C and D are that check, so the refusal is replaced by
+        // the gate. What rides here is the SHAPE of a checkable registration; whether the graph
+        // covers, fits the ladder, costs what the ruleset allows and counts the pwu it declares is
+        // `verify_class_admission_v2`'s, at acceptance, where the bundle is in hand.
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. } => Ok(()),
+        PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
+            "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
+        ),
         PalwConsensusObjectV2::PanelBound { .. } => {
             Err("the chain derives panel bindings; a carried one would be a second answer to a question with one")
         }
         PalwConsensusObjectV2::BondRegistered { .. } => {
             Err("a bond registration declares collateral nothing on this path locks — bonds come from genesis")
-        }
-        PalwConsensusObjectV2::ClassRegistered { .. } => {
-            Err("a class entering a live chain moves the share table and brings its own pwu rule — classes come from genesis")
         }
         PalwConsensusObjectV2::FreePromptCommitted { .. } => {
             Err("a free-prompt commitment rides its own subnetwork, where its price is checked")
@@ -256,6 +268,9 @@ mod tests {
             collateral: 1_000_000_000_000,
             payout_payload: h64(0x9A11),
         };
+        // A class registration with NO admission material: still refused, because there is
+        // nothing to check it with (ADR-0049 Decision H replaced the blanket refusal with a gate,
+        // and a gate needs an input).
         let class_registration = PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(0xC1A55),
             artifact_root: h64(0xA7),
@@ -265,6 +280,7 @@ mod tests {
             initial_target: u128::MAX / 2,
             share_permille: 1000,
             activation_daa: 0,
+            admission: None,
         };
         let fp = PalwConsensusObjectV2::FreePromptCommitted {
             claim: h64(0xF1),
@@ -287,6 +303,50 @@ mod tests {
             assert!(out.objects.is_empty(), "{object:?} must not enter a chain here");
             assert_eq!(out.skipped.len(), 1, "and the drop is reported, not silent");
         }
+    }
+
+    /// **ADR-0049 Decision H: one registration policy, and it is a gate.**
+    ///
+    /// Three policies coexisted — the carriage refused `ClassRegistered` outright,
+    /// `verify_class_admission_v2` would have admitted it at the minimum grantable share, and the
+    /// state machine implements a weightless activation clock. The carriage's objection was the
+    /// right one and it was a statement about CHECKING, so the refusal is replaced by the gate:
+    /// a registration that carries the graph and the canonical job RIDES, and the acceptance layer
+    /// decides whether the graph covers, fits the ladder, costs what the ruleset allows and counts
+    /// the pwu it declares.
+    ///
+    /// What this layer owns is the shape: carried material rides, missing material does not.
+    #[test]
+    fn a_class_registration_rides_only_when_it_carries_what_checks_it() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use crate::palw_state_v2::PalwClassAdmissionCarriageV2;
+
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's own graph");
+        let carriage = PalwClassAdmissionCarriageV2 {
+            canonical: rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1),
+            profile: profile.clone(),
+        };
+        let registration = |admission: Option<Box<PalwClassAdmissionCarriageV2>>| PalwConsensusObjectV2::ClassRegistered {
+            class_id: profile.shape_profile_id(),
+            artifact_root: h64(0xA7),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 4_096 },
+            initial_target: u128::MAX / 2,
+            share_permille: 1,
+            activation_daa: 0,
+            admission,
+        };
+
+        // Carried: it rides, and the acceptance layer gets something to check.
+        let out = palw_lifecycle_objects_from_accepted_txs_v2(&[lifecycle_tx(registration(Some(Box::new(carriage))))]);
+        assert_eq!(out.objects.len(), 1, "a checkable registration reaches the chain");
+        assert!(out.skipped.is_empty());
+
+        // Missing: refused HERE, because the gate downstream has no input. The reason names the
+        // material rather than the policy — the policy is now "check it", not "never".
+        let out = palw_lifecycle_objects_from_accepted_txs_v2(&[lifecycle_tx(registration(None))]);
+        assert!(out.objects.is_empty());
+        assert!(out.skipped[0].1.contains("shape profile"), "got {:?}", out.skipped[0].1);
     }
 
     /// A payload that does not decode, or names another wire version, contributes no object and

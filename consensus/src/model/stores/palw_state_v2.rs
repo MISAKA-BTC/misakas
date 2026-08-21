@@ -265,6 +265,7 @@ mod tests {
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
                 activation_daa: 0,
+                admission: None,
             },
             PalwConsensusObjectV2::BondRegistered {
                 bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }),
