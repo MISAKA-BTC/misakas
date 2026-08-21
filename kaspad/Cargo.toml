@@ -82,13 +82,21 @@ toml = "0.8.10"
 serde_with = "3.7.0"
 
 [features]
+# The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
+# testnet-12 activate the lane at DAA 0, so a binary built without it refuses to start there
+# (`EvmLaneRequiresEvmBuild`) — which turned "forgot the flag" into a fleet-wide operational trap.
+# A plain `cargo build -p kaspad` now yields the binary those networks require; mainnet keeps the
+# lane inert by params (`evm_activation_daa_score: u64::MAX`), not by the build. The cost is that
+# the DEFAULT artifact now links secp256k1 via revm's ecrecover — the consensus rules stay PQ-only,
+# but a secp-free artifact needs an explicit `--no-default-features` build.
+default = ["evm"]
 heap = ["dhat", "kaspa-alloc/heap"]
 devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
 # MISAKA: devnet-only deterministic VLT fixture (consensus profile + matching runtime).
 devnet-vlt-fixture = ["kaspa-consensus/devnet-vlt-fixture", "misaka-palw/devnet-vlt-fixture"]
 semaphore-trace = ["kaspa-utils/semaphore-trace"]
-# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Empty in P1; opt-in EVM build
-# (revm executor + EVM lane lands in P2). The default build stays secp-free.
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Default since 2026-08-21 (see `default` above);
+# the revm executor runs IN this process — there is no separate EVM daemon.
 evm = ["kaspa-consensus/evm", "kaspa-mining/evm", "kaspa-p2p-flows/evm", "dep:kaspa-eth-rpc", "dep:kaspa-evm"]
 
 [lints]

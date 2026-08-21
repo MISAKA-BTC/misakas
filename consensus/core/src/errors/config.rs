@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Error, Debug, Clone)]
 pub enum ConfigError {
     #[error(
-        "Configuration: {0} activates the EVM lane at DAA 0 and this kaspad was built without the `evm` feature — it could sync but never build a block. Rebuild with: cargo build --release -p kaspad --features evm"
+        "Configuration: {0} activates the EVM lane at DAA 0 and this kaspad was built without the `evm` feature — it could sync but never build a block. The feature is on by default, so this is a `--no-default-features` build; rebuild with: cargo build --release -p kaspad"
     )]
     EvmLaneRequiresEvmBuild(String),
 

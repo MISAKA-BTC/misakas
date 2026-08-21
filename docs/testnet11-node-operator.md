@@ -91,25 +91,22 @@ into the worker. Treat `BUILD-MISMATCH` as "determinism untested", not as "hosts
 
 ## 3. Running the node
 
-### Build kaspad with the `evm` feature — this is not optional
+### Build kaspad — the EVM lane is part of the default build
 
 ```bash
-cargo build --release -p kaspad --bin kaspad --features evm
+cargo build --release -p kaspad --bin kaspad
 ```
 
 testnet-11 inherits `evm_activation_daa_score: 0` from the testnet params, so the EVM lane is
-active from the first block. A kaspad built **without** `--features evm` starts fine and syncs
-fine, then **panics the moment it builds a block template**:
+active from the first block — and since 2026-08-21 the `evm` feature is a **default** feature of
+kaspad, so a plain build already carries the in-process revm executor. There is no separate EVM
+daemon and nothing extra to run: starting kaspad IS starting the lane, and whether it executes is
+decided by the network's own params.
 
-```
-the EVM lane is active at DAA 0 but this kaspad was built without the `evm` feature
- — cannot build a valid template (rebuild with --features evm)
-```
-
-That is a deliberate fail-loud (the alternative is producing templates missing the EVM
-commitments, i.e. invalid blocks) — but the failure lands on the *miner*, minutes after a start
-that looked healthy. Build with the feature and it never arises. The same flag is used by
-`contrib/local-desktop-join/scripts/misaka-desktop-node.sh` and by the PoW E2E harness.
+The history matters only if you build with `--no-default-features`: such a binary **refuses to
+start** on this network (`EvmLaneRequiresEvmBuild`, a startup message naming the fix) rather than
+panicking at its first block template minutes after a healthy-looking start, which is what the
+pre-guard builds did. `--features evm` in older scripts is now a harmless no-op.
 
 ### Run
 

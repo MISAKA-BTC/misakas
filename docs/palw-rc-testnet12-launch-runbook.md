@@ -23,7 +23,7 @@ reject each other at the handshake, on purpose.
 
 Two properties worth knowing before anything else:
 
-* **The EVM lane is ON from DAA 0, and that makes `--features evm` mandatory for the fleet.**
+* **The EVM lane is ON from DAA 0 — and the lane ships in the default build (2026-08-21).**
   testnet-11 carries the lane and the RC is the network t11's traffic moves onto, so the RC carries
   it too. `MAINNET_PARAMS` never activates it, so the RC and mainnet differ here — a known,
   deliberate difference rather than an inherited accident.
@@ -125,11 +125,13 @@ a fact the **handshake reports** rather than something an operator has to be tru
 ## 2. Build
 
 ```bash
-cargo build --release -p kaspad --features evm
+cargo build --release -p kaspad
 ```
 
-**`--features evm` is required** — see §0. A binary without it refuses to start on this network
-rather than failing later.
+The `evm` feature is a **default** feature of kaspad, so the plain build is the fleet build — the
+revm executor runs in-process, no separate daemon. Only a `--no-default-features` binary lacks the
+lane, and it refuses to start on this network rather than failing later. `--features evm` in older
+scripts is a harmless no-op.
 
 No other feature flags. A `ConsensusV2` node needs no model runtime to **verify** — ADR-0042
 Decision 4. Only a producing node links the engine, and it links it because it is producing.
