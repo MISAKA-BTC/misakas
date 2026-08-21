@@ -41,6 +41,9 @@ Each was verified by mutation: reverting the fix makes the test fail with the st
 | **Ⅱ.3** | `ClassFrozen`'s contradiction certificate has signatures `check_class_contradiction_shape_v2` defers to "the acceptance layer", which had no arm. A forged one froze a class forever — there is deliberately no `ClassUnfrozen`. | `40002ddd` | Refused at both layers until `adjudicate_class_contradiction_v1` is wired. |
 | **Ⅱ.4** | `CourtOpened` named a challenger bond with **no authorization from it**. Everything `validate_court_opened_v2` checked was a fact *about* the bond, none about who spoke for it — and the transition disarms the claim's final deadline while a session is open. | `4724863a` | Challenger signature over the session id, in its own ML-DSA-87 context. The test asserts the message **and** the context. |
 | **Ⅱ.5** | A stateful lie in a 0x4b transaction **killed the honest block that accepted it**. 0x4b admission is purely stateless, so the transaction relayed and mined freely; the first honest block to accept it was disqualified, and the transaction stayed in the acceptance set for the next candidate. ~100 bytes, one fee, chain stops. | `4724863a` | A failing object is now **dropped** and the block stands. The verdict is a pure function of `(state, params, point, object)`, so every node drops the same ones. |
+| **§1 (half)** | A ConsensusV2 node with **no PALW state ran anyway**, reading absent state as "no policy" — state root unchecked, tips by blue work, any pruning point, deep-reorg comparator skipped. It does not fork, so nothing reported it. | `0cf7ead2` | Refuses at startup. The guard covers the node that did **not** process genesis — the dangerous case — and tells staging apart by its database (`past_pruning_points[0]`) rather than a flag. Two tests: the degraded state is real, and the assertion fires in it. |
+| **§4** | The free-prompt **commitment** signature was verified nowhere. `validate_stateless_v3` said "verified by the caller" and there was no caller; the only `validate_signature_v3` use in the tree was the SPEND envelope's. Any stranger's 0x4a tx created a claim bound to any bond outpoint it named. | `dc8ca79c` | The verifier is now an **argument** to the extraction walk, so "somebody else checks it" is unrepresentable. Tests pin the message (claim id), the key (carried), and the context. |
+| **producer ×4** | `has_epoch_room()` capped the liveness floor that admission exempts, and the budget table is written for the tip's epoch and read for the candidate's — so the producer **refused the first block of every epoch**. Plus: a `trace_retention_daa` promise with the material dropped, `should_mine` bypassed, and a tokio worker pinned. | `2870f1d6` | `the_liveness_floor_is_never_capped_by_an_epoch_budget` asserts a floor with a ZERO budget is still producible. Material is persisted before the block publishes; a write failure aborts the publish. Both CPU phases moved to `spawn_blocking`. |
 | **Ⅳ** | **The court convicted honest executions.** Three divergences from the engine, each invisible without >1 head *and* position >0: SoftMax (engine per head, court once over the concatenation); RoPE (court asked byte offset 0 — always position 0's row — and for the whole row's pairs, not one head's); P·V (V cache is `[position][kv_dim]`, court read `[out_dim][in_dim]` — the transpose, agreeing only at `kv_len == 1`). `map_refutation_outcome` → `ExecutorGuilty` → `void_and_slash` is a live money path, and `CourtClosed` may ride a transaction. | `5cf1a94c` | `the_court_convicts_no_leaf_of_an_honest_execution`: **914 leaves swept, 910 `NoFaultFound`, 0 convicted**, and 16 tampered tiles at the repaired nodes still convicted. Reverting each fix convicts **10 / 32 / 30** honest leaves. |
 
 > **Why a sweep and not a test.** All three court defects survived every single-coordinate test in
@@ -75,11 +78,17 @@ Four independent triggers:
   "Unit D site 2" IBD commit gate is **structurally vacuous** — `decide_ibd_commit_v2` is never
   reached on a real IBD and the commit is authorized unconditionally.
 
-**The critic's single recommendation is here**: give `PalwChainStateV2` a pruning-point import — a
-`RequestPruningPointPalwState` / `PruningPointPalwState` message pair, a capture in the pruning
-processor beside the overlay snapshot it already takes, and an `import_pruning_point_palw_state`
-that installs the root-verified carriage as the store's tip — **and make an absent tip on a
-`ConsensusV2` network a hard refusal at startup rather than a silent downgrade.**
+**The refusal half is done** (`0cf7ead2`): a ConsensusV2 consensus resuming a real history with no
+PALW tip now aborts at startup instead of running permissively. A silent consensus divergence is a
+loud startup message.
+
+**What remains is the half that lets such a node exist at all** — the critic's single
+recommendation: give `PalwChainStateV2` a pruning-point import — a `RequestPruningPointPalwState` /
+`PruningPointPalwState` message pair, a capture in the pruning processor beside the overlay
+snapshot it already takes, and an `import_pruning_point_palw_state` that installs the root-verified
+carriage as the store's tip. Until it exists, a stranger **cannot join** once the pruning point
+leaves genesis — which is a smaller failure than joining wrongly, and is where the refusal buys
+time.
 
 ### 2. The claim lattice has no configuration in which a claim reaches `Final`
 
@@ -97,13 +106,9 @@ reachable kernel-ID set — so a stranger can register a class naming catalogued
 the adjudicator cannot serve. Every dispute over those nodes ends `Unadjudicable`: **rejected but
 unslashed**, which is unfalsifiable work on a chain where bonds are supposed to be at risk.
 
-### 4. The free-prompt commitment signature is verified nowhere
+### 4. ~~The free-prompt commitment signature is verified nowhere~~ — **CLOSED** (`dc8ca79c`)
 
-`PalwFreePromptCommitmentEnvelopeV3::validate_signature_v3` (`palw_freeprompt_v3.rs:738`) has **no
-caller** — the one call site (`palw_fp_admission_v3.rs:201`) is on `PalwReceiptSpendEnvelopeV3`
-(`:816`). Its own doc states the contract: *"The signature is verified by the caller."* Any
-stranger's 0x4a transaction creates a claim bound to any bond outpoint it names, including the
-genesis premine bond pinned in `params.rs`.
+See the closed table above.
 
 ### 5. One solved PoW mints unbounded relay-valid blocks
 
@@ -146,16 +151,18 @@ which the class lottery refuses every attempt and there is no path back.
 
 ---
 
-## Bugs introduced in this session's own producer work
+## Bugs introduced in this session's own producer work — **all four CLOSED** (`2870f1d6`)
 
-Recorded here rather than quietly fixed, because three of the four are still open.
+Recorded rather than quietly fixed. Kept here because the first one is the kind of mistake worth
+remembering: a client-side re-creation of a chain-stopping deadlock that had already been removed
+from consensus.
 
 | Where | What | State |
 |---|---|---|
-| `palw_producer_v2.rs:85` | `has_epoch_room()` applies the epoch budget to the base class, which **admission deliberately exempts** (`palw_admission_v2.rs:234`) — re-creating client-side the deadlock removed from consensus in `58291251`. Worse: the budget table is written for the **tip's** epoch and looked up for the **candidate's**, so a missing entry becomes `unwrap_or(0)` and the producer **refuses the first block of every epoch**. | **OPEN** |
-| `palw_producer.rs` | Signs a `trace_retention_daa` obligation it structurally cannot meet — the execution's tiles and binding are dropped when `produce_one` returns, and nothing persists or serves them. The comment asserting the opposite reads as a verified property. | **OPEN** |
-| `palw_producer.rs` | Bypasses `FlowContext::should_mine`, "the gate every participation path consults" — it will produce with zero peers, on a stale sink, and while chain participation is closed. | **OPEN** |
-| `palw_producer.rs` | The job build, inference and nonce grind run synchronously inside an async task, pinning one tokio worker. Trivial at genesis difficulty; bites once the retarget pulls the search out to the 120 s cadence. | **OPEN** |
+| `palw_producer_v2.rs:85` | `has_epoch_room()` applies the epoch budget to the base class, which **admission deliberately exempts** (`palw_admission_v2.rs:234`) — re-creating client-side the deadlock removed from consensus in `58291251`. Worse: the budget table is written for the **tip's** epoch and looked up for the **candidate's**, so a missing entry becomes `unwrap_or(0)` and the producer **refuses the first block of every epoch**. | CLOSED |
+| `palw_producer.rs` | Signs a `trace_retention_daa` obligation it structurally cannot meet — the execution's tiles and binding are dropped when `produce_one` returns, and nothing persists or serves them. The comment asserting the opposite reads as a verified property. | CLOSED |
+| `palw_producer.rs` | Bypasses `FlowContext::should_mine`, "the gate every participation path consults" — it will produce with zero peers, on a stale sink, and while chain participation is closed. | CLOSED |
+| `palw_producer.rs` | The job build, inference and nonce grind run synchronously inside an async task, pinning one tokio worker. Trivial at genesis difficulty; bites once the retarget pulls the search out to the 120 s cadence. | CLOSED |
 
 ---
 
@@ -203,9 +210,11 @@ Recorded here rather than quietly fixed, because three of the four are still ope
 
 ## Reading order for the next session
 
-1. §1 — the pruning-point import. The critic's one recommendation, and the reason a stranger cannot
-   safely join at all.
-2. §2 — something has to file a `ReceiptLicensed`, or the lattice never turns over.
-3. §3 — authorize post-genesis `ClassRegistered` (or fence it off for t12) and wire the coverage
+1. **§1's remaining half — the pruning-point import.** The refusal now makes a stranger's node
+   stop instead of diverge; the import is what lets it join. Still the critic's one recommendation.
+2. **§2 — something has to file a `ReceiptLicensed`**, or the lattice never turns over and every
+   panel seat is slashed at `ReceiptTimeout`.
+3. **§3 — authorize post-genesis `ClassRegistered`** (or fence it off for t12) and wire the coverage
    gate; the two compose into unfalsifiable work.
-4. The producer bugs above — cheap, and one of them halts every epoch boundary.
+4. **§6 — the per-class DAA divides by 4 every epoch** on a network whose receipt lane cannot
+   produce. Latent while other blockers stop the chain first; it goes live the moment they lift.
