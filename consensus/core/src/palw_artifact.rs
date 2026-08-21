@@ -18,13 +18,19 @@
 //! size, filename, repo and revision — flat, and nothing opens against it. This module is the
 //! openable commitment it is not.
 //!
-//! ## What is NOT here
+//! ## The inventory (ADR-0049 Decision G)
 //!
-//! The **inventory**: which tensors, in what order, sliced into what rows. That is a property of the
-//! model as the pinned runtime lays it out, and it belongs with the shape profile — which has never
-//! been built for the pinned model (every profile in this tree is a test fixture). So this module
-//! provides the commitment and the proof; a class cannot USE it until its inventory exists. Landing
-//! the mechanism first means the remainder is "register a root", not "design a proof system".
+//! This module used to say the inventory was "NOT here" — which tensors, in what order, sliced into
+//! what rows — on the grounds that no shape profile existed for a real class. Both classes have one
+//! now, so [`PalwArtifactInventoryV1`] is that missing half: the canonical layout an
+//! `artifact_root` commits to, with the rules that make an opening's ABSENCE mean something.
+//!
+//! An opening proves "these bytes are at this position under this root". It proves nothing about
+//! what is NOT opened unless the layout is pinned too — without that, an artifact can carry a row
+//! twice at different offsets, leave a gap no entry covers, or append bytes nothing describes, and
+//! every individual opening still verifies. So the constructor refuses a duplicate, an overlap, a
+//! gap, a zero-length row and a non-canonical order, and "every byte is covered exactly once, in
+//! one order" becomes a property of the type rather than a hope about the producer.
 
 use crate::Hash64;
 use blake2b_simd::Params;
@@ -319,5 +325,231 @@ mod tests {
         let (mut opening, root) = open(0);
         opening.path.push(Hash64::from_u64_word(0xDEAD));
         assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::RootMismatch));
+    }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// The canonical inventory (ADR-0049 Decision G)
+// ---------------------------------------------------------------------------------------------
+
+/// Why an inventory is not canonical.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwInventoryError {
+    #[error("an empty inventory has no root, and a zero root would verify nothing forever")]
+    Empty,
+    #[error("row {index} of '{tensor}' is zero-length — a row that proves no bytes is a leaf that binds nothing")]
+    ZeroLengthRow { tensor: String, index: usize },
+    #[error("'{tensor}' appears twice at byte {offset}: two leaves for one position let a producer choose which one an opening meets")]
+    DuplicateRow { tensor: String, offset: u32 },
+    #[error("'{tensor}' is out of canonical order at index {index}: (name, layer, offset) ascending is what makes the order one nobody chooses")]
+    NotCanonicalOrder { tensor: String, index: usize },
+    #[error("'{tensor}' does not start at byte 0 — a tensor whose first row is not its first byte has a prefix nothing covers")]
+    DoesNotStartAtZero { tensor: String },
+    #[error("'{tensor}' has a gap or an overlap at byte {at}: expected the previous row to end there")]
+    GapOrOverlap { tensor: String, at: u32 },
+    #[error("the profile names '{tensor}' and the inventory does not carry it")]
+    ProfileTensorMissing { tensor: String },
+}
+
+/// **The canonical layout an `artifact_root` commits to.**
+///
+/// One entry per contiguous row slice, ordered by `(tensor_name, layer, byte_offset)` ascending,
+/// with every tensor tiled from byte 0 with no gap and no overlap. Constructible only through
+/// [`PalwArtifactInventoryV1::new`], so an inventory value IS a checked one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventoryV1 {
+    operands: Vec<PalwArtifactOperandV1>,
+}
+
+impl PalwArtifactInventoryV1 {
+    /// Check the layout, then keep it. Every rule refuses a way an opening's absence could be made
+    /// to mean nothing.
+    pub fn new(operands: Vec<PalwArtifactOperandV1>) -> Result<Self, PalwInventoryError> {
+        if operands.is_empty() {
+            return Err(PalwInventoryError::Empty);
+        }
+        let key = |o: &PalwArtifactOperandV1| (o.tensor_name.clone(), o.layer, o.row_start);
+        for (i, o) in operands.iter().enumerate() {
+            if o.bytes.is_empty() {
+                return Err(PalwInventoryError::ZeroLengthRow { tensor: o.tensor_name.clone(), index: i });
+            }
+            if i > 0 {
+                let prev = &operands[i - 1];
+                let (pk, ok) = (key(prev), key(o));
+                if pk == ok {
+                    return Err(PalwInventoryError::DuplicateRow { tensor: o.tensor_name.clone(), offset: o.row_start });
+                }
+                if pk > ok {
+                    return Err(PalwInventoryError::NotCanonicalOrder { tensor: o.tensor_name.clone(), index: i });
+                }
+                // Within one tensor the rows must tile it: the next row starts exactly where the
+                // previous ended. Across tensors the previous end says nothing.
+                if (prev.tensor_name.as_str(), prev.layer) == (o.tensor_name.as_str(), o.layer) {
+                    let end = prev.row_start.checked_add(prev.bytes.len() as u32).ok_or(PalwInventoryError::GapOrOverlap {
+                        tensor: o.tensor_name.clone(),
+                        at: prev.row_start,
+                    })?;
+                    if end != o.row_start {
+                        return Err(PalwInventoryError::GapOrOverlap { tensor: o.tensor_name.clone(), at: end });
+                    }
+                    continue;
+                }
+            }
+            if o.row_start != 0 {
+                return Err(PalwInventoryError::DoesNotStartAtZero { tensor: o.tensor_name.clone() });
+            }
+        }
+        Ok(Self { operands })
+    }
+
+    pub fn operands(&self) -> &[PalwArtifactOperandV1] {
+        &self.operands
+    }
+
+    /// `artifact_root` — the Merkle root over this layout's leaves, in this order.
+    pub fn root(&self) -> Hash64 {
+        let leaves: Vec<Hash64> = self.operands.iter().map(artifact_leaf_v1).collect();
+        artifact_root_v1(&leaves).expect("a non-empty inventory has a root")
+    }
+
+    /// **Every tensor the class's graph reads is carried.**
+    ///
+    /// The layout rules make an inventory internally consistent; this is what ties it to the class.
+    /// A registration whose artifact omits a tensor its own profile names is a class whose steps
+    /// adjudicate `Unadjudicable` at exactly the nodes that read it — coverage-clean and
+    /// unprosecutable, which is the shape ADR-0049 exists to refuse.
+    pub fn verify_covers_profile(&self, profile: &crate::palw_step::PalwShapeProfileV3) -> Result<(), PalwInventoryError> {
+        for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
+            for node in table.iter() {
+                if node.weight_name.is_empty() {
+                    continue;
+                }
+                let carried = self.operands.iter().any(|o| {
+                    // `{layer}` is substituted at interpretation time, so a template matches any
+                    // entry whose name agrees outside the placeholder.
+                    o.tensor_name == node.weight_name
+                        || (node.weight_name.contains("{layer}")
+                            && layer_template_matches(node.weight_name.as_str(), o.tensor_name.as_str()))
+                });
+                if !carried {
+                    return Err(PalwInventoryError::ProfileTensorMissing { tensor: node.weight_name.clone() });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `blk.{layer}.x` against `blk.7.x` — the placeholder matches one path segment and nothing else,
+/// so `blk.{layer}.w` cannot be satisfied by `blk.7.other.w`.
+fn layer_template_matches(template: &str, name: &str) -> bool {
+    let Some((head, tail)) = template.split_once("{layer}") else { return template == name };
+    let Some(rest) = name.strip_prefix(head) else { return false };
+    let Some(middle) = rest.strip_suffix(tail) else { return false };
+    !middle.is_empty() && middle.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    fn row(tensor: &str, layer: Option<u16>, row_start: u32, len: usize) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: tensor.to_string(), layer, row_start, bytes: vec![7u8; len] }
+    }
+
+    fn good() -> Vec<PalwArtifactOperandV1> {
+        vec![
+            row("blk.0.w", Some(0), 0, 4),
+            row("blk.0.w", Some(0), 4, 4),
+            row("blk.1.w", Some(1), 0, 8),
+            row("token_embd.weight", None, 0, 16),
+        ]
+    }
+
+    /// **The rules are what make an opening's ABSENCE mean something.**
+    ///
+    /// A Merkle opening proves "these bytes are at this position under this root" and says nothing
+    /// about what is not opened. Without a pinned layout an artifact can carry one row twice at
+    /// different offsets, leave a gap no entry covers, or append bytes nothing describes — and every
+    /// individual opening still verifies, so the court sees a consistent artifact that is not the
+    /// one the class registered.
+    #[test]
+    fn a_canonical_inventory_is_the_only_constructible_one() {
+        let inv = PalwArtifactInventoryV1::new(good()).expect("a tiled, ordered, gapless layout");
+        assert_eq!(inv.operands().len(), 4);
+        assert_ne!(inv.root(), Hash64::default(), "and it has a root");
+
+        // Empty: a zero root would verify nothing, forever.
+        assert_eq!(PalwArtifactInventoryV1::new(vec![]).unwrap_err(), PalwInventoryError::Empty);
+
+        // A zero-length row is a leaf that binds no bytes.
+        let mut z = good();
+        z[0].bytes.clear();
+        assert!(matches!(PalwArtifactInventoryV1::new(z).unwrap_err(), PalwInventoryError::ZeroLengthRow { .. }));
+
+        // Two leaves for one position let a producer choose which one an opening meets.
+        let mut dup = good();
+        dup.insert(1, row("blk.0.w", Some(0), 0, 4));
+        assert!(matches!(PalwArtifactInventoryV1::new(dup).unwrap_err(), PalwInventoryError::DuplicateRow { .. }));
+
+        // Order is ascending on (name, layer, offset) so that it is an order nobody chooses.
+        let mut unordered = good();
+        unordered.swap(0, 2);
+        assert!(matches!(PalwArtifactInventoryV1::new(unordered).unwrap_err(), PalwInventoryError::NotCanonicalOrder { .. }));
+
+        // A tensor whose first row is not its first byte has a prefix nothing covers.
+        let mut late = good();
+        late[0].row_start = 4;
+        late[1].row_start = 8;
+        assert!(matches!(PalwArtifactInventoryV1::new(late).unwrap_err(), PalwInventoryError::DoesNotStartAtZero { .. }));
+
+        // A gap: byte 4..8 of `blk.0.w` is described by nothing.
+        let mut gap = good();
+        gap[1].row_start = 8;
+        assert!(matches!(PalwArtifactInventoryV1::new(gap).unwrap_err(), PalwInventoryError::GapOrOverlap { at: 4, .. }));
+
+        // An overlap: byte 2..4 belongs to two rows, so an opening can prove either.
+        let mut over = good();
+        over[1].row_start = 2;
+        assert!(matches!(PalwArtifactInventoryV1::new(over).unwrap_err(), PalwInventoryError::GapOrOverlap { .. }));
+    }
+
+    /// A registration whose artifact omits a tensor its own profile names is coverage-clean and
+    /// unprosecutable: every step reading that tensor adjudicates `Unadjudicable`.
+    #[test]
+    fn an_inventory_must_carry_every_tensor_the_graph_reads() {
+        let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor's geometry is expressible");
+
+        // One row per tensor the graph names, layer 0 substituted — enough to satisfy coverage.
+        let mut operands: Vec<PalwArtifactOperandV1> = crate::palw_base0_profile::base0_tensor_names_v1()
+            .into_iter()
+            .map(|t| row(&t.replace("{layer}", "0"), None, 0, 8))
+            .collect();
+        operands.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
+        let inv = PalwArtifactInventoryV1::new(operands.clone()).expect("one row per tensor is a legal layout");
+        inv.verify_covers_profile(&profile).expect("every tensor the graph reads is carried");
+
+        // Drop the one the residual narrowing reads — the node ADR-0050 A added — and the gate says
+        // which tensor is missing rather than leaving it to be found by a dispute.
+        let without: Vec<PalwArtifactOperandV1> =
+            operands.into_iter().filter(|o| !o.tensor_name.contains("attn_residual")).collect();
+        let err = PalwArtifactInventoryV1::new(without)
+            .expect("still a legal layout")
+            .verify_covers_profile(&profile)
+            .expect_err("a graph reading a tensor nobody carries is unprosecutable at that node");
+        assert!(matches!(err, PalwInventoryError::ProfileTensorMissing { ref tensor } if tensor.contains("attn_residual")), "got {err:?}");
+    }
+
+    /// `{layer}` matches one numeric segment and nothing else, so a template cannot be satisfied by
+    /// a tensor that merely starts and ends the same way.
+    #[test]
+    fn the_layer_placeholder_matches_a_number_and_not_a_path() {
+        assert!(layer_template_matches("blk.{layer}.w", "blk.7.w"));
+        assert!(layer_template_matches("blk.{layer}.w", "blk.13.w"));
+        assert!(!layer_template_matches("blk.{layer}.w", "blk.7.other.w"), "a dot is not a digit");
+        assert!(!layer_template_matches("blk.{layer}.w", "blk..w"), "an empty layer is not a layer");
+        assert!(!layer_template_matches("blk.{layer}.w", "blk.7.x"));
     }
 }
