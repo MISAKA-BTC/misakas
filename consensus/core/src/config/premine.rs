@@ -284,12 +284,77 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
 /// only there — the community allocation. Keyed by [`NetworkId`] rather than [`NetworkType`]
 /// because t10 and t11 share a type and must NOT share a UTXO set: t10 is a running chain whose
 /// commitment cannot move.
+/// **The fee float each PALW-RC genesis bond receives, and why a network needs one.**
+///
+/// A `ConsensusV2` producer earns NOTHING it can spend until one of its claims reaches `Final`:
+/// the shipped split puts 62 % of the subsidy in the worker base and escrows exactly 62 %, so the
+/// coinbase pays the producer `worker_base − escrow = 0` (measured: both are 27,562,844,868 sompi
+/// on a 44,456,201,400 subsidy). The escrow is released by a `ReceiptLicensed` object, which rides
+/// a 0x4b transaction, which needs a funded input. Mining income requires a finalized claim;
+/// finalizing a claim requires mining income. **The loop is closed, and no amount of running the
+/// chain opens it** — testnet-12's first launch produced 600 blocks and could not license one.
+///
+/// So the genesis opens it, because the genesis is the only place that can. Each registered bond's
+/// PAYOUT address — an address the card already proves an operator holds the key for — receives a
+/// small spendable float, carved OUT of the main premine rather than minted beside it, so the
+/// supply is unchanged. 100 MSK covers roughly thirty thousand lifecycle submissions at the
+/// production relay rate (~300k sompi each); the bonds need one working submitter, not an endowment.
+///
+/// Scoped to networks that actually run a `ConsensusV2` registry. Everything else — testnet-10's
+/// running chain, testnet-11, devnet, simnet, mainnet — is byte-identical to before.
+pub const PALW_RC_BOND_FEE_FLOAT_SOMPI: u64 = 100 * SOMPI_PER_KASPA;
+
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     let mut set = misaka_premine_utxos_for(net);
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
         set.extend(testnet11_community_utxos());
     }
+    if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
+        set.extend(palw_rc_bond_fee_floats());
+    }
     set
+}
+
+/// The float outputs, one per shipped genesis bond, at indices after the main wallet — and the
+/// main wallet reduced by exactly their total, so `MISAKA_PREMINE_SOMPI` still names the supply.
+///
+/// Empty when the card is unset, which is what keeps a bundle-free testnet-12 identical to the
+/// network it was before any of this.
+fn palw_rc_bond_fee_floats() -> UtxoCollection {
+    let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
+    if cards.is_empty() {
+        return UtxoCollection::default();
+    }
+    let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(cards.len() + 1);
+    for (i, card) in cards.iter().enumerate() {
+        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
+        // After the main wallet, so no vault index moves and no bond outpoint is disturbed.
+        let outpoint = TransactionOutpoint { transaction_id: txid, index: (VAULT_COUNT + 1 + i) as u32 };
+        utxos.push((
+            outpoint,
+            UtxoEntry { amount: PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false },
+        ));
+    }
+    // The carve: the main wallet pays for every float, so the total premine is unchanged.
+    let total_float = PALW_RC_BOND_FEE_FLOAT_SOMPI
+        .checked_mul(cards.len() as u64)
+        .expect("a genesis registry is six rows, not enough to overflow");
+    let main = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(NetworkId::with_suffix(
+        NetworkType::Testnet,
+        12,
+    ))));
+    let main_outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
+    utxos.push((
+        main_outpoint,
+        UtxoEntry {
+            amount: MAIN_PREMINE_SOMPI.checked_sub(total_float).expect("the floats are a rounding error against 9B"),
+            script_public_key: main,
+            block_daa_score: 0,
+            is_coinbase: false,
+        },
+    ));
+    UtxoCollection::from_iter(utxos)
 }
 
 #[cfg(test)]
@@ -303,6 +368,49 @@ mod tests {
     /// for the VALUE-LESS test networks ONLY — used to fund / stand up a validator
     /// during the re-genesis E2E validation. NEVER mainnet.
     pub(super) const TESTNET_MAIN_SEED: &[u8] = b"misaka-testnet-premine-9b-claude-managed";
+
+    /// **A PALW network can fund its own first submitter** — the loop the launch found closed.
+    ///
+    /// The producer's coinbase pays it `worker_base − escrow`, and the shipped split makes those
+    /// two equal: mining income needs a finalized claim, finalizing needs a funded 0x4b
+    /// transaction, funding needs mining income. The genesis float is the only thing that opens
+    /// it, so this asserts the three properties that make it work at all: the floats exist at the
+    /// registry's own payout addresses, the supply does not move, and no other network is touched.
+    #[test]
+    fn the_rc_genesis_funds_every_bond_and_mints_nothing_extra() {
+        let t12 = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let set = genesis_premine_utxos_for(t12);
+        let total: u64 = set.values().map(|e| e.amount).sum();
+        let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
+
+        assert_eq!(total, MISAKA_PREMINE_SOMPI, "the floats are carved from the main wallet, never minted beside it");
+
+        if cards.is_empty() {
+            return; // an unset card is the bundle-free network, unchanged
+        }
+        // Every registered bond can pay a fee, at the address its own card names.
+        for card in cards {
+            let spk = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
+            let funded: u64 = set.values().filter(|e| e.script_public_key == spk).map(|e| e.amount).sum();
+            assert!(
+                funded >= PALW_RC_BOND_FEE_FLOAT_SOMPI,
+                "bond at premine #{} has no spendable float — it cannot submit a receipt quorum",
+                card.premine_index
+            );
+        }
+        // And the vault outputs the bonds are staked against are untouched, or the collateral the
+        // genesis gate checked would no longer be there.
+        for i in 0..VAULT_COUNT as u32 {
+            let outpoint = TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index: i };
+            assert_eq!(set.get(&outpoint).expect("vault present").amount, VAULT_PREMINE_SOMPI, "vault {i} moved");
+        }
+        // No other network gains a float.
+        for other in [NetworkId::with_suffix(NetworkType::Testnet, 10), NetworkId::with_suffix(NetworkType::Testnet, 11)] {
+            let n = genesis_premine_utxos_for(other).len();
+            let expected = if other.suffix == Some(11) { VAULT_COUNT + 1 + testnet11_community_utxos().len() } else { VAULT_COUNT + 1 };
+            assert_eq!(n, expected, "{other} must not gain RC floats");
+        }
+    }
 
     /// **The public PALW nets' 9B main wallet is the operator's address, and ONLY on those two.**
     ///
@@ -327,7 +435,16 @@ mod tests {
         for suffix in [11u32, 12] {
             let entry = main_of(NetworkId::with_suffix(NetworkType::Testnet, suffix));
             assert_eq!(entry.script_public_key, public_spk, "testnet-{suffix} pays the operator address");
-            assert_eq!(entry.amount, MAIN_PREMINE_SOMPI, "and it is the whole 9B, unchanged");
+            // testnet-12 carves each genesis bond's fee float OUT of this output (see
+            // `palw_rc_bond_fee_floats`) rather than minting beside it, so the main wallet is the
+            // whole 9B minus exactly those floats — and the SUPPLY is what stays unchanged, which
+            // `the_rc_genesis_funds_every_bond_and_mints_nothing_extra` asserts directly.
+            let carved = if suffix == 12 {
+                PALW_RC_BOND_FEE_FLOAT_SOMPI * crate::config::params::PALW_RC_GENESIS_BONDS.len() as u64
+            } else {
+                0
+            };
+            assert_eq!(entry.amount, MAIN_PREMINE_SOMPI - carved, "testnet-{suffix} main wallet is 9B less its carved floats");
         }
         // testnet-10 and the suffix-less testnet answer keep the Claude-managed wallet.
         assert_eq!(main_of(NetworkId::with_suffix(NetworkType::Testnet, 10)).script_public_key, claude_spk);
