@@ -157,6 +157,14 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// the transition, which runs only for chain blocks, and the selected parent is the one block
     /// of the mergeset that is one.
     pub palw_v2_escrow_withheld: u64,
+    /// **Audit C-08 part three: what a released bond's spend must destroy, per outpoint.**
+    ///
+    /// The lock keeps a live bond's collateral unspendable; this is the other end. A bond that was
+    /// slashed and then retired would otherwise walk away with its whole outpoint, and
+    /// `PalwBondStateV2::slashed`'s own documentation — "it leaves `collateral` and enters
+    /// circulation nowhere" — would be false at the only moment it mattered. Only RELEASED bonds
+    /// appear: a locked one cannot be spent, so it owes nothing yet.
+    pub palw_v2_bond_burns: std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -177,6 +185,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_payout_outputs: Vec::new(),
             palw_v2_locked_bonds: Default::default(),
             palw_v2_escrow_withheld: 0,
+            palw_v2_bond_burns: Default::default(),
         }
     }
 
@@ -207,9 +216,19 @@ pub(crate) struct BondSpendFilter<'a> {
     bond_view: Option<&'a ActiveBondView>,
     daa_score: u64,
     palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
+    /// What a RELEASED PALW bond's spend must destroy (audit C-08 part three). Distinct from
+    /// `palw_locked` because these are the outpoints a spend MAY touch — under an obligation
+    /// rather than freely — and a filter that could only say yes or no had no way to express that.
+    palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
 impl BondSpendFilter<'_> {
+    /// **What this transaction must leave unclaimed, in total.** The sum over its inputs of every
+    /// released PALW bond's slashed sompi — usually zero, because usually no input is a bond.
+    fn burn_owed(&self, tx: &Transaction) -> u64 {
+        tx.inputs.iter().filter_map(|input| self.palw_burns.get(&input.previous_outpoint)).fold(0u64, |a, b| a.saturating_add(*b))
+    }
+
     /// `true` iff `outpoint` is a known bond that is NOT releasable at `self.daa_score` (i.e. its
     /// locked output-0 must not be spent). Mirrors the legacy [`bond_spend_gate`] releasable test.
     fn locks(&self, outpoint: &TransactionOutpoint) -> bool {
@@ -323,11 +342,13 @@ impl VirtualStateProcessor {
             // Built when EITHER model has something to lock: the DNS view above the mergeset fence,
             // or a non-empty PALW V2 registry (audit C-08). `None` only when both are inert, which
             // keeps every shipped network byte-identical to the legacy own-body-only gate.
-            let bond_filter = (bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty()).then(|| BondSpendFilter {
-                bond_view: bond_gate_view.as_ref(),
-                daa_score: pov_daa_score,
-                palw_locked: &ctx.palw_v2_locked_bonds,
-            });
+            let bond_filter = (bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty() || !ctx.palw_v2_bond_burns.is_empty())
+                .then(|| BondSpendFilter {
+                    bond_view: bond_gate_view.as_ref(),
+                    daa_score: pov_daa_score,
+                    palw_locked: &ctx.palw_v2_locked_bonds,
+                    palw_burns: &ctx.palw_v2_bond_burns,
+                });
             let (validated_transactions, inner_multiset) =
                 self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
 
@@ -355,7 +376,15 @@ impl VirtualStateProcessor {
             for (validated_tx, _) in validated_transactions.iter() {
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
-                block_fee += validated_tx.calculated_fee;
+                // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
+                //
+                // A released PALW bond's spend must leave `slashed` sompi unclaimed by any output,
+                // and `calculated_fee` is exactly `in − out` — so without this the burn would be a
+                // REDIRECTION to the block's miner rather than a destruction, and `slashed`'s own
+                // documentation ("enters circulation nowhere") would still be false. Burned by
+                // don't-mint, the mechanism the §F service share already uses.
+                let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0);
+                block_fee += validated_tx.calculated_fee.saturating_sub(owed);
                 if finality_fee_active
                     && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
                 {
@@ -1895,6 +1924,24 @@ impl VirtualStateProcessor {
             && let Some(input) = transaction.inputs.iter().find(|input| filter.locks(&input.previous_outpoint))
         {
             return Err(TxRuleError::SpendsNonReleasableBond(input.previous_outpoint));
+        }
+        // **Audit C-08 part three: a released bond's spend must destroy what the bond lost.**
+        //
+        // The lock above keeps a live bond's collateral unspendable; this is the other end. Without
+        // it a bond that was slashed and then retired walks away with its whole outpoint, and
+        // `PalwBondStateV2::slashed`'s "it leaves `collateral` and enters circulation nowhere" is
+        // false at the only moment it means anything. `in − out` is what the transaction leaves
+        // unclaimed, and the accumulation site removes the same amount from the block's fee pool so
+        // it is destroyed rather than handed to the miner.
+        if let Some(filter) = bond_filter {
+            let owed = filter.burn_owed(transaction);
+            if owed > 0 {
+                let total_in: u64 = entries.iter().fold(0u64, |a, e| a.saturating_add(e.amount));
+                let total_out: u64 = transaction.outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value));
+                if total_in.saturating_sub(total_out) < owed {
+                    return Err(TxRuleError::BondBurnNotPaid { owed, left: total_in.saturating_sub(total_out) });
+                }
+            }
         }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
         // CONSENSUS path: DNS coinbase settlement is deliberately NOT consulted here
@@ -3729,7 +3776,8 @@ mod tests {
 
             let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
             let empty = std::collections::HashSet::new();
-            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty };
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
             assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
@@ -3750,23 +3798,71 @@ mod tests {
             let view = ActiveBondView::from_records([(dns_op, bond(dns_op))]);
             let palw: std::collections::HashSet<_> = [palw_op].into_iter().collect();
             let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
 
             // Both models live: each locks its own, and nothing else.
-            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw };
+            let both = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns };
             assert!(both.locks(&dns_op));
             assert!(both.locks(&palw_op));
             assert!(!both.locks(&outpoint(9)));
 
             // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
             // outpoint.
-            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty };
+            let dns_only = BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns };
             assert!(dns_only.locks(&dns_op));
             assert!(!dns_only.locks(&palw_op));
 
             // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
-            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw };
+            let palw_only = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns };
             assert!(palw_only.locks(&palw_op));
             assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
+        }
+
+        /// **Audit C-08 part three: a RELEASED bond owes what it lost, and the filter can say so.**
+        ///
+        /// The lock is binary — spendable or not — and the third part needs a third answer: this
+        /// outpoint MAY be spent, under an obligation. A bond that was slashed and then retired
+        /// would otherwise walk away with its whole outpoint, and `slashed`'s own documentation
+        /// ("it leaves `collateral` and enters circulation nowhere") would be false at the only
+        /// moment it means anything.
+        #[test]
+        fn a_released_bond_owes_the_burn_and_an_ordinary_transaction_owes_nothing() {
+            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, scriptvec};
+
+            let bond_op = outpoint(4);
+            let other = outpoint(5);
+            let empty = std::collections::HashSet::new();
+            let burns: std::collections::HashMap<_, _> = [(bond_op, 900u64)].into_iter().collect();
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &burns };
+
+            let spend = |ops: Vec<TransactionOutpoint>| {
+                Transaction::new(
+                    0,
+                    ops.into_iter()
+                        .map(|previous_outpoint| TransactionInput {
+                            previous_outpoint,
+                            signature_script: vec![],
+                            sequence: 0,
+                            sig_op_count: 0,
+                        })
+                        .collect(),
+                    vec![TransactionOutput::new(1, ScriptPublicKey::new(0, scriptvec!(0x51)))],
+                    0,
+                    kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                    0,
+                    vec![],
+                )
+            };
+
+            assert_eq!(filter.burn_owed(&spend(vec![bond_op])), 900, "a released bond's spend owes what it lost");
+            assert_eq!(filter.burn_owed(&spend(vec![other])), 0, "an ordinary spend owes nothing");
+            // Obligations ADD: one transaction releasing two slashed bonds destroys both.
+            let two: std::collections::HashMap<_, _> = [(bond_op, 900u64), (other, 100)].into_iter().collect();
+            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &two };
+            assert_eq!(filter.burn_owed(&spend(vec![bond_op, other])), 1_000);
+            // And a LOCKED bond never reaches this question — it cannot be spent at all, so it
+            // appears in no obligation map. The two answers are disjoint by construction.
+            assert!(!filter.locks(&bond_op), "a bond that owes a burn is one that may be spent");
         }
     }
 

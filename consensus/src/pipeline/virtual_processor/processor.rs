@@ -1124,6 +1124,9 @@ impl VirtualStateProcessor {
                     // spent of its worker reward, so this coinbase does not pay it twice.
                     ctx.palw_v2_escrow_withheld =
                         palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent)).unwrap_or(0);
+                    // Audit C-08 part three: and what a released bond's spend must destroy.
+                    ctx.palw_v2_bond_burns =
+                        palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
@@ -2242,12 +2245,18 @@ impl VirtualStateProcessor {
         // the template would build on a UTXO view that includes a spend every validating node
         // skips. Read from the store tip, which IS virtual's selected parent — and only when the
         // tip really names it, because a tip on another branch is not this candidate's registry.
-        ctx.palw_v2_locked_bonds = self
+        let virtual_palw_state = self
             .palw_state_params_v2
             .as_ref()
             .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
-            .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
-            .map(|(_, state)| self.palw_v2_locked_bond_outpoints(&state, virtual_daa_window.daa_score))
+            .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent);
+        ctx.palw_v2_locked_bonds = virtual_palw_state
+            .as_ref()
+            .map(|(_, state)| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
+            .unwrap_or_default();
+        ctx.palw_v2_bond_burns = virtual_palw_state
+            .as_ref()
+            .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
 
         // Calc virtual UTXO state relative to selected parent
@@ -3625,6 +3634,37 @@ impl VirtualStateProcessor {
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
             .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
+    }
+
+    /// **Audit C-08's third part: what a RELEASED bond's collateral still owes the burn.**
+    ///
+    /// The lock keeps a live bond's outpoint unspendable; this is what happens at the other end.
+    /// A bond that was slashed and then retired would otherwise walk away with its whole outpoint,
+    /// and `PalwBondStateV2::slashed`'s own documentation — "it leaves `collateral` and enters
+    /// circulation nowhere" — would be false at the only moment it mattered.
+    ///
+    /// Only bonds whose collateral is spendable appear: a locked one cannot be spent at all, so it
+    /// owes nothing yet. Same parent state, same walk, same reason as the lock beside it.
+    pub(super) fn palw_v2_bond_burn_obligations(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        now_daa: u64,
+    ) -> std::collections::HashMap<TransactionOutpoint, u64> {
+        let Some(bond_params) = self.palw_bond_params_v2.as_ref() else {
+            return Default::default();
+        };
+        state
+            .bonds_iter()
+            .filter(|(_, record)| {
+                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
+                    record,
+                    now_daa,
+                    bond_params.withdrawal_delay_daa(),
+                )
+            })
+            .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
+            .filter(|(_, owed)| *owed > 0)
+            .collect()
     }
 
     fn palw_v2_payout_outputs(

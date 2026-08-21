@@ -547,26 +547,20 @@ pub enum PalwBondStatusV2 {
 /// notion of stake was "an outpoint that held the money once". Every ceiling, every slash and
 /// Decision 7's Sybil bound would have been denominated in a balance the bond no longer had.
 ///
-/// Locked, in three cases, and the third is the one that makes a slash cost something:
+/// Locked in two cases:
 ///
 /// * **`Active`** — the bond is backing claims and may take more. Nothing to argue about.
 /// * **`Retiring`, inside the withdrawal delay** — the delay exists so a bond cannot leave before
 ///   its fraud is provable (`palw_fp_devnet_v3` asserts the delay exceeds that liability), and a
 ///   delay whose collateral is spendable throughout is a delay that delays nothing.
-/// * **anything with `slashed > 0`, forever (for now)** — `PalwBondStateV2::slashed` is documented
-///   as burned, "it leaves `collateral` and enters circulation nowhere". That sentence is only
-///   true if the sompi cannot be spent, and the transaction shape that would BURN the slashed part
-///   and return the remainder does not exist yet. Refusing the whole spend is the fail-closed
-///   reading — the same one `palw_audit_bond_spend_gate` takes for `SlashFlowOnly`, in the same
-///   words: refuse everything until the flow that could be right exists.
 ///
-///   It over-punishes, deliberately and visibly: a bond slashed by one sompi cannot withdraw the
-///   rest. The alternative is under-punishing to exactly zero, which is the defect. The remainder
-///   is frozen, not confiscated, and the burn rule is what unfreezes it.
+/// A slashed bond used to be locked FOREVER here, as the fail-closed placeholder for a burn rule
+/// that did not exist. It exists now ([`palw_bond_burn_obligation_v2`]): the collateral releases on
+/// the ordinary schedule and the spend must DESTROY what the bond lost, so the remainder is the
+/// owner's and the slashed sompi are nobody's. Freezing a whole collateral over one sompi of slash
+/// was the honest reading while the alternative was under-punishing to exactly zero; it stops
+/// being the honest reading once the money can actually be destroyed.
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
-    if bond.slashed > 0 {
-        return true;
-    }
     match bond.status {
         PalwBondStatusV2::Active => true,
         PalwBondStatusV2::Retiring { since_daa } => match since_daa.checked_add(withdrawal_delay_daa) {
@@ -575,6 +569,27 @@ pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, w
             Some(release_at) => now_daa < release_at,
         },
     }
+}
+
+/// **Audit C-08, third part: what a released bond's spend must DESTROY.**
+///
+/// `PalwBondStateV2::slashed` is documented as burned — "it leaves `collateral` and enters
+/// circulation nowhere" — and the first two parts made that half true: the collateral is money the
+/// chain can see (the genesis gate) and money nobody can move while the bond lives (the spend
+/// gate). Neither of them destroys anything. A bond that was slashed and then retired would have
+/// walked away with its whole outpoint, and the sentence would have been false at the only moment
+/// it mattered.
+///
+/// The design that closes it without moving the bond's identity: the KEY is the outpoint, so
+/// re-minting a remainder would re-key the bond and break every claim that names it. The
+/// obligation rides the SPEND instead — a transaction releasing this collateral must leave at
+/// least `slashed` sompi unclaimed by any output, and the block's fee pool loses the same amount,
+/// so the miner cannot collect what the chain destroyed. Burned by don't-mint, which is the
+/// mechanism the §F service share and every unspent validator remainder already use.
+///
+/// `0` for a bond that never lost anything, which is a spend with no obligation at all.
+pub fn palw_bond_burn_obligation_v2(bond: &PalwBondStateV2) -> u64 {
+    bond.slashed
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -3775,12 +3790,16 @@ pub(crate) mod tests {
         let late = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: u64::MAX - 1 }, ..base.clone() };
         assert!(palw_bond_collateral_is_locked_v2(&late, u64::MAX, DELAY));
 
-        // **Slashed: locked, and this is the fail-closed arm.** Releasing it would put the slashed
-        // sompi back into circulation, and the transaction shape that burns them and returns the
-        // remainder does not exist yet. One sompi of slash freezes the whole collateral —
-        // deliberately, because the alternative is freezing none of it.
-        let slashed = PalwBondStateV2 { slashed: 1, status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base };
-        assert!(palw_bond_collateral_is_locked_v2(&slashed, u64::MAX, DELAY), "a slashed bond never releases (yet)");
+        // **Slashed: the lock is the ordinary one, and the burn is what makes the slash cost
+        // something.** This arm used to hold a slashed bond forever, as the fail-closed placeholder
+        // for a rule that did not exist. The rule exists, so the collateral releases on schedule
+        // and the SPEND carries the obligation — the remainder is the owner's and the slashed sompi
+        // are nobody's.
+        let slashed = PalwBondStateV2 { slashed: 7, status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base.clone() };
+        assert!(palw_bond_collateral_is_locked_v2(&slashed, 6_999, DELAY), "the delay still applies to a slashed bond");
+        assert!(!palw_bond_collateral_is_locked_v2(&slashed, 7_000, DELAY), "and it ends on the ordinary schedule");
+        assert_eq!(palw_bond_burn_obligation_v2(&slashed), 7, "what it lost is what its spend must destroy");
+        assert_eq!(palw_bond_burn_obligation_v2(&base), 0, "a bond that never lost anything owes nothing");
     }
 
     /// Operator identities are DERIVED from a key now, so the fixtures carry a key and let the

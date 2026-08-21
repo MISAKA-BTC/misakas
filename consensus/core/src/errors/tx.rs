@@ -183,6 +183,12 @@ pub enum TxRuleError {
     /// only wired when the fence is reached), so it never fires on a current network.
     #[error("transaction input spends a non-releasable bond's locked output-0 (outpoint {0})")]
     SpendsNonReleasableBond(TransactionOutpoint),
+
+    /// MISAKA audit C-08: a transaction releasing a slashed PALW bond's collateral must leave at
+    /// least what the bond lost unclaimed by any output. The block's fee pool loses the same
+    /// amount, so the sompi are destroyed rather than redirected to the miner.
+    #[error("a released bond's spend must burn {owed} sompi and leaves only {left}")]
+    BondBurnNotPaid { owed: u64, left: u64 },
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;
