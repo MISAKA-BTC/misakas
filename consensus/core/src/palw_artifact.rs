@@ -41,6 +41,8 @@ pub struct PalwArtifactOperandV1 {
     pub tensor_name: String,
     /// `None` for a graph-level tensor; the layer index otherwise.
     pub layer: Option<u16>,
+    /// **A BYTE offset into the tensor** (ADR-0049 Decision A). Every caller already treated it
+    /// as one; the name predates the contract being written down.
     pub row_start: u32,
     /// The bytes themselves, in the tensor's own dtype.
     pub bytes: Vec<u8>,
@@ -179,12 +181,21 @@ impl PalwProvenOperandsV1 {
 }
 
 impl crate::palw_step_refute::PalwWeightOracleV1 for PalwProvenOperandsV1 {
-    fn weight_row(&self, tensor_name: &str, layer: Option<u16>, row_start: u32, elements: u32) -> Option<Vec<u8>> {
+    /// **Exactly `byte_len` bytes, or nothing** (ADR-0049 Decision A).
+    ///
+    /// This returned `byte_len` bytes while the trait asked for `elements` VALUES, and the two
+    /// coincide only at a one-byte dtype. `PALW-BASE-0` is `int8` throughout, so the only class
+    /// that exists could not expose it — and `Rescale`, which asked for one value and required
+    /// five bytes, could never adjudicate through a real opening. The contract is bytes on both
+    /// sides now; the mismatch had no way to announce itself before.
+    fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
         let operand =
-            self.operands.iter().find(|o| o.tensor_name == tensor_name && o.layer == layer && o.row_start == row_start)?;
+            self.operands.iter().find(|o| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
         // The proof binds the bytes that were committed; it says nothing about how many the caller
-        // wants. A short slice is a missing operand, not a truncated answer.
-        (operand.bytes.len() >= elements as usize).then(|| operand.bytes[..elements as usize].to_vec())
+        // wants. A short opening is a missing operand, not a truncated answer — and a LONG one is
+        // refused too, because an opening that proves more than the step reads is an opening whose
+        // extra bytes nothing checked.
+        (operand.bytes.len() == byte_len as usize).then(|| operand.bytes.clone())
     }
 }
 
@@ -233,11 +244,11 @@ mod tests {
     fn a_proven_operand_answers_the_oracle() {
         let (opening, root) = open(0);
         let oracle = PalwProvenOperandsV1::from_openings_v1(&[opening], root).expect("honest opening");
-        assert_eq!(oracle.weight_row("blk.{layer}.attn_q.weight", Some(0), 0, 4), Some(vec![1, 2, 3, 4]));
+        assert_eq!(oracle.operand_bytes("blk.{layer}.attn_q.weight", Some(0), 0, 4), Some(vec![1, 2, 3, 4]));
         // A row nobody proved is absent — which the court reads as Unadjudicable, the safe
         // direction: no proof, no conviction.
-        assert_eq!(oracle.weight_row("blk.{layer}.attn_q.weight", Some(0), 0, 5), None, "more elements than were proven");
-        assert_eq!(oracle.weight_row("blk.{layer}.ffn_down.weight", Some(0), 0, 1), None, "never opened");
+        assert_eq!(oracle.operand_bytes("blk.{layer}.attn_q.weight", Some(0), 0, 5), None, "more elements than were proven");
+        assert_eq!(oracle.operand_bytes("blk.{layer}.ffn_down.weight", Some(0), 0, 1), None, "never opened");
     }
 
     /// The leaf binds the POSITION, so a genuine row of another tensor cannot stand in.

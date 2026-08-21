@@ -1204,7 +1204,7 @@ mod resolver_tests {
     /// real node without the oracle does.
     struct NoStepWeights;
     impl crate::palw_step_refute::PalwWeightOracleV1 for NoStepWeights {
-        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+        fn operand_bytes(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
             None
         }
     }

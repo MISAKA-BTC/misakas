@@ -2616,7 +2616,7 @@ mod step_conviction_tests {
 
     struct NoWeights;
     impl PalwWeightOracleV1 for NoWeights {
-        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+        fn operand_bytes(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
             None
         }
     }

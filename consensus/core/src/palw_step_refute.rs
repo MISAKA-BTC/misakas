@@ -402,7 +402,8 @@ fn base0_row(
             let start = (token as u64).checked_mul(width as u64).ok_or(PalwStepRefuteError::Unadjudicable)?;
             let start = u32::try_from(start).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let row = weights
-                .weight_row(node.weight_name.as_str(), layer, start, width)
+                // BASE-0's embedding table is `int8`, so a value is a byte and `width` is both.
+                .operand_bytes(node.weight_name.as_str(), layer, start, width)
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
             if row.len() != width as usize {
                 return Err(PalwStepRefuteError::Unadjudicable);
@@ -417,7 +418,11 @@ fn base0_row(
         // allowed to amplify. Its params are a registration artifact, like Requantize's.
         Base0Op::Rescale => {
             need(1)?;
-            let row = weights.weight_row(node.weight_name.as_str(), layer, 0, 1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // Five bytes: one i32 multiplier LE and one u8 shift. Asked for as five rather than
+            // as "one element", which is what left op 9 unable to adjudicate through any real
+            // opening (ADR-0049 Decision A).
+            let row =
+                weights.operand_bytes(node.weight_name.as_str(), layer, 0, 5).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if row.len() != 5 {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rescale params are not 5 bytes"));
             }
@@ -482,10 +487,11 @@ fn base0_row(
                 operand
             } else {
                 let row = weights
-                    .weight_row(
+                    .operand_bytes(
                         node.weight_name.as_str(),
                         layer,
                         0,
+                        // `int8` weights: one byte per value.
                         u32::try_from(wanted).map_err(|_| PalwStepRefuteError::Unadjudicable)?,
                     )
                     .ok_or(PalwStepRefuteError::Unadjudicable)?;
@@ -501,7 +507,20 @@ fn base0_row(
         Base0Op::Requantize | Base0Op::Rope => {
             need(1)?;
             let name = node.weight_name.as_str();
-            let row = weights.weight_row(name, layer, 0, inputs[0].len() as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // The two ops share this site and their parameter blocks do NOT share a width, so the
+            // byte count is computed per op before the request. One argument meaning two widths is
+            // the defect ADR-0049 Decision A names.
+            let byte_len = match op {
+                // (multiplier LE, shift, zero LE) per channel.
+                Base0Op::Requantize => 9usize.checked_mul(inputs[0].len()),
+                // cos row then sin row, 4 bytes each, one pair per two lanes.
+                Base0Op::Rope => 8usize.checked_mul(inputs[0].len() / 2),
+                _ => unreachable!("outer match restricts these three"),
+            }
+            .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let row = weights
+                .operand_bytes(name, layer, 0, u32::try_from(byte_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
             match op {
                 Base0Op::Requantize => {
                     // The oracle row carries (multiplier LE, shift, zero LE) per channel: 9 bytes
@@ -614,9 +633,28 @@ pub struct PalwExecutionStepRefutationV1 {
 /// digest (`qwen35_pins::GGUF_SHA256`) before answering; adjudication trusts the oracle the
 /// way it trusts the pinned GGUF itself.
 pub trait PalwWeightOracleV1 {
-    /// Little-endian raw bytes of `elements` values starting at `row_start` of the named
-    /// tensor (layer-substituted), in the tensor's own dtype.
-    fn weight_row(&self, tensor_name: &str, layer: Option<u16>, row_start: u32, elements: u32) -> Option<Vec<u8>>;
+    /// **`byte_len` raw bytes at `byte_offset` of the named tensor (layer-substituted).**
+    ///
+    /// Bytes on both sides, with no dtype arithmetic in the oracle (ADR-0049 Decision A). The
+    /// parameter used to be `elements`, documented as a count of VALUES while the production
+    /// implementation returned that many BYTES — two units under one name, which coincide for
+    /// exactly one dtype width. `PALW-BASE-0` is `int8` throughout, so the only class that exists
+    /// could not see it, and four call sites had already drifted to four different implicit
+    /// widths: 1 byte per value at the embedding gather and the matmul, 4 at the fused norm, 5
+    /// for a whole `Rescale` node and 9 per channel for `Requantize`.
+    ///
+    /// `Rescale` was the one that proved it: it asked for ONE element and required FIVE bytes, so
+    /// through a real Merkle opening it received one byte and refused every step it was asked to
+    /// adjudicate — while its test passed, because the double returned whole rows regardless of
+    /// the size requested.
+    ///
+    /// Bytes rather than "dtype plus element count" because a Merkle opening already proves bytes:
+    /// an oracle that speaks bytes needs no conversion between what it proves and what it returns,
+    /// and there is no second place for the conversion to be written differently.
+    ///
+    /// **An implementation must return exactly `byte_len` bytes or `None`.** Returning more is how
+    /// a mismatch stays invisible.
+    fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>>;
 }
 
 /// A node that holds no model weights, as a production type rather than a test double.
@@ -633,7 +671,7 @@ pub trait PalwWeightOracleV1 {
 pub struct PalwNoWeightsV1;
 
 impl PalwWeightOracleV1 for PalwNoWeightsV1 {
-    fn weight_row(&self, _tensor_name: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
+    fn operand_bytes(&self, _tensor_name: &str, _layer: Option<u16>, _byte_offset: u32, _byte_len: u32) -> Option<Vec<u8>> {
         None
     }
 }
@@ -966,8 +1004,10 @@ fn run_program(
         }
         KernelProgram::RmsNormFused => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("rmsnorm needs one input row"))?;
-            let wrow =
-                weights.weight_row(&node.weight_name, layer, 0, x.len() as u32).ok_or(PalwStepRefuteError::WeightUnavailable)?;
+            // Four bytes per value: the fused norm's gain is an f32 lane.
+            let wrow = weights
+                .operand_bytes(&node.weight_name, layer, 0, u32::try_from(x.len() * 4).map_err(|_| PalwStepRefuteError::WeightUnavailable)?)
+                .ok_or(PalwStepRefuteError::WeightUnavailable)?;
             if wrow.len() != x.len() * 4 {
                 return Err(PalwStepRefuteError::WeightUnavailable);
             }
@@ -1214,7 +1254,7 @@ pub(crate) mod tests {
 
     struct NoWeights;
     impl PalwWeightOracleV1 for NoWeights {
-        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+        fn operand_bytes(&self, _t: &str, _l: Option<u16>, _o: u32, _n: u32) -> Option<Vec<u8>> {
             None
         }
     }
@@ -1223,8 +1263,12 @@ pub(crate) mod tests {
     /// weight oracle would have committed.
     struct FixedRow(Vec<u8>);
     impl PalwWeightOracleV1 for FixedRow {
-        fn weight_row(&self, _t: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
-            Some(self.0.clone())
+        /// **Honours `byte_len`, because a double that does not cannot witness a size defect.**
+        /// This returned the whole row regardless of what was asked for, which is why op 9 asking
+        /// for one byte and requiring five had a passing test (ADR-0049 Decision A).
+        fn operand_bytes(&self, _t: &str, _l: Option<u16>, o: u32, n: u32) -> Option<Vec<u8>> {
+            let (o, n) = (o as usize, n as usize);
+            (self.0.len() >= o + n).then(|| self.0[o..o + n].to_vec())
         }
     }
 
@@ -1272,6 +1316,58 @@ pub(crate) mod tests {
         small.base0_rms_eps_q = 1 << 8;
         assert_ne!(big.shape_profile_id(), small.shape_profile_id(), "the epsilon is inside the class id");
     }
+    /// **Op 9 adjudicating through the PRODUCTION oracle, which it had never done.**
+    ///
+    /// `rescale_is_adjudicable_and_bounded` below proves the arithmetic, and proves it through
+    /// `FixedRow` — a double that used to return whole rows regardless of the size requested. The
+    /// arm asked for ONE element and required FIVE bytes, and `PalwProvenOperandsV1` returned
+    /// `elements` bytes, so through a real Merkle opening `Rescale` received one byte and refused
+    /// every step it was handed. Coverage still reported the kernel catalogued, because coverage
+    /// compares ids.
+    ///
+    /// This is the same step, served by the oracle a full node actually holds: an opening verified
+    /// against a registered `artifact_root`, no local model, no double. It is the test ADR-0049
+    /// Decision A exists to make possible.
+    #[test]
+    fn op_nine_adjudicates_through_a_real_artifact_opening() {
+        use crate::palw_artifact::{
+            PalwArtifactOpeningV1, PalwArtifactOperandV1, PalwProvenOperandsV1, artifact_leaf_v1, artifact_root_v1,
+        };
+
+        let mut node = requantize_node();
+        node.weight_name = "blk.{layer}.scale".to_string();
+        let acc: Vec<i32> = vec![1_000, -2_000, 3_000, -4_000];
+        let input: Vec<Vec<u32>> = vec![acc.iter().map(|v| *v as u32).collect()];
+
+        // The five bytes a `Rescale` node's parameters are: one i32 multiplier LE, one u8 shift.
+        let mut bytes = i32::MAX.to_le_bytes().to_vec();
+        bytes.push(23);
+        let operand =
+            PalwArtifactOperandV1 { tensor_name: "blk.{layer}.scale".to_string(), layer: Some(0), row_start: 0, bytes };
+        let leaf = artifact_leaf_v1(&operand);
+        let root = artifact_root_v1(&[leaf]).expect("a one-leaf inventory has a root");
+        let opening = PalwArtifactOpeningV1 { operand, leaf_index: 0, leaf_count: 1, path: vec![] };
+        let oracle = PalwProvenOperandsV1::from_openings_v1(&[opening], root).expect("the opening verifies against its root");
+
+        let got = base0_row(Base0Op::Rescale, &node, Some(0), &profile(), &input, &oracle, 1, NO_GATHER)
+            .expect("op 9 adjudicates through a proven operand");
+        let want: Vec<u32> =
+            crate::palw_base0_ops::rescale_row(&acc, crate::palw_base0_ops::ScaleParams { multiplier: i32::MAX, shift: 23 })
+                .into_iter()
+                .map(|v| v as u32)
+                .collect();
+        assert_eq!(got, want, "the court recomputes the step from carried evidence alone");
+
+        // And a node whose parameters nobody opened stays Unadjudicable — no proof, no conviction.
+        let mut unopened = node.clone();
+        unopened.weight_name = "blk.{layer}.never_registered".to_string();
+        assert_eq!(
+            base0_row(Base0Op::Rescale, &unopened, Some(0), &profile(), &input, &oracle, 1, NO_GATHER),
+            Err(PalwStepRefuteError::Unadjudicable),
+            "an operand nobody proved leaves the step unchecked rather than decided"
+        );
+    }
+
 
     /// ADR-0040 H op 9 is adjudicable, and a committed shift outside its domain is refused.
     ///
@@ -1345,13 +1441,32 @@ pub(crate) mod tests {
             "a short weight block is unadjudicable, never the challenger's fault"
         );
 
-        // A kv-scaled width is not determinable here, so it is refused rather than guessed.
+        // **A kv-scaled width IS determinable here, and this assertion used to say otherwise.**
+        //
+        // It read "a kv-scaled width is not determinable here, so it is refused rather than
+        // guessed" and passed — but not for that reason. `out_dim` is `multiplier x kv_len` and the
+        // caller passes `kv_len`, which the arm's own comment records ("the old refusal … no longer
+        // describes anything"). What produced the refusal was `FixedRow` serving twelve bytes when
+        // the step asked for eight, so the length check rejected an oracle that had over-answered.
+        // With the double honouring `byte_len` (ADR-0049 Decision A) the over-answer is gone and
+        // the step adjudicates, which is correct.
         let mut kv = node.clone();
         kv.out_len = PalwStepOutLenV1::KvScaled { multiplier: 2 };
         let full: Vec<u8> = w.iter().map(|v| *v as u8).collect();
+        let kv_got = base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full.clone()), 1, NO_GATHER)
+            .expect("multiplier x kv_len is a width this arm holds");
+        let kv_want: Vec<u32> =
+            crate::palw_base0_ops::matmul_quant(&w[..8], &x, 2).unwrap().into_iter().map(|v| v as u32).collect();
+        assert_eq!(kv_got, kv_want, "a kv-scaled node recomputes multiplier x kv_len output rows");
+
+        // What IS still refused: a width the oracle cannot serve. Not being able to check is never
+        // the challenger's fault, so it is `Unadjudicable` rather than a conviction or an acquittal.
+        let mut wide = node.clone();
+        wide.out_len = PalwStepOutLenV1::KvScaled { multiplier: 9 };
         assert_eq!(
-            base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full), 1, NO_GATHER),
-            Err(PalwStepRefuteError::Unadjudicable)
+            base0_row(Base0Op::MatMul, &wide, Some(0), &profile(), &input, &FixedRow(full), 1, NO_GATHER),
+            Err(PalwStepRefuteError::Unadjudicable),
+            "an oracle that cannot serve the declared width leaves the step unchecked, not decided"
         );
     }
 
@@ -1926,11 +2041,12 @@ pub(crate) mod tests {
         // A four-row table: row t is [t, t+1, t+2, t+3] as int8 codes.
         struct Table;
         impl PalwWeightOracleV1 for Table {
-            fn weight_row(&self, name: &str, _l: Option<u16>, row_start: u32, elements: u32) -> Option<Vec<u8>> {
-                if name != "token_embd.weight" || row_start + elements > 16 {
+            fn operand_bytes(&self, name: &str, _l: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
+                // `int8` table: one byte per value, so the byte range is the value range.
+                if name != "token_embd.weight" || byte_offset + byte_len > 16 {
                     return None;
                 }
-                Some((row_start..row_start + elements).map(|i| (i % 4 + i / 4) as u8).collect())
+                Some((byte_offset..byte_offset + byte_len).map(|i| (i % 4 + i / 4) as u8).collect())
             }
         }
         let want = |t: u32| -> Vec<u32> { (0..4u32).map(|i| ((t * 4 + i) % 4 + t) as i32 as u32).collect() };
@@ -1962,7 +2078,7 @@ pub(crate) mod tests {
         // A table that cannot serve the row is unadjudicable, not a conviction.
         struct Empty;
         impl PalwWeightOracleV1 for Empty {
-            fn weight_row(&self, _n: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
+            fn operand_bytes(&self, _n: &str, _l: Option<u16>, _r: u32, _e: u32) -> Option<Vec<u8>> {
                 None
             }
         }

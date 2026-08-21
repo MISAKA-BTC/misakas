@@ -9608,7 +9608,7 @@ impl PartialOrd for RankedTip {
 /// conviction on; leaving it here keeps the path structurally present and derives nothing.
 struct NoStepWeights;
 impl kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1 for NoStepWeights {
-    fn weight_row(&self, _tensor: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
+    fn operand_bytes(&self, _tensor: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
         None
     }
 }
