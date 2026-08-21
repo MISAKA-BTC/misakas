@@ -570,14 +570,34 @@ mod tests {
     fn the_shipped_rc_card_is_unset_and_says_so_by_being_bundle_free() {
         use crate::config::params::{PALW_RC_GENESIS_ARTIFACT_ROOT, palw_rc_genesis_card_is_set, palw_rc_shipped_params};
 
-        assert!(!palw_rc_genesis_card_is_set(), "no bond key ships, and none should");
+        // **The card is SET as of 2026-08-22** — six bonds over vault premine 0..=5, each key
+        // generated on the host that holds it. This test asserted the unset state, which was the
+        // right thing to pin while nothing shipped: the property is "the two agree", not "the card
+        // is empty", so it is written as the equivalence and stays true on both sides of minting.
         let shipped = palw_rc_shipped_params();
-        assert!(
-            !matches!(shipped.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)),
-            "an unset card yields the base identity, not a network with a bond nobody can sign for"
+        assert_eq!(
+            matches!(shipped.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)),
+            palw_rc_genesis_card_is_set(),
+            "a set card yields a bundled network; an unset one yields the base identity, and never the other way round"
         );
         assert_eq!(shipped.net.to_string(), "testnet-12", "it is still the RC identity");
         assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, Hash64::default(), "the half code CAN mint is minted");
+        if palw_rc_genesis_card_is_set() {
+            // The shipped card must be one a node can actually boot on — the registry gate, run
+            // here rather than only by the tool that assembled it.
+            let bonds = crate::config::params::PALW_RC_GENESIS_BONDS;
+            assert!(
+                bonds.len() >= crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+                "the shipped registry must seat a panel: {} rows",
+                bonds.len()
+            );
+            let operators: std::collections::BTreeSet<&[u8]> = bonds.iter().map(|c| c.operator_pubkey).collect();
+            assert_eq!(operators.len(), bonds.len(), "one seat is one operator — the shipped rows must all differ");
+            for card in bonds {
+                assert_eq!(card.bond_pubkey.len(), 2592, "a bond key nobody can sign with is a dead seat");
+                assert_eq!(card.operator_pubkey.len(), 2592);
+            }
+        }
 
         // And the card assembles the moment it is filled: the same four values `palw-rc-genesis`
         // prints, through the same function the network id calls.
@@ -587,7 +607,7 @@ mod tests {
         assert_ne!(
             filled.consensus_params_id(),
             shipped.consensus_params_id(),
-            "a filled card is a different ruleset from an empty one, visibly, at the handshake"
+            "a DIFFERENT registry is a different ruleset, visibly, at the handshake — which is the              check that stops a node shipping its own card from quietly joining"
         );
     }
 
