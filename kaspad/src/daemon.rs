@@ -429,6 +429,27 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         }
     };
 
+    // ADR-0042 PR-10: the PALW-RC identity (testnet-12) without its ruleset bundle.
+    //
+    // `Params::from(NetworkId)` returns the RC IDENTITY — the RC genesis, the frozen cadence, no
+    // V1 PALW proof-of-work — because a `ConsensusV2` bundle is a function of genesis artifacts
+    // no `From` impl holds. A node started here with no bundle is therefore on a DIFFERENT
+    // ruleset from the real RC network: the bundle is inside `consensus_params_id`, so it will be
+    // refused at the handshake rather than silently join a chain with no classes, no bonds and no
+    // court.
+    //
+    // That refusal is correct and it is also opaque from the outside — "no peers" looks like a
+    // networking problem. Say it here, once, in the words the operator needs, rather than letting
+    // them infer it from a node that dials and gets dropped.
+    if !matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+        && params.genesis.hash == kaspa_consensus_core::config::genesis::PALW_RC_GENESIS.hash
+    {
+        warn!(
+            "network {} is the PALW-RC identity but this node carries NO ConsensusV2 ruleset bundle.              Its consensus fingerprint therefore differs from a bundled node's and peers will refuse              the handshake — this node cannot join the RC network until the genesis artifacts are              installed. Nothing is wrong with the connection.",
+            network
+        );
+    }
+
     // MISAKA Phase 4 (PALW LLM PoW, ADR-0021) startup rails. Header validation on a PALW-active
     // network replays a pinned-LLM inference per header; a node whose runtime is missing there
     // would price every honest header as failed PoW and follow nothing (ADR-0042 Decision 4 —

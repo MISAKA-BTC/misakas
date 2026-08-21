@@ -1233,7 +1233,13 @@ impl From<NetworkId> for Params {
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
                 Some(11) => TESTNET11_PARAMS,
-                Some(x) => panic!("Testnet suffix {} is not supported", x),
+                // The PALW-RC network (ADR-0036 Decision 2 / ADR-0042 PR-10). Its bundle-free
+                // BASE identity: the bundle is a function of genesis artifacts no `From<NetworkId>`
+                // holds, so it is installed on top (`palw_rc_params`) and its absence is visible
+                // in `consensus_params_id` rather than silent. Before this arm existed, naming the
+                // suffix `palw_rc_params` itself stamps aborted the process.
+                Some(12) => palw_rc_base_params(),
+                Some(x) => panic!("Testnet suffix {} is not supported (this build knows 10, 11 and 12)", x),
                 None => panic!("Testnet suffix not provided"),
             },
             NetworkType::Devnet => DEVNET_PARAMS,
@@ -2291,6 +2297,53 @@ pub fn palw_rc_params_from_artifacts(
     )
 }
 
+/// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
+/// to, and the base every bundled variant is built from.**
+///
+/// `Params::from(NetworkId)` used to `panic!` on every testnet suffix but 10 and 11, and
+/// testnet-12 is the suffix `palw_rc_params` stamps into its own `net`. So the RC network could
+/// be assembled in a test and could not be constructed by a node: `kaspad` builds its params with
+/// `let params: Params = network.into()`, and every tool beside it — the wallet, the CLI, the
+/// validator — does the same. A network whose identity aborts the process that names it is not a
+/// network anyone can run.
+///
+/// What this returns is the RC IDENTITY: the RC genesis, the frozen 120 s cadence, no V1 PALW
+/// proof-of-work, no inherited seeders. What it deliberately does NOT carry is the `ConsensusV2`
+/// bundle, because a bundle is a function of genesis ARTIFACTS (the BASE-0 artifact root, the
+/// catalog preimage, the genesis bond and its keys) that no `From<NetworkId>` impl holds. That is
+/// also why every shipped preset stays bundle-free, which
+/// `assembling_an_identity_installs_no_fence_on_any_shipped_preset` asserts.
+///
+/// **A node on this base is not on the RC ruleset, and it finds out at the handshake rather than
+/// at consensus.** The bundle is inside `consensus_params_id`, so an artifact-less node
+/// fingerprints differently from a bundled one and the two refuse each other — the fail-safe
+/// direction. `kaspad` also says so at startup rather than leaving the operator to infer it from
+/// a peerless node.
+pub fn palw_rc_base_params() -> Params {
+    let mut params = TESTNET_PARAMS.clone();
+    params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+    params.genesis = crate::config::genesis::PALW_RC_GENESIS;
+    // **Empty on purpose, and it cannot be filled from here.**
+    //
+    // Inheriting the test nets' seeders would be worse than empty: those records answer with
+    // testnet-10/11 nodes, which this network rejects at the handshake, so discovery would LOOK
+    // configured and find nobody. A new network's discovery names have to be names someone owns
+    // and delegates — an operational step, not a code one — and `dns_seeders` is deliberately
+    // outside `consensus_params_id` ("where to find peers is not a rule about blocks"), so adding
+    // them later is a plain edit and not a flag day.
+    //
+    // Until then a node bootstraps with `--addpeer`, and `kaspad` WARNS at startup when it has
+    // neither seeders nor explicit peers rather than sitting alone in silence.
+    params.dns_seeders = &[];
+    // A `ConsensusV2` network activates no V1 PALW proof-of-work and installs no V1 fence —
+    // `validate_palw_v2` refuses both, and that refusal is why this is a new identity.
+    params.pow_blake2b_sha3_activation = ForkActivation::never();
+    params.pow_palw_activation = ForkActivation::never();
+    params.pow_palw_ollama_activation = ForkActivation::never();
+    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+    params
+}
+
 pub fn palw_rc_params(
     base_class_id: crate::Hash64,
     class_catalog_root: crate::Hash64,
@@ -2313,27 +2366,11 @@ pub fn palw_rc_params(
         genesis_operator_pubkey,
         genesis_payout_payload,
     )?;
-    let mut params = TESTNET_PARAMS.clone();
-    params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
-    params.genesis = crate::config::genesis::PALW_RC_GENESIS;
-    // **Empty on purpose, and it cannot be filled from here.**
-    //
-    // Inheriting the test nets' seeders would be worse than empty: those records answer with
-    // testnet-10/11 nodes, which this network rejects at the handshake, so discovery would LOOK
-    // configured and find nobody. A new network's discovery names have to be names someone owns
-    // and delegates — an operational step, not a code one — and `dns_seeders` is deliberately
-    // outside `consensus_params_id` ("where to find peers is not a rule about blocks"), so adding
-    // them later is a plain edit and not a flag day.
-    //
-    // Until then a node bootstraps with `--addpeer`, and `kaspad` WARNS at startup when it has
-    // neither seeders nor explicit peers rather than sitting alone in silence.
-    params.dns_seeders = &[];
-    // A `ConsensusV2` network activates no V1 PALW proof-of-work and installs no V1 fence —
-    // `validate_palw_v2` refuses both, and that refusal is why this is a new identity.
-    params.pow_blake2b_sha3_activation = ForkActivation::never();
-    params.pow_palw_activation = ForkActivation::never();
-    params.pow_palw_ollama_activation = ForkActivation::never();
-    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+    // The identity is the base's, in ONE place: `Params::from(testnet-12)` and this must not be
+    // able to disagree about which genesis, cadence or activation set the RC network has — a
+    // node whose bundled and bundle-less forms differ in anything but the bundle would be two
+    // networks wearing one name.
+    let mut params = palw_rc_base_params();
     // Sized against the bundle's own challenge window, which is what the schedule rule compares:
     // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
     // than by one.
@@ -2925,6 +2962,68 @@ mod fingerprint_probe {
         assert_eq!(
             via_preset_net, as_the_daemon_builds_it,
             "the preset's own NetworkId must reach the same match arm the daemon's does"
+        );
+    }
+
+    /// **The PALW-RC network can be NAMED — the daemon's own path used to abort on it.**
+    ///
+    /// `palw_rc_params` stamps `NetworkId::with_suffix(Testnet, 12)` into its own `net`, and
+    /// `From<NetworkId> for Params` panicked on every testnet suffix but 10 and 11. So the RC
+    /// identity could be assembled inside a test and could not be constructed by the process that
+    /// runs it: `kaspad` does `let params: Params = network.into()` before anything else, and the
+    /// wallet, the CLI and the validator all take the same route.
+    ///
+    /// What the arm returns is the identity, NOT the ruleset — the bundle is a function of genesis
+    /// artifacts no `From` impl holds. The last assertion is the one that makes that safe.
+    #[test]
+    fn the_palw_rc_network_id_builds_params_instead_of_aborting() {
+        let id = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let base = Params::from(id);
+
+        assert_eq!(base.net, id, "the params a node builds name the network it asked for");
+        assert_eq!(base.genesis.hash, crate::config::genesis::PALW_RC_GENESIS.hash, "the RC genesis, not testnet-10's");
+        assert_eq!(
+            base.blockrate.target_time_per_block,
+            crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS,
+            "the frozen PALW cadence — the first of the two reasons this is a new identity"
+        );
+        for (name, activation) in [
+            ("blake2b_sha3", base.pow_blake2b_sha3_activation),
+            ("palw v1", base.pow_palw_activation),
+            ("palw ollama", base.pow_palw_ollama_activation),
+        ] {
+            assert!(!activation.is_active(u64::MAX - 1), "{name} must never activate on a V2 identity");
+        }
+        assert!(base.dns_seeders.is_empty(), "inheriting testnet-10/11 seeders would look configured and find nobody");
+        assert!(base.palw_credit.is_none(), "and no V1 fence, which `validate_palw_v2` would refuse anyway");
+        assert!(
+            !matches!(base.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+            "the bundle is installed from artifacts, not carried by a NetworkId"
+        );
+
+        // The bundled form is the SAME identity plus the ruleset: one source for genesis, cadence
+        // and activations, so the two forms cannot come to disagree about which network they are.
+        let bundled = palw_rc_params_from_artifacts(
+            crate::Hash64::from_u64_word(0xA7),
+            crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(0xB0), 0)),
+            vec![7; 32],
+            vec![21; 8],
+            crate::Hash64::from_u64_word(0x9A11),
+        )
+        .expect("the RC artifacts assemble");
+        assert_eq!(bundled.net, base.net);
+        assert_eq!(bundled.genesis.hash, base.genesis.hash);
+        assert_eq!(bundled.blockrate.target_time_per_block, base.blockrate.target_time_per_block);
+        assert_eq!(bundled.dns_seeders, base.dns_seeders);
+
+        // **The fail-safe.** The bundle is inside `consensus_params_id`, so a node that boots this
+        // identity WITHOUT the artifacts fingerprints differently and is refused at the handshake
+        // — it cannot silently join the RC network on a ruleset that has no classes, no bonds and
+        // no court. Making the arm exist must not make that mistake quiet.
+        assert_ne!(
+            base.consensus_params_id(),
+            bundled.consensus_params_id(),
+            "an artifact-less node must be a DIFFERENT ruleset, visibly, at the handshake"
         );
     }
 }
