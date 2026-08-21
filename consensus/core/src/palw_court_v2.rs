@@ -131,6 +131,16 @@ pub enum PalwCourtV2Error {
     DoesNotAdjudicate(String),
     #[error("class {0} does not exist at this chain point")]
     MissingClass(Hash64),
+    #[error(
+        "the close carries {got} operand openings; the ruleset admits at most {ceiling} \
+         (ADR-0049 Decision C — a bound the class was admitted under is a bound its evidence must meet)"
+    )]
+    TooManyOperands { got: u64, ceiling: u64 },
+    #[error(
+        "the close's openings carry {got} bytes; the ruleset admits at most {ceiling} \
+         (ADR-0049 Decision C — the cost bound is what makes 'a full node can close this court' true)"
+    )]
+    OpeningTooLarge { got: u64, ceiling: u64 },
 }
 
 /// May THIS `CourtOpened` object be accepted at THIS chain point?
@@ -301,7 +311,24 @@ pub fn adjudicate_court_close_v2(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
+    // **ADR-0049 Decision C's bounds, applied to the OBJECT** (audit H-03).
+    //
+    // The four cost bounds live in `PalwCourtParamsV2` and are inside `palw_ruleset_id_v2`, and
+    // `verify_class_admission_v2` checks a CLASS against them: "this class's geometry never needs
+    // an opening bigger than X". Nothing checked the evidence that actually arrives. A class
+    // admitted at 32 KiB could be challenged with a close carrying a million openings, and every
+    // validating node would verify every Merkle path before the adjudication refused it — the
+    // bound the ruleset id commits to, unenforced at the only place it is spendable.
+    //
+    // Checked FIRST, before a single path is walked, because the whole point of a cost bound is
+    // that exceeding it costs nothing to detect.
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
+    // bound has to have: an oversized object must be refusable without a lookup, a decode or a
+    // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
+    // the ceiling, and that is the right answer — the object was inadmissible on its face.
+    check_close_cost_v2(proof, court)?;
     let (_session, claim) = resolve_court_session_v2(state, session_id)?;
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings } => {
@@ -313,6 +340,39 @@ pub fn adjudicate_court_close_v2(
             map_refutation_outcome(check_execution_step_refutation_v1(refutation, &operands))
         }
     }
+}
+
+/// **ADR-0049 Decision C's ceilings, applied to a close's own payload (audit H-03).**
+///
+/// The bounds live in `PalwCourtParamsV2` and are therefore inside `palw_ruleset_id_v2` — the
+/// network's identity. `verify_class_admission_v2` checks a CLASS against them ("this class's
+/// geometry never needs an opening bigger than X"), and nothing checked the evidence that
+/// actually arrives: a class admitted at 32 KiB could be challenged with a close carrying a
+/// million openings, and every validating node would verify every Merkle path before the
+/// adjudication refused it on the merits.
+///
+/// A pure function of the object, so it needs no chain state and costs two length comparisons.
+pub fn check_close_cost_v2(
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Result<(), PalwCourtV2Error> {
+    let PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. } = proof;
+    let count = operand_openings.len() as u64;
+    let operand_ceiling = u64::from(court.max_operand_count());
+    if count > operand_ceiling {
+        return Err(PalwCourtV2Error::TooManyOperands { got: count, ceiling: operand_ceiling });
+    }
+    // The opened BYTES, which is what a node pays to hold and to hash. Merkle path elements are
+    // counted with them: a path element is 64 bytes a peer chose, and an opening whose path is
+    // longer than its payload is still an opening someone has to walk.
+    let bytes: u64 = operand_openings
+        .iter()
+        .map(|o| o.operand.bytes.len() as u64 + (o.path.len() as u64) * 64)
+        .fold(0u64, |a, b| a.saturating_add(b));
+    if bytes > court.max_opening_bytes() {
+        return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+    }
+    Ok(())
 }
 
 /// The outcome mapping, isolated so every arm is unit-testable without a full refutation
@@ -351,6 +411,13 @@ mod tests {
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    /// The ruleset's court, at the shipped cost ceilings — what a close's evidence is measured
+    /// against (ADR-0049 Decision C, audit H-03).
+    fn court() -> crate::palw_mode_v2::PalwCourtParamsV2 {
+        crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+            .expect("the shipped court parameters are valid")
     }
 
     fn params() -> PalwStateParamsV2 {
@@ -726,7 +793,7 @@ mod tests {
 
         // The conviction, derived from the carried proof.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
-        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof).expect("a recomputable step adjudicates");
+        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("a recomputable step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
 
         // …and the chain acts on it: the claim is void as CourtFraud and the bond is debited.
@@ -840,7 +907,7 @@ mod tests {
         // correct. `ChallengerDefeated`, not a refusal — a refusal would mean the court could not
         // check, which is a different and much weaker kind of safety.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
-        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof).expect("an honest step adjudicates");
+        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("an honest step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
 
         let (closed, _) = apply_palw_transition_v2(
@@ -907,7 +974,7 @@ mod tests {
             refutation: crate::palw_step_refute::tests::skeleton_refutation(),
             operand_openings: Vec::new(),
         };
-        let outcome = adjudicate_court_close_v2(&in_court, &sid, &bogus);
+        let outcome = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::TraceRootMismatch)),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
@@ -920,7 +987,7 @@ mod tests {
 
         // A close naming a session that does not exist never reaches arithmetic either.
         assert!(matches!(
-            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus),
+            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus, &court()),
             Err(PalwCourtV2Error::MissingSession(_))
         ));
     }
@@ -936,5 +1003,87 @@ mod tests {
         // The two rung contexts in particular: the parties have opposite interests, so one shared
         // context would let a responder's own signature be replayed as the challenger's verdict.
         assert_ne!(PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT);
+    }
+
+    /// **Audit H-03: the ruleset's cost bound is checked where it is spent, not only where the
+    /// class was admitted.**
+    ///
+    /// ADR-0049 Decision C put four cost ceilings inside `PalwCourtParamsV2`, and therefore inside
+    /// `palw_ruleset_id_v2` — the network's own identity. `verify_class_admission_v2` checks a
+    /// CLASS against them ("this class's geometry never needs an opening bigger than X"). Nothing
+    /// checked the evidence that actually arrives, so a class admitted at 32 KiB could be
+    /// challenged with a close carrying a million openings, and every validating node would verify
+    /// every Merkle path before the adjudication refused it on the merits.
+    ///
+    /// The refusal now costs a length comparison, which is the only cost a cost bound may have.
+    #[test]
+    fn a_close_that_exceeds_the_rulesets_cost_ceilings_is_refused_before_any_path_is_walked() {
+        use crate::palw_artifact::{PalwArtifactOpeningV1, PalwArtifactOperandV1};
+
+        let (state, sid) = (PalwChainStateV2::genesis(), h64(0xC0FFEE));
+        let opening = |bytes: usize, path: usize| PalwArtifactOpeningV1 {
+            operand: PalwArtifactOperandV1 {
+                tensor_name: "blk.0.attn_q.weight".to_string(),
+                layer: Some(0),
+                row_start: 0,
+                bytes: vec![7u8; bytes],
+            },
+            leaf_index: 0,
+            leaf_count: 1,
+            path: vec![h64(0xAB); path],
+        };
+        let proof = |openings: Vec<PalwArtifactOpeningV1>| PalwCourtVerdictProofV2::Arithmetic {
+            refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+            operand_openings: openings,
+        };
+
+        // A tiny court, so the fixture states the rule rather than the shipped numbers.
+        let tight = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+            1_024,
+            1_000,
+            2,
+        )
+        .unwrap();
+
+        // Too many openings — refused by count, whatever they contain.
+        let many = proof(vec![opening(1, 0), opening(1, 0), opening(1, 0)]);
+        assert!(
+            matches!(
+                adjudicate_court_close_v2(&state, &sid, &many, &tight),
+                Err(PalwCourtV2Error::TooManyOperands { got: 3, ceiling: 2 })
+            ),
+            "three openings against a ceiling of two"
+        );
+
+        // Within the count and over the bytes — refused by size.
+        let fat = proof(vec![opening(2_048, 0)]);
+        assert!(
+            matches!(adjudicate_court_close_v2(&state, &sid, &fat, &tight), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            "2 KiB against a 1 KiB ceiling"
+        );
+
+        // And the Merkle path counts toward it: a path is 64 bytes a peer chose, and a node has to
+        // walk every one. Sixteen path elements is 1 KiB on their own.
+        let long_path = proof(vec![opening(1, 17)]);
+        assert!(
+            matches!(adjudicate_court_close_v2(&state, &sid, &long_path, &tight), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            "a long path is an opening someone still has to walk"
+        );
+
+        // Inside both ceilings, the bound says nothing and the close proceeds to the questions
+        // that need chain state — here `MissingSession`, which is the point: the cost gate is out
+        // of the way, and it never became the reason for anything else.
+        let small = proof(vec![opening(4, 0)]);
+        assert!(
+            matches!(adjudicate_court_close_v2(&state, &sid, &small, &tight), Err(PalwCourtV2Error::MissingSession(_))),
+            "a proof inside the ceilings must reach the state questions"
+        );
+
+        // The gate is cheapest-first: an oversized object is refused without the session lookup
+        // that would otherwise report first. `state` here holds no session at all.
+        assert!(matches!(adjudicate_court_close_v2(&state, &sid, &many, &tight), Err(PalwCourtV2Error::TooManyOperands { .. })));
     }
 }
