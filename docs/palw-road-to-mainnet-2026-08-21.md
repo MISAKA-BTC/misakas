@@ -174,6 +174,23 @@ therefore inside the network's identity:
 
 ## What is safe to say today, revised
 
+> **Update 2026-08-21, `bb62f1fc` — the code-level determination.** All eight launch dimensions in
+> [the blockers document](palw-rc-launch-blockers-2026-08-21.md) are now closed, each by a test that
+> is red on regression. **This is still NO-GO for a weight-bearing launch, and the reason is one
+> named subsystem rather than a defect:** a panel seat cannot obtain the material it is supposed to
+> check, because the producer writes its retained execution to its own disk and nothing serves or
+> fetches it. There is no trace-chunk transport in the tree. Until it exists — together with the
+> panel service and the product decision about whether a validator node holds a wallet — a live
+> chain still voids every claim at `BindTimeout` or `ReceiptTimeout`. What changed is that it now
+> says so in the log and cannot slash anyone for it. The blockers document carries the shape of the
+> three pieces.
+>
+> Two consequences worth stating separately. The **ruleset id moved** (terminal-claim retirement
+> changed `state_root`), so a testnet-12 genesis must be re-minted whatever else happens — which is
+> the moment to settle M-02 rather than after. And the growth measurement behind that change is on
+> record: without retirement the PALW state cost 8.2 ms and a 5.4 MB tip row per block after two
+> weeks, 49 ms and 54 MB after four months, and did not plateau.
+
 Gates 0, 1 and 2 are closed in code and covered by tests that fail when the property is removed.
 What remains is not implementation:
 

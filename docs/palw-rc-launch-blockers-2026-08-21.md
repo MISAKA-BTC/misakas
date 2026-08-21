@@ -17,7 +17,8 @@ recorded verbatim: *"the audit said X" is a claim somebody should be able to che
 | Base of the sweep | `8db458f2` (branch `palw-base0-depth`) |
 | Method | 36 agents: the 19 external-audit findings re-verified in 9 buckets → adversarial refutation of every CLOSED verdict → 8 launch dimensions swept → each dimension adversarially re-examined → a completeness critic |
 | Inputs | [docs/palw-external-audit-2026-08-21.md](palw-external-audit-2026-08-21.md) (the commissioned static audit and its Appendix A) |
-| Verdict | **NO-GO**, and the critic's own reasoning: the branch "does not fail the standard on a technicality — it fails it three independent ways, only one of which the external audit knew about." |
+| Verdict at the sweep | **NO-GO**, and the critic's own reasoning: the branch "does not fail the standard on a technicality — it fails it three independent ways, only one of which the external audit knew about." |
+| Verdict now (2026-08-21, `bb62f1fc`) | **All eight dimensions closed at the code level.** Still NO-GO for a weight-bearing launch, for exactly one reason, and it is a missing subsystem rather than a defect — see *What is still missing*. |
 
 **Appendix A of the external audit does not apply to this branch.** It was written against
 `palw-mainnet-rc-integration` at baseline `e5d7a69c`. Its status column is stale here.
@@ -56,98 +57,64 @@ Each was verified by mutation: reverting the fix makes the test fail with the st
 
 ---
 
-## Open — blocks a public weight-bearing testnet-12
+## The eight launch dimensions — **all closed at the code level**
 
-### 1. A node that did not walk from genesis silently runs with **no PALW rules at all**
+Each was verified by mutation or by a test that is red on regression. The text of what each one
+*was* is kept, because "we fixed it" is worth nothing without "here is what it did".
 
-`PalwChainStateV2` is written only by `process_genesis`. Absent state is read as "no policy", and
-every PALW authority then fails **open**: `palw_state_root` unchecked, no transition applied, tips
-ordered by blue work alone, any pruning point allowed, the deep-reorg comparator skipped, any
-staged chain accepted at IBD. **It does not fork** — it is strictly more permissive — so nothing
-warns anyone.
+| # | What it was | Commit |
+|---|---|---|
+| **1** | A node that did not walk from genesis ran with **no PALW rules at all**. Absent state read as "no policy", so every authority failed open — `palw_state_root` unchecked, tips by blue work, any pruning point, the deep-reorg comparator skipped. It does not fork (it is strictly more permissive), so nothing warned anyone. Four triggers: pruned IBD, an existing datadir, `reindex_if_stale` after any schema bump, and a staging consensus built with `.skip_adding_genesis()`. | `0cf7ead2` (refuse) + `e52a1234` (import) |
+| **2** | **The lattice had no configuration in which a claim reached `Final`.** Every `PalwSeatReceiptV2` and `ReceiptLicensed` in the tree was a test fixture. With one bond no panel seated; with enough bonds the chain bound one and then slashed every seat at `ReceiptTimeout`. `safe_weight` stayed 0 forever and every block's 620‰ carve was burned. | `d85ab588` — **consensus side only**, see *What is still missing* below |
+| **3** | Post-genesis `ClassRegistered` was **unauthenticated** — nothing signed it and nothing gated who could take a permille from every incumbent. Compounded by `verify_profile_coverage_v1` having no non-test caller, so a stranger could register a class at shapes the adjudicator cannot serve: every dispute over those nodes ends `Unadjudicable` — rejected but unslashed, which is unfalsifiable work on a chain where bonds are supposed to be at risk. | `cb131570` |
+| **4** | The free-prompt **commitment** signature was verified nowhere: `validate_stateless_v3` said "verified by the caller" and there was no caller. Any stranger's 0x4a transaction created a claim bound to any bond outpoint it named. The verifier is now an **argument** to the extraction walk, so "somebody else checks it" is unrepresentable. | `dc8ca79c` |
+| **5** | **One solved PoW minted unbounded relay-valid blocks.** The attempt envelope's signature was checked on the chain-walk path only, so a block relayed to every peer with arbitrary bytes of the right length in `signature`. Cost to the attacker: one byte flip and a re-hash. | `be690d20` |
+| **6** | The per-class DAA target **divided by 4 at every epoch boundary**. A ConsensusV2 network demands one `pow_algo_id`, so the receipt lane is structurally impossible — yet the retarget measured the floor against a 150‰ attempt-lane expectation, reading it as a 6.67× over-producer forever. Target 1 after ~63 epochs (~87.5 days), after which the lottery refuses every attempt with no path back. | `4210c7be` |
+| **7** | **Four fork-choice inversions.** (a) A resolvable tip beat any unresolvable one, and a candidate is only weighable once its deltas exist — which is only after it has been committed. So the incumbent outranked every challenger by construction: a node whose branch stalls never reorgs again, and one privately-delivered block forces that on a chosen victim. (b) The deep-reorg gate then failed **open** on a candidate it could not weigh. (c) The tip site used a different comparator from the other three. (d) The tip row is written in its own batch before the virtual state commits, and the walk took it as the state at its own starting point — so a crash in that window panicked `revert_delta_v2` on every subsequent start, forever. | `268293b9` |
+| **8** | **Money conservation, three ways.** (a) The subsidy was claimable with a hash alone: the stateful half of admission runs on the selected chain only, while the coinbase paid every merged blue its full worker share — an unbonded miner collected on PoW. (b) A voided claim's escrow is burned by don't-mint deliberately, but nothing said so, so a network whose panels never bind burns the whole carve of every block and looks identical to one paying it. (c) The state grew by one claim (and one panel) per block forever, and `state_root` re-hashes every collection on every block. | `bb62f1fc` |
 
-Four independent triggers:
+### The §8 growth measurement
 
-* **Pruned IBD.** `import_pruning_point_utxo_set` writes no PALW row, and no P2P message carries
-  one (`PalwStateCarriageV2` appears nowhere under `protocol/p2p`).
-* **An existing datadir.** The only datadir guard is the genesis hash, and bundle-free testnet-12
-  and bundled testnet-12 **share a genesis** — so a node that ran before the card was filled never
-  installs the zero point.
-* **`reindex_if_stale`.** Any schema-version bump deletes every delta row and the tip, with nothing
-  that rebuilds. A routine binary upgrade disables PALW enforcement on a healthy node.
-* **Staging consensus.** `factory.rs:389` builds it with `.skip_adding_genesis()`, so the ADR-0042
-  "Unit D site 2" IBD commit gate is **structurally vacuous** — `decide_ibd_commit_v2` is never
-  reached on a real IBD and the commit is authorized unconditionally.
+Release build, frozen 120 s cadence, one claim of 530 bytes per attempt-lane block:
 
-**§1 IS CLOSED** — both halves. The text below is kept because it records what the failure was.
+| claims | `state_root` | tip row | reached after |
+|---|---|---|---|
+| 10,000 | 8.2 ms/block | 5.4 MB/block | ~14 days |
+| 100,000 | 49 ms/block | 54 MB/block | ~139 days |
+| 1,000,000 | 467 ms/block | 538 MB/block | ~3.8 years |
 
-**The refusal half** (`0cf7ead2`): a ConsensusV2 consensus resuming a real history with no
-PALW tip now aborts at startup instead of running permissively. A silent consensus divergence is a
-loud startup message.
+It does not plateau. Terminal claims now retire on a span the ruleset declares (the court window on
+the shipped bundle), which settles the map at ~7,200 entries; `validate` refuses a ruleset that
+declares no span at all. The measurement is kept runnable as `measure_claim_growth_cost`
+(`#[ignore]`d).
 
-**The import half** (`e52a1234`) is the critic's single recommendation, built as it described: the
-message pair, the serving flow, the IBD fetch inside the existing all-or-nothing sidecar block, and
-`import_pruning_point_palw_state` installing the root-verified carriage as the store's tip. A peer
-that cannot serve it aborts the IBD on a ConsensusV2 network.
+---
 
-### 2. The claim lattice has no configuration in which a claim reaches `Final`
+## What is still missing — and it is not a defect, it is a subsystem
 
-With the shipped one bond, no panel seats (now refused at genesis by Ⅰb). **With enough bonds to
-seat one, the chain binds a panel automatically and then slashes every seat at `ReceiptTimeout` —
-because no code in the tree ever files a `ReceiptLicensed`.** Both configurations lose money. This
-is the next thing that must exist for the lattice to turn over at all.
+**A panel seat cannot obtain the material it is supposed to check.** §2 built the consensus side —
+`palw_seat_duties_v2` tells a node which claims it is seated on, `base0_material_matches_claim_v1`
+decides what a seat should answer, and a signed quorum licenses a claim — but the producer writes
+its retained execution to its **own disk** (`kaspad/src/palw_producer.rs`) and *nothing serves it
+and nothing fetches it*. There is no `trace_chunk` message under `protocol/p2p/proto`, no serving
+flow, and no fetch. A seat on another host has no way to get the tiles, so no honest panel can file
+a `ReceiptLicensed` on a real network however the service is written.
 
-### 3. Post-genesis class registration is unauthenticated (H-01's side effect, H-07, OBS-01)
+Three pieces, and only the first is purely mechanical:
 
-Closing H-01 made post-genesis `ClassRegistered` a live permissionless path. Nothing signs it and
-nothing gates who may take a permille from every incumbent. Compounding it, **H-02**:
-`verify_profile_coverage_v1` has no non-test caller — `verify_class_admission_v2` checks only the
-reachable kernel-ID set — so a stranger can register a class naming catalogued kernel ids at shapes
-the adjudicator cannot serve. Every dispute over those nodes ends `Unadjudicable`: **rejected but
-unslashed**, which is unfalsifiable work on a chain where bonds are supposed to be at risk.
+1. **A trace data-availability transport.** Request/response keyed by `(claim, chunk index)`,
+   served from the producer's retention directory, verified by the fetcher against the claim's own
+   `trace_manifest_root` and `trace_chunk_count` — both already in the attempt. Shaped exactly like
+   §1's pruning-point carriage pair.
+2. **A panel service in kaspad.** Poll `palw_seat_duties_v2`, fetch, run the material check, sign a
+   `PalwSeatReceiptV2`.
+3. **A way to submit it.** `ReceiptLicensed` rides a 0x4b transaction, which needs a funded UTXO and
+   a signing key — i.e. a validator node has to hold a wallet. **That is a product decision, not an
+   implementation detail**, and it is the reason this is written down rather than guessed at.
 
-### 4. ~~The free-prompt commitment signature is verified nowhere~~ — **CLOSED** (`dc8ca79c`)
-
-See the closed table above.
-
-### 5. One solved PoW mints unbounded relay-valid blocks
-
-The attempt envelope's ML-DSA-87 signature is verified on the chain-walk path only. Header/body
-validation never checks it, so a block is broadcast to every peer with **arbitrary bytes of the
-right length** in `signature`. Cost to the attacker: one byte flip and a re-hash. The block never
-becomes chain, but it is DAG spam that costs nothing to produce.
-
-### 6. The per-class DAA target divides by 4 at every epoch boundary
-
-A `ConsensusV2` network demands exactly one `pow_algo_id`, so the receipt lane (algo 7) is
-structurally impossible — every algo-7 header is rejected by the header gate. Yet the retarget still
-measures the floor against a 150‰ attempt-lane expectation, so the floor reads as a 6.67× over-
-producer at **every** epoch boundary. Its target reaches 1 after ~63 epochs (~87.5 days), after
-which the class lottery refuses every attempt and there is no path back.
-
-### 7. Fork-choice inversions
-
-* On `ConsensusV2` a **resolvable tip beats any unresolvable one**, and only the current sink is
-  resolvable — so a sink the network later orphans wedges a non-mining node permanently, and an
-  attacker can force that state on a chosen node with one privately-delivered block.
-* The deep-reorg gate fails **open** on any candidate this node cannot weigh: `palw_state_walk`
-  deliberately refuses a missing delta, and `.ok()?` two layers up turns that refusal into `None`
-  → `GateInactive` → allow.
-* The tip site uses a **different comparator** from the other three, contradicting Unit D's claim of
-  one authority, and drops the primary key.
-* The V2 tip snapshot is written in its own `WriteBatch` **before** the virtual state commits — an
-  unclean shutdown in that window leaves the PALW tip ahead of the sink and the next start panics in
-  `apply_delta_v2`, in a loop, recoverable only by wiping the data directory.
-
-### 8. Money conservation
-
-* **Block subsidy is claimable with hash alone.** Attempt admission runs only for selected-chain
-  candidates, while every merged blue block in the DAA window is paid its full worker share — with
-  no escrow — from the accepting block's coinbase.
-* **The escrow is destroyed rather than paid** whenever a claim never reaches `Final` (see §2): 620‰
-  of every block's subsidy is withheld and burned by don't-mint, with no log line saying so.
-* **PALW V2 state grows without bound** — claims are never removed and the pruning processor never
-  deletes delta rows, while `load_tip` does a full root-verified rebuild per sink-search candidate.
+Until (1)–(3) exist, a live network still voids every claim at `BindTimeout` or `ReceiptTimeout`.
+The difference from before this session is that it now says so in the log (§8b) and cannot slash
+anyone for it (Ⅱ.1), rather than doing it silently.
 
 ---
 
@@ -210,9 +177,9 @@ from consensus.
 
 ## Reading order for the next session
 
-1. **§2 — something has to file a `ReceiptLicensed`**, or the lattice never turns over and every
-   panel seat is slashed at `ReceiptTimeout`.
-2. **§3 — authorize post-genesis `ClassRegistered`** (or fence it off for t12) and wire the coverage
-   gate; the two compose into unfalsifiable work.
-3. **§6 — the per-class DAA divides by 4 every epoch** on a network whose receipt lane cannot
-   produce. Latent while other blockers stop the chain first; it goes live the moment they lift.
+1. **The data-availability transport** (above). Everything else on this page is closed; this is what
+   stands between the code and a chain whose claims mature.
+2. **The wallet decision** a validator node needs in order to submit a receipt at all.
+3. **M-02** — settle `state_root()`'s five items against ADR-0043's preimage **before** the ruleset
+   id is frozen. The id already moved once this session (retirement changed the state), so a t12
+   genesis must be re-minted regardless; doing M-02 first makes that one flag day instead of two.
