@@ -70,6 +70,17 @@ pub struct PalwProducerFactsV2 {
     /// Admission item 7: blocks of this class this epoch may not exceed this.
     pub epoch_budget_blocks: u64,
     pub epoch_produced_blocks: u64,
+    /// Is this the liveness floor? **The floor is EXEMPT from the epoch budget** — admission says so
+    /// at `palw_admission_v2.rs:234`, and the exemption is what makes ADR-0039 W6′'s deadlock
+    /// unrepresentable: DAA only advances when blocks are produced, so a floor that could be capped
+    /// could stop the chain and then never reach the epoch that would uncap it.
+    ///
+    /// Carried because a producer that applied the cap anyway would re-create that deadlock on the
+    /// CLIENT side — refusing to build a block the chain would have accepted. It did: the budget
+    /// table is written for the TIP's epoch and looked up for the CANDIDATE's, so at every epoch
+    /// boundary the lookup missed, `unwrap_or(0)` made the budget zero, and the producer held
+    /// forever.
+    pub is_base_class: bool,
     /// How long a producer must promise to keep its trace. Derived from the lattice windows this
     /// network runs, because a promise shorter than the challenge-plus-court span is a promise to
     /// discard the evidence before anyone can ask for it — and nothing at admission catches that,
@@ -82,7 +93,8 @@ impl PalwProducerFactsV2 {
     /// Is the epoch budget spent? A producer that keeps mining past it produces blocks admission
     /// refuses — burning an inference each time and learning nothing.
     pub fn has_epoch_room(&self) -> bool {
-        self.epoch_produced_blocks < self.epoch_budget_blocks
+        // The floor is exempt, exactly as admission exempts it. See `is_base_class`.
+        self.is_base_class || self.epoch_produced_blocks < self.epoch_budget_blocks
     }
 
     /// Every stateful precondition a producer can check BEFORE running an inference, in one
@@ -145,6 +157,7 @@ pub fn palw_producer_facts_v2(
         })
     });
     Some(PalwProducerFactsV2 {
+        is_base_class: class_id == state_params.base_class_id(),
         min_trace_retention_daa: state_params
             .window_bind()
             .saturating_add(state_params.window_receipt())
@@ -333,7 +346,47 @@ mod tests {
         }
     }
 
-    /// The pre-flight answers are the ones admission would give, not a second opinion: an
+    /// **The floor is exempt from the epoch budget, and the producer must agree with admission.**
+    ///
+    /// The budget table is written for the TIP's epoch and read for the CANDIDATE's, so at every
+    /// epoch boundary the lookup misses and `unwrap_or(0)` makes the budget zero. Admission does not
+    /// care — it exempts the floor (`palw_admission_v2.rs:234`) precisely so the ADR-0039 W6′
+    /// deadlock is unrepresentable — but the producer applied the cap anyway and held forever,
+    /// re-creating on the client side the chain-stopping deadlock `58291251` removed from consensus.
+    ///
+    /// This is the whole failure in one assertion: a floor with a ZERO budget is still producible.
+    #[test]
+    fn the_liveness_floor_is_never_capped_by_an_epoch_budget() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+
+        // An epoch the chain has written no budget for — every epoch boundary, in other words.
+        let far = params.epoch_length() * 9_999 + 1;
+        let facts =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), far, h64(1), Some(&bond_key))
+                .expect("the class is still registered");
+        assert!(facts.is_base_class, "h64(1) is this fixture's floor");
+        assert_eq!(facts.epoch_budget_blocks, 0, "and the chain has written no budget for this epoch");
+        assert!(facts.has_epoch_room(), "a zero budget must not stop the floor — that is the deadlock");
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Ok(()), "so the producer builds the epoch's first block");
+
+        // A NON-floor class is still capped, because the cap is what Decision 2 is for. Nothing was
+        // loosened; the exemption is exactly the one admission already makes.
+        let entrant = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            far,
+            h64(2),
+            Some(&bond_key),
+        );
+        assert!(entrant.is_none(), "this fixture registers no entrant; the floor is the only class");
+    }
+
+    /// The pre-flight answers are the ones admission would give, not a second opinion: an    /// The pre-flight answers are the ones admission would give, not a second opinion: an
     /// unregistered bond has no facts to be ready with.
     #[test]
     fn a_bond_the_chain_does_not_know_is_not_ready() {

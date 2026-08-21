@@ -74,6 +74,9 @@ pub struct PalwProducerConfig {
     pub address_prefix: kaspa_addresses::Prefix,
     /// The network's own domain, derived from its `NetworkId` string exactly as consensus does.
     pub network_id: String,
+    /// Where the execution material behind each published attempt is kept for as long as its
+    /// `trace_retention_daa` promises. See `retain_execution` for why this is not optional.
+    pub retention_dir: std::path::PathBuf,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -145,6 +148,34 @@ impl PalwProducerService {
         Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data }
     }
 
+    /// **Keep what the attempt promises to keep.**
+    ///
+    /// `trace_retention_daa` is a data-availability obligation: the producer is telling the chain it
+    /// will serve this execution's material until that DAA score. It was signing that promise and
+    /// then dropping the material on the floor — `run.tiles` and `run.binding` died when
+    /// `produce_one` returned, and nothing in the tree persisted or served them. A panel asking for
+    /// a chunk would have found nothing, and the honest answer to "did you keep it?" was no.
+    ///
+    /// Written BEFORE the block is published, and a write failure aborts the publish: a promise you
+    /// have already broken is not one to make. Keyed by the attempt id, which is what a challenge
+    /// names.
+    fn retain_execution(
+        &self,
+        attempt_id: Hash64,
+        run: &misaka_palw_base0::produce::Base0ExecutionV1,
+    ) -> Result<(), String> {
+        std::fs::create_dir_all(&self.config.retention_dir)
+            .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
+        let path = self.config.retention_dir.join(format!("{attempt_id}.material"));
+        let bytes = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids))
+            .map_err(|e| format!("the execution material is not serializable: {e}"))?;
+        let tmp = path.with_extension("material.partial");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        // Rename last: a reader never sees a half-written obligation.
+        std::fs::rename(&tmp, &path).map_err(|e| format!("cannot publish {}: {e}", path.display()))?;
+        Ok(())
+    }
+
     fn verification_key(&self) -> Vec<u8> {
         self.keypair.as_ref().map(|kp| kp.verification_key.as_ref().to_vec()).unwrap_or_default()
     }
@@ -166,6 +197,15 @@ impl PalwProducerService {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
+                continue;
+            }
+            // **The gate every participation path consults** — its own doc's words. This loop
+            // bypassed it, so it would produce with zero peers, on a stale sink, and while the
+            // chain-participation gate was closed: none of which the RPC mining path allows, and
+            // all of which put blocks on a chain this node has no business extending.
+            if !self.flow_context.should_mine(&session).await {
+                trace!("[{PALW_PRODUCER}] holding: the mining rule engine says this node should not mine");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }
             let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
@@ -223,7 +263,18 @@ impl PalwProducerService {
             kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
             kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
         );
-        let run = base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt).map_err(|e| format!("the job: {e}"))?;
+        // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
+        // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.
+        // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search
+        // out to the 120 s cadence, at which point that thread is busy essentially all the time and
+        // every other service on the runtime is short one worker.
+        let (job_for_blocking, prompt_for_blocking, profile_for_blocking) = (job.clone(), prompt.clone(), profile.clone());
+        let run = tokio::task::spawn_blocking(move || {
+            base0_execute_for_attempt_v1(&artifact, &profile_for_blocking, &job_for_blocking, &prompt_for_blocking)
+                .map_err(|e| format!("the job: {e}"))
+        })
+        .await
+        .map_err(|e| format!("the execution task did not finish: {e}"))??;
 
         // Every field but the challenge is fixed now: the roots are the execution's and the six
         // chain facts are `facts`'. The nonce moves the challenge, the challenge moves the
@@ -262,21 +313,38 @@ impl PalwProducerService {
             })
             .unwrap_or(0);
 
-        let mut header = template.block.header.clone();
-        for nonce in 0..NONCES_PER_TEMPLATE {
-            attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond);
-            if class_ticket_v2(&attempt) > facts.class_target {
-                continue;
-            }
-            // The class lottery is won; now the network's. Only one nonce in many reaches here, so
-            // the expensive check runs rarely.
-            header.nonce = nonce;
-            header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; sig_len] }.encode_wire();
-            let state = kaspa_pow::StateLayer0::new(&header, self.config.network_id.as_bytes());
-            if !state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
-                continue;
-            }
-
+        // The nonce search, also off the async worker and for the same reason as the inference: it
+        // is a pure-CPU loop with no await in it, and at the retargeted cadence it runs long enough
+        // to hold a tokio worker for essentially all of it.
+        let search = {
+            let header0 = template.block.header.clone();
+            let network_id = self.config.network_id.clone();
+            let (class_id, class_target) = (facts.class_id, facts.class_target);
+            let mut attempt_for_search = attempt.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut header = header0;
+                for nonce in 0..NONCES_PER_TEMPLATE {
+                    attempt_for_search.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
+                    if class_ticket_v2(&attempt_for_search) > class_target {
+                        continue;
+                    }
+                    // The class lottery is won; now the network's. Only one nonce in many reaches
+                    // here, so the expensive check runs rarely.
+                    header.nonce = nonce;
+                    header.palw_commitment =
+                        PalwAttemptEnvelopeV2 { attempt: attempt_for_search.clone(), signature: vec![0u8; sig_len] }.encode_wire();
+                    let state = kaspa_pow::StateLayer0::new(&header, network_id.as_bytes());
+                    if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
+                        return Some((nonce, attempt_for_search));
+                    }
+                }
+                None
+            })
+            .await
+            .map_err(|e| format!("the nonce search task did not finish: {e}"))?
+        };
+        if let Some((nonce, won)) = search {
+            attempt = won;
             // Both under target. Sign the attempt id ONCE and publish.
             let kp = self.keypair.as_ref().ok_or("no signing key")?;
             let message = attempt_id_v2(&attempt);
@@ -289,6 +357,8 @@ impl PalwProducerService {
             .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
             .as_ref()
             .to_vec();
+            // The promise, kept before it is made. See `retain_execution`.
+            self.retain_execution(message, &run)?;
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
             template.block.header.finalize();

@@ -1204,6 +1204,10 @@ Do you confirm? (y/n)";
                         pay_address: pay_address.clone(),
                         address_prefix: config.prefix(),
                         network_id: config.params.net.to_string(),
+                        // Beside the per-network data dir: the material behind a published attempt
+                        // is a data-availability obligation for `trace_retention_daa`, so it has to
+                        // outlive a restart the way the chain it answers to does.
+                        retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         class_id,
                     },
                     consensus_manager.clone(),
