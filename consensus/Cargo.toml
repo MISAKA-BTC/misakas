@@ -10,6 +10,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# ML-DSA-87 SIGNING. A normal dependency rather than a dev one because `TestConsensus` compiles
+# into the lib and its V2 attempt carriage must sign what the chain verifies — a harness that
+# fabricates the one credential admission checks cannot measure admission. The verification side
+# (kaspa-txscript) already depends on this crate, so the edge is direct rather than new.
+libcrux-ml-dsa.workspace = true
 # ADR-0042 (PR-08 store shape) / ADR-0044 Unit C: the PALW V2 state store persists the consensus
 # types' canonical Borsh bytes verbatim as its rows, so borsh is a normal dependency now — it
 # used to be dev-only (the DNS-overlay harness).
@@ -61,9 +66,6 @@ flate2.workspace = true
 rand_distr.workspace = true
 kaspa-txscript-errors.workspace = true
 kaspa-addresses.workspace = true
-# kaspa-pq (ADR-0018 §G): ML-DSA-87 signing for the DNS-overlay DAG test harness
-# (the verification side, kaspa-txscript, is already a normal dependency).
-libcrux-ml-dsa.workspace = true
 
 [[bench]]
 name = "parallel_muhash"

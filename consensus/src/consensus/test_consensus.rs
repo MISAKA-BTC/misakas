@@ -159,10 +159,38 @@ impl TestConsensus {
     /// A position-bound `PalwAttemptEnvelopeV2` for `header`, as a miner on a V2 network would
     /// carry — the harness's answer to "what does a block of this network look like".
     ///
-    /// The signature is a fixture: the finalizer does not read it (identity is the UNSIGNED
-    /// attempt, ADR-0042 Decision 3c) and stateful admission — where the key and the bond are
-    /// checked — is Unit C step 3's consumer, not this. What must be real is everything the
-    /// challenge and the commitment root cover, because those are what the PoW prices.
+    /// **The signature is real, and the note that said it need not be was the hole.**
+    ///
+    /// It read: "the signature is a fixture: the finalizer does not read it (identity is the
+    /// UNSIGNED attempt, ADR-0042 Decision 3c) and stateful admission — where the key and the bond
+    /// are checked — is Unit C step 3's consumer, not this." Every clause of that was true and the
+    /// conclusion did not follow: stateful admission checked the key against the bond and NOBODY
+    /// checked the signature, because the pipeline called the entry point that takes no verifier.
+    /// A harness carrying `vec![7u8; 32]` as an ML-DSA-87 key and `vec![0x5A; ..]` as its signature
+    /// could not have noticed, which is why it did not.
+    /// **The harness's own ML-DSA-87 identity, generated once.**
+    ///
+    /// The carriage calls itself a miner because it computes what the chain will demand rather
+    /// than hard-coding it. It carried `executor_pubkey: vec![7u8; 32]` and
+    /// `signature: vec![0x5A; ..]` — neither an ML-DSA-87 key nor an ML-DSA-87 signature — and
+    /// every V2 pipeline test passed, because the pipeline called the admission entry point that
+    /// takes no verifier. A harness that fabricates the one credential the chain is supposed to
+    /// check is not measuring the chain.
+    ///
+    /// Generated once: ML-DSA-87 keygen is not cheap and every block of every V2 test needs the
+    /// same identity — the genesis `BondRegistered` registers this key, and admission item 2
+    /// compares the carried one against it.
+    pub(crate) fn palw_v2_harness_keypair() -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+        static KP: std::sync::OnceLock<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair> = std::sync::OnceLock::new();
+        KP.get_or_init(|| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]))
+    }
+
+    /// The verification key the genesis bond registers and the carriage carries — one value, so
+    /// admission item 2's equality is a fact about the harness rather than a coincidence.
+    pub(crate) fn palw_v2_harness_pubkey() -> Vec<u8> {
+        Self::palw_v2_harness_keypair().verification_key.as_ref().to_vec()
+    }
+
     pub(crate) fn palw_v2_test_carriage(&self, header: &Header) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2,
@@ -208,7 +236,7 @@ impl TestConsensus {
             challenge: challenge_v2(network_domain, pre_pow, header.timestamp, header.nonce, class_id, &bond),
             class_id,
             executor_bond: bond,
-            executor_pubkey: vec![7u8; 32],
+            executor_pubkey: Self::palw_v2_harness_pubkey(),
             // DERIVED from the operator key, never a literal: `BondRegistered` mints the id with
             // `palw_operator_id_v2(operator_pubkey)`, and admission item 3 compares the carried id
             // against the registration's. A hand-written value here is an attempt no chain admits,
@@ -228,11 +256,20 @@ impl TestConsensus {
             trace_retention_daa: u64::MAX,
         };
         let attempt = self.palw_v2_win_class_ticket(attempt, class_target);
-        PalwAttemptEnvelopeV2 {
-            attempt,
-            signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
-        }
-        .encode_wire()
+        // Signed AFTER the ticket search, because the search moves fields that are inside
+        // `attempt_id_v2` and the signature is over that id. Signing first would authorise an
+        // attempt nobody mined.
+        let message = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&attempt);
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &Self::palw_v2_harness_keypair().signing_key,
+            message.as_byte_slice(),
+            kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("ML-DSA-87 sign over a 64-byte attempt id")
+        .as_ref()
+        .to_vec();
+        PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire()
     }
 
     /// The class LOTTERY, run the way a miner runs it (ADR-0039: "ticket, not hash").

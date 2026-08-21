@@ -645,6 +645,72 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     assert_ne!(liar_hash, sink_before);
 }
 
+/// **The attempt's signature is checked on the live path — and one solved PoW is one block.**
+///
+/// The pipeline called `check_palw_attempt_admission_v2`, which takes no verifier and cannot take
+/// one: its item 2 compares the carried `executor_pubkey` against the bond record's key, and both
+/// are public. So an attempt was admitted on the strength of naming an Active bond, and the
+/// `signature` field was bytes nobody read. Two consequences, both asserted here:
+///
+/// * **anyone could mine under anyone's stake** — the bond outpoint and the key are on chain, so
+///   an attacker copies both, writes any bytes into `signature`, and solves the PoW;
+/// * **one PoW minted unlimited blocks** — the signature is deliberately outside `attempt_id_v2`
+///   and therefore outside the PoW digest (ADR-0042 Decision 3c), while block identity hashes the
+///   raw carrier bytes. Unverified, flipping one signature bit yields a different, equally valid
+///   block at zero marginal cost.
+///
+/// The fixture that could not see this was the harness itself: it carried `vec![7u8; 32]` as an
+/// ML-DSA-87 public key and `vec![0x5A; ..]` as an ML-DSA-87 signature, and every V2 test passed.
+/// It now holds a real key pair, the genesis bond registers that key, and it signs the attempt id
+/// after the ticket search — so this test's forgery is a forgery of something real.
+#[tokio::test]
+async fn palw_v2_a_forged_attempt_signature_cannot_become_the_sink() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let mut ctx = TestContext::new(consensus);
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let sink_before = ctx.consensus.get_sink();
+
+    // Everything an honest miner produces — the right bond, the registered key, a derived pwu, a
+    // winning class ticket — and ONE flipped signature byte. Nothing else moves, so nothing else
+    // can be the reason it is refused.
+    let template = ctx.build_block_template(11, ctx.simulated_time + 1);
+    let mut forger = template.block.clone();
+    let mut envelope =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&forger.header.palw_commitment).unwrap();
+    let honest_id = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+    envelope.signature[0] ^= 0x01;
+    forger.header.palw_commitment = envelope.encode_wire();
+    forger.header.finalize();
+    let forged_hash = forger.header.hash;
+
+    // The attempt itself is untouched: the id the PoW commits to is the honest one, which is
+    // exactly why an unverified signature was free to vary.
+    let reread =
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&forger.header.palw_commitment).unwrap();
+    assert_eq!(
+        kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&reread.attempt),
+        honest_id,
+        "the forgery moves no priced field — only the signature, which is what makes it free"
+    );
+
+    ctx.validate_and_insert_block(forger.to_immutable()).await;
+    assert_eq!(ctx.consensus.get_sink(), sink_before, "an attempt whose signature does not verify cannot become the sink");
+    assert_ne!(forged_hash, sink_before);
+}
+
 /// BASE-0's own reachable set, so the fixture cannot certify itself (see
 /// `base0_reaches_only_kernels_this_build_adjudicates`).
 fn palw_v2_test_catalog() -> kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2 {
@@ -679,7 +745,10 @@ fn palw_v2_test_bundle(
             kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
             0,
         )),
-        vec![7u8; 32],
+        // The harness's REAL verification key: admission item 2 compares the attempt's carried
+        // key against this registration's, and the signature check behind it is only meaningful if
+        // the key it authorises is the one the chain registered.
+        crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey(),
         vec![21u8; 8],
         kaspa_hashes::Hash64::from_u64_word(0x9A11),
     )

@@ -3716,12 +3716,36 @@ impl VirtualStateProcessor {
             return Err("an attempt-lane block on a network with no V2 admission params".to_string());
         };
         let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).map_err(|e| e.to_string())?;
-        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_v2(
+        // **The FULL admission, because the stateful half alone verifies no signature.**
+        //
+        // `check_palw_attempt_admission_v2` takes no verifier and cannot: its item 2 compares the
+        // carried `executor_pubkey` against the bond record's key, and BOTH are public. Called
+        // alone it establishes "this attempt names a key that matches an Active bond" and nothing
+        // about who authored it — so an attacker copies a victim's bond outpoint and public key
+        // off the chain, writes any bytes into `signature`, solves the PoW, and mines under
+        // someone else's stake. `check_palw_attempt_admission_full_v2` is the composer that runs
+        // the stateless binding and `validate_signature_v2` before delegating here.
+        //
+        // The signature is also outside `attempt_id_v2` and therefore outside the PoW digest
+        // (ADR-0042 Decision 3c, deliberately), while the block-identity digest hashes the raw
+        // carrier bytes. Unverified, that combination lets ANY third party flip one signature bit
+        // and mint another distinct, valid block from one solved PoW. 3c's deferral rested on
+        // "only the bond holder can mint valid-signature siblings", which is a statement about a
+        // signature somebody checks.
+        let network_domain =
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
             state,
             state_params,
             admission,
             point,
+            network_domain,
+            pre_pow_hash,
+            header.timestamp,
+            header.nonce,
             &envelope,
+            |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
