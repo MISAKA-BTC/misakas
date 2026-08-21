@@ -174,16 +174,15 @@ therefore inside the network's identity:
 
 ## What is safe to say today, revised
 
-> **Update 2026-08-21, `bb62f1fc` — the code-level determination.** All eight launch dimensions in
-> [the blockers document](palw-rc-launch-blockers-2026-08-21.md) are now closed, each by a test that
-> is red on regression. **This is still NO-GO for a weight-bearing launch, and the reason is one
-> named subsystem rather than a defect:** a panel seat cannot obtain the material it is supposed to
-> check, because the producer writes its retained execution to its own disk and nothing serves or
-> fetches it. There is no trace-chunk transport in the tree. Until it exists — together with the
-> panel service and the product decision about whether a validator node holds a wallet — a live
-> chain still voids every claim at `BindTimeout` or `ReceiptTimeout`. What changed is that it now
-> says so in the log and cannot slash anyone for it. The blockers document carries the shape of the
-> three pieces.
+> **Update 2026-08-22, `9d8c7645` — code-complete.** All eight launch dimensions in
+> [the blockers document](palw-rc-launch-blockers-2026-08-21.md) are closed, each by a test that is
+> red on regression — and the subsystem the 08-21 update named as the last blocker is now built:
+> the material broadcast (2.27 MB per claim, relay-once, self-authenticating against the claim's
+> committed roots), the panel service (`--palw-panel`), and the quorum submitter, whose object
+> comes from the acceptance validator itself so the submitter and the chain cannot disagree. The
+> wallet question was answered without a wallet: one funded outpoint on the bond key's own
+> address, rolled through change. **What separates this from a public weight-bearing testnet-12 is
+> operational**: a multi-node drill, and the genesis re-mint the state change already forces.
 >
 > Two consequences worth stating separately. The **ruleset id moved** (terminal-claim retirement
 > changed `state_root`), so a testnet-12 genesis must be re-minted whatever else happens — which is

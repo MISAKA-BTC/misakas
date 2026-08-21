@@ -18,7 +18,7 @@ recorded verbatim: *"the audit said X" is a claim somebody should be able to che
 | Method | 36 agents: the 19 external-audit findings re-verified in 9 buckets → adversarial refutation of every CLOSED verdict → 8 launch dimensions swept → each dimension adversarially re-examined → a completeness critic |
 | Inputs | [docs/palw-external-audit-2026-08-21.md](palw-external-audit-2026-08-21.md) (the commissioned static audit and its Appendix A) |
 | Verdict at the sweep | **NO-GO**, and the critic's own reasoning: the branch "does not fail the standard on a technicality — it fails it three independent ways, only one of which the external audit knew about." |
-| Verdict now (2026-08-21, `bb62f1fc`) | **All eight dimensions closed at the code level.** Still NO-GO for a weight-bearing launch, for exactly one reason, and it is a missing subsystem rather than a defect — see *What is still missing*. |
+| Verdict now (2026-08-22, `9d8c7645`) | **Code-complete.** All eight dimensions closed, and the missing subsystem — material gossip, the panel service, the quorum submitter — is built and correspondence-tested. What separates this from a public weight-bearing testnet-12 is operational: a multi-node drill, the genesis re-mint (with M-02 settled first), and fleet deployment. |
 
 **Appendix A of the external audit does not apply to this branch.** It was written against
 `palw-mainnet-rc-integration` at baseline `e5d7a69c`. Its status column is stale here.
@@ -87,80 +87,39 @@ declares no span at all. The measurement is kept runnable as `measure_claim_grow
 
 ---
 
-## What is still missing — and it is not a defect, it is a subsystem
+## What was still missing — built (`9d8c7645`, 2026-08-22)
 
-**A panel seat cannot obtain the material it is supposed to check.** §2 built the consensus side —
-`palw_seat_duties_v2` tells a node which claims it is seated on, `base0_material_matches_claim_v1`
-decides what a seat should answer, and a signed quorum licenses a claim — but the producer writes
-its retained execution to its **own disk** (`kaspad/src/palw_producer.rs`) and *nothing serves it
-and nothing fetches it*. There is no `trace_chunk` message under `protocol/p2p/proto`, no serving
-flow, and no fetch. A seat on another host has no way to get the tiles, so no honest panel can file
-a `ReceiptLicensed` on a real network however the service is written.
+**A panel seat could not obtain the material it judges, could not deliver its receipt, and nobody
+assembled a quorum into the object a block accepts.** The consensus side existed end to end and was
+unreachable from the network. All three pieces now exist:
 
-Three pieces, and only the first is purely mechanical:
+1. **Transport** — broadcast, not request/response. The RC floor's material measures **2.27 MB**
+   once per 120 s block; one flood serves all five seats and doubles as the producer discharging
+   its retention obligation in the open. The bytes authenticate themselves against the claim's own
+   committed roots. Flood control: relay-once by digest, an 8 MiB cap, 4 distinct payloads per
+   claim, a bounded inbox. The band is gated on a ConsensusV2 ruleset in both directions (the
+   old-binary lesson from the pruning-state pair, applied before it bit).
+2. **The panel service** (`--palw-panel`): duties → material check (`base0_material_matches_claim_v1`,
+   through the ONE codec the retention file and the broadcast now share) → signed
+   `PalwSeatReceiptV2`, broadcast. An `Unavailable` is filed only after half the receipt window —
+   an early accusation is a false one with a signature on it.
+3. **The submitter, and the wallet decision decided**: no wallet. One outpoint
+   (`--palw-fee-outpoint`) paying to the bond key's own P2PKH, spent per submission, change back to
+   the same address, rolling outpoint persisted. The object comes from
+   `palw_v2_receipt_quorum_assemble`, which grows the receipt set through the ACCEPTANCE validator
+   itself — the submitter and the chain cannot disagree about what a quorum is. One funded node per
+   network suffices; a duplicate submission dies at acceptance as a wrong-phase object.
 
-1. **A trace data-availability transport**, and it needs no new format. BASE-0's
-   `trace_chunk_count` is **1** — `base0_execute_for_attempt_v1` says so in as many words: "the
-   whole trace is one object at this class's size" — and the producer already writes exactly that
-   object, `borsh((binding, tiles, generated_token_ids))`, to
-   `<retention_dir>/<attempt_id>.material`. So the request is keyed by the claim id alone and the
-   response is that blob. Note what the fetcher must NOT do: `trace_manifest_root` hashes
-   `(ctx, trace_root, step_merkle_root, count)` and **not the chunk bytes**, so it cannot
-   authenticate a served blob — the check is `base0_material_matches_claim_v1`, which rebuilds the
-   roots the on-chain claim already carries. Shaped like §1's pruning-point carriage pair otherwise.
+The correspondence test (`palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts`)
+pins the chain end to end: registry-signed receipts polluted with a forged signature and a
+duplicate seat assemble into exactly the quorum, the payload passes the 0x4b admission gate, and
+the object passes `palw_v2_validate_objects` at the same state. Building it caught a real
+divergence — the assembler evaluated at the sink's DAA and refused every receipt signed at
+virtual's — which is the "correspondence defects are found by round trips" pattern, again.
 
-   Deliberately not built this session: a request/response pair needs a requester that owns the
-   route, and the only requester is (2). Landing the serving half alone would add protocol surface
-   nothing can reach — which is the exact shape of the defects this sweep spent itself finding.
-2. **A panel service in kaspad.** Poll `palw_seat_duties_v2`, fetch, run the material check, sign a
-   `PalwSeatReceiptV2`.
-3. **A way to submit it.** `ReceiptLicensed` rides a 0x4b transaction, which needs a funded UTXO and
-   a signing key — i.e. a validator node has to hold a wallet. **That is a product decision, not an
-   implementation detail**, and it is the reason this is written down rather than guessed at.
-
-Until (1)–(3) exist, a live network still voids every claim at `BindTimeout` or `ReceiptTimeout`.
-The difference from before this session is that it now says so in the log (§8b) and cannot slash
-anyone for it (Ⅱ.1), rather than doing it silently.
-
----
-
-## Bugs introduced in this session's own producer work — **all four CLOSED** (`2870f1d6`)
-
-Recorded rather than quietly fixed. Kept here because the first one is the kind of mistake worth
-remembering: a client-side re-creation of a chain-stopping deadlock that had already been removed
-from consensus.
-
-| Where | What | State |
-|---|---|---|
-| `palw_producer_v2.rs:85` | `has_epoch_room()` applies the epoch budget to the base class, which **admission deliberately exempts** (`palw_admission_v2.rs:234`) — re-creating client-side the deadlock removed from consensus in `58291251`. Worse: the budget table is written for the **tip's** epoch and looked up for the **candidate's**, so a missing entry becomes `unwrap_or(0)` and the producer **refuses the first block of every epoch**. | CLOSED |
-| `palw_producer.rs` | Signs a `trace_retention_daa` obligation it structurally cannot meet — the execution's tiles and binding are dropped when `produce_one` returns, and nothing persists or serves them. The comment asserting the opposite reads as a verified property. | CLOSED |
-| `palw_producer.rs` | Bypasses `FlowContext::should_mine`, "the gate every participation path consults" — it will produce with zero peers, on a stale sink, and while chain participation is closed. | CLOSED |
-| `palw_producer.rs` | The job build, inference and nonce grind run synchronously inside an async task, pinning one tokio worker. Trivial at genesis difficulty; bites once the retarget pulls the search out to the 120 s cadence. | CLOSED |
-
----
-
-## Operator-facing errors
-
-* **[runbook](palw-rc-testnet12-launch-runbook.md) §4 names the wrong P2P port** — testnet-12 listens
-  on **26411**, the runbook says 16311. With `dns_seeders` empty, `--addpeer` is the only discovery
-  path, so a fleet brought up by following the runbook **never forms**.
-* `palw_rc_params` raises `finality_depth` to 600 without raising `pruning_depth` (1144), violating
-  the prunality lower bound of 1384 — the region upstream's own comment labels "unsafe".
-* `palw-rc-genesis` applies **no length validation** to `--bond-pubkey` / `--operator-pubkey`, and
-  neither does the genesis gate, yet it prints `ACCEPTED — every gate the genesis loader runs has
-  passed`. A truncated paste mints a genesis nobody can sign for; the cost is a flag-day relaunch.
-* `--bond-index 40` silently locks the entire **9,000,000,000 MSK** main premine wallet as collateral
-  — and it is the only premine output whose key a testnet operator plausibly holds.
-* testnet-12 silently inherits testnet-10's DNS-finality PoS overlay and VLT shadow overlay,
-  genesis-active, with the VLT model cost table inside the consensus fingerprint. (The specific
-  wedge the audit feared is **not** reachable on a bundled node — the V2 comparator short-circuits
-  the DNS gate — but the inheritance is unexamined, the same class of accident as the EVM lane.)
-* `misaminer` and `pq-miner` **spin every core at 100% forever**, with no log line and no template
-  refetch, when pointed at a ConsensusV2 network: both refuse algo 4/5 explicitly and have nothing
-  for algo 6/7. This is the failure a public testnet actually produces.
-* Half of §5's "verify the network is what you think it is" table names things an operator cannot
-  observe: no log line on a healthy node mentions algo 6, and `epoch_produced_blocks` has no RPC,
-  CLI or log surface at all.
+**What remains is operational, not code**: a multi-node drill (producer + 5 seats + one funded
+submitter on real hosts) before any public weight-bearing announcement, and the genesis re-mint
+the retirement change already forces (settle M-02 first — one flag day, not two).
 
 ---
 
