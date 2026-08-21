@@ -82,10 +82,11 @@ pub fn base0_step_tiles_v1(
         // layer's values under every layer's coordinate — a producer could then execute one thing
         // and open another.
         let global_slot = (profile.pre_nodes.len() as u32)
-            .checked_add((*layer as u32).checked_mul(profile.attn_nodes.len() as u32).ok_or(LegError::UnknownSlot {
-                layer: *layer,
-                slot: *slot,
-            })?)
+            .checked_add(
+                (*layer as u32)
+                    .checked_mul(profile.attn_nodes.len() as u32)
+                    .ok_or(LegError::UnknownSlot { layer: *layer, slot: *slot })?,
+            )
             .and_then(|g| g.checked_add(*slot as u32))
             .ok_or(LegError::UnknownSlot { layer: *layer, slot: *slot })?;
         // Checked against the profile's own walk rather than trusted: if the two ever disagreed the
@@ -100,12 +101,7 @@ pub fn base0_step_tiles_v1(
             return Err(LegError::UnknownSlot { layer: *layer, slot: *slot });
         }
         for (tile_index, chunk) in row.chunks(tile_len).enumerate() {
-            let coord = PalwStepCoordinateV1 {
-                call_index,
-                node_slot: global_slot,
-                position,
-                tile_index: tile_index as u32,
-            };
+            let coord = PalwStepCoordinateV1 { call_index, node_slot: global_slot, position, tile_index: tile_index as u32 };
             let index = canonical_step_leaf_index(profile, ctx, &coord).ok_or(LegError::NotACanonicalCoordinate {
                 layer: *layer,
                 slot: *slot,
@@ -132,6 +128,132 @@ pub fn base0_step_tiles_v1(
 /// The step leg's Merkle root over `leaves`.
 pub fn base0_step_merkle_root_v1(tiles: &Base0StepTilesV1) -> Option<Hash64> {
     step_merkle_root_v1(&tiles.leaves).ok()
+}
+
+/// **The producer's own commitment, from its own capture** (audit C-01).
+///
+/// A binding is not a bag of hashes a caller fills in: `verify_binding` recomputes
+/// `committed_execution_root` from the four leg roots and refuses anything else, so a hand-written
+/// binding fails before a single opening is read. That is the check doing its job, and it is also
+/// why nothing outside the checker's own tests could ever build one — the producer side did not
+/// exist.
+///
+/// Everything here is derived from the capture and the job: the step leg's root is the capture's,
+/// the checkpoint leg is the empty one this class's single-call jobs have, and the execution root
+/// is the composition. What a caller supplies is the two roots this module does not own — the
+/// logits trace and the activation leg.
+pub fn base0_binding_from_capture_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    tiles: &Base0StepTilesV1,
+    full_logits_trace_root: Hash64,
+    activation_leg_root: Hash64,
+) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
+        execution_commitment_root_v2, step_leg_root_v1,
+    };
+    let context_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let checkpoint_profile = kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
+        version: kaspa_consensus_core::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+        checkpoint_interval: 1,
+        state_layout_id: Hash64::default(),
+    };
+    let step_leaf_count = tiles.leaves.len() as u64;
+    let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
+    let state_chunk_map_id = Hash64::default();
+    // The canonical checkpoint count is `decode_calls / interval`; a job with one decode token has
+    // no decode CALLS, so the leg is the empty one — and the shape pass refuses any other pairing
+    // of count and root, which is why this is derived rather than chosen.
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let checkpoint_count = decode_calls / checkpoint_profile.checkpoint_interval;
+    let checkpoint_merkle_root = if checkpoint_count == 0 { checkpoint_empty_root_v2(&context_hash) } else { Hash64::default() };
+    let checkpoint_profile_hash = checkpoint_profile.profile_hash();
+    let checkpoint_root = checkpoint_leg_root_v2(
+        &context_hash,
+        &checkpoint_profile_hash,
+        &state_chunk_map_id,
+        decode_calls,
+        checkpoint_count,
+        &checkpoint_merkle_root,
+    );
+    let step_root = step_leg_root_v1(&context_hash, &profile_hash, step_leaf_count, &step_merkle_root);
+    let committed_execution_root =
+        execution_commitment_root_v2(&context_hash, &full_logits_trace_root, &activation_leg_root, &checkpoint_root, &step_root);
+    Ok(PalwStepBindingV2 {
+        version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+        job_context: ctx.clone(),
+        shape_profile: profile.clone(),
+        checkpoint_profile,
+        state_chunk_map_id,
+        full_logits_trace_root,
+        activation_leg_root,
+        step_leaf_count,
+        step_merkle_root,
+        checkpoint_count,
+        checkpoint_merkle_root,
+        committed_execution_root,
+    })
+}
+
+/// **A complete refutation, assembled from a real capture** (audit C-01's other half).
+///
+/// The checker existed and the prover did not. `check_execution_step_refutation_v1` computes the
+/// canonical input set privately and refuses any other, so a producer had to guess the rule and
+/// would learn only that its guess was "not the canonical one" — an evidence format nobody could
+/// produce, which is why every refutation in the tree was a hand-built skeleton.
+///
+/// This closes the round trip: run the engine, tile the capture, pick a coordinate, and get the
+/// object the court takes. What the court then says about it is the court's business — an honest
+/// capture is `NoFaultFound`, a tampered one is a conviction — and that is exactly the property
+/// worth having, because the same function produces both.
+///
+/// `binding` is the producer's own commitment; its `step_leaf_count` and `step_merkle_root` must be
+/// the ones `tiles` produced or the openings will not verify, which is the check doing its job
+/// rather than a caller's obligation.
+pub fn base0_refutation_from_capture_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    tiles: &Base0StepTilesV1,
+    binding: kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    target: PalwStepCoordinateV1,
+    prompt_token_ids: Vec<u32>,
+) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
+    use kaspa_consensus_core::palw_step_leg::step_opening_v1;
+    use kaspa_consensus_core::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepInputOpeningV1, canonical_input_leaves_v1};
+
+    let leaf_of =
+        |index: u64| -> Option<PalwStepTileLeafV1> { tiles.tiles.iter().find(|(i, _)| *i == index).map(|(_, leaf)| leaf.clone()) };
+    let target_index = canonical_step_leaf_index(profile, ctx, &target).ok_or(LegError::NotACanonicalCoordinate {
+        layer: 0,
+        slot: target.node_slot as u16,
+        tile: target.tile_index,
+    })?;
+    let output_preimage = leaf_of(target_index).ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
+    let output_opening = step_opening_v1(&tiles.leaves, target_index).map_err(|_| LegError::NotACanonicalCoordinate {
+        layer: 0,
+        slot: target.node_slot as u16,
+        tile: target.tile_index,
+    })?;
+
+    // The canonical input set, in the checker's own order — asked for rather than reconstructed,
+    // so a prover cannot disagree with the court about what a step reads.
+    let required =
+        canonical_input_leaves_v1(profile, ctx, &target).ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
+    let mut inputs = Vec::new();
+    for row in &required {
+        for (index, coord) in row {
+            let preimage = leaf_of(*index).ok_or(LegError::UnknownSlot { layer: 0, slot: coord.node_slot as u16 })?;
+            let opening = step_opening_v1(&tiles.leaves, *index).map_err(|_| LegError::NotACanonicalCoordinate {
+                layer: 0,
+                slot: coord.node_slot as u16,
+                tile: coord.tile_index,
+            })?;
+            inputs.push(PalwStepInputOpeningV1 { opening, preimage });
+        }
+    }
+    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens: None })
 }
 
 #[cfg(test)]
@@ -305,5 +427,85 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **Audit C-01, closed end to end: a real execution becomes a refutation the court reads.**
+    ///
+    /// The audit's largest finding was that nothing turned a run into the commitment a court opens
+    /// against. The capture half landed first; this is the other half, and it is the one that
+    /// proves the format is producible: `check_execution_step_refutation_v1` computes the canonical
+    /// input set privately and refuses any other, so until `canonical_input_leaves_v1` existed a
+    /// producer had to guess the rule and would learn only that its guess was wrong.
+    ///
+    /// Both verdicts come out of the same assembly, which is what makes this a round trip rather
+    /// than a demonstration: an HONEST capture is `NoFaultFound` — the challenger loses on the
+    /// merits — and one tampered tile is a conviction.
+    #[test]
+    fn a_capture_becomes_a_refutation_the_court_adjudicates_both_ways() {
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let a = artifact();
+        let profile = base0_profile_v1(geometry()).expect("expressible");
+        let ctx = context(&profile);
+        let leaf_count = step_leaf_count(&profile, &ctx).expect("the job has a step space");
+
+        let engine = crate::engine::Base0Engine::new(&a);
+        let mut cache = crate::engine::KvCache::new(&a);
+        let (_, probe) = engine.forward_token_probed(&mut cache, 3, 0).expect("the pass completes");
+        let tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &probe.steps).expect("the rows tile");
+        let root = base0_step_merkle_root_v1(&tiles).expect("a populated space has a root");
+
+        let binding = |tiles: &Base0StepTilesV1| {
+            base0_binding_from_capture_v1(&profile, &ctx, tiles, Hash64::default(), Hash64::default())
+                .expect("a capture yields its own commitment")
+        };
+
+        // A step with real inputs and a real weight operand: the FFN down projection's narrowing
+        // (slot 33 of layer 0), which reads the accumulator the step before it produced.
+        let target =
+            PalwStepCoordinateV1 { call_index: 0, node_slot: profile.pre_nodes.len() as u32 + 33, position: 0, tile_index: 0 };
+        let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new())
+            .expect("a capture assembles");
+
+        // The oracle is the PRODUCTION inventory, proven against its own root — so this exercises
+        // the artifact path and the step path in one call, with no synthetic leaf anywhere.
+        let inventory = crate::inventory::base0_inventory_v1(&a, geometry()).expect("a real inventory");
+        let artifact_root = inventory.root();
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .filter(|i| {
+                let o = &inventory.operands()[*i];
+                o.tensor_name == "blk.{layer}.ffn_down.requant" && o.layer == Some(0)
+            })
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root)
+            .expect("the narrowing's row proves against the artifact root");
+
+        // Honest: the challenger loses on the merits, which is a VERDICT and not an error.
+        assert!(
+            matches!(check_execution_step_refutation_v1(&honest, &oracle), Err(PalwStepRefuteError::NoFaultFound)),
+            "an honest execution refutes nothing: {:?}",
+            check_execution_step_refutation_v1(&honest, &oracle)
+        );
+
+        // Tampered: one value of the challenged tile changed, re-tiled, re-rooted — the producer
+        // committed a row its own inputs do not produce, and the court says so.
+        let mut lying = probe.steps.clone();
+        let (_, _, row) = lying.iter_mut().find(|(l, slot, _)| *l == 0 && *slot == 33).expect("the step is captured");
+        row[0] = row[0].wrapping_add(1);
+        let lying_tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &lying).expect("the rows tile");
+        let lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");
+        let fraud = base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new())
+            .expect("a tampered capture assembles the same way");
+        let verdict =
+            check_execution_step_refutation_v1(&fraud, &oracle).expect("a committed row its own inputs do not produce convicts");
+        // The conviction is ARITHMETIC, not structural: the tampered leaf was re-hashed and
+        // re-rooted, so it is internally consistent — the only thing wrong with it is that
+        // recomputing the step from its own opened inputs does not produce it.
+        assert!(
+            matches!(verdict.fault, kaspa_consensus_core::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index: 0 }),
+            "the fault must be the recomputation's, at the value that was changed — got {:?}",
+            verdict.fault
+        );
     }
 }

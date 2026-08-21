@@ -161,7 +161,14 @@ pub fn base0_inventory_v1(
     // --- per layer ---------------------------------------------------------------------------
     for (li, layer) in artifact.layers.iter().enumerate() {
         let l = Some(li as u16);
-        let named = |suffix: &str| format!("blk.{li}.{suffix}");
+        // **The TEMPLATE name, with the layer in the `layer` field** — not a substituted one.
+        // `palw_step_refute` asks the oracle with `node.weight_name`, which is the IR's own
+        // `blk.{layer}.…` string, and passes the layer index beside it. An inventory that
+        // substituted the index into the name would answer no request the court ever makes —
+        // and `verify_covers_profile` would still pass, because it matches a template against a
+        // substituted name deliberately. Found by closing the refutation round trip, which is
+        // the only thing that asks the two sides to agree.
+        let named = |suffix: &str| format!("blk.{{layer}}.{suffix}");
         for (suffix, weights, in_dim) in [
             ("attn_q.weight", &layer.wq, d),
             ("attn_k.weight", &layer.wk, d),
@@ -286,11 +293,11 @@ mod tests {
         // quadratic in the leaf count and proves nothing the sample does not.
         let wanted = [
             ("token_embd.weight", None, (7 * d) as u32),
-            ("blk.2.attn_q.weight", Some(2u16), (tile * d) as u32),
-            ("blk.0.qk_to_code.requant", Some(0), 0),
-            ("blk.1.attn_logit.scale", Some(1), 0),
-            ("blk.3.rope_table", Some(3), 0),
-            ("blk.0.attn_q.weight", Some(0), 0),
+            ("blk.{layer}.attn_q.weight", Some(2u16), (tile * d) as u32),
+            ("blk.{layer}.qk_to_code.requant", Some(0), 0),
+            ("blk.{layer}.attn_logit.scale", Some(1), 0),
+            ("blk.{layer}.rope_table", Some(3), 0),
+            ("blk.{layer}.attn_q.weight", Some(0), 0),
         ];
         let openings: Vec<_> = wanted
             .iter()
@@ -308,21 +315,25 @@ mod tests {
         assert_eq!(proven.operand_bytes("token_embd.weight", None, (7 * d) as u32, d as u32).map(|b| b.len()), Some(d));
         // A matmul tile: `(tile · tile_len · in_dim, tile_width · in_dim)`.
         assert_eq!(
-            proven.operand_bytes("blk.2.attn_q.weight", Some(2), (tile * d) as u32, (tile * d) as u32).map(|b| b.len()),
+            proven.operand_bytes("blk.{layer}.attn_q.weight", Some(2), (tile * d) as u32, (tile * d) as u32).map(|b| b.len()),
             Some(tile * d)
         );
         // A uniform narrowing: nine bytes at offset zero.
-        assert_eq!(proven.operand_bytes("blk.0.qk_to_code.requant", Some(0), 0, 9).map(|b| b.len()), Some(9));
+        assert_eq!(proven.operand_bytes("blk.{layer}.qk_to_code.requant", Some(0), 0, 9).map(|b| b.len()), Some(9));
         // A rescale: five bytes at offset zero.
-        assert_eq!(proven.operand_bytes("blk.1.attn_logit.scale", Some(1), 0, 5).map(|b| b.len()), Some(5));
+        assert_eq!(proven.operand_bytes("blk.{layer}.attn_logit.scale", Some(1), 0, 5).map(|b| b.len()), Some(5));
         // One rotary position: cos then sin, four bytes each, one pair per two lanes.
         let pairs = artifact.shape.d_head / 2;
-        assert_eq!(proven.operand_bytes("blk.3.rope_table", Some(3), 0, (8 * pairs) as u32).map(|b| b.len()), Some(8 * pairs));
+        assert_eq!(proven.operand_bytes("blk.{layer}.rope_table", Some(3), 0, (8 * pairs) as u32).map(|b| b.len()), Some(8 * pairs));
 
         // And the negative: a byte range nobody committed is not served, which is what makes an
         // opening's absence a fact rather than a gap.
-        assert_eq!(proven.operand_bytes("blk.0.attn_q.weight", Some(0), 1, d as u32), None);
-        assert_eq!(proven.operand_bytes("blk.0.attn_norm.weight", Some(0), 0, 9), None, "the phantom gain is gone from both sides");
+        assert_eq!(proven.operand_bytes("blk.{layer}.attn_q.weight", Some(0), 1, d as u32), None);
+        assert_eq!(
+            proven.operand_bytes("blk.{layer}.attn_norm.weight", Some(0), 0, 9),
+            None,
+            "the phantom gain is gone from both sides"
+        );
     }
 
     /// The builder refuses a geometry that is not this artifact's, so an inventory can never

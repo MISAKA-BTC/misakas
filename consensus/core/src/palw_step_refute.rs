@@ -817,6 +817,26 @@ fn required_positions(program: KernelProgram, out: &PalwStepCoordinateV1) -> Vec
     }
 }
 
+/// **The prover's view of the canonical input set** — which leaves a refutation of `coord` must
+/// open, in the order it must open them.
+///
+/// The checker computed this privately and refused any set that differed, so a producer building a
+/// refutation had to guess the rule and would be told only "not the canonical one". That is the
+/// shape of an evidence format nobody can produce: the verifier existed and the prover did not,
+/// which is the same gap `open_artifact_leaf_v1` closed on the artifact tree (audit C-01).
+///
+/// `None` means the coordinate names a step this checker cannot resolve — the same answer the
+/// checker itself gives, so a prover learns it before assembling anything rather than after.
+pub fn canonical_input_leaves_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    let (node, _) = profile.resolve_node_slot(coord.node_slot)?;
+    let program = resolve_kernel(&node.kernel_semantics_id)?;
+    canonical_input_leaves(profile, ctx, coord.node_slot, coord, program)
+}
+
 /// The canonical input rows for one step: one entry per (required position × input_ref),
 /// each listing that node-row's tiles ascending. The flattened order is the canonical
 /// opening order; the grouping is what programs consume (whole rows, not tiles). Returns
