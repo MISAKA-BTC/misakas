@@ -164,6 +164,39 @@ from consensus.
 
 ---
 
+## Open observation — the integration crate has never passed a full workspace run
+
+Not a consensus finding; recorded so it is not rediscovered.
+
+`cargo test --workspace --lib` reports **2044 passed / 0 failed across 41 crates**, and
+`kaspa-testing-integration` is the 42nd: it does not report a result at all, because the test
+process dies or hangs partway.
+
+* **Before `d0727415`** it aborted at the FIRST daemon test: the daemon tests boot a real kaspad on
+  **devnet**, devnet activates the EVM lane at DAA 0, and the startup refusal added with the RC's
+  lane decision (`740ed99e`) exits the process — taking the harness with it. Fixed by defaulting the
+  crate to the `evm` feature, which is how the binary those tests start must be built.
+* **After it**, `daemon_integration_tests` pass **in isolation** (3/3, 16.8 s, with
+  `MISAKA_PALW_POW_FIXTURE=1`), but a single-threaded run of the WHOLE crate spins at 99% CPU inside
+  `daemon_cleaning_test` — the upstream test that asserts `ConsensusManager` / `AsyncRuntime` /
+  `Core` all reach a strong count of 0 after `shutdown()`. Something started earlier in the process
+  keeps a reference or a loop alive.
+
+What is NOT known: whether the hang predates this session. It cannot be compared directly, because
+before the feature default the same test killed the process at startup — so the crate failed the
+workspace run either way, and only the reason changed.
+
+Reproduction:
+
+```
+MISAKA_PALW_POW_FIXTURE=1 cargo test -p kaspa-testing-integration --lib -- --test-threads=1
+```
+
+Both environment requirements are real and neither is new: the fixture variable is the model-free
+devnet PALW path (a non-evm concern), and the feature is the lane.
+
+---
+
 ## Known-open and deliberately scoped out
 
 * **The decode-call embedding gather is `Unadjudicable`** — 4 of 914 leaves. Its token is a
