@@ -219,6 +219,21 @@ impl ConsensusSessionOwned {
         self.consensus.palw_seat_duties_v2(mine)
     }
 
+    pub fn palw_court_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> {
+        self.consensus.palw_court_duties_v2(mine)
+    }
+
+    pub fn palw_court_close_verdict_v2(
+        &self,
+        session_id: &kaspa_consensus_core::Hash64,
+        proof: &kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2> {
+        self.consensus.palw_court_close_verdict_v2(session_id, proof)
+    }
+
     /// Assemble the lifecycle object a gossip-delivered receipt pool supports, using the
     /// acceptance validator itself (launch blockers: "what is still missing"). ML-DSA-87
     /// verification per receipt — a few ms; acceptable on the caller's cadence.

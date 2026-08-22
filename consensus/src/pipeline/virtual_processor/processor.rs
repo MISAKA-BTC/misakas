@@ -3687,6 +3687,38 @@ impl VirtualStateProcessor {
     /// must be the one the candidate will be admitted in — reading the tip's would put a producer
     /// one epoch behind at every boundary, mining into a refusal it could not see the reason for.
     /// The seat duties this node holds at the state store's tip (launch blockers §2).
+    /// **What verdict would this proof produce, at this node's tip?**
+    ///
+    /// A `CourtClosed` must ANNOUNCE the verdict the evidence supports — the pipeline derives it
+    /// and refuses an object that names a different one — so a party assembling a close has to
+    /// know the answer before it spends a fee on it. Asking the node is also the honest ordering:
+    /// the party that assembled the evidence does not get to be the party that decides what it
+    /// means.
+    pub fn palw_court_close_verdict_v2_impl(
+        &self,
+        session_id: &kaspa_consensus_core::Hash64,
+        proof: &kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let court = self.palw_court_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court).ok()
+    }
+
+    /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
+    /// party to. Read at the same tip, for the same reason — a duty derived at a point the node is
+    /// not standing on is a duty about a chain it is not on.
+    pub fn palw_court_duties_v2_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],

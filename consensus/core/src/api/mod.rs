@@ -530,6 +530,20 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// The court's half: open sessions this node holds a bond in.
+    fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
+        Vec::new()
+    }
+
+    /// The verdict a close proof would produce at this node's tip, or `None` when it produces none.
+    fn palw_court_close_verdict_v2(
+        &self,
+        _session_id: &crate::Hash64,
+        _proof: &crate::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> Option<crate::palw_state_v2::PalwCourtVerdictV2> {
+        None
+    }
+
     /// Import: install the pruning point's PALW V2 chain state (launch blockers §1).
     ///
     /// The carriage is REBUILT and its `state_root` demanded back against the pruning point's own

@@ -39,7 +39,11 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_bisect::{PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectTurnV1, PalwBisectVerdictV1};
+use kaspa_consensus_core::palw_court_v2::{
+    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT, PalwCourtVerdictProofV2,
+};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwCourtVerdictV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -157,6 +161,19 @@ impl PalwPanelService {
         None
     }
 
+    /// Sign `message` under this node's bond key in `context`. `None` when the node holds no key,
+    /// which is a receipts-only seat and has nothing to say in a court either.
+    fn sign(&self, message: &[u8], context: &[u8]) -> Option<Vec<u8>> {
+        let kp = self.keypair.as_ref()?;
+        match libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]) {
+            Ok(sig) => Some(sig.as_ref().to_vec()),
+            Err(e) => {
+                warn!("[{PALW_PANEL}] ML-DSA-87 sign failed: {e:?}");
+                None
+            }
+        }
+    }
+
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
@@ -251,6 +268,9 @@ impl PalwPanelService {
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
         let mut submitted: HashSet<Hash64> = HashSet::new();
         let mut submit_attempts: HashMap<Hash64, u32> = HashMap::new();
+        // One move per (session, round, side): the ladder advances on acceptance, so a move
+        // resubmitted before the block that carries it lands is a duplicate the chain drops.
+        let mut court_moved: HashSet<(Hash64, u32, bool)> = HashSet::new();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -280,6 +300,108 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+
+            let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+            // --- the court's half: answer the disputes this bond is a party to ---
+            //
+            // Nothing in this tree used to construct a `CourtDisclosed`. A challenger could open a
+            // session and the accused had no software able to answer it, so every dispute ran out
+            // on the clock — which is why the opening rung had to stop convicting on silence. This
+            // is the missing half: both parties act from the SAME capture, through the same
+            // functions, so the bisection converges on a real divergence rather than on whoever
+            // stayed awake.
+            let court_duties = session.palw_court_duties_v2(vec![bond_key]);
+            for duty in &court_duties {
+                if court_moved.contains(&(duty.session_id, duty.round, duty.i_am_responder)) {
+                    continue;
+                }
+                // The capture, and the family's backend for it. A party with no material — or a
+                // family with no court — cannot answer honestly, and answering dishonestly is what
+                // the terminal close exists to punish, so it stays silent and lets the clock decide.
+                let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
+                    &self.config.court,
+                    duty.class_id,
+                    duty.artifact_root,
+                    &self.class_artifacts,
+                ) else {
+                    continue;
+                };
+                let backend = Base0Backend::new(resolved);
+                let Some(capture) = materials.get(&duty.claim_id).and_then(|pool| {
+                    pool.iter().find(|b| {
+                        backend.verify_material(
+                            b,
+                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root },
+                        ) == PalwMaterialVerdictV1::Matches
+                    })
+                }) else {
+                    trace!("[{PALW_PANEL}] session {} needs a move but this node holds no matching capture", duty.session_id);
+                    continue;
+                };
+                let object = match (duty.turn, duty.i_am_responder) {
+                    // Our disclosure: the state of OUR execution at the midpoint the ladder asks
+                    // about. A prefix commitment, so agreeing at an index means agreeing before it.
+                    (PalwBisectTurnV1::AwaitDisclosure, true) => {
+                        let Some(midpoint) = duty.midpoint else { continue };
+                        let Some(mid_state) = backend.bisect_prefix_state(capture, midpoint) else { continue };
+                        let disclosure = PalwBisectDisclosureV1 {
+                            version: PALW_BISECT_OBJECT_VERSION_V1,
+                            session_id: duty.session_id,
+                            round: duty.round,
+                            midpoint,
+                            mid_state,
+                        };
+                        let message = borsh::to_vec(&disclosure).expect("a disclosure is borsh-serializable");
+                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT) else { continue };
+                        Some(PalwConsensusObjectV2::CourtDisclosed { session_id: duty.session_id, disclosure, signature })
+                    }
+                    // Our verdict: does the responder's disclosed state match ours at that index?
+                    // `agree` means the prefix matches, so the divergence is ABOVE the midpoint.
+                    (PalwBisectTurnV1::AwaitVerdict, false) => {
+                        let Some(disclosed) = duty.last_disclosure else { continue };
+                        let Some(ours) = backend.bisect_prefix_state(capture, disclosed.0) else { continue };
+                        let verdict = PalwBisectVerdictV1 {
+                            version: PALW_BISECT_OBJECT_VERSION_V1,
+                            session_id: duty.session_id,
+                            round: duty.round,
+                            agree: ours == disclosed.1,
+                        };
+                        let message = borsh::to_vec(&verdict).expect("a verdict is borsh-serializable");
+                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT) else { continue };
+                        Some(PalwConsensusObjectV2::CourtVerdictPosted { session_id: duty.session_id, verdict, signature })
+                    }
+                    // The terminal move. EITHER party may make it, and it is deliberately the SAME
+                    // call for both: an honest executor closing its own case and a challenger
+                    // closing a real fraud assemble the identical object, and
+                    // `adjudicate_court_close_v2` is what decides which way it reads. A prover only
+                    // one side could run would be a prover that decides the verdict.
+                    (PalwBisectTurnV1::Terminal, _) => {
+                        let Some(index) = duty.terminal_index else { continue };
+                        let refutation = match backend.refutation_for_index(capture, index) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                warn!("[{PALW_PANEL}] cannot assemble the close for session {}: {e}", duty.session_id);
+                                continue;
+                            }
+                        };
+                        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: Vec::new() };
+                        // **The chain says what the evidence means, not us.** A `CourtClosed` must
+                        // announce the verdict the proof derives to, and the pipeline refuses one
+                        // that names any other — so asking first is both the only way to spend a
+                        // fee on an object that will land, and the right ordering: the party that
+                        // assembled the evidence is not the party that reads it.
+                        let Some(verdict) = session.palw_court_close_verdict_v2(&duty.session_id, &proof) else {
+                            trace!("[{PALW_PANEL}] session {} has no adjudicable close from this capture yet", duty.session_id);
+                            continue;
+                        };
+                        info!("[{PALW_PANEL}] session {} closes as {verdict:?} on step {index}", duty.session_id);
+                        Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof })
+                    }
+                    _ => None,
+                };
+                let Some(object) = object else { continue };
+                court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+            }
 
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
@@ -368,6 +490,41 @@ impl PalwPanelService {
                     // identical lines an hour.
                     warn!("[{PALW_PANEL}] a quorum stands but no fee UTXO resolves — a carrier may still be in flight; else fund --palw-fee-outpoint");
                 }
+                // The court's moves first: a rung has a deadline and a receipt quorum does not.
+                for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        Ok(tx) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                Ok(()) => {
+                                    info!(
+                                        "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
+                                        object_name(&object)
+                                    );
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    court_moved.insert((session_id, round, mine_is_responder));
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
+                                    funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
+                    }
+                }
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
@@ -414,7 +571,13 @@ impl PalwPanelService {
 
             // Forget what the chain has moved past: a claim with no duty and no unsubmitted quorum
             // holds memory for nothing. (Duties vanish when a claim leaves `PanelBound`.)
-            let live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
+            //
+            // **A disputed claim is not moved past.** A court opens on a `ReceiptLicensed` claim,
+            // which is a phase past `PanelBound` — so the old rule dropped the tiles exactly when a
+            // dispute could start needing them, and neither party could disclose or refute. Claims
+            // under an open court keep their material for as long as the session lives.
+            let mut live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
+            live.extend(court_duties.iter().map(|d| d.claim_id));
             materials.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
             receipts.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());

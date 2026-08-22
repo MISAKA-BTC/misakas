@@ -1576,6 +1576,12 @@ impl PalwChainStateV2 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
     }
 
+    /// Iterate the open court sessions in canonical id order — what a party's own court duty list
+    /// is built from.
+    pub fn court_sessions_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwCourtSessionStateV2)> {
+        self.court_sessions.iter()
+    }
+
     /// How many court sessions this state holds. A retired claim must leave none of its own.
     pub fn court_sessions_len(&self) -> usize {
         self.court_sessions.len()
@@ -5460,6 +5466,46 @@ pub(crate) mod tests {
         assert_eq!(ladder.interval(), (4, 5), "one index wide");
         assert_eq!(ladder.terminal_index(), Some(4), "and the dispute is located");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal, "only an arithmetic close finishes it now");
+    }
+
+    /// **A party can find out what it owes in a court it is in.**
+    ///
+    /// Nothing in this tree constructed a `CourtDisclosed`, and the reason was upstream of the
+    /// object: no code ever asked the ladder, on behalf of a node holding one of the two bonds,
+    /// whose turn it was and what index was open. The responder therefore had nothing to answer
+    /// with and every dispute ran out on the clock — which is why the opening rung had to stop
+    /// convicting on silence. This is the question being asked.
+    #[test]
+    fn a_court_tells_each_party_what_it_owes() {
+        use crate::palw_producer_v2::palw_court_duties_v2;
+        let p = params_with_ladder();
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+
+        // The executor's view: it is the responder, and the opening rung is its move.
+        let mine = palw_court_duties_v2(&s5, &[bond_key(1)]);
+        assert_eq!(mine.len(), 1, "one open session names this bond");
+        let duty = &mine[0];
+        assert_eq!(duty.session_id, sid);
+        assert_eq!(duty.claim_id, claim_id);
+        assert!(duty.i_am_responder, "the claim was produced under this bond");
+        assert_eq!(duty.turn, crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure);
+        assert_eq!(duty.interval, (0, 16));
+        assert_eq!(duty.midpoint, Some(8), "and the index it must answer about");
+        assert_eq!(duty.terminal_index, None, "nothing is narrowed yet");
+        assert_eq!(duty.last_disclosure, None);
+
+        // A bond that is party to nothing owes nothing.
+        assert!(palw_court_duties_v2(&s5, &[bond_key(7)]).is_empty(), "a stranger holds no duty");
+
+        // After the disclosure lands, the challenger's move is a comparison against it.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let after = palw_court_duties_v2(&s6, &[bond_key(1)]);
+        assert_eq!(after[0].turn, crate::palw_bisect::PalwBisectTurnV1::AwaitVerdict);
+        assert_eq!(
+            after[0].last_disclosure,
+            Some((8, h64(0xD0))),
+            "a challenger must be able to see WHICH index it is being asked to agree about"
+        );
     }
 
     /// **An executor could close on a step it had computed correctly and buy its own acquittal.**

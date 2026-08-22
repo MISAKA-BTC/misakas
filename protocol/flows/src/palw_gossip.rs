@@ -186,8 +186,16 @@ impl PalwGossipCenter {
 
     /// Mark this node's OWN outgoing message seen, so the echo a peer relays back is a duplicate
     /// rather than a second inbox event.
+    /// Mark our own material seen so the echo is not re-admitted — AND hand it to our own inbox.
+    ///
+    /// The second half is what lets a producer answer a court about its own claim. A dispute is
+    /// opened against the executor, and the only party that can disclose the execution's state at
+    /// a rung is the party that ran it; a producer whose own capture never reached its own panel
+    /// service had nothing to answer with, and the session ran out. Everyone else gets these bytes
+    /// over the wire, so the executor being the one node without them was the wrong asymmetry.
     pub fn mark_own_material(&self, claim: Hash64, bytes: &[u8]) {
         let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim));
+        let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
     }
 
     pub fn mark_own_receipt(&self, bytes: &[u8]) {

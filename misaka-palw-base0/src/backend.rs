@@ -92,6 +92,77 @@ impl PalwExecutionBackendV1 for Base0Backend {
             Err(_) => PalwMaterialVerdictV1::Unverifiable,
         }
     }
+
+    fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
+        let (binding, tiles, _, _) = base0_material_decode_v1(material).ok()?;
+        let leaves = leaves_by_position(&binding, &tiles);
+        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
+    }
+
+    fn refutation_for_index(
+        &self,
+        material: &[u8],
+        index: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated) =
+            base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
+        // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
+        // the KV aux leaves, which live in their own coordinate space and cannot be opened this way.
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
+            kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows, generated_token_ids: generated },
+        );
+        // **The prompt, re-derived rather than carried.** An embedding leaf is adjudicated against
+        // the token it read, so a refutation with no prompt reads `Unadjudicable` at leaf 0 — and
+        // the retained material does not carry the ids. It does not need to: the job's own
+        // `job_id` IS the anchor, and the prompt is a pure function of the anchor. Re-deriving is
+        // also the safer half of the choice, because a carried prompt would be a second place the
+        // producer could disagree with the chain about what it was asked.
+        let (_, prompt) = crate::produce::base0_rc_job_v1(
+            &binding.shape_profile,
+            binding.job_context.job_id,
+            self.artifact.shape.vocab,
+            binding.job_context.declared_prefill_tokens,
+            binding.job_context.exact_decode_tokens,
+        );
+        let prompt_token_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+}
+
+/// The capture's leaf hashes, laid out BY POSITION over the whole step space.
+///
+/// The retained material carries `(index, leaf)` pairs and need not arrive ordered, while both the
+/// Merkle scheme and the bisection address by position — so the vector is sized from the binding's
+/// own `step_leaf_count` and filled by index, exactly as `base0_step_tiles_v1` builds it. Taking
+/// the pairs in arrival order instead would silently re-number every leaf.
+fn leaves_by_position(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
+) -> Vec<kaspa_hashes::Hash64> {
+    use kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1;
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut leaves = vec![kaspa_hashes::Hash64::default(); binding.step_leaf_count as usize];
+    for (index, leaf) in tiles {
+        if let Some(slot) = leaves.get_mut(*index as usize) {
+            *slot = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+        }
+    }
+    leaves
 }
 
 #[cfg(test)]
@@ -125,6 +196,90 @@ mod tests {
         // The seat's half, against the roots this very run committed.
         let claim = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
+    }
+
+    /// **Both sides of a court, from the same two functions.**
+    ///
+    /// Nothing in this tree used to construct a `CourtDisclosed`, so a dispute could be opened and
+    /// never answered — and the audit's acceptance condition for the adjudication layer was a ROUND
+    /// TRIP, because a one-way green is what let two defects hide: a court that convicts everything
+    /// and a court that convicts nothing both pass a test that only ever runs one direction.
+    ///
+    /// So: an honest capture must refute to `NoFaultFound` at the disputed step (the executor
+    /// clears itself), and a capture with one tampered lane must convict at that same step (a
+    /// challenger takes it) — through the SAME `refutation_for_index`, because a prover only one
+    /// side could run would be a prover that decides the verdict.
+    #[test]
+    fn a_court_goes_both_ways_through_one_prover() {
+        use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let backend = floor_backend();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xC0117)).expect("job");
+        let outcome = backend.execute(&job, &prompt).expect("the floor runs");
+        let (binding, tiles, logits, generated) =
+            crate::produce::base0_material_decode_v1(&outcome.material).expect("our own material decodes");
+        let profile = binding.shape_profile.clone();
+        let ctx = binding.job_context.clone();
+
+        // A step both sides can address: a main coordinate whose tile the capture actually holds.
+        let (index, coord) = (0..binding.step_leaf_count)
+            .find_map(|i| {
+                let c = canonical_step_coordinates(&profile, &ctx, i)?;
+                let idx = canonical_step_leaf_index(&profile, &ctx, &c)?;
+                tiles.iter().any(|(t, _)| *t == idx).then_some((idx, c))
+            })
+            .expect("the capture holds at least one openable main leaf");
+
+        // --- the executor's side: its own capture clears it at that step ---
+        let honest = backend.refutation_for_index(&outcome.material, index).expect("an honest capture opens");
+        // One oracle over the WHOLE inventory, proven against its own root — the production path.
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("a real inventory");
+        let inv_root = inventory.root();
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inv_root)
+            .expect("the inventory proves against its own root");
+        let got = check_execution_step_refutation_v1(&honest, &oracle);
+        assert!(
+            matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+            "an honest execution must clear itself at the disputed step (leaf {index}, coord {coord:?}); got {got:?}"
+        );
+
+        // --- the challenger's side: one tampered lane at that same step convicts ---
+        let mut lying_tiles = tiles.clone();
+        {
+            let slot = lying_tiles.iter_mut().find(|(i, _)| *i == index).expect("the tile is held");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+        }
+        let lying = crate::legs::Base0StepTilesV1 {
+            leaves: leaves_by_position(&binding, &lying_tiles),
+            tiles: lying_tiles.clone(),
+        };
+        let lying_binding = crate::legs::base0_binding_from_capture_v1(
+            &profile,
+            &ctx,
+            &lying,
+            binding.full_logits_trace_root,
+            crate::produce::base0_activation_leg_root_v1(&ctx),
+        )
+        .expect("a tampered capture still commits to itself");
+        let lying_material = borsh::to_vec(&(&lying_binding, &lying_tiles, &logits, &generated)).expect("serializes");
+        let guilty = backend.refutation_for_index(&lying_material, index).expect("a tampered capture opens too");
+        assert!(
+            check_execution_step_refutation_v1(&guilty, &oracle).is_ok(),
+            "a tampered lane at the disputed step must convict, not read as no fault"
+        );
+
+        // --- and the bisection can find it: the two executions agree before the step and differ at it ---
+        let honest_before = backend.bisect_prefix_state(&outcome.material, index).expect("prefix state");
+        let lying_before = backend.bisect_prefix_state(&lying_material, index).expect("prefix state");
+        assert_eq!(honest_before, lying_before, "the prefix BEFORE the tampered leaf is shared, so a ladder narrows into it");
+        let honest_after = backend.bisect_prefix_state(&outcome.material, index + 1).expect("prefix state");
+        let lying_after = backend.bisect_prefix_state(&lying_material, index + 1).expect("prefix state");
+        assert_ne!(honest_after, lying_after, "and including it, they differ — which is what makes the rung informative");
     }
 
     /// **The three verdicts are three, and each is reachable.** Collapsing `Mismatch` into

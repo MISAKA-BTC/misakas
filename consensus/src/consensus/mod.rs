@@ -2124,6 +2124,21 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_seat_duties_v2_impl(&mine)
     }
 
+    fn palw_court_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> {
+        self.virtual_processor.palw_court_duties_v2_impl(&mine)
+    }
+
+    fn palw_court_close_verdict_v2(
+        &self,
+        session_id: &kaspa_consensus_core::Hash64,
+        proof: &kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2> {
+        self.virtual_processor.palw_court_close_verdict_v2_impl(session_id, proof)
+    }
+
     fn palw_v2_receipt_quorum_assemble(
         &self,
         claim: kaspa_hashes::Hash64,

@@ -272,6 +272,41 @@ pub fn base0_step_merkle_root_v1(tiles: &Base0StepTilesV1) -> Option<Hash64> {
     step_merkle_root_v1(&tiles.leaves).ok()
 }
 
+/// **The bisection's state at index `i`: a commitment to the execution prefix through leaf `i`.**
+///
+/// The ladder narrows by asking each party "what is your state at the midpoint?", and it can only
+/// converge on a real divergence if the answer is a PREFIX commitment: two executions that agree
+/// through leaf `i` must produce the same value, and two that differ before it must not. A Merkle
+/// root over `leaves[..i]` has exactly that property, so the first index at which the two parties
+/// disagree is the first leaf at which their executions do.
+///
+/// The ladder's own endpoints are the job context hash at 0 and the claim's announced root at the
+/// end — anchors the state machine seeds and refuses a disclosure from repeating. Those are a
+/// different kind of value (the announced root commits the whole execution, not a prefix of the
+/// step space), which is why this is domain-separated and keyed by the context: it is the rung
+/// scheme, not a continuation of the endpoints.
+///
+/// **What this is not.** It does not make a disclosure true — no node can decide that without the
+/// execution, and `apply_disclosure` refuses only a state repeating an endpoint. A responder that
+/// discloses distinct junk at every rung steers the interval freely. The terminal close is what
+/// settles truth, on operand openings the artifact root proves. This function's job is narrower
+/// and still necessary: without it the two parties have no shared way to compute the same answer
+/// from the same execution, so an HONEST bisection cannot converge at all.
+pub fn base0_bisect_prefix_state_v1(ctx: &PalwJobContextV2, leaves: &[Hash64], index: u64) -> Hash64 {
+    const DOMAIN: &[u8] = b"misaka-palw/base0/bisect-prefix-state/v1";
+    let take = (index as usize).min(leaves.len());
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(DOMAIN).to_state();
+    h.update(ctx.context_hash().as_byte_slice());
+    h.update(&index.to_le_bytes());
+    h.update(&(take as u64).to_le_bytes());
+    for leaf in &leaves[..take] {
+        h.update(leaf.as_byte_slice());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 /// **The producer's own commitment, from its own capture** (audit C-01).
 ///
 /// A binding is not a bag of hashes a caller fills in: `verify_binding` recomputes

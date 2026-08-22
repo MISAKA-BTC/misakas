@@ -132,6 +132,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// convict where a court exists, and where one does not the claim simply fails to gather a
     /// quorum and voids.
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1;
+
+    /// **A party's answer at one rung of the bisection: its execution's state at `index`.**
+    ///
+    /// The ladder converges only if this is a PREFIX commitment — two executions agreeing through
+    /// `index` must agree here, and two differing before it must not — because that is what makes
+    /// "the first index we disagree on" the same as "the first leaf our executions differ at".
+    ///
+    /// `None` is the honest answer for a family the court cannot adjudicate, and for material this
+    /// backend cannot read. A silent party loses its rung, which is the correct outcome for a party
+    /// that cannot substantiate its own execution.
+    fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
+        None
+    }
+
+    /// **The terminal move's evidence: everything the court needs to recompute step `index`.**
+    ///
+    /// Returned by BOTH sides, and deliberately the same call for both: an honest executor closing
+    /// its own case and a challenger closing a real fraud assemble the identical object, and
+    /// `adjudicate_court_close_v2` is what decides which way it reads. A prover that could only be
+    /// run by one side would be a prover that decides the verdict.
+    ///
+    /// `Err` for a family with no court, and for an index this capture cannot open.
+    fn refutation_for_index(
+        &self,
+        _material: &[u8],
+        _index: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this execution family cannot be adjudicated".to_string())
+    }
 }
 
 #[cfg(test)]

@@ -302,6 +302,15 @@ impl PalwBisectLadderV1 {
         self.last_deadline_daa
     }
 
+    /// The rung the responder most recently answered: `(midpoint, disclosed state)`.
+    ///
+    /// The challenger's move is a comparison against this, so without it a challenger could only
+    /// guess which index it was being asked about — and a verdict about the wrong index steers the
+    /// interval away from the divergence just as effectively as a lie.
+    pub fn last_disclosure(&self) -> Option<(u64, Hash64)> {
+        self.disclosures.last().copied()
+    }
+
     pub fn round(&self) -> u32 {
         self.round
     }

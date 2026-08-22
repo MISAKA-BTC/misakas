@@ -503,6 +503,9 @@ pub struct PalwCourtDutyV2 {
     pub midpoint: Option<u64>,
     /// `Some(index)` once the ladder has narrowed to one step — the index a close must adjudicate.
     pub terminal_index: Option<u64>,
+    /// The rung the responder last answered, `(midpoint, disclosed state)` — what a challenger's
+    /// verdict is a comparison against.
+    pub last_disclosure: Option<(u64, Hash64)>,
     /// Whose move it is, so a caller does not have to re-derive the turn from the interval.
     pub turn: crate::palw_bisect::PalwBisectTurnV1,
     pub rung_deadline_daa: u64,
@@ -537,6 +540,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             interval: (lo, hi),
             midpoint: (hi.saturating_sub(lo) > 1).then(|| lo + (hi - lo) / 2),
             terminal_index: session.ladder.terminal_index(),
+            last_disclosure: session.ladder.last_disclosure(),
             turn: session.ladder.turn(),
             rung_deadline_daa: session.ladder.last_deadline_daa(),
             session_deadline_daa: session.deadline_daa,
