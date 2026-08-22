@@ -39,9 +39,12 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_bisect::{PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectTurnV1, PalwBisectVerdictV1};
+use kaspa_consensus_core::palw_bisect::{
+    PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
+};
 use kaspa_consensus_core::palw_court_v2::{
-    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT, PalwCourtVerdictProofV2,
+    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    PalwCourtVerdictProofV2, court_session_id_v2,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwCourtVerdictV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
@@ -83,6 +86,15 @@ pub struct PalwPanelConfig {
     /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
     /// has; the floor's are derived, so this is empty on an RC node.
     pub class_artifacts: Vec<PathBuf>,
+    /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
+    ///
+    /// Off by default because it is not free: it costs one full inference per licensed claim, and
+    /// opening a court stakes this bond the claim's own reserved amount. A network wants some
+    /// nodes doing it, not all of them — which is the same shape as any other watchdog.
+    pub challenge: bool,
+    /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
+    /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
+    pub drill_challenge_all: bool,
 }
 
 pub struct PalwPanelService {
@@ -271,6 +283,8 @@ impl PalwPanelService {
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
         let mut court_moved: HashSet<(Hash64, u32, bool)> = HashSet::new();
+        // Claims this node has already judged: either reproduced (nothing to say) or disputed.
+        let mut challenged: HashSet<Hash64> = HashSet::new();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -302,6 +316,83 @@ impl PalwPanelService {
             let current_daa = session.get_virtual_daa_score();
 
             let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+            // --- the challenger's half: dispute a licensed claim whose execution is not the
+            // canonical one ---
+            //
+            // `CourtOpened` was constructed nowhere either, so the only disputes any chain ever saw
+            // were the ones a test wrote by hand. A seat's `verify_material` cannot find this
+            // fraud: it checks that the capture reproduces the roots the claim COMMITTED, which a
+            // producer that ran a wrong execution and committed to it honestly still passes. The
+            // only way to see it is to run the job yourself — which is the whole premise of the
+            // class being deterministic — and compare.
+            //
+            // Opening costs this bond the claim's own stake, so it is done on a mismatch and never
+            // on a suspicion.
+            if self.config.challenge {
+                for target in session.palw_disputable_claims_v2(vec![bond_key]) {
+                    if challenged.contains(&target.claim_id) {
+                        continue;
+                    }
+                    let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
+                        &self.config.court,
+                        target.class_id,
+                        target.artifact_root,
+                        &self.class_artifacts,
+                    ) else {
+                        continue;
+                    };
+                    let backend = Base0Backend::new(resolved);
+                    let Some(capture) = materials.get(&target.claim_id).and_then(|pool| pool.first()) else { continue };
+                    let Ok((binding, _, _, _)) = misaka_palw_base0::produce::base0_material_decode_v1(capture) else { continue };
+                    // The job is the ANCHOR's, and the anchor is the job's own id — so the
+                    // canonical job is recomputed rather than taken from the producer.
+                    let Ok((job, prompt)) = backend.job_for_anchor(binding.job_context.job_id) else { continue };
+                    let Ok(mine_run) = backend.execute(&job, &prompt) else { continue };
+                    let reproduced = mine_run.execution_root == target.execution_root && mine_run.trace_root == target.trace_root;
+                    if reproduced && !self.config.drill_challenge_all {
+                        challenged.insert(target.claim_id);
+                        continue;
+                    }
+                    if reproduced {
+                        warn!(
+                            "[{PALW_PANEL}] DRILL: opening a court against claim {} which this node REPRODUCES — this \
+                             challenge is meant to lose",
+                            target.claim_id
+                        );
+                    } else {
+                        warn!(
+                            "[{PALW_PANEL}] claim {} committed an execution this node does not reproduce — opening a court",
+                            target.claim_id
+                        );
+                    }
+                    let space = PalwBisectSpaceV1::StepLeaves;
+                    let space_size = binding.step_leaf_count;
+                    let session_id = court_session_id_v2(
+                        &target.claim_id,
+                        &target.trace_root,
+                        &target.executor_bond,
+                        &bond_key,
+                        space,
+                        space_size,
+                    );
+                    let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
+                    challenged.insert(target.claim_id);
+                    court_pending.push((
+                        session_id,
+                        0,
+                        false,
+                        PalwConsensusObjectV2::CourtOpened {
+                            session_id,
+                            claim: target.claim_id,
+                            challenger_bond: bond_key,
+                            space,
+                            space_size,
+                            signature,
+                        },
+                    ));
+                }
+            }
+
             // --- the court's half: answer the disputes this bond is a party to ---
             //
             // Nothing in this tree used to construct a `CourtDisclosed`. A challenger could open a

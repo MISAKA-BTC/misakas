@@ -476,6 +476,55 @@ pub struct PalwSeatDutyV2 {
 /// `mine` is the set of bonds this node can sign for. Derived from the state the chain holds rather
 /// than assembled by the caller, for the same reason `palw_producer_facts_v2` is: a seat that
 /// computed its own deadline would eventually disagree with the quorum check about it.
+/// **A claim a challenger could still dispute** — licensed, not yet final, and with no session of
+/// this bond's already open against it.
+///
+/// The court had no opener either: `CourtOpened` was constructed nowhere, so the only disputes on
+/// any chain were the ones a test wrote by hand. Deciding WHETHER to dispute is the challenger's
+/// (it costs the claim's own stake now), but finding the claims it could is a question about state,
+/// and belongs here beside the seat and court duty lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDisputableClaimV2 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+    pub licensed_daa: u64,
+}
+
+pub fn palw_disputable_claims_v2(
+    state: &PalwChainStateV2,
+    mine: &[PalwBondKeyV2],
+) -> Vec<PalwDisputableClaimV2> {
+    let mut out = Vec::new();
+    for (claim_id, claim) in state.claims_iter() {
+        let crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { continue };
+        // Never our own work: `derive_panel_v2` excludes the executor from its own panel for the
+        // same reason, and `validate_court_opened_v2` refuses a self-challenge outright.
+        if mine.contains(&claim.bond) {
+            continue;
+        }
+        // One session per (claim, challenger) — the id is derived from both, so a second open
+        // would collide rather than stack.
+        if state.court_sessions_iter().any(|(_, s)| s.claim == *claim_id && mine.contains(&s.challenger_bond)) {
+            continue;
+        }
+        let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
+        out.push(PalwDisputableClaimV2 {
+            claim_id: *claim_id,
+            class_id: claim.class_id,
+            artifact_root,
+            executor_bond: claim.bond,
+            trace_root: claim.trace_root,
+            execution_root: claim.execution_root,
+            licensed_daa,
+        });
+    }
+    out
+}
+
 /// **What a party owes in a court session it is a party to** — the court's half of
 /// [`palw_seat_duties_v2`].
 ///

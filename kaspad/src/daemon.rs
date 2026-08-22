@@ -1219,6 +1219,24 @@ Do you confirm? (y/n)";
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,
+                        // **Refused on any network that carries value.** The flag exists so a
+                        // court can be shown convicting on a live testnet; a mainnet producer
+                        // committing a deliberate fraud is not a drill, it is the thing the drill
+                        // is about.
+                        drill_tamper_leaf: match args.palw_drill_tamper_leaf {
+                            Some(leaf) if network.is_mainnet() => {
+                                panic!("--palw-drill-tamper-leaf={leaf} is a drill fault injector and is refused on mainnet")
+                            }
+                            Some(leaf) => {
+                                warn!(
+                                    "PALW DRILL: this producer will commit a CORRUPTED execution at step leaf {leaf} in every \
+                                     block it makes. Its claims are meant to be convicted. Do not run this on a network you \
+                                     care about."
+                                );
+                                Some(leaf)
+                            }
+                            None => None,
+                        },
                         class_id,
                         // From the bundle, not reconstructed: the court decides the geometry a
                         // class is admissible at and therefore its id, so a producer resolving
@@ -1340,6 +1358,20 @@ Do you confirm? (y/n)";
                     state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
                     court: panel_court.clone().expect("v2 is true exactly when this is Some"),
                     class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                    challenge: args.palw_challenge || args.palw_drill_challenge_all,
+                    drill_challenge_all: match args.palw_drill_challenge_all {
+                        true if network.is_mainnet() => {
+                            panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")
+                        }
+                        true => {
+                            warn!(
+                                "PALW DRILL: this node will open a court against every licensed claim, including ones it \
+                                 reproduces. Those disputes are meant to LOSE, and each costs this bond the claim's stake."
+                            );
+                            true
+                        }
+                        false => false,
+                    },
                 },
                 consensus_manager.clone(),
                 flow_context_for_palw_panel.clone(),

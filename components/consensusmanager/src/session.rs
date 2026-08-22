@@ -226,6 +226,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_court_duties_v2(mine)
     }
 
+    pub fn palw_disputable_claims_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2> {
+        self.consensus.palw_disputable_claims_v2(mine)
+    }
+
     pub fn palw_court_close_verdict_v2(
         &self,
         session_id: &kaspa_consensus_core::Hash64,

@@ -535,6 +535,14 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// Claims this node could still dispute.
+    fn palw_disputable_claims_v2(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<crate::palw_producer_v2::PalwDisputableClaimV2> {
+        Vec::new()
+    }
+
     /// The verdict a close proof would produce at this node's tip, or `None` when it produces none.
     fn palw_court_close_verdict_v2(
         &self,

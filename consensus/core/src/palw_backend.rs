@@ -161,6 +161,27 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         Err("this execution family cannot be adjudicated".to_string())
     }
+
+    /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
+    ///
+    /// A court that has never convicted on a live chain is a court nobody has evidence works, and
+    /// the only way to get that evidence is for some producer to actually be wrong. Re-deriving
+    /// the commitment from the corrupted capture is what makes this a real fraud rather than a
+    /// mismatch: the producer's roots are self-consistent and honestly its own, and the ONLY way
+    /// to catch it is to run the canonical job yourself — which is exactly the fraud the court
+    /// exists for and exactly the one no seat check can see.
+    ///
+    /// Callers must refuse to reach this on a network carrying value. It is a method rather than a
+    /// test helper because the drill has to go through the same production path the honest
+    /// producer does; a fault injected somewhere else would prove something about the injector.
+    fn execute_with_injected_fault(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _leaf_index: u64,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        Err("this execution family has no drill fault".to_string())
+    }
 }
 
 #[cfg(test)]

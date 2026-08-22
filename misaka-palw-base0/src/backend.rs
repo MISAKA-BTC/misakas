@@ -93,6 +93,50 @@ impl PalwExecutionBackendV1 for Base0Backend {
         }
     }
 
+    fn execute_with_injected_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        leaf_index: u64,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        let mut run = base0_execute_for_attempt_v1(&self.artifact, &self.profile, job, prompt).map_err(|e| e.to_string())?;
+        let ctx_hash = job.context_hash();
+        let profile_hash = self.profile.shape_profile_id();
+        {
+            let slot = run
+                .tiles
+                .tiles
+                .iter_mut()
+                .find(|(i, _)| *i == leaf_index)
+                .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[leaf_index as usize] =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
+        // is a producer whose roots disagree with its material — which any seat catches without a
+        // court, and which is therefore not the fraud under test.
+        let binding = crate::legs::base0_binding_from_capture_v1(
+            &self.profile,
+            job,
+            &run.tiles,
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(job),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        run.execution_root = binding.committed_execution_root;
+        run.binding = binding;
+        let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        Ok(PalwExecutionOutcomeV1 {
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            material,
+        })
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _) = base0_material_decode_v1(material).ok()?;
         let leaves = leaves_by_position(&binding, &tiles);
@@ -280,6 +324,55 @@ mod tests {
         let honest_after = backend.bisect_prefix_state(&outcome.material, index + 1).expect("prefix state");
         let lying_after = backend.bisect_prefix_state(&lying_material, index + 1).expect("prefix state");
         assert_ne!(honest_after, lying_after, "and including it, they differ — which is what makes the rung informative");
+    }
+
+    /// **The drill fault has to be the fraud a court is FOR, not a mismatch anyone can see.**
+    ///
+    /// A producer whose roots disagree with its own material is caught by every seat before any
+    /// court opens, so injecting that would prove nothing about the court. The fault under test is
+    /// the other one: a producer that ran a wrong execution and committed to it honestly. Its
+    /// capture verifies against its own claim, and the ONLY way to see the lie is to run the
+    /// canonical job yourself and get different roots.
+    ///
+    /// Both halves are asserted here, because a drill that fails either way is a drill that proves
+    /// the wrong thing.
+    #[test]
+    fn the_drill_fault_is_self_consistent_and_only_a_re_execution_finds_it() {
+        let backend = floor_backend();
+        let anchor = Hash64::from_u64_word(0xD8111);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
+        let honest = backend.execute(&job, &prompt).expect("the floor runs");
+
+        // A leaf the capture actually holds.
+        let (binding, tiles, _, _) = crate::produce::base0_material_decode_v1(&honest.material).expect("decodes");
+        let leaf = tiles.first().map(|(i, _)| *i).expect("the capture holds a tile");
+        let lying = backend.execute_with_injected_fault(&job, &prompt, leaf).expect("the drill fault runs");
+
+        // 1. It really is a different execution.
+        assert_ne!(lying.execution_root, honest.execution_root, "a drill that commits the honest root disputes nothing");
+
+        // 2. And it is SELF-CONSISTENT: the liar's own material verifies against the liar's own
+        //    claim, so no seat check refuses it and the claim licenses normally.
+        let its_own = PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root };
+        assert_eq!(
+            backend.verify_material(&lying.material, its_own),
+            PalwMaterialVerdictV1::Matches,
+            "a fraud a seat can see is not the fraud the court exists for"
+        );
+
+        // 3. The only thing that finds it is running the job again.
+        assert_ne!(
+            backend.execute(&job, &prompt).expect("re-runs").execution_root,
+            lying.execution_root,
+            "a challenger re-running the canonical job must not reproduce the liar's commitment"
+        );
+        // …and the honest re-run is byte-identical to the first, which is what makes the
+        // comparison evidence rather than noise.
+        assert_eq!(backend.execute(&job, &prompt).expect("re-runs").execution_root, honest.execution_root);
+        assert_eq!(binding.step_leaf_count, {
+            let (b2, _, _, _) = crate::produce::base0_material_decode_v1(&lying.material).expect("decodes");
+            b2.step_leaf_count
+        });
     }
 
     /// **The three verdicts are three, and each is reachable.** Collapsing `Mismatch` into

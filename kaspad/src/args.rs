@@ -212,6 +212,12 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// Re-run every licensed claim and open a court against the ones this node cannot reproduce.
+    pub palw_challenge: bool,
+    /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
+    pub palw_drill_tamper_leaf: Option<u64>,
+    /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
+    pub palw_drill_challenge_all: bool,
     pub palw_producer_pay_address: Option<String>,
     pub palw_panel: bool,
     pub palw_fee_outpoint: Option<String>,
@@ -347,6 +353,9 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_challenge: false,
+            palw_drill_tamper_leaf: None,
+            palw_drill_challenge_all: false,
             palw_producer_pay_address: None,
             palw_panel: false,
             palw_fee_outpoint: None,
@@ -799,6 +808,41 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help("PALW: <txid>:<index> of the bond output this node signs attempts under — the one the genesis card names."),
+        )
+        .arg(
+            Arg::new("palw-drill-challenge-all")
+                .long("palw-drill-challenge-all")
+                .env("KASPAD_PALW_DRILL_CHALLENGE_ALL")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY: open a court against every licensed claim, including ones this node reproduces \
+                     exactly. Exists so an HONEST producer can be shown clearing itself — the half of a round trip that a \
+                     conviction alone does not prove. Every such dispute costs this bond the claim's stake and loses. \
+                     REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tamper-leaf")
+                .long("palw-drill-tamper-leaf")
+                .env("KASPAD_PALW_DRILL_TAMPER_LEAF")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "PALW DRILL ONLY: produce blocks whose committed execution has one lane of this step leaf corrupted, \
+                     with the commitment re-derived so the fraud is self-consistent and only a re-execution can see it. \
+                     Exists so a court can be shown convicting on a live chain. REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-challenge")
+                .long("palw-challenge")
+                .env("KASPAD_PALW_CHALLENGE")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW: re-run every licensed claim and open a court against any this node cannot reproduce. Costs one \
+                     inference per claim and stakes this bond the claim's own reserved amount on every dispute it opens, \
+                     so it is a watchdog role rather than something every seat does.",
+                ),
         )
         .arg(
             Arg::new("palw-class-artifact")
@@ -1286,6 +1330,12 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
+            palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
+            palw_drill_challenge_all: m
+                .get_one::<bool>("palw-drill-challenge-all")
+                .copied()
+                .unwrap_or(defaults.palw_drill_challenge_all),
             palw_producer_pay_address: m
                 .get_one::<String>("palw-producer-pay-address")
                 .cloned()

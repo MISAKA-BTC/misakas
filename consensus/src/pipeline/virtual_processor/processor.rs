@@ -3687,6 +3687,19 @@ impl VirtualStateProcessor {
     /// must be the one the candidate will be admitted in — reading the tip's would put a producer
     /// one epoch behind at every boundary, mining into a refusal it could not see the reason for.
     /// The seat duties this node holds at the state store's tip (launch blockers §2).
+    /// Claims this node could still dispute — licensed, not its own, and not already under a
+    /// session of its own.
+    pub fn palw_disputable_claims_v2_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2(&state, mine)
+    }
+
     /// **What verdict would this proof produce, at this node's tip?**
     ///
     /// A `CourtClosed` must ANNOUNCE the verdict the evidence supports — the pipeline derives it

@@ -90,6 +90,11 @@ pub struct PalwProducerConfig {
     /// The gate's other two clauses — chain participation and peer connectivity — are NOT waived
     /// by this. They are the ones that stop a node extending a chain it has no business on.
     pub enable_unsynced_mining: bool,
+    /// **DRILL ONLY: commit a corrupted execution.** `Some(leaf)` makes every block this node
+    /// produces carry a self-consistent fraud — one lane of that step leaf changed and the
+    /// commitment re-derived — so a court can be shown convicting on a live chain. The daemon
+    /// refuses to set it on a network carrying value.
+    pub drill_tamper_leaf: Option<u64>,
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
@@ -394,9 +399,13 @@ impl PalwProducerService {
         // out to the 120 s cadence, at which point that thread is busy essentially all the time and
         // every other service on the runtime is short one worker.
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
-        let run = tokio::task::spawn_blocking(move || backend.execute(&job_for_blocking, &prompt_for_blocking))
-            .await
-            .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        let tamper = self.config.drill_tamper_leaf;
+        let run = tokio::task::spawn_blocking(move || match tamper {
+            None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+            Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
+        })
+        .await
+        .map_err(|e| format!("the execution task did not finish: {e}"))??;
 
         // Every field but the challenge is fixed now: the roots are the execution's and the six
         // chain facts are `facts`'. The nonce moves the challenge, the challenge moves the
