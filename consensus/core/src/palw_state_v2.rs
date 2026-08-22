@@ -776,6 +776,18 @@ impl PalwClassTermsV2 {
         match (self.panel_seats, self.panel_quorum) {
             (None, None) => Ok(*network),
             (Some(seats), Some(quorum)) => {
+                // **A network that declared no floor admits no per-class panel at all.**
+                //
+                // Read as "no minimum to enforce" this was fail-OPEN: a chain that never opted
+                // into thin panels would silently accept a two-seat class, and admitting one is a
+                // decision a network makes about its own identity — the floor is inside the
+                // ruleset id precisely so it cannot be a registrant's choice. Caught by
+                // `a_network_that_declares_no_floor_refuses_a_thin_class`.
+                if floor_seats == 0 || floor_quorum == 0 {
+                    return Err(
+                        "this network declares no per-class panel floor, so a class may not draw its own panel".to_string()
+                    );
+                }
                 if seats < floor_seats || quorum < floor_quorum {
                     return Err(format!(
                         "a class may not register a panel below the network's floor ({floor_seats} seats / {floor_quorum} quorum); \

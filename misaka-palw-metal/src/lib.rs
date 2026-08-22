@@ -44,6 +44,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+pub mod catalog;
 pub mod material;
 pub use material::{PalwMetalMaterialV1, metal_material_decode_v1, metal_material_encode_v1};
 

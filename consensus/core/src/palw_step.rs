@@ -433,8 +433,51 @@ pub struct PalwShapeProfileV3 {
 }
 
 impl PalwShapeProfileV3 {
+    /// **The half of `validate_shape` that is about a MODEL, not about an adjudicable graph**
+    /// (ADR-0051).
+    ///
+    /// Version, layer count, context, dimensions, the pinned flash-attention rule, thread count —
+    /// every one of these is true or false about the thing being run, whoever verifies it and
+    /// however. What follows them in `validate_shape` is a different subject: whether the declared
+    /// NODE TABLES describe a graph a court can walk.
+    ///
+    /// A Family-M class has no such graph and says so with empty tables, which the node-table
+    /// rules correctly refuse and which is correct *for the family they were written for*. So the
+    /// non-court admission gate validates the geometry and stops, exactly as it skips the ladder
+    /// depth and the opening cost. Family D still runs the whole of `validate_shape`, which is
+    /// still what refuses a class with nothing to adjudicate.
+    pub fn validate_geometry(&self) -> Result<(), PalwStepError> {
+        use PalwStepError::ProfileNotCanonical as bad;
+        if self.version != PALW_STEP_OBJECT_VERSION_V1 {
+            return Err(PalwStepError::UnsupportedVersion { got: self.version, expected: PALW_STEP_OBJECT_VERSION_V1 });
+        }
+        if self.layer_count == 0 {
+            return Err(bad("layer count is zero"));
+        }
+        if self.layer_count > PALW_STEP_MAX_LAYERS {
+            return Err(bad("layer count exceeds the adjudicable ceiling"));
+        }
+        if self.n_ctx == 0 {
+            return Err(bad("context length is zero"));
+        }
+        if (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
+            return Err(bad("the declared shape drives an enumeration past the work ceiling"));
+        }
+        if self.hidden_dim == 0 || self.vocab_size == 0 {
+            return Err(bad("zero geometry dimension"));
+        }
+        if self.flash_attn_disabled != 1 {
+            return Err(bad("flash attention must be pinned disabled (ADR-0030 Fact 7)"));
+        }
+        if self.n_threads == 0 {
+            return Err(bad("thread count is zero"));
+        }
+        Ok(())
+    }
+
     pub fn validate_shape(&self) -> Result<(), PalwStepError> {
         use PalwStepError::ProfileNotCanonical as bad;
+        self.validate_geometry()?;
         if self.version != PALW_STEP_OBJECT_VERSION_V1 {
             return Err(PalwStepError::UnsupportedVersion { got: self.version, expected: PALW_STEP_OBJECT_VERSION_V1 });
         }

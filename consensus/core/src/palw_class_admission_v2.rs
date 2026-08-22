@@ -391,7 +391,10 @@ fn palw_metal_class_admission_v1(
     artifact_root: Hash64,
     pwu_rule: crate::palw_state_v2::PalwPwuRuleV2,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
-    profile.validate_shape().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+    // GEOMETRY, not the graph: the node-table rules refuse an empty table, which is exactly what
+    // a class with no court declares, and refusing it here would refuse the family for being
+    // itself. Same reasoning as skipping the ladder and the opening cost.
+    profile.validate_geometry().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
     let derived_id = profile.shape_profile_id();
     if class_id != derived_id {
         return Err(PalwClassAdmissionError::ClassIdIsNotTheProfileId { declared: class_id, derived: derived_id });
