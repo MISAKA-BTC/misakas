@@ -227,6 +227,28 @@ Adding seeders later is a plain edit, not a flag day: `dns_seeders` is deliberat
 IPs, and a socket bridge is not the same thing as a delegated seed name. Test reachability from
 outside your own network before announcing anything.
 
+**Every registered bond needs a node, and the registry has no spare.** `derive_panel_v2` seats
+`PALW_V2_PANEL_SEATS` bonds and excludes the executor, so a six-row registry seats *all five*
+non-producing bonds on *every* claim. A bond whose node is not running is not idle — it is a silent
+seat, and `slash_silent_seats` takes `claim.reserved` from it on every licensed claim. It drains,
+and a drained bond cannot be replaced: `BondRegistered` may not ride a transaction, so the only
+repair is a flag-day relaunch. **Decide where each bond's node will run BEFORE generating its
+seed**, because the seed is generated on the host that will run it and does not move afterwards.
+testnet-12 had to re-mint over exactly this: bond 4's seed was on a host whose egress to the fleet
+turned out to be filtered upstream.
+
+**Reachability measured for testnet-12** (2026-08-22, from outside the fleet):
+
+| host | role | 26411 from outside |
+|---|---|---|
+| 169.58.39.220 | producer (bond 0) + seat 1 | **reachable** |
+| 5.104.81.23 | seats 2, 3, 4 | **reachable** |
+| 160.16.131.119 | seat 5 | not reachable — peers outbound only |
+
+Two public entry points, which is what an announcement needs. A fourth host was dropped from the
+fleet: it reaches exactly one fleet member and nothing else, and its memory belongs to a live
+testnet-10 node.
+
 ---
 
 ## 5. Verify the network is what you think it is
@@ -236,14 +258,24 @@ outside your own network before announcing anything.
 | the ruleset | compare `consensus_params_id` in the startup log across nodes | a node is running a different card, or an unfilled one |
 | the lane | the producer's first log line names algo 6 | the bundle did not install; §1's constants are unset |
 | production | `[palw-producer] produced block #N …` | see the hold reason it prints instead |
-| **the chain has PALW weight** | `[palw-producer] palw weight=… final_claims=… unresolved=…` | **a flat zero `weight` with rising `unresolved` is a hash chain wearing PALW's clothes** — every claim is voiding; check that a funded submitter exists |
+| **the lattice is turning over** | `[palw-producer] palw weight=… live_total=… final_claims=… unresolved=…` | **`live_total` at zero is the failure.** `weight` at zero is NOT — see below |
 | the seats are answering | `[palw-panel] filed a "Valid" receipt for claim …` on the NON-producing nodes | no material is reaching them, or their bond holds no seat |
 | the quorum reaches the chain | `[palw-panel] submitted ReceiptLicensed for claim …` | `no fee UTXO resolves` ⇒ the genesis float was spent or the card is unset |
 
-**The weight line is the one that matters.** A network can produce blocks, gossip material, file
-receipts and still certify nothing: the lattice only turns over when a `ReceiptLicensed` reaches
-the chain, and only then does `safe_weight` leave zero. Everything above it can look healthy while
-that number stays at 0.
+**The weight line is the one that matters — and it must be read in two stages.** A network can
+produce blocks, gossip material, file receipts and still certify nothing, and nothing else in the
+log says so.
+
+*Before the first `Final`, which is `window_challenge` (1200 DAA ≈ **40 hours** at the frozen 120 s
+cadence) after the first licensed claim:* `weight` and `final_claims` are zero **by construction**,
+on every healthy chain, and a young network cannot be judged by them. Read `live_total` instead —
+it is the third key of the fork-choice order and carries the bounded immature contribution, so it
+climbs from the first block. `live_total` rising with `weight` at zero is correct. Both at zero is
+a lattice that never started: check that a funded submitter exists and that
+`[palw-panel] submitted ReceiptLicensed` appears.
+
+*After that:* `weight` must leave zero and `final_claims` must climb. A flat zero `weight` past
+DAA 1200, with `unresolved` still rising, is a hash chain wearing PALW's clothes.
 
 ---
 
