@@ -918,4 +918,74 @@ mod tests {
         seen.dedup();
         assert_eq!(seen.len(), before);
     }
+
+    /// **How many operators a class needs to be alive — as arithmetic, not as folklore.**
+    ///
+    /// The number governs every deployment decision (how many hosts, how much hardware for a
+    /// family whose seats must hold particular hardware) and it had been stated wrongly twice in
+    /// one session: once as "5 seats, 5 quorum" and once as "the RC declares no per-class floor".
+    /// Both are measured here instead.
+    ///
+    /// The rule that makes it a hard count rather than a target: `derive_panel_v2` **refuses** a
+    /// short draw. It does not seat four of five and carry on — `quorum` is how many must AGREE,
+    /// never how many must EXIST. So a class needs its full seat count of eligible operators for
+    /// any claim to bind at all, and one operator short is not degraded service, it is a chain
+    /// where every claim voids at `BindTimeout` and every block's worker carve burns.
+    ///
+    /// Eligibility excludes the executor three ways (bond, operator, key) and seats one bond per
+    /// operator, so the count is `seat_count + 1` DISTINCT OPERATORS — five extra bonds under one
+    /// operator buy exactly one seat.
+    #[test]
+    fn a_class_needs_seat_count_plus_one_distinct_operators() {
+        // Five operators total: one executor + four others, against a 5-seat panel.
+        let mut objects = vec![PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 1,
+            pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        }];
+        objects.push(register(1, 7, 0x21)); // the executor
+        for k in 0..4u64 {
+            objects.push(register(10 + k, 20 + k as u8, 0x30 + k));
+        }
+        // Plus three MORE bonds under an operator that already has one: extra collateral, zero
+        // extra seats. This is the Sybil bound Decision 7 rests on, and it is why the answer is
+        // counted in operators.
+        for k in 0..3u64 {
+            objects.push(register(50 + k, 50 + k as u8, 0x30));
+        }
+        let (s1, _) =
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let anchor = BlockHash::from_u64_word(0xA1);
+
+        // Four eligible OPERATORS (eight eligible bonds) against five seats: refused, and the
+        // error reports the operator count rather than the bond count.
+        let five = PalwPanelParamsV2::new(5, 3, 4).unwrap();
+        match derive_panel_v2(&state, &five, &claim_id, anchor) {
+            Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available }) => {
+                assert_eq!(needed, 5);
+                assert_eq!(available, 4, "eight bonds under four operators seat four — one per operator");
+            }
+            other => panic!("a short panel must be refused, not seated short: {other:?}"),
+        }
+
+        // The floor `(2, 2)` a class may thin to needs three distinct operators: executor + two.
+        let two = PalwPanelParamsV2::new(2, 2, 4).unwrap();
+        let seats = derive_panel_v2(&state, &two, &claim_id, anchor).expect("two seats from four eligible operators");
+        assert_eq!(seats.len(), 2);
+        let mut ops: Vec<Hash64> = seats.iter().map(|s| s.operator_id).collect();
+        ops.sort();
+        ops.dedup();
+        assert_eq!(ops.len(), 2, "one seat per operator");
+        assert!(!ops.contains(&op_id(0x21)), "the executor's operator is never seated");
+    }
+
 }

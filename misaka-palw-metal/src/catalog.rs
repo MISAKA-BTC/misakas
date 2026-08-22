@@ -344,20 +344,39 @@ mod tests {
         println!("CAT-M-0001 ADMITTED  class_id={}  pwu={}", entry.class_id, entry.canonical_step_leaf_count);
     }
 
-    /// **A chain that did not opt in refuses the thin panel.** The floor is in the bundle and
-    /// therefore in the ruleset id: admitting a two-seat class is a decision a network makes about
-    /// its own identity, not one a registrant makes on its behalf.
+    /// **The shipped floor, measured, and what it costs in operators.**
+    ///
+    /// Corrects an assertion this test made in its first form: it claimed the RC ships
+    /// `min_class_panel = (0, 0)` (no per-class panel at all) and the shipped value is `(2, 2)`.
+    /// The distinction is the whole operator budget of a family, so it is pinned rather than
+    /// remembered:
+    ///
+    /// * the network panel is **5 seats, quorum 3**, and `derive_panel_v2` REFUSES a short draw
+    ///   (`InsufficientEligibleBonds`) rather than seating fewer — so a class on the network panel
+    ///   needs five seats *plus* the executor, and one seat per operator, which is **6 distinct
+    ///   operators**;
+    /// * a class may thin down to the floor `(2, 2)`, which is **3 distinct operators**.
+    ///
+    /// For Family M every one of those operators must hold Apple Silicon, because a seat verifies
+    /// by re-running the job. That is the number this test exists to keep honest.
     #[test]
-    fn a_network_that_declares_no_floor_refuses_a_thin_class() {
-        use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, verify_class_admission_v2};
+    fn the_shipped_floor_and_what_it_costs_in_operators() {
         let Some(bundle) = shipped_bundle() else { return };
-        assert_eq!(bundle.min_class_panel, (0, 0), "the shipped RC has not opted in");
+        assert_eq!(bundle.min_class_panel, (2, 2), "the RC's per-class floor");
+        assert_eq!((bundle.panel.seat_count(), bundle.panel.quorum()), (5, 3), "the network panel");
+
+        // A class registered at the floor is admissible; one below it is not.
         let pins = pins();
-        let reg = cat_m_0001_registration(&pins, 2, 2, 1, u128::MAX / 2, 5, 0);
-        assert!(matches!(
-            verify_class_admission_v2(&bundle, &cat_m_0001_profile(), &cat_m_0001_canonical_job(&pins), &reg),
-            Err(PalwClassAdmissionError::PanelTerms(_))
-        ));
+        for (seats, quorum, admissible) in [(2u16, 2u16, true), (1, 1, false)] {
+            let reg = cat_m_0001_registration(&pins, seats, quorum, 1, u128::MAX / 2, 5, 0);
+            let got = kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
+                &bundle,
+                &cat_m_0001_profile(),
+                &cat_m_0001_canonical_job(&pins),
+                &reg,
+            );
+            assert_eq!(got.is_ok(), admissible, "a {seats}/{quorum} panel: admissible={admissible}, got {got:?}");
+        }
     }
 
     fn shipped_bundle() -> Option<kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {

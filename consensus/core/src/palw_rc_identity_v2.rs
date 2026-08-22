@@ -655,4 +655,23 @@ mod tests {
         }
     }
 
+
+    /// Print the SHIPPED panel and bond parameters — what liveness actually requires.
+    /// `cargo test -p kaspa-consensus-core --lib dump_liveness_requirements -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_liveness_requirements() {
+        let p = crate::config::params::palw_rc_shipped_params();
+        match &p.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
+                println!("panel:  seats={} quorum={} anchor_delay={}", b.panel.seat_count(), b.panel.quorum(), b.panel.anchor_delay());
+                println!("min_class_panel: {:?}", b.min_class_panel);
+                println!("state:  bind={} receipt={} challenge={} court={}",
+                    b.state.window_bind(), b.state.window_receipt(), b.state.window_challenge(), b.state.window_court());
+                println!("min_collateral_sompi={}", b.state.min_collateral_sompi());
+            }
+            _ => println!("no bundle"),
+        }
+    }
+
 }
