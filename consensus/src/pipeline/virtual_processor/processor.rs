@@ -3786,11 +3786,14 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
     ) -> BlockHashSet {
-        use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
+        use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2, class_ticket_v2};
         let mut unentitled = BlockHashSet::default();
         if self.palw_state_params_v2.is_none() {
             return unentitled;
         }
+        // Identities already paid or claimed in THIS mergeset. The state answers for identities
+        // the chain has already seen; nothing but this answers for two siblings carrying one.
+        let mut seen_here: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
             // The selected parent went through the full admission on its way to becoming a chain
             // block, and its reward is escrowed rather than paid. Re-deciding it here could only
@@ -3819,6 +3822,40 @@ impl VirtualStateProcessor {
                     {
                         debug!("merged blue {blue} is not paid a worker share: {e}");
                         unentitled.insert(*blue);
+                        continue;
+                    }
+                    // **Entitlement says WHO may be paid. It does not say how MUCH work exists.**
+                    //
+                    // The items that meter issuance — the class lottery, the epoch budget, the
+                    // exposure ceiling, one-identity-one-claim — all live in
+                    // `check_palw_attempt_admission_v2`, which only ever runs on the selected
+                    // chain. A merged blue was therefore paid the full worker carve for a block
+                    // that satisfied none of them. Worse, the attempt's signature is outside both
+                    // `attempt_id` and the PoW digest, so ONE solved attempt re-signed with
+                    // different hedging randomness yields arbitrarily many distinct valid block
+                    // ids — each of them a separate payment for the same work. A rational
+                    // producer emits K blocks per ticket and ignores the class lottery entirely,
+                    // diluting honest miners K-fold and leaving the per-class retarget measuring
+                    // a census the paid blocks are not in.
+                    //
+                    // These two are the ones this site can decide from the parent state alone,
+                    // and they are the two the exploit turns on: the lottery is what makes a
+                    // ticket cost something, and the identity is what makes it cost something
+                    // ONCE. The epoch budget and the exposure ceiling are sequential — they
+                    // depend on what the same walk has already accepted — and belong with the
+                    // wider fix noted in the audit, not here.
+                    let attempt_id = attempt_id_v2(&envelope.attempt);
+                    if state.claim(&attempt_id).is_some() || !seen_here.insert(attempt_id) {
+                        debug!("merged blue {blue} carries an attempt identity already paid on this chain");
+                        unentitled.insert(*blue);
+                        continue;
+                    }
+                    match state.class_target(&envelope.attempt.class_id) {
+                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {}
+                        _ => {
+                            debug!("merged blue {blue} did not win its class lottery");
+                            unentitled.insert(*blue);
+                        }
                     }
                 }
                 Err(_) => {

@@ -83,7 +83,17 @@ pub struct PalwGossipCenter {
 
 struct GossipState {
     seen: HashSet<u64>,
-    seen_order: VecDeque<u64>,
+    /// Each remembered digest, with the claim its per-claim count was charged to. The claim
+    /// travels WITH the digest so that evicting one decrements the other — see
+    /// `materials_per_claim`.
+    seen_order: VecDeque<(u64, Option<Hash64>)>,
+    /// Per-claim material counts, and **a derived index of `seen_order`, not a map of its own.**
+    ///
+    /// It used to gain an entry per claim id and never lose one. Claim ids are 64-byte values
+    /// taken straight off the wire — no on-chain existence check, no signature, no bond binding,
+    /// no rate limit — so a peer could name a fresh one per message and grow this map until the
+    /// node died, without holding a bond or landing a single block. Keying eviction to the
+    /// digest FIFO bounds it at `SEEN_CAP` claims by construction.
     materials_per_claim: HashMap<Hash64, usize>,
 }
 
@@ -129,10 +139,20 @@ impl PalwGossipCenter {
             *count += 1;
         }
         state.seen.insert(digest);
-        state.seen_order.push_back(digest);
+        state.seen_order.push_back((digest, material_claim));
         if state.seen_order.len() > SEEN_CAP {
-            if let Some(old) = state.seen_order.pop_front() {
+            if let Some((old, claim)) = state.seen_order.pop_front() {
                 state.seen.remove(&old);
+                // Give the count back with the digest that took it, so the map cannot outlive the
+                // FIFO that feeds it.
+                if let Some(claim) = claim
+                    && let Some(count) = state.materials_per_claim.get_mut(&claim)
+                {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        state.materials_per_claim.remove(&claim);
+                    }
+                }
             }
         }
         PalwGossipAdmit::Fresh
@@ -178,6 +198,29 @@ impl PalwGossipCenter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// **The per-claim map grew forever, and nothing on the wire was authenticated enough to stop
+    /// it.** Claim ids arrive as 64 raw bytes with no on-chain existence check, no signature and
+    /// no bond binding, so a peer could name a fresh claim per message and grow this map until the
+    /// node died — while holding no bond and landing no block. Bounding it by the digest FIFO
+    /// makes it a derived index instead of an independent map.
+    #[test]
+    fn the_material_map_cannot_outgrow_the_digest_window() {
+        let center = PalwGossipCenter::default();
+        for n in 0..(SEEN_CAP as u64 * 3) {
+            let claim = Hash64::from_u64_word(n);
+            let digest = center.digest(1, Some(&claim), &n.to_le_bytes());
+            let _ = center.admit_digest(digest, Some(claim));
+        }
+        let state = center.state.lock().unwrap();
+        assert!(
+            state.materials_per_claim.len() <= SEEN_CAP,
+            "the map held {} claims against a {SEEN_CAP}-digest window",
+            state.materials_per_claim.len()
+        );
+        assert_eq!(state.seen.len(), state.seen_order.len(), "the two halves of the window agree");
+    }
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)

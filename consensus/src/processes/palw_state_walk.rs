@@ -151,6 +151,8 @@ mod tests {
             claim: h64(claim),
             class_id: h64(1),
             bond: bond(),
+            // The key this fixture's `BondRegistered` declares: the transition compares them now.
+            executor_pubkey: vec![7; 4],
             pwu,
             quanta,
             trace_root: h64(41),
