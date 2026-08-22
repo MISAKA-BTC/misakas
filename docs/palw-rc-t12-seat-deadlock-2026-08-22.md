@@ -170,3 +170,33 @@ launch record already describes (ibm-and-C as the reachable pair).
 The practical consequence for the drill: a six-seat fleet works, because A dials out and the two
 reachable hosts carry inbound. It is not a public-entry topology, and nothing measured today
 changes that — it stays an operator item with a name that now matches what it is.
+
+
+---
+
+## The multi-node drill, live (2026-08-22 16:30 CEST, fingerprint `8a65f767…`)
+
+The third re-mint of the day brought all six seats up together — ibm 2, C 3, A 1, every one
+reporting the same consensus fingerprint — and with them the first run where the whole
+producer → panel → receipt → quorum → submitter chain moves on a real chain rather than in a
+correspondence test.
+
+Measured in the first four minutes:
+
+| stage | evidence |
+|---|---|
+| producer | 294 blocks, ~1 s apart (genesis difficulty; the retarget has not pulled it to the 120 s cadence yet) |
+| six seats | all six `--palw-panel` processes up, fingerprints identical |
+| panels bind | `[palw-panel] a quorum stands` — panels seat and seats sign |
+| quorum → chain | **208 `submitted ReceiptLicensed`**, climbing steadily |
+| fee floats | the submitters spend outpoints **41–45**, which is exactly `VAULT_COUNT + 1 + i` — the genesis carve reaching the addresses the cards name |
+
+`final_claims=0`, and that is the design rather than a fault: `window_bind` is **600 DAA** and the
+chain is at ~300, so no claim can have aged into `Final` yet. Weight stays 0 until it does. The
+same reading was recorded before as "the first ~40 hours at weight 0 is normal"; here it is the
+first hours of it, with the licensing loop visibly running underneath.
+
+What this closes and what it does not: the drill's *closable* stages are now demonstrated on a
+live six-seat fleet. `Final` is time-gated, not blocked — the thing to watch is whether
+`final_claims` leaves 0 after DAA 600, and the wedge watcher (now self-probing) is armed on all
+four hosts to catch a seat freezing before it does.
