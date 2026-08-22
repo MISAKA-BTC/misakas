@@ -247,6 +247,42 @@ that number stays at 0.
 
 ---
 
+## 5b. What testnet-12 carries, and the one lane it does not
+
+Checked against the shipped bundle rather than asserted, because "all of PALW works" is a claim
+somebody should be able to verify:
+
+| capability | on t12 | evidence |
+|---|---|---|
+| BASE-0 attempt lane (algo 6) | **live** | every block is a real inference; `palw weight` moves |
+| the claim lattice — panel, receipts, quorum, `Final` | **live** | `submitted ReceiptLicensed`, and the weight line |
+| the court (step dispute, interactive ladder) | **armed** | `COURT_TURN_DEADLINE = 60` inside `WINDOW_COURT = 2400`; the ladder is what that turns on |
+| every lattice window | **real values** | bind 600, receipt 600, challenge 1200, court 2400 — none fenced to `u64::MAX` |
+| claim retirement | **live** | `CLAIM_RETIREMENT = WINDOW_COURT` |
+| free-prompt COMMITMENT (0x4a) | **live** | routes at transaction admission; a claim is created and can be licensed |
+| the EVM lane | **live** | active at DAA 0 and in the default build — no `--features evm` to forget |
+| lifecycle objects (0x4b) | **live** | the receipt quorum rides one |
+| **free-prompt receipt SPEND (algo 7)** | **not producible** | see below |
+
+**The one gap, stated plainly.** ADR-0044's receipt lane is fully implemented in consensus — the
+header gate decodes and position-binds an algo-7 carriage, `PalwFreePromptParamsV3` is a required
+part of the bundle, and a licensed free-prompt claim's weight is defined to arrive per spent
+quantum at the receipt block that spends it. What does not exist anywhere in the tree is anything
+that PRODUCES such a block: no `--palw-receipt-produce`, no receipt-spend builder, no miner arm.
+
+So the lane is closed at `required_algo_id`, and that is deliberate rather than an oversight.
+Opening it without a producer would hand cadence share to a lane nobody can fill, and the per-class
+DAA retarget then reads the floor as an over-producer at every epoch boundary — dividing its target
+by four each time until the class lottery refuses every attempt. That is the exact wedge §6 of the
+[launch blockers](palw-rc-launch-blockers-2026-08-21.md) records, and it is why
+`ATTEMPT_SHARE_PERMILLE` is 1000: **a lane that cannot produce holds no cadence.**
+
+Opening it is therefore one piece of work, not two: build the receipt producer, split the share,
+re-mint genesis. Until then a free-prompt commitment can be made and licensed on testnet-12, and
+its licensed quanta cannot be spent.
+
+---
+
 ## 6. What is NOT in place, and should be said out loud
 
 > **The complete, evidenced list is
