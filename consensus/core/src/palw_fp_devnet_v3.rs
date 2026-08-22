@@ -453,6 +453,39 @@ mod tests {
         assert!(admits < MAX_CLAIM_EXPOSURE_DAA as u128 + 8, "the derivation should not quietly inflate: admits {admits}");
     }
 
+    /// The invariant testnet-12 violated, stated at the layer that owns it: a chain must be able
+    /// to produce its way to the first `Final` without production stopping first.
+    ///
+    /// Nothing is released before then — a claim's exposure stands until it finalizes or voids,
+    /// and no claim can finalize before `WINDOW_CHALLENGE` — so the live claim count on a young
+    /// chain IS the block height. If the ceiling admits fewer claims than that, the chain reaches
+    /// the ceiling with zero finalized claims, and it is a permanent stop: the only thing that
+    /// releases room is a claim finalizing, the only thing that advances DAA is a block, and the
+    /// ceiling refuses the block. Every unit test passed while the fleet did exactly this.
+    #[test]
+    fn honest_production_reaches_the_first_final_before_it_reaches_the_ceiling() {
+        let pwu_per_inference = 7_900;
+        let collateral = palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference);
+        let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
+        // Mirrors `palw_admission_v2` step 8 exactly: collateral × ratio / 1000, floored.
+        let per_claim = (pwu as u128) * (SLASH_VALUE_PER_PWU as u128);
+        let ceiling = (collateral as u128) * (MAX_EXPOSURE_RATIO_PERMILLE as u128) / 1000;
+        let admits = ceiling / per_claim;
+
+        // The earliest `Final` reachable at all: bound and licensed in the block that made the
+        // claim, then the whole challenge window. One attempt claim per block.
+        assert!(
+            admits > WINDOW_CHALLENGE as u128,
+            "the ceiling admits {admits} concurrent claims, but no claim can finalize before block              {WINDOW_CHALLENGE} — production stops before the first release, and stays stopped"
+        );
+        // And the worst honest case: bound late, licensed late, taken to court.
+        assert!(
+            admits >= MAX_CLAIM_EXPOSURE_DAA as u128,
+            "the ceiling admits {admits}, a contested claim can hold its room for {} blocks",
+            MAX_CLAIM_EXPOSURE_DAA
+        );
+    }
+
     /// The span the collateral covers must be the span the state machine can actually hold
     /// exposure across — every window on the path from `Provisional` to a terminal phase. If a
     /// window is added to the lattice and left out of this sum, the ceiling silently becomes
