@@ -256,6 +256,12 @@ pub fn verify_class_admission_v2(
         return Err(PalwClassAdmissionError::NotARegistration);
     };
 
+    // **Well-formedness first, before anything reads the shape.** Every check below — the id
+    // derivation, the kernel walk, the leaf enumeration — is driven by `n_ctx` and `layer_count`,
+    // so an unbounded shape decides how much work it costs to reject it. `validate_shape` is where
+    // those bounds live; running it after the first consumer is running it too late.
+    profile.validate_shape().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+
     let derived_id = profile.shape_profile_id();
     if *class_id != derived_id {
         return Err(PalwClassAdmissionError::ClassIdIsNotTheProfileId { declared: *class_id, derived: derived_id });

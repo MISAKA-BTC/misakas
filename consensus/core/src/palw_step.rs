@@ -60,6 +60,24 @@ pub const PALW_STEP_ALL_DOMAINS: &[&[u8]] = &[
 /// Cap on step-leg leaves per job (ADR-0030 §3 sizing: the pinned geometry at the credited
 /// ceiling is ≈ 3.26 M — inside with headroom, tight against adversarial allocation).
 pub const PALW_STEP_MAX_LEAVES: u64 = 1 << 22;
+
+/// Cap on the ENUMERATION the shape drives — `n_ctx` positions times `layer_count` layers.
+///
+/// `PALW_STEP_MAX_LEAVES` bounds the ANSWER; this bounds the WORK of computing it, and the two
+/// are not the same bound. `worst_case_step_leaf_count_v1` walks every position and every layer
+/// before it can compare against the leaf cap, so with `n_ctx: u32` and `layer_count: u16`
+/// unbounded a single ~5 KB `ClassRegistered` object buys ≈2.8e14 iterations — evaluated by every
+/// node, for every chain candidate, on a block already stored by isolation validation. It
+/// reproduces on restart and on resync, so the only recovery is a hard fork.
+///
+/// 1 << 24 is ≈8× the largest real class this bundle contemplates (Qwen at 32 K context and 64
+/// layers is 2.1 M) and is a few tens of milliseconds of cheap iteration once, at registration.
+pub const PALW_STEP_MAX_ENUMERATION: u64 = 1 << 24;
+
+/// Ceiling on declared layers. A layer's table is walked at every position, so this is the inner
+/// factor of [`PALW_STEP_MAX_ENUMERATION`]; it is also far above any architecture the court can
+/// adjudicate.
+pub const PALW_STEP_MAX_LAYERS: u16 = 1024;
 /// Most nodes one layer template may declare.
 pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
 /// Tile length bounds (elements per committed tile).
@@ -423,6 +441,18 @@ impl PalwShapeProfileV3 {
         if self.layer_count == 0 {
             return Err(bad("layer count is zero"));
         }
+        if self.layer_count > PALW_STEP_MAX_LAYERS {
+            return Err(bad("layer count exceeds the adjudicable ceiling"));
+        }
+        if self.n_ctx == 0 {
+            return Err(bad("context length is zero"));
+        }
+        // **The work bound, not the answer bound.** See `PALW_STEP_MAX_ENUMERATION`: the leaf
+        // enumeration is driven by this product, and it is computed BEFORE anything can compare
+        // against the leaf cap.
+        if (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
+            return Err(bad("the declared shape drives an enumeration past the work ceiling"));
+        }
         if self.hidden_dim == 0 || self.vocab_size == 0 {
             return Err(bad("zero geometry dimension"));
         }
@@ -729,10 +759,19 @@ pub fn kv_aux_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV
 /// a class whose TYPICAL job fits the ladder while its longest does not is admitting a class an
 /// attacker chooses the job length for.
 pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64, PalwStepError> {
+    // **Validate BEFORE enumerating.** This walk is driven by `n_ctx` and `layer_count`, so a
+    // shape that has not been bounded yet decides how long it runs. `step_leaf_count` has always
+    // validated first; this sibling did not, and it is the one an unadmitted class reaches.
+    profile.validate_shape()?;
     let prefill = profile.n_ctx.saturating_sub(1);
     let mut total = 0u64;
     for p in 0..prefill as u64 {
         total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill as u64));
+        // Inside the loop, not after it: a cap tested at the end is an answer bound that has
+        // already paid the whole cost of the answer.
+        if total > PALW_STEP_MAX_LEAVES {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        }
     }
     // One decode call at the far end of the context, matching `step_leaf_count`'s own enumeration.
     total = total.saturating_add(leaves_per_position(profile, prefill as u64 + 1, true));
@@ -751,11 +790,17 @@ pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2)
     let mut total = 0u64;
     // Prefill call: per position p, kv_len = p+1; logits only at the last position.
     for p in 0..prefill {
-        total += leaves_per_position(profile, p + 1, p + 1 == prefill);
+        total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill));
+        if total > PALW_STEP_MAX_LEAVES {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        }
     }
     // Decode calls c = 1..=decode_calls: kv_len = prefill + c, logits always.
     for c in 1..=decode_calls {
-        total += leaves_per_position(profile, prefill + c, true);
+        total = total.saturating_add(leaves_per_position(profile, prefill + c, true));
+        if total > PALW_STEP_MAX_LEAVES {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        }
     }
     total += kv_aux_leaf_count(profile, context);
     if total > PALW_STEP_MAX_LEAVES {
@@ -885,6 +930,53 @@ mod tests {
 
     fn h64(fill: u8) -> Hash64 {
         Hash64::from_bytes([fill; 64])
+    }
+
+    /// **One ~5 KB object could stop every node forever, and the cap did not stop it.**
+    ///
+    /// `worst_case_step_leaf_count_v1` walks `n_ctx` positions and `layer_count` layers at each
+    /// before comparing the total to `PALW_STEP_MAX_LEAVES`. With both fields unbounded, a
+    /// `ClassRegistered` naming `n_ctx = u32::MAX` and `layer_count = u16::MAX` buys ≈2.8e14
+    /// iterations from every node, for every chain candidate, on a block isolation validation has
+    /// already stored — so it reproduces on restart and on resync, and nothing short of a hard
+    /// fork recovers.
+    ///
+    /// The bound has to be on the WORK, not on the answer: a cap tested after the enumeration has
+    /// already paid for the enumeration. Timed rather than merely asserted, because a regression
+    /// here does not fail — it hangs, and a hanging test looks like a slow machine.
+    #[test]
+    fn an_unbounded_shape_cannot_buy_an_unbounded_enumeration() {
+        let mut profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the shipped floor profile is well-formed");
+        assert!(profile.validate_shape().is_ok(), "the real class must still pass");
+        assert!(worst_case_step_leaf_count_v1(&profile).is_ok(), "the real class must still enumerate");
+
+        profile.n_ctx = u32::MAX;
+        profile.layer_count = u16::MAX;
+        let started = std::time::Instant::now();
+        let refused = worst_case_step_leaf_count_v1(&profile);
+        let took = started.elapsed();
+        assert!(refused.is_err(), "an unbounded shape must be refused, not enumerated");
+        assert!(
+            took < std::time::Duration::from_millis(200),
+            "refusing the shape took {took:?} — it is being enumerated before it is refused"
+        );
+    }
+
+    /// The product is the thing an attacker buys, so it is the thing that is bounded. Each factor
+    /// alone can look reasonable while the product does not.
+    #[test]
+    fn the_enumeration_ceiling_binds_the_product_not_each_factor() {
+        let mut profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the shipped floor profile is well-formed");
+        let layers = profile.layer_count as u64;
+        assert!(layers > 0);
+        // Just over the ceiling, at this profile's real layer count.
+        profile.n_ctx = ((PALW_STEP_MAX_ENUMERATION / layers) + 1) as u32;
+        assert!(profile.validate_shape().is_err(), "a context that puts the product past the ceiling must be refused");
+        // Just under it — the factor alone is enormous, and that is fine, because the product is not.
+        profile.n_ctx = (PALW_STEP_MAX_ENUMERATION / layers) as u32;
+        assert!(profile.validate_shape().is_ok(), "a huge context is admissible while the product fits");
     }
 
     fn node(kind: PalwStepOpKindV1, out: PalwStepOutLenV1, tile: u32) -> PalwStepNodeV1 {
