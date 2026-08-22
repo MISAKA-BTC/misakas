@@ -92,8 +92,33 @@ pub struct FeerateEstimator {
 impl FeerateEstimator {
     pub fn new(total_weight: f64, inclusion_interval: f64, target_time_per_block_seconds: f64) -> Self {
         assert!(total_weight >= 0.0);
-        assert!((0f64..1f64).contains(&inclusion_interval));
+        // **The bound is positivity and finiteness, not "under one second."**
+        //
+        // `inclusion_interval` is a TIME: `average_tx_mass / (mass_per_block × bps)`. The old
+        // `< 1.0` bound encoded an assumption stated in `build_feerate_estimator` itself — "since
+        // mass_per_block > average_transaction_mass and **bps >= 1**" — and PALW is not that
+        // network: ADR-0038's frozen cadence is 120 s per block, i.e. bps = 1/120, which multiplies
+        // this quantity by 120. A 7,292-mass receipt transaction on testnet-12 yields 1.75 s, which
+        // is not an error, it is how long a transaction really waits there.
+        //
+        // Measured: the producer node panicked on `mining/src/feerate/mod.rs:95` the moment the
+        // first `ReceiptLicensed` reached the mempool, and the process exited — a sub-1-BPS network
+        // killed its own node with its own traffic, immediately after the lattice finally turned
+        // over.
+        assert!(inclusion_interval > 0f64 && inclusion_interval.is_finite(), "inclusion interval must be a positive time");
         Self { total_weight, inclusion_interval, target_time_per_block_seconds }
+    }
+
+    /// A probe time this estimator can actually be asked about.
+    ///
+    /// `time_to_feerate` is undefined at or below the amortized inclusion interval — you cannot buy
+    /// a wait shorter than the queue's own service time — and it asserts as much. On a 120 s network
+    /// the fixed probes `calc_estimations` uses (60 s, and the block time itself when it is smaller)
+    /// can legitimately fall below it, so they are lifted rather than allowed to panic.
+    #[inline]
+    fn probe_time(&self, seconds: f64) -> f64 {
+        let floor = self.inclusion_interval * 1.000_001;
+        if seconds > floor { seconds } else { floor }
     }
 
     pub(crate) fn feerate_to_time(&self, feerate: f64) -> f64 {
@@ -135,13 +160,13 @@ impl FeerateEstimator {
     pub fn calc_estimations(&self, minimum_standard_feerate: f64) -> FeerateEstimations {
         let min = minimum_standard_feerate;
         // Choose `high` such that the transaction is expected to be included in the next block.
-        let high = self.time_to_feerate(self.target_time_per_block_seconds).max(min);
+        let high = self.time_to_feerate(self.probe_time(self.target_time_per_block_seconds)).max(min);
         // Choose `low` feerate such that it provides sub-hour waiting time AND it covers (at least) the 0.25 quantile
-        let low = self.time_to_feerate(3600f64).max(self.quantile(min, high, 0.25));
+        let low = self.time_to_feerate(self.probe_time(3600f64)).max(self.quantile(min, high, 0.25));
         // Choose `normal` feerate such that it provides sub-minute waiting time AND it covers (at least) the 0.66 quantile between low and high.
-        let normal = self.time_to_feerate(60f64).max(self.quantile(low, high, 0.66));
+        let normal = self.time_to_feerate(self.probe_time(60f64)).max(self.quantile(low, high, 0.66));
         // Choose an additional point between normal and low
-        let mid = self.time_to_feerate(1800f64).max(self.quantile(min, high, 0.5));
+        let mid = self.time_to_feerate(self.probe_time(1800f64)).max(self.quantile(min, high, 0.5));
         /* Intuition for the above:
                1. The quantile calculations make sure that we return interesting points on the `feerate_to_time` curve.
                2. They also ensure that the times don't diminish too high if small increments to feerate would suffice
@@ -173,6 +198,44 @@ pub struct FeeEstimateVerbose {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A 120-second network must not panic its own node** (testnet-12, 2026-08-22).
+    ///
+    /// `build_feerate_estimator` computes `inclusion_interval = avg_mass / (mass_per_block × bps)`
+    /// and its own comment justifies the old `< 1.0` bound with "bps >= 1". ADR-0038 freezes PALW
+    /// at 120 s per block, so bps is 1/120 and the quantity is 120× larger. The real numbers from
+    /// the first `ReceiptLicensed` that ever reached a PALW mempool: a 7,292-mass transaction, a
+    /// 500,000-mass block limit, 1/120 BPS — 1.75 seconds. The node asserted and the process exited.
+    #[test]
+    fn a_sub_one_bps_network_estimates_instead_of_panicking() {
+        let avg_mass = 7_292f64;
+        let mass_per_block = 500_000f64;
+        let bps = 1f64 / 120f64;
+        let inclusion_interval = avg_mass / (mass_per_block * bps);
+        assert!(inclusion_interval > 1.0, "the fixture must reproduce the case: {inclusion_interval}");
+
+        let estimator = FeerateEstimator::new(1_000f64, inclusion_interval, 120f64);
+        let est = estimator.calc_estimations(1f64);
+        // Every bucket is a real number and the ordering the API promises still holds.
+        let high = est.priority_bucket.feerate;
+        let low = est.low_buckets[0].feerate;
+        assert!(high.is_finite() && low.is_finite(), "buckets must be finite: {high}, {low}");
+        assert!(high >= low, "priority must not be cheaper than low: {high} < {low}");
+        for b in std::iter::once(&est.priority_bucket).chain(est.normal_buckets.iter()).chain(est.low_buckets.iter()) {
+            assert!(b.estimated_seconds.is_finite() && b.estimated_seconds > 0.0, "bucket time {}", b.estimated_seconds);
+        }
+    }
+
+    /// The bound that replaced it still refuses the values that are genuinely meaningless.
+    #[test]
+    fn a_zero_or_infinite_inclusion_interval_is_still_refused() {
+        for bad in [0f64, -1f64, f64::INFINITY, f64::NAN] {
+            assert!(
+                std::panic::catch_unwind(|| FeerateEstimator::new(1f64, bad, 120f64)).is_err(),
+                "an inclusion interval of {bad} must be refused"
+            );
+        }
+    }
     use super::*;
     use itertools::Itertools;
 
