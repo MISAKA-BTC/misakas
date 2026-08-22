@@ -1,7 +1,13 @@
 # testnet-12 — what was verified, and what could not be
 
 **Date:** 2026-08-22 · **Binary:** `kaspad v1.1.0-c1e612a9`, sha256 `87235442e1e1096166498b6a…`
-**Genesis:** `28a44a680be0fb35…` · **Consensus fingerprint:** `79a306edbd84e3c4e59c5e585deaf8e9c06a440feb37699303a3e73de05d9794`
+**Genesis:** `28a44a680be0fb35…` · **Consensus fingerprint:** `f08215783e2b8f7e196fe12284fa9fedc6e37b860205d777dfe6c50e1aecb11f`
+
+> **Relaunched 2026-08-22 with the Phase 0 security fixes** (`75439aee…`, tree `e06d9409` plus the
+> protocol-version bump). The fingerprint moved from `79a306ed…` deliberately: the rules changed,
+> so `PALW_ATTEMPT_V2_VERSION` went 2 → 3 and the two networks no longer share an identity. A node
+> built before that cannot peer with this one — which is the point, because it would otherwise pass
+> the handshake and fork.
 
 This is the record a reader should be able to check rather than believe. It exists because the
 same fleet had already been declared healthy twice on evidence that turned out not to mean what it
@@ -46,7 +52,7 @@ JSON-RPC adapter. `--nodnsseed` is unnecessary and harmless: this network has no
 peers come from `--addpeer` and the address manager.
 
 **Check you are on the right network before anything else.** The startup banner prints
-`Consensus params fingerprint: 79a306edbd84e3c4e59c5e585deaf8e9c06a440feb37699303a3e73de05d9794`.
+`Consensus params fingerprint: f08215783e2b8f7e196fe12284fa9fedc6e37b860205d777dfe6c50e1aecb11f`.
 A different value means a different ruleset, and the handshake will refuse rather than fork.
 The genesis is `28a44a680be0fb35…`.
 
