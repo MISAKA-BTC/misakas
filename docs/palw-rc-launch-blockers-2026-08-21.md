@@ -123,11 +123,11 @@ the retirement change already forces (settle M-02 first — one flag day, not tw
 
 ---
 
-## Launching it found twelve more — the class of defect only a real network has
+## Launching it found fourteen more — the class of defect only a real network has
 
 Recorded because the pattern is the finding: **every one of these is invisible to a test suite,
 because a suite always starts from a chain that already exists and a binary somebody already built
-correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would: six before the first block, two that only a running chain could show, and four that needed a multi-host chain carrying real traffic.
+correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would: six before the first block, two that only a running chain could show, four that needed a multi-host chain carrying real traffic, and two that needed the four before them fixed first.
 
 | # | what | why no test could see it | fix |
 |---|---|---|---|
@@ -157,6 +157,32 @@ for real time.
 | 10 | **…and the same assumption failed the other way.** `network_blocks_per_second: 1000 / target_milliseconds_per_block` is integer division, so at 120,000 ms it is **0**, and the estimator's `avg_mass / (mass_per_block × 0)` is `+inf`. Fixing only the bound moved the panic message, not the panic. | `44441f70` |
 | 11 | **Two submitters racing one claim killed the honest block carrying both.** One funded submitter suffices, so several MAY be funded; both assemble the same quorum and both submit. Both objects are valid against the PARENT state, so a filter judging each one there passes both — and the transition, which applies them in order, refuses the second as `wrong phase`. Measured: 175 produced, 23 accepted, 74 disqualified, DAA frozen at 103 while three hosts submitted correctly. | `dc0fc144` |
 | 12 | **And the fix for 11 ate every object after the first.** The rehearsal fold re-applied at the block's own chain point, which `apply_palw_transition_v3` accepts exactly once (it demands a strictly increasing blue score). 356 blocks, 72 submissions, **zero licensed** — and the only thing that said so was the weight line added the same day. | `0c2931f6` |
+
+### The two that only appeared once the first twelve were fixed
+
+Each of these was *behind* a defect above: nothing could reach them until the chain in front of
+them worked. That is the shape of the whole list — a network reveals its next defect only after
+you have removed the one standing in front of it.
+
+| # | what | fix |
+|---|---|---|
+| 13 | **The collateral was sized for the wrong window, so no chain could ever finalize a claim.** `release_for_claim` runs on `Final` and on `Voided`, and nowhere else — a claim holds its executor's exposure for its whole life, not until a panel binds it. Collateral was derived from `WINDOW_BIND + 1`, admitting 601 concurrent claims, while the earliest `Final` any chain can reach is a licensed claim plus `WINDOW_CHALLENGE`: block 1200 at one claim per block. Every claim the chain was waiting to finalize was itself occupying the room the chain needed to keep producing. Measured twice: 601 blocks, `weight=0 final_claims=0 unresolved=600`, then held forever. Finding 7 was the same arithmetic one layer shallower — the `+1` was right, the window was not. | `c23a3ff2` |
+| 14 | **The submitter double-spent its own fee UTXO inside a single tick.** It re-resolved the fee outpoint per claim, but a carrier submitted earlier in the same tick leaves its change in *our own mempool*, not in the virtual UTXO set — so every claim after the first was handed the same spent outpoint and refused. The unresolvable-funding warning fired once per claim per tick with it: **24,014 identical lines in fifteen minutes**, which is also how a long-running node fills a disk. Resolve once per tick, chain the change onto the next carrier, warn once. | `c23a3ff2` |
+
+**A design fact the launch settled, which is not a defect and must not be read as one:** at the
+frozen 120 s cadence, `WINDOW_CHALLENGE = 1200` puts the first `Final` on any chain **about 40
+hours after its genesis**. `safe_weight` and the safe frontier are zero until then by
+construction. The fork-choice order is not blind in the meantime — its third key, `live_total`,
+carries the bounded immature contribution and moves from the first block — but nothing logged it,
+so an operator watching the opening day could not tell a healthy young chain from a dead lattice.
+`7eac681a` puts `live_total` on the same line as `safe_weight` for exactly that reading.
+
+**The regression tests are at the layer that owns the invariant** (`e2b47753`): a chain must be
+able to produce its way to the first `Final` without production stopping first. Against the old
+sizing it prints what the fleet printed — *the ceiling admits 601 concurrent claims, but no claim
+can finalize before block 1200*. All 797 PALW tests passed while that was true of the shipped
+params, because no test asked whether the *deployed configuration* could reach the end of its own
+lattice.
 
 **The observability line is what made 12 findable.** Disqualifications were gone, submissions were
 landing, every log an operator reads looked healthy — and `weight=0 unresolved=355` was the sole
