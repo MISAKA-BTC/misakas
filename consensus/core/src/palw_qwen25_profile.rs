@@ -224,25 +224,20 @@ pub fn qwen25_admissible_geometry_v1(
 /// q/k/v biases are absent as tensors and present as requantization zero points (G2), and there
 /// is no `output.weight` because `tie_word_embeddings` is true — the lm_head reads the embedding
 /// table. The `.requant` entries are the per-channel `(multiplier, shift, zero)` triples.
-pub const QWEN25_TENSOR_NAMES: &[&str] = &[
-    "token_embd.weight",
-    "blk.{layer}.attn_q.weight",
-    "blk.{layer}.attn_q.requant",
-    "blk.{layer}.attn_k.weight",
-    "blk.{layer}.attn_k.requant",
-    "blk.{layer}.attn_v.weight",
-    "blk.{layer}.attn_v.requant",
-    "blk.{layer}.rope_table",
-    "blk.{layer}.attn_logit_scale",
-    "blk.{layer}.attn_output.weight",
-    "blk.{layer}.attn_output.requant",
-    "blk.{layer}.ffn_gate.weight",
-    "blk.{layer}.ffn_gate.scale",
-    "blk.{layer}.ffn_up.weight",
-    "blk.{layer}.ffn_up.requant",
-    "blk.{layer}.ffn_down.weight",
-    "blk.{layer}.ffn_down.requant",
-];
+/// **Projected from the IR** (ADR-0049 Decision F), with this family's head tensor.
+///
+/// It was a hand-written list of 17 names beside a hand-written graph, and the graph it was
+/// supposed to describe reads 27 — it omitted every narrowing (`qk_to_code.requant`,
+/// `code_product.requant`, `rope_clamp.requant`, the two norm requants, the residual requants and
+/// scales) exactly as the hand-written node table omitted every narrowing node. An inventory that
+/// does not list a tensor the graph reads is an operand the court cannot open, and a step that
+/// cannot be adjudicated.
+pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
+    // Tied embeddings: the head reads the embedding table, which is already first in the list, so
+    // naming it here dedups to nothing and no `output.weight` is declared.
+    crate::palw_base0_profile::base0_tensor_names_for_head_v1("token_embd.weight")
+}
+
 
 /// Qwen2.5's graph, for `geometry`.
 ///
@@ -301,66 +296,52 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         Vec::new(),
     )];
 
-    let attn_nodes = vec![
-        // 0: input_layernorm. No gain node — G1 folded it into q/k/v.
-        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, fixed(hidden), vec![PALW_STEP_INPUT_LAYER_IN]),
-        // 1..=3: the three projections. Each is followed by its own requantize, whose per-channel
-        // zero point carries that projection's BIAS (G2) — the measured tensor table says q, k and
-        // v each have one and o and the MLP have none.
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_q.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(q_dim), vec![0]),
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_k.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(kv_dim), vec![0]),
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_v.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(kv_dim), vec![0]),
-        // 4..=6: requantize each projection back to int8, carrying its bias in the zero point.
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_q.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(q_dim), vec![1]),
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_k.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(kv_dim), vec![2]),
-        // The V cache holds the requantized value: no rotation applies to it.
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_v.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(kv_dim), vec![3]),
-        // 7, 8: rotary on q and on k, by the PINNED integer table (no sinf/cosf anywhere in the
-        // class). G3's permutation is folded into the projection rows, so the kernel is BASE-0's
-        // pairwise table unchanged. **The K cache role sits on the ROTATED k**, because that is
-        // what a later position's attention reads.
-        weighted(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", &per_layer, PalwStepNodeRoleV1::Plain, fixed(q_dim), vec![4]),
-        weighted(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", &per_layer, PalwStepNodeRoleV1::KCacheWrite, fixed(kv_dim), vec![5]),
-        // 9: the V cache write, an identity re-tag so the role names a node of its own.
-        plain(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, fixed(kv_dim), vec![6, 6]),
-        // 10: scores — one per cached key PER QUERY HEAD, so the width is `attn_heads x kv_len`.
-        //     Its second operand is the K series, not a weight (G5a/c).
-        plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, PalwStepOutLenV1::KvScaled { multiplier: geometry.attn_heads as u32 }, vec![7, PALW_STEP_INPUT_KV_K]),
-        // 11: 1/sqrt(head_dim), as the amplifying rescale — a `Requantize` gain is at most 1 and
-        //     an attention logit at the accumulator's natural scale makes softmax flat.
-        weighted(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.attn_logit_scale", &per_layer, PalwStepNodeRoleV1::Plain, PalwStepOutLenV1::KvScaled { multiplier: geometry.attn_heads as u32 }, vec![10]),
-        // 12: softmax. Causality is the ROW WIDTH — a position sees exactly its own prefix — so
-        //     there is no mask op and no masked lane to get wrong.
-        plain(PalwStepOpKindV1::SoftMax, KDESC_BASE0_SOFTMAX, PalwStepOutLenV1::KvScaled { multiplier: geometry.attn_heads as u32 }, vec![11]),
-        // 13: the weighted sum of values, against the V series.
-        plain(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, fixed(q_dim), vec![12, PALW_STEP_INPUT_KV_V]),
-        // 14, 15: output projection and its requantize (no bias — the table says so).
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_output.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(hidden), vec![13]),
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_output.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(hidden), vec![14]),
-        // 16: the attention residual.
-        plain(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, fixed(hidden), vec![15, PALW_STEP_INPUT_LAYER_IN]),
-        // 17: post_attention_layernorm — gain folded into gate/up (G1).
-        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, fixed(hidden), vec![16]),
-        // 18, 19: the SwiGLU gate. The gate pre-activation is AMPLIFIED before `Silu` for the same
-        //         reason the logits are: at the accumulator's natural scale `IntSigmoid` returns
-        //         0.5 and the gate degenerates to `x/2`.
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_gate.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(geometry.ffn_dim), vec![17]),
-        weighted(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE, "blk.{layer}.ffn_gate.scale", &per_layer, PalwStepNodeRoleV1::Plain, fixed(geometry.ffn_dim), vec![18]),
-        // 20: silu, 21: up projection + requantize, 22: the gating multiply.
-        plain(PalwStepOpKindV1::Silu, KDESC_BASE0_SILU, fixed(geometry.ffn_dim), vec![19]),
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_up.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(geometry.ffn_dim), vec![17]),
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_up.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(geometry.ffn_dim), vec![21]),
-        plain(PalwStepOpKindV1::MulElem, KDESC_BASE0_MUL_ELEM, fixed(geometry.ffn_dim), vec![20, 22]),
-        // 24, 25: down projection and its requantize. 26: the FFN residual.
-        weighted(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.ffn_down.weight", &per_layer, PalwStepNodeRoleV1::Plain, fixed(hidden), vec![23]),
-        weighted(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_down.requant", &per_layer, PalwStepNodeRoleV1::Plain, fixed(hidden), vec![24]),
-        plain(PalwStepOpKindV1::AddElem, KDESC_BASE0_ADD_ELEM, fixed(hidden), vec![25, 16]),
-    ];
+    // **Projected from `BASE0_LAYER_IR`, the engine's own step order** (ADR-0049 Decision F).
+    //
+    // This table was written here by hand, beside an engine written by hand, and the two were not
+    // the same graph: it declared **27** nodes against the engine's **38**, and of the rows that
+    // did land the widths diverged from the third node onward — the 1536/256 pairs traded places
+    // (the grouped-query boundary sitting in different positions in the two descriptions) and the
+    // FFN's 8960 arrived where the residual width was expected. Measured with
+    // `qwen25-convert --check-capture`: **842 disagreements over 1068 captured rows**, so no
+    // execution of this class could become a step leg, and the class could not produce a block.
+    //
+    // It was invisible because the only thing ever run against the real checkpoint was a FORWARD
+    // PASS (`measure_depth_health`). The step capture is a different path. A model can run
+    // perfectly and still be unable to commit to what it ran.
+    //
+    // The floor was already projected from the IR; the projection just could not express
+    // grouped-query attention, because it read `PalwBase0GeometryV1`, which has no kv-head count.
+    // `Base0IrGeometryV1` supplies one, and both classes now come from the same call.
+    let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(crate::palw_base0_profile::Base0IrGeometryV1 {
+        layer_count: geometry.layer_count,
+        hidden_dim: hidden,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_kv_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        tile_len: tile,
+        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
+    });
+    debug_assert_eq!(kv_dim, geometry.attn_kv_heads as u32 * geometry.attn_head_dim);
+    debug_assert_eq!(q_dim, hidden, "the query width is the hidden width for every member of this family");
 
-    // The final norm (gain folded into the lm_head) and the logits, read from the TIED embedding
-    // table — `tie_word_embeddings` is true and the file has no `lm_head.weight`.
+    // The head, and it is THREE steps, not two. `Base0Engine::norm_to_code` is `rms_norm` followed
+    // by the narrowing back to activation codes; this table declared the first and not the second,
+    // which is the same omission the floor's post table carried before it was corrected — a court
+    // recomputing the head would compare a Qk value against a code. The engine emits three rows
+    // here and the profile now has three nodes for them.
     let post_nodes = vec![
         plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, fixed(hidden), vec![PALW_STEP_INPUT_LAYER_IN]),
+        weighted(
+            PalwStepOpKindV1::MulElem,
+            KDESC_BASE0_REQUANTIZE,
+            "output_norm.requant",
+            &once,
+            PalwStepNodeRoleV1::Plain,
+            fixed(hidden),
+            vec![0],
+        ),
         weighted(
             PalwStepOpKindV1::MatMulQuant,
             KDESC_BASE0_MATMUL,
@@ -368,9 +349,10 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
             &once,
             PalwStepNodeRoleV1::Plain,
             fixed(geometry.vocab_size),
-            vec![0],
+            vec![1],
         ),
     ];
+
 
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
@@ -428,6 +410,26 @@ mod tests {
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
     use crate::palw_step::PalwStepTableV1;
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
+
+    /// Diagnostic: the smallest tile_len that admits the declared 4096 context, projected.
+    /// `cargo test -p kaspa-consensus-core --lib dump_full_ctx_tile -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_full_ctx_tile() {
+        for (name, g) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
+            let mut found = None;
+            for tile in [16_384u32, 32_768, 65_536, 131_072, 262_144] {
+                let cand = PalwQwen25GeometryV1 { tile_len: tile, ..g };
+                if let Ok(p) = qwen25_profile_v1(cand)
+                    && crate::palw_step::worst_case_step_leaf_count_v1(&p).is_ok()
+                {
+                    found = Some(tile);
+                    break;
+                }
+            }
+            println!("{name}: smallest tile admitting n_ctx {} is {found:?}", g.n_ctx);
+        }
+    }
 
     /// Diagnostic: the node table the engine's capture must land in, slot by slot.
     /// `cargo test -p kaspa-consensus-core --lib dump_qwen_slots -- --ignored --nocapture`
@@ -576,7 +578,13 @@ mod tests {
                 checked += 1;
             }
         }
-        assert_eq!(checked, 1 + 27 + 2, "the whole graph was checked, not a prefix");
+        // Tracks the IR, because the layer table IS the IR now (ADR-0049 Decision F) — a literal
+        // here is how the hand-written table's 27 nodes went unnoticed against the engine's 38.
+        assert_eq!(
+            checked,
+            1 + crate::palw_base0_profile::BASE0_LAYER_IR.len() + 3,
+            "the whole graph was checked, not a prefix"
+        );
     }
 
     /// **The three transformations, asserted as absences.**
@@ -603,7 +611,14 @@ mod tests {
             }
         }
         // Tied embeddings: the lm_head reads the embedding table, and no `output.weight` exists.
-        assert_eq!(p.post_nodes[1].weight_name, "token_embd.weight", "tie_word_embeddings is true");
+        // Found by op kind rather than by index: the post table gained its missing narrowing, and
+        // an index would have moved silently.
+        let head = p
+            .post_nodes
+            .iter()
+            .find(|n| n.op_kind == PalwStepOpKindV1::MatMulQuant)
+            .expect("the head is a matmul");
+        assert_eq!(head.weight_name, "token_embd.weight", "tie_word_embeddings is true");
         assert!(!names.contains(&"output.weight"));
     }
 
@@ -614,7 +629,19 @@ mod tests {
     fn the_cache_roles_name_the_rotated_key_and_the_requantized_value() {
         let p = qwen25_profile_v1(QWEN25_1_5B).unwrap();
         let k = p.attn_nodes.iter().position(|n| n.role == PalwStepNodeRoleV1::KCacheWrite).expect("a K cache node");
-        assert_eq!(p.attn_nodes[k].op_kind, PalwStepOpKindV1::RopeImrope, "the cached key is the rotated one");
+        // The cached key is the rotated one, NARROWED — what a later position reads is an int8
+        // code, not the Qk value rope produces, so the role sits on the narrowing that follows the
+        // rotation. Asserted through the input chain rather than by node kind: the hand-written
+        // table put the role on the raw rope output, and "is it a RopeImrope" was the check that
+        // let that pass.
+        assert_eq!(p.attn_nodes[k].op_kind, PalwStepOpKindV1::MulElem, "the cached key is a narrowing");
+        assert_eq!(p.attn_nodes[k].weight_name, "blk.{layer}.rope_clamp.requant");
+        let feeder = p.attn_nodes[k].input_refs[0] as usize;
+        assert_eq!(
+            p.attn_nodes[feeder].op_kind,
+            PalwStepOpKindV1::RopeImrope,
+            "and what it narrows is the rotation — an unrotated cached key convicts every honest producer"
+        );
         let v = p.attn_nodes.iter().position(|n| n.role == PalwStepNodeRoleV1::VCacheWrite);
         assert!(v.is_none() || p.attn_nodes[v.unwrap()].op_kind != PalwStepOpKindV1::RopeImrope, "no rotation applies to V");
         // Exactly one node per role, or "the K cache" names two things.
@@ -728,10 +755,16 @@ mod tests {
         let ctx = probe_context(&p);
         let total = crate::palw_step::step_leaf_count(&p, &ctx).unwrap();
 
-        // The challenged node: `attn_output`, slot 14 of the attention table, +1 for the pre node.
-        let out_slot = 1 + 14u32;
-        assert_eq!(p.attn_nodes[14].weight_name, "blk.{layer}.attn_output.weight");
-        let in_slot = 1 + 13u32; // its one input, the P.V result
+        // The challenged node: `attn_output`, found by the tensor it reads rather than by a slot
+        // index — the table is projected from the IR now and an index would be a second, silently
+        // rotting description of where the node is.
+        let out_index = p
+            .attn_nodes
+            .iter()
+            .position(|n| n.weight_name == "blk.{layer}.attn_output.weight")
+            .expect("the output projection is in the graph");
+        let out_slot = 1 + out_index as u32;
+        let in_slot = 1 + p.attn_nodes[out_index].input_refs[0] as u32; // its one input, the P.V result
 
         // The weight block the class registered, and the input row a producer committed.
         let hidden = g.hidden_dim as usize;
@@ -912,7 +945,7 @@ mod tests {
             }
         }
         used.sort_unstable();
-        let mut declared: Vec<&str> = QWEN25_TENSOR_NAMES.to_vec();
+        let mut declared: Vec<&str> = qwen25_tensor_names_v1();
         declared.sort_unstable();
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
     }
@@ -933,11 +966,16 @@ mod tests {
         // finding rather than a target.
         let small = qwen25_admissible_geometry_v1(QWEN25_1_5B, &floor_sized).expect("some pair is admissible");
         let big = qwen25_admissible_geometry_v1(QWEN25_3B, &floor_sized).expect("some pair is admissible");
-        // Pinned, because these two pairs are the answer a genesis reads. 125 reproduces the
-        // number `DEFAULT_MAX_OPENING_BYTES`' own doc records for 1.5B — the derivation agrees
-        // with the measurement that motivated it — and 79 for 3B had never been stated.
-        assert_eq!((small.tile_len, small.n_ctx), (64, 125), "1.5B under the shipped ceilings");
-        assert_eq!((big.tile_len, big.n_ctx), (64, 79), "3B is deeper, so it buys less context for the same court");
+        // Pinned, because these two pairs are the answer a genesis reads.
+        //
+        // **They moved when the graph became honest** (ADR-0049 Decision F): 1.5B was 125 and 3B
+        // was 79 against a hand-written table of 27 nodes per layer, and the engine performs 38.
+        // The projected graph is bigger, so the same ladder buys less context — 125 -> 90 and
+        // 79 -> 56. The old numbers were not a measurement of this class; they were a measurement
+        // of a graph nothing executed. `DEFAULT_MAX_OPENING_BYTES`' doc still records 125, and
+        // that reference is now stale for the same reason.
+        assert_eq!((small.tile_len, small.n_ctx), (64, 90), "1.5B under the shipped ceilings");
+        assert_eq!((big.tile_len, big.n_ctx), (64, 56), "3B is deeper, so it buys less context for the same court");
         for (name, model, found) in [("1.5B", QWEN25_1_5B, small), ("3B", QWEN25_3B, big)] {
             let profile = qwen25_profile_v1(found).expect("expressible");
             assert!(

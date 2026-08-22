@@ -257,13 +257,25 @@ const _: Base0IrWidthV1 = HeadDim;
 /// the pre and post tables read. Maintaining this list by hand is how it came to omit every
 /// narrowing's parameters while listing three norm gains the engine never reads.
 pub fn base0_tensor_names_v1() -> Vec<&'static str> {
+    base0_tensor_names_for_head_v1("output.weight")
+}
+
+/// The same list for a class whose head reads a different tensor.
+///
+/// Tied embeddings are the case that needs it: the lm_head reads `token_embd.weight` and no
+/// `output.weight` exists, so the head tensor is a property of the class rather than of the IR.
+/// Everything else — every narrowing, every scale, every projection — comes from the IR, which is
+/// the point: the inventory is a PROJECTION (ADR-0049 Decision F), and the hand-written Qwen list
+/// it replaces declared 17 tensors against a graph that reads 27, omitting every narrowing exactly
+/// as the hand-written node table omitted every narrowing node.
+pub fn base0_tensor_names_for_head_v1(head: &'static str) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = vec!["token_embd.weight"];
     for ir in BASE0_LAYER_IR {
         if !ir.weight.is_empty() && !names.contains(&ir.weight) {
             names.push(ir.weight);
         }
     }
-    for graph_level in ["output_norm.requant", "output.weight"] {
+    for graph_level in ["output_norm.requant", head] {
         if !names.contains(&graph_level) {
             names.push(graph_level);
         }
@@ -281,6 +293,70 @@ pub fn base0_tensor_names_v1() -> Vec<&'static str> {
 /// The node order IS the execution order, and `input_refs` names which committed material each
 /// step is recomputed from — without it a challenger could open unrelated tiles as "the inputs"
 /// and manufacture a conviction.
+/// **The geometry the IR is projected at** (ADR-0049 Decision F).
+///
+/// `BASE0_LAYER_IR` is one description of one computation; this is the only thing that varies
+/// between the classes projected from it. It exists as its own type because the projection used to
+/// read `PalwBase0GeometryV1` directly, and that type has no kv-head count — so `kv_dim` was
+/// `attn_heads x attn_head_dim` and the projection could express multi-head attention and nothing
+/// else. The second class is grouped-query (12 query heads against 2 kv), so it could not be
+/// projected at all, and a hand-written table was written beside the engine instead. That table
+/// declared 27 nodes against the engine's 38 and its widths diverged from the third node onward:
+/// **842 disagreements over 1068 captured rows**, and no execution of that class could become a
+/// step leg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0IrGeometryV1 {
+    pub layer_count: u16,
+    pub hidden_dim: u32,
+    pub ffn_dim: u32,
+    pub attn_heads: u16,
+    /// Equal to `attn_heads` for multi-head attention, which is what the floor is and what every
+    /// projection meant before this field existed.
+    pub attn_kv_heads: u16,
+    pub attn_head_dim: u32,
+    pub tile_len: u32,
+    /// One byte per weight dtype entry — the projection needs the layer count it covers.
+    pub weight_dtype: u8,
+}
+
+/// **Project `BASE0_LAYER_IR` into a profile's attention table.**
+///
+/// The one place a layer's node table comes from. Both classes call it; neither writes a node.
+pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
+    let layers = (g.layer_count as usize).max(1);
+    let per_layer = vec![g.weight_dtype; layers];
+    let kv_dim = g.attn_kv_heads as u32 * g.attn_head_dim;
+    BASE0_LAYER_IR
+        .iter()
+        .map(|ir| PalwStepNodeV1 {
+            op_kind: ir.op,
+            role: ir.role,
+            weight_name: ir.weight.to_string(),
+            weight_dtypes: if ir.weight.is_empty() { Vec::new() } else { per_layer.clone() },
+            out_len: match ir.out {
+                Hidden => PalwStepOutLenV1::Fixed { elements: g.hidden_dim },
+                KvDim => PalwStepOutLenV1::Fixed { elements: kv_dim },
+                FfnDim => PalwStepOutLenV1::Fixed { elements: g.ffn_dim },
+                HeadDim => PalwStepOutLenV1::Fixed { elements: g.attn_head_dim },
+                KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
+                KvPerHead => PalwStepOutLenV1::KvScaled { multiplier: g.attn_heads as u32 },
+            },
+            tile_len: g.tile_len,
+            kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
+            input_refs: ir
+                .inputs
+                .iter()
+                .map(|r| match r {
+                    Step(k) => *k,
+                    LayerIn => PALW_STEP_INPUT_LAYER_IN,
+                    CachedK => PALW_STEP_INPUT_KV_K,
+                    CachedV => PALW_STEP_INPUT_KV_V,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let layers = geometry.layer_count as usize;
     let i8_per_layer = vec![BASE0_WEIGHT_DTYPE_I8; layers.max(1)];
@@ -340,35 +416,20 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     // and that is how it came to declare eighteen of the engine's thirty-six steps — every
     // arithmetic op and not one of the narrowings — with K never rotated and the cache role on the
     // raw projection instead of the rotated key.
-    let attn_nodes: Vec<PalwStepNodeV1> = BASE0_LAYER_IR
-        .iter()
-        .map(|ir| PalwStepNodeV1 {
-            op_kind: ir.op,
-            role: ir.role,
-            weight_name: ir.weight.to_string(),
-            weight_dtypes: if ir.weight.is_empty() { Vec::new() } else { i8_per_layer.clone() },
-            out_len: match ir.out {
-                Hidden => PalwStepOutLenV1::Fixed { elements: hidden },
-                KvDim => PalwStepOutLenV1::Fixed { elements: kv_dim },
-                FfnDim => PalwStepOutLenV1::Fixed { elements: geometry.ffn_dim },
-                HeadDim => PalwStepOutLenV1::Fixed { elements: geometry.attn_head_dim },
-                KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
-                KvPerHead => PalwStepOutLenV1::KvScaled { multiplier: geometry.attn_heads as u32 },
-            },
-            tile_len: tile,
-            kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
-            input_refs: ir
-                .inputs
-                .iter()
-                .map(|r| match r {
-                    Step(k) => *k,
-                    LayerIn => PALW_STEP_INPUT_LAYER_IN,
-                    CachedK => PALW_STEP_INPUT_KV_K,
-                    CachedV => PALW_STEP_INPUT_KV_V,
-                })
-                .collect(),
-        })
-        .collect();
+    // Projected, not written. The floor is multi-head, so its kv-head count IS its query-head
+    // count — which is what `kv_dim` above has always assumed and what keeps this byte-identical
+    // to the hand-rolled projection this replaced.
+    let attn_nodes: Vec<PalwStepNodeV1> = base0_ir_attn_nodes_v1(Base0IrGeometryV1 {
+        layer_count: geometry.layer_count,
+        hidden_dim: hidden,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        tile_len: tile,
+        weight_dtype: BASE0_WEIGHT_DTYPE_I8,
+    });
+    debug_assert_eq!(kv_dim, geometry.attn_heads as u32 * geometry.attn_head_dim);
 
     // The `KvScaled` widths come from the IR now. They used to be patched in here by slot
     // index, which silently rewrote two unrelated nodes the moment the graph gained its narrowings.
@@ -949,4 +1010,16 @@ mod tests {
             }
         }
     }
+
+    /// Print the floor's class id. It is pinned by the RC genesis and by a live testnet-12, so any
+    /// refactor of the projection must leave it byte-identical.
+    /// `cargo test -p kaspa-consensus-core --lib dump_floor_class_id -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_floor_class_id() {
+        let p = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor is expressible");
+        println!("FLOOR_CLASS_ID {}", p.shape_profile_id());
+        println!("  pre={} attn={} post={}", p.pre_nodes.len(), p.attn_nodes.len(), p.post_nodes.len());
+    }
+
 }

@@ -354,7 +354,14 @@ mod tests {
     /// refuses, and `the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context` below is
     /// the tripwire for it.
     fn qwen_admissible() -> PalwShapeProfileV3 {
-        qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 16_384, ..QWEN25_1_5B }).expect("the measured geometry is expressible")
+        // DERIVED against the full ladder, not a hand-picked tile. It was `tile_len: 16_384` at
+        // the declared 4096 context, which was admissible against a hand-written 27-node layer
+        // table; the table is projected from `BASE0_LAYER_IR` now (ADR-0049 Decision F) and the
+        // engine performs 38 steps, so that pair is 4,194,650 leaves against a 4,194,304 cap.
+        // A literal here would be a third description of the class, rotting on its own schedule.
+        let court = PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 20, 2).expect("the full ladder is a legal court");
+        let g = crate::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &court).expect("some pair is admissible under the full ladder");
+        qwen25_profile_v1(g).expect("the derived geometry is expressible")
     }
 
     fn context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
@@ -424,7 +431,10 @@ mod tests {
     #[test]
     fn a_qwen_scale_class_can_join_a_chain_provisioned_for_the_step_space() {
         let profile = qwen_admissible();
-        let canonical = context(&profile, 64, 64);
+        // The floor's shape of canonical job. (64, 64) needs 128 positions and the DERIVED context is
+        // smaller than that — the class is admissible at a context the projected graph allows, not
+        // at the one the hand-written table pretended to.
+        let canonical = context(&profile, 8, 4);
         let counted = step_leaf_count(&profile, &canonical).expect("the canonical job counts");
         let entry = verify_class_admission_v2(
             &bundle_that_pays_for_qwen(),
@@ -447,7 +457,7 @@ mod tests {
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor geometry is expressible");
         let before = floor.shape_profile_id();
         let big = qwen_admissible();
-        let canonical = context(&big, 64, 64);
+        let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
         verify_class_admission_v2(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect("admissible");
@@ -514,7 +524,7 @@ mod tests {
         bundle.court = PalwCourtParamsV2::new(floor_worst, 20, 2).expect("a floor-sized court is legal");
 
         let big = qwen_admissible();
-        let canonical = context(&big, 64, 64);
+        let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
         let err = verify_class_admission_v2(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect_err("the ladder cannot reach it");
@@ -655,14 +665,29 @@ mod tests {
                 Err(e) => panic!("tile {tile}: unexpected {e:?}"),
             }
         }
-        assert_eq!(fits, vec![64], "only the smallest tile fits a floor-sized court, and it buys 125 tokens of context");
-
-        // The declared 4,096-token context, priced. This is the number a genesis chooses against.
-        let full_ctx = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 16_384, ..QWEN25_1_5B }).expect("expressible");
+        assert_eq!(fits, vec![64], "only the smallest tile fits a floor-sized court, and it buys a toy context");
         assert!(widest_adjudicable_ctx(64) < 200, "the tile that fits a floor-sized court buys a toy context");
-        assert!(worst_case_step_leaf_count_v1(&full_ctx).is_ok(), "16,384 is what makes 4,096 adjudicable");
-        let full_cost = derive_court_cost_v1(&full_ctx).expect("derivable");
-        assert_eq!(full_cost.max_opening_bytes, 24 * 1024 * 1024, "and it costs 24 MiB an opening");
+
+        // **The declared 4,096-token context is not adjudicable at ANY legal tile length**, and
+        // that is a change: against the hand-written 27-node layer table `tile_len` 16,384 reached
+        // it and cost 24 MiB an opening. The table is projected from `BASE0_LAYER_IR` now and the
+        // engine performs 38 steps per layer, so the whole legal tile range — up to
+        // `PALW_STEP_MAX_TILE_LEN` — is short. Swept rather than asserted at one tile, because
+        // "16,384 works" was exactly the shape of claim that went stale silently.
+        let mut admits_full_ctx = Vec::new();
+        let mut tile = crate::palw_step::PALW_STEP_MIN_TILE_LEN;
+        while tile <= crate::palw_step::PALW_STEP_MAX_TILE_LEN {
+            if let Ok(p) = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: tile, ..QWEN25_1_5B })
+                && worst_case_step_leaf_count_v1(&p).is_ok()
+            {
+                admits_full_ctx.push(tile);
+            }
+            tile = tile.saturating_mul(2);
+        }
+        assert!(
+            admits_full_ctx.is_empty(),
+            "a tile length reached the declared 4096 context ({admits_full_ctx:?}) — the sizing table needs updating with it"
+        );
     }
 
     /// **The shipped Qwen geometries do not admit their own declared context**, and coverage
@@ -686,8 +711,18 @@ mod tests {
                 "a shipped Qwen geometry became admissible — update this tripwire and the sizing table with it"
             );
         }
-        assert!(worst_case_step_leaf_count_v1(&qwen_admissible()).is_ok(), "1.5B at tile_len 16_384 admits its declared 4096 context");
-        let three_b = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: 65_536, ..QWEN25_3B }).expect("expressible");
-        assert!(worst_case_step_leaf_count_v1(&three_b).is_ok(), "3B needs the maximum legal tile to admit 4096");
+        // The DERIVED geometry is admissible — that is what makes the class registrable at all.
+        assert!(worst_case_step_leaf_count_v1(&qwen_admissible()).is_ok(), "the derived 1.5B geometry is inside the step space");
+        // And the declared context is not reachable at the maximum legal tile either, for either
+        // member. Against the hand-written table 1.5B reached 4096 at 16,384 and 3B at 65,536;
+        // the projected graph is bigger and neither does.
+        for shipped in [QWEN25_1_5B, QWEN25_3B] {
+            let widest = qwen25_profile_v1(PalwQwen25GeometryV1 { tile_len: crate::palw_step::PALW_STEP_MAX_TILE_LEN, ..shipped })
+                .expect("expressible at the maximum tile");
+            assert!(
+                worst_case_step_leaf_count_v1(&widest).is_err(),
+                "the declared context became reachable at the maximum tile — update the sizing table"
+            );
+        }
     }
 }

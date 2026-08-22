@@ -319,7 +319,7 @@ mod tests {
         let c = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("1.5B is in the registry");
         assert_eq!(c.artifact_shape.eps_q, 1, "the canonical epsilon is the class constant's, not the floor's 1<<8");
         assert_eq!(c.inventory_geometry.tile_len, 64);
-        assert_eq!(c.artifact_shape.max_position, 125, "the admissible context, not the model's 4096");
+        assert_eq!(c.artifact_shape.max_position, 90, "the admissible context under the projected 38-node graph, not the model's 4096");
         assert_eq!(c.artifact_shape.n_kv_heads, 2, "grouped-query attention survives into the artifact shape");
         assert_eq!(c.source, ArtifactSourceV1::Converted);
     }
