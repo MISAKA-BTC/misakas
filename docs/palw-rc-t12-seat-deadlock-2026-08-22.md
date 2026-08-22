@@ -146,3 +146,27 @@ licensing loop's stall traces to seat liveness, not to the fee floats — the ge
 did its job (the 10:45 burst through the funded submitter is the drill loop closing live).
 The freeze context (`protocol version 103` flow registration) matches the IBD-flow work in
 flight on the branch at the time of writing.
+
+
+---
+
+## The fleet-deployment blockers, measured (2026-08-22 16:30 CEST)
+
+Both were carried as named operational blockers. Measured directly, neither is what it was
+called, and the difference matters because one of them is not fixable from a shell at all.
+
+| carried as | measured | disposition |
+|---|---|---|
+| "host A の egress filter" — A cannot reach the fleet on 26411 | A → ibm reaches **:22, :26411, :26421 and :443, all OK**; A → C :26411 OK | **Not an egress filter.** The BLOCKED reading reproduces only while the far-side node is DOWN — a closed port, not a filtered one. It was taken during a window when ibm's seats were stopped for the re-mint. |
+| "C の ufw 26411 未開放" | `ufw allow 26411/tcp` returns *"Skipping adding existing rule"*; `ufw status` shows the rule for v4 and v6 | **Already open**, and had been. The original observation truncated `ufw status` before the line. |
+
+What IS filtered, and was not the item on the list: **inbound from the public internet to A and
+B**. From an outside host, `:26411` answers on ibm and C and does not on A (`ufw` inactive, node
+listening) or B (`ufw` inactive, node stopped by us). Host-level firewalling is not doing it, so
+it is upstream — a provider security group — and it is the one item here that needs a console,
+not a shell. A and B therefore participate by dialing OUT, which is exactly the topology the
+launch record already describes (ibm-and-C as the reachable pair).
+
+The practical consequence for the drill: a six-seat fleet works, because A dials out and the two
+reachable hosts carry inbound. It is not a public-entry topology, and nothing measured today
+changes that — it stays an operator item with a name that now matches what it is.
