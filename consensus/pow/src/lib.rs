@@ -884,7 +884,12 @@ mod tests_pq {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2;
 
         const TS: u64 = 1_700_000_000;
-        const NONCE: u64 = 7;
+        // A fixture, not a constant of the protocol: it must SOLVE the (very easy) target below,
+        // and the digest moves whenever the envelope's encoding does — as it did when
+        // `PALW_ATTEMPT_V2_VERSION` went 2 → 3. If this test starts failing on
+        // "the solved header passes at its target", the envelope changed and this needs re-picking,
+        // not the code under test.
+        const NONCE: u64 = 0;
         const BITS: u32 = 0x207fffff;
         let network_id: &[u8] = b"simnet";
 
