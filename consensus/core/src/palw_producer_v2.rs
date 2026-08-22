@@ -87,6 +87,22 @@ pub struct PalwProducerFactsV2 {
     /// so it is the producer's to get right and this is where it gets it.
     pub min_trace_retention_daa: u64,
     pub bond: Option<PalwProducerBondFactsV2>,
+
+    /// **The chain's PALW weight, and how many claims are still unresolved** — the two numbers that
+    /// say whether this network is doing PALW at all.
+    ///
+    /// `safe_weight` is what fork choice orders by. It leaves zero only when a claim reaches
+    /// `Final`, which needs a panel, receipts, a quorum and a submitted `ReceiptLicensed` — the
+    /// whole lattice. A network producing blocks with `safe_weight == 0` is indistinguishable from
+    /// a hash chain wearing PALW's clothes, and until this field existed there was no way to see
+    /// that from outside a debugger: nothing logged it, no RPC returned it, and a fleet could run
+    /// for a day looking healthy while every claim it ever made was quietly voiding.
+    pub safe_weight: u128,
+    /// Claims created and not yet resolved. Rising without bound while `safe_weight` stays zero is
+    /// the signature of a lattice that never turns over.
+    pub unresolved_claims: u64,
+    /// Claims that have reached `Final` — the count of work this chain has actually certified.
+    pub final_claims: u64,
 }
 
 impl PalwProducerFactsV2 {
@@ -173,6 +189,12 @@ pub fn palw_producer_facts_v2(
         epoch_budget_blocks,
         epoch_produced_blocks,
         bond,
+        safe_weight: state.safe_weight(),
+        unresolved_claims: state.claims_iter().filter(|(_, c)| !c.phase.is_terminal()).count() as u64,
+        final_claims: state
+            .claims_iter()
+            .filter(|(_, c)| matches!(c.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }))
+            .count() as u64,
     })
 }
 

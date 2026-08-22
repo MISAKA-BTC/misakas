@@ -284,6 +284,18 @@ impl PalwProducerService {
                 Ok(Some(hash)) => {
                     produced += 1;
                     info!("[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket + Layer-0 both under target)");
+                    // **The two numbers that say whether this is a PALW network or a hash chain
+                    // wearing its clothes.** `safe_weight` leaves zero only when a claim reaches
+                    // `Final`, which needs the whole lattice — panel, receipts, quorum, a submitted
+                    // `ReceiptLicensed`. Nothing logged it and no RPC returned it, so a fleet could
+                    // run all day looking healthy while every claim it made quietly voided. Printed
+                    // every block: rising `unresolved` against a flat zero `weight` is the
+                    // signature of a lattice that never turns over, and it should be visible from
+                    // the log an operator already watches.
+                    info!(
+                        "[{PALW_PRODUCER}] palw weight={} final_claims={} unresolved={}",
+                        facts.safe_weight, facts.final_claims, facts.unresolved_claims
+                    );
                 }
                 Ok(None) => trace!("[{PALW_PRODUCER}] no nonce in {NONCES_PER_TEMPLATE} tries against this template"),
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
