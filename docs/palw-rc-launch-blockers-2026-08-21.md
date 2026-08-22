@@ -231,10 +231,23 @@ Not one finding but FOUR, peeled in order, recorded so none is rediscovered.
    RC network was named and the wallet's suffix table did not, the exact t11 incident replayed. The
    behaviour-comparison test written after t11 caught it — on its FIRST workspace run, because
    `cargo test` used to die at this crate before ever reaching the wallet's turn.
-4. **Still open, serial mode only**: a single-threaded run of the WHOLE crate spins at 99% CPU inside
-   `daemon_cleaning_test` (the upstream shutdown-refcount assertion) even though the daemon tests
-   pass 3/3 in isolation — something an earlier test starts keeps a reference alive. Whether it
-   predates this session cannot be compared: before item 1 the crate died earlier either way.
+4. ~~**Still open, serial mode only**~~ — **DOES NOT REPRODUCE (measured 2026-08-22, two runs).**
+   The claim was that a single-threaded run of the WHOLE crate spins at 99% CPU inside
+   `daemon_cleaning_test` (the upstream shutdown-refcount assertion) while the daemon tests pass
+   3/3 in isolation — something an earlier test keeping a reference alive.
+
+   The documented reproduction was run twice, unmodified, at `4e6d08c6`: **33 passed / 0 failed /
+   18 ignored in 859 s**, and again in **776 s** with the same counts. `daemon_cleaning_test`
+   reports `ok` in both, and the suite exits on its own rather than being killed — a watcher
+   sampling the harness every 15 s recorded CPU tracking the consensus tests' own work and the
+   log line advancing throughout, never a stall.
+
+   Recorded as *not reproducible* rather than *fixed*, because nothing here was aimed at it: the
+   likely cause is that items 1–3 changed which tests run and in what order (the crate used to
+   die before reaching this point either way, which is why the entry could never say whether the
+   spin predated the session). If it returns, the thing to capture is a `sample` of the harness
+   during the stall — the watcher script is the shape of it — because the refcount holder is an
+   earlier test's leak and only a stack says which.
 
 Reproduction:
 
