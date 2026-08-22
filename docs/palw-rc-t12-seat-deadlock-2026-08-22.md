@@ -110,3 +110,39 @@ nonsense.
 t10 and t11 had just been stopped on all four hosts, and **that is not the cause**: this node went
 quiet at 06:55:25 and the first change on host C was at ~07:05. The producer on `169.58.39.220`
 was unaffected throughout and was at block #763 when this was written.
+
+
+---
+
+## The second occurrence, same day — and the watcher's blind spot it exposed
+
+The relaunched ibm seat (`.t12b`, bond-1, `:26421`) froze at **10:41:55 CEST**, at the exact
+moment it connected to the producer and logged `Registering p2p flows for peer … protocol
+version 103` — mid-handshake, five re-syncs into the relaunched chain. It sat frozen for 5.5
+hours. Thread census identical to the morning's C incident (every pool parked in
+`futex_wait_queue`), CPU 7 ticks over 10 s, `State: S`. **This time a stack exists**:
+`eu-stack` walked all 44 threads (526 lines, 325 frames resolved to `kaspad+0x…` offsets
+against Build ID `75439aee…`'s maps) — captured live, before any restart, which is the whole
+reason elfutils was installed this morning. Bundle: `/var/log/palw-wedge/manual-*-t12b/` on ibm,
+mirrored to the session scratchpad.
+
+**And the watcher missed it for 5.5 hours, by design.** Both socket triggers assume somebody
+knocks: CLOSE-WAIT accumulates only when peers dial in and give up; the LISTEN backlog fills
+only when connections arrive. Every fleet peer connects OUTBOUND from this seat, so a frozen
+accept loop produced no signal at all — log stalled, sockets silent, watcher quiet. The third
+wedge signature is *a wedged node nobody dials*.
+
+Closed by making the watcher **knock for itself**: when the log is stalled past the threshold
+and both socket signals are absent, it opens one self-connection to the node's own P2P port and
+holds it a few seconds. The kernel completes the handshake either way; a healthy node's accept
+loop drains it within milliseconds, a wedged one leaves it sitting in the LISTEN backlog — which
+is exactly the trigger the morning drill already validated, now self-supplied. Deployed to all
+four hosts, and validated against the REAL wedge rather than a drill: the probing watcher fired
+on `.t12b` within one poll cycle (`/var/log/palw-wedge/20260822T141528Z-p26421/`).
+
+Downstream effect worth recording: with this seat frozen, `ReceiptLicensed` submissions on the
+relaunched chain stopped at 13:02 (587 in the 10:00 hour, then one, then nothing), so the
+licensing loop's stall traces to seat liveness, not to the fee floats — the genesis-float fix
+did its job (the 10:45 burst through the funded submitter is the drill loop closing live).
+The freeze context (`protocol version 103` flow registration) matches the IBD-flow work in
+flight on the branch at the time of writing.

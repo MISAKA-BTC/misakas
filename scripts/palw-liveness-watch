@@ -144,6 +144,21 @@ while :; do
     lq=$(ss -tanl "( sport = :$port )" 2>/dev/null | awk '$1=="LISTEN"{print $2; exit}')
     lq=${lq:-0}
 
+    # **The third signature, learned 2026-08-22 afternoon: a wedged node nobody dials.** The ibm
+    # seat froze mid-handshake and sat silent for 5.5 hours while this watcher captured nothing —
+    # every fleet peer connects OUTBOUND from that node, so no CLOSE-WAIT ever accumulated and the
+    # accept queue stayed empty. The socket signals only exist if somebody knocks. So when the log
+    # is stalled and both signals are absent, the watcher KNOCKS: one self-connect, held open a few
+    # seconds. The kernel completes the handshake either way; a healthy node's accept loop drains
+    # it within milliseconds, a wedged one leaves it sitting in the LISTEN backlog — which is
+    # exactly the drilled trigger, now self-supplied.
+    if [ "$age" -gt "$STALL_SECS" ] && [ "$cw" -lt "$CW_MIN" ] && [ "$lq" -eq 0 ]; then
+      ( exec 3<>"/dev/tcp/127.0.0.1/$port" && sleep 6 ) 2>/dev/null &
+      sleep 3
+      lq=$(ss -tanl "( sport = :$port )" 2>/dev/null | awk '$1=="LISTEN"{print $2; exit}')
+      lq=${lq:-0}
+    fi
+
     key="$port"
     if [ "$age" -gt "$STALL_SECS" ] && { [ "$cw" -ge "$CW_MIN" ] || [ "$lq" -ge 1 ]; }; then
       if [ "${REPORTED[$key]:-0}" != "$pid" ]; then
