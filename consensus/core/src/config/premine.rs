@@ -385,9 +385,12 @@ mod tests {
 
         assert_eq!(total, MISAKA_PREMINE_SOMPI, "the floats are carved from the main wallet, never minted beside it");
 
-        if cards.is_empty() {
-            return; // an unset card is the bundle-free network, unchanged
-        }
+        // NOT `if cards.is_empty() { return }`: that made every assertion below vacuous the moment
+        // the card was unset, which is exactly when a reader would most want to know. The shipped
+        // RC has a card, so the test demands one — a build that drops it fails here rather than
+        // passing silently.
+        assert!(!cards.is_empty(), "the shipped RC card must be set for this network to fund anything");
+        assert_eq!(set.len(), VAULT_COUNT + 1 + cards.len(), "40 vaults + the main wallet + one float per bond");
         // Every registered bond can pay a fee, at the address its own card names.
         for card in cards {
             let spk = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);

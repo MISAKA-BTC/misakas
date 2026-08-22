@@ -80,6 +80,45 @@ pub fn set_initial_utxo_set(config: &Config, consensus: Arc<Consensus>, genesis_
 }
 
 #[cfg(test)]
+mod repin {
+    use super::*;
+    use kaspa_consensus_core::config::params::palw_rc_shipped_params;
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+
+    /// **Print the genesis constants the current premine set implies.** Run when the premine
+    /// changes: `cargo test -p kaspa-consensus --lib repin::print -- --ignored --nocapture`.
+    /// The M-07 guard refuses to boot on a mismatch, deliberately — this is how the pin is
+    /// recomputed rather than guessed.
+    #[test]
+    #[ignore]
+    fn print_repinned_rc_genesis() {
+        let mut params = palw_rc_shipped_params();
+        params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in kaspa_consensus_core::config::premine::genesis_premine_utxos_for(params.net) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        params.genesis.utxo_commitment = commitment;
+        let header: kaspa_consensus_core::header::Header = (&params.genesis).into();
+        let rust = |b: &[u8]| {
+            let mut out = String::from("[\n");
+            for chunk in b.chunks(21) {
+                out.push_str("        ");
+                for x in chunk {
+                    out.push_str(&format!("0x{x:02x}, "));
+                }
+                out.push('\n');
+            }
+            out.push_str("    ]");
+            out
+        };
+        println!("REPIN utxo_commitment: Hash64::from_bytes({}),", rust(commitment.as_byte_slice()));
+        println!("REPIN hash: Hash64::from_bytes({}),", rust(header.hash.as_byte_slice()));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use kaspa_consensus_core::{
