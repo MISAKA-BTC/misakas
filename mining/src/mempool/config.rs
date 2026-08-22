@@ -154,7 +154,19 @@ impl Config {
             minimum_relay_transaction_fee: DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE,
             minimum_standard_transaction_version: DEFAULT_MINIMUM_STANDARD_TRANSACTION_VERSION,
             maximum_standard_transaction_version: DEFAULT_MAXIMUM_STANDARD_TRANSACTION_VERSION,
-            network_blocks_per_second: 1000 / target_milliseconds_per_block,
+            // **Never zero, whatever the cadence.** `1000 / target_milliseconds_per_block` is
+            // integer division: at PALW's frozen 120 s it is `1000 / 120_000 = 0`, and every
+            // consumer divides by it. The feerate estimator then computes
+            // `avg_mass / (mass_per_block × 0) = +inf` and asserts, taking the whole node process
+            // with it — measured on testnet-12, twice, the second time on the very transaction
+            // that carries a receipt quorum.
+            //
+            // A sub-1-BPS network is not "zero blocks per second"; it is a fraction. `u64` cannot
+            // hold that, so the floor is 1 and the exact cadence rides
+            // `target_milliseconds_per_block` beside it — which every rate calculation that needs
+            // sub-1 precision should read instead. Rounding the RATE up understates the interval
+            // between transactions, which is the safe direction: it never inflates a fee estimate.
+            network_blocks_per_second: (1000 / target_milliseconds_per_block).max(1),
             // kaspa-pq PQ-only relay is OFF in the base config so the (non-ML-DSA) mempool unit
             // tests and the `MiningManager::new` test path keep the upstream class behavior; the
             // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
@@ -177,5 +189,29 @@ impl Config {
     pub(crate) fn minimum_feerate(&self) -> f64 {
         // The parameter minimum_relay_transaction_fee is in sompi/kg units so divide by 1000 to get sompi/gram
         self.minimum_relay_transaction_fee as f64 / 1000.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A 120-second network must not report zero blocks per second** (testnet-12, 2026-08-22).
+    ///
+    /// `1000 / target_milliseconds_per_block` is integer division, and PALW's frozen cadence is
+    /// 120,000 ms — so this was 0, and the feerate estimator's `avg_mass / (mass_per_block × bps)`
+    /// became `+inf`. The node asserted and the whole process exited, on the transaction carrying a
+    /// receipt quorum: the first transaction a PALW network ever really needs. The estimator's own
+    /// `< 1.0` bound had already been widened for the same launch; that fixed the value being too
+    /// large, and this fixes it being infinite — two faces of "bps >= 1 was assumed everywhere".
+    #[test]
+    fn the_block_rate_is_never_zero_however_slow_the_network() {
+        for ms in [120_000u64, 60_000, 10_000, 1_000, 100] {
+            let cfg = Config::build_default(ms, false, 500_000);
+            assert!(cfg.network_blocks_per_second >= 1, "{ms} ms/block reported {} bps", cfg.network_blocks_per_second);
+            // And the quantity the estimator divides by is finite and positive.
+            let interval = 1_000f64 / (cfg.maximum_mass_per_block as f64 * cfg.network_blocks_per_second as f64);
+            assert!(interval.is_finite() && interval > 0.0, "{ms} ms/block yields interval {interval}");
+        }
     }
 }
