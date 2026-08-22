@@ -716,6 +716,51 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
     // transition: what it returns, the fold takes.
     kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(&state, &bundle.state, &point, &accepted, None)
         .expect("what the filter accepts, the transition applies");
+
+    // **And the fold must not eat the objects that are NOT duplicates.** The first version of this
+    // filter re-applied at the block's own chain point, which the transition accepts exactly once
+    // (it demands a strictly increasing blue score) — so every object after the first was dropped
+    // with `blue_score must strictly increase`, whatever claim it named. The chain then produced
+    // blocks, accepted submissions and licensed nothing: 356 blocks, 72 submissions, weight zero.
+    let mut many: Vec<PalwConsensusObjectV2> = Vec::new();
+    for (id, claim) in state.claims_iter() {
+        if !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. }) {
+            continue;
+        }
+        let Some(p) = state.panel(id) else { continue };
+        let rs: Vec<PalwSeatReceiptV2> = p
+            .seats
+            .iter()
+            .take(3)
+            .map(|seat| {
+                let bond = state.bond(&seat.bond).expect("registered");
+                let kp = (0..16u64)
+                    .map(TestConsensus::palw_v2_registry_keypair)
+                    .find(|kp| kp.verification_key.as_ref() == bond.pubkey.as_slice())
+                    .expect("a registry key");
+                let message = palw_receipt_message_v2(network_domain, *id, PalwReceiptVerdictV2::Valid, signed_daa);
+                let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                    &kp.signing_key,
+                    message.as_byte_slice(),
+                    PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+                    [0u8; 32],
+                )
+                .expect("sign")
+                .as_ref()
+                .to_vec();
+                PalwSeatReceiptV2 { claim: *id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat.bond, signed_daa, signature }
+            })
+            .collect();
+        many.push(PalwConsensusObjectV2::ReceiptLicensed { claim: *id, receipts: rs });
+        if many.len() == 3 {
+            break;
+        }
+    }
+    assert!(many.len() >= 2, "the fixture must offer at least two distinct bound claims, got {}", many.len());
+    let all = vp.palw_v2_accepted_objects_for_tests(&state, &bundle.state, &point, many.clone(), ctx.consensus.get_sink());
+    assert_eq!(all.len(), many.len(), "distinct claims must all survive the fold — only duplicates are dropped");
+    kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(&state, &bundle.state, &point, &all, None)
+        .expect("and the whole accepted set applies in one block");
 }
 
 /// **A merged blue is paid only if this chain can show its producer is bonded** (launch blockers

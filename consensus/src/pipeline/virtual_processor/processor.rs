@@ -3940,23 +3940,33 @@ impl VirtualStateProcessor {
         // Folding the state forward here makes the filter ask the question the transition will ask.
         // A duplicate is then dropped as an object — which is what `Ⅱ.5` decided a failing object
         // should be — and the block stands.
+        // The fold is a REHEARSAL, and its chain point has to advance for the transition to accept
+        // it at all: `apply_palw_transition_v3` demands a strictly increasing blue score, so
+        // re-applying at the block's own point succeeds exactly once and then refuses everything
+        // with `blue_score must strictly increase` — which silently dropped every object after the
+        // first, licensed nothing, and left the chain producing blocks whose weight never moved.
+        // (Measured before this line existed: 356 blocks, 72 submissions, zero licensed.)
+        //
+        // Each rehearsal step therefore gets its own synthetic point one blue score along. The
+        // fold's job is to answer "what phase will this claim be in when the transition reaches
+        // the next object", and that answer does not depend on the point's exact value — only on
+        // the objects already applied.
         let mut folded = state.clone();
+        let mut rehearsal = *point;
         let mut accepted = Vec::with_capacity(objects.len());
         for object in objects {
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    // Fold this object in so the next one is judged against the state it created.
-                    // A transition that refuses here is the same refusal the real fold would make,
-                    // so the object is dropped for the same reason rather than carried into it.
                     match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
                         &folded,
                         state_params,
-                        point,
+                        &rehearsal,
                         std::slice::from_ref(&object),
                         None,
                     ) {
                         Ok((next, _)) => {
                             folded = next;
+                            rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
                             accepted.push(object);
                         }
                         Err(why) => {
