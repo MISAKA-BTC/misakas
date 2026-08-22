@@ -377,6 +377,29 @@ mod tests {
     use crate::palw_step::PalwStepTableV1;
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
 
+    /// **Print the admissible geometry a class must actually register at.** The constants above
+    /// are the MODEL's shape; `n_ctx 4096` at `tile_len 128` is far past `PALW_STEP_MAX_LEAVES`,
+    /// so a class registered at the model's own numbers is refused. Run when picking the pair:
+    /// `cargo test -p kaspa-consensus-core --lib print_admissible -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn print_admissible_qwen25_geometry() {
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+            .expect("the shipped court");
+        for (name, g) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
+            match qwen25_admissible_geometry_v1(g, &court) {
+                Some(a) => {
+                    let p = qwen25_profile_v1(a).expect("expressible");
+                    println!(
+                        "{name}: tile_len={} n_ctx={} class_id={} (model declared tile={} n_ctx={})",
+                        a.tile_len, a.n_ctx, p.shape_profile_id(), g.tile_len, g.n_ctx
+                    );
+                }
+                None => println!("{name}: NO admissible (tile, n_ctx) under this court"),
+            }
+        }
+    }
+
     /// **Condition 3: the profile derives from the MEASURED geometry**, for both readings of "2B".
     #[test]
     fn the_profile_derives_from_the_measured_geometry() {

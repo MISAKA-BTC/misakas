@@ -753,6 +753,268 @@ fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
     state.update(&p.zero.to_le_bytes());
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// The artifact file — how a converted class reaches the nodes that must run it
+// ---------------------------------------------------------------------------------------------
+
+/// Magic + version of the on-disk artifact container.
+pub const BASE0_ARTIFACT_FILE_MAGIC: &[u8; 8] = b"PALWB0A1";
+
+/// Why this exists at all: the floor's artifact is **derived** (`derive_deterministic`), so every
+/// node can mint it from a seed and no file is needed. A converted class cannot be — its weights
+/// are a checkpoint someone quantized — so the bytes have to travel. `qwen25-convert` measured and
+/// printed and threw the artifact away, which meant the only class the tree could actually RUN was
+/// the one it could re-derive.
+///
+/// The format is deliberately dull: fixed-width little-endian scalars, length-prefixed vectors, no
+/// self-description. It is not a consensus object — `artifact_digest()` is, and the loader
+/// recomputes it — so nothing here needs to be stable across versions, only across one build.
+/// A file whose digest does not reproduce is refused rather than repaired.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ArtifactFileError {
+    /// Not a BASE-0 artifact file, or a version this build does not read.
+    Magic,
+    /// The bytes ran out mid-field.
+    Truncated(&'static str),
+    /// A length prefix that cannot be a length on this machine.
+    Length(&'static str),
+    /// Decoded, but the shape it declares is not one an artifact may have.
+    Shape(ArtifactError),
+    /// Decoded and well-shaped, and its digest is not the one the file claims. Either the bytes
+    /// were damaged or the writer and reader disagree about the encoding — both are refusals.
+    DigestMismatch { declared: Hash64, recomputed: Hash64 },
+}
+
+impl std::fmt::Display for ArtifactFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Magic => write!(f, "not a PALW BASE-0 artifact file (bad magic or version)"),
+            Self::Truncated(w) => write!(f, "artifact file ends inside {w}"),
+            Self::Length(w) => write!(f, "artifact file declares an impossible length for {w}"),
+            Self::Shape(e) => write!(f, "artifact file declares an invalid shape: {e:?}"),
+            Self::DigestMismatch { declared, recomputed } => {
+                write!(f, "artifact file digest {declared} does not match the bytes, which produce {recomputed}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArtifactFileError {}
+
+struct W(Vec<u8>);
+impl W {
+    fn u8(&mut self, v: u8) { self.0.push(v); }
+    fn u32(&mut self, v: u32) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn i32(&mut self, v: i32) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn u64(&mut self, v: u64) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn i64(&mut self, v: i64) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn i128(&mut self, v: i128) { self.0.extend_from_slice(&v.to_le_bytes()); }
+    fn usize(&mut self, v: usize) { self.u64(v as u64); }
+    fn i8s(&mut self, v: &[i8]) { self.usize(v.len()); self.0.extend(v.iter().map(|x| *x as u8)); }
+    fn i32s(&mut self, v: &[i32]) { self.usize(v.len()); for x in v { self.i32(*x); } }
+    fn quant(&mut self, q: &QuantParams) { self.i32(q.multiplier); self.u8(q.shift); self.i32(q.zero); }
+    fn scale(&mut self, s: &ScaleParams) { self.i32(s.multiplier); self.u8(s.shift); }
+}
+
+struct R<'a> { b: &'a [u8], i: usize }
+impl<'a> R<'a> {
+    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], ArtifactFileError> {
+        let end = self.i.checked_add(n).ok_or(ArtifactFileError::Length(what))?;
+        if end > self.b.len() { return Err(ArtifactFileError::Truncated(what)); }
+        let out = &self.b[self.i..end];
+        self.i = end;
+        Ok(out)
+    }
+    fn u8(&mut self, w: &'static str) -> Result<u8, ArtifactFileError> { Ok(self.take(1, w)?[0]) }
+    fn u32(&mut self, w: &'static str) -> Result<u32, ArtifactFileError> {
+        Ok(u32::from_le_bytes(self.take(4, w)?.try_into().expect("4")))
+    }
+    fn i32(&mut self, w: &'static str) -> Result<i32, ArtifactFileError> {
+        Ok(i32::from_le_bytes(self.take(4, w)?.try_into().expect("4")))
+    }
+    fn u64(&mut self, w: &'static str) -> Result<u64, ArtifactFileError> {
+        Ok(u64::from_le_bytes(self.take(8, w)?.try_into().expect("8")))
+    }
+    fn i64(&mut self, w: &'static str) -> Result<i64, ArtifactFileError> {
+        Ok(i64::from_le_bytes(self.take(8, w)?.try_into().expect("8")))
+    }
+    fn i128(&mut self, w: &'static str) -> Result<i128, ArtifactFileError> {
+        Ok(i128::from_le_bytes(self.take(16, w)?.try_into().expect("16")))
+    }
+    fn usize(&mut self, w: &'static str) -> Result<usize, ArtifactFileError> {
+        usize::try_from(self.u64(w)?).map_err(|_| ArtifactFileError::Length(w))
+    }
+    fn i8s(&mut self, w: &'static str) -> Result<Vec<i8>, ArtifactFileError> {
+        let n = self.usize(w)?;
+        Ok(self.take(n, w)?.iter().map(|b| *b as i8).collect())
+    }
+    fn i32s(&mut self, w: &'static str) -> Result<Vec<i32>, ArtifactFileError> {
+        let n = self.usize(w)?;
+        let bytes = self.take(n.checked_mul(4).ok_or(ArtifactFileError::Length(w))?, w)?;
+        Ok(bytes.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().expect("4"))).collect())
+    }
+    fn quant(&mut self, w: &'static str) -> Result<QuantParams, ArtifactFileError> {
+        Ok(QuantParams { multiplier: self.i32(w)?, shift: self.u8(w)?, zero: self.i32(w)? })
+    }
+    fn scale(&mut self, w: &'static str) -> Result<ScaleParams, ArtifactFileError> {
+        Ok(ScaleParams { multiplier: self.i32(w)?, shift: self.u8(w)? })
+    }
+}
+
+/// Serialize an artifact to the container format. The declared digest is written last so a reader
+/// can check the bytes it just parsed against what the writer believed it was writing.
+pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
+    let mut w = W(Vec::with_capacity(1 << 20));
+    w.0.extend_from_slice(BASE0_ARTIFACT_FILE_MAGIC);
+
+    let s = &a.shape;
+    w.usize(s.n_layers); w.usize(s.n_heads); w.usize(s.n_kv_heads); w.usize(s.d_head);
+    w.usize(s.d_ff); w.usize(s.vocab); w.usize(s.max_position);
+    w.i128(s.ln_theta_gen_q); w.i64(s.eps_q);
+
+    w.i8s(&a.embed);
+    w.i8s(&a.unembed);
+
+    w.usize(a.layers.len());
+    for l in &a.layers {
+        w.i8s(&l.wq); w.i8s(&l.wk); w.i8s(&l.wv); w.i8s(&l.wo);
+        w.i8s(&l.w_gate); w.i8s(&l.w_up); w.i8s(&l.w_down);
+        for q in &l.requant { w.quant(q); }
+        match &l.qkv_channel_requant {
+            None => w.u8(0),
+            Some(t) => { w.u8(1); for v in t.iter() { w.usize(v.len()); for q in v { w.quant(q); } } }
+        }
+        w.scale(&l.attn_logit_scale);
+        w.scale(&l.ffn_gate_scale);
+    }
+
+    w.usize(a.rope.d_head); w.usize(a.rope.max_position);
+    w.i32s(&a.rope.cos_q); w.i32s(&a.rope.sin_q);
+
+    w.0.extend_from_slice(a.tokenizer_commitment.as_byte_slice());
+    w.quant(&a.norm_requant);
+    w.quant(&a.residual_requant);
+
+    match &a.layer_residual_requant {
+        None => w.u8(0),
+        Some(t) => { w.u8(1); w.usize(t.len()); for pair in t { w.quant(&pair[0]); w.quant(&pair[1]); } }
+    }
+    match &a.layer_residual_scale {
+        None => w.u8(0),
+        Some(t) => { w.u8(1); w.usize(t.len()); for pair in t { w.scale(&pair[0]); w.scale(&pair[1]); } }
+    }
+    for q in &a.class_narrowings { w.quant(q); }
+    match a.derived_seed {
+        None => w.u8(0),
+        Some(v) => { w.u8(1); w.u64(v); }
+    }
+
+    // Declared last, checked first by the reader against what it actually parsed.
+    w.0.extend_from_slice(a.artifact_digest().as_byte_slice());
+    w.0
+}
+
+/// Parse a container and **verify it**: the shape must validate and the recomputed digest must
+/// equal the declared one. A file that decodes into a different artifact than it claims is
+/// refused, because the digest is the class id the chain registered — accepting a mismatch would
+/// run one class under another's name.
+pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, ArtifactFileError> {
+    let mut r = R { b: bytes, i: 0 };
+    if r.take(8, "magic")? != BASE0_ARTIFACT_FILE_MAGIC.as_slice() {
+        return Err(ArtifactFileError::Magic);
+    }
+
+    let shape = Base0ShapeV1 {
+        n_layers: r.usize("shape")?, n_heads: r.usize("shape")?, n_kv_heads: r.usize("shape")?,
+        d_head: r.usize("shape")?, d_ff: r.usize("shape")?, vocab: r.usize("shape")?,
+        max_position: r.usize("shape")?,
+        ln_theta_gen_q: r.i128("shape")?, eps_q: r.i64("shape")?,
+    };
+    shape.validate().map_err(ArtifactFileError::Shape)?;
+
+    let embed = r.i8s("embed")?;
+    let unembed = r.i8s("unembed")?;
+
+    let n_layers = r.usize("layer count")?;
+    let mut layers = Vec::with_capacity(n_layers.min(1024));
+    for _ in 0..n_layers {
+        let wq = r.i8s("wq")?; let wk = r.i8s("wk")?; let wv = r.i8s("wv")?; let wo = r.i8s("wo")?;
+        let w_gate = r.i8s("w_gate")?; let w_up = r.i8s("w_up")?; let w_down = r.i8s("w_down")?;
+        let mut requant = [QuantParams { multiplier: 0, shift: 0, zero: 0 }; 7];
+        for q in requant.iter_mut() { *q = r.quant("requant")?; }
+        let qkv_channel_requant = match r.u8("qkv tag")? {
+            0 => None,
+            _ => {
+                let mut out: [Vec<QuantParams>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+                for v in out.iter_mut() {
+                    let n = r.usize("qkv channel")?;
+                    v.reserve(n.min(1 << 20));
+                    for _ in 0..n { v.push(r.quant("qkv channel")?); }
+                }
+                Some(out)
+            }
+        };
+        let attn_logit_scale = r.scale("attn scale")?;
+        let ffn_gate_scale = r.scale("gate scale")?;
+        layers.push(Base0LayerWeightsV1 {
+            wq, wk, wv, wo, w_gate, w_up, w_down, requant, qkv_channel_requant,
+            attn_logit_scale, ffn_gate_scale,
+        });
+    }
+
+    let rope = RopeTableV1 {
+        d_head: r.usize("rope")?,
+        max_position: r.usize("rope")?,
+        cos_q: r.i32s("rope cos")?,
+        sin_q: r.i32s("rope sin")?,
+    };
+
+    let mut tc = [0u8; 64];
+    tc.copy_from_slice(r.take(64, "tokenizer commitment")?);
+    let tokenizer_commitment = Hash64::from_bytes(tc);
+
+    let norm_requant = r.quant("norm requant")?;
+    let residual_requant = r.quant("residual requant")?;
+
+    let layer_residual_requant = match r.u8("layer requant tag")? {
+        0 => None,
+        _ => {
+            let n = r.usize("layer requant")?;
+            let mut t = Vec::with_capacity(n.min(1 << 16));
+            for _ in 0..n { t.push([r.quant("layer requant")?, r.quant("layer requant")?]); }
+            Some(t)
+        }
+    };
+    let layer_residual_scale = match r.u8("layer scale tag")? {
+        0 => None,
+        _ => {
+            let n = r.usize("layer scale")?;
+            let mut t = Vec::with_capacity(n.min(1 << 16));
+            for _ in 0..n { t.push([r.scale("layer scale")?, r.scale("layer scale")?]); }
+            Some(t)
+        }
+    };
+    let mut class_narrowings = [QuantParams { multiplier: 0, shift: 0, zero: 0 }; 3];
+    for q in class_narrowings.iter_mut() { *q = r.quant("class narrowing")?; }
+    let derived_seed = match r.u8("seed tag")? { 0 => None, _ => Some(r.u64("seed")?) };
+
+    let mut dd = [0u8; 64];
+    dd.copy_from_slice(r.take(64, "declared digest")?);
+    let declared = Hash64::from_bytes(dd);
+
+    let artifact = Base0ArtifactV1 {
+        shape, embed, unembed, layers, rope, tokenizer_commitment,
+        norm_requant, residual_requant, layer_residual_requant, layer_residual_scale,
+        class_narrowings, derived_seed,
+    };
+    let recomputed = artifact.artifact_digest();
+    if recomputed != declared {
+        return Err(ArtifactFileError::DigestMismatch { declared, recomputed });
+    }
+    Ok(artifact)
+}
+
 #[cfg(test)]
 mod tests {
     /// **Condition 6: the tokenizer is inside the class identity.**
@@ -1071,5 +1333,62 @@ mod tests {
         assert!(Base0ShapeV1 { d_ff: kaspa_consensus_core::palw_base0::MAX_DOT_LEN, ..tiny() }.validate().is_ok());
         assert_eq!(Base0ShapeV1 { d_head: 7, ..tiny() }.validate(), Err(ArtifactError::BadShape));
         assert_eq!(Base0ShapeV1 { n_layers: 0, ..tiny() }.validate(), Err(ArtifactError::BadShape));
+    }
+
+    /// **The container round-trips, and the digest is what proves it.**
+    ///
+    /// Field-by-field equality would pass while a field the encoder forgot stayed at its default
+    /// on both sides of a comparison written from the same wrong list. `artifact_digest()` is
+    /// computed from the artifact's own contents by code that predates this codec, so agreeing
+    /// with it is agreeing with something that was not written to agree.
+    #[test]
+    fn the_artifact_file_round_trips_and_the_digest_survives() {
+        let a = Base0ArtifactV1::derive_deterministic(tiny(), 0xC0FFEE).expect("the fixture derives");
+        let bytes = encode_artifact_file_v1(&a);
+        let back = decode_artifact_file_v1(&bytes).expect("its own bytes decode");
+        assert_eq!(back.artifact_digest(), a.artifact_digest(), "the class id must survive the file");
+        assert_eq!(back, a, "and so must every field");
+        // A derived artifact keeps its seed marker through the file: `is_derived` is what refuses
+        // a fixture where a real class is required, so losing it would silently launder one.
+        assert_eq!(back.derived_seed(), a.derived_seed());
+    }
+
+    /// **The optional tables survive as SOMETHING rather than as None.** Every one of them was
+    /// added after the first artifact existed, and each `None` arm means "what artifacts used to
+    /// mean" — so an encoder that dropped one would produce a file that decodes cleanly, hashes
+    /// differently, and is refused for a reason that points at the wrong thing.
+    #[test]
+    fn the_calibration_tables_survive_the_file() {
+        let base = Base0ArtifactV1::derive_deterministic(tiny(), 7).expect("derives");
+        let n = base.shape.n_layers;
+        let a = base
+            .clone()
+            .with_layer_residual_requant(vec![[QuantParams { multiplier: i32::MAX, shift: 1, zero: 3 }; 2]; n])
+            .expect("one pair per layer")
+            .with_layer_residual_scale(vec![[ScaleParams { multiplier: i32::MAX, shift: 29 }; 2]; n])
+            .expect("one pair per layer");
+        assert_ne!(a.artifact_digest(), base.artifact_digest(), "the tables are inside the class id");
+        let back = decode_artifact_file_v1(&encode_artifact_file_v1(&a)).expect("decodes");
+        assert_eq!(back.artifact_digest(), a.artifact_digest());
+        assert!(back.layer_residual_requant.is_some() && back.layer_residual_scale.is_some());
+    }
+
+    /// A damaged file is refused, and refused by the digest rather than by luck: one flipped
+    /// weight byte still parses into a well-shaped artifact of the right size.
+    #[test]
+    fn a_damaged_artifact_file_is_refused_by_its_digest() {
+        let a = Base0ArtifactV1::derive_deterministic(tiny(), 11).expect("derives");
+        let mut bytes = encode_artifact_file_v1(&a);
+        // magic 8 + shape (7 usize = 56, i128 = 16, i64 = 8) + the embed length prefix 8 = 96,
+        // so 96 is the first weight byte. Computed rather than guessed: the first attempt landed
+        // in the length prefix and was refused as Truncated, which is a different bug entirely.
+        let at = 8 + (7 * 8 + 16 + 8) + 8;
+        bytes[at] = bytes[at].wrapping_add(1);
+        match decode_artifact_file_v1(&bytes) {
+            Err(ArtifactFileError::DigestMismatch { .. }) => {}
+            other => panic!("a flipped weight byte must be refused by the digest, got {other:?}"),
+        }
+        assert_eq!(decode_artifact_file_v1(b"not an artifact at all"), Err(ArtifactFileError::Magic));
+        assert!(matches!(decode_artifact_file_v1(&bytes[..40]), Err(ArtifactFileError::Truncated(_))));
     }
 }
