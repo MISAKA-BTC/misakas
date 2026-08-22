@@ -197,6 +197,32 @@ same reading was recorded before as "the first ~40 hours at weight 0 is normal";
 first hours of it, with the licensing loop visibly running underneath.
 
 What this closes and what it does not: the drill's *closable* stages are now demonstrated on a
-live six-seat fleet. `Final` is time-gated, not blocked — the thing to watch is whether
-`final_claims` leaves 0 after DAA 600, and the wedge watcher (now self-probing) is armed on all
-four hosts to catch a seat freezing before it does.
+live six-seat fleet. `Final` is time-gated, not blocked.
+
+### How time-gated, exactly (measured 2026-08-23)
+
+The shipped bundle's lattice windows, read off `palw_rc_shipped_params()`:
+
+```
+bind=600  receipt=600  challenge=1200  court=2400  epoch=1000   (DAA)
+```
+
+A claim reaches `Final` at **bind + receipt + challenge = 2,400 DAA after acceptance**. So the
+number to watch was never "does `final_claims` leave 0 after DAA 600" — 600 is only the BIND
+deadline, and passing it cleanly proved something different and also worth having: the
+exposure-ceiling wedge (`2b1097f3`, "one claim short of the bind window") **did not recur on a live
+chain**. The chain went through 600 producing normally with `holding=0`.
+
+Measured at DAA 668, with the retarget having pulled the cadence to ~120 s/block:
+
+| | |
+|---|---|
+| first Final | DAA 2,400 — **1,732 blocks away, ≈ 57.7 h** |
+| licensing | 465 `ReceiptLicensed` and climbing; `unresolved` tracks blocks 1:1 because *licensed is still non-terminal* |
+| weight | 0 until the first Final, by design |
+
+That reconciles the standing note that "the first ~40 hours at weight 0 is normal": at the shipped
+windows and cadence it is ~80 h for a claim accepted at genesis, and the first claims to finalize
+are the ones accepted once the cadence settled. Nothing here is waiting on a defect, and no
+watcher can usefully sit on it — the wedge watcher (now self-probing) is armed on all four hosts
+and is the thing that would fire if a seat froze in the meantime.

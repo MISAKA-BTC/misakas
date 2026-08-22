@@ -632,4 +632,25 @@ mod tests {
             );
         }
     }
+
+    /// Print the SHIPPED bundle's lattice windows — what dates a claim's Final.
+    /// `cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_rc_windows() {
+        let p = crate::config::params::palw_rc_shipped_params();
+        match &p.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
+                let s = &b.state;
+                println!(
+                    "RC windows: bind={} receipt={} challenge={} court={} epoch={}",
+                    s.window_bind(), s.window_receipt(), s.window_challenge(), s.window_court(), s.epoch_length()
+                );
+                println!("  a claim reaches Final at bind+receipt+challenge = {} DAA after acceptance",
+                    s.window_bind() + s.window_receipt() + s.window_challenge());
+            }
+            _ => println!("this build ships no bundle"),
+        }
+    }
+
 }
