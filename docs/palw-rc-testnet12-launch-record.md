@@ -11,15 +11,22 @@ looked like.
 
 ## The fleet
 
-| host | roles | bonds | P2P 26411 from outside |
-|---|---|---|---|
-| 169.58.39.220 | producer + seat | 0, 1 | **reachable** |
-| 5.104.81.23 | seat, seat, seat | 2, 3, 4 | **reachable** |
-| 160.16.131.119 | seat | 5 | outbound only |
+Six registry rows, six running nodes across three hosts — the registry has no spare seat (§4 of
+the runbook), so this is a requirement and not a preference. All six report the same consensus
+fingerprint; a node that shipped a different card would be refused at the handshake rather than
+fork.
 
-Six registry rows, six running nodes — the registry has no spare seat (§4 of the runbook), so this
-is a requirement and not a preference. All six report the same consensus fingerprint; a node that
-shipped a different card would be refused at the handshake rather than fork.
+**Public P2P entry points** (the addresses a joining node needs):
+
+    169.58.39.220:26411
+    5.104.81.23:26411
+
+**A known limitation, stated because it is real whether or not it is written down:** the five panel
+seats are not spread across five operators. They sit on three hosts, and one of those hosts carries
+enough of them to hold a quorum by itself. The panel's independence assumption is therefore not met
+on this fleet — it is a release-candidate testnet run by one operator, and the seat-to-host map is
+deliberately not published. Treat panel verdicts here as a working lifecycle, not as an adversarial
+guarantee. Distributing seats across independent operators is the thing that makes it one.
 
 ## Verified live
 
@@ -80,10 +87,7 @@ network is algo-6 by definition. See runbook §5b.
 
 ## Open, and owned by the operator
 
-- **Host B is at 98% disk** (18 GB free). `p0-e2e-appdir` (267 GB) and `kpq-testnet.bak-pre-hotfix`
-  (64 GB) are prior artifacts; nothing was deleted, because deleting them is not this task's call.
-- A fourth host (95.111.236.186) is out of the fleet: its egress reaches exactly one fleet member,
-  the block is upstream rather than a local rule, and its memory belongs to a live testnet-10 node.
-- **Nothing has been published.** The branch is not on the public remote and no binaries are
-  distributed, so no third party can join yet — that step is a publication decision, not a
-  configuration one.
+- One fleet host is near its disk limit, and one candidate host was left out because its egress to
+  the fleet is filtered upstream. Both are operator-side and neither affects a joining node.
+- **The panel seats are concentrated** — see above. This is the gap between "the lifecycle works"
+  and "the lifecycle is adversarially sound", and closing it needs independent operators, not code.

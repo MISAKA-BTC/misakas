@@ -248,15 +248,12 @@ turned out to be filtered upstream.
 
 **Reachability measured for testnet-12** (2026-08-22, from outside the fleet):
 
-| host | role | 26411 from outside |
-|---|---|---|
-| 169.58.39.220 | producer (bond 0) + seat 1 | **reachable** |
-| 5.104.81.23 | seats 2, 3, 4 | **reachable** |
-| 160.16.131.119 | seat 5 | not reachable — peers outbound only |
+    169.58.39.220:26411
+    5.104.81.23:26411
 
-Two public entry points, which is what an announcement needs. A fourth host was dropped from the
-fleet: it reaches exactly one fleet member and nothing else, and its memory belongs to a live
-testnet-10 node.
+Two public entry points, which is what an announcement needs; a third fleet host peers outbound
+only. Which bond each host carries is deliberately not published — on a fleet this small the map
+would name the machine to attack for a panel quorum.
 
 ---
 
