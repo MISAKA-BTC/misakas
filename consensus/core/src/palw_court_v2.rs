@@ -535,6 +535,37 @@ mod tests {
 
     /// The ruleset's court, at the shipped cost ceilings — what a close's evidence is measured
     /// against (ADR-0049 Decision C, audit H-03).
+    /// **The space a court opens over is the RULESET's, not the claim's** — and an opener that got
+    /// that wrong died silently on a live chain.
+    ///
+    /// `palw_court_v2`'s own rule is that a space the accuser chose is a ladder depth the accuser
+    /// chose, so acceptance demands `max_step_leaf_count`. The first challenger written against
+    /// this opened at the disputed job's OWN step count — 7,900 leaves — and every `CourtOpened`
+    /// was dropped with `declares a 7900-wide StepLeaves space; the ruleset's is 4194304`. Nothing
+    /// else surfaced it: the challenger logged a submission, the mempool took the transaction, and
+    /// the object was discarded while the block stood. The responder never saw a duty because
+    /// there was no session.
+    ///
+    /// The padding this creates is not a problem, and the second assertion is why: above the real
+    /// leaf count both parties commit to the same full prefix, so a divergence in the real leaves
+    /// keeps producing disagreement until the interval narrows back into range.
+    #[test]
+    fn a_court_opens_over_the_rulesets_space_not_the_claims() {
+        let c = court();
+        assert_eq!(
+            c.max_step_leaf_count(),
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
+            "the ruleset's space is the step-space ceiling, which is what an opener must declare"
+        );
+        // A real BASE-0 job is far smaller than that ceiling, which is exactly the trap: the
+        // number an opener has in hand is not the number it must declare.
+        let real_job_leaves = 7_900u64;
+        assert!(
+            real_job_leaves < c.max_step_leaf_count(),
+            "an opener holding the job's own leaf count holds a number acceptance will refuse"
+        );
+    }
+
     fn court() -> crate::palw_mode_v2::PalwCourtParamsV2 {
         crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
             .expect("the shipped court parameters are valid")

@@ -381,7 +381,17 @@ impl PalwPanelService {
                         );
                     }
                     let space = PalwBisectSpaceV1::StepLeaves;
-                    let space_size = binding.step_leaf_count;
+                    // **The RULESET's space, not this claim's.** A space the accuser chose is a
+                    // ladder depth the accuser chose, so acceptance refuses any declaration that
+                    // is not `max_step_leaf_count`. Opening at the job's own 7,900 leaves was
+                    // refused on the live drill with exactly that reason, and the dispute died
+                    // before the responder ever saw a duty.
+                    //
+                    // The padding is harmless to the bisection: above the real leaf count both
+                    // parties commit to the same full prefix, so a divergence anywhere in the real
+                    // leaves keeps producing disagreement until the interval narrows back into
+                    // range and lands on it.
+                    let space_size = self.config.court.max_step_leaf_count();
                     let session_id = court_session_id_v2(
                         &target.claim_id,
                         &target.trace_root,
