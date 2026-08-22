@@ -1324,10 +1324,13 @@ Do you confirm? (y/n)";
     // submitter that carries the assembled quorum to the chain. Deliberately independent of
     // --palw-produce: a validator that never mines still judges.
     let palw_panel_service = if args.palw_panel {
-        let v2 = matches!(
-            config_for_palw_panel.params.palw_consensus_mode,
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
-        );
+        // The court, from the SAME bundle the mode check reads — a seat resolving a duty's class
+        // against a different court would look for a class the chain never registered.
+        let panel_court = match &config_for_palw_panel.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.court.clone()),
+            _ => None,
+        };
+        let v2 = panel_court.is_some();
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
             (true, Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                 crate::palw_panel::PalwPanelConfig {
@@ -1335,6 +1338,8 @@ Do you confirm? (y/n)";
                     bond: bond.clone(),
                     fee_outpoint: args.palw_fee_outpoint.clone(),
                     state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
+                    court: panel_court.clone().expect("v2 is true exactly when this is Some"),
+                    class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                 },
                 consensus_manager.clone(),
                 flow_context_for_palw_panel.clone(),

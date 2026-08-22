@@ -242,10 +242,39 @@ statelessly at admission and panel-verified asynchronously — the ADR-0037/0038
 * **Apple monoculture.** Accepted for launch, by construction; Decision 2's catalog is how CUDA
   or CPU families join later without touching consensus again.
 
-## Implementation order (each PR-sized, none started)
+## Measured after writing this ADR (2026-08-22/23, Apple M4 Pro)
 
-1. `PalwBackend` seam in the worker: `load / infer(teacher_forced) / commit / verify` — the
-   ADR-0026 adapter surface, made a trait. `IntegerBackend` (existing engine) moves behind it.
+Two things the ADR guessed at are now numbers.
+
+**The runtime layer already exists.** `misaka-palw-worker` links a *pinned* llama.cpp static build
+(`MISAKA_LLAMA_SRC`, `GGML_METAL:BOOL=ON`, Release) and its `RuntimeManifestV2` already measures
+every identity Decision 2 asks a catalog entry to pin: `llama_cpp_commit`,
+`llama_static_library_sha256`, `cmake_cache_sha256`, `gguf_sha256`, `tokenizer_sha256`, plus a
+`shape_string_v2` that reads
+`n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/token-ids-input/exact-decode/no-early-eog/prefill-single-batch/v2`.
+Greedy-argmax and exact-decode — the two rules Decision 2 requires — are pinned there already.
+Family M is therefore not a new runtime; it is the ADR-0026 v2 path re-scoped as a consensus
+family.
+
+**Metal is bit-exact on one machine.** Four consecutive `--mode self-job` runs of
+`Qwen3.5-2B-Q4_K_M.gguf` (n_vocab 248,320, prefill 9 / decode 3) produced **byte-identical**
+output, `gemm_trace_root` and `output_commitment` included. So the tolerance question is narrower
+than Decision 4 assumed: **ε = 0 is available for same-device, same-build replay**, and ε > 0 is
+needed only across device generations and OS/Metal versions. That suggests the seat rule should be
+*exact first, tolerant as a declared fallback* — a class could even register ε = 0 and a device
+allow-list — rather than tolerant everywhere. **Cross-device ε is still unmeasured**, and until a
+second Apple machine runs the same job it stays the family's one open constant.
+
+## Implementation order (step 1 landed 2026-08-23; the rest PR-sized)
+
+1. ~~`PalwBackend` seam~~ — **landed.** `PalwExecutionBackendV1` in `consensus/core/src/palw_backend.rs`
+   (three verbs: `job_for_anchor` / `execute` / `verify_material`), with `PalwExecutionFamilyV1`
+   carrying `is_court_adjudicable()` so no consumer can accidentally open a court on a family that
+   has none. `Base0Backend` puts Family D behind it, and both consumers now go through it: the
+   producer no longer names `base0_profile_v1`/`palw_rc_base0_artifact_v1`, and the seat resolves
+   the class **per duty** — `PalwSeatDutyV2` gained `class_id` and `artifact_root`, because a seat
+   that resolved the class separately could verify material committed under one family's scheme
+   using another's.
 2. `MetalBackend`: pinned llama.cpp-fork build (runtime_id = build sha), logits callback capture,
    fixed-point quantization of committed rows.
 3. Seat verdict rule (Decision 4) in the panel service, behind the family dispatch.

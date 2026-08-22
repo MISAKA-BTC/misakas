@@ -38,6 +38,7 @@
 //! ADR-0040 Decision H. It is the reason the op count is ten rather than nine.
 
 pub mod artifact;
+pub mod backend;
 pub mod classes;
 pub mod engine;
 pub mod inventory;

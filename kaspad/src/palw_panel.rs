@@ -51,7 +51,8 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
 use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
-use misaka_palw_base0::produce::{base0_material_decode_v1, base0_material_matches_claim_v1};
+use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
+use misaka_palw_base0::backend::Base0Backend;
 
 const PALW_PANEL: &str = "palw-panel";
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
@@ -72,10 +73,19 @@ pub struct PalwPanelConfig {
     pub fee_outpoint: Option<String>,
     /// Where the rolling fee outpoint survives a restart.
     pub state_dir: PathBuf,
+    /// The court this network admits classes against — needed to resolve a duty's class the same
+    /// way the producer does, because the court decides the geometry a class is registered at.
+    pub court: kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
+    /// has; the floor's are derived, so this is empty on an RC node.
+    pub class_artifacts: Vec<PathBuf>,
 }
 
 pub struct PalwPanelService {
     config: PalwPanelConfig,
+    /// Decoded once. Same contract as the producer's: digest-checked here, matched against the
+    /// CHAIN per duty.
+    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -104,7 +114,22 @@ impl PalwPanelService {
                 None
             }
         };
-        Self { config, consensus_manager, flow_context, consensus_config, keypair, bond }
+        // Same loader as the producer's, and the same rule: a file that will not load is warned
+        // about rather than skipped, because a seat silently unable to judge a class looks exactly
+        // like a seat whose material never arrived.
+        let mut class_artifacts = Vec::new();
+        for path in &config.class_artifacts {
+            match std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
+                misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string())
+            }) {
+                Ok(artifact) => {
+                    info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
+                    class_artifacts.push(artifact);
+                }
+                Err(err) => warn!("[{PALW_PANEL}] class artifact {} is unusable: {err}", path.display()),
+            }
+        }
+        Self { config, consensus_manager, flow_context, consensus_config, keypair, bond, class_artifacts }
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -265,8 +290,29 @@ impl PalwPanelService {
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
                 let verdict = 'verdict: {
                     for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        if let Ok(material) = base0_material_decode_v1(bytes)
-                            && base0_material_matches_claim_v1(&material, duty.execution_root, duty.trace_root).unwrap_or(false)
+                        // Through the family's backend (ADR-0051 step 1). A seat does not know
+                        // which family it is judging — Family D recomputes the leg root exactly,
+                        // Family M will spot-replay within a tolerance — and `Mismatch` is
+                        // deliberately NOT an accusation here: it gathers no quorum and the claim
+                        // voids, which is the soft failure both families share.
+                        // Resolved per duty from what the CHAIN says the claim's class is
+                        // (ADR-0051 step 1). A seat holding no material for that class cannot
+                        // judge it and says so by filing nothing — which is the same shape as
+                        // "the material has not arrived", and correctly so: both are "I cannot
+                        // verify", never "the producer lied".
+                        let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
+                            &self.config.court,
+                            duty.class_id,
+                            duty.artifact_root,
+                            &self.class_artifacts,
+                        ) else {
+                            break 'verdict None;
+                        };
+                        let backend = Base0Backend::new(resolved);
+                        if backend.verify_material(
+                            bytes,
+                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root },
+                        ) == PalwMaterialVerdictV1::Matches
                         {
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }

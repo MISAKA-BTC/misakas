@@ -358,8 +358,6 @@ pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
 }
 
 pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    let layers = geometry.layer_count as usize;
-    let i8_per_layer = vec![BASE0_WEIGHT_DTYPE_I8; layers.max(1)];
     let i8_once = vec![BASE0_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;

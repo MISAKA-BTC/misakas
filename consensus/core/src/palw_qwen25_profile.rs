@@ -47,13 +47,12 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3,
+    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3,
     PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
     kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE,
-    KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE,
 };
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
@@ -250,8 +249,6 @@ pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
 /// what the roles select, and getting it backwards would have the court recompute attention
 /// against unrotated keys and convict every honest producer.
 pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    let layers = (geometry.layer_count as usize).max(1);
-    let per_layer = vec![QWEN25_WEIGHT_DTYPE_I8; layers];
     let once = vec![QWEN25_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;

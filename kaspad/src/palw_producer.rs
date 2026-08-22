@@ -52,7 +52,9 @@ use kaspa_core::{info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::manager::MiningManagerProxy;
 use kaspa_p2p_flows::flow_context::FlowContext;
-use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
+use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+use misaka_palw_base0::backend::Base0Backend;
+use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
@@ -208,17 +210,17 @@ impl PalwProducerService {
     /// Written BEFORE the block is published, and a write failure aborts the publish: a promise you
     /// have already broken is not one to make. Keyed by the attempt id, which is what a challenge
     /// names.
-    fn retain_execution(
-        &self,
-        attempt_id: Hash64,
-        run: &misaka_palw_base0::produce::Base0ExecutionV1,
-    ) -> Result<Vec<u8>, String> {
+    /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's
+    /// (ADR-0051 step 1), because only the family that produced material knows how to write it.
+    /// This function's job is the obligation — that the bytes are on disk before the block that
+    /// promises them is published — and that is family-agnostic.
+    fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<Vec<u8>, String> {
         std::fs::create_dir_all(&self.config.retention_dir)
             .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
         let path = self.config.retention_dir.join(format!("{attempt_id}.material"));
-        // The ONE codec (`base0_material_encode_v1`): the retention file, the gossip broadcast and
-        // the seat's decode all read these exact bytes, so the three cannot drift.
-        let bytes = misaka_palw_base0::produce::base0_material_encode_v1(run).map_err(|e| e.to_string())?;
+        // Still the ONE codec — the retention file, the gossip broadcast and the seat's decode all
+        // read these exact bytes — it is just applied one frame up now, where the backend is.
+        let bytes = material.to_vec();
         let tmp = path.with_extension("material.partial");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
         // Rename last: a reader never sees a half-written obligation.
@@ -381,21 +383,20 @@ impl PalwProducerService {
             &self.class_artifacts,
         )
         .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
-        let profile = resolved.profile.clone();
-        let artifact = resolved.artifact;
-        let (job, prompt) = base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, resolved.canonical_job.0, resolved.canonical_job.1);
+        // **Through the seam** (ADR-0051 step 1). The backend is the family's execution path; this
+        // function no longer knows which family it is producing for, which is what lets a second
+        // one exist. The floor's is `Base0Backend` because `resolve_class_v1` said so.
+        let backend = Base0Backend::new(resolved);
+        let (job, prompt) = backend.job_for_anchor(anchor).map_err(|e| format!("the job this template implies: {e}"))?;
         // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
         // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search
         // out to the 120 s cadence, at which point that thread is busy essentially all the time and
         // every other service on the runtime is short one worker.
-        let (job_for_blocking, prompt_for_blocking, profile_for_blocking) = (job.clone(), prompt.clone(), profile.clone());
-        let run = tokio::task::spawn_blocking(move || {
-            base0_execute_for_attempt_v1(&artifact, &profile_for_blocking, &job_for_blocking, &prompt_for_blocking)
-                .map_err(|e| format!("the job: {e}"))
-        })
-        .await
-        .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
+        let run = tokio::task::spawn_blocking(move || backend.execute(&job_for_blocking, &prompt_for_blocking))
+            .await
+            .map_err(|e| format!("the execution task did not finish: {e}"))??;
 
         // Every field but the challenge is fixed now: the roots are the execution's and the six
         // chain facts are `facts`'. The nonce moves the challenge, the challenge moves the
@@ -416,7 +417,8 @@ impl PalwProducerService {
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,
             // The retention window a producer promises to keep the trace for. The material is in
-            // hand (`run.tiles`), which is what makes the promise one it can keep.
+            // hand (`run.material`, encoded by the backend), which is what makes the promise one
+            // it can keep.
             // Derived from the network's own lattice windows, not chosen: see the field's docs.
             trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
@@ -479,7 +481,7 @@ impl PalwProducerService {
             .as_ref()
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
-            let material = self.retain_execution(message, &run)?;
+            let material = self.retain_execution(message, &run.material)?;
             // And SERVED, not just kept: the panel's seats verify these bytes against the claim's
             // committed roots, and a receipt cannot be filed about material nobody has.
             self.flow_context.broadcast_palw_material(message, material).await;

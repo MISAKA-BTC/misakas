@@ -444,6 +444,15 @@ mod tests {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSeatDutyV2 {
     pub claim_id: Hash64,
+    /// **Which class this claim is of** — and therefore which family's rules a seat judges it by
+    /// (ADR-0051). Carried rather than looked up: a seat that resolved the class separately could
+    /// verify with one family's scheme material committed under another's, and the two schemes
+    /// disagree about what "matches" means. It comes off the claim record, so it is the chain's
+    /// answer and not the seat's.
+    pub class_id: Hash64,
+    /// The class's registered artifact root, for the same reason the producer is handed one: the
+    /// seat must hold the SAME weights, and "the same" is this value.
+    pub artifact_root: Hash64,
     pub seat_bond: PalwBondKeyV2,
     /// The producer whose material this seat must judge. Never this seat: `derive_panel_v2`
     /// excludes a claim's own executor by bond, by operator and by key.
@@ -467,6 +476,77 @@ pub struct PalwSeatDutyV2 {
 /// `mine` is the set of bonds this node can sign for. Derived from the state the chain holds rather
 /// than assembled by the caller, for the same reason `palw_producer_facts_v2` is: a seat that
 /// computed its own deadline would eventually disagree with the quorum check about it.
+/// **What a party owes in a court session it is a party to** — the court's half of
+/// [`palw_seat_duties_v2`].
+///
+/// Nothing in this tree constructed a `CourtDisclosed`, so a dispute could be opened and never
+/// answered. That was not a missing feature so much as a missing QUESTION: the ladder knows whose
+/// turn it is and what interval is open, and no code ever asked it on behalf of a node that holds
+/// one of the two bonds. This is the asking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCourtDutyV2 {
+    pub session_id: Hash64,
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    /// The bond the claim was produced under — the RESPONDER, who discloses.
+    pub executor_bond: PalwBondKeyV2,
+    /// The bond that opened the session — the CHALLENGER, who posts verdicts.
+    pub challenger_bond: PalwBondKeyV2,
+    /// Which of the two this node is. Both is possible only in a self-challenge, which
+    /// `validate_court_opened_v2` refuses, so exactly one side is ours.
+    pub i_am_responder: bool,
+    pub round: u32,
+    /// The open interval, `[lo, hi)`.
+    pub interval: (u64, u64),
+    /// The index a disclosure must answer about, when it is our turn to disclose.
+    pub midpoint: Option<u64>,
+    /// `Some(index)` once the ladder has narrowed to one step — the index a close must adjudicate.
+    pub terminal_index: Option<u64>,
+    /// Whose move it is, so a caller does not have to re-derive the turn from the interval.
+    pub turn: crate::palw_bisect::PalwBisectTurnV1,
+    pub rung_deadline_daa: u64,
+    pub session_deadline_daa: u64,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+}
+
+/// Every open session in which `mine` holds the executor's bond or the challenger's.
+pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) -> Vec<PalwCourtDutyV2> {
+    let mut out = Vec::new();
+    for (session_id, session) in state.court_sessions_iter() {
+        let Some(claim) = state.claim(&session.claim) else { continue };
+        let i_am_responder = mine.contains(&claim.bond);
+        let i_am_challenger = mine.contains(&session.challenger_bond);
+        if !i_am_responder && !i_am_challenger {
+            continue;
+        }
+        // A claim whose class has left the registry cannot be adjudicated by anyone, so it yields
+        // no duty rather than a duty nobody can discharge — the same rule the seat list uses.
+        let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
+        let (lo, hi) = session.ladder.interval();
+        out.push(PalwCourtDutyV2 {
+            session_id: *session_id,
+            claim_id: session.claim,
+            class_id: claim.class_id,
+            artifact_root,
+            executor_bond: claim.bond,
+            challenger_bond: session.challenger_bond,
+            i_am_responder,
+            round: session.ladder.round(),
+            interval: (lo, hi),
+            midpoint: (hi.saturating_sub(lo) > 1).then(|| lo + (hi - lo) / 2),
+            terminal_index: session.ladder.terminal_index(),
+            turn: session.ladder.turn(),
+            rung_deadline_daa: session.ladder.last_deadline_daa(),
+            session_deadline_daa: session.deadline_daa,
+            trace_root: claim.trace_root,
+            execution_root: claim.execution_root,
+        });
+    }
+    out
+}
+
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {
@@ -475,12 +555,18 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             continue;
         };
         let Some(panel) = state.panel(claim_id) else { continue };
+        // The class's registered root, read where the claim is read. A claim whose class is gone
+        // from the registry is not judgeable by anyone, so it yields no duty rather than a duty
+        // nobody can act on.
+        let Some(class_artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         for seat in &panel.seats {
             if !mine.contains(&seat.bond) {
                 continue;
             }
             out.push(PalwSeatDutyV2 {
                 claim_id: *claim_id,
+                class_id: claim.class_id,
+                artifact_root: class_artifact_root,
                 seat_bond: seat.bond,
                 executor_bond: claim.bond,
                 execution_root: claim.execution_root,
