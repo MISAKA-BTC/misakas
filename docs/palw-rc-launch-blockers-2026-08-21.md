@@ -123,11 +123,11 @@ the retirement change already forces (settle M-02 first — one flag day, not tw
 
 ---
 
-## Launching it found eight more — the class of defect only a real network has
+## Launching it found twelve more — the class of defect only a real network has
 
 Recorded because the pattern is the finding: **every one of these is invisible to a test suite,
 because a suite always starts from a chain that already exists and a binary somebody already built
-correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would: six before the first block, two that only a running chain could show.
+correctly.** The launch of testnet-12 (2026-08-22) surfaced them in the order an operator would: six before the first block, two that only a running chain could show, and four that needed a multi-host chain carrying real traffic.
 
 | # | what | why no test could see it | fix |
 |---|---|---|---|
@@ -148,6 +148,20 @@ for real time.
 |---|---|---|
 | 7 | **The exposure ceiling was one claim short of the bind window.** `palw_v2_collateral_for_bind_window_v1` sized collateral for exactly `window_bind` concurrent claims — which moved the genesis deadlock from block 2 to block 600 rather than removing it. Measured: 600 blocks, then `holding: the bond's exposure ceiling leaves no room for another claim`, forever. Admission runs against the PARENT state, so producing block `window_bind + 1` needs room for `window_bind + 1` live claims, and the first void is not swept until block `window_bind + 2` — which the chain can no longer reach. DAA advances only when blocks are produced, so no timeout helps. | `2b1097f3` |
 | 8 | **Following one chain as it grows counted as abandoning it.** Host B adopted the producer's single chain five times as it advanced — five tips, one lineage, one pruning point — spent `MAX_CHAIN_SWITCHES` and quarantined itself while perfectly healthy. The earlier fix to this counter (count adoptions, not encounters) was right and insufficient. On PALW, where checking a header costs an inference, *every* node that falls behind hits this; `--clear-quarantine` deliberately keeps the count, so it is permanent. | `73c35c6d` |
+
+### The three only a MULTI-HOST chain could show
+
+| # | what | fix |
+|---|---|---|
+| 9 | **A sub-1-BPS network killed its own node with its own first transaction.** `FeerateEstimator::new` asserted `inclusion_interval < 1.0`, a bound whose justification `build_feerate_estimator` states out loud — "since … **bps >= 1**". PALW's frozen cadence is 120 s, so bps is 1/120 and the value is 120× larger: a 7,292-mass receipt transaction yields 1.75 s and the process exited. | `cdeb4080` |
+| 10 | **…and the same assumption failed the other way.** `network_blocks_per_second: 1000 / target_milliseconds_per_block` is integer division, so at 120,000 ms it is **0**, and the estimator's `avg_mass / (mass_per_block × 0)` is `+inf`. Fixing only the bound moved the panic message, not the panic. | `44441f70` |
+| 11 | **Two submitters racing one claim killed the honest block carrying both.** One funded submitter suffices, so several MAY be funded; both assemble the same quorum and both submit. Both objects are valid against the PARENT state, so a filter judging each one there passes both — and the transition, which applies them in order, refuses the second as `wrong phase`. Measured: 175 produced, 23 accepted, 74 disqualified, DAA frozen at 103 while three hosts submitted correctly. | `dc0fc144` |
+| 12 | **And the fix for 11 ate every object after the first.** The rehearsal fold re-applied at the block's own chain point, which `apply_palw_transition_v3` accepts exactly once (it demands a strictly increasing blue score). 356 blocks, 72 submissions, **zero licensed** — and the only thing that said so was the weight line added the same day. | `0c2931f6` |
+
+**The observability line is what made 12 findable.** Disqualifications were gone, submissions were
+landing, every log an operator reads looked healthy — and `weight=0 unresolved=355` was the sole
+statement that the lattice still was not turning over. A network can produce blocks, gossip
+material, file receipts, assemble quorums and submit them, and still certify nothing.
 
 Operational facts the launch also settled, which no amount of code reading would have produced:
 host A cannot reach any fleet member on 26411 (its egress is selectively filtered; it reaches
