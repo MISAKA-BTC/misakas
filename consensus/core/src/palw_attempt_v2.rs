@@ -35,7 +35,22 @@ use crate::tx::TransactionOutpoint;
 use blake2b_simd::Params;
 
 /// = [`crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2`]'s object version.
-pub const PALW_ATTEMPT_V2_VERSION: u16 = 2;
+///
+/// **It is also the only thing that makes a rule change visible at the handshake.**
+/// `palw_ruleset_id_v2` hashes `PalwConsensusParamsV2` and nothing else, and a bundle's fields are
+/// parameters — so a change to what the RULES are, written in code rather than in a parameter,
+/// leaves the ruleset id and `consensus_params_id` untouched. Two binaries that disagree about
+/// which blocks are valid would then pass each other's handshake and fork in silence, which is the
+/// one failure the fingerprint exists to prevent. `PalwConsensusParamsV2::protocol_version` is
+/// pinned to this constant precisely so a rule change has somewhere to be declared.
+///
+/// **2 → 3** (2026-08-22): the mainnet-readiness audit's Phase 0. Attempt admission changed —
+/// merged blues are now metered by the class lottery and by attempt identity rather than paid on
+/// producer entitlement alone — and class registration gained bounds that refuse shapes the old
+/// build accepted. A node running the older rules produces attempts this one must not accept, and
+/// now cannot: the version check refuses them by construction rather than by hoping the two never
+/// meet.
+pub const PALW_ATTEMPT_V2_VERSION: u16 = 3;
 
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;
