@@ -309,29 +309,55 @@ impl PalwPanelService {
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
+                // Resolve the fee UTXO ONCE per tick and then CHAIN it: the change of a carrier
+                // this tick already submitted is not in the virtual UTXO set — it is in our own
+                // mempool — so re-resolving per claim hands every claim after the first the same
+                // spent outpoint, and the mempool refuses it as a double spend. Chaining is also
+                // what lets the submitter keep up: one carrier per tick cannot track a lane that
+                // mints a claim per block.
+                let mut funding = self.resolve_fee_funding(&session);
+                if funding.is_none() && receipts.keys().any(|c| !submitted.contains(c)) {
+                    // Once per tick, not once per claim: a pending carrier keeps every quorum
+                    // unfundable until it is mined, and that used to be tens of thousands of
+                    // identical lines an hour.
+                    warn!("[{PALW_PANEL}] a quorum stands but no fee UTXO resolves — a carrier may still be in flight; else fund --palw-fee-outpoint");
+                }
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
                     if submitted.contains(&claim) || submit_attempts.get(&claim).copied().unwrap_or(0) >= SUBMIT_ATTEMPTS {
                         continue;
                     }
                     let pool = receipts.get(&claim).cloned().unwrap_or_default();
                     let Some(object) = session.palw_v2_receipt_quorum_assemble(claim, pool) else { continue };
-                    let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session) else {
-                        warn!("[{PALW_PANEL}] a quorum stands for claim {claim} but no fee UTXO resolves — fund --palw-fee-outpoint");
-                        continue;
-                    };
                     *submit_attempts.entry(claim).or_insert(0) += 1;
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding) {
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
+                            // The change this carrier creates, read off the carrier itself rather
+                            // than recomputed — it is the next carrier's input.
+                            let change = tx.outputs[0].clone();
                             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                                 Ok(()) => {
                                     info!("[{PALW_PANEL}] submitted {} for claim {claim} in tx {txid}", object_name(&object));
-                                    self.persist_fee_outpoint(TransactionOutpoint::new(txid, 0));
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
                                     submitted.insert(claim);
                                 }
                                 Err(e) => {
+                                    // The chain we were spending is gone or was never there; stop
+                                    // this tick rather than build more carriers on a dead input.
                                     warn!("[{PALW_PANEL}] the mempool refused the {} for claim {claim}: {e}", object_name(&object));
+                                    funding = None;
                                 }
                             }
                         }

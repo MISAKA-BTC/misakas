@@ -186,6 +186,18 @@ const GENESIS_CLASS_TARGET: u128 = u128::MAX / 2;
 /// Slashable value per pwu — what an exposure ceiling is measured in.
 const SLASH_VALUE_PER_PWU: u64 = 5;
 
+/// The longest a single claim can hold its executor's exposure: every window on the path from
+/// creation to a terminal phase, laid end to end.
+///
+/// `release_for_claim` runs on `Final` and on `Voided` — and nowhere else. Exposure therefore
+/// stands for the WHOLE lifetime of a claim, not until a panel binds it. Sizing collateral
+/// against `WINDOW_BIND` alone wedged testnet-12 at block 601 with `weight=0`: the ceiling
+/// admitted 601 concurrent claims, while the earliest `Final` a chain can reach is one licensed
+/// claim plus `WINDOW_CHALLENGE` away — DAA 1200 at one claim per block. Every claim the chain
+/// was waiting to finalize was itself occupying the room the chain needed to keep producing.
+/// Blocks were produced, receipts were licensed, and nothing ever finalized.
+const MAX_CLAIM_EXPOSURE_DAA: u64 = WINDOW_BIND + WINDOW_RECEIPT + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD;
+
 /// One bond in a genesis registry.
 ///
 /// A registry, not a bond: `derive_panel_v2` excludes a claim's own executor by bond, by operator
@@ -222,20 +234,22 @@ pub struct PalwGenesisBondSpecV1 {
 ///
 /// The arithmetic, with one claim per block and DAA advancing one per block. A claim accepted in
 /// block `k` carries deadline `k + window_bind`, and the sweep voids deadlines STRICTLY before the
-/// block's DAA — so claim 1 is swept while block `window_bind + 2` is applied. But admission runs
-/// against the PARENT state, before that block's own sweep, so producing block `window_bind + 1`
-/// requires room for `window_bind + 1` live claims. One short is not a near miss: the chain cannot
-/// produce the block that would have released the room, and there is no timeout that helps,
-/// because DAA only advances when blocks are produced.
+/// block's DAA. But admission runs against the PARENT state, before that block's own sweep, so
+/// the room a producer needs is one claim MORE than the span it must cover. One short is not a
+/// near miss: the chain cannot produce the block that would have released the room, and there is
+/// no timeout that helps, because DAA only advances when blocks are produced.
+///
+/// The span to cover is `MAX_CLAIM_EXPOSURE_DAA`, not the bind window — a claim's exposure is
+/// released at `Final`, and the road to `Final` runs through every window in the lattice.
 ///
 /// This is the structural minimum, not a safety margin. A network that wants slack against DAA
 /// advancing more slowly than one per block (parallel producers sharing a DAA score) must fund
 /// beyond it — the ceiling is per BOND, so a bond that produces in parallel with itself needs a
 /// multiple.
-pub fn palw_v2_collateral_for_bind_window_v1(pwu_per_inference: u64) -> u64 {
+pub fn palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference: u64) -> u64 {
     let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
     let per_claim = (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1);
-    let ceiling = per_claim.saturating_mul(WINDOW_BIND as u128 + 1);
+    let ceiling = per_claim.saturating_mul(MAX_CLAIM_EXPOSURE_DAA as u128 + 1);
     let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
     collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
 }
@@ -284,10 +298,10 @@ pub fn palw_fp_devnet_bundle_v3(
     // The whole registry, because a panel is seated out of it — see `PalwGenesisBondSpecV1`.
     genesis_bonds: Vec<PalwGenesisBondSpecV1>,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
-    // Derived, not declared: see `palw_v2_collateral_for_bind_window_v1`. Applied to the policy
+    // Derived, not declared: see `palw_v2_collateral_for_claim_lifetime_v1`. Applied to the policy
     // minimum as well as to every registration, so "the minimum collateral" means "the smallest
     // stake that can carry a claim through the bind window" rather than a number chosen earlier.
-    let genesis_collateral = palw_v2_collateral_for_bind_window_v1(genesis_pwu_per_inference);
+    let genesis_collateral = palw_v2_collateral_for_claim_lifetime_v1(genesis_pwu_per_inference);
     // ADR-0045 Decision 3: no share table here. The chain grants shares at registration — the
     // first registration on the chain must be `base_class_id` at the whole 1000‰, which is the
     // single-class devnet shape this bundle used to spell out as a params constant.
@@ -338,7 +352,7 @@ pub fn palw_fp_devnet_bundle_v3(
         admission,
         panel: PalwPanelParamsV2::new(PALW_V2_PANEL_SEATS, PALW_V2_PANEL_QUORUM, ANCHOR_DELAY)?,
         reward: PalwRewardParamsV2::new(WORKER_CARVE_PERMILLE)?,
-        // The POLICY floor, deliberately not the derived one. `palw_v2_collateral_for_bind_window_v1`
+        // The POLICY floor, deliberately not the derived one. `palw_v2_collateral_for_claim_lifetime_v1`
         // is what a bond must declare to keep a chain moving, and `verify_palw_genesis_v2` enforces
         // it on the registrations themselves; this is the smaller "a bond is not nothing" bar, and
         // keeping the two apart is what lets a fixture build a deliberately thin network to watch
@@ -413,26 +427,42 @@ mod tests {
     ///
     /// Measured on testnet-12's first run: sized to exactly `window_bind`, the chain produced 600
     /// blocks and then held forever on `the bond's exposure ceiling leaves no room for another
-    /// claim`. Admission runs against the PARENT state, so block `window_bind + 1` needs room for
-    /// `window_bind + 1` live claims — and the first void is not swept until block
-    /// `window_bind + 2`, which the chain can no longer reach.
+    /// claim`. Admission runs against the PARENT state, so covering a span of N DAA needs room
+    /// for N + 1 live claims — and the first sweep is not applied until one block later, which
+    /// the chain can no longer reach.
+    ///
+    /// The span is the whole claim lifetime. Sized against the bind window alone, testnet-12
+    /// produced 601 blocks, licensed receipts the whole way, and finalized nothing: `Final` is
+    /// `WINDOW_CHALLENGE` past a license, so it could not arrive before DAA 1200, and every
+    /// claim waiting for it was occupying the ceiling.
     #[test]
-    fn the_collateral_admits_one_more_claim_than_the_bind_window_is_long() {
+    fn the_collateral_admits_one_more_claim_than_a_claim_can_live() {
         let pwu_per_inference = 7_900;
-        let collateral = palw_v2_collateral_for_bind_window_v1(pwu_per_inference);
+        let collateral = palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference);
         let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
         let per_claim = (pwu as u128) * (SLASH_VALUE_PER_PWU as u128);
         // The ceiling admission actually enforces: collateral × ratio / 1000.
         let ceiling = (collateral as u128) * (MAX_EXPOSURE_RATIO_PERMILLE as u128) / 1000;
         let admits = ceiling / per_claim;
         assert!(
-            admits >= WINDOW_BIND as u128 + 1,
-            "the ceiling admits {admits} concurrent claims; producing block {} needs {}",
-            WINDOW_BIND + 1,
-            WINDOW_BIND + 1
+            admits >= MAX_CLAIM_EXPOSURE_DAA as u128 + 1,
+            "the ceiling admits {admits} concurrent claims; a claim can hold exposure for {} DAA",
+            MAX_CLAIM_EXPOSURE_DAA
         );
         // And not wastefully more — this is a floor with a stated reason, not a round number.
-        assert!(admits < WINDOW_BIND as u128 + 8, "the derivation should not quietly inflate: admits {admits}");
+        assert!(admits < MAX_CLAIM_EXPOSURE_DAA as u128 + 8, "the derivation should not quietly inflate: admits {admits}");
+    }
+
+    /// The span the collateral covers must be the span the state machine can actually hold
+    /// exposure across — every window on the path from `Provisional` to a terminal phase. If a
+    /// window is added to the lattice and left out of this sum, the ceiling silently becomes
+    /// reachable by honest production again.
+    #[test]
+    fn the_covered_span_is_every_window_a_live_claim_can_wait_through() {
+        assert_eq!(MAX_CLAIM_EXPOSURE_DAA, WINDOW_BIND + WINDOW_RECEIPT + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD);
+        // The one that made the difference: a licensed claim waits out the challenge window
+        // while still holding its reservation, so the bind window alone is not the span.
+        assert!(MAX_CLAIM_EXPOSURE_DAA > WINDOW_BIND + WINDOW_CHALLENGE);
     }
     use super::*;
     use crate::palw_mode_v2::{PalwConsensusMode, palw_ruleset_id_v2};
