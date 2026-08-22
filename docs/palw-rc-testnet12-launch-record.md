@@ -69,7 +69,7 @@ before DAA 1200 the number that moves is `live_total`.
 | the EVM lane is queryable | `eth_chainId` → `0x4d534b` ("MSK"), `eth_blockNumber` → `0x1b7`, tracking the PALW chain height |
 | the submitter no longer floods | `no fee UTXO resolves` warnings: **24,014 in 15 minutes → 33 across the whole run** |
 | **claims stop voiding once the fleet is synced** | terminal claims plateaued at **135** and stayed there while DAA advanced 579 → 591 and `unresolved` rose 444 → 456 — every claim made after the seats caught up is still live |
-| the exposure ceiling never fires | `exposure ceiling` holds: **0**, where the previous binary held forever from block 601 |
+| **the exposure ceiling is gone, measured** | the chain crossed **611 concurrent claims** (`unresolved=611`) at DAA 771 with `exposure ceiling` holds: **0**. The previous binary's ceiling admitted exactly 601 and held there forever. This is the fix proven on a running chain rather than in a test |
 
 ## One thing that looked like a fault and was not
 
