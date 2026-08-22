@@ -140,8 +140,16 @@ pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collec
 pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
-pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] =
-    &[PALW_STATE_V2_DOMAIN_STATE_ROOT, PALW_STATE_V2_DOMAIN_COLLECTION, PALW_STATE_V2_DOMAIN_CARRIAGE];
+pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_STATE_V2_DOMAIN_STATE_ROOT,
+    PALW_STATE_V2_DOMAIN_COLLECTION,
+    PALW_STATE_V2_DOMAIN_CARRIAGE,
+    // The two authorisation domains in this module. A signing domain that no sweep can see is a
+    // domain nothing stops another family from reusing, and a reused domain is a signature made
+    // for one purpose accepted for another.
+    PALW_CLASS_REGISTRATION_V2_DOMAIN,
+    PALW_BOND_RETIREMENT_V2_DOMAIN,
+];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
@@ -1016,6 +1024,24 @@ pub struct PalwClassAdmissionCarriageV2 {
 pub const PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-registration-v2/mldsa87/v1";
 pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registration-v2/message/v1";
 
+pub const PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-retirement-v2/mldsa87/v1";
+pub const PALW_BOND_RETIREMENT_V2_DOMAIN: &[u8] = b"misaka-palw/bond-retirement-v2/message/v1";
+
+/// What a bond's owner signs to take it out of service.
+///
+/// Retirement is the only writer of `Retiring`, and `palw_bond_collateral_is_locked_v2` is
+/// unconditionally true for an `Active` bond — so with retirement refused, every collateral
+/// outpoint is unspendable forever and every slashed sompi freezes instead of burning (the C-08
+/// obligation is only collected from a bond the lock has released). Re-admitting it needs the
+/// authorisation the refusal was standing in for, and this is that authorisation: the same shape
+/// `ClassRegistered` already uses, over the network, the bond and the retiring party.
+pub fn palw_bond_retirement_message_v2(network_domain: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    let mut state = keyed(PALW_BOND_RETIREMENT_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    finish(state)
+}
+
 /// What a registrant signs: the class it is registering and the share it is taking.
 ///
 /// The class id is its graph, so signing the id signs the graph; the share is signed because it is
@@ -1058,6 +1084,11 @@ pub enum PalwConsensusObjectV2 {
     },
     BondRetireRequested {
         bond: PalwBondKeyV2,
+        /// The owner's ML-DSA-87 over [`palw_bond_retirement_message_v2`], verified against the
+        /// bond's own registered `pubkey`. It rides the OBJECT rather than the carrier because the
+        /// carrier is a transaction anyone can build; what has to be proven is that the party
+        /// asking to release this collateral is the party that posted it.
+        signature: Vec<u8>,
     },
     ClassRegistered {
         class_id: Hash64,
@@ -3173,7 +3204,7 @@ fn apply_object(
                 }),
             );
         }
-        PalwConsensusObjectV2::BondRetireRequested { bond } => {
+        PalwConsensusObjectV2::BondRetireRequested { bond, .. } => {
             let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
             match record.status {
                 PalwBondStatusV2::Retiring { .. } => return Err(PalwStateV2Error::BondAlreadyRetiring(*bond)),
@@ -5281,6 +5312,11 @@ pub(crate) mod tests {
     /// Params with a rung window STRICTLY inside the court budget — the configuration that turns
     /// the interactive ladder on. The default leaves rung == backstop, which the sweep treats as
     /// no rung clock at all.
+    fn court_params() -> crate::palw_mode_v2::PalwCourtParamsV2 {
+        crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+            .expect("the shipped court parameters are valid")
+    }
+
     fn params_with_ladder() -> PalwStateParamsV2 {
         params().with_turn_deadline_daa(20).unwrap()
     }
@@ -5361,6 +5397,57 @@ pub(crate) mod tests {
         assert_eq!(ladder.interval(), (4, 5), "one index wide");
         assert_eq!(ladder.terminal_index(), Some(4), "and the dispute is located");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal, "only an arithmetic close finishes it now");
+    }
+
+    /// **An executor could close on a step it had computed correctly and buy its own acquittal.**
+    ///
+    /// `adjudicate_court_close_v2` resolved the session and threw it away, so nothing tied the
+    /// step being adjudicated to the step the bisection had narrowed to. A trace runs to
+    /// `PALW_STEP_MAX_LEAVES` leaves and one wrong leaf is enough to be guilty, so the accused
+    /// picked any leaf it had got right, `check_execution_step_refutation_v1` answered
+    /// `NoFaultFound`, `map_refutation_outcome` turned that into `ChallengerDefeated`, and the
+    /// session was deleted with the claim re-armed for `Final` — for one transaction.
+    ///
+    /// The ladder always knew the answer; it was never asked. This is the asking.
+    #[test]
+    fn a_close_must_be_the_step_the_ladder_narrowed_to() {
+        use crate::palw_court_v2::{PalwCourtV2Error, adjudicate_court_close_v2};
+        let p = params_with_ladder();
+        let (s5, _claim_id, sid) = licensed_with_court(&p);
+
+        // Before the bisection has located anything, a close decides a dispute nobody narrowed.
+        let proof = crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+            refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+            operand_openings: Vec::new(),
+        };
+        assert!(
+            matches!(adjudicate_court_close_v2(&s5, &sid, &proof, &court_params()), Err(PalwCourtV2Error::LadderNotTerminal)),
+            "a close before the ladder terminates must be refused"
+        );
+
+        // Narrow it, exactly as `palw_v2_the_ladder_narrows_across_blocks` does, to index 4.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 106, 7), &[rung_verdict(sid, 0, false)], None);
+        let (s8, _) = apply(&s7, &p, &ctx(8, 107, 8), &[disclose(sid, 1, 4, 0xD1)], None);
+        let (s9, _) = apply(&s8, &p, &ctx(9, 108, 9), &[rung_verdict(sid, 1, true)], None);
+        let (s10, _) = apply(&s9, &p, &ctx(10, 109, 10), &[disclose(sid, 2, 6, 0xD2)], None);
+        let (s11, _) = apply(&s10, &p, &ctx(11, 110, 11), &[rung_verdict(sid, 2, false)], None);
+        let (s12, _) = apply(&s11, &p, &ctx(12, 111, 12), &[disclose(sid, 3, 5, 0xD3)], None);
+        let (s13, _) = apply(&s12, &p, &ctx(13, 112, 13), &[rung_verdict(sid, 3, false)], None);
+        assert_eq!(s13.court_session(&sid).unwrap().ladder.terminal_index(), Some(4), "the dispute is located at 4");
+
+        // The accused answers about a DIFFERENT leaf. The skeleton refutation opens leaf 0, so it
+        // is exactly the shape of the escape: a step that is not the one under dispute.
+        let opened = match &proof {
+            crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation, .. } => refutation.output_opening.leaf_index,
+            _ => unreachable!(),
+        };
+        assert_ne!(opened, 4, "the fixture must open a leaf other than the narrowed one");
+        let outcome = adjudicate_court_close_v2(&s13, &sid, &proof, &court_params());
+        assert!(
+            matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
+            "a close about another step must be refused, got {outcome:?}"
+        );
     }
 
     /// **A silent responder loses, and no object says so.** This is the whole reason the ladder
@@ -5467,7 +5554,7 @@ pub(crate) mod tests {
         ));
         // Retiring a bond that does not exist.
         assert!(matches!(
-            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(9) }], None),
+            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(9), signature: vec![0xEE; 8] }], None),
             Err(PalwStateV2Error::MissingBond(_))
         ));
     }
@@ -5499,7 +5586,7 @@ pub(crate) mod tests {
         ));
 
         // Retiring bond refuses the attempt.
-        let (retiring, _) = apply(&s1, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1) }], None);
+        let (retiring, _) = apply(&s1, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }], None);
         assert!(matches!(
             apply_palw_transition_v2(&retiring, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1))),
             Err(PalwStateV2Error::RetiringBond(_))
@@ -5741,7 +5828,7 @@ pub(crate) mod tests {
         );
         let (with_claim, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
         let (with_retire, _) =
-            apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1) }], None);
+            apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }], None);
         // The freeze rides an entrant (the floor may not be frozen), which is still a distinct
         // surface: the registration alone and the registration-plus-freeze must differ.
         let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[entrant_class(h64(2), 500), freeze(h64(2))], None);

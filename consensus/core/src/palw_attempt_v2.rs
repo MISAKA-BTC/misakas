@@ -44,13 +44,22 @@ use blake2b_simd::Params;
 /// one failure the fingerprint exists to prevent. `PalwConsensusParamsV2::protocol_version` is
 /// pinned to this constant precisely so a rule change has somewhere to be declared.
 ///
+/// **3 → 4** (2026-08-22, later the same day): the court's close rules. A close is now bound to
+/// the step its session narrowed to, and the close binding compares the claim's trace root against
+/// the binding's LOGITS root rather than its step Merkle root. Both change which `CourtClosed`
+/// objects are applied, and `processor.rs`'s object walk DROPS an object that fails adjudication
+/// while the block itself stands — so an old binary drops every close a new binary applies. Same
+/// blocks, divergent claim phases, divergent slashed bonds, divergent `safe_weight`: a silent fork
+/// rather than a refused handshake. Version 3 was already published and deployed, so this needed
+/// its own bump rather than riding the previous one.
+///
 /// **2 → 3** (2026-08-22): the mainnet-readiness audit's Phase 0. Attempt admission changed —
 /// merged blues are now metered by the class lottery and by attempt identity rather than paid on
 /// producer entitlement alone — and class registration gained bounds that refuse shapes the old
 /// build accepted. A node running the older rules produces attempts this one must not accept, and
 /// now cannot: the version check refuses them by construction rather than by hoping the two never
 /// meet.
-pub const PALW_ATTEMPT_V2_VERSION: u16 = 3;
+pub const PALW_ATTEMPT_V2_VERSION: u16 = 4;
 
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;

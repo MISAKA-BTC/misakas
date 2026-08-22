@@ -4346,8 +4346,38 @@ impl VirtualStateProcessor {
                 // retire and an emergency freeze must eventually be pullable — but a door that
                 // cannot be authenticated is better shut than open, and `palw_lifecycle_objects_v2`
                 // refuses them at admission for the same reason. This arm is the second lock.
-                Obj::BondRetireRequested { .. } => {
-                    return Err("a bond retirement carries no owner authorization; the object is refused".to_string());
+                // **A retirement is authorised by the bond's own key, and by nothing else.**
+                //
+                // This used to be a blanket refusal, which was correct about the danger and wrong
+                // as a resting state: retirement is the only writer of `Retiring`, an `Active`
+                // bond's collateral is unconditionally locked, and the C-08 burn is collected only
+                // from a bond the lock has released. Refusing it forever means the collateral can
+                // never be withdrawn and the slashed sompi never actually burns.
+                //
+                // So the door opens with the lock the refusal described: the same registrant-bond
+                // signature check `ClassRegistered` performs a few arms above, over
+                // `palw_bond_retirement_message_v2`, verified against the pubkey the bond itself
+                // registered. A bond key is a public premine outpoint; the signature is what makes
+                // naming one different from owning it.
+                Obj::BondRetireRequested { bond, signature } => {
+                    let record = state
+                        .bond(bond)
+                        .ok_or_else(|| format!("a retirement names bond {bond:?} this chain does not have"))?;
+                    if matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }) {
+                        return Err(format!("bond {bond:?} is already retiring"));
+                    }
+                    let message = kaspa_consensus_core::palw_state_v2::palw_bond_retirement_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        bond,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s retirement is not signed by the key it registered"));
+                    }
                 }
                 Obj::ClassFrozen { .. } => {
                     return Err("a class freeze carries no verified contradiction; the object is refused".to_string());
@@ -10090,6 +10120,13 @@ impl VirtualStateProcessor {
         {
             let mut store = self.palw_state_v2_store.write();
             store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+            // The same state, also as this node's servable snapshot. Without it a node that just
+            // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
+            // its own pruning point next advances — so the fix would not propagate past the first
+            // hop, and a young network would have exactly one node able to serve.
+            store
+                .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
+                .expect("writing the verified PALW pruning snapshot cannot fail");
         }
         self.db.write(batch).unwrap();
         Ok(())
@@ -10106,7 +10143,11 @@ impl VirtualStateProcessor {
         pruning_point: BlockHash,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2> {
         let params = self.palw_state_params_v2.as_ref()?;
-        let (block, state) = self.palw_state_v2_store.read().load_tip(params).ok().flatten()?;
+        // **The SNAPSHOT, not the tip.** The tip is rewritten to the sink on every virtual walk, so
+        // asking whether it equals the pruning point was a question whose answer was always no on
+        // a running node — and the reply was always `found: false`, which aborts the requester's
+        // whole IBD. `capture_pruning_point_palw_state` materialises this row at pruning-advance.
+        let (block, state) = self.palw_state_v2_store.read().load_pruning_snapshot(params).ok().flatten()?;
         (block == pruning_point).then(|| kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state))
     }
 
@@ -10227,6 +10268,63 @@ impl VirtualStateProcessor {
     /// reads them). The reconstructed as-of-pp bond view + the still-present per-block
     /// rows reproduce exactly what a node computed when it validated the pruning point's
     /// child (so the first post-pruning block's `c == v` on an importer matches).
+    /// **Materialise the PALW state AT the pruning point, while the deltas below it still exist.**
+    ///
+    /// The server used to answer a peer's `RequestPruningPointPalwState` only when the singleton
+    /// TIP row happened to name the pruning point — but the tip is rewritten to the sink on every
+    /// virtual walk, so on any running node that equality is permanently false and the reply was
+    /// always `found: false`. Every pruned IBD therefore hard-aborted, and the only way to join
+    /// was a replay from genesis with an LLM inference verified per header. The overlay lanes grew
+    /// this sibling long ago (`capture_pruning_point_overlay_snapshot`, right below); PALW never
+    /// did.
+    ///
+    /// Must run BEFORE `prune` deletes the below-pruning-point delta rows — the walk back from the
+    /// tip is what needs them — which is why the call site sits beside the overlay one.
+    pub fn capture_pruning_point_palw_state(&self, pruning_point: BlockHash) {
+        let Some(params) = self.palw_state_params_v2.as_ref() else {
+            return;
+        };
+        let store = self.palw_state_v2_store.read();
+        let loaded = match store.load_tip(params) {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => {
+                warn!("PALW: no V2 state tip to capture a pruning-point snapshot from; peers cannot be served a pruned sync yet");
+                return;
+            }
+            Err(e) => {
+                warn!("PALW: the V2 state tip does not load ({e}); no pruning-point snapshot captured");
+                return;
+            }
+        };
+        let (tip_block, tip_state) = loaded;
+        let state = if tip_block == pruning_point {
+            tip_state
+        } else {
+            let path = self.dag_traversal_manager.calculate_chain_path(tip_block, pruning_point, None);
+            let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
+            let added: Vec<BlockHash> = path.added.iter().copied().collect();
+            match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!(
+                        "PALW: cannot walk the V2 state from tip {tip_block} back to pruning point {pruning_point} ({e}); no snapshot captured, so this node cannot serve a pruned sync"
+                    );
+                    return;
+                }
+            }
+        };
+        drop(store);
+        let mut batch = WriteBatch::default();
+        let mut store = self.palw_state_v2_store.write();
+        if let Err(e) = store.set_pruning_snapshot_batch(&mut batch, pruning_point, &state) {
+            warn!("PALW: the pruning-point snapshot did not stage ({e})");
+            return;
+        }
+        drop(store);
+        self.db.write(batch).unwrap();
+        info!("PALW: captured the V2 state at pruning point {pruning_point} — peers can now sync from it");
+    }
+
     pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) {
         if self.dns_params.is_none() {
             return;

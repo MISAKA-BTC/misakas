@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(admit(&state, &ctx(6, 135, 6), &beacon(), &foreign).unwrap_err(), PalwFpAdmissionV3Error::ProducerNotExecutor);
 
         // 6b. A retiring bond backs no new blocks.
-        let retire = PalwConsensusObjectV2::BondRetireRequested { bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)) };
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)), signature: vec![0xEE; 8] };
         let (retiring, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[retire], None).unwrap();
         assert!(matches!(admit(&retiring, &ctx(7, 135, 7), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::BondRetiring(_)));
 

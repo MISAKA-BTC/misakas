@@ -2087,6 +2087,18 @@ impl IbdFlow {
     }
 
     async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
+        // **Everything that can legitimately fail happens BEFORE anything is destroyed.**
+        //
+        // The PALW carriage is fetched first because a peer may answer `found: false` — it has
+        // captured no snapshot yet — and that is a normal outcome, not a fault. Clearing the utxo
+        // set first meant such a node had already deleted its own pruning utxoset and latched
+        // `is_utxo_stable = false` before it could learn it had to stop, and every retry deleted it
+        // again against the same unservable peer.
+        let palw_carriage = if pruning_point != self.ctx.config.genesis.hash {
+            self.request_pruning_point_palw_state(pruning_point).await?
+        } else {
+            None
+        };
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
         consensus.async_clear_pruning_utxo_set().await; // this deletes the old pruning utxoset and also sets the pruning utxo as invalidated
         self.sync_pruning_point_utxoset(consensus, pruning_point).await?;
@@ -2103,7 +2115,9 @@ impl IbdFlow {
         if pruning_point != self.ctx.config.genesis.hash {
             self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
             self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
-            self.sync_pruning_point_palw_state(consensus, pruning_point).await?;
+            if let Some(carriage) = palw_carriage {
+                self.import_pruning_point_palw_state(consensus, pruning_point, carriage).await?;
+            }
         }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         consensus.async_set_pruning_utxoset_stable().await;
@@ -2301,11 +2315,21 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     ///
     /// The carriage is verified against the pruning point's OWN header inside
     /// `import_pruning_point_palw_state`, before anything is written.
-    async fn sync_pruning_point_palw_state(
+    /// Fetch the pruning point's PALW carriage, WITHOUT touching this node's state.
+    ///
+    /// Separated from the import because `sync_new_utxo_set` used to run
+    /// `async_clear_pruning_utxo_set()` — which deletes the pruning utxoset and latches
+    /// `is_utxo_stable = false` — BEFORE this request, which a peer can legitimately answer
+    /// `found: false`. A node that tried to sync from a peer with no snapshot had therefore
+    /// already destroyed its own utxoset before learning it could not proceed, and every retry
+    /// destroyed it again. Fetch first, destroy second.
+    ///
+    /// `Ok(None)` is the honest answer on a network with no V2 ruleset — the caller then imports
+    /// nothing, which is what a dormant lane needs.
+    async fn request_pruning_point_palw_state(
         &mut self,
-        consensus: &ConsensusProxy,
         pruning_point: BlockHash,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>, ProtocolError> {
         let palw_active = matches!(
             self.ctx.config.params.palw_consensus_mode,
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
@@ -2319,7 +2343,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // ruleset is inside the consensus fingerprint, and mismatched fingerprints refuse the
         // handshake), so there the request is always answerable.
         if !palw_active {
-            return Ok(());
+            return Ok(None);
         }
         self.router
             .enqueue(make_message!(
@@ -2341,6 +2365,16 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 = borsh::from_slice(&msg.palw_state)
             .map_err(|_| ProtocolError::Other("invalid PALW state carriage in PruningPointPalwState"))?;
+        Ok(Some(carriage))
+    }
+
+    /// Install a carriage fetched earlier by [`Self::request_pruning_point_palw_state`].
+    async fn import_pruning_point_palw_state(
+        &mut self,
+        consensus: &ConsensusProxy,
+        pruning_point: BlockHash,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+    ) -> Result<(), ProtocolError> {
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state(pruning_point, carriage)).await?;
         info!("imported the PALW state of the pruning point {}", pruning_point);
         Ok(())

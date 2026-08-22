@@ -115,8 +115,21 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // `adjudicate_class_contradiction_v1` (which takes a verifier, and is wired only into the
         // other band today). Until then they are refused here AND at acceptance — one lock is a
         // lock somebody removes while refactoring.
+        // **Re-admitted, now that it carries the authorisation the refusal stood in for.**
+        //
+        // The refusal was right and it was also a permanent capital lock: retirement is the ONLY
+        // writer of `Retiring`, `palw_bond_collateral_is_locked_v2` is unconditionally true for an
+        // `Active` bond, and the C-08 burn is collected only from a bond the lock has released —
+        // so with this door shut, every genesis collateral outpoint is unspendable forever and
+        // every slashed sompi freezes instead of being destroyed. "Stake" that can never be
+        // withdrawn is not stake.
+        //
+        // This layer is stateless, so it checks SHAPE only: a retirement must carry a signature.
+        // Whether that signature is the bond's own is the acceptance layer's, where the registry
+        // is in hand — the same split `ClassRegistered` uses two arms below.
+        PalwConsensusObjectV2::BondRetireRequested { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::BondRetireRequested { .. } => Err(
-            "a bond retirement carries no owner authorization — anyone could retire anyone's bond, and a bond key is a public outpoint",
+            "a bond retirement must carry the owner signature that authorizes it — a bond key is a public outpoint, so without one anyone could retire anyone's bond",
         ),
         PalwConsensusObjectV2::ClassFrozen { .. } => Err(
             "a class freeze carries a contradiction certificate no layer verifies — a forged one freezes a class permanently, and there is no unfreeze",
@@ -284,7 +297,7 @@ mod tests {
     #[test]
     fn the_two_unauthenticated_objects_may_not_ride() {
         for (object, needle) in [
-            (PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) }, "owner authorization"),
+            (PalwConsensusObjectV2::BondRetireRequested { bond: bond(3), signature: Vec::new() }, "must carry the owner signature"),
             (
                 PalwConsensusObjectV2::ClassFrozen {
                     class_id: h64(1),
@@ -450,7 +463,7 @@ mod tests {
             .unwrap(),
             borsh::to_vec(&PalwLifecycleTxPayloadV2 {
                 version: PALW_LIFECYCLE_TX_VERSION_V2,
-                object: PalwConsensusObjectV2::BondRetireRequested { bond: bond(3) },
+                object: PalwConsensusObjectV2::BondRetireRequested { bond: bond(3), signature: vec![0xEE; 8] },
             })
             .unwrap(),
             // Does not ride: the chain derives panel bindings.

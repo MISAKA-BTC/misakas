@@ -268,6 +268,12 @@ impl PruningProcessor {
             // node serving this snapshot matches a pruned-IBD importer's first post-pruning
             // block `c == v`. No-op when the overlay is dormant.
             self.virtual_processor.capture_pruning_point_overlay_snapshot(new_pruning_point);
+            // And the PALW state, for exactly the same reason and with the same ordering
+            // constraint: the walk back from the tip reads the delta rows `prune` is about to
+            // delete. Without it a running node's tip never equals its pruning point, so it
+            // answered every peer's request with `found: false` and no node could ever join by a
+            // pruned sync. No-op when ConsensusV2 is dormant.
+            self.virtual_processor.capture_pruning_point_palw_state(new_pruning_point);
 
             self.prune(new_pruning_point, adjusted_retention_period_root);
         }

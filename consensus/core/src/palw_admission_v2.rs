@@ -808,7 +808,7 @@ mod tests {
             &state,
             &state_params(),
             &c,
-            &[PalwConsensusObjectV2::BondRetireRequested { bond: PalwBondKeyV2(bond_outpoint(1)) }],
+            &[PalwConsensusObjectV2::BondRetireRequested { bond: PalwBondKeyV2(bond_outpoint(1)), signature: vec![0xEE; 8] }],
             None,
         )
         .unwrap();

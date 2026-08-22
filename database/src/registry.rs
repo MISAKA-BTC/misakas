@@ -376,6 +376,16 @@ pub enum DatabaseStorePrefixes {
     /// looks exactly like "no PALW work matured", which fork choice would act on.
     PalwStateV2Schema = 224,
 
+    /// Singleton [`PalwStateTipRecordV2`]-shaped row: the PALW state MATERIALISED AT the current
+    /// pruning point, captured while the below-pruning-point delta rows still exist and served to
+    /// peers doing a pruned IBD.
+    ///
+    /// It cannot be the tip row. That one is rewritten to the sink on every virtual walk, so the
+    /// "is the tip the pruning point?" equality the server used was permanently false on any
+    /// running node and every pruned IBD hard-aborted. The overlay lanes solved this the same way
+    /// (`capture_pruning_point_overlay_snapshot`); PALW simply never grew the sibling.
+    PalwPruningPointState = 225,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

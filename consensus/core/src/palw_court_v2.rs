@@ -135,6 +135,10 @@ pub enum PalwCourtV2Error {
     TraceRootMismatch,
     #[error("the refutation's binding is not the execution this claim committed to")]
     ExecutionRootMismatch,
+    #[error("the ladder has not reached a terminal step — a close before the bisection ends decides a dispute nobody narrowed")]
+    LadderNotTerminal,
+    #[error("the refutation opens leaf {opened}, but the ladder narrowed to {narrowed} — a close must answer the step the session is about")]
+    CloseIsNotTheNarrowedStep { opened: u64, narrowed: u64 },
     #[error("the operand openings do not prove against the class's registered artifact root: {0}")]
     OperandProofInvalid(String),
     #[error("the refutation does not adjudicate ({0}) — an unadjudicable object convicts nobody and acquits nobody")]
@@ -316,6 +320,26 @@ pub fn check_arithmetic_close_binding(claim_trace_root: Hash64, refutation_root:
     if refutation_root != claim_trace_root { Err(PalwCourtV2Error::TraceRootMismatch) } else { Ok(()) }
 }
 
+/// **Which root of the binding a claim's `trace_root` is.**
+///
+/// A claim commits the LOGITS trace root: `palw_producer.rs` sets `trace_root` from
+/// `Base0ExecutionV1::trace_root`, which `misaka-palw-base0/src/produce.rs` computes as
+/// `base0_logits_trace_root_v1`, and which `base0_binding_from_capture_v1` then carries into the
+/// binding as `full_logits_trace_root`. `step_merkle_root` is a DIFFERENT root over the step
+/// leaves; it is pinned, but transitively — `committed_execution_root` is
+/// `execution_commitment_root_v2(context, full_logits_trace_root, activation, checkpoint, step)`,
+/// so the execution-root check beside this one already binds it.
+///
+/// Both close arms used to compare `claim.trace_root` against `step_merkle_root`, which are never
+/// equal for a real execution: every close failed `TraceRootMismatch` before reading any evidence,
+/// so no producer could be convicted and no honest producer could clear itself. It was not red
+/// because the test built its claim by assigning `attempt.trace_root = binding.step_merkle_root` —
+/// the reverse of what production does — which is why the test below builds from a real capture
+/// instead.
+fn binding_logits_root_of(binding: &crate::palw_step_leg::PalwStepBindingV2) -> Hash64 {
+    binding.full_logits_trace_root
+}
+
 /// The binding must be the EXECUTION THE CLAIM COMMITTED TO — not merely one that mentions the
 /// claim's public trace root (audit C3).
 ///
@@ -363,10 +387,47 @@ pub fn adjudicate_court_close_v2(
     // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
     // the ceiling, and that is the right answer — the object was inadmissible on its face.
     check_close_cost_v2(proof, court)?;
-    let (_session, claim) = resolve_court_session_v2(state, session_id)?;
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    // **A close is a move IN this session, not a fresh argument beside it.**
+    //
+    // The session used to be resolved and thrown away (`let (_session, claim) = …`), so nothing
+    // tied the step being adjudicated to the step the bisection had narrowed to. A trace is up to
+    // `PALW_STEP_MAX_LEAVES` leaves and one wrong leaf is enough to be guilty, so an executor
+    // could answer with a leaf it had computed CORRECTLY, take `NoFaultFound` — which
+    // `map_refutation_outcome` turns into `ChallengerDefeated` — and buy its own acquittal for one
+    // transaction, deleting the session and re-arming the claim for `Final`.
+    //
+    // The ladder already knew which step the dispute was about; it was simply never asked. That is
+    // also what `palw_v2_the_ladder_narrows_across_blocks` says in words — "at which point the
+    // ladder is `Terminal` and only an arithmetic close can finish the job" — so this makes the
+    // code agree with the sentence the ladder was built for.
+    let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    if let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } = proof {
+        let opened = refutation.output_opening.leaf_index;
+        if opened != narrowed {
+            return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
+        }
+    }
+    adjudicate_close_proof_v2(state, claim, proof, court)
+}
+
+/// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
+/// proof support?
+///
+/// Split out from [`adjudicate_court_close_v2`] so the two properties can be tested apart. The
+/// outer function answers "is this close a legal move in this session"; this one answers "and what
+/// does the evidence say". Mixing them meant every arithmetic test had to drive a full bisection,
+/// and the procedural rule had nowhere to be tested on its own.
+pub fn adjudicate_close_proof_v2(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    check_close_cost_v2(proof, court)?;
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings } => {
-            check_arithmetic_close_binding(claim.trace_root, refutation.binding.step_merkle_root)?;
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(&refutation.binding))?;
             check_execution_root_binding(claim.execution_root, refutation.binding.committed_execution_root)?;
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
@@ -378,7 +439,7 @@ pub fn adjudicate_court_close_v2(
             // about THIS claim's committed execution, and `verify_binding` inside the check
             // refuses a binding whose parts do not produce `committed_execution_root` — so the
             // pinned `full_logits_trace_root` is the claim's own, not the accuser's.
-            check_arithmetic_close_binding(claim.trace_root, binding.step_merkle_root)?;
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
             check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
             map_refutation_outcome(crate::palw_step_refute::check_base0_decode_token_refutation_v1(binding, pin, *position))
         }
@@ -897,7 +958,10 @@ mod tests {
     #[test]
     fn palw_v2_matmul_fraud_convicts_a_claim_and_slashes_its_bond_without_a_model() {
         let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_matmul_fraud();
-        let trace_root = refutation.binding.step_merkle_root;
+        // The claim's `trace_root` is the LOGITS root, which is exactly what the binding carries
+        // as `full_logits_trace_root`. Taking `step_merkle_root` here was the reverse of what a
+        // producer does, and it is what let the close binding stay wrong without a red test.
+        let trace_root = refutation.binding.full_logits_trace_root;
         let execution_root = refutation.binding.committed_execution_root;
         let p = params();
 
@@ -976,7 +1040,10 @@ mod tests {
 
         // The conviction, derived from the carried proof.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
-        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("a recomputable step adjudicates");
+        // The arithmetic half: what the evidence says about this claim. Whether the close is a
+        // legal move in the session is `a_close_must_be_the_step_the_ladder_narrowed_to`.
+        let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
+        let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("a recomputable step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
 
         // …and the chain acts on it: the claim is void as CourtFraud and the bond is debited.
@@ -1017,7 +1084,8 @@ mod tests {
                     honest_pin.generated_token_ids.clone(),
                 )
             };
-            let trace_root = binding.step_merkle_root;
+            // See above: the claim commits the logits root, not the step root.
+            let trace_root = binding.full_logits_trace_root;
             let execution_root = binding.committed_execution_root;
             let p = params();
             let objects = vec![
@@ -1088,7 +1156,8 @@ mod tests {
             )
             .unwrap();
             let proof = PalwCourtVerdictProofV2::DecodeToken { binding, pin, position: 1 };
-            let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("a carried pin adjudicates");
+            let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
+            let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("a carried pin adjudicates");
             let (closed, _) = apply_palw_transition_v2(
                 &in_court,
                 &p,
@@ -1154,7 +1223,10 @@ mod tests {
     #[test]
     fn palw_v2_an_honest_producer_survives_a_challenge_and_keeps_its_stake() {
         let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_honest_case();
-        let trace_root = refutation.binding.step_merkle_root;
+        // The claim's `trace_root` is the LOGITS root, which is exactly what the binding carries
+        // as `full_logits_trace_root`. Taking `step_merkle_root` here was the reverse of what a
+        // producer does, and it is what let the close binding stay wrong without a red test.
+        let trace_root = refutation.binding.full_logits_trace_root;
         let execution_root = refutation.binding.committed_execution_root;
         let p = params();
 
@@ -1240,7 +1312,8 @@ mod tests {
         // correct. `ChallengerDefeated`, not a refusal — a refusal would mean the court could not
         // check, which is a different and much weaker kind of safety.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
-        let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("an honest step adjudicates");
+        let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
+        let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("an honest step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
 
         let (closed, _) = apply_palw_transition_v2(
@@ -1308,10 +1381,19 @@ mod tests {
             refutation: crate::palw_step_refute::tests::skeleton_refutation(),
             operand_openings: Vec::new(),
         };
-        let outcome = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());
+        // Asked of the proof itself, so the reason under test is the binding rather than the
+        // procedure. The full close refuses this even earlier now — the ladder has not narrowed —
+        // and that is asserted separately below.
+        let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
+        let outcome = adjudicate_close_proof_v2(&in_court, claim_rec, &bogus, &court());
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::TraceRootMismatch)),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
+        );
+        let procedural = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());
+        assert!(
+            matches!(procedural, Err(PalwCourtV2Error::LadderNotTerminal)),
+            "and the full close refuses it before the evidence, because no step was narrowed to, got {procedural:?}"
         );
 
         // Which is what a declared verdict runs into: `palw_v2_validate_objects` compares the

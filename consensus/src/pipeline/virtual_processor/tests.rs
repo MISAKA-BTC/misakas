@@ -1724,8 +1724,16 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     };
     let honest = PalwStateCarriageV2::from_state(&state);
 
-    // What a peer would serve for this point, through the production exporter.
-    let served = vp.pruning_point_palw_state(tip).expect("this node holds the state at its own tip");
+    // **What a peer would serve, through the production path — which is the SNAPSHOT, not the tip.**
+    //
+    // This assertion used to read the tip, and passed for that reason alone: on a running node the
+    // tip is rewritten to the sink on every virtual walk, so the server's "is the tip the pruning
+    // point?" test was permanently false and every pruned IBD aborted. The test could not see it
+    // because it served the same row it had just written. Now it captures first, as
+    // `advance_pruning_point_if_possible` does, and asks for what the capture put there.
+    assert!(vp.pruning_point_palw_state(tip).is_none(), "nothing is servable before a snapshot is captured");
+    vp.capture_pruning_point_palw_state(tip);
+    let served = vp.pruning_point_palw_state(tip).expect("the captured snapshot is servable");
     assert_eq!(served, PalwStateCarriageV2::from_state(&vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap().1));
     assert!(vp.pruning_point_palw_state(kaspa_consensus_core::BlockHash::from_u64_word(0xBAD)).is_none(), "and nothing else");
 
@@ -1904,16 +1912,34 @@ async fn palw_v2_an_unsigned_receipt_set_cannot_slash_anyone() {
         assert!(err.contains("quorum"), "and the refusal must name the missing quorum: got {err}");
     }
 
-    // The two doors that cannot be authenticated at all are shut here too, so removing the ride
-    // list's refusal alone does not re-open them.
-    let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+    // **A retirement is authorised by the bond's own key.** It used to be refused outright, which
+    // shut the door and locked every genesis bond's collateral in behind it. Now the check is the
+    // one the refusal described, so the two ways of getting it wrong must both still fail: a bond
+    // this chain does not have, and a real bond whose owner did not sign.
+    let stranger = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
         kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
         0,
     ));
     let err = vp
-        .palw_v2_validate_objects(&state, &bundle.state, &point, &[Obj::BondRetireRequested { bond }])
-        .expect_err("anyone could retire anyone's bond");
-    assert!(err.contains("owner authorization"), "got {err}");
+        .palw_v2_validate_objects(
+            &state,
+            &bundle.state,
+            &point,
+            &[Obj::BondRetireRequested { bond: stranger, signature: vec![0xEE; 8] }],
+        )
+        .expect_err("a retirement nobody signed must not release anyone's collateral");
+    assert!(err.contains("not signed by the key it registered"), "got {err}");
+
+    // And an EMPTY signature is refused a layer earlier, on the ride list, so the two locks are
+    // still two — removing either does not open the door on its own.
+    assert!(
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&Obj::BondRetireRequested {
+            bond: stranger,
+            signature: Vec::new(),
+        })
+        .is_err(),
+        "an unsigned retirement must not even ride"
+    );
 }
 
 /// **A gossiped receipt pool assembles into exactly the object a block accepts** (launch

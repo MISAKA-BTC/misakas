@@ -91,6 +91,12 @@ pub struct DbPalwStateV2Store {
     db: Arc<DB>,
     deltas: CachedDbAccess<BlockHash, Arc<PalwStateDeltaRecordV2>>,
     tip: CachedDbItem<PalwStateTipRecordV2>,
+    /// The state materialised AT the pruning point, kept beside the tip because it answers a
+    /// different question: the tip says where this node's chain is, and this says what a peer
+    /// starting from the pruning point must be handed. The tip is rewritten to the sink on every
+    /// virtual walk, so it can never stand in for this — which is why every pruned IBD used to
+    /// abort.
+    pruning_snapshot: CachedDbItem<PalwStateTipRecordV2>,
     schema: CachedDbItem<u32>,
 }
 
@@ -100,6 +106,7 @@ impl DbPalwStateV2Store {
             db: Arc::clone(&db),
             deltas: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::PalwStateV2Deltas.into()),
             tip: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwStateV2Tip.into()),
+            pruning_snapshot: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningPointState.into()),
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
         }
     }
@@ -230,6 +237,46 @@ impl DbPalwStateV2Store {
     /// Load and REBUILD the tip state, demanding the recorded root — index rebuild, internal
     /// consistency, deadline consistency and the root equality all run (`into_state`), so what
     /// this returns is a state the machine would have produced, or an error naming why not.
+    /// Stage the pruning-point snapshot. Same shape and same derivation as [`Self::set_tip_batch`]
+    /// — the root is computed from the state handed in, never carried.
+    pub fn set_pruning_snapshot_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state: &PalwChainStateV2,
+    ) -> StoreResult<()> {
+        let carriage = PalwStateCarriageV2::from_state(state);
+        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        self.pruning_snapshot.write(
+            BatchDbWriter::new(batch),
+            &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh },
+        )
+    }
+
+    /// The raw snapshot row, or `None` when this node has not captured one yet — which is the
+    /// honest answer for a node whose pruning point has not advanced since it started.
+    pub fn pruning_snapshot_record(&self) -> StoreResult<Option<PalwStateTipRecordV2>> {
+        match self.pruning_snapshot.read() {
+            Ok(record) => Ok(Some(record)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The snapshot, decoded and re-checked against its own root, exactly as [`Self::load_tip`]
+    /// does for the tip.
+    pub fn load_pruning_snapshot(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
+        let Some(record) = self.pruning_snapshot_record()? else {
+            return Ok(None);
+        };
+        let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
+            .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
+        let state = carriage
+            .into_state(params, Some(record.state_root))
+            .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 pruning snapshot refused: {e}")))?;
+        Ok(Some((record.block, state)))
+    }
+
     pub fn load_tip(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
         let Some(record) = self.tip_record()? else {
             return Ok(None);

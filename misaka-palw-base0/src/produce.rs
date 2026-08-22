@@ -348,6 +348,34 @@ mod tests {
     /// the model actually said was the one part of the graph no refutation could open, and the
     /// commitment could not tell "computed zero" from "never computed". `finish` refuses a short
     /// capture now, so this test failing is the same event as a producer refusing to publish.
+    /// **What a claim's `trace_root` IS, pinned across the crate boundary the court reads it over.**
+    ///
+    /// `palw_producer.rs` puts `Base0ExecutionV1::trace_root` on the claim, and the court's close
+    /// binding compares that value against a field of the refutation's binding. Which field is not
+    /// a matter of taste: only `full_logits_trace_root` can ever equal it, because this is where
+    /// the one is passed into the other. `step_merkle_root` is a different root over different
+    /// leaves, pinned transitively through `committed_execution_root`.
+    ///
+    /// The court compared against `step_merkle_root`, so every close on a real claim failed
+    /// `TraceRootMismatch` before reading any evidence — no fraud convictable, no honest producer
+    /// able to clear itself. The court-side tests did not catch it because they built their claim
+    /// by assigning `trace_root = binding.step_merkle_root`, which is the reverse of the line
+    /// below. This test exists so that correspondence is asserted where it is actually created.
+    #[test]
+    fn a_claims_trace_root_is_the_bindings_logits_root() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        assert_eq!(
+            run.trace_root, run.binding.full_logits_trace_root,
+            "the claim's trace root and the binding's logits root are one value"
+        );
+        assert_ne!(
+            run.trace_root, run.binding.step_merkle_root,
+            "and the step root is a different root — comparing against it can only ever fail"
+        );
+        assert_eq!(run.execution_root, run.binding.committed_execution_root, "the execution root is the binding's own");
+    }
+
     #[test]
     fn an_honest_execution_fills_every_leaf_of_its_step_space() {
         let (artifact, profile, ctx, prompt) = small_job();
