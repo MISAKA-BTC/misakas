@@ -1244,6 +1244,7 @@ Do you confirm? (y/n)";
                         // registered.
                         court: palw_court.clone().expect("a ConsensusV2 bundle was matched above"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                        metal_worker: args.palw_metal_worker.as_ref().map(std::path::PathBuf::from),
                     },
                     consensus_manager.clone(),
                     mining_manager.clone(),
@@ -1372,6 +1373,7 @@ Do you confirm? (y/n)";
                         }
                         false => false,
                     },
+                    metal_worker: args.palw_metal_worker.as_ref().map(std::path::PathBuf::from),
                 },
                 consensus_manager.clone(),
                 flow_context_for_palw_panel.clone(),

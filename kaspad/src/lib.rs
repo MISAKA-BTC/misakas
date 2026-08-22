@@ -6,5 +6,6 @@ pub mod palw_agent;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod palw_panel;
+pub mod palw_backends;
 pub mod palw_producer;
 pub mod validator_service;

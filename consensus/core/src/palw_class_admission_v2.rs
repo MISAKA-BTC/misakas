@@ -284,8 +284,26 @@ pub fn verify_class_admission_v2(
     // in the same place a Family-D class carries its graph: the profile's ids ARE the runtime
     // manifest, model, tokenizer and shape pins that a producer's worker must reproduce before it
     // may produce (`MetalBackend::check_runtime_identity`).
+    // **Pins exist exactly when the family's identity is not its graph.** A deterministic class
+    // carrying them would be declaring an identity nothing checks; a black-box class without them
+    // could be run by any runtime, since nothing downstream re-derives the arithmetic.
+    match (terms.family.is_court_adjudicable(), terms.runtime_pins.is_some()) {
+        (true, true) => {
+            return Err(PalwClassAdmissionError::Profile(
+                "a deterministic class's identity is its graph; runtime pins on it are an identity nothing checks".into(),
+            ));
+        }
+        (false, false) => {
+            return Err(PalwClassAdmissionError::Profile(
+                "a black-box class must pin its runtime, model and tokenizer — without them any runtime could claim to be it".into(),
+            ));
+        }
+        _ => {}
+    }
+
     if !terms.family.is_court_adjudicable() {
-        return palw_metal_class_admission_v1(bundle, profile, canonical, *class_id, *artifact_root, *pwu_rule);
+        let pins = terms.runtime_pins.expect("checked just above");
+        return palw_metal_class_admission_v1(bundle, profile, canonical, &pins, *class_id, *artifact_root, *pwu_rule);
     }
 
     // **Well-formedness first, before anything reads the shape.** Every check below — the id
@@ -387,6 +405,7 @@ fn palw_metal_class_admission_v1(
     bundle: &PalwConsensusParamsV2,
     profile: &PalwShapeProfileV3,
     canonical: &PalwJobContextV2,
+    pins: &crate::palw_state_v2::PalwRuntimePinsV2,
     class_id: Hash64,
     artifact_root: Hash64,
     pwu_rule: crate::palw_state_v2::PalwPwuRuleV2,
@@ -405,17 +424,47 @@ fn palw_metal_class_admission_v1(
     // what it ran cannot be contradicted by anything.
     for (what, value) in [
         ("artifact_root", artifact_root),
-        ("runtime_manifest_hash", canonical.runtime_manifest_hash),
-        ("runtime_class_id", canonical.runtime_class_id),
-        ("model_profile_id", canonical.model_profile_id),
-        ("tokenizer_id", canonical.tokenizer_id),
-        ("trace_scheme_id", canonical.trace_scheme_id),
+        ("runtime_manifest_hash", pins.runtime_manifest_hash),
+        ("runtime_class_id", pins.runtime_class_id),
+        ("model_profile_id", pins.model_profile_id),
+        ("tokenizer_id", pins.tokenizer_id),
+        ("trace_scheme_id", pins.trace_scheme_id),
+        ("cu_ruleset_id", pins.cu_ruleset_id),
     ] {
         if value == Hash64::default() {
             return Err(PalwClassAdmissionError::Profile(format!(
                 "a Metal/GGUF class must pin its {what}; an unset one is a class any runtime could claim to be"
             )));
         }
+    }
+
+    // **The pins and the canonical job are one statement.** They are two encodings of the same
+    // identity — the registration's, and the job it is priced over — and a registration whose job
+    // was run under a different runtime than the class pins is a class priced for work it does not
+    // describe. Correspondence checked here because this is the only place both are in hand.
+    for (what, a, b) in [
+        ("runtime_manifest_hash", pins.runtime_manifest_hash, canonical.runtime_manifest_hash),
+        ("runtime_class_id", pins.runtime_class_id, canonical.runtime_class_id),
+        ("model_profile_id", pins.model_profile_id, canonical.model_profile_id),
+        ("tokenizer_id", pins.tokenizer_id, canonical.tokenizer_id),
+        ("trace_scheme_id", pins.trace_scheme_id, canonical.trace_scheme_id),
+        ("cu_ruleset_id", pins.cu_ruleset_id, canonical.cu_ruleset_id),
+    ] {
+        if a != b {
+            return Err(PalwClassAdmissionError::Profile(format!(
+                "the class pins {what} {a} and its canonical job was run at {b} — two identities under one registration"
+            )));
+        }
+    }
+    if (pins.prefill_tokens, pins.exact_decode_tokens, pins.max_context_tokens)
+        != (canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens)
+    {
+        return Err(PalwClassAdmissionError::Profile(
+            "the class's declared job shape is not the canonical job's".into(),
+        ));
+    }
+    if pins.vocab_size != profile.vocab_size {
+        return Err(PalwClassAdmissionError::Profile("the class pins a vocabulary its profile does not declare".into()));
     }
 
     if canonical.exact_decode_tokens == 0 {
@@ -854,8 +903,28 @@ mod tests {
     use crate::palw_backend::PalwExecutionFamilyV1;
     use crate::palw_state_v2::PalwClassTermsV2;
 
+    fn metal_pins() -> crate::palw_state_v2::PalwRuntimePinsV2 {
+        crate::palw_state_v2::PalwRuntimePinsV2 {
+            runtime_manifest_hash: Hash64::from_u64_word(0x1),
+            runtime_class_id: Hash64::from_u64_word(0x2),
+            model_profile_id: Hash64::from_u64_word(0x3),
+            trace_scheme_id: Hash64::from_u64_word(0x5),
+            cu_ruleset_id: Hash64::from_u64_word(0x6),
+            tokenizer_id: Hash64::from_u64_word(0x4),
+            prefill_tokens: 8,
+            exact_decode_tokens: 4,
+            max_context_tokens: 512,
+            vocab_size: base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap().vocab_size,
+        }
+    }
+
     fn metal_terms(seats: Option<u16>, quorum: Option<u16>) -> PalwClassTermsV2 {
-        PalwClassTermsV2 { family: PalwExecutionFamilyV1::MetalGguf, panel_seats: seats, panel_quorum: quorum }
+        PalwClassTermsV2 {
+            family: PalwExecutionFamilyV1::MetalGguf,
+            runtime_pins: Some(metal_pins()),
+            panel_seats: seats,
+            panel_quorum: quorum,
+        }
     }
 
     /// A canonical job with every Family-M identity pinned. The profile is the floor's — a
@@ -868,6 +937,11 @@ mod tests {
         c.model_profile_id = Hash64::from_u64_word(0x3);
         c.tokenizer_id = Hash64::from_u64_word(0x4);
         c.trace_scheme_id = Hash64::from_u64_word(0x5);
+        c.cu_ruleset_id = Hash64::from_u64_word(0x6);
+        // The pins and the job are one statement, so the fixture states it once: the job's shape
+        // must be the pins' too, or the correspondence check refuses — as it should, and as it did
+        // the first time this fixture set only half of them.
+        c.max_context_tokens = 512;
         c
     }
 

@@ -123,9 +123,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Version 6: ADR-0051's two execution families. `PalwClassStateV2` gains `terms` — which family
 /// verifies the class, and the panel it draws — so the class collection's record encoding moves
 /// and every `state_root` with it. Exactly the change ADR-0043 §2's rule is written for, and the
-/// bump is here rather than discovered later because `the_version_6_state_root_golden_vectors`
+/// bump is here rather than discovered later because `the_version_7_state_root_golden_vectors`
 /// caught it: the gate M-02 installed fired on the first change that came after it.
-pub const PALW_STATE_V2_VERSION: u16 = 6;
+///
+/// Version 7: ADR-0051 step 6. `PalwClassTermsV2` gains `runtime_pins` — the runtime, model and
+/// tokenizer a black-box class is held to — which a Metal class must carry and a deterministic one
+/// must not. It moves the class record again, so it moves the root again, and the golden vectors
+/// said so the moment it did. Two bumps in one day is the change rule working, not thrashing: each
+/// is a real preimage move that would otherwise have been a silent fork.
+pub const PALW_STATE_V2_VERSION: u16 = 7;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -743,9 +749,36 @@ pub enum PalwPwuRuleV2 {
 /// Both are in the registration and therefore on chain, which is the point: a class verified by a
 /// thin panel is *visibly* thin, and anyone weighing its share can see the terms it was admitted
 /// under rather than assume the network's.
+/// **What a black-box class pins** (ADR-0051 Decision 2), on chain.
+///
+/// A deterministic class's identity is its graph, and the graph is in the profile the class id
+/// hashes. A Metal/GGUF class's identity is *which runtime, which weights, which tokenizer* — and
+/// none of that is in a shape profile, so the chain must carry it or a node has nothing to check
+/// its own worker against. Without these on chain, `check_runtime_identity` would be a binary
+/// agreeing with itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwRuntimePinsV2 {
+    pub runtime_manifest_hash: Hash64,
+    pub runtime_class_id: Hash64,
+    pub model_profile_id: Hash64,
+    pub trace_scheme_id: Hash64,
+    pub cu_ruleset_id: Hash64,
+    pub tokenizer_id: Hash64,
+    /// The canonical job's shape. `exact_decode_tokens` is also the class's `pwu_per_inference`,
+    /// which the gate recounts rather than believes.
+    pub prefill_tokens: u32,
+    pub exact_decode_tokens: u32,
+    pub max_context_tokens: u32,
+    pub vocab_size: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassTermsV2 {
     pub family: crate::palw_backend::PalwExecutionFamilyV1,
+    /// Present exactly for a family whose identity is not its graph. A deterministic class
+    /// carrying pins, or a Metal class carrying none, is refused at admission: the pins are the
+    /// only thing a black-box class can be held to.
+    pub runtime_pins: Option<PalwRuntimePinsV2>,
     /// Seats this class's panels are drawn at. `None` uses the bundle's global parameters, which
     /// is what every class registered before this field meant.
     pub panel_seats: Option<u16>,
@@ -760,6 +793,7 @@ impl PalwClassTermsV2 {
     pub fn deterministic_default() -> Self {
         Self {
             family: crate::palw_backend::PalwExecutionFamilyV1::DeterministicInteger,
+            runtime_pins: None,
             panel_seats: None,
             panel_quorum: None,
         }
@@ -7828,7 +7862,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&6u16.to_le_bytes()); // version_le(2) = 6, restated from the ADR
+            s.update(&7u16.to_le_bytes()); // version_le(2) = 7, restated from the ADR
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -8118,16 +8152,16 @@ pub(crate) mod tests {
     /// one of these constants, which is the visible flag ADR-0043's change rule demands. Update
     /// them ONLY together with a version bump and an ADR-0043 amendment.
     #[test]
-    fn the_version_6_state_root_golden_vectors() {
+    fn the_version_7_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "adf04d563072b2f031c07e8599b02dccb47c6f80c85233f428c5315482bade0a785e21a82b1935f9d0f5d4e03adb36c97771226ae39777b364d60b503bd4818e",
-            "the empty state's version-6 root moved"
+            "d7db6b79278a8a472bb33b47cec7e0a259c33bd7df8638576922d5e069bea120d793bef9c4c04c99e01fefbedd0b9f6fe1de22869701ff1c3b25f012edd77b91",
+            "the empty state's version-7 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "481487a177270018a4948719e7d9bffecf020ce186d8c79b75a95069c001fab18b43860f7f82ff50a81fb1b78ee1cd3bf6649514eb6e3ddf1bfd2ce09515be08",
-            "the inhabited state's version-6 root moved"
+            "032065bce0a4e1a8e2a52a2a2f3ec6d5ed86df94175691faeb7ee4c29d7ed28b6e262025cb80900477a1eacb299b40a991ee8a723ff56d19b39757f98af6f628",
+            "the inhabited state's version-7 root moved"
         );
     }
 }

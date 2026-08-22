@@ -60,10 +60,10 @@ commitment makes the acyclicity structural rather than reviewed-per-change.
 
 Implemented in `PalwChainStateV2::state_root` (domain
 `misaka-palw/state-v2/state-root/v1`, keyed BLAKE2b-512), version constant
-`PALW_STATE_V2_VERSION = 6`:
+`PALW_STATE_V2_VERSION = 7`:
 
 ```
-H( version_le(2)                                                            # = 6
+H( version_le(2)                                                            # = 7
  ‖ root("bonds")  ‖ root("reserved_exposure") ‖ root("classes") ‖ root("class_targets")
  ‖ root("class_shares")
  ‖ epoch_budgets_tag(1) [‖ borsh(epoch_budgets)]
@@ -92,6 +92,7 @@ reason, and "derivable caches stay out" (§3) still holds:
 | `receipt_epoch_counters` | ADR-0044 / FP-03 (`5b53e8b7`) | the receipt lane's census, the mirror of `epoch_counters` |
 | `pending_payouts` | ADR-0042 Decision 10 escrow (`1a4bedb5`, version 4) | a released escrow waiting for the next coinbase — a miner must not be able to pay a queue nobody else has |
 | `retired_safe_weight` | launch blockers §8, terminal-claim retirement (`bb62f1fc`) | the certified weight of retired claims; not derivable precisely because the claims it summarizes are gone |
+| `classes[…].terms.runtime_pins` | ADR-0051 step 6 | the runtime, model and tokenizer a black-box class is held to. A node with no on-chain pins could only check its worker against itself |
 | `classes[…].terms` | ADR-0051 (two execution families) | which family verifies a class — and therefore whether a dispute about it can end in a conviction — plus the panel it draws. Not derivable from the graph: a black-box class and an adjudicable one can have the same shape |
 
 Chain-block identity throughout the state — `PalwBlockContextV2::block`, `safe_frontier`, a
@@ -113,15 +114,17 @@ from colliding.
 
 **Change rule:** adding, removing, or reordering a field or collection — or changing any
 record's Borsh shape — is a consensus change and takes a new version constant, an amendment to
-the §2 listing above, and new golden vectors (`the_version_6_state_root_golden_vectors`); the
+the §2 listing above, and new golden vectors (`the_version_7_state_root_golden_vectors`); the
 domain strings stay at `/v1` because the version inside the preimage is the separator. There is
 no "compatible" evolution of a hash preimage. The rule was violated once — `retired_safe_weight`
 entered without a bump — which is why the correspondence is now a test rather than a sentence.
 
 **And the test has already caught one.** ADR-0051 added `terms` to `PalwClassStateV2`, which moves
 the class collection's record encoding and therefore every root;
-`the_version_6_state_root_golden_vectors` failed on the first run after that change, before the
-preimage move could ship as a silent fork. Version 5 → 6 is that catch.
+the golden vectors failed on the first run after that change, before the preimage move could ship
+as a silent fork — and again when step 6 added `runtime_pins` to those terms. Versions 5 → 6 → 7
+are those two catches. Two bumps in one day is the change rule working, not thrashing: each is a
+real preimage move that would otherwise have been silent.
 
 ## 3. What the root deliberately does not cover
 

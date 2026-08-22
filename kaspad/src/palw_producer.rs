@@ -53,7 +53,6 @@ use kaspa_hashes::Hash64;
 use kaspa_mining::manager::MiningManagerProxy;
 use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-use misaka_palw_base0::backend::Base0Backend;
 use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
@@ -110,6 +109,9 @@ pub struct PalwProducerConfig {
     /// at startup and matched against what the CHAIN says the class is; a file that does not
     /// match is not used, never trusted into service.
     pub class_artifacts: Vec<std::path::PathBuf>,
+    /// The pinned Metal worker, if this node has one (ADR-0051). `None` everywhere without a GPU
+    /// toolchain, which must stay a supported node: the deterministic floor is the liveness anchor.
+    pub metal_worker: Option<std::path::PathBuf>,
 }
 
 pub struct PalwProducerService {
@@ -215,6 +217,18 @@ impl PalwProducerService {
     /// Written BEFORE the block is published, and a write failure aborts the publish: a promise you
     /// have already broken is not one to make. Keyed by the attempt id, which is what a challenge
     /// names.
+    /// The families this node can serve, from its configuration. Rebuilt per call rather than
+    /// cached: it is a handful of clones, and a cache would be a second place the operator's
+    /// configuration lives.
+    fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
+        crate::palw_backends::PalwBackendRegistry::new(
+            self.config.court.clone(),
+            self.class_artifacts.clone(),
+            self.config.metal_worker.clone(),
+            self.config.network_id.as_bytes().to_vec(),
+        )
+    }
+
     /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's
     /// (ADR-0051 step 1), because only the family that produced material knows how to write it.
     /// This function's job is the obligation — that the bytes are on disk before the block that
@@ -381,17 +395,13 @@ impl PalwProducerService {
         // BOTH. The floor is derived so it resolves from nothing; a converted class resolves from
         // a file the operator deployed. Derive, never declare (ADR-0046): the producer proves it
         // has what the chain named rather than asserting it.
-        let resolved = misaka_palw_base0::classes::resolve_class_v1(
-            &self.config.court,
-            facts.class_id,
-            facts.artifact_root,
-            &self.class_artifacts,
-        )
-        .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
+        let backend = self
+            .backends()
+            .resolve(facts.terms, facts.class_id, facts.artifact_root)
+            .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
         // **Through the seam** (ADR-0051 step 1). The backend is the family's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second
-        // one exist. The floor's is `Base0Backend` because `resolve_class_v1` said so.
-        let backend = Base0Backend::new(resolved);
+        // one exist. Which backend it is, is the CHAIN's answer (`facts.terms.family`).
         let (job, prompt) = backend.job_for_anchor(anchor).map_err(|e| format!("the job this template implies: {e}"))?;
         // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
         // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.

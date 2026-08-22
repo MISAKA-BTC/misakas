@@ -177,6 +177,7 @@ pub fn cat_m_0001_registration(
         class_id: cat_m_0001_profile().shape_profile_id(),
         terms: PalwClassTermsV2 {
             family: PalwExecutionFamilyV1::MetalGguf,
+            runtime_pins: Some(cat_m_0001_runtime_pins(pins)),
             panel_seats: Some(panel_seats),
             panel_quorum: Some(panel_quorum),
         },
@@ -190,6 +191,48 @@ pub fn cat_m_0001_registration(
         share_permille,
         activation_daa,
         admission: None,
+    }
+}
+
+/// **The on-chain half of the pins.** The node-local [`MetalClassPinsV1`] adds a worker path,
+/// which is a local fact; everything else is consensus and lives here so a node can check its own
+/// worker against what the CHAIN registered rather than against itself.
+pub fn cat_m_0001_runtime_pins(pins: &MetalClassPinsV1) -> kaspa_consensus_core::palw_state_v2::PalwRuntimePinsV2 {
+    kaspa_consensus_core::palw_state_v2::PalwRuntimePinsV2 {
+        runtime_manifest_hash: pins.runtime_manifest_hash,
+        runtime_class_id: pins.runtime_class_id,
+        model_profile_id: pins.model_profile_id,
+        trace_scheme_id: pins.trace_scheme_id,
+        cu_ruleset_id: pins.cu_ruleset_id,
+        tokenizer_id: pins.tokenizer_id,
+        prefill_tokens: pins.prefill_tokens,
+        exact_decode_tokens: pins.exact_decode_tokens,
+        max_context_tokens: pins.max_context_tokens,
+        vocab_size: pins.vocab_size,
+    }
+}
+
+/// The inverse: node-local pins from what the chain holds, plus this node's worker.
+pub fn pins_from_chain(
+    worker_path: PathBuf,
+    network_id: Vec<u8>,
+    on_chain: &kaspa_consensus_core::palw_state_v2::PalwRuntimePinsV2,
+) -> MetalClassPinsV1 {
+    MetalClassPinsV1 {
+        model_id: kaspa_consensus_core::vlt::qwen35_pins::BASE_REPO_ID.to_string(),
+        worker_path,
+        runtime_manifest_hash: on_chain.runtime_manifest_hash,
+        model_profile_id: on_chain.model_profile_id,
+        runtime_class_id: on_chain.runtime_class_id,
+        shape_profile_id: cat_m_0001_profile().shape_profile_id(),
+        trace_scheme_id: on_chain.trace_scheme_id,
+        cu_ruleset_id: on_chain.cu_ruleset_id,
+        tokenizer_id: on_chain.tokenizer_id,
+        prefill_tokens: on_chain.prefill_tokens,
+        exact_decode_tokens: on_chain.exact_decode_tokens,
+        max_context_tokens: on_chain.max_context_tokens,
+        vocab_size: on_chain.vocab_size,
+        network_id,
     }
 }
 

@@ -212,6 +212,11 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **The pinned Metal/GGUF worker** (ADR-0051). Absent on every node without a GPU toolchain,
+    /// which stays a fully supported node: the deterministic floor is the liveness anchor and may
+    /// never require a runtime a Linux server cannot build. A node without one simply cannot serve
+    /// Family-M classes, and says so rather than falling back to a family it can.
+    pub palw_metal_worker: Option<String>,
     /// Re-run every licensed claim and open a court against the ones this node cannot reproduce.
     pub palw_challenge: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
@@ -353,6 +358,7 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_metal_worker: None,
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
             palw_drill_challenge_all: false,
@@ -845,6 +851,17 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-metal-worker")
+                .long("palw-metal-worker")
+                .env("KASPAD_PALW_METAL_WORKER")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW: path to the pinned Metal/GGUF worker. Only needed to serve a Metal class; the node checks the \
+                     worker's measured identity against what the chain registered before producing under it.",
+                ),
+        )
+        .arg(
             Arg::new("palw-class-artifact")
                 .long("palw-class-artifact")
                 .env("KASPAD_PALW_CLASS_ARTIFACT")
@@ -1330,6 +1347,7 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_challenge_all: m

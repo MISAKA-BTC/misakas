@@ -59,7 +59,6 @@ use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
 use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
-use misaka_palw_base0::backend::Base0Backend;
 
 const PALW_PANEL: &str = "palw-panel";
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
@@ -95,6 +94,9 @@ pub struct PalwPanelConfig {
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
+    /// The pinned Metal worker, if this seat has one (ADR-0051). A seat without one cannot judge a
+    /// Metal class and files nothing for it — "I could not verify", never an accusation.
+    pub metal_worker: Option<PathBuf>,
 }
 
 pub struct PalwPanelService {
@@ -110,6 +112,18 @@ pub struct PalwPanelService {
 }
 
 impl PalwPanelService {
+    /// The families this seat can serve, from its configuration. Rebuilt per use rather than
+    /// cached, for the same reason the producer's is: a cache would be a second place the
+    /// operator's configuration lives.
+    fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
+        crate::palw_backends::PalwBackendRegistry::new(
+            self.config.court.clone(),
+            self.class_artifacts.clone(),
+            self.config.metal_worker.clone(),
+            self.consensus_config.params.net.to_string().into_bytes(),
+        )
+    }
+
     pub fn new(
         config: PalwPanelConfig,
         consensus_manager: Arc<ConsensusManager>,
@@ -338,15 +352,9 @@ impl PalwPanelService {
                     if challenged.contains(&target.claim_id) {
                         continue;
                     }
-                    let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
-                        &self.config.court,
-                        target.class_id,
-                        target.artifact_root,
-                        &self.class_artifacts,
-                    ) else {
+                    let Ok(backend) = self.backends().resolve(target.terms, target.class_id, target.artifact_root) else {
                         continue;
                     };
-                    let backend = Base0Backend::new(resolved);
                     let Some(capture) = materials.get(&target.claim_id).and_then(|pool| pool.first()) else { continue };
                     let Ok((binding, _, _, _)) = misaka_palw_base0::produce::base0_material_decode_v1(capture) else { continue };
                     // The job is the ANCHOR's, and the anchor is the job's own id — so the
@@ -418,15 +426,9 @@ impl PalwPanelService {
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
-                let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
-                    &self.config.court,
-                    duty.class_id,
-                    duty.artifact_root,
-                    &self.class_artifacts,
-                ) else {
-                    continue;
-                };
-                let backend = Base0Backend::new(resolved);
+                let Ok(backend) = self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) else {
+                        continue;
+                    };
                 let Some(capture) = materials.get(&duty.claim_id).and_then(|pool| {
                     pool.iter().find(|b| {
                         backend.verify_material(
@@ -522,15 +524,9 @@ impl PalwPanelService {
                         // judge it and says so by filing nothing — which is the same shape as
                         // "the material has not arrived", and correctly so: both are "I cannot
                         // verify", never "the producer lied".
-                        let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(
-                            &self.config.court,
-                            duty.class_id,
-                            duty.artifact_root,
-                            &self.class_artifacts,
-                        ) else {
+                        let Ok(backend) = self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) else {
                             break 'verdict None;
                         };
-                        let backend = Base0Backend::new(resolved);
                         if backend.verify_material(
                             bytes,
                             PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root },
