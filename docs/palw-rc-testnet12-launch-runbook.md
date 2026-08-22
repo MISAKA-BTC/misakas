@@ -37,9 +37,39 @@ Two properties worth knowing before anything else:
 
 ---
 
-## 1. The genesis card — three facts code cannot mint
+## 1. The genesis card — a REGISTRY, not a bond
 
-Everything else about the genesis is derived. Run:
+**Six rows, six distinct operator keys.** `derive_panel_v2` excludes a claim's own executor by
+bond, by operator and by key and seats one bond per operator, so a 5-seat panel needs six — and
+`BondRegistered` may not ride a transaction, so a registry too small has no later repair. A
+one-row card is refused by the genesis gate (`PanelCannotBeSeated`), which is what the tool used
+to produce every single time before 2026-08-22.
+
+Two commands, split along the secrecy line: **rows are emitted where the secrets live, assembled
+where they do not.**
+
+```bash
+# ON EACH OPERATOR'S HOST — two keys, secrets never leave it
+misaka validator keygen --out /etc/misaka/t12-bond.key
+misaka validator keygen --out /etc/misaka/t12-operator.key
+
+# ON THE SAME HOST — one public row (two verification keys + an address payload, nothing signable)
+palw-rc-genesis --emit-row --bond-index 3 \
+    --bond-seed /etc/misaka/t12-bond.key --operator-seed /etc/misaka/t12-operator.key
+#   the payout DEFAULTS to the bond key's own address — matured rewards are then spendable
+#   by the seed that signs for them, with no second key to get wrong
+
+# ANYWHERE — collect the six rows into a file and assemble
+palw-rc-genesis --rows /tmp/t12-rows.txt
+```
+
+`--rows` puts the registry through `palw_rc_params_from_artifacts` — the same call a node makes at
+boot — so an ACCEPTED card is one a node accepts, and it prints the `consensus_params_id` a node
+will log. **Changing the premine (which the bond fee floats do) requires re-pinning
+`PALW_RC_GENESIS`**; the M-07 guard refuses to boot on a mismatch and
+`cargo test -p kaspa-consensus --lib repin::print -- --ignored --nocapture` recomputes it.
+
+Everything else about the genesis is derived. Run it with no arguments to see what:
 
 ```bash
 cargo run --release -p misaka-palw-base0 --bin palw-rc-genesis
@@ -206,7 +236,14 @@ outside your own network before announcing anything.
 | the ruleset | compare `consensus_params_id` in the startup log across nodes | a node is running a different card, or an unfilled one |
 | the lane | the producer's first log line names algo 6 | the bundle did not install; §1's constants are unset |
 | production | `[palw-producer] produced block #N …` | see the hold reason it prints instead |
-| the floor is producing | `palw_producer_facts_v2().epoch_produced_blocks` moves | the epoch budget or the ceiling is the reason |
+| **the chain has PALW weight** | `[palw-producer] palw weight=… final_claims=… unresolved=…` | **a flat zero `weight` with rising `unresolved` is a hash chain wearing PALW's clothes** — every claim is voiding; check that a funded submitter exists |
+| the seats are answering | `[palw-panel] filed a "Valid" receipt for claim …` on the NON-producing nodes | no material is reaching them, or their bond holds no seat |
+| the quorum reaches the chain | `[palw-panel] submitted ReceiptLicensed for claim …` | `no fee UTXO resolves` ⇒ the genesis float was spent or the card is unset |
+
+**The weight line is the one that matters.** A network can produce blocks, gossip material, file
+receipts and still certify nothing: the lattice only turns over when a `ReceiptLicensed` reaches
+the chain, and only then does `safe_weight` leave zero. Everything above it can look healthy while
+that number stays at 0.
 
 ---
 
