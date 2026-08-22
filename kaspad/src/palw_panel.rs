@@ -304,6 +304,9 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
+        // not rebuilt from a stale root every two seconds. See the note at its first use.
+        let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -589,7 +592,24 @@ impl PalwPanelService {
                 // spent outpoint, and the mempool refuses it as a double spend. Chaining is also
                 // what lets the submitter keep up: one carrier per tick cannot track a lane that
                 // mints a claim per block.
-                let mut funding = self.resolve_fee_funding(&session);
+                // **The mempool chain survives the tick.**
+                //
+                // Chaining the change within a tick was not enough: `resolve_fee_funding` reads the
+                // VIRTUAL utxo set, so a carrier submitted last tick is invisible to it until it is
+                // mined — and the fallback is the CONFIGURED outpoint, which is still unspent in
+                // virtual because only the mempool has spent it. Every tick therefore rebuilt a
+                // transaction spending an output its own predecessor had already taken, and the
+                // mempool refused it as a double spend. Measured on the drill: 53 frauds detected,
+                // 115 courts intended, `already spent by transaction … in the mempool`, zero
+                // carried.
+                //
+                // So the chained entry is held across ticks and only re-resolved when we have none
+                // — and dropped the moment a submission is refused, because that is the signal that
+                // the chain we were extending is not one the mempool will accept.
+                if chained_funding.is_none() {
+                    chained_funding = self.resolve_fee_funding(&session);
+                }
+                let mut funding = chained_funding.clone();
                 if funding.is_none() && receipts.keys().any(|c| !submitted.contains(c)) {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
@@ -683,6 +703,9 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for claim {claim}: {e}"),
                     }
                 }
+                // What the next tick continues from. `None` here means a refusal cleared it, and
+                // the next tick resolves afresh.
+                chained_funding = funding;
             }
 
             // Forget what the chain has moved past: a claim with no duty and no unsubmitted quorum
