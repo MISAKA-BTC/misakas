@@ -224,6 +224,7 @@ mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -237,8 +238,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 100_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ]
     }
 

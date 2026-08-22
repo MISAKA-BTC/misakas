@@ -127,6 +127,7 @@ mod tests {
     fn registrations() -> Vec<PalwConsensusObjectV2> {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
+                terms: kaspa_consensus_core::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
@@ -142,6 +143,7 @@ mod tests {
                 operator_pubkey: vec![21; 8],
                 collateral: 100_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
             },
         ]
     }

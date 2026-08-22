@@ -240,6 +240,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
@@ -253,8 +254,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: vec![0x21; 8],
                 collateral: 1_000_000,
-                payout_payload: h64(0x9A11),
-            },
+                payout_payload: h64(0x9A11), signature: Vec::new() },
         ];
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
         apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx, &objects, None).unwrap().0

@@ -149,9 +149,23 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::PanelBound { .. } => {
             Err("the chain derives panel bindings; a carried one would be a second answer to a question with one")
         }
-        PalwConsensusObjectV2::BondRegistered { .. } => {
-            Err("a bond registration declares collateral nothing on this path locks — bonds come from genesis")
-        }
+        // **Re-admitted, and the thing the refusal named is now proven by the carrier itself.**
+        //
+        // The objection was exact: a registration DECLARES collateral, and nothing on this path
+        // locked it — so "stake" meant a number in an object. It could not be checked here either,
+        // because this layer is stateless and has no UTXO set to look an outpoint up in.
+        //
+        // So the outpoint is not looked up: it is CREATED. A registration must name an output of
+        // its own carrying transaction, which makes existence, value and script something block
+        // validation has already established before this object is read —
+        // `palw_bond_registration_binds_its_carrier_v2` is what checks that binding, and it needs
+        // the transaction, so it runs in the extractor rather than here. What is left for this
+        // layer is the shape: a registration must carry the signature that proves the registrant
+        // holds the key it declares, since anyone can pay to somebody else's script.
+        PalwConsensusObjectV2::BondRegistered { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::BondRegistered { .. } => Err(
+            "a bond registration must carry the registrant's signature over the key it declares — the carrier proves the collateral, not the owner",
+        ),
         PalwConsensusObjectV2::FreePromptCommitted { .. } => {
             Err("a free-prompt commitment rides its own subnetwork, where its price is checked")
         }
@@ -164,6 +178,43 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
 /// — that the claim exists and is in the right phase, that the panel is the one this chain
 /// derives, that a court close's proof adjudicates — is the acceptance layer's and the
 /// transition's, exactly as it is for the free-prompt walk.
+/// **A bond registration must name an output of its own carrier, and that output must be the
+/// collateral it declares.**
+///
+/// This is what replaces "bonds come from genesis". A registration used to declare a `bond`
+/// outpoint and a `collateral` amount that no layer could check: the stateless ride list has no
+/// UTXO set, and the acceptance validator is handed PALW state rather than the UTXO diff. Both
+/// facts are still true — so the outpoint is not looked up anywhere. It is created by the
+/// transaction carrying the registration, which means existence, amount and script are things
+/// block validation established before this object was ever decoded.
+///
+/// The script must be the P2PKH-ML-DSA-87 of the payload the registration names as its payee, so
+/// the collateral is reclaimable by exactly whoever the rewards are. Together with the signature
+/// the ride list demands, that is the pair the audit asked for: the carrier proves the money, the
+/// signature proves the owner.
+pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
+    let PalwConsensusObjectV2::BondRegistered { bond, collateral, payout_payload, .. } = object else {
+        return Ok(());
+    };
+    if bond.0.transaction_id != tx.id() {
+        return Err("a bond registration must name an output of its own carrying transaction");
+    }
+    let Some(output) = tx.outputs.get(bond.0.index as usize) else {
+        return Err("a bond registration names an output its carrier does not have");
+    };
+    if output.value < *collateral {
+        return Err("a bond registration declares more collateral than the output it names holds");
+    }
+    // The same script the chain will pay this bond's rewards to. Two things follow from that
+    // choice: the collateral is reclaimable by whoever the rewards are reclaimable by, and the
+    // registration cannot lock money behind a script it did not also name as its own payee.
+    let owner: [u8; 64] = *payout_payload.as_byte_slice();
+    if output.script_public_key != crate::dns_finality::p2pkh_mldsa87_spk(&owner) {
+        return Err("a bond's collateral output must pay to the payload the registration names as its payee");
+    }
+    Ok(())
+}
+
 pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwLifecycleExtractionV2 {
     let mut out = PalwLifecycleExtractionV2::default();
     for tx in txs {
@@ -183,6 +234,10 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
             continue;
         }
         if let Err(reason) = palw_lifecycle_object_may_ride_v2(&payload.object) {
+            out.skipped.push((id, reason));
+            continue;
+        }
+        if let Err(reason) = palw_bond_registration_binds_its_carrier_v2(tx, &payload.object) {
             out.skipped.push((id, reason));
             continue;
         }
@@ -324,13 +379,13 @@ mod tests {
             operator_pubkey: vec![21; 8],
             // The number that would be free: nothing on this path locks a UTXO behind it.
             collateral: 1_000_000_000_000,
-            payout_payload: h64(0x9A11),
-        };
+            payout_payload: h64(0x9A11), signature: Vec::new() };
         // A class registration with NO admission material: still refused, because there is
         // nothing to check it with (ADR-0049 Decision H replaced the blanket refusal with a gate,
         // and a gate needs an input).
         let class_registration = PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(0xC1A55),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 1,
             // The rule genesis refuses, arriving through the side door.
@@ -393,6 +448,7 @@ mod tests {
         };
         let registration = |admission: Option<Box<PalwClassAdmissionCarriageV2>>| PalwConsensusObjectV2::ClassRegistered {
             class_id: profile.shape_profile_id(),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 4_096 },
@@ -476,8 +532,7 @@ mod tests {
                     pubkey: vec![3u8; 8],
                     operator_pubkey: vec![5u8; 8],
                     collateral: 1_000_000,
-                    payout_payload: h64(0x1234),
-                },
+                    payout_payload: h64(0x1234), signature: Vec::new() },
             })
             .unwrap(),
             // Wrong wire version.

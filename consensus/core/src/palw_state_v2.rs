@@ -149,6 +149,7 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     // for one purpose accepted for another.
     PALW_CLASS_REGISTRATION_V2_DOMAIN,
     PALW_BOND_RETIREMENT_V2_DOMAIN,
+    PALW_BOND_REGISTRATION_V2_DOMAIN,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -720,8 +721,83 @@ pub enum PalwPwuRuleV2 {
     DerivedV1 { pwu_per_inference: u64 },
 }
 
+/// **A class's verification terms** (ADR-0051 Decisions 1 and 6).
+///
+/// Two facts that used to be network-global and cannot be, once a chain carries more than one
+/// execution family:
+///
+/// * which **family** the class is verified under — and therefore whether a dispute about it can
+///   end in a conviction at all. A tolerance-verified class has no arithmetic terminal, so a court
+///   opened against one would be a court that can only acquit;
+/// * how large its **panel** is. The shipped rule is 5 seats from 5 distinct operators, which on a
+///   family whose seats must hold particular hardware means six such operators before a single
+///   claim can license. Requiring that on the day a family launches is requiring the family not to
+///   exist.
+///
+/// Both are in the registration and therefore on chain, which is the point: a class verified by a
+/// thin panel is *visibly* thin, and anyone weighing its share can see the terms it was admitted
+/// under rather than assume the network's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassTermsV2 {
+    pub family: crate::palw_backend::PalwExecutionFamilyV1,
+    /// Seats this class's panels are drawn at. `None` uses the bundle's global parameters, which
+    /// is what every class registered before this field meant.
+    pub panel_seats: Option<u16>,
+    /// Same-verdict signatures a quorum needs. Meaningless without `panel_seats` and refused
+    /// without it, so the pair cannot be half-specified.
+    pub panel_quorum: Option<u16>,
+}
+
+impl PalwClassTermsV2 {
+    /// The terms every class registered before ADR-0051 meant: the deterministic family, on the
+    /// network's own panel.
+    pub fn deterministic_default() -> Self {
+        Self {
+            family: crate::palw_backend::PalwExecutionFamilyV1::DeterministicInteger,
+            panel_seats: None,
+            panel_quorum: None,
+        }
+    }
+
+    /// The panel this class draws, given the network's. `Err` names what is wrong rather than
+    /// silently falling back — a class whose terms do not parse must not be admitted at all.
+    pub fn panel_params(
+        &self,
+        network: &crate::palw_panel_v2::PalwPanelParamsV2,
+        floor_seats: u16,
+        floor_quorum: u16,
+    ) -> Result<crate::palw_panel_v2::PalwPanelParamsV2, String> {
+        match (self.panel_seats, self.panel_quorum) {
+            (None, None) => Ok(*network),
+            (Some(seats), Some(quorum)) => {
+                if seats < floor_seats || quorum < floor_quorum {
+                    return Err(format!(
+                        "a class may not register a panel below the network's floor ({floor_seats} seats / {floor_quorum} quorum); \
+                         this one asks for {seats}/{quorum}"
+                    ));
+                }
+                if seats > network.seat_count() || quorum > network.quorum() {
+                    return Err(format!(
+                        "a class may not register a panel ABOVE the network's own ({}/{}) — the draw could not be satisfied; \
+                         this one asks for {seats}/{quorum}",
+                        network.seat_count(),
+                        network.quorum()
+                    ));
+                }
+                crate::palw_panel_v2::PalwPanelParamsV2::new(seats, quorum, network.anchor_delay())
+                    .map_err(|e| format!("the class's panel parameters are not a legal panel: {e:?}"))
+            }
+            _ => Err("a class declares both of its panel parameters or neither — a half-specified panel has no quorum rule".to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassStateV2 {
+    /// ADR-0051: which family verifies this class, and the panel it draws. Stored rather than
+    /// re-derived because the economy and the court boundary both key on it, and a node that
+    /// inferred the family from a graph would be a second opinion about a consensus fact.
+    pub terms: PalwClassTermsV2,
     /// What artifact openings prove against; an attempt whose `artifact_root` differs is
     /// admission-rejected (Decision 6 item 5).
     pub artifact_root: Hash64,
@@ -1024,6 +1100,31 @@ pub struct PalwClassAdmissionCarriageV2 {
 pub const PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-registration-v2/mldsa87/v1";
 pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registration-v2/message/v1";
 
+pub const PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-registration-v2/mldsa87/v1";
+pub const PALW_BOND_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/bond-registration-v2/message/v1";
+
+/// What a registrant signs to put a bond on a running chain: every field the registration binds,
+/// so a signature harvested from one registration cannot be replayed onto another.
+pub fn palw_bond_registration_message_v2(
+    network_domain: Hash64,
+    bond: &PalwBondKeyV2,
+    pubkey: &[u8],
+    operator_pubkey: &[u8],
+    collateral: u64,
+    payout_payload: &Hash64,
+) -> Hash64 {
+    let mut state = keyed(PALW_BOND_REGISTRATION_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    state.update(&(pubkey.len() as u64).to_le_bytes());
+    state.update(pubkey);
+    state.update(&(operator_pubkey.len() as u64).to_le_bytes());
+    state.update(operator_pubkey);
+    state.update(&collateral.to_le_bytes());
+    state.update(payout_payload.as_byte_slice());
+    finish(state)
+}
+
 pub const PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-retirement-v2/mldsa87/v1";
 pub const PALW_BOND_RETIREMENT_V2_DOMAIN: &[u8] = b"misaka-palw/bond-retirement-v2/message/v1";
 
@@ -1081,6 +1182,15 @@ pub enum PalwConsensusObjectV2 {
         /// refused: a bond that names no payee is a bond whose every reward would be minted to a
         /// script nobody can open, and the place to find that out is registration.
         payout_payload: Hash64,
+        /// The registrant's ML-DSA-87 over [`palw_bond_registration_message_v2`], verified against
+        /// the `pubkey` this registration declares.
+        ///
+        /// The carrier already proves the collateral output EXISTS and holds what is claimed —
+        /// it is an output of the carrying transaction, so block validation established it. What
+        /// the carrier cannot prove is that the party registering holds the key it names: anyone
+        /// can pay to somebody else's script. Without this, a stranger could pad the registry with
+        /// bonds under keys nobody controls, and a registry is a list of who may be seated.
+        signature: Vec<u8>,
     },
     BondRetireRequested {
         bond: PalwBondKeyV2,
@@ -1109,6 +1219,13 @@ pub enum PalwConsensusObjectV2 {
         /// disputable, and holding no cadence — so it can be soaked on a live chain before it
         /// takes a permille from anyone. See [`PalwClassStatusV2::Registered`].
         activation_daa: u64,
+        /// **ADR-0051: the family that verifies this class, and the panel it draws.**
+        ///
+        /// On the registration rather than inferred, because both are consensus facts: the family
+        /// decides whether a dispute can end in a conviction, and the panel decides how many
+        /// distinct operators a claim needs before it can license. A class admitted on thinner
+        /// terms is visibly thinner to anyone weighing its share.
+        terms: PalwClassTermsV2,
         /// **What a POST-GENESIS registration must carry to be checkable (ADR-0049 Decision H).**
         ///
         /// Three policies coexisted: the lifecycle carriage refused `ClassRegistered` outright,
@@ -3211,7 +3328,7 @@ fn apply_object(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     match object {
-        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload } => {
+        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature: _ } => {
             if builder.state.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::DuplicateBond(*bond));
             }
@@ -3257,6 +3374,7 @@ fn apply_object(
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
+            terms,
             artifact_root,
             slash_value_per_pwu,
             pwu_rule,
@@ -3317,6 +3435,7 @@ fn apply_object(
             builder.write_class(
                 *class_id,
                 Some(PalwClassStateV2 {
+                    terms: *terms,
                     artifact_root: *artifact_root,
                     slash_value_per_pwu: *slash_value_per_pwu,
                     pwu_rule: *pwu_rule,
@@ -4249,6 +4368,7 @@ pub(crate) mod tests {
     pub(crate) fn entrant_class(class_id: Hash64, share_permille: u16) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -4375,6 +4495,7 @@ pub(crate) mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -4383,7 +4504,7 @@ pub(crate) mod tests {
                 activation_daa: 0,
                 admission: None,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) },
+            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ]
     }
 
@@ -5105,6 +5226,7 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: entrant,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -5265,8 +5387,7 @@ pub(crate) mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(20 + n),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            });
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
         }
         let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &objects, None);
         let env = attempt(40, 1);
@@ -6001,7 +6122,7 @@ pub(crate) mod tests {
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11) }],
+            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
             None,
         );
         let (with_class, _) = apply(
@@ -6010,6 +6131,7 @@ pub(crate) mod tests {
             &ctx(2, 101, 2),
             &[PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(2),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(12),
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6265,6 +6387,7 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6322,6 +6445,7 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6364,6 +6488,7 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6377,8 +6502,7 @@ pub(crate) mod tests {
             pubkey: vec![8; 4],
             operator_pubkey: op_key(22),
             collateral: 1_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-        });
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
         // Class 1 takes three blocks of the span, class 2 takes one: 750/250 against a 500/500
@@ -6415,15 +6539,13 @@ pub(crate) mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (state, _) = apply(&genesis, &p, &ctx(1, 100, 1), &shared, None);
         assert_eq!(
@@ -6444,8 +6566,7 @@ pub(crate) mod tests {
                 pubkey: vec![9; 4],
                 operator_pubkey: op_key(0xBB),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
             None,
         );
         assert_ne!(state2.bond(&bond_key(3)).unwrap().operator_id, op_id(0xAA));
@@ -6460,8 +6581,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi() - 1,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
             None,
         );
         assert!(matches!(dust, Err(PalwStateV2Error::CollateralBelowMinimum { .. })), "got {dust:?}");
@@ -6476,8 +6596,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi(),
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
             None,
         );
 
@@ -6491,8 +6610,7 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: Vec::new(),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
             None,
         );
         assert!(matches!(empty, Err(PalwStateV2Error::EmptyOperatorKey(_))), "got {empty:?}");
@@ -6591,8 +6709,7 @@ pub(crate) mod tests {
             pubkey: vec![9; 4],
             operator_pubkey: op_key(0x99),
             collateral: 1_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-        });
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
         let env = attempt(40, 1);
@@ -6664,6 +6781,7 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6983,6 +7101,7 @@ pub(crate) mod tests {
         let genesis = PalwChainStateV2::genesis();
         let register = |class_id: u64, share: u16| PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(class_id),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(19),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
@@ -7035,6 +7154,7 @@ pub(crate) mod tests {
             &ctx(1, 100, 1),
             &[PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(9),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(19),
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
@@ -7059,6 +7179,7 @@ pub(crate) mod tests {
                 &ctx(1, 100, 1),
                 &[PalwConsensusObjectV2::ClassRegistered {
                     class_id: h64(9),
+                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(19),
                     slash_value_per_pwu: 1,
                     pwu_rule: rule,
@@ -7762,6 +7883,7 @@ pub(crate) mod tests {
         state.classes.insert(
             h64(0xC1),
             PalwClassStateV2 {
+                terms: PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(0xAF),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 15_800 },
@@ -7772,6 +7894,7 @@ pub(crate) mod tests {
         state.classes.insert(
             h64(0xC2),
             PalwClassStateV2 {
+                terms: PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(0xB0),
                 slash_value_per_pwu: 7,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(100),

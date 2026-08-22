@@ -469,6 +469,7 @@ mod tests {
         let canonical = crate::palw_base0_profile::rc_job_context(&profile, 8, 4);
         let registration = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: crate::Hash64::from_u64_word(0xA1),
             slash_value_per_pwu: 5,
             // COUNTED from the canonical job, never declared — the gate recounts and refuses a

@@ -414,6 +414,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -429,8 +430,7 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (state, _) =
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
@@ -493,6 +493,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -503,6 +504,7 @@ mod tests {
             },
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(2),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -516,8 +518,7 @@ mod tests {
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 2_000_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (state, _) =
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
@@ -619,6 +620,7 @@ mod tests {
             let objects = vec![
                 PalwConsensusObjectV2::ClassRegistered {
                     class_id: h64(1),
+                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(11),
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -632,8 +634,7 @@ mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-                },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             ];
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap().0
         };
@@ -696,6 +697,7 @@ mod tests {
     fn state_with_derived_class(initial_target: u128) -> PalwChainStateV2 {
         let objects = vec![PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(22),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },

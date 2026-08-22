@@ -305,6 +305,7 @@ mod tests {
     fn registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
@@ -333,6 +334,7 @@ mod tests {
             operator_pubkey: vec![0x21, n as u8, 0, 0, 0, 0, 0, 0],
             collateral: FIXTURE_COLLATERAL,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            signature: Vec::new(),
         }
     }
 
@@ -454,7 +456,9 @@ mod tests {
                 };
                 // Only the first bond is thinned, so the failure names a bond rather than the set.
                 let c = if i == 0 { collateral } else { FIXTURE_COLLATERAL };
-                objects.push(PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral: c, payout_payload });
+                objects.push(PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral: c, payout_payload,
+            signature: Vec::new(),
+        });
             }
             verify_palw_genesis_v2(&bundle, &catalog, &objects, |_| Some(u64::MAX))
         };
@@ -511,7 +515,8 @@ mod tests {
                 operator_pubkey: vec![21; 8],
                 collateral,
                 payout_payload,
-            });
+            signature: Vec::new(),
+        });
         }
         assert!(
             matches!(

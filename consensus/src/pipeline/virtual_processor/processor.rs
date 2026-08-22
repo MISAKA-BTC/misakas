@@ -4431,7 +4431,35 @@ impl VirtualStateProcessor {
                 // **This match is EXHAUSTIVE on purpose**: the `_ => {}` it replaces is what let
                 // four money-moving object kinds through in silence, and an exhaustive match makes
                 // adding a fifth a decision somebody has to write down.
-                Obj::BondRegistered { .. } => {}
+                // **A registration is authorised by the key it declares.**
+                //
+                // This arm was a silent pass-through, and the only thing refusing an
+                // unauthenticated registration was the ride list — one lock where the comment
+                // three arms up says there should be two. The carrier proves the collateral output
+                // exists, holds what is claimed and pays to the declared payee
+                // (`palw_bond_registration_binds_its_carrier_v2`, in the extractor, where the
+                // transaction is). What it cannot prove is that the registrant holds the key it
+                // names, because anyone can pay to somebody else's script — and a registry is a
+                // list of who may be SEATED, so padding it with keys nobody controls is not a
+                // harmless gift.
+                Obj::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature } => {
+                    let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        bond,
+                        pubkey,
+                        operator_pubkey,
+                        *collateral,
+                        payout_payload,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s registration is not signed by the key it declares"));
+                    }
+                }
                 Obj::FreePromptCommitted { .. } => {}
             }
         }

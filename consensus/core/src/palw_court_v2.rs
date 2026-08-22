@@ -583,6 +583,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -596,15 +597,13 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let env = attempt(40, 1);
@@ -971,6 +970,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root,
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -984,15 +984,13 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);
@@ -1091,6 +1089,7 @@ mod tests {
             let objects = vec![
                 PalwConsensusObjectV2::ClassRegistered {
                     class_id: h64(1),
+                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(0xA1),
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -1104,15 +1103,13 @@ mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-                },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: bond_key(2),
                     pubkey: vec![8; 4],
                     operator_pubkey: op_key(0x22),
                     collateral: 1_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-                },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             ];
             let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
             let mut env = attempt(40, 1);
@@ -1233,6 +1230,7 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root,
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -1246,15 +1244,13 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);

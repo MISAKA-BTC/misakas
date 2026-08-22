@@ -1497,6 +1497,7 @@ async fn palw_v2_a_class_registration_needs_a_bond_that_signed_for_it() {
         .to_vec()
     };
     let make = |bond: PalwBondKeyV2, signature: Vec<u8>| Obj::ClassRegistered {
+        terms: kaspa_consensus_core::palw_state_v2::PalwClassTermsV2::deterministic_default(),
         class_id,
         artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA7),
         slash_value_per_pwu: 1,

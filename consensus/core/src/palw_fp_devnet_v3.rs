@@ -343,6 +343,7 @@ pub fn palw_fp_devnet_bundle_v3(
         MAX_BEACON_GAP,
     )?;
     let bundle = PalwConsensusParamsV2 {
+        min_class_panel: (0, 0),
         protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
         algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
         base_class_id,
@@ -375,6 +376,7 @@ pub fn palw_fp_devnet_bundle_v3(
         genesis_objects: vec![
             crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
                 class_id: base_class_id,
+                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: genesis_artifact_root,
                 slash_value_per_pwu: SLASH_VALUE_PER_PWU,
                 pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },
@@ -391,6 +393,11 @@ pub fn palw_fp_devnet_bundle_v3(
             operator_pubkey: b.operator_pubkey,
             collateral: genesis_collateral,
             payout_payload: b.payout_payload,
+                    // Genesis bonds carry no signature: `verify_palw_genesis_v2` establishes the whole
+            // registry as one artifact, and there is no chain yet for a signature to be replayed
+            // across. The field exists for the post-genesis path, where the carrier proves the
+            // collateral and this proves the key.
+            signature: Vec::new(),
         }))
         .collect(),
     };
