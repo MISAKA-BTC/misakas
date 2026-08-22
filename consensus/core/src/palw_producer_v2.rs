@@ -103,6 +103,17 @@ pub struct PalwProducerFactsV2 {
     pub unresolved_claims: u64,
     /// Claims that have reached `Final` — the count of work this chain has actually certified.
     pub final_claims: u64,
+    /// `safe_weight` plus the bounded immature contribution — the THIRD key of the fork-choice
+    /// order (`palw_fork_choice::PalwCandidateOrderV1`), and the only one that can move on a
+    /// young chain.
+    ///
+    /// A claim cannot finalize before `window_challenge` has passed, so `safe_weight` and the
+    /// safe frontier are both zero for the whole first stretch of a network's life — at the
+    /// frozen 120 s cadence, more than a day. That is by construction, not a fault, and this is
+    /// how an operator tells the two apart: `live_total` climbing while `safe_weight` sits at
+    /// zero is a chain ordering on immature PALW work exactly as designed, whereas both at zero
+    /// is a chain whose lifecycle never started.
+    pub live_total: u128,
 }
 
 impl PalwProducerFactsV2 {
@@ -190,6 +201,7 @@ pub fn palw_producer_facts_v2(
         epoch_produced_blocks,
         bond,
         safe_weight: state.safe_weight(),
+        live_total: state.safe_weight().saturating_add(state.bounded_immature()),
         unresolved_claims: state.claims_iter().filter(|(_, c)| !c.phase.is_terminal()).count() as u64,
         final_claims: state
             .claims_iter()
