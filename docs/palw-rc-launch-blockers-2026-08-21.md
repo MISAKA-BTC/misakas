@@ -237,7 +237,10 @@ Not one finding but FOUR, peeled in order, recorded so none is rediscovered.
    3/3 in isolation — something an earlier test keeping a reference alive.
 
    The documented reproduction was run twice, unmodified, at `4e6d08c6`: **33 passed / 0 failed /
-   18 ignored in 859 s**, and again in **776 s** with the same counts. `daemon_cleaning_test`
+   18 ignored in 859 s**, and again in **776 s** with the same counts. Re-run a third time at
+   `b14b6a9e`, after the Decision F projection and the producer's class-resolution rewiring had
+   both landed — the two changes most likely to have disturbed daemon startup — with the same
+   result: **33 / 0 / 18 in 803 s**, `EXIT=0`. Three independent runs across three tree states. `daemon_cleaning_test`
    reports `ok` in both, and the suite exits on its own rather than being killed — a watcher
    sampling the harness every 15 s recorded CPU tracking the consensus tests' own work and the
    log line advancing throughout, never a stall.
