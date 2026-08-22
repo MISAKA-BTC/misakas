@@ -241,10 +241,18 @@ outside your own network before announcing anything.
 > path — the published number has to be the real one.
 
 
-* **Third-party mining does not work.** `misaminer` and `pq-miner` branch on algo 4 and 5 only.
-  Making an external miner possible needs the class target, the pwu and the bond registration on
-  the RPC wire — a protocol change, and its own piece of work. Until then the producing node is the
-  producer.
+* **Third-party mining: the facts are on the wire now; no external miner has been written.**
+  The blocker this bullet used to name is closed — `getPalwProducerFacts` (op 167, the full grpc
+  and wRPC stack) serves the class's artifact root, its target, the pwu that target implies, the
+  bond's registered key and operator id, its exposure room and a readiness verdict, all DERIVED
+  (ADR-0046) so a miner cannot disagree with admission by multiplying its own. With it the wire
+  path is complete: `getCurrentNetwork` → `getPalwProducerFacts` → `getBlockTemplate` → run the
+  inference and the nonce search → `submitBlock` with the envelope in `palw_commitment`
+  (`network_domain` is `H(network_id)`, derivable from what the node already publishes).
+  What remains is not protocol: `misaminer` and `pq-miner` still branch on algo 4 and 5 only, and
+  an algo-6 miner has to implement the BASE-0 engine, the carriage build and the retention
+  obligation the facts advertise. Until someone writes one, the producing node is the producer —
+  by absence of a client, not by absence of an interface.
 * **The court's other two legs.** `full_logits_trace_root_v2` hashes f32 rows and
   `PalwActivationTapProfileV1` requires a non-empty f32 tap list; BASE-0 is an integer class and
   taps nothing, so it commits integer roots of its own in those two slots. The arithmetic court —
