@@ -1,0 +1,159 @@
+#!/bin/bash
+# PALW node liveness watcher — catches the 2026-08-22 seat wedge SIGNATURE and captures the
+# one artifact that occurrence could not produce: a userspace backtrace.
+#
+# Why this signature and not "is the process alive" / "is the port open": on 2026-08-22 both of
+# those read healthy for 44 minutes while the node did nothing. What was actually true was
+#   (a) the log stopped moving while sibling nodes on the same host kept logging, and
+#   (b) CLOSE-WAIT piled up on the P2P port — the kernel had delivered peers' version messages
+#       and the application never read its accept queue.
+#
+# An IDLE node is NOT this. Idle tokio workers park in futex_wait_queue exactly like a deadlocked
+# one, and a node with no reachable peer logs nothing either. So (b) is required, not optional:
+# an idle node still drains its accept queue. CPU delta is captured as evidence, never as the
+# trigger — the wedged node's threads were all parked, so low CPU is a symptom, and a node doing
+# a long IBD is busy AND quiet, which is why CPU alone would false-positive both ways.
+#
+# It CAPTURES and reports. It does not restart: a restart destroys the evidence (that is how the
+# first occurrence became unanswerable) and can flap. Recovery stays a human decision.
+set -u
+
+STALL_SECS="${PALW_WATCH_STALL_SECS:-240}"   # log untouched this long...
+CW_MIN="${PALW_WATCH_CW_MIN:-5}"             # ...AND at least this many CLOSE-WAIT on its P2P port
+INTERVAL="${PALW_WATCH_INTERVAL:-60}"
+OUTDIR="${PALW_WATCH_OUTDIR:-/var/log/palw-wedge}"
+NETSUFFIX="${PALW_WATCH_NETSUFFIX:-12}"
+
+mkdir -p "$OUTDIR"
+say() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
+
+# One capture bundle. Everything here was either decisive on 2026-08-22 or was missing when it
+# was needed.
+capture() {
+  local pid="$1" port="$2" appdir="$3" logf="$4" cw="$5" age="$6"
+  local ts dir
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  dir="$OUTDIR/${ts}-p${port}"
+  mkdir -p "$dir"
+  {
+    echo "pid=$pid port=$port appdir=$appdir"
+    echo "log=$logf stalled_for=${age}s close_wait/listen_backlog=$cw"
+    echo "captured=$(date -u +%Y-%m-%dT%H:%M:%SZ) host=$(hostname)"
+    echo "thresholds: stall>${STALL_SECS}s and close_wait>=${CW_MIN}"
+  } > "$dir/summary.txt"
+
+  # THE artifact the first occurrence could not produce. Bounded so a hung node cannot hang us.
+  timeout 120 eu-stack -p "$pid" > "$dir/eu-stack.txt" 2>&1 || echo "(eu-stack failed/absent)" >> "$dir/eu-stack.txt"
+
+  # The thread census that first showed the parked set — kept because it is readable at a glance
+  # and survives when eu-stack cannot attach.
+  for t in /proc/$pid/task/*; do
+    printf '%-18s %s\n' "$(cat "$t/comm" 2>/dev/null)" "$(cat "$t/wchan" 2>/dev/null)"
+  done 2>/dev/null | sort | uniq -c | sort -rn > "$dir/threads.txt"
+
+  # CPU over a short window: the discriminator between wedged and merely busy-and-quiet.
+  local c1 c2
+  c1=$(awk '{print $14+$15}' /proc/$pid/stat 2>/dev/null)
+  sleep 10
+  c2=$(awk '{print $14+$15}' /proc/$pid/stat 2>/dev/null)
+  echo "utime+stime ticks over 10s: ${c1:-?} -> ${c2:-?} (delta $(( ${c2:-0} - ${c1:-0} )))" > "$dir/cpu.txt"
+
+  # -a, because the trigger IS the non-established sockets: a plain `ss -tn` lists only
+  # ESTABLISHED and would record an empty file for the exact evidence that fired the alert.
+  # (Caught in the 2026-08-22 drill, where sockets.txt came back as a bare header.)
+  ss -tanp "( sport = :$port )" > "$dir/sockets.txt" 2>&1
+  ss -tan state close-wait "( sport = :$port )" > "$dir/sockets-close-wait.txt" 2>&1
+  cat /proc/$pid/status > "$dir/proc-status.txt" 2>&1
+  tail -200 "$logf" > "$dir/log-tail.txt" 2>/dev/null
+  tail -200 "${logf%.log}_err.log" > "$dir/log-err-tail.txt" 2>/dev/null
+
+  # **The shipped binary is STRIPPED** (no .symtab, no .debug_*), so eu-stack can only print raw
+  # addresses. They are still resolvable — but only with the load base and a matching build. Both
+  # are recorded here, and the frames are pre-translated to module+vaddr so resolving later is one
+  # addr2line away rather than an archaeology exercise.
+  cp /proc/$pid/maps "$dir/maps.txt" 2>/dev/null
+  local exe binbuild
+  exe=$(readlink -f /proc/$pid/exe 2>/dev/null)
+  binbuild=$(readelf -n "$exe" 2>/dev/null | grep -A1 'Build ID' | tail -1 | tr -d ' \t')
+  echo "exe=$exe" > "$dir/build.txt"
+  echo "$binbuild" >> "$dir/build.txt"
+  sha256sum "$exe" >> "$dir/build.txt" 2>/dev/null
+
+  awk -v exe="$exe" '
+    NR==FNR {
+      # maps: start-end perms offset dev inode path
+      split($1, r, "-"); path=""
+      for (i=6; i<=NF; i++) path = path (i>6 ? " " : "") $i
+      if (path == "") next
+      if (!(path in base) || strtonum("0x" r[1]) < base[path]) base[path] = strtonum("0x" r[1])
+      lo[NR]=strtonum("0x" r[1]); hi[NR]=strtonum("0x" r[2]); pn[NR]=path; n=NR
+      next
+    }
+    {
+      if (match($0, /0x[0-9a-f]+/)) {
+        a = strtonum(substr($0, RSTART, RLENGTH))
+        for (i=1; i<=n; i++) if (a >= lo[i] && a < hi[i]) {
+          printf "%s  -> %s+0x%x\n", $0, pn[i], a - base[pn[i]]; next
+        }
+      }
+      print $0 "  -> (unmapped)"
+    }
+  ' "$dir/maps.txt" "$dir/eu-stack.txt" > "$dir/eu-stack-resolved.txt" 2>/dev/null
+
+  cat > "$dir/HOW-TO-RESOLVE.txt" <<'HOWTO'
+The shipped kaspad is stripped, so eu-stack.txt is addresses only.
+eu-stack-resolved.txt rewrites each frame as  <module>+0x<vaddr>.
+
+To get function names, build the SAME commit without stripping and run:
+
+    addr2line -e <unstripped-kaspad> -f -C -i 0x<vaddr>
+
+Match the build first: build.txt carries the running binary's Build ID and
+sha256. A different build resolves to confident nonsense, which is worse than
+no answer.
+HOWTO
+
+  say "WEDGE port=$port pid=$pid stalled=${age}s close_wait/listen_backlog=$cw -> captured $dir"
+  say "WEDGE recovery is NOT automatic. Read $dir/eu-stack.txt, then restart by hand."
+}
+
+say "palw-liveness-watch started: netsuffix=$NETSUFFIX stall>${STALL_SECS}s close_wait>=${CW_MIN} every ${INTERVAL}s -> $OUTDIR"
+
+declare -A REPORTED
+while :; do
+  now=$(date +%s)
+  for pid in $(pgrep -f -- "--netsuffix=$NETSUFFIX" 2>/dev/null); do
+    [ -d "/proc/$pid" ] || continue
+    cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)
+    case "$cmd" in *kaspad*) ;; *) continue ;; esac   # the node, not a wrapper or this watcher
+    appdir=$(sed -n 's/.*--appdir=\([^ ]*\).*/\1/p' <<<"$cmd")
+    port=$(sed -n 's/.*--listen=[^:]*:\([0-9]*\).*/\1/p' <<<"$cmd")
+    [ -n "$appdir" ] && [ -n "$port" ] || continue
+    logf="$appdir/misaka-testnet-$NETSUFFIX/logs/rusty-kaspa.log"
+    [ -f "$logf" ] || continue
+
+    mtime=$(stat -c %Y "$logf" 2>/dev/null) || continue
+    age=$(( now - mtime ))
+    cw=$(ss -tn state close-wait "( sport = :$port )" 2>/dev/null | grep -c "^" )
+    cw=$(( cw > 0 ? cw - 1 : 0 ))   # drop the header line
+
+    # Recv-Q on the LISTEN socket IS the accept backlog — connections the kernel has completed and
+    # the application has not taken. It is the same fault CLOSE-WAIT reports, one step earlier and
+    # without needing peers to give up first: on a quiet network nobody may ever time out, so
+    # CLOSE-WAIT could stay at zero while the node accepts nothing. Either one is the signal.
+    lq=$(ss -tanl "( sport = :$port )" 2>/dev/null | awk '$1=="LISTEN"{print $2; exit}')
+    lq=${lq:-0}
+
+    key="$port"
+    if [ "$age" -gt "$STALL_SECS" ] && { [ "$cw" -ge "$CW_MIN" ] || [ "$lq" -ge 1 ]; }; then
+      if [ "${REPORTED[$key]:-0}" != "$pid" ]; then
+        REPORTED[$key]="$pid"          # once per pid: a wedge that persists is one event
+        capture "$pid" "$port" "$appdir" "$logf" "$cw/$lq" "$age"
+      fi
+    else
+      [ "${REPORTED[$key]:-0}" != "0" ] && say "port=$port recovered (stalled=${age}s close_wait=$cw listen_backlog=$lq)"
+      REPORTED[$key]=0
+    fi
+  done
+  sleep "$INTERVAL"
+done

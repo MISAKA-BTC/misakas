@@ -71,13 +71,39 @@ Restarted with the identical command line; the node came back and has logged nor
 **A restart is not a diagnosis** — the same conditions produced the same two log patterns again
 within seconds of coming up, so nothing here says it will not recur.
 
-Two things would make the next occurrence answerable, and neither is in place:
+Two things would make the next occurrence answerable. **Both are now in place** (2026-08-22):
 
-1. **A stack tool on the fleet hosts.** One `eu-stack -p <pid>` would have named the lock. Install
-   `elfutils` (or `gdb`) on all four before the next run.
-2. **A liveness check that watches the accept queue.** "The log has not moved and `CLOSE-WAIT` is
-   climbing on the P2P port" is a precise, cheap signal, and it is what a watcher should alert on
-   — the process being alive and the port being open both looked fine here.
+1. **A stack tool on the fleet hosts.** `elfutils` 0.190 installed on all four; `eu-stack -p <pid>`
+   walks a live node's 44 threads in **128 ms**.
+2. **A liveness watcher on the accept queue** — `scripts/palw-liveness-watch`, running as
+   `palw-liveness-watch.service` on all four hosts (enabled, 60 s poll). It fires on *stalled log
+   for >240 s* **AND** *(≥5 CLOSE-WAIT **or** a non-empty LISTEN backlog)* on that node's P2P port,
+   and captures a bundle: `eu-stack`, thread census, sockets, `/proc` status, CPU delta and log
+   tails. It does **not** restart anything — a restart is what made the first occurrence
+   unanswerable.
+
+### What the drills found, and why the watcher is not the first draft
+
+The watcher was exercised against a real node (`.t12b` on ibm, `SIGSTOP`/`SIGCONT`) rather than
+declared working, and two defects fell out of doing that:
+
+* **`sockets.txt` came back as a bare header.** The capture used `ss -tn`, which lists only
+  ESTABLISHED — so the file recording the alert's own evidence was empty. Fixed to `ss -tanp`,
+  plus a separate CLOSE-WAIT-only file.
+* **CLOSE-WAIT alone is not a dependable trigger.** It only accumulates once peers give up, so on
+  a quiet network a wedged node could sit at zero. `Recv-Q` on the **LISTEN** socket is the same
+  fault one step earlier — it *is* the accept backlog — and is now an independent trigger. Drilled
+  on its own with a single connection and no peer traffic: fired at 60 s with `close_wait/listen_backlog=1/1`.
+
+### The stripped-binary problem, and what the capture does about it
+
+The shipped `kaspad` has **no `.symtab` and no `.debug_*`**, so `eu-stack` prints raw addresses.
+The bundle therefore also records `/proc/<pid>/maps`, the Build ID
+(`752a3e1cf827bd3776e6466e460b47189919f03f`) and the binary's sha256, and pre-translates every
+frame to `<module>+0x<vaddr>` in `eu-stack-resolved.txt` — 299 frames resolved in the drill.
+Names still need an unstripped build of the same commit; `HOW-TO-RESOLVE.txt` in each bundle says
+so, and says to match the Build ID first, because a different build resolves to confident
+nonsense.
 
 ## Fleet state at the time
 
