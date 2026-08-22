@@ -162,6 +162,30 @@ Byte-equal full-trace agreement remains a legal fast path (same device family, s
 will often hold) but is never required: the rule is the tolerance, so an OS update that shifts
 float sums degrades the family to voided claims, never to slashed bonds.
 
+> **Decision 4 revised by measurement (2026-08-23).** The sampled rule above was designed around
+> an assumption — that replaying a whole generation is too expensive to ask of a seat — and on this
+> family's launch class that assumption is false. The canonical job (8 prefill / 4 decode) replays
+> in **2.75 s** on an M4 Pro, and four runs of one anchor on one machine are **byte-identical**,
+> `gemm_trace_root` included.
+>
+> So the implemented seat rule is **full replay, compared exactly**: re-run the carried job, and
+> sign `Valid` only if the resulting `execution_root` and `trace_root` equal the ones the chain
+> holds. That is simpler than the sampled rule and strictly stronger — every position instead of
+> `m`, and equality instead of a band. It also removes ε, K and m from this class's registration
+> entirely: there is nothing to calibrate and nothing for an attacker to sit inside.
+>
+> The sampled, tolerant rule is **kept as a class property, not deleted**. It is what a class needs
+> whose generations are long enough that replay costs more than a seat will pay, or whose panel
+> spans device generations where ε > 0. Both are facts about a class, so both belong in its
+> registration — and neither is true of `CAT-M-0001`. Cross-device ε remains unmeasured and is now
+> a *precondition for a mixed-generation panel*, rather than a precondition for the family.
+>
+> One consequence worth stating: exact replay means a Family-M panel is, in practice, a
+> **same-device-family panel**. A seat on a different Apple generation may reproduce and may not;
+> if it does not, it files nothing, the claim gathers no quorum, and the escrow burns. That is the
+> soft failure the family is built on — but it makes the panel's composition an operational fact
+> the class should declare rather than discover.
+
 ## Decision 5 — What this family cannot do, said out loud
 
 **No court.** A challenge against a Family-M claim has no arithmetic terminal: the bisection

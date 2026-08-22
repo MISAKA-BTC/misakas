@@ -287,24 +287,58 @@ impl PalwExecutionBackendV1 for MetalBackend {
         })
     }
 
+    /// **A seat re-runs the job and compares roots — exactly** (ADR-0051 Decision 4, implemented
+    /// as full replay rather than spot replay, and the reason is a measurement).
+    ///
+    /// Decision 4 proposed sampling `m` positions and teacher-forcing each, because replaying a
+    /// whole generation was assumed too expensive to ask of a seat. On the class this family
+    /// launches with it is not: the canonical job (8 prefill / 4 decode) runs in **2.75 s** on an
+    /// M4 Pro. Full replay is simpler, and it is *stronger* than the sampled rule in two ways —
+    /// it checks every position instead of `m` of them, and it compares **exactly** rather than
+    /// within a tolerance, which the same measurement licenses: four runs of one anchor on one
+    /// machine are byte-identical, `gemm_trace_root` included.
+    ///
+    /// The sampled, tolerant rule is not discarded — it is what a class needs whose generations
+    /// are long enough that replay costs more than a seat will pay, or whose panel spans device
+    /// generations where ε > 0. Both are properties of a class, so both belong in its
+    /// registration, and neither is this class.
+    ///
+    /// A seat that cannot run the worker answers `Unverifiable` and files nothing. That is not a
+    /// mismatch: the producer may be perfectly honest and this seat merely unequipped, and the
+    /// receipt lane already separates "I could not check" from "this does not match".
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
         let Ok(decoded) = metal_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
-        // Step 1 of a seat's check, and the only part that costs nothing: does the material even
-        // claim to be this claim's execution? The expensive half — replaying sampled positions on
-        // this seat's own Metal (ADR-0051 Decision 4) — is step 3 of the ADR's implementation
-        // order and is deliberately absent rather than faked: signing `Valid` on this check alone
-        // would attest that the producer's numbers are self-consistent, which they always are.
+        // Cheap checks first: a material that does not even claim to be this claim's execution is
+        // refused before a GPU is woken.
         if decoded.binding.committed_execution_root != claim.execution_root
             || decoded.binding.full_logits_trace_root != claim.trace_root
+            || decoded.projection.full_logits_trace_root != decoded.binding.full_logits_trace_root
         {
             return PalwMaterialVerdictV1::Mismatch;
         }
-        if decoded.projection.full_logits_trace_root != decoded.binding.full_logits_trace_root {
+        // The prompt must be the one the carried job commits to — otherwise a seat would replay a
+        // prompt the producer chose after the fact.
+        if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&decoded.prompt_token_ids)
+            != decoded.job.prompt_token_ids_hash
+        {
             return PalwMaterialVerdictV1::Mismatch;
         }
-        PalwMaterialVerdictV1::Unverifiable
+        let prompt: Vec<usize> = decoded.prompt_token_ids.iter().map(|t| *t as usize).collect();
+        match self.execute(&decoded.job, &prompt) {
+            // Ran it, and got what the chain holds. This is the only path to `Valid`.
+            Ok(mine) if mine.execution_root == claim.execution_root && mine.trace_root == claim.trace_root => {
+                PalwMaterialVerdictV1::Matches
+            }
+            // Ran it, and got something else. The producer committed to an execution this
+            // runtime does not reproduce — which on a same-device panel is a lie, and across
+            // device generations may not be. The family never convicts either way: no quorum
+            // forms, the claim voids, and the escrow is burned.
+            Ok(_) => PalwMaterialVerdictV1::Mismatch,
+            // Could not run it at all.
+            Err(_) => PalwMaterialVerdictV1::Unverifiable,
+        }
     }
 }
 
@@ -473,11 +507,13 @@ mod tests {
         // A seat's transport check passes against the roots this run committed, and fails against
         // somebody else's.
         let claim = PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root };
-        assert_ne!(
+        let seat_started = std::time::Instant::now();
+        assert_eq!(
             backend.verify_material(&a.material, claim),
-            PalwMaterialVerdictV1::Mismatch,
-            "material must answer for its own roots"
+            PalwMaterialVerdictV1::Matches,
+            "a seat re-running the job must reproduce the roots the producer committed"
         );
+        eprintln!("seat verify (full replay): {:?}", seat_started.elapsed());
         let other = PalwClaimRootsV1 { execution_root: Hash64::from_u64_word(0xBAD), ..claim };
         assert_eq!(backend.verify_material(&a.material, other), PalwMaterialVerdictV1::Mismatch);
 
