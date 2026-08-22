@@ -227,6 +227,15 @@ Adding seeders later is a plain edit, not a flag day: `dns_seeders` is deliberat
 IPs, and a socket bridge is not the same thing as a delegated seed name. Test reachability from
 outside your own network before announcing anything.
 
+**Start every seat BEFORE the producer.** Trace material is gossiped once and never replayed, so
+a seat that is still catching up when a claim is made never sees that claim's material — and it is
+*right* to file `Unavailable`, because it genuinely cannot verify. Three such verdicts are a quorum,
+and the claim voids for `ProducerWithholding` with its escrow destroyed. testnet-12's relaunch
+measured this exactly: the seats brought up after the producer each filed **158** `Unavailable`
+verdicts covering the same claims, and then filed nothing but `Valid` once caught up. Nothing was
+wrong with the network; the launch order was wrong. Bring every seat to a synced tip first, and
+only then start producing.
+
 **Every registered bond needs a node, and the registry has no spare.** `derive_panel_v2` seats
 `PALW_V2_PANEL_SEATS` bonds and excludes the executor, so a six-row registry seats *all five*
 non-producing bonds on *every* claim. A bond whose node is not running is not idle — it is a silent
