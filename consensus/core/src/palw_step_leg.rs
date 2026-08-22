@@ -713,6 +713,12 @@ pub enum PalwStepFaultV1 {
     ComputationMismatch {
         value_index: u32,
     } = 15,
+    /// ADR-0049 Decision E's verdict: the committed decode token at `position` is not what the
+    /// pinned selection rule (`base0_decode_token_select_v1`) produces from that position's own
+    /// committed logits row (discriminants 0-15 unmoved).
+    DecodeTokenMismatch {
+        position: u32,
+    } = 16,
 }
 
 impl PalwStepFaultV1 {
@@ -734,6 +740,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::CheckpointGenesisPrevMismatch => (13, 0),
             PalwStepFaultV1::CheckpointChainBroken => (14, 0),
             PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
+            PalwStepFaultV1::DecodeTokenMismatch { position } => (16, position),
         }
     }
 }
@@ -816,6 +823,13 @@ fn evidence_id(committed_root: &Hash64, evidence_kind: u8, leaf_index: u64, faul
 /// checkpoint profile hash). Rejection here means the evidence is about some other
 /// commitment — never that the commitment is honest. A malformed shape PROFILE, by contrast,
 /// is itself the fault (checked by the caller against the recomputed root first).
+/// [`verify_binding`], public: the decode-token adjudication (ADR-0049 Decision E) pins a
+/// binding to a claim's `execution_root` and then needs exactly this recomputation — the same
+/// one every structural and arithmetic arm runs — without carrying a leaf to open.
+pub fn verify_binding_v1(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64), PalwStepLegError> {
+    verify_binding(binding)
+}
+
 fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64), PalwStepLegError> {
     if binding.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Err(PalwStepLegError::UnsupportedVersion { got: binding.version, expected: PALW_STEP_LEG_OBJECT_VERSION_V1 });

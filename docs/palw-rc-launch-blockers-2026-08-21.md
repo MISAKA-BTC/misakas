@@ -208,17 +208,39 @@ The fixture variable is the model-free devnet PALW path; both requirements preda
 
 ## Known-open and deliberately scoped out
 
-* **The decode-call embedding gather is `Unadjudicable`** — 4 of 914 leaves. Its token is a
-  generated id whose BASE-0 commitment rides `base0_logits_trace_root_v1` (the integer trace root)
-  while the court's decode-token check recomputes the v2 event-tree root. Closing it is the
-  integer-leg dispatch. It is *cannot check*, not *wrongly convict*, so it burns no honest bond —
-  and `the_court_convicts_no_leaf_of_an_honest_execution` pins it so a **new** hole fails the test.
-* **ADR-0049 Decision E's selection rule does not exist** — no argmax, no tie-break, no fault code
-  (C-04's second half). Nothing on-chain refutes a committed decode token.
-* **M-02** — `state_root()` covers five items ADR-0043's preimage does not (class shares, epoch
-  budgets, receipt targets, pending payouts, receipt epoch counters). Documentation debt today; it
-  must be settled **before the ruleset id is frozen**, or a golden vector is fixed against the wrong
-  ADR and the correction becomes a flag day.
+> **Update 2026-08-22: the first three entries below are CLOSED**, each with the mutation
+> measurement that says so. Kept in place because each records what the defect *was*.
+
+* ~~**The decode-call embedding gather is `Unadjudicable`**~~ — **CLOSED (the integer-leg
+  dispatch).** The decode check now dispatches on the class's registered `PalwStepLaneV1`: an
+  `Int32` class authenticates its generated ids by recomputing `base0_logits_trace_root_v1` from
+  a carried pin (rows + ids), a `Float32` class through the v2 event-tree root as before, and a
+  pin that does not speak the class's lane is refused by name. The sweep now demands **914/914
+  adjudicated, 0 unadjudicable**; reverting the dispatch arm reddens it at leaf 542 by name.
+  The retained-material codec grew the logits rows in the same change (one codec — retention
+  file, broadcast, seat decode), so a third party can assemble the pin from broadcast material,
+  and `base0_material_matches_claim_v1` now *recomputes* the integer trace root from the carried
+  rows rather than comparing binding fields.
+* ~~**ADR-0049 Decision E's selection rule does not exist**~~ — **CLOSED (integer-first).**
+  `base0_decode_token_select_v1` (argmax, ties LOWEST) is one function the engine's decode loop
+  and the court both call; `PalwCourtVerdictProofV2::DecodeToken` refutes a committed decode
+  token on-chain with fault `DecodeTokenMismatch { position }` (evidence kind 6), cost-gated by
+  the same opening-byte ceiling. Money path proven: the lying claim voids as `CourtFraud` and its
+  bond is slashed; the honest one survives the same close
+  (`palw_v2_a_lying_decode_token_convicts_through_the_court_close`). Re-tying the rule to the
+  highest index reddens the tie test. A `Float32` class remains refused by name — its
+  per-position openings arrive with the class that needs them (Gate 3, not a launch blocker).
+* ~~**M-02**~~ — **CLOSED (`364fe079`), and it was sharper than documentation debt**: the drift
+  was SIX items (the five named plus `retired_safe_weight`), and `retired_safe_weight` had
+  entered the preimage **without the version bump** ADR-0043's own change rule demands. Settled
+  as: ADR-0043 §2 amended to the full list with provenance, `PALW_STATE_V2_VERSION = 5`
+  supplying the missed bump, and the correspondence made executable — a from-spec second
+  implementation (`the_state_root_preimage_is_exactly_the_adr_0043_list`, with an exhaustive
+  no-rest destructure so a new carriage field fails to compile beside the list it must join),
+  a 20-field perturbation census (`every_primary_datum_moves_the_root`), and golden vectors.
+  Settled before the ruleset id froze, as required. The ruleset id itself (H of the params
+  bundle) does not move with the bump; what moves is every `palw_state_root`, which is a
+  consensus change the forced t12 genesis re-mint absorbs.
 * **Qwen (H-04 / H-05 / H-06 / M-03)** — not a launch blocker: testnet-12 registers only BASE-0.
 
 ---

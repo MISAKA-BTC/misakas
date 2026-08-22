@@ -433,16 +433,12 @@ impl<'a> Base0Engine<'a> {
     }
 }
 
-/// Argmax with ties broken to the lowest index. Separate and named so the tie rule is a thing that
-/// can be pointed at rather than an accident of `max_by_key`.
+/// Argmax with ties broken to the lowest index. The rule itself now lives with the COURT
+/// (`base0_decode_token_select_v1`, ADR-0049 Decision E) and this delegates, so the engine that
+/// selects a token and the adjudication that refutes one can never disagree about what
+/// "selected" means.
 pub fn argmax_lowest(values: &[i32]) -> usize {
-    let mut best = 0usize;
-    for (i, v) in values.iter().enumerate() {
-        if *v > values[best] {
-            best = i;
-        }
-    }
-    best
+    kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(values)
 }
 
 /// Re-exported so a caller can name the op set the engine is restricted to without depending on

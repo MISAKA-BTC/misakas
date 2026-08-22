@@ -361,6 +361,7 @@ pub fn base0_refutation_from_capture_v1(
     binding: kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     target: PalwStepCoordinateV1,
     prompt_token_ids: Vec<u32>,
+    decode_tokens: Option<kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1>,
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
     use kaspa_consensus_core::palw_step_leg::step_opening_v1;
     use kaspa_consensus_core::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepInputOpeningV1, canonical_input_leaves_v1};
@@ -395,7 +396,7 @@ pub fn base0_refutation_from_capture_v1(
             inputs.push(PalwStepInputOpeningV1 { opening, preimage });
         }
     }
-    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens: None })
+    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens })
 }
 
 #[cfg(test)]
@@ -606,7 +607,7 @@ mod tests {
         // (slot 34 of layer 0), which reads the accumulator the step before it produced.
         let target =
             PalwStepCoordinateV1 { call_index: 0, node_slot: profile.pre_nodes.len() as u32 + 34, position: 0, tile_index: 0 };
-        let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new())
+        let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new(), None)
             .expect("a capture assembles");
 
         // The oracle is the PRODUCTION inventory, proven against its own root — so this exercises
@@ -637,7 +638,7 @@ mod tests {
         row[0] = row[0].wrapping_add(1);
         let lying_tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &lying).expect("the rows tile");
         let lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");
-        let fraud = base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new())
+        let fraud = base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new(), None)
             .expect("a tampered capture assembles the same way");
         let verdict =
             check_execution_step_refutation_v1(&fraud, &oracle).expect("a committed row its own inputs do not produce convicts");

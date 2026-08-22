@@ -860,7 +860,7 @@ pub struct PalwExecutionStepRefutationV1 {
     ///
     /// `None` means the refutation addresses no decode gather, which is every refutation of a
     /// prefill-only class and most refutations of any class.
-    pub decode_tokens: Option<PalwDecodeTokensV1>,
+    pub decode_tokens: Option<PalwDecodeTokenPinV1>,
 }
 
 /// What a court needs to recompute `full_logits_trace_root_v2` and so pin the generated tokens.
@@ -875,6 +875,175 @@ pub struct PalwDecodeTokensV1 {
     pub ordered_event_commitment: Hash64,
     pub generated_token_ids: Vec<u32>,
 }
+
+/// **The generated ids, pinned through the scheme the class actually committed under — the
+/// integer-leg dispatch.**
+///
+/// `binding.full_logits_trace_root` is one header slot with two occupants: a `Float32` class
+/// commits [`crate::palw_v2::full_logits_trace_root_v2`] (an event tree over f32 rows), and the
+/// `Int32` class commits [`base0_logits_trace_root_v1`] (a flat keyed hash over its i32 logits
+/// rows and generated ids). The court's decode-token check used to recompute ONLY the v2 root, so
+/// a BASE-0 execution — whose canonical job decodes — could never carry its generated ids into a
+/// refutation, and every decode-call embedding gather ended `Unadjudicable`: 4 of the floor's
+/// 914 leaves, pinned by the sweep until this dispatch existed.
+///
+/// The variant does NOT choose the scheme; the class's registered
+/// [`crate::palw_step::PalwStepLaneV1`] does, and the checker refuses a pin that does not speak
+/// the class's lane. Derive, never declare (ADR-0046): a challenger picks what to carry, never
+/// which rules apply.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwDecodeTokenPinV1 {
+    /// A `Float32` class's pin: recompute the v2 event-tree root from the carried summary.
+    FloatV2(PalwDecodeTokensV1),
+    /// The `Int32` class's pin: recompute [`base0_logits_trace_root_v1`] from the carried rows.
+    Base0V1(PalwBase0DecodeTokensV1),
+}
+
+/// What a court needs to recompute [`base0_logits_trace_root_v1`] and so pin the generated
+/// tokens of an integer-class execution: the logits rows themselves, i32 lanes, one row per
+/// call. Affordable to carry whole because the class's vocabulary is small by construction —
+/// the same reason its whole trace is one retained object.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBase0DecodeTokensV1 {
+    pub logits_rows: Vec<Vec<i32>>,
+    pub generated_token_ids: Vec<u32>,
+}
+
+/// Domain of [`base0_logits_trace_root_v1`]. Moved here from the producer crate with the byte
+/// string unchanged, so every root ever committed under it still verifies.
+pub const PALW_BASE0_DOMAIN_LOGITS_TRACE: &[u8] = b"misaka-palw/base0/logits-trace/v1";
+
+/// **The integer class's logits trace root.**
+///
+/// One keyed hash over the context, the shape of the run, and every logits row the job produced,
+/// as `i32` little-endian — the lanes the engine actually computes. Not
+/// [`crate::palw_v2::full_logits_trace_root_v2`]: that scheme hashes f32 rows, and BASE-0 has
+/// none.
+///
+/// Lives in the COURT's module and is re-exported by the producer crate, so the committing side
+/// and the adjudicating side are one implementation — the correspondence-by-construction shape
+/// the material codec already uses.
+pub fn base0_logits_trace_root_v1(
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    logits_rows: &[Vec<i32>],
+    generated_token_ids: &[u32],
+) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_LOGITS_TRACE).to_state();
+    h.update(ctx.context_hash().as_byte_slice());
+    h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
+    h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
+    h.update(&(logits_rows.len() as u64).to_le_bytes());
+    for row in logits_rows {
+        h.update(&(row.len() as u64).to_le_bytes());
+        for v in row {
+            h.update(&v.to_le_bytes());
+        }
+    }
+    h.update(&(generated_token_ids.len() as u64).to_le_bytes());
+    for t in generated_token_ids {
+        h.update(&t.to_le_bytes());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **ADR-0049 Decision E's selection rule, pinned: argmax with ties broken to the LOWEST
+/// index.** The engine's decode loop and the court's decode-token adjudication both call this
+/// one function; a committed token is refutable exactly because the rule is a thing that can be
+/// pointed at rather than an accident of `max_by_key`.
+pub fn base0_decode_token_select_v1(values: &[i32]) -> usize {
+    let mut best = 0usize;
+    for (i, v) in values.iter().enumerate() {
+        if *v > values[best] {
+            best = i;
+        }
+    }
+    best
+}
+
+/// **The Base0 pin, authenticated** — shared by the step-refutation dispatch and the
+/// decode-token close. Structural bounds run BEFORE any hashing, so an oversized pin costs a
+/// few comparisons to refuse: the row count is the context's own decode count, every row is the
+/// registered vocabulary wide, and the ids pair one-to-one with the rows. Then the root is
+/// recomputed from the carried material and compared against the binding's committed slot — a
+/// challenger that alters one lane gets a different root and is refused before a single id is
+/// read.
+fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeTokensV1) -> Result<(), PalwStepRefuteError> {
+    let decode = binding.job_context.exact_decode_tokens as usize;
+    if pin.logits_rows.len() != decode {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the pin's row count is not the context's decode count"));
+    }
+    if pin.generated_token_ids.len() != decode {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the pin's id count is not the context's decode count"));
+    }
+    let vocab = binding.shape_profile.vocab_size as usize;
+    if pin.logits_rows.iter().any(|row| row.len() != vocab) {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("a pinned logits row is not the registered vocabulary wide"));
+    }
+    let root = base0_logits_trace_root_v1(&binding.job_context, &pin.logits_rows, &pin.generated_token_ids);
+    if root != binding.full_logits_trace_root {
+        return Err(PalwStepRefuteError::InputSetNotCanonical(
+            "the carried logits do not reproduce the claim's own integer trace root",
+        ));
+    }
+    Ok(())
+}
+
+/// **ADR-0049 Decision E, the on-chain half: refute a committed decode token.**
+///
+/// The producer's generated ids are INSIDE [`base0_logits_trace_root_v1`], beside the very rows
+/// they were selected from — so a committed token that is not what the selection rule produces
+/// from its own row is a lie the commitment itself carries. The challenger carries the pin; the
+/// court authenticates it against the claim's committed root, recomputes
+/// [`base0_decode_token_select_v1`] over the challenged position's row, and convicts on
+/// inequality. One row, one argmax, no opening — the whole-vocabulary cost Decision E refuses to
+/// pay is a few kilobytes here, because the integer class's vocabulary is small by construction.
+///
+/// The float lane has no decode-token adjudicator yet (its per-position openings arrive with the
+/// class that needs them, Gate 3); a close against a `Float32` class is refused by name rather
+/// than adjudicated wrongly.
+///
+/// The caller (the court's close arm) has already pinned `binding.committed_execution_root` to
+/// the claim's own `execution_root`, which transitively pins `full_logits_trace_root` — the
+/// binding recomputation below refuses a binding whose parts do not produce its root.
+pub fn check_base0_decode_token_refutation_v1(
+    binding: &PalwStepBindingV2,
+    pin: &PalwBase0DecodeTokensV1,
+    position: u32,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(PalwStepRefuteError::Leg)?;
+    if binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Int32 {
+        return Err(PalwStepRefuteError::InputSetNotCanonical(
+            "the float logits leg has no decode-token adjudicator yet — a Float32 class cannot be closed here",
+        ));
+    }
+    check_base0_decode_pin(binding, pin)?;
+    let row = pin
+        .logits_rows
+        .get(position as usize)
+        .ok_or(PalwStepRefuteError::InputSetNotCanonical("the challenged position is outside the job's decode calls"))?;
+    let committed = pin.generated_token_ids[position as usize];
+    let expected = base0_decode_token_select_v1(row) as u32;
+    if committed != expected {
+        let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position };
+        return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
+            fault,
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &binding.committed_execution_root,
+                PALW_DECODE_TOKEN_EVIDENCE_KIND,
+                position as u64,
+                fault,
+            ),
+        });
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
+
+/// The §24.1 evidence-kind of a decode-token refutation. 0–4 are the structural arms
+/// ([`crate::palw_step_leg::PalwStepEvidenceV1`]), 5 is the arithmetic step recomputation;
+/// this is the sixth way an execution commitment can be caught lying.
+pub const PALW_DECODE_TOKEN_EVIDENCE_KIND: u8 = 6;
 
 /// Supplies raw rows of the pinned model artifact. The CALLER owns verifying the artifact
 /// digest (`qwen35_pins::GGUF_SHA256`) before answering; adjudication trusts the oracle the
@@ -1207,14 +1376,16 @@ pub fn check_execution_step_refutation_v1(
     {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried prompt ids are not the ones the job context commits to"));
     }
-    // **The decode half (ADR-0049 Decision E), checked the same way and before anything reads it.**
-    //
-    // `output_token_ids_hash_v2` of the generated ids is bound inside `full_logits_trace_root_v2`,
-    // which the binding carries, so recomputing the root from the carried summary and ids IS the
-    // check — no new commitment, and a challenger who alters one id produces a different root.
-    let generated: &[u32] = match refutation.decode_tokens.as_ref() {
-        None => &[],
-        Some(d) => {
+    // **The decode half (ADR-0049 Decision E), checked the same way and before anything reads
+    // it — dispatched on the class's registered LANE, because `full_logits_trace_root` is one
+    // slot with two occupants.** A `Float32` class committed the v2 event-tree root; the `Int32`
+    // class committed `base0_logits_trace_root_v1`. Recomputing the root the class actually
+    // committed IS the check — no new commitment, and a challenger who alters one id produces a
+    // different root. A pin that does not speak the class's lane is refused by name: the
+    // challenger picks what to carry, never which rules apply.
+    let generated: &[u32] = match (binding.shape_profile.lane, refutation.decode_tokens.as_ref()) {
+        (_, None) => &[],
+        (crate::palw_step::PalwStepLaneV1::Float32, Some(PalwDecodeTokenPinV1::FloatV2(d))) => {
             if crate::palw_v2::output_token_ids_hash_v2(&d.generated_token_ids) != d.summary.output_token_ids_hash {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the carried generated ids are not the ones the summary commits to"));
             }
@@ -1226,6 +1397,11 @@ pub fn check_execution_step_refutation_v1(
             }
             &d.generated_token_ids
         }
+        (crate::palw_step::PalwStepLaneV1::Int32, Some(PalwDecodeTokenPinV1::Base0V1(d))) => {
+            check_base0_decode_pin(binding, d)?;
+            &d.generated_token_ids
+        }
+        _ => return Err(PalwStepRefuteError::InputSetNotCanonical("the decode-token pin does not speak the class's lane")),
     };
     let (recomputed_row, row_offset) = run_program(
         program,
@@ -2742,6 +2918,215 @@ pub(crate) mod tests {
             inputs,
             prompt_token_ids: Vec::new(),
             decode_tokens: None,
+        }
+    }
+
+    /// Recompute a binding's `committed_execution_root` from its own parts — what every fixture
+    /// that edits a bound field must do, extracted so they cannot each do it differently.
+    pub(crate) fn rebind_committed_root(binding: &mut PalwStepBindingV2) {
+        let ctx_hash = binding.job_context.context_hash();
+        let profile_hash = binding.shape_profile.shape_profile_id();
+        let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
+        let ckpt_root = checkpoint_leg_root_v2(
+            &ctx_hash,
+            &binding.checkpoint_profile.profile_hash(),
+            &binding.state_chunk_map_id,
+            decode_calls,
+            binding.checkpoint_count,
+            &binding.checkpoint_merkle_root,
+        );
+        binding.committed_execution_root = execution_commitment_root_v2(
+            &ctx_hash,
+            &binding.full_logits_trace_root,
+            &binding.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+    }
+
+    /// The matmul fixture's execution, re-committed with a REAL integer decode commitment:
+    /// `full_logits_trace_root` becomes [`base0_logits_trace_root_v1`] over the given rows and
+    /// ids. The rows must be `exact_decode_tokens` of them, each `vocab_size` wide — the shape
+    /// the pin check enforces.
+    pub(crate) fn base0_binding_with_decode_root(
+        logits_rows: Vec<Vec<i32>>,
+        generated: Vec<u32>,
+    ) -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>, PalwBase0DecodeTokensV1) {
+        let (mut binding, material, rows) = base0_honest_execution();
+        binding.full_logits_trace_root = base0_logits_trace_root_v1(&binding.job_context, &logits_rows, &generated);
+        rebind_committed_root(&mut binding);
+        (binding, material, rows, PalwBase0DecodeTokensV1 { logits_rows, generated_token_ids: generated })
+    }
+
+    /// Deterministic logits rows at the fixture's shape (2 decode calls, vocabulary 40), and the
+    /// ids the pinned selection rule derives from them.
+    pub(crate) fn base0_honest_decode_commitment()
+    -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>, PalwBase0DecodeTokensV1) {
+        let (b, _, _) = base0_honest_execution();
+        let vocab = b.shape_profile.vocab_size as usize;
+        let decode = b.job_context.exact_decode_tokens as usize;
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 31 + i * 7) % 23) as i32 - 11).collect()).collect();
+        let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        base0_binding_with_decode_root(logits_rows, generated)
+    }
+
+    /// **ADR-0049 Decision E fires, and fires positionally.** An honest commitment clears at
+    /// every decode position; a commitment whose id at position 1 is not the selection rule's
+    /// answer convicts at position 1 with `DecodeTokenMismatch { position: 1 }` — and STILL
+    /// clears at position 0, because the fault is the lie, not the producer's neighborhood.
+    #[test]
+    fn the_decode_token_selection_rule_convicts_exactly_the_lying_position() {
+        let (binding, _m, _r, pin) = base0_honest_decode_commitment();
+        for p in 0..pin.generated_token_ids.len() as u32 {
+            assert!(
+                matches!(check_base0_decode_token_refutation_v1(&binding, &pin, p), Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest committed token at position {p} clears"
+            );
+        }
+        // The lie is INSIDE the commitment: the root is recomputed over the lying ids, exactly
+        // as a fraudulent producer would commit it.
+        let mut lying_ids = pin.generated_token_ids.clone();
+        lying_ids[1] = lying_ids[1].wrapping_add(1);
+        let (lb, _m2, _r2, lpin) = base0_binding_with_decode_root(pin.logits_rows.clone(), lying_ids);
+        let verdict = check_base0_decode_token_refutation_v1(&lb, &lpin, 1).expect("a lying committed token convicts");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 1 });
+        assert!(
+            matches!(check_base0_decode_token_refutation_v1(&lb, &lpin, 0), Err(PalwStepRefuteError::NoFaultFound)),
+            "position 0's token was honest, and stays cleared"
+        );
+        assert!(
+            matches!(
+                check_base0_decode_token_refutation_v1(&lb, &lpin, 7),
+                Err(PalwStepRefuteError::InputSetNotCanonical(_))
+            ),
+            "a position outside the job's decode calls is malformed evidence, never a verdict"
+        );
+    }
+
+    /// **The tie rule is the LOWEST index, and the court holds a producer to it.** Two lanes tie
+    /// at the max; a producer that committed the lower twin clears, one that committed the
+    /// higher twin is convicted — same rows, same values, one rule.
+    #[test]
+    fn the_decode_token_tie_breaks_to_the_lowest_index() {
+        let (b, _, _) = base0_honest_execution();
+        let vocab = b.shape_profile.vocab_size as usize;
+        let decode = b.job_context.exact_decode_tokens as usize;
+        let mut row = vec![-5i32; vocab];
+        row[3] = 7;
+        row[9] = 7; // the twin
+        let rows: Vec<Vec<i32>> = (0..decode).map(|_| row.clone()).collect();
+
+        let (hb, _m, _r, hpin) = base0_binding_with_decode_root(rows.clone(), vec![3; decode]);
+        for p in 0..decode as u32 {
+            assert!(
+                matches!(check_base0_decode_token_refutation_v1(&hb, &hpin, p), Err(PalwStepRefuteError::NoFaultFound)),
+                "the lower twin is the selection"
+            );
+        }
+        let (gb, _m2, _r2, gpin) = base0_binding_with_decode_root(rows, vec![9; decode]);
+        let verdict = check_base0_decode_token_refutation_v1(&gb, &gpin, 0).expect("the higher twin convicts");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 0 });
+    }
+
+    /// **A pin the commitment does not authenticate is refused, never adjudicated.** One lane
+    /// flipped, one id flipped, one row the wrong width, the wrong row count — each is malformed
+    /// evidence by name, and none of them can convict anyone.
+    #[test]
+    fn a_decode_pin_the_committed_root_does_not_authenticate_is_refused() {
+        let (binding, _m, _r, pin) = base0_honest_decode_commitment();
+        let cases: Vec<(&str, PalwBase0DecodeTokensV1)> = vec![
+            ("a flipped lane", {
+                let mut p = pin.clone();
+                p.logits_rows[0][0] += 1;
+                p
+            }),
+            ("a flipped id", {
+                let mut p = pin.clone();
+                p.generated_token_ids[0] = p.generated_token_ids[0].wrapping_add(1);
+                p
+            }),
+            ("a row the wrong width", {
+                let mut p = pin.clone();
+                p.logits_rows[1].pop();
+                p
+            }),
+            ("the wrong row count", {
+                let mut p = pin.clone();
+                p.logits_rows.pop();
+                p
+            }),
+        ];
+        for (what, bad) in cases {
+            assert!(
+                matches!(
+                    check_base0_decode_token_refutation_v1(&binding, &bad, 0),
+                    Err(PalwStepRefuteError::InputSetNotCanonical(_))
+                ),
+                "{what} must be refused as malformed evidence"
+            );
+        }
+    }
+
+    /// **The lane guard is refusal by name, in both directions.** A `Float32` class has no
+    /// decode-token adjudicator yet, so a close against one is refused rather than adjudicated
+    /// wrongly; and at the step-refutation dispatch, an `Int32` class handed a `FloatV2` pin — or
+    /// a pin whose root recompute fails — is refused before a single id is read.
+    #[test]
+    fn a_pin_that_does_not_speak_the_class_lane_is_refused() {
+        // The close guard: same execution, lane rewritten to Float32 (with the context and the
+        // committed root made consistent, so the refusal is the LANE's and not the binding's).
+        let (binding, _m, _r, pin) = base0_honest_decode_commitment();
+        let mut fb = binding.clone();
+        fb.shape_profile.lane = crate::palw_step::PalwStepLaneV1::Float32;
+        fb.job_context.shape_profile_id = fb.shape_profile.shape_profile_id();
+        rebind_committed_root(&mut fb);
+        match check_base0_decode_token_refutation_v1(&fb, &pin, 0) {
+            Err(PalwStepRefuteError::InputSetNotCanonical(msg)) => {
+                assert!(msg.contains("Float32"), "the refusal names the missing adjudicator: {msg}")
+            }
+            other => panic!("a Float32 class must be refused by name, got {other:?}"),
+        }
+
+        // The step-dispatch guard: a decode-embed refutation of the Int32 class carrying the
+        // FLOAT scheme's pin. The refusal happens before any gather or oracle is consulted.
+        let (ib, material, rows, _) = base0_honest_decode_commitment();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 0, position: 0, tile_index: 0 };
+        let mut refutation = build_refutation(&ib, &material, &rows, coord);
+        refutation.decode_tokens = Some(PalwDecodeTokenPinV1::FloatV2(PalwDecodeTokensV1 {
+            summary: crate::palw_v2::PalwTraceSummaryV2 {
+                vocab_size: 40,
+                logits_dtype: crate::palw_v2::PalwLogitsDtypeV2::F32Le,
+                declared_prefill_tokens: 2,
+                exact_decode_tokens: 2,
+                event_count: 4,
+                first_event_kind: crate::palw_v2::PalwTracePhaseV2::Prefill,
+                last_event_kind: crate::palw_v2::PalwTracePhaseV2::Decode,
+                output_token_ids_hash: crate::palw_v2::output_token_ids_hash_v2(&[1, 2]),
+                stop_reason: crate::palw_v2::PalwStopReasonV2::ExactBudgetReached,
+            },
+            ordered_event_commitment: h64(0xF0),
+            generated_token_ids: vec![1, 2],
+        }));
+        let empty_oracle = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&[], h64(0x1)).unwrap();
+        match check_execution_step_refutation_v1(&refutation, &empty_oracle) {
+            Err(PalwStepRefuteError::InputSetNotCanonical(msg)) => {
+                assert!(msg.contains("lane"), "the dispatch refuses the wrong-scheme pin by name: {msg}")
+            }
+            other => panic!("an Int32 class handed a FloatV2 pin must be refused, got {other:?}"),
+        }
+
+        // And a Base0 pin whose recompute does not reproduce the committed root — the same
+        // refusal, at the same point, before anything downstream runs.
+        let (ub, umaterial, urows) = base0_honest_execution(); // root left at the h64(0xAA) placeholder
+        let mut unrooted = build_refutation(&ub, &umaterial, &urows, coord);
+        unrooted.decode_tokens = Some(PalwDecodeTokenPinV1::Base0V1(pin));
+        match check_execution_step_refutation_v1(&unrooted, &empty_oracle) {
+            Err(PalwStepRefuteError::InputSetNotCanonical(msg)) => {
+                assert!(msg.contains("integer trace root"), "the dispatch refuses an unauthenticated pin by name: {msg}")
+            }
+            other => panic!("a pin the committed root does not authenticate must be refused, got {other:?}"),
         }
     }
 

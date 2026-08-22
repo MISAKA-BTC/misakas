@@ -39,7 +39,11 @@ use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
-pub const PALW_BASE0_DOMAIN_LOGITS_TRACE: &[u8] = b"misaka-palw/base0/logits-trace/v1";
+/// Moved to the COURT's module (`kaspa_consensus_core::palw_step_refute`) with the byte string
+/// unchanged, so the committing side and the adjudicating side are one implementation; re-exported
+/// here for every existing caller.
+pub use kaspa_consensus_core::palw_step_refute::{PALW_BASE0_DOMAIN_LOGITS_TRACE, base0_logits_trace_root_v1};
+
 pub const PALW_BASE0_DOMAIN_ACTIVATION_LEG: &[u8] = b"misaka-palw/base0/activation-leg/v1";
 pub const PALW_BASE0_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/base0/trace-manifest/v1";
 
@@ -85,32 +89,6 @@ impl std::fmt::Display for ProduceError {
 }
 
 impl std::error::Error for ProduceError {}
-
-/// **The integer class's logits trace root.**
-///
-/// One keyed hash over the context, the shape of the run, and every logits row the job produced,
-/// as `i32` little-endian — the lanes the engine actually computes. See the module docs for why
-/// this is not `full_logits_trace_root_v2`.
-pub fn base0_logits_trace_root_v1(ctx: &PalwJobContextV2, logits_rows: &[Vec<i32>], generated_token_ids: &[u32]) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_LOGITS_TRACE).to_state();
-    h.update(ctx.context_hash().as_byte_slice());
-    h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
-    h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
-    h.update(&(logits_rows.len() as u64).to_le_bytes());
-    for row in logits_rows {
-        h.update(&(row.len() as u64).to_le_bytes());
-        for v in row {
-            h.update(&v.to_le_bytes());
-        }
-    }
-    h.update(&(generated_token_ids.len() as u64).to_le_bytes());
-    for t in generated_token_ids {
-        h.update(&t.to_le_bytes());
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
-}
 
 /// **The integer class's activation leg: the statement that it taps nothing.**
 ///
@@ -217,6 +195,10 @@ pub struct Base0ExecutionV1 {
     /// Every step leaf, kept for the same reason — a producer that discarded these could not
     /// answer a challenge and would lose its bond by default.
     pub tiles: Base0StepTilesV1,
+    /// Every logits row, i32 lanes, one per call — kept because a decode-side dispute
+    /// (ADR-0049 Decision E) is adjudicated against them, and a producer that discarded them
+    /// could not carry the pin that clears it.
+    pub logits_rows: Vec<Vec<i32>>,
     pub generated_token_ids: Vec<u32>,
 }
 
@@ -315,6 +297,7 @@ pub fn base0_execute_for_attempt_v1(
         trace_chunk_count: 1,
         binding,
         tiles,
+        logits_rows,
         generated_token_ids: generated,
     })
 }
@@ -405,6 +388,7 @@ mod tests {
             run.binding.clone(),
             target,
             prompt.iter().map(|t| *t as u32).collect(),
+            None,
         )
         .expect("a coordinate the capture covers produces a refutation");
 
@@ -472,7 +456,7 @@ mod tests {
     fn measure_retained_material_size() {
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
-        let bytes = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids)).unwrap();
+        let bytes = base0_material_encode_v1(&run).unwrap();
         println!("small_job material = {} bytes over {} tiles", bytes.len(), run.tiles.tiles.len());
         let rc_artifact = crate::rc::palw_rc_base0_artifact_v1().expect("derives");
         let rc_profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
@@ -487,7 +471,7 @@ mod tests {
             kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
         );
         let rc_run = base0_execute_for_attempt_v1(&rc_artifact, &rc_profile, &rc_job, &rc_prompt).expect("the floor runs");
-        let rc_bytes = borsh::to_vec(&(&rc_run.binding, &rc_run.tiles.tiles, &rc_run.generated_token_ids)).unwrap();
+        let rc_bytes = base0_material_encode_v1(&rc_run).unwrap();
         println!("RC floor material = {} bytes over {} tiles", rc_bytes.len(), rc_run.tiles.tiles.len());
     }
 
@@ -512,8 +496,16 @@ mod tests {
             .expect("the inventory proves against its own root");
 
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        // The integer-leg pin: the run's own logits rows and ids, which every decode-side leaf is
+        // adjudicated against (ADR-0049 Decision E). Carried on every refutation — a prefill leaf
+        // simply never reads it.
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
+            kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+                logits_rows: run.logits_rows.clone(),
+                generated_token_ids: run.generated_token_ids.clone(),
+            },
+        );
         let mut adjudicated = 0usize;
-        let mut unadjudicable = 0usize;
         let mut convicted: Vec<String> = Vec::new();
         for leaf in 0..leaves {
             let Some(coord) = canonical_step_coordinates(&profile, &ctx, leaf) else { continue };
@@ -524,29 +516,22 @@ mod tests {
                 run.binding.clone(),
                 coord,
                 ids.clone(),
+                Some(pin.clone()),
             ) {
                 Ok(r) => r,
                 Err(e) => panic!("leaf {leaf} at {coord:?} could not even be assembled: {e:?}"),
             };
             match check_execution_step_refutation_v1(&refutation, &oracle) {
                 Err(PalwStepRefuteError::NoFaultFound) => adjudicated += 1,
+                // The decode-embed carve-out that used to sit here is CLOSED: the integer-leg
+                // dispatch authenticates the generated ids against `base0_logits_trace_root_v1`,
+                // so there is no coordinate this class reaches that the court cannot check —
+                // and any NEW hole fails the sweep by name instead of hiding in a loose count.
                 Err(PalwStepRefuteError::Unadjudicable) => {
-                    unadjudicable += 1;
-                    // The only known-open unadjudicable is a DECODE-call embedding gather, and it
-                    // is unadjudicable (cannot check) rather than mis-convicted (safe). Its token
-                    // is a generated id whose BASE-0 commitment rides `base0_logits_trace_root_v1`,
-                    // the integer trace root, while the court's decode-token check recomputes the
-                    // v2 event-tree root — the integer-leg dispatch, a separate item. Pinning it
-                    // means a NEW hole (an attention node, say) fails this test rather than hiding
-                    // in a loose count.
                     let (n, _) = profile.resolve_node_slot(coord.node_slot).unwrap();
-                    assert!(
-                        n.op_kind == PalwStepOpKindV1::EmbedLookup && coord.call_index > 0,
-                        "an unexpected leaf is unadjudicable — {:?} at call {} pos {} tile {}; only decode-embed is known-open",
-                        n.op_kind,
-                        coord.call_index,
-                        coord.position,
-                        coord.tile_index
+                    panic!(
+                        "leaf {leaf} is unadjudicable — {:?} at call {} pos {} tile {}; every coordinate this class reaches must adjudicate",
+                        n.op_kind, coord.call_index, coord.position, coord.tile_index
                     );
                 }
                 other => convicted
@@ -559,9 +544,9 @@ mod tests {
             convicted.len(),
             convicted.iter().take(12).cloned().collect::<Vec<_>>().join("\n")
         );
-        // And the sweep has to have actually adjudicated something, or it proves nothing.
-        assert!(adjudicated > 0, "no leaf was adjudicated at all");
-        println!("swept {leaves} leaves: {adjudicated} adjudicated NoFaultFound, {unadjudicable} unadjudicable");
+        // Every leaf of the space adjudicated NoFaultFound — the sweep is exhaustive now.
+        assert_eq!(adjudicated, leaves as usize, "every leaf of a real execution adjudicates");
+        println!("swept {leaves} leaves: {adjudicated} adjudicated NoFaultFound, 0 unadjudicable");
 
         // **The other half, and without it this test is worthless.** A court that convicts nothing
         // passes the sweep above by being broken. So one lane of one tile is tampered at each of
@@ -589,7 +574,8 @@ mod tests {
                 crate::legs::base0_binding_from_capture_v1(&profile, &ctx, &lying, run.trace_root, base0_activation_leg_root_v1(&ctx))
                     .expect("a tampered capture still commits");
             let refutation =
-                crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, binding, coord, ids.clone()).expect("assembles");
+                crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, binding, coord, ids.clone(), Some(pin.clone()))
+                    .expect("assembles");
             match check_execution_step_refutation_v1(&refutation, &oracle) {
                 Ok(_) => still_convicts += 1,
                 Err(PalwStepRefuteError::NoFaultFound) => {
@@ -604,6 +590,54 @@ mod tests {
         }
         assert!(still_convicts > 0, "no tampered tile was convicted — the sweep above proves nothing");
         println!("and {still_convicts} tampered tiles at the repaired nodes were convicted");
+    }
+
+    /// **ADR-0049 Decision E over the REAL floor execution.** The engine's own selected tokens
+    /// clear at every decode position; a producer that re-commits the same logits under one
+    /// altered id is convicted at exactly that position — the commitment itself carries the lie,
+    /// and no artifact opening is involved.
+    #[test]
+    fn the_court_refutes_a_committed_decode_token_or_clears_it() {
+        use kaspa_consensus_core::palw_step_refute::{
+            PalwBase0DecodeTokensV1, PalwStepRefuteError, check_base0_decode_token_refutation_v1,
+        };
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let honest = PalwBase0DecodeTokensV1 {
+            logits_rows: run.logits_rows.clone(),
+            generated_token_ids: run.generated_token_ids.clone(),
+        };
+        for p in 0..ctx.exact_decode_tokens {
+            assert!(
+                matches!(
+                    check_base0_decode_token_refutation_v1(&run.binding, &honest, p),
+                    Err(PalwStepRefuteError::NoFaultFound)
+                ),
+                "the engine's own selection clears at decode position {p}"
+            );
+        }
+
+        // The fraud: same logits, one id altered, re-rooted and re-bound — exactly what a
+        // producer that lied about its output would commit.
+        let mut lying_ids = run.generated_token_ids.clone();
+        lying_ids[1] = (lying_ids[1] + 1) % artifact.shape.vocab as u32;
+        let lying_root = base0_logits_trace_root_v1(&ctx, &run.logits_rows, &lying_ids);
+        let lying_binding =
+            crate::legs::base0_binding_from_capture_v1(&profile, &ctx, &run.tiles, lying_root, base0_activation_leg_root_v1(&ctx))
+                .expect("a lying commitment still binds");
+        let lying_pin = PalwBase0DecodeTokensV1 { logits_rows: run.logits_rows.clone(), generated_token_ids: lying_ids };
+        let verdict = check_base0_decode_token_refutation_v1(&lying_binding, &lying_pin, 1)
+            .expect("a committed token the selection rule refutes convicts");
+        assert_eq!(
+            verdict.fault,
+            kaspa_consensus_core::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 1 },
+            "the fault names the lying position"
+        );
+        assert!(
+            matches!(check_base0_decode_token_refutation_v1(&lying_binding, &lying_pin, 0), Err(PalwStepRefuteError::NoFaultFound)),
+            "position 0's token was honest, and stays cleared"
+        );
     }
 
     /// The roots follow the execution: a different prompt is a different commitment, in every slot
@@ -639,7 +673,8 @@ mod tests {
     fn a_seat_licenses_only_material_that_matches_the_claim() {
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
-        let material: Base0RetainedMaterialV1 = (run.binding.clone(), run.tiles.tiles.clone(), run.generated_token_ids.clone());
+        let material: Base0RetainedMaterialV1 =
+            (run.binding.clone(), run.tiles.tiles.clone(), run.logits_rows.clone(), run.generated_token_ids.clone());
 
         assert!(
             base0_material_matches_claim_v1(&material, run.execution_root, run.trace_root).expect("checkable"),
@@ -695,7 +730,7 @@ mod tests {
 /// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
 /// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
 pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
-    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.generated_token_ids))
+    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
         .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
 }
 
@@ -708,6 +743,7 @@ pub fn base0_material_decode_v1(bytes: &[u8]) -> Result<Base0RetainedMaterialV1,
 pub type Base0RetainedMaterialV1 = (
     kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
+    Vec<Vec<i32>>,
     Vec<u32>,
 );
 
@@ -727,7 +763,7 @@ pub fn base0_material_matches_claim_v1(
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
-    let (binding, tiles, _generated) = material;
+    let (binding, tiles, logits_rows, generated) = material;
     // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
     // binding whose root does not match its own tiles kept a commitment, not an execution.
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
@@ -743,6 +779,15 @@ pub fn base0_material_matches_claim_v1(
         return Ok(false);
     };
     if root != binding.step_merkle_root {
+        return Ok(false);
+    }
+    // The logits rows and generated ids must REPRODUCE the integer trace root the binding
+    // carries — equality of the binding's field against the claim says the producer kept the
+    // right commitment; this says it kept the execution behind it, which is what a decode-side
+    // dispute (ADR-0049 Decision E) is adjudicated against.
+    if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        != binding.full_logits_trace_root
+    {
         return Ok(false);
     }
     // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained

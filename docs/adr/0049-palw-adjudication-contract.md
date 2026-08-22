@@ -179,6 +179,32 @@ refuted by the same opening rather than believed.
 *Proving is expensive and refuting is cheap, so refute.* That is the same asymmetry the whole dispute
 model rests on, applied to the one place it had not been.
 
+> **Implemented 2026-08-22 — integer-first, both halves.** The selection rule is one pinned
+> function, `base0_decode_token_select_v1` (argmax, ties to the LOWEST index), which the engine's
+> decode loop and the court both call — the engine's `argmax_lowest` delegates to it, so
+> "selected" cannot mean two things. On-chain refutation is the new close arm
+> `PalwCourtVerdictProofV2::DecodeToken { binding, pin, position }` with fault
+> `PalwStepFaultV1::DecodeTokenMismatch { position }` (evidence kind 6): the pin carries the
+> integer class's logits rows and generated ids, authenticated by recomputing
+> `base0_logits_trace_root_v1` against the binding the claim's own `execution_root` pins — the
+> evidence is the commitment itself, no artifact opening involved. For BASE-0 the "one index"
+> economy is unnecessary: its vocabulary is small by construction, so the pin carries whole rows
+> (bounded by the court's opening-byte ceiling at the cost gate) and the court runs the whole
+> argmax. A `Float32` class is refused by name — its per-position openings arrive with the class
+> that needs them (Gate 3).
+>
+> The same pin closes the **integer-leg dispatch**: `full_logits_trace_root` is one header slot
+> with two occupants, and the step-refutation decode check used to recompute only the v2
+> event-tree root, so a BASE-0 decode-embed gather could never authenticate its generated ids —
+> 4 of the floor's 914 leaves ended `Unadjudicable`. The check now dispatches on the class's
+> registered `PalwStepLaneV1`, and the sweep
+> (`the_court_convicts_no_leaf_of_an_honest_execution`) demands **914/914 adjudicated, zero
+> unadjudicable** — a new hole fails the test by name. Money path verified end to end
+> (`palw_v2_a_lying_decode_token_convicts_through_the_court_close`): the lying claim voids as
+> `CourtFraud` and its bond is slashed; the honest one survives the same close with its stake.
+> Mutation-checked in both directions: reverting the dispatch reddens the sweep, and re-tying the
+> selection rule to the highest index reddens the tie test.
+
 ## Decision F — the engine, the profile, the adjudicator and the inventory are projections of one description
 
 Decisions B and D require the engine's tile boundaries and the court's tile boundaries to be the same

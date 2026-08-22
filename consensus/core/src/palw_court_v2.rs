@@ -226,6 +226,17 @@ pub enum PalwCourtVerdictProofV2 {
     /// the recomputation touches arrives as an opening against the class's registered artifact
     /// root, and the refutation binds the claim's committed trace root.
     Arithmetic { refutation: PalwExecutionStepRefutationV1, operand_openings: Vec<PalwArtifactOpeningV1> },
+    /// ADR-0049 Decision E's terminal: the committed decode token at `position` is refuted from
+    /// the claim's own committed logits. The binding pins the execution (its recomputed root must
+    /// equal the claim's `execution_root`, which transitively pins `full_logits_trace_root`);
+    /// the pin carries the integer class's logits rows and generated ids, authenticated by
+    /// recomputing `base0_logits_trace_root_v1`; the verdict is one argmax under the pinned
+    /// selection rule. No artifact opening is needed — the evidence is the commitment itself.
+    DecodeToken {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        pin: crate::palw_step_refute::PalwBase0DecodeTokensV1,
+        position: u32,
+    },
 }
 
 /// **Who may post a rung, and under whose key (P0-9's forgery half).**
@@ -362,6 +373,15 @@ pub fn adjudicate_court_close_v2(
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
             map_refutation_outcome(check_execution_step_refutation_v1(refutation, &operands))
         }
+        PalwCourtVerdictProofV2::DecodeToken { binding, pin, position } => {
+            // The same two pins the arithmetic close runs, for the same reason: the dispute is
+            // about THIS claim's committed execution, and `verify_binding` inside the check
+            // refuses a binding whose parts do not produce `committed_execution_root` — so the
+            // pinned `full_logits_trace_root` is the claim's own, not the accuser's.
+            check_arithmetic_close_binding(claim.trace_root, binding.step_merkle_root)?;
+            check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+            map_refutation_outcome(crate::palw_step_refute::check_base0_decode_token_refutation_v1(binding, pin, *position))
+        }
     }
 }
 
@@ -379,7 +399,23 @@ pub fn check_close_cost_v2(
     proof: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
 ) -> Result<(), PalwCourtV2Error> {
-    let PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. } = proof;
+    let operand_openings: &[PalwArtifactOpeningV1] = match proof {
+        PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. } => operand_openings,
+        // A decode-token close opens nothing; its whole payload is the pin, bounded here by the
+        // same byte ceiling an opening set answers to — the cost of a close is the cost of a
+        // close, whichever arm carries it.
+        PalwCourtVerdictProofV2::DecodeToken { pin, .. } => {
+            let bytes: u64 = pin
+                .logits_rows
+                .iter()
+                .map(|row| row.len() as u64 * 4)
+                .fold(pin.generated_token_ids.len() as u64 * 4, |a, b| a.saturating_add(b));
+            if bytes > court.max_opening_bytes() {
+                return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+            }
+            return Ok(());
+        }
+    };
     let count = operand_openings.len() as u64;
     let operand_ceiling = u64::from(court.max_operand_count());
     if count > operand_ceiling {
@@ -958,6 +994,148 @@ mod tests {
         }
         assert!(closed.bond(&bond_key(1)).unwrap().slashed > 0, "and the executor pays for it");
         assert!(closed.court_session(&sid).is_none(), "the session is closed");
+    }
+
+    /// **ADR-0049 Decision E through the WHOLE money path: a lying committed decode token voids
+    /// the claim and slashes the bond — and an honest one survives the same close.**
+    ///
+    /// The producer's generated ids ride inside its own committed integer trace root, beside the
+    /// very logits rows they were selected from — so the conviction needs no artifact opening at
+    /// all: the evidence is the commitment itself, and the verdict is one argmax under the
+    /// pinned selection rule.
+    #[test]
+    fn palw_v2_a_lying_decode_token_convicts_through_the_court_close() {
+        let run_close = |lying: bool| {
+            let (_hb, _m, _r, honest_pin) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
+            let (binding, _m2, _r2, pin) = if lying {
+                let mut ids = honest_pin.generated_token_ids.clone();
+                ids[1] = ids[1].wrapping_add(1);
+                crate::palw_step_refute::tests::base0_binding_with_decode_root(honest_pin.logits_rows.clone(), ids)
+            } else {
+                crate::palw_step_refute::tests::base0_binding_with_decode_root(
+                    honest_pin.logits_rows.clone(),
+                    honest_pin.generated_token_ids.clone(),
+                )
+            };
+            let trace_root = binding.step_merkle_root;
+            let execution_root = binding.committed_execution_root;
+            let p = params();
+            let objects = vec![
+                PalwConsensusObjectV2::ClassRegistered {
+                    class_id: h64(1),
+                    artifact_root: h64(0xA1),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 1000,
+                    activation_daa: 0,
+                    admission: None,
+                },
+                PalwConsensusObjectV2::BondRegistered {
+                    bond: bond_key(1),
+                    pubkey: vec![7; 4],
+                    operator_pubkey: op_key(0x21),
+                    collateral: 1_000,
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                },
+                PalwConsensusObjectV2::BondRegistered {
+                    bond: bond_key(2),
+                    pubkey: vec![8; 4],
+                    operator_pubkey: op_key(0x22),
+                    collateral: 1_000,
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                },
+            ];
+            let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
+            let mut env = attempt(40, 1);
+            env.attempt.artifact_root = h64(0xA1);
+            env.attempt.trace_root = trace_root;
+            env.attempt.execution_root = execution_root;
+            env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
+            let (s3, _) = apply_palw_transition_v2(
+                &s2,
+                &p,
+                &ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+            )
+            .unwrap();
+            let (s4, _) = apply_palw_transition_v2(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+                None,
+            )
+            .unwrap();
+            let sid = court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64);
+            let (in_court, _) = apply_palw_transition_v2(
+                &s4,
+                &p,
+                &ctx(5, 110, 5),
+                &[PalwConsensusObjectV2::CourtOpened {
+                    session_id: sid,
+                    claim: claim_id,
+                    challenger_bond: bond_key(2),
+                    space: PalwBisectSpaceV1::StepLeaves,
+                    space_size: 64,
+                    signature: Vec::new(),
+                }],
+                None,
+            )
+            .unwrap();
+            let proof = PalwCourtVerdictProofV2::DecodeToken { binding, pin, position: 1 };
+            let verdict = adjudicate_court_close_v2(&in_court, &sid, &proof, &court()).expect("a carried pin adjudicates");
+            let (closed, _) = apply_palw_transition_v2(
+                &in_court,
+                &p,
+                &ctx(6, 111, 6),
+                &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }],
+                None,
+            )
+            .unwrap();
+            (verdict, closed, claim_id)
+        };
+
+        let (verdict, closed, claim_id) = run_close(true);
+        assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a committed token the rule refutes is a conviction");
+        match closed.claim(&claim_id).unwrap().phase {
+            crate::palw_state_v2::PalwClaimPhaseV2::Voided { reason: crate::palw_state_v2::PalwVoidReasonV2::CourtFraud, .. } => {}
+            ref other => panic!("the lying claim must void as CourtFraud, got {other:?}"),
+        }
+        assert!(closed.bond(&bond_key(1)).unwrap().slashed > 0, "and the executor pays for it");
+
+        let (verdict, closed, claim_id) = run_close(false);
+        assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest committed token defeats the challenge");
+        assert!(
+            !matches!(closed.claim(&claim_id).unwrap().phase, crate::palw_state_v2::PalwClaimPhaseV2::Voided { .. }),
+            "the honest claim survives"
+        );
+        assert_eq!(closed.bond(&bond_key(1)).unwrap().slashed, 0, "and its bond is untouched");
+    }
+
+    /// **The cost gate covers the new arm.** A decode-token close's payload is its pin; a pin
+    /// bigger than the court's opening-byte ceiling is refused before any state is read, exactly
+    /// as an oversized opening set is.
+    #[test]
+    fn an_oversized_decode_pin_is_refused_by_the_cost_gate() {
+        let c = court();
+        let lanes_per_row = (c.max_opening_bytes() / 4) as usize + 1;
+        let proof = PalwCourtVerdictProofV2::DecodeToken {
+            binding: crate::palw_step_refute::tests::base0_honest_decode_commitment().0,
+            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 {
+                logits_rows: vec![vec![0i32; lanes_per_row]],
+                generated_token_ids: vec![0],
+            },
+            position: 0,
+        };
+        assert!(
+            matches!(check_close_cost_v2(&proof, &c), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            "a pin past the byte ceiling is refused on its face"
+        );
     }
 
     /// **Condition 11: an honest producer is not slashed, end to end.**
