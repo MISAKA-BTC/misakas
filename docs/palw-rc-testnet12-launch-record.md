@@ -3,6 +3,12 @@
 **Date:** 2026-08-22 · **Binary:** `kaspad v1.1.0-c1e612a9`, sha256 `87235442e1e1096166498b6a…`
 **Genesis:** `28a44a680be0fb35…` · **Consensus fingerprint:** `f08215783e2b8f7e196fe12284fa9fedc6e37b860205d777dfe6c50e1aecb11f`
 
+> **Relaunched again 2026-08-22 with Phase 1** — the six builds the mainnet audit left open:
+> the court's close binding and its tie to the disputed step, the pruning-point carriage, bond
+> retirement, the challenger's stake, and the IBD fork-choice gate. `PALW_ATTEMPT_V2_VERSION`
+> went 3 → 4 for the same reason it went 2 → 3: the close rules decide which `CourtClosed` objects
+> apply, so two binaries that disagree must not share an identity. Fingerprint `8a65f767…`.
+>
 > **Relaunched 2026-08-22 with the Phase 0 security fixes** (`75439aee…`, tree `e06d9409` plus the
 > protocol-version bump). The fingerprint moved from `79a306ed…` deliberately: the rules changed,
 > so `PALW_ATTEMPT_V2_VERSION` went 2 → 3 and the two networks no longer share an identity. A node
@@ -52,7 +58,7 @@ JSON-RPC adapter. `--nodnsseed` is unnecessary and harmless: this network has no
 peers come from `--addpeer` and the address manager.
 
 **Check you are on the right network before anything else.** The startup banner prints
-`Consensus params fingerprint: f08215783e2b8f7e196fe12284fa9fedc6e37b860205d777dfe6c50e1aecb11f`.
+`Consensus params fingerprint: 8a65f76792ec8bb95710c43dce5541b344464cfea49c23ff7d98b183de99f2b5`.
 A different value means a different ruleset, and the handshake will refuse rather than fork.
 The genesis is `28a44a680be0fb35…`.
 
