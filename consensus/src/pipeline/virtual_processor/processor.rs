@@ -3901,6 +3901,20 @@ impl VirtualStateProcessor {
     /// [`Self::palw_v2_validate_objects`] as a FILTER: the objects that passed, in order, with the
     /// rejected ones logged by their own reason. See the call site for why a rejection drops the
     /// object instead of the block.
+    /// [`Self::palw_v2_accepted_objects`], reachable from the sibling test module. The filter's
+    /// contract — "what it returns, the transition applies" — is only checkable by calling both.
+    #[cfg(test)]
+    pub(super) fn palw_v2_accepted_objects_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        block: BlockHash,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.palw_v2_accepted_objects(state, state_params, point, objects, block)
+    }
+
     fn palw_v2_accepted_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -3909,16 +3923,53 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        objects
-            .into_iter()
-            .filter(|object| match self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
-                Ok(()) => true,
+        // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
+        //
+        // Validating every object against the parent state alone is wrong in exactly the way the
+        // transition is right: the transition applies them in order, so the second object naming a
+        // claim meets the phase the first one moved it to. Two nodes independently assembling the
+        // same quorum — which is the design, since one funded submitter per network suffices and
+        // several may be funded — put two `ReceiptLicensed` for one claim in one block. Both passed
+        // this filter (both were valid against the parent), the transition applied the first, and
+        // the second was refused as `wrong phase for ReceiptLicensed` — killing an honest block for
+        // carrying a duplicate of its own valid object.
+        //
+        // Measured on testnet-12: 175 blocks produced, 23 accepted, 74 disqualified, the chain's
+        // DAA frozen at 103 while three hosts submitted correctly.
+        //
+        // Folding the state forward here makes the filter ask the question the transition will ask.
+        // A duplicate is then dropped as an object — which is what `Ⅱ.5` decided a failing object
+        // should be — and the block stands.
+        let mut folded = state.clone();
+        let mut accepted = Vec::with_capacity(objects.len());
+        for object in objects {
+            match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
+                Ok(()) => {
+                    // Fold this object in so the next one is judged against the state it created.
+                    // A transition that refuses here is the same refusal the real fold would make,
+                    // so the object is dropped for the same reason rather than carried into it.
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+                        &folded,
+                        state_params,
+                        point,
+                        std::slice::from_ref(&object),
+                        None,
+                    ) {
+                        Ok((next, _)) => {
+                            folded = next;
+                            accepted.push(object);
+                        }
+                        Err(why) => {
+                            info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
+                        }
+                    }
+                }
                 Err(why) => {
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
-                    false
                 }
-            })
-            .collect()
+            }
+        }
+        accepted
     }
 
     /// **Assemble the largest lifecycle object this node's receipt pool supports** (launch

@@ -631,6 +631,93 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
 }
 
+/// **Two submitters racing the same claim must not kill the block that carries both** (testnet-12,
+/// 2026-08-22).
+///
+/// One funded submitter per network suffices, so several MAY be funded — and when they are, two
+/// nodes independently assemble the same quorum and both submit. Both objects are valid against
+/// the parent state, so a filter that judges each one there lets both through; the transition then
+/// applies them in order and refuses the second as `wrong phase for ReceiptLicensed`, taking the
+/// honest block with it. Measured: 175 blocks produced, 23 accepted, 74 disqualified, DAA frozen
+/// while three hosts submitted correctly.
+///
+/// The filter must ask the question the transition will ask, which means folding each accepted
+/// object in before judging the next.
+#[tokio::test]
+async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_panel_v2::{
+        PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+    };
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwConsensusObjectV2};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..26 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let (claim_id, _) =
+        state.claims_iter().find(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. })).expect("a bound claim");
+    let claim_id = *claim_id;
+    let panel = state.panel(&claim_id).expect("a bound claim has a panel");
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let signed_daa = ctx.consensus.get_virtual_daa_score();
+
+    let receipts: Vec<PalwSeatReceiptV2> = panel
+        .seats
+        .iter()
+        .take(3)
+        .map(|seat| {
+            let bond = state.bond(&seat.bond).expect("registered");
+            let kp = (0..16u64)
+                .map(TestConsensus::palw_v2_registry_keypair)
+                .find(|kp| kp.verification_key.as_ref() == bond.pubkey.as_slice())
+                .expect("a registry key");
+            let message = palw_receipt_message_v2(network_domain, claim_id, PalwReceiptVerdictV2::Valid, signed_daa);
+            let signature =
+                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_RECEIPT_V2_MLDSA87_CONTEXT, [0u8; 32])
+                    .expect("sign")
+                    .as_ref()
+                    .to_vec();
+            PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat.bond, signed_daa, signature }
+        })
+        .collect();
+
+    let object = PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts };
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: signed_daa,
+        blue_score: 27,
+        subsidy: 0,
+    };
+
+    // What two racing submitters put in one block: the same valid object, twice.
+    let accepted = vp.palw_v2_accepted_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![object.clone(), object.clone()],
+        ctx.consensus.get_sink(),
+    );
+    assert_eq!(accepted.len(), 1, "the duplicate is dropped as an OBJECT — the block must not die for carrying it");
+
+    // And the one that survived is applicable, which is the property the filter exists to give the
+    // transition: what it returns, the fold takes.
+    kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(&state, &bundle.state, &point, &accepted, None)
+        .expect("what the filter accepts, the transition applies");
+}
+
 /// **A merged blue is paid only if this chain can show its producer is bonded** (launch blockers
 /// §8, first bullet).
 ///
