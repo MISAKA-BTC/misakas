@@ -28,6 +28,31 @@ on this fleet — it is a release-candidate testnet run by one operator, and the
 deliberately not published. Treat panel verdicts here as a working lifecycle, not as an adversarial
 guarantee. Distributing seats across independent operators is the thing that makes it one.
 
+## Joining
+
+The source is the `palw-base0-depth` branch of `github.com/MISAKA-BTC/misakas`. A joining node
+needs no permission and no bond — bonds are the panel's, not a participant's.
+
+```bash
+git clone -b palw-base0-depth https://github.com/MISAKA-BTC/misakas.git
+cd misakas
+cargo build --release -p kaspad
+./target/release/kaspad --testnet --netsuffix=12 --utxoindex \
+    --addpeer=169.58.39.220:26411 --addpeer=5.104.81.23:26411
+```
+
+The EVM lane is in the default build; add `--evm-rpc-listen=127.0.0.1:8545` for the Ethereum
+JSON-RPC adapter. `--nodnsseed` is unnecessary and harmless: this network has no DNS seeders yet, so
+peers come from `--addpeer` and the address manager.
+
+**Check you are on the right network before anything else.** The startup banner prints
+`Consensus params fingerprint: 79a306edbd84e3c4e59c5e585deaf8e9c06a440feb37699303a3e73de05d9794`.
+A different value means a different ruleset, and the handshake will refuse rather than fork.
+The genesis is `28a44a680be0fb35…`.
+
+**Do not expect `weight` to be non-zero yet.** See the two-stage reading below and in the runbook:
+before DAA 1200 the number that moves is `live_total`.
+
 ## Verified live
 
 | claim | evidence |
