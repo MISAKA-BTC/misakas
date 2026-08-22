@@ -34,6 +34,7 @@ members = [
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-worker",
+    "misaka-palw-metal",
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
     "misaka-palw-reference2",
@@ -167,6 +168,7 @@ kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/s
 kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
 misaka-palw-base0 = { version = "1.0.1", path = "misaka-palw-base0" }
+misaka-palw-metal = { version = "1.1.0", path = "misaka-palw-metal" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

@@ -1,0 +1,15 @@
+[package]
+name = "misaka-palw-metal"
+description = "PALW Family M (ADR-0051): the Metal/GGUF execution backend, as a client of the pinned worker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake2b_simd.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+borsh.workspace = true

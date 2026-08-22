@@ -52,7 +52,7 @@ use crate::palw_step::{
     kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE,
+    KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM,
 };
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
@@ -603,7 +603,7 @@ mod tests {
         // G3: the rotary is the pinned table, and the ONLY rope kernel is BASE-0's pairwise one.
         for node in &p.attn_nodes {
             if node.op_kind == PalwStepOpKindV1::RopeImrope {
-                assert_eq!(node.kernel_semantics_id, kernel_semantics_id_v1(KDESC_BASE0_ROPE));
+                assert_eq!(node.kernel_semantics_id, kernel_semantics_id_v1(crate::palw_step_refute::KDESC_BASE0_ROPE));
                 assert_eq!(node.weight_name, "blk.{layer}.rope_table");
             }
         }
