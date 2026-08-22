@@ -1313,6 +1313,44 @@ message GetTokenLedgerEntryResponseMessage {
   RPCError error = 1000;
 }
 
+// PALW ConsensusV2 (ADR-0042 Decision 6): the derived facts a block producer reads before it may
+// build an algo-6 attempt. u128 quantities travel as decimal strings; Hash64 identities as 128-hex.
+// Derived, never the ingredients (ADR-0046) — a producer that multiplies its own would get an
+// independent chance to disagree with admission.
+message GetPalwProducerFactsRequestMessage {
+  string classId = 1;
+  string bondTransactionId = 2;
+  uint32 bondIndex = 3;
+  bool withBond = 4;
+}
+
+message GetPalwProducerFactsResponseMessage {
+  // False on any network that is not ConsensusV2, and on one that does not know the class.
+  bool available = 1;
+  string chainPoint = 2;
+  // The CANDIDATE's DAA score, not the tip's.
+  uint64 daaScore = 3;
+  string classId = 4;
+  string artifactRoot = 5;
+  string classTarget = 6;
+  uint64 pwu = 7;
+  bool isBaseClass = 8;
+  uint64 minTraceRetentionDaa = 9;
+  uint64 epochIndex = 10;
+  uint64 epochBudgetBlocks = 11;
+  uint64 epochProducedBlocks = 12;
+  bool bondKnown = 13;
+  string bondRegisteredPubkey = 14;
+  string bondOperatorId = 15;
+  uint64 bondCollateral = 16;
+  string bondReservedExposure = 17;
+  string bondExposureCeiling = 18;
+  string bondClaimExposure = 19;
+  // Empty when this bond may produce now; otherwise why it may not.
+  string notReadyReason = 20;
+  RPCError error = 1000;
+}
+
 message GetTokenSupplyRequestMessage {
   uint64 assetId = 1;
 }

@@ -374,6 +374,39 @@ from!(item: &kaspa_rpc_core::GetTokenLedgerEntryRequest, protowire::GetTokenLedg
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenLedgerEntryResponse>, protowire::GetTokenLedgerEntryResponseMessage, {
     Self { available: item.available, balance: item.balance.clone(), nonce: item.nonce, error: None }
 });
+from!(item: &kaspa_rpc_core::GetPalwProducerFactsRequest, protowire::GetPalwProducerFactsRequestMessage, {
+    Self {
+        class_id: item.class_id.clone(),
+        bond_transaction_id: item.bond_transaction_id.clone(),
+        bond_index: item.bond_index,
+        with_bond: item.with_bond,
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire::GetPalwProducerFactsResponseMessage, {
+    Self {
+        available: item.available,
+        chain_point: item.chain_point.clone(),
+        daa_score: item.daa_score,
+        class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        class_target: item.class_target.clone(),
+        pwu: item.pwu,
+        is_base_class: item.is_base_class,
+        min_trace_retention_daa: item.min_trace_retention_daa,
+        epoch_index: item.epoch_index,
+        epoch_budget_blocks: item.epoch_budget_blocks,
+        epoch_produced_blocks: item.epoch_produced_blocks,
+        bond_known: item.bond_known,
+        bond_registered_pubkey: item.bond_registered_pubkey.clone(),
+        bond_operator_id: item.bond_operator_id.clone(),
+        bond_collateral: item.bond_collateral,
+        bond_reserved_exposure: item.bond_reserved_exposure.clone(),
+        bond_exposure_ceiling: item.bond_exposure_ceiling.clone(),
+        bond_claim_exposure: item.bond_claim_exposure.clone(),
+        not_ready_reason: item.not_ready_reason.clone(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
     Self {
@@ -1044,6 +1077,38 @@ try_from!(item: &protowire::GetTokenLedgerEntryRequestMessage, kaspa_rpc_core::G
 try_from!(item: &protowire::GetTokenLedgerEntryResponseMessage, RpcResult<kaspa_rpc_core::GetTokenLedgerEntryResponse>, {
     Self { available: item.available, balance: item.balance.clone(), nonce: item.nonce }
 });
+try_from!(item: &protowire::GetPalwProducerFactsRequestMessage, kaspa_rpc_core::GetPalwProducerFactsRequest, {
+    Self {
+        class_id: item.class_id.clone(),
+        bond_transaction_id: item.bond_transaction_id.clone(),
+        bond_index: item.bond_index,
+        with_bond: item.with_bond,
+    }
+});
+try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwProducerFactsResponse>, {
+    Self {
+        available: item.available,
+        chain_point: item.chain_point.clone(),
+        daa_score: item.daa_score,
+        class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        class_target: item.class_target.clone(),
+        pwu: item.pwu,
+        is_base_class: item.is_base_class,
+        min_trace_retention_daa: item.min_trace_retention_daa,
+        epoch_index: item.epoch_index,
+        epoch_budget_blocks: item.epoch_budget_blocks,
+        epoch_produced_blocks: item.epoch_produced_blocks,
+        bond_known: item.bond_known,
+        bond_registered_pubkey: item.bond_registered_pubkey.clone(),
+        bond_operator_id: item.bond_operator_id.clone(),
+        bond_collateral: item.bond_collateral,
+        bond_reserved_exposure: item.bond_reserved_exposure.clone(),
+        bond_exposure_ceiling: item.bond_exposure_ceiling.clone(),
+        bond_claim_exposure: item.bond_claim_exposure.clone(),
+        not_ready_reason: item.not_ready_reason.clone(),
+    }
+});
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
 try_from!(item: &protowire::GetTokenSupplyResponseMessage, RpcResult<kaspa_rpc_core::GetTokenSupplyResponse>, {
     Self {
@@ -1389,6 +1454,80 @@ try_from!(&protowire::NotifySinkBlueScoreChangedResponseMessage, RpcResult<kaspa
 // ----------------------------------------------------------------------------
 
 // TODO: tests
+
+#[cfg(test)]
+mod palw_producer_facts_tests {
+    use kaspa_rpc_core::{GetPalwProducerFactsRequest, GetPalwProducerFactsResponse, RpcResult};
+
+
+    /// **Every field of the producer facts survives the grpc wire, both ways.**
+    ///
+    /// Twenty fields cross `from!`/`try_from!` by hand, and a dropped one is invisible: it
+    /// arrives as a type-correct default. The facts are what a third-party miner builds an
+    /// admissible attempt from — a silently-zeroed `pwu` or `class_target` is a miner that
+    /// mines into a refusal it cannot diagnose. Distinct non-default values throughout, so a
+    /// field copied from its neighbour fails too.
+    #[test]
+    fn every_producer_fact_survives_the_grpc_round_trip() {
+        let request = GetPalwProducerFactsRequest {
+            class_id: "aa".repeat(64),
+            bond_transaction_id: "bb".repeat(64),
+            bond_index: 7,
+            with_bond: true,
+        };
+        let wire: crate::protowire::GetPalwProducerFactsRequestMessage = (&request).into();
+        let back: GetPalwProducerFactsRequest = (&wire).try_into().unwrap();
+        assert_eq!(back.class_id, request.class_id);
+        assert_eq!(back.bond_transaction_id, request.bond_transaction_id);
+        assert_eq!(back.bond_index, request.bond_index);
+        assert_eq!(back.with_bond, request.with_bond);
+
+        let response = GetPalwProducerFactsResponse {
+            available: true,
+            chain_point: "01".repeat(64),
+            daa_score: 30_200_001,
+            class_id: "02".repeat(64),
+            artifact_root: "03".repeat(64),
+            class_target: "340282366920938463463374607431768211455".to_string(),
+            pwu: 15_800,
+            is_base_class: true,
+            min_trace_retention_daa: 2_400,
+            epoch_index: 41,
+            epoch_budget_blocks: 720,
+            epoch_produced_blocks: 719,
+            bond_known: true,
+            bond_registered_pubkey: "04".repeat(32),
+            bond_operator_id: "05".repeat(64),
+            bond_collateral: 400_000,
+            bond_reserved_exposure: "79000".to_string(),
+            bond_exposure_ceiling: "200000".to_string(),
+            bond_claim_exposure: "94800".to_string(),
+            not_ready_reason: "the bond's exposure ceiling leaves no room for another claim".to_string(),
+        };
+        let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
+        assert_eq!(back.available, response.available);
+        assert_eq!(back.chain_point, response.chain_point);
+        assert_eq!(back.daa_score, response.daa_score);
+        assert_eq!(back.class_id, response.class_id);
+        assert_eq!(back.artifact_root, response.artifact_root);
+        assert_eq!(back.class_target, response.class_target, "a u128 target must survive as its full decimal string");
+        assert_eq!(back.pwu, response.pwu);
+        assert_eq!(back.is_base_class, response.is_base_class);
+        assert_eq!(back.min_trace_retention_daa, response.min_trace_retention_daa);
+        assert_eq!(back.epoch_index, response.epoch_index);
+        assert_eq!(back.epoch_budget_blocks, response.epoch_budget_blocks);
+        assert_eq!(back.epoch_produced_blocks, response.epoch_produced_blocks);
+        assert_eq!(back.bond_known, response.bond_known);
+        assert_eq!(back.bond_registered_pubkey, response.bond_registered_pubkey);
+        assert_eq!(back.bond_operator_id, response.bond_operator_id);
+        assert_eq!(back.bond_collateral, response.bond_collateral);
+        assert_eq!(back.bond_reserved_exposure, response.bond_reserved_exposure);
+        assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
+        assert_eq!(back.bond_claim_exposure, response.bond_claim_exposure);
+        assert_eq!(back.not_ready_reason, response.not_ready_reason);
+    }
+}
 
 #[cfg(test)]
 mod tests {

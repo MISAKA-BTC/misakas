@@ -734,6 +734,66 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(response)
     }
 
+    async fn get_palw_producer_facts_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwProducerFactsRequest,
+    ) -> RpcResult<GetPalwProducerFactsResponse> {
+        // **ADR-0042 Decision 6, on the wire — what makes third-party mining possible.**
+        //
+        // `available: false` on any network that is not `ConsensusV2` and on one that does not
+        // know the class: both are honest answers, not errors. The facts are handed over DERIVED
+        // (ADR-0046) — the class target, the pwu it implies, the artifact root, the registered
+        // key, the operator id and the exposure room — because exposing the ingredients would
+        // give every producer an independent chance to disagree with admission.
+        let Ok(class_id) = request.class_id.parse::<kaspa_hashes::Hash64>() else {
+            return Ok(GetPalwProducerFactsResponse::default());
+        };
+        let bond = if request.with_bond {
+            let Ok(transaction_id) = request.bond_transaction_id.parse::<kaspa_consensus_core::tx::TransactionId>() else {
+                return Ok(GetPalwProducerFactsResponse::default());
+            };
+            Some(kaspa_consensus_core::tx::TransactionOutpoint { transaction_id, index: request.bond_index })
+        } else {
+            None
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(facts) = session.palw_producer_facts_v2(class_id, bond) else {
+            return Ok(GetPalwProducerFactsResponse::default());
+        };
+        let mut response = GetPalwProducerFactsResponse {
+            available: true,
+            chain_point: facts.chain_point.to_string(),
+            daa_score: facts.daa_score,
+            class_id: facts.class_id.to_string(),
+            artifact_root: facts.artifact_root.to_string(),
+            class_target: facts.class_target.to_string(),
+            pwu: facts.pwu,
+            is_base_class: facts.is_base_class,
+            min_trace_retention_daa: facts.min_trace_retention_daa,
+            epoch_index: facts.epoch_index,
+            epoch_budget_blocks: facts.epoch_budget_blocks,
+            epoch_produced_blocks: facts.epoch_produced_blocks,
+            ..Default::default()
+        };
+        if let Some(bond_facts) = facts.bond.as_ref() {
+            response.bond_known = true;
+            response.bond_registered_pubkey = faster_hex::hex_string(&bond_facts.registered_pubkey);
+            response.bond_operator_id = bond_facts.operator_id.to_string();
+            response.bond_collateral = bond_facts.collateral;
+            response.bond_reserved_exposure = bond_facts.reserved_exposure.to_string();
+            response.bond_exposure_ceiling = bond_facts.exposure_ceiling.to_string();
+            response.bond_claim_exposure = bond_facts.claim_exposure.to_string();
+            // The readiness verdict comes from `ready_to_produce` itself rather than being
+            // re-derived here: the RPC and the producer must not be able to disagree about what
+            // "ready" means. Its key check is against the caller's own key, which this server
+            // does not hold — so the answer is given for the key the bond registered.
+            response.not_ready_reason =
+                facts.ready_to_produce(&bond_facts.registered_pubkey).err().unwrap_or_default().to_string();
+        }
+        Ok(response)
+    }
+
     async fn get_token_supply_call(
         &self,
         _connection: Option<&DynRpcConnection>,

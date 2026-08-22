@@ -819,6 +819,30 @@ async fn sanity_test() {
             KaspadPayloadOps::GetTokenLedgerEntry => {
                 tst!(op, "TOK ledger read — the token program is inert on every shipped preset (tkn fence = u64::MAX)")
             }
+            KaspadPayloadOps::GetPalwProducerFacts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // The sanity daemon is simnet, which is not `ConsensusV2` — so the contract
+                    // this asserts is the honest-negative one: a producer asking a hash-only
+                    // chain for a class target gets `available: false` rather than an error, and
+                    // can find out it is on the wrong network by asking. Exercised for real
+                    // (available: true) by the PALW-RC drill, which needs a V2 chain to exist.
+                    let response = rpc_client
+                        .get_palw_producer_facts_call(
+                            None,
+                            GetPalwProducerFactsRequest {
+                                class_id: "00".repeat(64),
+                                bond_transaction_id: "00".repeat(64),
+                                bond_index: 0,
+                                with_bond: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "a non-ConsensusV2 network answers available:false, and does not error");
+                    assert!(!response.bond_known, "and names no bond it does not have");
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

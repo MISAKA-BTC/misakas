@@ -103,6 +103,7 @@ pub enum KaspadPayloadOps {
     GetValidatorStatus,
     // MISAKA Compute Token Program (design v0.1 §9.3)
     GetTokenLedgerEntry,
+    GetPalwProducerFacts,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

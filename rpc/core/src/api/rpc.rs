@@ -497,6 +497,35 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetTokenLedgerEntryResponse::default())
     }
 
+    /// **PALW ConsensusV2: the derived facts a block producer must read** (ADR-0042 Decision 6).
+    ///
+    /// The one call that makes third-party mining possible: without the class target, the pwu it
+    /// implies and the bond's exposure room on the wire, only a node with its own state store
+    /// could build an admissible algo-6 attempt.
+    async fn get_palw_producer_facts(
+        &self,
+        class_id: String,
+        bond_transaction_id: String,
+        bond_index: u32,
+        with_bond: bool,
+    ) -> RpcResult<GetPalwProducerFactsResponse> {
+        self.get_palw_producer_facts_call(
+            None,
+            GetPalwProducerFactsRequest { class_id, bond_transaction_id, bond_index, with_bond },
+        )
+        .await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op; the
+    /// node's core service overrides it.
+    async fn get_palw_producer_facts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwProducerFactsRequest,
+    ) -> RpcResult<GetPalwProducerFactsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwProducerFactsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

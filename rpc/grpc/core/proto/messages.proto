@@ -82,6 +82,7 @@ message KaspadRequest {
     GetTokenLedgerEntryRequestMessage getTokenLedgerEntryRequest = 1130;
     GetTokenSupplyRequestMessage getTokenSupplyRequest = 1132;
     GetTokenEmissionInfoRequestMessage getTokenEmissionInfoRequest = 1134;
+    GetPalwProducerFactsRequestMessage getPalwProducerFactsRequest = 1136;
   }
 }
 
@@ -159,6 +160,7 @@ message KaspadResponse {
     GetTokenLedgerEntryResponseMessage getTokenLedgerEntryResponse = 1131;
     GetTokenSupplyResponseMessage getTokenSupplyResponse = 1133;
     GetTokenEmissionInfoResponseMessage getTokenEmissionInfoResponse = 1135;
+    GetPalwProducerFactsResponseMessage getPalwProducerFactsResponse = 1137;
   }
 }
 

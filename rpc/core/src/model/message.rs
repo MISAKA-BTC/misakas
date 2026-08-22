@@ -2214,6 +2214,165 @@ impl Deserializer for GetTokenLedgerEntryResponse {
     }
 }
 
+/// **PALW ConsensusV2: what a block producer must read from chain state** (ADR-0042 Decision 6).
+///
+/// `bond` is optional: a producer that only wants the class's target and pwu may omit it, and one
+/// that names its bond additionally gets the exposure facts and a ready-to-produce verdict.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwProducerFactsRequest {
+    /// 128-hex class id (`execution_class_id`, the shape profile id).
+    pub class_id: String,
+    /// Optional bond outpoint: 128-hex transaction id.
+    pub bond_transaction_id: String,
+    pub bond_index: u32,
+    /// False when `bond_transaction_id` is not to be read at all.
+    pub with_bond: bool,
+}
+
+impl Serializer for GetPalwProducerFactsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.bond_transaction_id, writer)?;
+        store!(u32, &self.bond_index, writer)?;
+        store!(bool, &self.with_bond, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwProducerFactsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let class_id = load!(String, reader)?;
+        let bond_transaction_id = load!(String, reader)?;
+        let bond_index = load!(u32, reader)?;
+        let with_bond = load!(bool, reader)?;
+        Ok(Self { class_id, bond_transaction_id, bond_index, with_bond })
+    }
+}
+
+/// The producer facts, **derived** — never the ingredients (ADR-0046: derive, never declare).
+///
+/// Exposing the ingredients and letting a producer multiply them would give every producer an
+/// independent chance to disagree with admission, which is the exact shape of the correspondence
+/// defects this codebase has found repeatedly. `u128` quantities travel as decimal strings and
+/// `Hash64` identities as 128-hex, the same convention the token surface uses.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwProducerFactsResponse {
+    /// False on every network that is not `ConsensusV2`, and on one that is but does not know the
+    /// class. Both are honest answers rather than errors: a producer asking a hash-only chain for
+    /// a class target is on the wrong network, and should be able to find that out by asking.
+    pub available: bool,
+    /// The state's chain point these facts were read at — a producer that builds against a
+    /// different point built against a different state.
+    pub chain_point: String,
+    /// The CANDIDATE's DAA score, not the tip's: admission's epoch index comes from the candidate.
+    pub daa_score: u64,
+    pub class_id: String,
+    pub artifact_root: String,
+    /// Decimal string (`u128`).
+    pub class_target: String,
+    /// The one legal `pwu` for an attempt of this class — admission item 6 is equality, not a bound.
+    pub pwu: u64,
+    pub is_base_class: bool,
+    /// The retention obligation a producer takes on by accepting: bind + receipt + challenge + court.
+    pub min_trace_retention_daa: u64,
+    pub epoch_index: u64,
+    pub epoch_budget_blocks: u64,
+    pub epoch_produced_blocks: u64,
+    /// False when the request named no bond, or the chain does not know it.
+    pub bond_known: bool,
+    /// Hex of the bond's registered ML-DSA-87 public key — a producer compares it against the key
+    /// it holds rather than discovering the mismatch when its block is refused.
+    pub bond_registered_pubkey: String,
+    pub bond_operator_id: String,
+    pub bond_collateral: u64,
+    /// Decimal strings (`u128`).
+    pub bond_reserved_exposure: String,
+    pub bond_exposure_ceiling: String,
+    pub bond_claim_exposure: String,
+    /// Empty when this bond may produce now; otherwise the reason it may not, which is exactly
+    /// what `PalwProducerFactsV2::ready_to_produce` says — one answer, not two.
+    pub not_ready_reason: String,
+}
+
+impl Serializer for GetPalwProducerFactsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.chain_point, writer)?;
+        store!(u64, &self.daa_score, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(String, &self.class_target, writer)?;
+        store!(u64, &self.pwu, writer)?;
+        store!(bool, &self.is_base_class, writer)?;
+        store!(u64, &self.min_trace_retention_daa, writer)?;
+        store!(u64, &self.epoch_index, writer)?;
+        store!(u64, &self.epoch_budget_blocks, writer)?;
+        store!(u64, &self.epoch_produced_blocks, writer)?;
+        store!(bool, &self.bond_known, writer)?;
+        store!(String, &self.bond_registered_pubkey, writer)?;
+        store!(String, &self.bond_operator_id, writer)?;
+        store!(u64, &self.bond_collateral, writer)?;
+        store!(String, &self.bond_reserved_exposure, writer)?;
+        store!(String, &self.bond_exposure_ceiling, writer)?;
+        store!(String, &self.bond_claim_exposure, writer)?;
+        store!(String, &self.not_ready_reason, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwProducerFactsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let chain_point = load!(String, reader)?;
+        let daa_score = load!(u64, reader)?;
+        let class_id = load!(String, reader)?;
+        let artifact_root = load!(String, reader)?;
+        let class_target = load!(String, reader)?;
+        let pwu = load!(u64, reader)?;
+        let is_base_class = load!(bool, reader)?;
+        let min_trace_retention_daa = load!(u64, reader)?;
+        let epoch_index = load!(u64, reader)?;
+        let epoch_budget_blocks = load!(u64, reader)?;
+        let epoch_produced_blocks = load!(u64, reader)?;
+        let bond_known = load!(bool, reader)?;
+        let bond_registered_pubkey = load!(String, reader)?;
+        let bond_operator_id = load!(String, reader)?;
+        let bond_collateral = load!(u64, reader)?;
+        let bond_reserved_exposure = load!(String, reader)?;
+        let bond_exposure_ceiling = load!(String, reader)?;
+        let bond_claim_exposure = load!(String, reader)?;
+        let not_ready_reason = load!(String, reader)?;
+        Ok(Self {
+            available,
+            chain_point,
+            daa_score,
+            class_id,
+            artifact_root,
+            class_target,
+            pwu,
+            is_base_class,
+            min_trace_retention_daa,
+            epoch_index,
+            epoch_budget_blocks,
+            epoch_produced_blocks,
+            bond_known,
+            bond_registered_pubkey,
+            bond_operator_id,
+            bond_collateral,
+            bond_reserved_exposure,
+            bond_exposure_ceiling,
+            bond_claim_exposure,
+            not_ready_reason,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTokenSupplyRequest {

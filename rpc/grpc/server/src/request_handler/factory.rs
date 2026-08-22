@@ -91,6 +91,7 @@ impl Factory {
                 SubmitEvmDepositClaim,
                 GetValidatorStatus,
                 GetTokenLedgerEntry,
+                GetPalwProducerFacts,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

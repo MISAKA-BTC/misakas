@@ -171,6 +171,9 @@ pub enum RpcApiOps {
     GetTokenSupply = 165,
     /// MISAKA Compute Token Program (design §9.3): an epoch's emission settlement + the live cursors
     GetTokenEmissionInfo = 166,
+    /// PALW ConsensusV2: the six derived facts a block producer must read from chain state before
+    /// it may build an algo-6 attempt. What makes third-party mining possible at all.
+    GetPalwProducerFacts = 167,
 }
 
 impl RpcApiOps {

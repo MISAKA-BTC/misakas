@@ -79,6 +79,7 @@ impl Router {
                 SubmitEvmDepositClaim,
                 GetValidatorStatus,
                 GetTokenLedgerEntry,
+                GetPalwProducerFacts,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,
