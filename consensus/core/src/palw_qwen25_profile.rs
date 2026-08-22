@@ -96,6 +96,58 @@ pub const QWEN25_1_5B: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 {
     tile_len: 128,
 };
 
+/// **The integer-engine shape an artifact for this geometry must have.**
+///
+/// The mirror of the floor's `palw_rc_base0_shape_v1`, and it exists for the same stated reason:
+/// "every field is the geometry's, so the two cannot describe different classes". Before it, the
+/// converter carried its own copy of the arithmetic — `eps_q: 1 << 8`, inherited from the floor —
+/// while `QWEN25_1_5B` declared `rms_eps_q: 1`. That is two arithmetic specifications under one
+/// model id, and it is not a cosmetic split: the engine norms with the ARTIFACT's epsilon and the
+/// court re-norms with the CLASS's, so an artifact built at 256 under a class registered at 1 has
+/// every honest execution convicted. This repo already has that bug in its history.
+///
+/// Returned as scalars because `Base0ShapeV1` lives in the engine crate, which consensus cannot
+/// name. The engine crate's `classes` registry is what assembles them.
+pub struct PalwQwen25ArtifactShapeV1 {
+    pub n_layers: usize,
+    pub n_heads: usize,
+    pub n_kv_heads: usize,
+    pub d_head: usize,
+    pub d_ff: usize,
+    pub vocab: usize,
+    pub max_position: usize,
+    pub eps_q: i64,
+}
+
+pub fn qwen25_artifact_shape_v1(g: PalwQwen25GeometryV1) -> PalwQwen25ArtifactShapeV1 {
+    PalwQwen25ArtifactShapeV1 {
+        n_layers: g.layer_count as usize,
+        n_heads: g.attn_heads as usize,
+        n_kv_heads: g.attn_kv_heads as usize,
+        d_head: g.attn_head_dim as usize,
+        d_ff: g.ffn_dim as usize,
+        vocab: g.vocab_size as usize,
+        // The rotary table is generated for the class's own context length, and `max_position` is
+        // inside the artifact digest — so a class registered at one context and an artifact built
+        // for another are two classes.
+        max_position: g.n_ctx as usize,
+        eps_q: g.rms_eps_q,
+    }
+}
+
+/// The canonical geometry for a Hugging Face model id, or `None` for one this build does not know.
+///
+/// The single place a model id becomes numbers. A converter that read a checkpoint's `config.json`
+/// and believed it would let the file decide the class; this makes the checkpoint something to
+/// CHECK against instead.
+pub fn qwen25_canonical_geometry_v1(model_id: &str) -> Option<PalwQwen25GeometryV1> {
+    match model_id {
+        "Qwen/Qwen2.5-1.5B" => Some(QWEN25_1_5B),
+        "Qwen/Qwen2.5-3B" => Some(QWEN25_3B),
+        _ => None,
+    }
+}
+
 /// `Qwen2.5-3B`, measured the same day — the other reading of "2B".
 pub const QWEN25_3B: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 {
     layer_count: 36,
@@ -376,6 +428,76 @@ mod tests {
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
     use crate::palw_step::PalwStepTableV1;
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
+
+    /// Diagnostic: the node table the engine's capture must land in, slot by slot.
+    /// `cargo test -p kaspa-consensus-core --lib dump_qwen_slots -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_qwen_slots() {
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+        let g = qwen25_admissible_geometry_v1(QWEN25_1_5B, &court).unwrap();
+        let p = qwen25_profile_v1(g).unwrap();
+        println!("tile_len(geometry)={} pre={} attn={} post={} per-layer-attn={}",
+            g.tile_len, p.pre_nodes.len(), p.attn_nodes.len(), p.post_nodes.len(), p.attn_nodes.len());
+        for slot in 0..14u32 {
+            if let Some((n, layer)) = p.resolve_node_slot(slot) {
+                let w = match n.out_len {
+                    crate::palw_step::PalwStepOutLenV1::Fixed { elements } => format!("Fixed {elements}"),
+                    crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => format!("KvScaled x{multiplier}"),
+                };
+                println!("  slot {slot:3} layer {layer:?} {:?} out_len={w} tile_len={}", n.op_kind, n.tile_len);
+            }
+        }
+    }
+
+    /// **Would the chain admit this class?** — the four checks `verify_class_admission_v2` runs,
+    /// against the SHIPPED bundle, on the geometry a Qwen2.5-1.5B registration would actually use.
+    ///
+    /// Run before deploying anything: a registration that fails here fails on-chain, and finding
+    /// that out with a 1.7 GiB artifact already on four hosts is finding it in the worst place.
+    /// The artifact root is a placeholder because the gate does not check it — that binding is the
+    /// producer's (its attempt must name the class's registered root) and the genesis gate's.
+    #[test]
+    fn the_admissible_qwen25_class_passes_the_admission_gate() {
+        let bundle = match &crate::config::params::palw_rc_shipped_params().palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+            _ => return, // a build whose card is unset ships no bundle; nothing to check against
+        };
+        let admissible = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
+            .expect("1.5B has an admissible (tile, n_ctx) under the shipped court");
+        let profile = qwen25_profile_v1(admissible).expect("expressible");
+        let class_id = profile.shape_profile_id();
+        let canonical = crate::palw_base0_profile::rc_job_context(&profile, 8, 4);
+        let registration = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root: crate::Hash64::from_u64_word(0xA1),
+            slash_value_per_pwu: 5,
+            // COUNTED from the canonical job, never declared — the gate recounts and refuses a
+            // mismatch, which is what makes `pwu_per_inference` a fact rather than a multiplier
+            // the registrant picks. (First run of this test declared 1 and was told 366,184.)
+            pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 {
+                pwu_per_inference: crate::palw_step::step_leaf_count(&profile, &canonical).expect("the canonical job has a step space"),
+            },
+            initial_target: u128::MAX / 2,
+            share_permille: 1,
+            activation_daa: 0,
+            admission: None,
+        };
+        match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration) {
+            Ok(entry) => {
+                assert_eq!(entry.class_id, class_id);
+                println!(
+                    "ADMITTED  class_id={class_id}  tile={} n_ctx={} canonical_leaves={}",
+                    admissible.tile_len, admissible.n_ctx, entry.canonical_step_leaf_count
+                );
+            }
+            Err(e) => panic!(
+                "the admissible Qwen2.5-1.5B geometry is REFUSED by the gate it was derived for: {e:?}\n\
+                 (tile={} n_ctx={})",
+                admissible.tile_len, admissible.n_ctx
+            ),
+        }
+    }
 
     /// **Print the admissible geometry a class must actually register at.** The constants above
     /// are the MODEL's shape; `n_ctx 4096` at `tile_len 128` is far past `PALW_STEP_MAX_LEAVES`,
