@@ -1191,6 +1191,14 @@ Do you confirm? (y/n)";
     // reward goes. A missing one is a startup refusal rather than a producer that runs and cannot
     // publish; a hash-only network is a refusal for a different reason, and both say which.
     let palw_producer_service = if args.palw_produce {
+        // Both facts come from the SAME bundle read: the class the floor is, and the court that
+        // decides what geometry any class is admissible at. Reading them separately would let a
+        // producer resolve against a court the chain does not have.
+        let palw_bundle = match &config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
+            _ => None,
+        };
+        let palw_court = palw_bundle.as_ref().map(|b| b.court.clone());
         let base_class_id = match &config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
             _ => None,
@@ -1212,6 +1220,12 @@ Do you confirm? (y/n)";
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,
                         class_id,
+                        // From the bundle, not reconstructed: the court decides the geometry a
+                        // class is admissible at and therefore its id, so a producer resolving
+                        // against a different court would look for a class the chain never
+                        // registered.
+                        court: palw_court.clone().expect("a ConsensusV2 bundle was matched above"),
+                        class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                     },
                     consensus_manager.clone(),
                     mining_manager.clone(),

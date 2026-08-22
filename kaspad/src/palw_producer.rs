@@ -91,10 +91,26 @@ pub struct PalwProducerConfig {
     /// Which class to produce for. The daemon passes the bundle's `base_class_id` — the liveness
     /// floor — because that is the one class ADR-0039 W6′ guarantees is always producible.
     pub class_id: Hash64,
+    /// The court this network's classes are admitted against. It decides which `(tile_len, n_ctx)`
+    /// a class is registered at, and therefore its class id — so resolution cannot be done without
+    /// it, and it must be the CHAIN's court rather than a default reconstructed here.
+    pub court: kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    /// **Artifact files this node holds, for classes whose weights are not derivable.**
+    ///
+    /// The floor's artifact is minted from a pinned seed by every node, so it needs no file and
+    /// this stays empty on an RC node. A converted class — a real checkpoint quantized offline —
+    /// cannot be re-derived from anything the node has, so its bytes must be carried. Loaded once
+    /// at startup and matched against what the CHAIN says the class is; a file that does not
+    /// match is not used, never trusted into service.
+    pub class_artifacts: Vec<std::path::PathBuf>,
 }
 
 pub struct PalwProducerService {
     config: PalwProducerConfig,
+    /// Decoded once at construction. Digest-checked by the decoder, so anything in here is an
+    /// artifact that hashes to what its own file claims; whether it is the artifact the CHAIN
+    /// registered is decided per block, against the producer facts.
+    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
@@ -156,7 +172,29 @@ impl PalwProducerService {
                 None
             }
         };
-        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data }
+        // Loaded once, and each file is refused loudly rather than skipped quietly: an operator
+        // who passed `--palw-class-artifact` meant this node to produce for that class, and a node
+        // that silently fell back to the floor would look like a working producer that never
+        // touches the class they deployed 1.7 GiB for.
+        let mut class_artifacts = Vec::new();
+        for path in &config.class_artifacts {
+            match std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
+                misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string())
+            }) {
+                Ok(artifact) => {
+                    info!(
+                        "[{PALW_PRODUCER}] loaded class artifact {} ({} layers, vocab {}, eps_q {})",
+                        path.display(),
+                        artifact.shape.n_layers,
+                        artifact.shape.vocab,
+                        artifact.shape.eps_q
+                    );
+                    class_artifacts.push(artifact);
+                }
+                Err(err) => warn!("[{PALW_PRODUCER}] class artifact {} is unusable: {err}", path.display()),
+            }
+        }
+        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_artifacts }
     }
 
     /// **Keep what the attempt promises to keep.**
@@ -325,18 +363,27 @@ impl PalwProducerService {
         // `base0_rc_job_anchor_v1` for why it is not the challenge's.
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
         let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond);
-        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+
+        // **The class comes from the CHAIN, not from a constant here.** This resolved the floor by
+        // name — `base0_profile_v1(PALW_RC_BASE0_GEOMETRY)` and `palw_rc_base0_artifact_v1()` —
+        // so `class_id` was configurable while the graph and the weights were not, and a node
+        // could not produce for a second class however it was registered.
+        //
+        // `resolve_class_v1` takes the two facts the chain states — which graph (`class_id`) and
+        // which weights (`artifact_root`) — and refuses unless this node holds material matching
+        // BOTH. The floor is derived so it resolves from nothing; a converted class resolves from
+        // a file the operator deployed. Derive, never declare (ADR-0046): the producer proves it
+        // has what the chain named rather than asserting it.
+        let resolved = misaka_palw_base0::classes::resolve_class_v1(
+            &self.config.court,
+            facts.class_id,
+            facts.artifact_root,
+            &self.class_artifacts,
         )
-        .map_err(|e| format!("the floor's graph is not expressible: {e:?}"))?;
-        let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().map_err(|e| format!("the floor's artifact: {e:?}"))?;
-        let (job, prompt) = base0_rc_job_v1(
-            &profile,
-            anchor,
-            artifact.shape.vocab,
-            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
-            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
-        );
+        .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
+        let profile = resolved.profile.clone();
+        let artifact = resolved.artifact;
+        let (job, prompt) = base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, resolved.canonical_job.0, resolved.canonical_job.1);
         // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
         // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search

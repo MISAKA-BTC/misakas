@@ -204,6 +204,14 @@ pub struct Args {
     pub palw_produce: bool,
     pub palw_producer_key: Option<String>,
     pub palw_producer_bond: Option<String>,
+    /// **Artifact files for classes whose weights cannot be derived** (repeatable).
+    ///
+    /// The floor is minted from a pinned seed on every node, so an RC producer needs none of
+    /// these. A converted class is somebody's checkpoint quantized offline — nothing the node
+    /// holds can re-derive it — so the bytes travel as a file. Each is digest-checked on load and
+    /// then matched against what the CHAIN says the class is; a file matching neither the
+    /// registered graph nor the registered weights is not used.
+    pub palw_class_artifact: Vec<String>,
     pub palw_producer_pay_address: Option<String>,
     pub palw_panel: bool,
     pub palw_fee_outpoint: Option<String>,
@@ -338,6 +346,7 @@ impl Default for Args {
             palw_produce: false,
             palw_producer_key: None,
             palw_producer_bond: None,
+            palw_class_artifact: Vec::new(),
             palw_producer_pay_address: None,
             palw_panel: false,
             palw_fee_outpoint: None,
@@ -790,6 +799,19 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help("PALW: <txid>:<index> of the bond output this node signs attempts under — the one the genesis card names."),
+        )
+        .arg(
+            Arg::new("palw-class-artifact")
+                .long("palw-class-artifact")
+                .env("KASPAD_PALW_CLASS_ARTIFACT")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW: path to a converted class artifact (repeatable). Only needed for a class whose weights are \
+                     not derivable — the floor is minted from a seed on every node. Digest-checked on load and matched \
+                     against the class the chain registered.",
+                ),
         )
         .arg(
             Arg::new("palw-producer-pay-address")
@@ -1260,6 +1282,10 @@ impl Args {
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
             palw_producer_key: m.get_one::<String>("palw-producer-key").cloned().or(defaults.palw_producer_key),
             palw_producer_bond: m.get_one::<String>("palw-producer-bond").cloned().or(defaults.palw_producer_bond),
+            palw_class_artifact: m
+                .get_many::<String>("palw-class-artifact")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_class_artifact),
             palw_producer_pay_address: m
                 .get_one::<String>("palw-producer-pay-address")
                 .cloned()
