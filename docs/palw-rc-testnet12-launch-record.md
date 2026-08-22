@@ -28,6 +28,7 @@ shipped a different card would be refused at the handshake rather than fork.
 | blocks are real inference | `produced block` from block 1; 0 disqualifications, 0 panics across 443 blocks |
 | one ruleset across the fleet | fingerprint `79a306ed…` identical on all six nodes |
 | the genesis commits to its own premine | node imports pruning point `28a44a68…`, which is the recomputed pin, and `all_networks_genesis_constants_match_premine` passes |
+| **the tool and the node agree** | the shipped `palw-rc-genesis --rows` re-derives `28a44a68…` and `consensus_params_id 79a306ed…` — the same genesis the node imported and the same fingerprint all six nodes report. Two earlier defects lived in exactly this gap: a tool that printed a params id no node would log, and one that printed a genesis hash from its own compiled premine rather than the card it had just built |
 | panels bind and seats answer | receipts filed: seat 1 → 394, seat 2 → 216, seat 3 → 116, seat 4 → 116 |
 | the executor never sits on its own panel | bond 0 files **zero** receipts while producing every block |
 | bond 4 answers | 116 receipts and 3 `ReceiptLicensed` submissions from the seat re-minted onto a reachable host |
