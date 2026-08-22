@@ -286,8 +286,8 @@ somebody should be able to verify:
 
 | capability | on t12 | evidence |
 |---|---|---|
-| BASE-0 attempt lane (algo 6) | **live** | every block is a real inference; `palw weight` moves |
-| the claim lattice — panel, receipts, quorum, `Final` | **live** | `submitted ReceiptLicensed`, and the weight line |
+| BASE-0 attempt lane (algo 6) | **live** | every block is a real inference; `[palw-producer] produced block` from block 1 |
+| the claim lattice — panel, receipts, quorum, `Final` | **live** | `submitted ReceiptLicensed` and `live_total` climbing; `weight` follows at DAA 1200 (§5) |
 | the court (step dispute, interactive ladder) | **armed** | `COURT_TURN_DEADLINE = 60` inside `WINDOW_COURT = 2400`; the ladder is what that turns on |
 | every lattice window | **real values** | bind 600, receipt 600, challenge 1200, court 2400 — none fenced to `u64::MAX` |
 | claim retirement | **live** | `CLAIM_RETIREMENT = WINDOW_COURT` |
@@ -302,8 +302,15 @@ part of the bundle, and a licensed free-prompt claim's weight is defined to arri
 quantum at the receipt block that spends it. What does not exist anywhere in the tree is anything
 that PRODUCES such a block: no `--palw-receipt-produce`, no receipt-spend builder, no miner arm.
 
-So the lane is closed at `required_algo_id`, and that is deliberate rather than an oversight.
-Opening it without a producer would hand cadence share to a lane nobody can fill, and the per-class
+**This is not a fence set for testnet-12.** `algorithm_id == POW_ALGO_ID_PALW_COMMITTED_V2` is
+part of what ConsensusV2 *is* — the mode's own doc calls it "the only algorithm a V2 network
+demands or accepts", and `validate` refuses any bundle that says otherwise. Nothing about this
+deployment was narrowed to close the lane; a network that produces algo-7 blocks is a different
+ruleset, and the code says so where the check lives: *when the receipt lane becomes producible this
+becomes a two-sided check again — and it will be a ruleset change.*
+
+The reason it must stay shut until then is liveness, not caution. Opening it without a producer
+would hand cadence share to a lane nobody can fill, and the per-class
 DAA retarget then reads the floor as an over-producer at every epoch boundary — dividing its target
 by four each time until the class lottery refuses every attempt. That is the exact wedge §6 of the
 [launch blockers](palw-rc-launch-blockers-2026-08-21.md) records, and it is why
