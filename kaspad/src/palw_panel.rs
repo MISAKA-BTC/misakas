@@ -692,8 +692,32 @@ impl PalwPanelService {
             // which is a phase past `PanelBound` — so the old rule dropped the tiles exactly when a
             // dispute could start needing them, and neither party could disclose or refute. Claims
             // under an open court keep their material for as long as the session lives.
+            // **And a claim this node has not yet judged is not moved past either.**
+            //
+            // The sequence that bites: a claim licenses, its seat duty vanishes, `submitted` holds
+            // it, and the material is evicted — and only THEN does a court open on it. By the time
+            // the court duty appears the tiles are gone, so the challenger cannot refute and the
+            // responder cannot disclose. Keeping court duties alone was not enough because the
+            // eviction happens strictly earlier.
+            //
+            // The window is bounded by this node's own decision latency rather than by the claim's
+            // life: a challenger holds a licensed claim's capture until it has either reproduced it
+            // (nothing to say) or carried a `CourtOpened` — both of which put it in `challenged` on
+            // the next tick. A producer needs no such rule; it re-broadcasts its own material while
+            // its claim is unresolved, and `mark_own_material` feeds that back to itself.
             let mut live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
             live.extend(court_duties.iter().map(|d| d.claim_id));
+            live.extend(court_pending.iter().filter_map(|(_, _, _, o)| match o {
+                PalwConsensusObjectV2::CourtOpened { claim, .. } => Some(*claim),
+                _ => None,
+            }));
+            if self.config.challenge {
+                live.extend(
+                    session.palw_disputable_claims_v2(vec![bond_key]).into_iter().filter_map(|d| {
+                        (!challenged.contains(&d.claim_id)).then_some(d.claim_id)
+                    }),
+                );
+            }
             materials.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
             receipts.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());
