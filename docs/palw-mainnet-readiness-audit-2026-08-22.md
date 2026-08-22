@@ -28,14 +28,39 @@ one of these tests passed on first writing and had to be rebuilt until it reprod
 | 10 — merged blues paid without lottery, budget or dedup | `410bbd90` — the payment predicate now asks the two questions the parent state can answer: did it win its class lottery, and has this identity already been paid here | — |
 | 11 — the gossip map grows forever on unauthenticated claim ids | `410bbd90` — the map became a derived index of the digest FIFO | `the map held 12288 claims against a 4096-digest window` |
 
-**Items 1, 4, 6, 7, 8, 9 are untouched.** They are the `[A]` builds — pruning-point carriage, the
-court responder, bond registration and retirement, and the adjudication layer's three bindings —
-and the audit's own phasing says they are weeks to months, not an afternoon. The verdict below is
-therefore unchanged: **NO-GO**.
+### Phase 1 — the six `[A]` items, same day
+
+Each was scoped against the real code first, and every one turned out smaller than "weeks to
+months" because the audit had sized the FEATURE rather than the defect. Three were a comparison
+against the wrong value, one was a missing store row, one was a clock nobody could answer, one was
+a `let-else` that failed open.
+
+| audit item | fix | the test, against the OLD code |
+|---|---|---|
+| 7 — the court's close binding never matches a real claim | `8be04677` — a claim's `trace_root` is the LOGITS root, which the binding carries as `full_logits_trace_root`; `step_merkle_root` is a different root, already pinned transitively through `committed_execution_root` | `a_claims_trace_root_is_the_bindings_logits_root`, asserted from a real `base0_execute_for_attempt_v1` run rather than from hand-set fields |
+| 8 — a close is not bound to the dispute it settles | `8be04677` — the close must be the step the ladder narrowed to, and the ladder must have narrowed; the procedural gate and the arithmetic adjudication are now separate functions | `a_close_must_be_the_step_the_ladder_narrowed_to` — drives a real bisection to index 4, then closes on another leaf |
+| 1 — nobody can serve the pruning-point PALW state | `8be04677` — a snapshot captured at pruning-advance under its own store prefix, written on import too so a joined node can hand it on; and the destructive utxoset clear now happens after the fetch that can legitimately fail | the old test served the row it had just written; it now asserts nothing is servable before a capture |
+| 6 — a bond can never retire, so collateral is locked forever | `8be04677` — re-admitted with the authorisation the refusal described: an owner ML-DSA-87 signature over the bond key, verified against the pubkey the bond registered | an unsigned retirement does not ride; a forged one is refused `not signed by the key it registered` |
+| 4 — the court is free to open and nothing can answer it | this commit — opening stakes the challenger the claim's own `reserved`, released structurally when the session is removed; and the opening rung runs on the session budget, because no software in this tree can make the responder's first move | `opening_a_court_stakes_the_challenger_and_closing_it_gives_the_stake_back`; `a_responder_is_not_convicted_for_a_move_no_software_can_make` |
+| 9 — the IBD fork-choice gate is structurally dead | this commit — staging is handed the pruning-point PALW state before it is judged, and the gate fails CLOSED, with two exemptions that are load-bearing: a non-V2 network, and an incumbent standing at genesis | — |
+
+`PALW_ATTEMPT_V2_VERSION` 3 → 4 rides with item 7/8: the close rules decide which `CourtClosed`
+objects apply, and a failing object is dropped while the block stands, so an old binary would keep
+a claim a new one voids. Same blocks, divergent state.
+
+**What Phase 1 did NOT do**, and the distinction matters: item 4's third part — the responder
+itself — is still not built. `CourtDisclosed` is constructed nowhere in this tree. What changed is
+that its absence no longer convicts anyone: the opening rung cannot lapse into a fraud verdict, and
+an accusation that goes nowhere now costs the accuser. That is the difference between a lie and a
+stated gap.
 
 ---
 
-**結論: NO-GO。** ConsensusV2 を mainnet で有効化すると、攻撃者がいなくても新規ノードが1台も参加できず既存ノードが壊れ、攻撃者がいれば1トランザクションで全ノードが永久停止し、bond は約15日で全部ゼロにできる。しかも「不正は court で slash される」という前提そのものが実運用パスで一度も成立しない。値を載せられる状態から複数の**build**（コード修正ではなく未実装機能）ぶん離れている。
+**当初の結論: NO-GO。** ConsensusV2 を mainnet で有効化すると、攻撃者がいなくても新規ノードが1台も参加できず既存ノードが壊れ、攻撃者がいれば1トランザクションで全ノードが永久停止し、bond は約15日で全部ゼロにできる。しかも「不正は court で slash される」という前提そのものが実運用パスで一度も成立しない。
+
+**2026-08-22 時点の更新:** 上記11項目はすべて close した。以下の各節は**発見時の記述のまま**残してある — 何がどう壊れていたかの記録であり、現状の説明ではない。修正内容は冒頭の2つの表を参照。
+
+残る mainnet の前提は、欠陥ではなく未実装機能である: court responder（`CourtDisclosed` を作る主体）、`BondRegistered` の post-genesis 経路、そして ADR-0049 の canonical IR。
 
 以下、**先に詰まる順**。`[A]`=mainnet が値を運ぶ前に作らねばならないもの、`[B]`=欠陥だがコードサイズ、`[C]`=欠陥ではないが明言すべき事実。
 

@@ -1735,6 +1735,13 @@ impl PalwChainStateV2 {
         let mut open_courts: BTreeMap<Hash64, u32> = BTreeMap::new();
         for session in self.court_sessions.values() {
             *open_courts.entry(session.claim).or_insert(0) += 1;
+            // An open court also holds the CHALLENGER's stake, so the exposure this check rebuilds
+            // is claims plus courts. Opening one used to cost nothing at all, which is why the
+            // summary was once claims alone.
+            if let Some(claim) = self.claims.get(&session.claim) {
+                let e = exposure.entry(session.challenger_bond).or_insert(0);
+                *e = e.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
+            }
         }
         // ADR-0045 Decision 3: the share table's invariants hold at EVERY state, not once at
         // boot. The donation arithmetic conserves the denominator, so a populated table sums to
@@ -2164,6 +2171,25 @@ impl<'a> TransitionBuilder<'a> {
                 self.state.open_courts_by_claim.remove(&previous.claim);
             }
             self.state.court_deadlines.remove(&(court_next_deadline_v2(previous), key));
+            // **The challenger's stake comes back HERE**, so reserve and release are one pair in
+            // one place. Opening a court charges the challenger the claim's own `reserved`; five
+            // different sites remove a session — two sweeps, a close, a retirement, a re-open —
+            // and a release each of them had to remember is a release one of them eventually will
+            // not. The claim is still present at every removal (`retire_claim` closes its sessions
+            // before it drops the claim), and a session whose claim is somehow gone had nothing
+            // countable to give back.
+            //
+            // Only on a REMOVAL. `write_court` is also how a session is rewritten in place — the
+            // abandoned-ladder refresh re-indexes the same session under the backstop — and giving
+            // the stake back there would release it without the session ending, so a challenger
+            // would hold an open court for free after one refresh.
+            if new.is_none()
+                && let Some(claim) = self.state.claims.get(&previous.claim)
+            {
+                let held = self.state.reserved_exposure.get(&previous.challenger_bond).copied().unwrap_or(0);
+                let back = held.saturating_sub(claim.reserved);
+                self.write_exposure(previous.challenger_bond, if back == 0 { None } else { Some(back) });
+            }
         }
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
@@ -2650,10 +2676,18 @@ fn rearm_after_challenger_side_close(
 pub(crate) fn court_next_deadline_v2(session: &PalwCourtSessionStateV2) -> u64 {
     use crate::palw_bisect::PalwBisectTurnV1;
     match session.ladder.turn() {
-        PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict | PalwBisectTurnV1::Terminal => {
+        PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => {
             session.deadline_daa.min(session.ladder.last_deadline_daa())
         }
-        PalwBisectTurnV1::Abandoned => session.deadline_daa,
+        // **`Terminal` has no move the responder can make, so it may not be clocked as if it did.**
+        //
+        // `declare_no_show` charges the RESPONDER for silence at `Terminal`, but the terminal move
+        // is a `CourtClosed { Arithmetic }` — a close, which the accused has no reason and no
+        // software to submit against itself. Grouping `Terminal` with the rung turns "the
+        // bisection finished and nobody closed" into a conviction, when the honest reading is that
+        // the accusation was never completed. The backstop still ends it, on the challenger's
+        // side, which is what an unproven accusation deserves.
+        PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => session.deadline_daa,
     }
 }
 
@@ -3376,12 +3410,23 @@ fn apply_object(
             builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
-            // The responder's first rung window. Sized from the state machine's own
-            // `turn_deadline_daa` so the ladder and the backstop are measured on one clock.
-            let first_deadline_daa = ctx
-                .daa_score
-                .checked_add(builder.params.turn_deadline_daa)
-                .ok_or(PalwStateV2Error::Overflow("rung deadline"))?;
+            // **The responder's FIRST rung runs on the session budget, not on the rung clock.**
+            //
+            // A rung clock convicts on silence: `declare_no_show` reads whose turn it was and ends
+            // the session against them. That is sound when the silent party COULD have moved — and
+            // for the opening rung, nothing in this tree can. `CourtDisclosed` is constructed
+            // nowhere: it exists in the object definition, this transition and the validator, and
+            // the panel service emits only `ReceiptLicensed` and `ProducerDefaulted`. So with a
+            // `turn_deadline_daa` tighter than `window_court`, anyone holding one bond convicts any
+            // producer by opening a court and waiting — for the price of one transaction, against
+            // a producer whose only fault is that no responder software exists.
+            //
+            // Until a responder ships, the opening rung may not be clocked tighter than the whole
+            // session: the backstop still ends the dispute, and it ends it on the CHALLENGER's
+            // side, which is the correct default for an unproven accusation. Later rungs keep the
+            // tight clock, because reaching one means the responder answered the first — so it
+            // demonstrably can.
+            let first_deadline_daa = deadline_daa;
             // The ladder's id is derived from the same six inputs `court_session_id_v2` uses, so
             // a ladder whose id is not `session_id` means the object's declared space does not
             // match the id it was opened under — refused here, not merely at the acceptance
@@ -3400,6 +3445,21 @@ fn apply_object(
             if ladder.session_id() != *session_id {
                 return Err(PalwStateV2Error::SessionIdMismatch(*session_id));
             }
+            // **An accusation costs the accuser what it puts at risk for the accused.**
+            //
+            // Opening used to cost one transaction fee: nothing was reserved, `Active` was not
+            // required, and every challenger-losing exit went through
+            // `rearm_after_challenger_side_close`, which slashes nobody. Meanwhile the responder's
+            // silence was priced at its whole claim. One bond could therefore hold every producer
+            // on the network under permanent accusation for the price of postage.
+            //
+            // The reservation is the claim's own `reserved` — the same number the executor has at
+            // stake in the dispute, so the two sides face the same figure — and it is charged to
+            // the challenger's exposure, which is also what stops one bond opening unboundedly many
+            // courts at once: the ceiling it already lives under does the counting.
+            let already = builder.state.reserved_exposure.get(challenger_bond).copied().unwrap_or(0);
+            let next = already.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("challenger exposure"))?;
+            builder.write_exposure(*challenger_bond, Some(next));
             builder.write_court(
                 *session_id,
                 Some(PalwCourtSessionStateV2 {
@@ -5376,7 +5436,10 @@ pub(crate) mod tests {
         let ladder = &s5.court_session(&sid).unwrap().ladder;
         assert_eq!(ladder.interval(), (0, 16), "the dispute opens over the whole space");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure, "the responder moves first");
-        assert_eq!(ladder.last_deadline_daa(), 124, "opened at 104 + a 20-DAA rung window");
+        // The OPENING rung runs on the session budget, not the rung window: no software in this
+        // tree can make the responder's first move, so silence there may not convict it. See
+        // `a_responder_is_not_convicted_for_a_move_no_software_can_make`.
+        assert_eq!(ladder.last_deadline_daa(), 604, "the opening rung is the backstop, opened at 104 + window_court");
 
         // Round 0: disclose at midpoint 8, challenger disagrees ⇒ the divergence is below.
         let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
@@ -5450,27 +5513,112 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A silent responder loses, and no object says so.** This is the whole reason the ladder
-    /// had to become chain state: the verdict comes from the chain's own clock plus an absence,
-    /// so there is no message for an attacker to forge.
+    /// **Opening a court costs the accuser what it puts at risk for the accused.**
+    ///
+    /// It used to cost one transaction fee and nothing else: `validate_court_opened_v2` never
+    /// touched `reserved_exposure`, the transition only looked the bond up, and every
+    /// challenger-losing exit ran through `rearm_after_challenger_side_close`, which slashes
+    /// nobody. The responder's silence, meanwhile, was priced at its whole claim. So one bond could
+    /// hold every producer on a network under permanent accusation for the price of postage, and
+    /// the per-bond exposure ceiling — the thing that bounds how much one bond can have at stake —
+    /// counted none of it.
+    ///
+    /// The accusation now carries the claim's own `reserved`, so both sides of a dispute face the
+    /// same figure, and the ceiling does the counting for free.
+    #[test]
+    fn opening_a_court_stakes_the_challenger_and_closing_it_gives_the_stake_back() {
+        let p = params_with_ladder();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let reserved = s4.claim(&claim_id).expect("the claim is licensed").reserved;
+        assert!(reserved > 0, "the claim has something at stake to mirror");
+        let before = s4.reserved_exposure(&bond_key(1));
+
+        // Open. The challenger is charged the same figure the executor already stands behind.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
+        assert_eq!(
+            s5.reserved_exposure(&bond_key(1)),
+            before + reserved,
+            "opening a court must cost the challenger the claim's own stake, not a transaction fee"
+        );
+
+        // The backstop lapses with nothing proved: the session ends and the stake comes back.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 605, 6), &[], None);
+        assert!(s6.court_session(&court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_none(), "the session is gone");
+        assert_eq!(
+            s6.reserved_exposure(&bond_key(1)),
+            before,
+            "and a closed court returns exactly what it took — reserve and release are one pair"
+        );
+    }
+
+    /// **A silent responder loses — but only once it has shown it can answer.**
+    ///
+    /// The verdict comes from the chain's own clock plus an absence, which is why the ladder had to
+    /// become chain state: there is no message for an attacker to forge. What that reasoning needs
+    /// is that the silent party COULD have moved, and on the OPENING rung nothing in this tree can:
+    /// `CourtDisclosed` is constructed nowhere — it exists in the object definition, the transition
+    /// and the validator, and the panel service emits only `ReceiptLicensed` and
+    /// `ProducerDefaulted`. Clocking that rung tightly therefore let anyone holding one bond
+    /// convict any producer by opening a court and waiting, for one transaction fee.
+    ///
+    /// So the opening rung runs on the session budget and its lapse ends the dispute on the
+    /// CHALLENGER's side — an accusation nobody completed. A later rung keeps the tight clock,
+    /// because reaching one means the responder answered the first.
+    #[test]
+    fn a_responder_is_not_convicted_for_a_move_no_software_can_make() {
+        let p = params_with_ladder();
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+        // The opening rung is the backstop now, not 124.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 125, 6), &[], None);
+        assert!(s6.court_session(&sid).is_some(), "the opening rung has not lapsed at the old rung clock");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nothing has been charged");
+
+        // Past the SESSION budget, still with no disclosure: the dispute ends, and it ends against
+        // the accusation rather than against the accused.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 605, 7), &[], None);
+        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
+        assert!(
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "an unanswered opening rung must not convict the executor of fraud"
+        );
+        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "and it must not cost the executor its stake");
+    }
+
+    /// The other half of the same rule: once the responder HAS answered, the tight rung clock is
+    /// legitimate and silence at a later rung does decide against it.
     #[test]
     fn palw_v2_a_silent_responder_loses_the_dispute() {
         let p = params_with_ladder();
         let (s5, claim_id, sid) = licensed_with_court(&p);
-        // The rung deadline is 124; the backstop is 604. Nothing is due yet at 124.
-        let (s6, _) = apply(&s5, &p, &ctx(6, 124, 6), &[], None);
-        assert!(s6.court_session(&sid).is_some(), "the rung window has not lapsed");
-        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        // Round 0: the responder discloses, so it has demonstrably got software that can move.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 106, 7), &[rung_verdict(sid, 0, false)], None);
+        let due = s7.court_session(&sid).expect("still open").ladder.last_deadline_daa();
+        assert!(due < 604, "a later rung runs on the tight clock: {due}");
 
-        // One DAA past it, with the responder never having disclosed.
-        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
-        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
-        match s7.claim(&claim_id).unwrap().phase {
+        // …and then goes quiet at round 1.
+        let (s8, _) = apply(&s7, &p, &ctx(8, due + 1, 8), &[], None);
+        assert!(s8.court_session(&sid).is_none(), "the session is decided and gone");
+        match s8.claim(&claim_id).unwrap().phase {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. } => {}
-            ref other => panic!("a responder that would not answer must lose the claim, got {other:?}"),
+            ref other => panic!("a responder that answered once and then would not must lose the claim, got {other:?}"),
         }
-        // And it cost the executor its stake, exactly as a proven fault does.
-        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "a default is not free");
+        assert!(s8.bond(&bond_key(1)).unwrap().slashed > 0, "a default is not free");
     }
 
     /// **A silent challenger loses too** — prosecution is its burden. The direction matters: the

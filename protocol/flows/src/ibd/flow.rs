@@ -1792,6 +1792,16 @@ impl IbdFlow {
         if self.active_recovery_permit.is_none() {
             self.validate_staging_timestamps(&self.ctx.consensus().session().await, &staging_session).await?;
         }
+        // **Make the staged chain weighable before judging it.**
+        //
+        // The gate below compares two PALW orders, and the staged one was structurally always
+        // absent: staging is built with `skip_adding_genesis`, so the genesis writer never runs,
+        // and the only other writer — the pruning-point import — used to run after the commit
+        // barrier. So the comparison had nothing to compare and fell through. Import here, into
+        // STAGING, and the challenger becomes a real value.
+        if let Some(carriage) = self.request_pruning_point_palw_state(pruning_point).await? {
+            self.import_pruning_point_palw_state(&staging_session, pruning_point, carriage).await?;
+        }
         self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
         Ok(())
     }
@@ -1814,10 +1824,42 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         staging_consensus: &ConsensusProxy,
     ) -> Result<(), ProtocolError> {
+        // **Two exemptions first, and both are load-bearing.**
+        //
+        // A non-V2 network has no PALW order by construction — `palw_candidate_order_v2` returns
+        // `None` the moment `palw_state_params_v2` is unset — so without this guard the fail-closed
+        // arm below would make every mainnet IBD impossible.
+        if !matches!(
+            self.ctx.config.params.palw_consensus_mode,
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
+        ) {
+            return Ok(());
+        }
+        // And an incumbent standing at genesis defends nothing. On a young network every joining
+        // node is in exactly that position, so refusing there is refusing to bootstrap.
+        if consensus.async_get_sink().await == self.ctx.config.genesis.hash {
+            return Ok(());
+        }
         let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
-        let (Some(incumbent), Some(challenger)) = (incumbent, challenger) else {
-            return Ok(());
+        // **Fail CLOSED.** This used to be a let-else returning `Ok(())`, and the challenger was
+        // always `None`, so the gate never once fired: an attacker who piled blue work on a private
+        // fork was refused by `decide_deep_reorg_v2` on the relay path and could install the whole
+        // chain on a victim through IBD instead. "PALW work decides the chain" degraded to "blue
+        // work decides the chain" for anyone syncing. The sibling gate in the virtual processor was
+        // deliberately made fail-closed for this reason; this is the same decision.
+        let (incumbent, challenger) = match (incumbent, challenger) {
+            (Some(i), Some(c)) => (i, c),
+            (Some(_), None) => {
+                return Err(ProtocolError::Other(
+                    "the staged chain carries no PALW order, so it cannot be shown to outweigh the local one; keeping the local chain",
+                ));
+            }
+            (None, _) => {
+                return Err(ProtocolError::Other(
+                    "this node is past genesis on a ConsensusV2 network but holds no PALW order of its own; refusing to replace a chain it cannot weigh",
+                ));
+            }
         };
         match kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger) {
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::Commit => Ok(()),
