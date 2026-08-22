@@ -110,7 +110,16 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `PalwBlockContextV2` — serialized into the root through `last_point` — gains the block's
 /// subsidy. Three separate reasons the version had to move, all of them the same rule: a
 /// consensus change to the root gets a new version rather than a silent re-reading of old bytes.
-pub const PALW_STATE_V2_VERSION: u16 = 4;
+///
+/// Version 5: the M-02 settlement. Terminal-claim retirement (launch blockers §8) had added
+/// `retired_safe_weight` to the preimage WITHOUT moving this constant — the one silent
+/// re-reading of old bytes the rule exists to forbid, caught while reconciling ADR-0043 against
+/// the implementation. The bump is supplied here, in the same change that rewrites ADR-0043 §2
+/// to the full list and pins the correspondence executably
+/// (`the_state_root_preimage_is_exactly_the_adr_0043_list`). No network froze a version-4 root:
+/// testnet-12's genesis is being re-minted regardless, which is exactly why M-02 had to settle
+/// before the ruleset id froze and not after.
+pub const PALW_STATE_V2_VERSION: u16 = 5;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -1548,12 +1557,13 @@ impl PalwChainStateV2 {
     // ---- the root ----
 
     /// The state root: version, then every collection root in the struct's declared order, then
-    /// the scalars. The exact ordering is frozen in ADR-0043 — extended in place (still pre-wire,
-    /// nothing had committed a root) by ADR-0044 with the two receipt-lane collections, each
-    /// placed directly after its attempt-lane counterpart, and again by ADR-0045 with the share
-    /// table and epoch budgets — the two extensions merged under the version bump to 3. Changing
-    /// it again — or what any collection's entry encoding covers — is a consensus change and
-    /// needs a new domain string or version.
+    /// the scalars. The exact ordering is frozen in ADR-0043 §2 **as amended 2026-08-22 (M-02)**,
+    /// which lists the version-5 preimage in full — the ADR text and this body are held equal by
+    /// `the_state_root_preimage_is_exactly_the_adr_0043_list` (a from-spec second
+    /// implementation), and every field's membership is enforced by
+    /// `every_primary_datum_moves_the_root`. Changing this body — or what any collection's entry
+    /// encoding covers — is a consensus change and needs a new version constant, a matching
+    /// ADR-0043 amendment, and new golden vectors; the tests refuse anything less.
     pub fn state_root(&self) -> Hash64 {
         let mut state = keyed(PALW_STATE_V2_DOMAIN_STATE_ROOT);
         state.update(&PALW_STATE_V2_VERSION.to_le_bytes());
@@ -7182,5 +7192,339 @@ pub(crate) mod tests {
                 "the heavier-frontier branch wins, whatever the insert order"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // M-02: the root preimage and ADR-0043 §2 are one list, executably
+    // -----------------------------------------------------------------------------------------
+
+    /// ADR-0043 §2 (as amended 2026-08-22), reimplemented FROM THE ADR TEXT over the carriage —
+    /// the census of exactly the primary data. Deliberately independent of the production path:
+    /// the domain strings and the version are literals restated from the document, so a change
+    /// to either constant that forgets the ADR breaks the correspondence here rather than
+    /// shipping as a silent re-reading of old bytes.
+    fn adr_0043_spec_root(c: &PalwStateCarriageV2) -> Hash64 {
+        fn spec_hash(domain: &'static [u8], feed: impl FnOnce(&mut blake2b_simd::State)) -> Hash64 {
+            let mut s = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+            feed(&mut s);
+            let mut out = [0u8; 64];
+            out.copy_from_slice(s.finalize().as_bytes());
+            Hash64::from_bytes(out)
+        }
+        fn spec_collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(
+            label: &[u8],
+            map: &BTreeMap<K, V>,
+        ) -> Hash64 {
+            spec_hash(b"misaka-palw/state-v2/collection/v1", |s| {
+                s.update(&(label.len() as u64).to_le_bytes());
+                s.update(label);
+                s.update(&(map.len() as u64).to_le_bytes());
+                for (key, value) in map {
+                    let key_bytes = borsh::to_vec(key).unwrap();
+                    let value_bytes = borsh::to_vec(value).unwrap();
+                    s.update(&(key_bytes.len() as u64).to_le_bytes());
+                    s.update(&key_bytes);
+                    s.update(&(value_bytes.len() as u64).to_le_bytes());
+                    s.update(&value_bytes);
+                }
+            })
+        }
+        spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
+            s.update(&5u16.to_le_bytes()); // version_le(2) = 5, restated from the ADR
+            s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
+            s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
+            s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
+            s.update(spec_collection_root(b"class_targets", &c.class_targets).as_byte_slice());
+            s.update(spec_collection_root(b"class_shares", &c.class_shares).as_byte_slice());
+            match &c.epoch_budgets {
+                None => {
+                    s.update(&[0u8]);
+                }
+                Some(budgets) => {
+                    s.update(&[1u8]);
+                    s.update(&borsh::to_vec(budgets).unwrap());
+                }
+            }
+            s.update(spec_collection_root(b"receipt_targets", &c.receipt_targets).as_byte_slice());
+            s.update(spec_collection_root(b"capabilities", &c.capabilities).as_byte_slice());
+            s.update(spec_collection_root(b"claims", &c.claims).as_byte_slice());
+            s.update(spec_collection_root(b"pending_payouts", &c.pending_payouts).as_byte_slice());
+            s.update(spec_collection_root(b"panels", &c.panels).as_byte_slice());
+            s.update(spec_collection_root(b"court_sessions", &c.court_sessions).as_byte_slice());
+            s.update(spec_collection_root(b"epoch_counters", &c.epoch_counters).as_byte_slice());
+            s.update(spec_collection_root(b"receipt_epoch_counters", &c.receipt_epoch_counters).as_byte_slice());
+            s.update(&c.safe_weight.to_le_bytes());
+            s.update(&c.retired_safe_weight.to_le_bytes());
+            s.update(&c.bounded_immature.to_le_bytes());
+            s.update(&c.safe_frontier_blue_score.to_le_bytes());
+            s.update(c.safe_frontier.as_byte_slice());
+            match &c.last_point {
+                None => {
+                    s.update(&[0u8]);
+                }
+                Some(p) => {
+                    s.update(&[1u8]);
+                    s.update(&borsh::to_vec(p).unwrap());
+                }
+            }
+        })
+    }
+
+    /// A state with EVERY collection inhabited and both option fields `Some` — hand-built,
+    /// because this is a hash correspondence, not a transition legality question. Deterministic
+    /// on purpose: the golden vector hashes exactly this.
+    fn m02_populated_state() -> PalwChainStateV2 {
+        let mut state = PalwChainStateV2::genesis();
+        state.bonds.insert(
+            bond_key(1),
+            PalwBondStateV2 {
+                pubkey: vec![0x11; 4],
+                operator_id: op_id(1),
+                collateral: 400_000,
+                slashed: 3,
+                status: PalwBondStatusV2::Active,
+                registered_daa: 0,
+                payout_payload: h64(0xA1),
+            },
+        );
+        state.bonds.insert(
+            bond_key(2),
+            PalwBondStateV2 {
+                pubkey: vec![0x22; 4],
+                operator_id: op_id(2),
+                collateral: 500_000,
+                slashed: 0,
+                status: PalwBondStatusV2::Retiring { since_daa: 40 },
+                registered_daa: 1,
+                payout_payload: h64(0xA2),
+            },
+        );
+        state.reserved_exposure.insert(bond_key(1), 79_000);
+        state.classes.insert(
+            h64(0xC1),
+            PalwClassStateV2 {
+                artifact_root: h64(0xAF),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 15_800 },
+                status: PalwClassStatusV2::Active,
+                registered_daa: 0,
+            },
+        );
+        state.classes.insert(
+            h64(0xC2),
+            PalwClassStateV2 {
+                artifact_root: h64(0xB0),
+                slash_value_per_pwu: 7,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(100),
+                status: PalwClassStatusV2::Registered { activation_daa: 900, pending_share_permille: 1 },
+                registered_daa: 2,
+            },
+        );
+        state.class_targets.insert(h64(0xC1), PalwClassTargetV2 { target: 1 << 100 });
+        state.class_shares.insert(h64(0xC1), 1000);
+        state.epoch_budgets =
+            Some(PalwEpochBudgetsV2 { epoch_index: 3, budget_blocks: [(h64(0xC1), 5u64)].into_iter().collect() });
+        state.receipt_targets.insert(h64(0xC1), PalwClassTargetV2 { target: 1 << 90 });
+        state.capabilities.insert(h64(0xCA), PalwCapabilityStateV2 { class_id: h64(0xC1), bond: bond_key(1), issued_daa: 6 });
+        state.claims.insert(
+            h64(0xE1),
+            PalwClaimStateV2 {
+                source: PalwClaimSourceV2::Attempt,
+                class_id: h64(0xC1),
+                bond: bond_key(1),
+                pwu: 15_800,
+                accepted_daa: 10,
+                accepted_blue_score: 10,
+                accepted_block: block(0xB1),
+                trace_root: h64(0x71),
+                output_root: h64(0x72),
+                execution_root: h64(0x73),
+                trace_chunk_count: 4,
+                trace_retention_daa: 700,
+                reserved: 79_000,
+                immature_contribution: 1_580,
+                escrowed_reward: 12,
+                phase: PalwClaimPhaseV2::Provisional,
+            },
+        );
+        state.claims.insert(
+            h64(0xE2),
+            PalwClaimStateV2 {
+                source: PalwClaimSourceV2::FreePrompt { quanta: 2, spent: [0u32].into_iter().collect() },
+                class_id: h64(0xC1),
+                bond: bond_key(2),
+                pwu: 31_600,
+                accepted_daa: 11,
+                accepted_blue_score: 11,
+                accepted_block: block(0xB2),
+                trace_root: h64(0x74),
+                output_root: h64(0x75),
+                execution_root: h64(0x76),
+                trace_chunk_count: 4,
+                trace_retention_daa: 700,
+                reserved: 0,
+                immature_contribution: 0,
+                escrowed_reward: 0,
+                phase: PalwClaimPhaseV2::Final { final_daa: 60 },
+            },
+        );
+        state.pending_payouts.insert(h64(0xEE), PalwPayoutV2 { payload: h64(0xA1), amount: 9 });
+        state.panels.insert(
+            h64(0xE1),
+            PalwPanelStateV2 {
+                anchor: h64(0x99),
+                seats: vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(2) }],
+                bound_daa: 12,
+            },
+        );
+        state.court_sessions.insert(
+            h64(0xD1),
+            PalwCourtSessionStateV2 {
+                claim: h64(0xE1),
+                challenger_bond: bond_key(2),
+                opened_daa: 20,
+                deadline_daa: 120,
+                ladder: crate::palw_bisect::PalwBisectLadderV1::open(
+                    &h64(0x31),
+                    &h64(0x32),
+                    &h64(0x33),
+                    &h64(0x34),
+                    crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                    8,
+                    20,
+                    24,
+                )
+                .unwrap(),
+            },
+        );
+        state.epoch_counters.insert(h64(0xC1), PalwEpochCounterV2 { epoch_index: 3, produced_pwu: 15_800, produced_blocks: 1 });
+        state
+            .receipt_epoch_counters
+            .insert(h64(0xC1), PalwEpochCounterV2 { epoch_index: 3, produced_pwu: 15_800, produced_blocks: 1 });
+        state.safe_weight = 15_800;
+        state.retired_safe_weight = 31_600;
+        state.bounded_immature = 1_580;
+        state.safe_frontier_blue_score = 11;
+        state.safe_frontier = block(0xB2);
+        state.last_point = Some(ctx(0xB3, 13, 12));
+        state
+    }
+
+    /// **The M-02 settlement's executable half.** ADR-0043 §2 as amended and
+    /// `PalwChainStateV2::state_root` are the same list: a second implementation written from
+    /// the document's text, over the carriage (the primary-data census), agrees byte-for-byte on
+    /// the empty state, on a state with every collection inhabited, and on both settings of both
+    /// option tags. While this holds, "the ADR says X" and "the code does X" are one claim.
+    #[test]
+    fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
+        let empty = PalwChainStateV2::genesis();
+        assert_eq!(
+            adr_0043_spec_root(&PalwStateCarriageV2::from_state(&empty)),
+            empty.state_root(),
+            "the ADR text and the implementation disagree on the empty state"
+        );
+        let full = m02_populated_state();
+        assert_eq!(
+            adr_0043_spec_root(&PalwStateCarriageV2::from_state(&full)),
+            full.state_root(),
+            "the ADR text and the implementation disagree on a fully inhabited state"
+        );
+        // Exhaustive on purpose — NO `..` rest pattern: a field added to the carriage without a
+        // decided place in the root fails to compile HERE, next to the list it has to join, and
+        // the author is reading the M-02 story when it does.
+        let PalwStateCarriageV2 {
+            version: _,
+            bonds: _,
+            reserved_exposure: _,
+            classes: _,
+            class_targets: _,
+            class_shares: _,
+            epoch_budgets: _,
+            receipt_targets: _,
+            capabilities: _,
+            claims: _,
+            pending_payouts: _,
+            panels: _,
+            court_sessions: _,
+            epoch_counters: _,
+            receipt_epoch_counters: _,
+            safe_weight: _,
+            retired_safe_weight: _,
+            bounded_immature: _,
+            safe_frontier_blue_score: _,
+            safe_frontier: _,
+            last_point: _,
+        } = &PalwStateCarriageV2::from_state(&full);
+    }
+
+    /// **"Hashed set == persisted set", as a test.** M-02's failure class was a primary field
+    /// entering the state without entering the ADR; the inverse — entering the carriage without
+    /// entering the root — is the one that breaks consensus silently. Every primary datum must
+    /// move the root, and every perturbation must also move the carriage bytes (else the datum
+    /// was not primary), and no two perturbations may collide (else the preimage is not
+    /// separating fields).
+    #[test]
+    fn every_primary_datum_moves_the_root() {
+        let base = m02_populated_state();
+        let base_root = base.state_root();
+        let base_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&base)).unwrap();
+        type Perturb = (&'static str, Box<dyn Fn(&mut PalwChainStateV2)>);
+        let perturbations: Vec<Perturb> = vec![
+            ("bonds", Box::new(|s| s.bonds.get_mut(&bond_key(1)).unwrap().collateral += 1)),
+            ("reserved_exposure", Box::new(|s| *s.reserved_exposure.get_mut(&bond_key(1)).unwrap() += 1)),
+            ("classes", Box::new(|s| s.classes.get_mut(&h64(0xC1)).unwrap().slash_value_per_pwu += 1)),
+            ("class_targets", Box::new(|s| s.class_targets.get_mut(&h64(0xC1)).unwrap().target += 1)),
+            ("class_shares", Box::new(|s| *s.class_shares.get_mut(&h64(0xC1)).unwrap() -= 1)),
+            ("epoch_budgets", Box::new(|s| s.epoch_budgets.as_mut().unwrap().epoch_index += 1)),
+            ("receipt_targets", Box::new(|s| s.receipt_targets.get_mut(&h64(0xC1)).unwrap().target += 1)),
+            ("capabilities", Box::new(|s| s.capabilities.get_mut(&h64(0xCA)).unwrap().issued_daa += 1)),
+            ("claims", Box::new(|s| s.claims.get_mut(&h64(0xE1)).unwrap().pwu += 1)),
+            ("pending_payouts", Box::new(|s| s.pending_payouts.get_mut(&h64(0xEE)).unwrap().amount += 1)),
+            ("panels", Box::new(|s| s.panels.get_mut(&h64(0xE1)).unwrap().bound_daa += 1)),
+            ("court_sessions", Box::new(|s| s.court_sessions.get_mut(&h64(0xD1)).unwrap().deadline_daa += 1)),
+            ("epoch_counters", Box::new(|s| s.epoch_counters.get_mut(&h64(0xC1)).unwrap().produced_blocks += 1)),
+            (
+                "receipt_epoch_counters",
+                Box::new(|s| s.receipt_epoch_counters.get_mut(&h64(0xC1)).unwrap().produced_blocks += 1),
+            ),
+            ("safe_weight", Box::new(|s| s.safe_weight += 1)),
+            ("retired_safe_weight", Box::new(|s| s.retired_safe_weight += 1)),
+            ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
+            ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
+            ("safe_frontier", Box::new(|s| s.safe_frontier = block(0xB9))),
+            ("last_point", Box::new(|s| s.last_point.as_mut().unwrap().daa_score += 1)),
+        ];
+        let mut roots_seen = std::collections::BTreeSet::new();
+        roots_seen.insert(base_root);
+        for (name, perturb) in perturbations {
+            let mut p = base.clone();
+            perturb(&mut p);
+            let root = p.state_root();
+            assert_ne!(root, base_root, "{name} is primary data and must move the root");
+            assert_ne!(
+                borsh::to_vec(&PalwStateCarriageV2::from_state(&p)).unwrap(),
+                base_bytes,
+                "{name}'s perturbation must also move the persisted carriage — a datum the carriage cannot see is not primary"
+            );
+            assert!(roots_seen.insert(root), "{name}'s perturbation collides with another — the preimage is not separating fields");
+        }
+    }
+
+    /// **The golden vectors M-02 warned about, fixed against the AMENDED ADR.** Any change to
+    /// the preimage — field, order, tag, domain, version, or any record's Borsh shape — moves
+    /// one of these constants, which is the visible flag ADR-0043's change rule demands. Update
+    /// them ONLY together with a version bump and an ADR-0043 amendment.
+    #[test]
+    fn the_version_5_state_root_golden_vectors() {
+        assert_eq!(
+            PalwChainStateV2::genesis().state_root().to_string(),
+            "a8b214fe0745cd5e9e1cf0d30eed76f21986942a6154530df50645e743cfb54fc32c348332d6d2c31c429e88d439b7a9ba05a197fa6d917a61db96ec64609f54",
+            "the empty state's version-5 root moved"
+        );
+        assert_eq!(
+            m02_populated_state().state_root().to_string(),
+            "47e8567b0df74f632d9002bd81f37bead95c1e76303cef8ad4eed767287a705eb15ccad5033f37177cf3c4f6c970a9a99b794f95daad6e7903fd9e3c03aa7e88",
+            "the inhabited state's version-5 root moved"
+        );
     }
 }

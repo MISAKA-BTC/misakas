@@ -47,27 +47,56 @@ commitment makes the acyclicity structural rather than reviewed-per-change.
 
 ## 2. The root derivation, frozen
 
+> **Amended 2026-08-22 — the M-02 settlement.** The listing below is the **version-5** preimage,
+> replacing the version-1 listing this section froze at authorship. Between the two, four changes
+> extended the preimage and this ADR did not follow; the external audit named the drift (M-02)
+> and it is settled here, before the ruleset id froze, so the golden vectors are fixed against
+> the right text. One of the four (`retired_safe_weight`) had ALSO skipped the version bump §2's
+> own change rule demands — version 5 supplies it. The amended listing is not prose any more:
+> `the_state_root_preimage_is_exactly_the_adr_0043_list` (in `palw_state_v2.rs`) reimplements
+> this section from its text and holds it equal to the production root, and
+> `every_primary_datum_moves_the_root` refuses a primary field that is persisted but unhashed.
+
 Implemented in `PalwChainStateV2::state_root` (domain
-`misaka-palw/state-v2/state-root/v1`, keyed BLAKE2b-512):
+`misaka-palw/state-v2/state-root/v1`, keyed BLAKE2b-512), version constant
+`PALW_STATE_V2_VERSION = 5`:
 
 ```
-H( version_le
+H( version_le(2)                                                            # = 5
  ‖ root("bonds")  ‖ root("reserved_exposure") ‖ root("classes") ‖ root("class_targets")
- ‖ root("capabilities") ‖ root("claims") ‖ root("panels") ‖ root("court_sessions")
- ‖ root("epoch_counters")
- ‖ safe_weight_le(16) ‖ bounded_immature_le(16)
+ ‖ root("class_shares")
+ ‖ epoch_budgets_tag(1) [‖ borsh(epoch_budgets)]
+ ‖ root("receipt_targets")
+ ‖ root("capabilities") ‖ root("claims")
+ ‖ root("pending_payouts")
+ ‖ root("panels") ‖ root("court_sessions")
+ ‖ root("epoch_counters") ‖ root("receipt_epoch_counters")
+ ‖ safe_weight_le(16) ‖ retired_safe_weight_le(16) ‖ bounded_immature_le(16)
  ‖ safe_frontier_blue_score_le(8) ‖ safe_frontier(64)
  ‖ last_point_tag(1) [‖ borsh(last_point)] )
 ```
+
+Both option fields use the same tag rule: `0x00` for absent, `0x01 ‖ borsh(value)` for present.
+`epoch_budgets` and `last_point` are single records, not collections, so they are serialized
+raw under the state-root domain rather than through a labeled collection root.
+
+Provenance of every item past the version-1 listing — each is primary data for the stated
+reason, and "derivable caches stay out" (§3) still holds:
+
+| item | added by | why it is primary |
+|---|---|---|
+| `class_shares` | ADR-0045 Decision 3 (`79245ef0`) | the cadence share table is granted by registration and conserved by transition — not derivable from the class set |
+| `epoch_budgets` | ADR-0045 Decision 2 (`79245ef0`, blocks-not-pwu per `d4890a78`) | derived once at the epoch boundary from the boundary's own facts, then constant — a later state cannot re-derive it |
+| `receipt_targets` | ADR-0044 / FP-03 (`5b53e8b7`) | the receipt lane's per-class retarget slot, the mirror of `class_targets` |
+| `receipt_epoch_counters` | ADR-0044 / FP-03 (`5b53e8b7`) | the receipt lane's census, the mirror of `epoch_counters` |
+| `pending_payouts` | ADR-0042 Decision 10 escrow (`1a4bedb5`, version 4) | a released escrow waiting for the next coinbase — a miner must not be able to pay a queue nobody else has |
+| `retired_safe_weight` | launch blockers §8, terminal-claim retirement (`bb62f1fc`) | the certified weight of retired claims; not derivable precisely because the claims it summarizes are gone |
 
 Chain-block identity throughout the state — `PalwBlockContextV2::block`, `safe_frontier`, a
 claim's `accepted_block`, the state-book keys — is the codebase's `BlockHash` (**`Hash64`**,
 flipped in PR-9.5e / ADR-0008). This is also why `PalwCandidateOrderV1::candidate` is a
 `Hash64`: the comparator's tie-break IS the candidate's block hash, no widening layer between
 them.
-
-```
-```
 
 Each collection root (domain `misaka-palw/state-v2/collection/v1`) is
 
@@ -81,8 +110,11 @@ adjacent entries from bleeding into one another; the label keeps two same-shaped
 from colliding.
 
 **Change rule:** adding, removing, or reordering a field or collection — or changing any
-record's Borsh shape — is a consensus change and takes a new version constant AND new domain
-strings. There is no "compatible" evolution of a hash preimage.
+record's Borsh shape — is a consensus change and takes a new version constant, an amendment to
+the §2 listing above, and new golden vectors (`the_version_5_state_root_golden_vectors`); the
+domain strings stay at `/v1` because the version inside the preimage is the separator. There is
+no "compatible" evolution of a hash preimage. The rule was violated once — `retired_safe_weight`
+entered without a bump — which is why the correspondence is now a test rather than a sentence.
 
 ## 3. What the root deliberately does not cover
 
