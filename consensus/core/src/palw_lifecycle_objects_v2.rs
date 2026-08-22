@@ -331,6 +331,9 @@ mod tests {
             claim: h64(0xF1),
             class_id: h64(1),
             bond: bond(1),
+            // Any key: this test asks whether the object may ride a carriage, which is decided
+            // before any state is consulted.
+            executor_pubkey: vec![7; 4],
             pwu: 8,
             quanta: 2,
             trace_root: h64(41),

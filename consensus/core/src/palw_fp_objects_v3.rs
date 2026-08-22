@@ -117,6 +117,10 @@ where
                 claim: payload.claim_id(),
                 class_id: commitment.job.class_id,
                 bond: PalwBondKeyV2(commitment.job.executor_bond),
+                // Carried, not dropped: the signature above proves this key authored the
+                // commitment; only the chain can say whether it is the key the named bond
+                // registered, and it can only say so if the key reaches it.
+                executor_pubkey: commitment.job.executor_pubkey.clone(),
                 pwu,
                 quanta,
                 trace_root: commitment.trace_root,

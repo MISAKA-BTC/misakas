@@ -1214,6 +1214,18 @@ pub enum PalwConsensusObjectV2 {
         claim: Hash64,
         class_id: Hash64,
         bond: PalwBondKeyV2,
+        /// **The key that signed this commitment, carried so the chain can ask whether it is the
+        /// key the named bond registered.**
+        ///
+        /// The extractor verifies the commitment's signature under the pubkey the payload carries
+        /// (`palw_fp_objects_v3.rs`), which proves the submitter authored it — and nothing else. A
+        /// stranger who names somebody else's bond and signs with their own key satisfies that
+        /// check exactly as well as the bond holder does, and the bond outpoints are published
+        /// constants (`config/params.rs`). The attempt lane has always compared the two
+        /// (`palw_admission_v2.rs`, "the bond record's pubkey == the commitment's executor_pubkey",
+        /// which closed P0-2); this lane could not, because the key did not survive extraction into
+        /// the object. Carrying it is what makes the comparison expressible here at all.
+        executor_pubkey: Vec<u8>,
         pwu: u64,
         quanta: u32,
         trace_root: Hash64,
@@ -1256,6 +1268,8 @@ pub enum PalwStateV2Error {
     BondAlreadyRetiring(PalwBondKeyV2),
     #[error("bond {0:?} is retiring and may take no new claims")]
     RetiringBond(PalwBondKeyV2),
+    #[error("bond {0:?} did not register the key that signed this commitment")]
+    BondKeyMismatch(PalwBondKeyV2),
     #[error("class {0} does not exist at this chain point")]
     MissingClass(Hash64),
     #[error("class {0} already exists")]
@@ -1529,6 +1543,17 @@ impl PalwChainStateV2 {
     /// Decision 6's `reserved_exposure(bond)` — what the admission ceiling is checked against.
     pub fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
+    }
+
+    /// How many court sessions this state holds. A retired claim must leave none of its own.
+    pub fn court_sessions_len(&self) -> usize {
+        self.court_sessions.len()
+    }
+
+    /// Sessions still armed against `claim`. Non-zero after the claim has been retired is the
+    /// state that halts a chain — see `a_court_session_cannot_outlive_its_claim_and_stop_the_chain`.
+    pub fn court_sessions_for_claim(&self, claim: &Hash64) -> usize {
+        self.court_sessions.values().filter(|s| s.claim == *claim).count()
     }
 
     pub fn safe_weight(&self) -> u128 {
@@ -2372,6 +2397,26 @@ impl<'a> TransitionBuilder<'a> {
             self.state.retired_safe_weight = new;
             self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
         }
+        // **Everything keyed to the claim goes with it, sessions included.**
+        //
+        // A court session whose claim has been retired is a backstop armed against nothing: when
+        // it fires, `sweep_court_deadlines` looks the claim up, does not find it, and returns
+        // `MissingClaim` — which fails the whole transition. That error is a pure function of
+        // (parent state, daa score), so every node computes it identically and disqualifies the
+        // same block, and then the next one, forever, with no object that can clear it. A claim
+        // can reach retirement with a session still open because a VOID does not require the
+        // court to have closed, and `CLAIM_RETIREMENT == WINDOW_COURT` on the shipped ruleset, so
+        // the two land together rather than needing a DAA jump.
+        let orphans: Vec<Hash64> = self
+            .state
+            .court_sessions
+            .iter()
+            .filter(|(_, session)| session.claim == id)
+            .map(|(session_id, _)| *session_id)
+            .collect();
+        for session_id in orphans {
+            self.write_court(session_id, None);
+        }
         self.write_claim(id, None);
         if self.state.panels.contains_key(&id) {
             self.write_panel(id, None);
@@ -2588,7 +2633,15 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         }
         let mut session =
             builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
-        let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+        // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
+        // a claim's sessions with it, so this should be unreachable — and it is written to be
+        // survivable anyway, because the alternative failure mode is a chain that stops forever on
+        // a state nothing can repair. Dropping is also the correct answer on its own terms: a
+        // session about a claim the chain no longer holds can decide nothing.
+        let Some(claim) = builder.state.claims.get(&session.claim).cloned() else {
+            builder.write_court(session_id, None);
+            continue;
+        };
 
         // **P0-9: silence at a rung decides the dispute, and no object says so.**
         //
@@ -3392,6 +3445,7 @@ fn apply_object(
             claim: claim_id,
             class_id,
             bond,
+            executor_pubkey,
             pwu,
             quanta,
             trace_root,
@@ -3404,6 +3458,15 @@ fn apply_object(
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
             }
             let bond_record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+            // **The bond must be the signer's, and only the state can say so.** Everything before
+            // this point proves the submitter authored the commitment under a key they chose; it
+            // does not prove the key belongs to the bond they named. Without this, a stranger
+            // creates claims against any published bond outpoint, the chain derives a panel for
+            // them, and the victim's collateral is what burns when no material appears. The
+            // attempt lane has had exactly this comparison since P0-2.
+            if bond_record.pubkey != *executor_pubkey {
+                return Err(PalwStateV2Error::BondKeyMismatch(*bond));
+            }
             if let PalwBondStatusV2::Retiring { .. } = bond_record.status {
                 return Err(PalwStateV2Error::RetiringBond(*bond));
             }
@@ -4719,6 +4782,73 @@ pub(crate) mod tests {
     // ---- courts ----
 
     #[test]
+    /// **A court session that outlived its claim stopped the chain permanently.**
+    ///
+    /// `retire_claim` removed the claim and its panel and left the court sessions keyed to it.
+    /// When such a session's backstop fired, `sweep_court_deadlines` looked the claim up, did not
+    /// find it, and returned `MissingClaim` — failing the whole transition. That error is a pure
+    /// function of (parent state, daa score), so every node reaches it from the same state, the
+    /// same block is disqualified everywhere, and so is the next one, with no object able to clear
+    /// it. A claim reaches retirement with a session still open because a VOID never required the
+    /// court to close, and on the shipped ruleset `CLAIM_RETIREMENT == WINDOW_COURT`, so the
+    /// backstop and the retirement land together.
+    ///
+    /// Two things are asserted, because either alone would let it back: the session is closed WITH
+    /// the claim, and a sweep that meets an orphan anyway drops it instead of failing the block.
+    #[test]
+    fn a_court_session_cannot_outlive_its_claim_and_stop_the_chain() {
+        let p = params().with_claim_retirement_daa(30).expect("retirement is representable");
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the fixture must actually open a court");
+
+        // Void it WITH the court still open — the case that makes the orphan. Retirement is 30 DAA
+        // past the void; the court's own backstop is `window_court` past the opening, which is far
+        // later. So the claim is swept out from under a live session, which is exactly the state
+        // nothing cleaned up.
+        let (s6, _) = apply(
+            &s5,
+            &p,
+            &ctx(6, 105, 6),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: seat_says(false) }],
+            None,
+        );
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the claim voided");
+        assert_eq!(s6.court_sessions_for_claim(&claim_id), 1, "and its court is still open");
+
+        // Now run past retirement AND past the court backstop. Every one of these blocks must
+        // apply: the block that meets the orphaned backstop is the one that used to fail, and
+        // after it, every block forever.
+        let mut state = s6;
+        for (n, daa) in (200u64..=900).step_by(10).enumerate() {
+            let applied = apply_palw_transition_v2(&state, &p, &ctx(10 + n as u64, daa, 10 + n as u64), &[], None);
+            let (next, _) = applied.unwrap_or_else(|e| panic!("block at daa {daa} must apply, got {e:?}"));
+            state = next;
+        }
+
+        // The claim is gone, and nothing is still armed against it.
+        assert!(state.claim(&claim_id).is_none(), "the claim retired");
+        assert_eq!(
+            state.court_sessions_for_claim(&claim_id),
+            0,
+            "a retired claim must leave no session armed against it"
+        );
+    }
+
     fn an_open_court_blocks_final_and_a_cleared_court_rearms_it() {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
@@ -6366,6 +6496,50 @@ pub(crate) mod tests {
         assert_ne!(ok.claim(&h64(0xFC)).unwrap().execution_root, Hash64::default(), "the record carries what the court will bind");
     }
 
+    /// **A stranger could charge claims to somebody else's bond, and the signature check said
+    /// nothing about it.**
+    ///
+    /// The extractor verifies the commitment under the pubkey the payload carries, which proves
+    /// the submitter authored it. It does not prove the key belongs to the bond the payload names,
+    /// and bond outpoints are published genesis constants. So for the price of one 0x4a
+    /// transaction anyone could create a claim charged to a victim's bond: the chain derives a
+    /// panel, no material appears because the victim never ran anything, and the victim's
+    /// collateral is what the void burns — while their exposure ceiling fills and stops them
+    /// producing.
+    ///
+    /// The attempt lane has compared the two keys since P0-2 (`palw_admission_v2`), and the
+    /// receipt-spend lane compares them too (`palw_fp_admission_v3`). The commitment lane was the
+    /// one sibling that did not, because the key was dropped during extraction and the comparison
+    /// was therefore not expressible.
+    #[test]
+    fn a_commitment_cannot_charge_a_bond_whose_key_did_not_sign_it() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (base, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // The bond holder's own commitment still lands.
+        let (ok, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xF0A, 60, 3)], None);
+        assert!(ok.claim(&h64(0xF0A)).is_some(), "the bond's own key must still be admitted");
+
+        // The same commitment, same bond, signed by somebody else's key.
+        let mut stolen = fp_commit(0xF0B, 60, 3);
+        let PalwConsensusObjectV2::FreePromptCommitted { executor_pubkey, bond, .. } = &mut stolen else {
+            unreachable!("fp_commit builds a commitment")
+        };
+        let victim = *bond;
+        *executor_pubkey = vec![9; 4];
+        let refused = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[stolen], None);
+        assert!(
+            matches!(refused, Err(PalwStateV2Error::BondKeyMismatch(b)) if b == victim),
+            "a commitment signed by a key the bond never registered must be refused, got {refused:?}"
+        );
+
+        // And nothing was charged: no claim, no reservation against the victim.
+        let (after, _) = apply(&base, &p, &ctx(2, 101, 2), &[], None);
+        assert!(after.claim(&h64(0xF0B)).is_none(), "the refused commitment left no claim behind");
+        assert_eq!(after.reserved_exposure(&victim), 0, "the victim's collateral was never put at risk");
+    }
+
     /// **Audit C5's free re-roll, the free-prompt half — the cost the block-based costs cannot
     /// provide.**
     ///
@@ -6663,6 +6837,10 @@ pub(crate) mod tests {
             claim: h64(claim_word),
             class_id: h64(1),
             bond: bond_key(1),
+            // The key `register_class_and_bond` registers for this bond: the transition now
+            // compares the two, so a fixture that carried anything else would be testing the
+            // rejection path by accident.
+            executor_pubkey: vec![7; 4],
             pwu,
             quanta,
             trace_root: h64(41),
