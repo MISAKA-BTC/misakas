@@ -346,28 +346,32 @@ mod tests {
 
     /// **The shipped floor, measured, and what it costs in operators.**
     ///
-    /// Corrects an assertion this test made in its first form: it claimed the RC ships
-    /// `min_class_panel = (0, 0)` (no per-class panel at all) and the shipped value is `(2, 2)`.
-    /// The distinction is the whole operator budget of a family, so it is pinned rather than
-    /// remembered:
+    /// Read twice, minutes apart, and it answered `(2, 2)` then `(0, 0)` — because the file was
+    /// being edited by a concurrent session at the time and the first read caught a transient
+    /// state. The shipped value is **`(0, 0)`**: this network admits no per-class panel at all, so
+    /// every class draws the network's own. The distinction is the whole operator budget of a
+    /// family, so it is pinned here rather than remembered:
     ///
     /// * the network panel is **5 seats, quorum 3**, and `derive_panel_v2` REFUSES a short draw
     ///   (`InsufficientEligibleBonds`) rather than seating fewer — so a class on the network panel
     ///   needs five seats *plus* the executor, and one seat per operator, which is **6 distinct
     ///   operators**;
-    /// * a class may thin down to the floor `(2, 2)`, which is **3 distinct operators**.
+    /// * a class could thin to a declared floor — `(2, 2)` would be **3 distinct operators** — but
+    ///   this network declares none, so 6 is the only number available to it today. Lowering it is
+    ///   a change to `min_class_panel`, which is inside the ruleset id and therefore a re-mint.
     ///
     /// For Family M every one of those operators must hold Apple Silicon, because a seat verifies
     /// by re-running the job. That is the number this test exists to keep honest.
     #[test]
     fn the_shipped_floor_and_what_it_costs_in_operators() {
         let Some(bundle) = shipped_bundle() else { return };
-        assert_eq!(bundle.min_class_panel, (2, 2), "the RC's per-class floor");
+        assert_eq!(bundle.min_class_panel, (0, 0), "the shipped RC admits no per-class panel");
         assert_eq!((bundle.panel.seat_count(), bundle.panel.quorum()), (5, 3), "the network panel");
 
-        // A class registered at the floor is admissible; one below it is not.
+        // With no declared floor, EVERY per-class panel is refused — fail-closed, so a chain that
+        // never opted in cannot have a thin class registered on it by a registrant's choice.
         let pins = pins();
-        for (seats, quorum, admissible) in [(2u16, 2u16, true), (1, 1, false)] {
+        for (seats, quorum, admissible) in [(2u16, 2u16, false), (1, 1, false)] {
             let reg = cat_m_0001_registration(&pins, seats, quorum, 1, u128::MAX / 2, 5, 0);
             let got = kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
                 &bundle,
