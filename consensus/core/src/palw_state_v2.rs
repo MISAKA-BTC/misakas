@@ -119,7 +119,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// (`the_state_root_preimage_is_exactly_the_adr_0043_list`). No network froze a version-4 root:
 /// testnet-12's genesis is being re-minted regardless, which is exactly why M-02 had to settle
 /// before the ruleset id froze and not after.
-pub const PALW_STATE_V2_VERSION: u16 = 5;
+///
+/// Version 6: ADR-0051's two execution families. `PalwClassStateV2` gains `terms` — which family
+/// verifies the class, and the panel it draws — so the class collection's record encoding moves
+/// and every `state_root` with it. Exactly the change ADR-0043 §2's rule is written for, and the
+/// bump is here rather than discovered later because `the_version_6_state_root_golden_vectors`
+/// caught it: the gate M-02 installed fired on the first change that came after it.
+pub const PALW_STATE_V2_VERSION: u16 = 6;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -7810,7 +7816,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&5u16.to_le_bytes()); // version_le(2) = 5, restated from the ADR
+            s.update(&6u16.to_le_bytes()); // version_le(2) = 6, restated from the ADR
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -8092,21 +8098,24 @@ pub(crate) mod tests {
         }
     }
 
-    /// **The golden vectors M-02 warned about, fixed against the AMENDED ADR.** Any change to
+    /// **The golden vectors M-02 warned about, fixed against the AMENDED ADR.**
+    ///
+    /// They have already earned their keep once: ADR-0051 added `terms` to the class record and
+    /// this test is what said so, before the preimage change could ship as a silent fork. Any change to
     /// the preimage — field, order, tag, domain, version, or any record's Borsh shape — moves
     /// one of these constants, which is the visible flag ADR-0043's change rule demands. Update
     /// them ONLY together with a version bump and an ADR-0043 amendment.
     #[test]
-    fn the_version_5_state_root_golden_vectors() {
+    fn the_version_6_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "a8b214fe0745cd5e9e1cf0d30eed76f21986942a6154530df50645e743cfb54fc32c348332d6d2c31c429e88d439b7a9ba05a197fa6d917a61db96ec64609f54",
-            "the empty state's version-5 root moved"
+            "adf04d563072b2f031c07e8599b02dccb47c6f80c85233f428c5315482bade0a785e21a82b1935f9d0f5d4e03adb36c97771226ae39777b364d60b503bd4818e",
+            "the empty state's version-6 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "47e8567b0df74f632d9002bd81f37bead95c1e76303cef8ad4eed767287a705eb15ccad5033f37177cf3c4f6c970a9a99b794f95daad6e7903fd9e3c03aa7e88",
-            "the inhabited state's version-5 root moved"
+            "481487a177270018a4948719e7d9bffecf020ce186d8c79b75a95069c001fab18b43860f7f82ff50a81fb1b78ee1cd3bf6649514eb6e3ddf1bfd2ce09515be08",
+            "the inhabited state's version-6 root moved"
         );
     }
 }
