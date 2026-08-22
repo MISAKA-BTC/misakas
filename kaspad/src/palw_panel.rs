@@ -285,6 +285,11 @@ impl PalwPanelService {
         let mut court_moved: HashSet<(Hash64, u32, bool)> = HashSet::new();
         // Claims this node has already judged: either reproduced (nothing to say) or disputed.
         let mut challenged: HashSet<Hash64> = HashSet::new();
+        // **Pending court moves survive the tick.** They used to be built into a per-tick vector
+        // and `mem::take`n by the submitter, which dropped every one of them whenever the fee UTXO
+        // was busy carrying a receipt — and the claim had already been marked judged, so the
+        // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
+        let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -315,7 +320,7 @@ impl PalwPanelService {
             }
             let current_daa = session.get_virtual_daa_score();
 
-            let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+
             // --- the challenger's half: dispute a licensed claim whose execution is not the
             // canonical one ---
             //
@@ -350,6 +355,8 @@ impl PalwPanelService {
                     let Ok(mine_run) = backend.execute(&job, &prompt) else { continue };
                     let reproduced = mine_run.execution_root == target.execution_root && mine_run.trace_root == target.trace_root;
                     if reproduced && !self.config.drill_challenge_all {
+                        // Reproduced and nothing to say: THIS is the only case where the claim is
+                        // finished with. A dispute is finished with only once it has been carried.
                         challenged.insert(target.claim_id);
                         continue;
                     }
@@ -376,7 +383,9 @@ impl PalwPanelService {
                         space_size,
                     );
                     let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
-                    challenged.insert(target.claim_id);
+                    if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+                        continue;
+                    }
                     court_pending.push((
                         session_id,
                         0,
@@ -582,8 +591,14 @@ impl PalwPanelService {
                     warn!("[{PALW_PANEL}] a quorum stands but no fee UTXO resolves — a carrier may still be in flight; else fund --palw-fee-outpoint");
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
+                let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
                 for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else {
+                        // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
+                        // dropped here is a dispute that never happens.
+                        unsent.push((session_id, round, mine_is_responder, object));
+                        continue;
+                    };
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -606,6 +621,9 @@ impl PalwPanelService {
                                         },
                                     ));
                                     court_moved.insert((session_id, round, mine_is_responder));
+                                    if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
+                                        challenged.insert(*claim);
+                                    }
                                 }
                                 Err(e) => {
                                     warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
@@ -616,6 +634,7 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
                     }
                 }
+                court_pending = unsent;
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
