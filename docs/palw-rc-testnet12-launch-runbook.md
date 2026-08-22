@@ -300,7 +300,7 @@ somebody should be able to verify:
 | the court (step dispute, interactive ladder) | **armed** | `COURT_TURN_DEADLINE = 60` inside `WINDOW_COURT = 2400`; the ladder is what that turns on |
 | every lattice window | **real values** | bind 600, receipt 600, challenge 1200, court 2400 — none fenced to `u64::MAX` |
 | claim retirement | **live** | `CLAIM_RETIREMENT = WINDOW_COURT` |
-| free-prompt COMMITMENT (0x4a) | **live** | routes at transaction admission; a claim is created and can be licensed |
+| free-prompt COMMITMENT (0x4a) | **open, unclienced** | consensus admits and routes the band (`palw_fp_objects_v3`), so anyone can carry one and have a claim created and licensed — but nothing in this tree BUILDS the transaction, so no first-party client offers it |
 | the EVM lane | **live** | active at DAA 0 and in the default build — no `--features evm` to forget |
 | lifecycle objects (0x4b) | **live** | the receipt quorum rides one |
 | **free-prompt receipt SPEND (algo 7)** | **not producible** | see below |

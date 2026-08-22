@@ -35,6 +35,23 @@ shipped a different card would be refused at the handshake rather than fork.
 | **the fork-choice key is live** | `live_total` climbs monotonically at exactly `unresolved × 1580` — 0 → 628,840 over 398 claims |
 | the EVM lane is queryable | `eth_chainId` → `0x4d534b` ("MSK"), `eth_blockNumber` → `0x1b7`, tracking the PALW chain height |
 | the submitter no longer floods | `no fee UTXO resolves` warnings: **24,014 in 15 minutes → 33 across the whole run** |
+| **claims stop voiding once the fleet is synced** | terminal claims plateaued at **135** and stayed there while DAA advanced 579 → 591 and `unresolved` rose 444 → 456 — every claim made after the seats caught up is still live |
+| the exposure ceiling never fires | `exposure ceiling` holds: **0**, where the previous binary held forever from block 601 |
+
+## One thing that looked like a fault and was not
+
+The first ~135 claims voided, destroying their escrow. The cause was the launch order, not the
+network: trace material is gossiped once and never replayed, so the three seats started after the
+producer could not verify claims made while they were still syncing. Each filed **exactly 158**
+`Unavailable` verdicts over the same claims — the correct answer to "can you verify this?" — and
+three such verdicts are a quorum for `ProducerWithholding`. From the moment they caught up they
+filed nothing but `Valid`, and the terminal count stopped moving. The runbook now says to bring
+every seat to a synced tip before producing.
+
+A second thing that reads worse than it is: the `voided claims holding … sompi` warning is emitted
+inside the virtual-resolution walk, so a claim can be counted by several candidate walks. The
+authoritative figures are `unresolved` and `final_claims` from the producer facts, which are read
+at virtual's selected parent.
 
 ## Verified by construction, NOT observable in a launch window
 
