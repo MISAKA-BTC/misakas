@@ -192,7 +192,7 @@ impl PalwPanelService {
 
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one. Returns the entry with it, which is also the unspent check.
-    fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
         let configured = self.config.fee_outpoint.as_deref()?;
         let mut candidates: Vec<TransactionOutpoint> = Vec::new();
         if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path())
@@ -208,6 +208,39 @@ impl PalwPanelService {
                 return Some((*outpoint, entry));
             }
         }
+        // **Neither remembered outpoint exists, so find the money instead of remembering it.**
+        //
+        // Both memories can die, and on a live network both do. The CONFIGURED outpoint is a
+        // genesis float, spendable exactly once — after the first carrier it is gone forever. The
+        // PERSISTED one is the change of the last carrier this panel submitted, which is a promise
+        // the chain never made: a carrier dropped in relay, or evicted, is an outpoint that will
+        // never exist. When the rolling chain breaks anywhere, the panel is left pointing at a
+        // ghost and a spent genesis output, and it can never fund anything again — measured on
+        // testnet-11 as `no fee UTXO resolves` forever, on every seat, while the seats kept filing
+        // receipts nobody could carry.
+        //
+        // There is no need to remember anything. Every carrier pays its change back to the SAME
+        // script it spent, so this panel's money is whatever the UTXO set holds under its own key.
+        // Deriving that script from the keypair makes recovery a function of the chain and the key
+        // — no state to lose, and correct after a wipe, a restart, or a dropped carrier.
+        //
+        // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
+        // the path back from having none.
+        let script = self.fee_script()?;
+        let mut cursor: Option<TransactionOutpoint> = None;
+        loop {
+            let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
+            if chunk.is_empty() {
+                break;
+            }
+            cursor = chunk.last().map(|(o, _)| *o);
+            if let Some((outpoint, entry)) = chunk.into_iter().find(|(_, e)| e.script_public_key == script && !e.is_coinbase)
+            {
+                info!("[{PALW_PANEL}] recovered funding at {}:{} — the remembered outpoints were spent or never mined", outpoint.transaction_id, outpoint.index);
+                self.persist_fee_outpoint(outpoint);
+                return Some((outpoint, entry));
+            }
+        }
         // **Say which outpoints were tried.** "no fee UTXO resolves" is true of a carrier still in
         // flight, of a configured outpoint that was never funded, and of one the chain has spent —
         // three different operator actions, and the log named none of them. Traced rather than
@@ -218,6 +251,16 @@ impl PalwPanelService {
             candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
         );
         None
+    }
+
+    /// The script this panel's carriers pay change to — its own ML-DSA-87 P2PKH.
+    ///
+    /// A function of the keypair alone, which is what makes funding recovery stateless: the panel
+    /// does not need to have remembered where its money went, only what its money looks like.
+    fn fee_script(&self) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
+        let kp = self.keypair.as_ref()?;
+        let payload = kaspa_consensus_core::dns_finality::validator_id_from_pubkey(kp.verification_key.as_ref());
+        Some(kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload.as_bytes()))
     }
 
     /// Sign `message` under this node's bond key in `context`. `None` when the node holds no key,
@@ -752,7 +795,7 @@ impl PalwPanelService {
                 // — and dropped the moment a submission is refused, because that is the signal that
                 // the chain we were extending is not one the mempool will accept.
                 if chained_funding.is_none() {
-                    chained_funding = self.resolve_fee_funding(&session);
+                    chained_funding = self.resolve_fee_funding(&session).await;
                     inflight = 0;
                 } else if let Some((tip, _)) = &chained_funding
                     && session.get_virtual_utxo_entry(*tip).is_some()
