@@ -4512,18 +4512,30 @@ pub fn palw_rc_base_params() -> Params {
     // genesis, is unchanged by the move. What changes is the name the handshake carries.
     params.net = NetworkId::with_suffix(NetworkType::Testnet, 11);
     params.genesis = crate::config::genesis::PALW_RC_GENESIS;
-    // **Empty on purpose, and it cannot be filled from here.**
+    // **The names are delegated, so they can be shipped.**
     //
-    // Inheriting the test nets' seeders would be worse than empty: those records answer with
-    // testnet-10/11 nodes, which this network rejects at the handshake, so discovery would LOOK
-    // configured and find nobody. A new network's discovery names have to be names someone owns
-    // and delegates — an operational step, not a code one — and `dns_seeders` is deliberately
-    // outside `consensus_params_id` ("where to find peers is not a rule about blocks"), so adding
-    // them later is a plain edit and not a flag day.
+    // This was empty on the reasoning that a new network's discovery names have to be names
+    // somebody owns and delegates — an operational step, not a code one. They are: the
+    // `misakascan.com` zone delegates `seederN.misakascan.com` NS to `ns-seederN.misakascan.com`,
+    // each an A record for a host running `misaka-dnsseeder`. Only two of the four are ours to
+    // reconfigure (seeder1 on 160.16.131.119, seeder3 on 95.111.236.186); the other two answer
+    // from hosts this fleet does not administer, and a seeder still pointed at another network
+    // returns nothing rather than returning wrong peers, which is the failure direction to want.
     //
-    // Until then a node bootstraps with `--addpeer`, and `kaspad` WARNS at startup when it has
-    // neither seeders nor explicit peers rather than sitting alone in silence.
-    params.dns_seeders = &[];
+    // **A seeder that answers nothing looks exactly like a name that does not resolve.** That is
+    // what made this hard to read: `dig seeder1.misakascan.com A` was empty for a delegated name
+    // whose nameserver was up, because the seeder had no node to read peers from. Test a seeder by
+    // querying its delegated nameserver directly, never by resolving the name and inferring.
+    //
+    // `dns_seeders` is deliberately outside `consensus_params_id` — where to find peers is not a
+    // rule about blocks — so this is a plain edit and not a flag day, and a node that reaches none
+    // of them still bootstraps with `--addpeer`.
+    params.dns_seeders = &[
+        "seeder1.misakascan.com",
+        "seeder2.misakascan.com",
+        "seeder3.misakascan.com",
+        "seeder4.misakascan.com",
+    ];
     // A `ConsensusV2` network activates no V1 PALW proof-of-work and installs no V1 fence —
     // `validate_palw_v2` refuses both, and that refusal is why this is a new identity.
     params.pow_blake2b_sha3_activation = ForkActivation::never();
@@ -5204,7 +5216,36 @@ mod fingerprint_probe {
         ] {
             assert!(!activation.is_active(u64::MAX - 1), "{name} must never activate on a V2 identity");
         }
-        assert!(base.dns_seeders.is_empty(), "inheriting testnet-10/11 seeders would look configured and find nobody");
+        // **The seeder names are SHARED with mainnet, testnet-10 and devnet, and that is not a
+        // mistake to fix.** This assertion used to demand the list be empty, on the reasoning that
+        // inheriting another network's seeders would look configured and find nobody. The names
+        // are inherited — there are only four delegated `misakascan.com` seeder records and every
+        // network ships them — so what actually keeps that safe is the port, not the name: a
+        // record hands out an IP, and each network dials it on ITS OWN default P2P port. A
+        // testnet-11 peer answers on 26311 and is simply not there on 26111/26211/26611, and if it
+        // were, `consensus_params_id` refuses the handshake. Shared name, disjoint port, and the
+        // failure direction is "finds nobody", never "peers with the wrong chain".
+        //
+        // So the property worth asserting is the disjoint port, plus that every name shipped here
+        // is one the project already delegates rather than a new name nobody owns.
+        assert!(!base.dns_seeders.is_empty(), "a public network ships discovery names");
+        let delegated: std::collections::HashSet<&str> =
+            MAINNET_PARAMS.dns_seeders.iter().chain(TESTNET_PARAMS.dns_seeders.iter()).copied().collect();
+        for name in base.dns_seeders {
+            assert!(delegated.contains(name), "{name} is not one of the delegated records — nothing would resolve it");
+        }
+        for other in [NetworkType::Mainnet, NetworkType::Devnet] {
+            assert_ne!(
+                NetworkId::new(other).default_p2p_port(),
+                id.default_p2p_port(),
+                "{other:?} shares these seeder names, so its port must differ or a record would cross networks"
+            );
+        }
+        assert_ne!(
+            NetworkId::with_suffix(NetworkType::Testnet, 10).default_p2p_port(),
+            id.default_p2p_port(),
+            "testnet-10 shares these seeder names, so its port must differ or a record would cross networks"
+        );
         assert!(base.palw_credit.is_none(), "and no V1 fence, which `validate_palw_v2` would refuse anyway");
         // **Since the card was minted (2026-08-22) `Params::from` DOES carry the bundle**, because
         // `palw_rc_shipped_params` installs it once `PALW_RC_GENESIS_BONDS` is non-empty. This

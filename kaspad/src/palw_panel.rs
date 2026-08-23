@@ -26,7 +26,7 @@
 //! The operator funds one address once; the bond key — which the node already holds to sign
 //! receipts — signs the spends. No second key, no key material beyond what a bonded node has.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -439,7 +439,17 @@ impl PalwPanelService {
             // is the missing half: both parties act from the SAME capture, through the same
             // functions, so the bisection converges on a real divergence rather than on whoever
             // stayed awake.
+            // **Why a party made no move is the fact an operator needs, and it was unloggable.**
+            //
+            // Six different gates below `continue` on a session, and five of them said nothing at
+            // all — so a fleet where nobody answered looked identical whether the node held no
+            // backend, no capture, no midpoint, no prefix state, or no key. Measured on the live
+            // drill: 357 sessions opened, 357 total moves (one apiece, all openings), and the log
+            // could not distinguish "the responder is broken" from "the responder is not a party".
+            // `court_stalls` counts the reasons and the tick prints them, which is bounded (one
+            // line per tick, only when something stalled) and turns silence into a measurement.
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
+            let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             for duty in &court_duties {
                 if court_moved.contains(&(duty.session_id, duty.round, duty.i_am_responder)) {
                     continue;
@@ -447,9 +457,17 @@ impl PalwPanelService {
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
-                let Ok(backend) = self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) else {
+                let backend = match self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) {
+                    Ok(backend) => backend,
+                    Err(why) => {
+                        // Not rate-limited by session: this one is a NODE-level misconfiguration
+                        // (no worker, wrong model, unservable class), identical for every session,
+                        // so it is counted per tick like the rest and named once here.
+                        *court_stalls.entry("no backend for the class").or_default() += 1;
+                        trace!("[{PALW_PANEL}] session {} cannot resolve a backend: {why}", duty.session_id);
                         continue;
-                    };
+                    }
+                };
                 let Some(capture) = materials.get(&duty.claim_id).and_then(|pool| {
                     pool.iter().find(|b| {
                         backend.verify_material(
@@ -458,6 +476,16 @@ impl PalwPanelService {
                         ) == PalwMaterialVerdictV1::Matches
                     })
                 }) else {
+                    *court_stalls
+                        .entry(if materials.contains_key(&duty.claim_id) {
+                            // Held material, and none of it reproduces the claim's roots — a
+                            // different failure from holding none, and the one that means the pool
+                            // is carrying somebody else's bytes for this claim.
+                            "capture held but none matches the claim's roots"
+                        } else {
+                            "no capture for the claim"
+                        })
+                        .or_default() += 1;
                     trace!("[{PALW_PANEL}] session {} needs a move but this node holds no matching capture", duty.session_id);
                     continue;
                 };
@@ -465,8 +493,14 @@ impl PalwPanelService {
                     // Our disclosure: the state of OUR execution at the midpoint the ladder asks
                     // about. A prefix commitment, so agreeing at an index means agreeing before it.
                     (PalwBisectTurnV1::AwaitDisclosure, true) => {
-                        let Some(midpoint) = duty.midpoint else { continue };
-                        let Some(mid_state) = backend.bisect_prefix_state(capture, midpoint) else { continue };
+                        let Some(midpoint) = duty.midpoint else {
+                            *court_stalls.entry("the interval has no midpoint to disclose").or_default() += 1;
+                            continue;
+                        };
+                        let Some(mid_state) = backend.bisect_prefix_state(capture, midpoint) else {
+                            *court_stalls.entry("the backend cannot state its prefix at the midpoint").or_default() += 1;
+                            continue;
+                        };
                         let disclosure = PalwBisectDisclosureV1 {
                             version: PALW_BISECT_OBJECT_VERSION_V1,
                             session_id: duty.session_id,
@@ -475,14 +509,23 @@ impl PalwPanelService {
                             mid_state,
                         };
                         let message = borsh::to_vec(&disclosure).expect("a disclosure is borsh-serializable");
-                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT) else { continue };
+                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT) else {
+                            *court_stalls.entry("no signing key for a disclosure").or_default() += 1;
+                            continue;
+                        };
                         Some(PalwConsensusObjectV2::CourtDisclosed { session_id: duty.session_id, disclosure, signature })
                     }
                     // Our verdict: does the responder's disclosed state match ours at that index?
                     // `agree` means the prefix matches, so the divergence is ABOVE the midpoint.
                     (PalwBisectTurnV1::AwaitVerdict, false) => {
-                        let Some(disclosed) = duty.last_disclosure else { continue };
-                        let Some(ours) = backend.bisect_prefix_state(capture, disclosed.0) else { continue };
+                        let Some(disclosed) = duty.last_disclosure else {
+                            *court_stalls.entry("no disclosure to post a verdict about").or_default() += 1;
+                            continue;
+                        };
+                        let Some(ours) = backend.bisect_prefix_state(capture, disclosed.0) else {
+                            *court_stalls.entry("the backend cannot state its prefix at the disclosed index").or_default() += 1;
+                            continue;
+                        };
                         let verdict = PalwBisectVerdictV1 {
                             version: PALW_BISECT_OBJECT_VERSION_V1,
                             session_id: duty.session_id,
@@ -490,7 +533,10 @@ impl PalwPanelService {
                             agree: ours == disclosed.1,
                         };
                         let message = borsh::to_vec(&verdict).expect("a verdict is borsh-serializable");
-                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT) else { continue };
+                        let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT) else {
+                            *court_stalls.entry("no signing key for a verdict").or_default() += 1;
+                            continue;
+                        };
                         Some(PalwConsensusObjectV2::CourtVerdictPosted { session_id: duty.session_id, verdict, signature })
                     }
                     // The terminal move. EITHER party may make it, and it is deliberately the SAME
@@ -499,10 +545,14 @@ impl PalwPanelService {
                     // `adjudicate_court_close_v2` is what decides which way it reads. A prover only
                     // one side could run would be a prover that decides the verdict.
                     (PalwBisectTurnV1::Terminal, _) => {
-                        let Some(index) = duty.terminal_index else { continue };
+                        let Some(index) = duty.terminal_index else {
+                            *court_stalls.entry("the ladder has not narrowed to a step").or_default() += 1;
+                            continue;
+                        };
                         let refutation = match backend.refutation_for_index(capture, index) {
                             Ok(r) => r,
                             Err(e) => {
+                                *court_stalls.entry("the close does not assemble from this capture").or_default() += 1;
                                 warn!("[{PALW_PANEL}] cannot assemble the close for session {}: {e}", duty.session_id);
                                 continue;
                             }
@@ -514,16 +564,31 @@ impl PalwPanelService {
                         // fee on an object that will land, and the right ordering: the party that
                         // assembled the evidence is not the party that reads it.
                         let Some(verdict) = session.palw_court_close_verdict_v2(&duty.session_id, &proof) else {
+                            *court_stalls.entry("the chain reads no verdict from this close").or_default() += 1;
                             trace!("[{PALW_PANEL}] session {} has no adjudicable close from this capture yet", duty.session_id);
                             continue;
                         };
                         info!("[{PALW_PANEL}] session {} closes as {verdict:?} on step {index}", duty.session_id);
                         Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof })
                     }
-                    _ => None,
+                    // Not our move: the other party owes this rung. Counted, because "waiting" and
+                    // "broken" are the two readings of a quiet court and only one is a problem.
+                    _ => {
+                        *court_stalls.entry("waiting — the rung is the other party's").or_default() += 1;
+                        None
+                    }
                 };
                 let Some(object) = object else { continue };
                 court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+            }
+            if !court_stalls.is_empty() {
+                let responder_of = court_duties.iter().filter(|d| d.i_am_responder).count();
+                info!(
+                    "[{PALW_PANEL}] court: {} sessions ({responder_of} as responder), {} pending; not moved: {}",
+                    court_duties.len(),
+                    court_pending.len(),
+                    court_stalls.iter().map(|(why, n)| format!("{n}× {why}")).collect::<Vec<_>>().join(", ")
+                );
             }
 
             // --- the seat's half: answer every duty exactly once ---
@@ -763,11 +828,28 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
     }
 }
 
+/// **Name every variant, and let the compiler keep it that way.**
+///
+/// This had two arms and a `_ => "lifecycle object"` catch-all, so every court move — the opening,
+/// the disclosure, the verdict, the close — logged under one indistinguishable name. On a live
+/// drill that is the difference between a readable transcript and none: "submitted lifecycle
+/// object for court session X round 0" is true of a challenger opening a case and of the accused
+/// answering it, and reading a fleet's court traffic meant guessing which. The catch-all is gone
+/// on purpose, so a new object cannot be added without deciding what it is called here.
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
-        _ => "lifecycle object",
+        PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
+        PalwConsensusObjectV2::BondRetireRequested { .. } => "BondRetireRequested",
+        PalwConsensusObjectV2::ClassRegistered { .. } => "ClassRegistered",
+        PalwConsensusObjectV2::ClassFrozen { .. } => "ClassFrozen",
+        PalwConsensusObjectV2::PanelBound { .. } => "PanelBound",
+        PalwConsensusObjectV2::FreePromptCommitted { .. } => "FreePromptCommitted",
+        PalwConsensusObjectV2::CourtOpened { .. } => "CourtOpened",
+        PalwConsensusObjectV2::CourtDisclosed { .. } => "CourtDisclosed",
+        PalwConsensusObjectV2::CourtVerdictPosted { .. } => "CourtVerdictPosted",
+        PalwConsensusObjectV2::CourtClosed { .. } => "CourtClosed",
     }
 }
 
