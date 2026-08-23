@@ -3732,6 +3732,16 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
     }
 
+    /// The payout payload the chain has registered for `bond`, if it is registered at all.
+    pub fn palw_bond_payout_payload_v2_impl(
+        &self,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::Hash64> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        state.bond(bond).map(|b| b.payout_payload)
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],

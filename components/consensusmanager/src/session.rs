@@ -226,6 +226,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_court_duties_v2(mine)
     }
 
+    /// Where a bond's rewards are paid, as the registered payload. See the trait's doc: a panel
+    /// reads it to recognise its own unspent outputs when its remembered fee outpoints have died.
+    pub fn palw_bond_payout_payload_v2(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::Hash64> {
+        self.consensus.palw_bond_payout_payload_v2(bond)
+    }
+
     pub fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

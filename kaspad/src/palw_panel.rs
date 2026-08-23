@@ -226,7 +226,7 @@ impl PalwPanelService {
         //
         // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
         // the path back from having none.
-        let script = self.fee_script()?;
+        let script = self.fee_script(session)?;
         let mut cursor: Option<TransactionOutpoint> = None;
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
@@ -253,13 +253,17 @@ impl PalwPanelService {
         None
     }
 
-    /// The script this panel's carriers pay change to — its own ML-DSA-87 P2PKH.
+    /// The script this panel's carriers pay change to.
     ///
-    /// A function of the keypair alone, which is what makes funding recovery stateless: the panel
-    /// does not need to have remembered where its money went, only what its money looks like.
-    fn fee_script(&self) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
-        let kp = self.keypair.as_ref()?;
-        let payload = kaspa_consensus_core::dns_finality::validator_id_from_pubkey(kp.verification_key.as_ref());
+    /// **Read from the CHAIN, not derived from the local key.** A bond's payout address is a
+    /// registration fact — whoever registered the bond named it — and it is not a function of the
+    /// signing key this panel holds. The genesis fee floats pay to exactly that script, and every
+    /// carrier pays its change back to the script it spent, so this is what "an output I can
+    /// spend" looks like. Deriving it from the keypair produced a script nothing on the chain pays
+    /// to, and the recovery scan found nothing while reporting no error: it was looking for money
+    /// that does not exist rather than for the money that does.
+    fn fee_script(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
+        let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(self.bond?))?;
         Some(kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload.as_bytes()))
     }
 

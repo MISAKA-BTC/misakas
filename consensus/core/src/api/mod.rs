@@ -535,6 +535,17 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **Where a bond's rewards are paid — the payload, not a script.**
+    ///
+    /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change
+    /// back to the script derived from this, so this is what "an output I can spend" looks like
+    /// when both remembered outpoints have died. Reading it from the CHAIN rather than deriving it
+    /// from a local key is the point — the payout address is a registration fact, not a function
+    /// of the signing key, and a node that guessed would scan for a script nothing pays to.
+    fn palw_bond_payout_payload_v2(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Option<crate::Hash64> {
+        None
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,
