@@ -187,11 +187,20 @@ impl PalwPanelService {
         if let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured) {
             candidates.push(outpoint);
         }
-        for outpoint in candidates {
-            if let Some(entry) = session.get_virtual_utxo_entry(outpoint) {
-                return Some((outpoint, entry));
+        for outpoint in &candidates {
+            if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
+                return Some((*outpoint, entry));
             }
         }
+        // **Say which outpoints were tried.** "no fee UTXO resolves" is true of a carrier still in
+        // flight, of a configured outpoint that was never funded, and of one the chain has spent —
+        // three different operator actions, and the log named none of them. Traced rather than
+        // warned because the tick-level warning above already fires once per tick; this is the
+        // detail behind it.
+        trace!(
+            "[{PALW_PANEL}] no fee UTXO resolves; tried {}",
+            candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
+        );
         None
     }
 
@@ -731,7 +740,11 @@ impl PalwPanelService {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
                     // identical lines an hour.
-                    warn!("[{PALW_PANEL}] a quorum stands but no fee UTXO resolves — a carrier may still be in flight; else fund --palw-fee-outpoint");
+                    warn!(
+                        "[{PALW_PANEL}] a quorum stands but no fee UTXO resolves — a carrier may still be in flight; else \
+                         --palw-fee-outpoint ({}) is unfunded or already spent",
+                        self.config.fee_outpoint.as_deref().unwrap_or("unset")
+                    );
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
                 let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();

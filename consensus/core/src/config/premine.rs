@@ -690,3 +690,17 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod float_probe {
+    use super::*;
+
+    #[test]
+    #[ignore = "probe"]
+    fn print_float_addresses() {
+        for (i, card) in crate::config::params::PALW_RC_GENESIS_BONDS.iter().enumerate() {
+            let addr = Address::new(kaspa_addresses::Prefix::Testnet, Version::PubKeyHashMlDsa87, &card.payout_payload);
+            println!("float {} -> {addr}", VAULT_COUNT + 1 + i);
+        }
+    }
+}

@@ -4061,6 +4061,22 @@ impl VirtualStateProcessor {
                 }
             }
         }
+        // **What this block actually carried.** A dropped object says so; an ACCEPTED one said
+        // nothing at all, so "the chain is not carrying courts" and "the chain is carrying courts
+        // and something later discards them" looked identical from every log on every node. On the
+        // testnet-11 drill that ambiguity cost a full investigation: 176 `CourtOpened` submitted
+        // with zero mempool refusals and zero drops, and no way to tell whether they were reaching
+        // blocks. One line per block that carried anything, kinds only.
+        if !accepted.is_empty() {
+            let mut kinds: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+            for object in &accepted {
+                *kinds.entry(palw_object_kind_name(object)).or_default() += 1;
+            }
+            info!(
+                "Block {block}: PALW lifecycle carried {}",
+                kinds.iter().map(|(k, n)| format!("{n}× {k}")).collect::<Vec<_>>().join(", ")
+            );
+        }
         accepted
     }
 
@@ -10882,5 +10898,28 @@ mod palw_equivocation_wiring_tests {
         forged.certificate.attestation_b.signature = vec![0xFF; 64];
         let txs = vec![carriage_tx(&forged)];
         assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
+    }
+}
+
+/// The name of a lifecycle object's kind, for logging what a block carried.
+///
+/// Total on purpose — no catch-all — so a new object kind has to decide what it is called here
+/// rather than disappear into "lifecycle object", which is exactly the shape that made a live
+/// court drill unreadable on the panel side.
+fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> &'static str {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
+    match object {
+        O::BondRegistered { .. } => "BondRegistered",
+        O::BondRetireRequested { .. } => "BondRetireRequested",
+        O::ClassRegistered { .. } => "ClassRegistered",
+        O::ClassFrozen { .. } => "ClassFrozen",
+        O::PanelBound { .. } => "PanelBound",
+        O::ReceiptLicensed { .. } => "ReceiptLicensed",
+        O::CourtOpened { .. } => "CourtOpened",
+        O::CourtClosed { .. } => "CourtClosed",
+        O::CourtDisclosed { .. } => "CourtDisclosed",
+        O::CourtVerdictPosted { .. } => "CourtVerdictPosted",
+        O::ProducerDefaulted { .. } => "ProducerDefaulted",
+        O::FreePromptCommitted { .. } => "FreePromptCommitted",
     }
 }
