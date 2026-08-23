@@ -66,6 +66,22 @@ const PALW_PANEL: &str = "palw-panel";
 const RECEIPTS_PER_CLAIM: usize = 16;
 /// Distinct material payloads kept per claim (mirrors the gossip relay budget).
 const MATERIALS_PER_CLAIM: usize = 4;
+
+/// **How many carriers this panel may have unconfirmed at once.**
+///
+/// Every carrier spends the previous one's change, so a panel's whole output is ONE chain of
+/// dependent transactions — and a chain can only be mined in order. Without a bound, a panel that
+/// sees hundreds of claims a minute extends it as fast as it can build, far past what the network
+/// confirms, and the excess does not queue politely: a peer that has not seen a parent treats the
+/// child as an orphan and drops it in relay, silently. Measured on the testnet-11 drill: one panel
+/// submitted 791 carriers with zero mempool refusals, the producer received 492 and mined 302, and
+/// of 300 `CourtOpened` exactly ONE ever reached a block — while `ReceiptLicensed` kept landing,
+/// because those were the ones near the confirmed end of the chain.
+///
+/// Bounding the in-flight depth converts that silent loss into back-pressure. It also decides
+/// WHICH work gets the scarce slots, because court moves are built and submitted before receipt
+/// quorums: a rung has a deadline and a quorum does not.
+const MAX_INFLIGHT_CARRIERS: usize = 8;
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
 
@@ -334,6 +350,9 @@ impl PalwPanelService {
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
         let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
+        // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
+        // appears in the virtual UTXO set, which is the only honest signal that it was mined.
+        let mut inflight: usize = 0;
 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -734,9 +753,27 @@ impl PalwPanelService {
                 // the chain we were extending is not one the mempool will accept.
                 if chained_funding.is_none() {
                     chained_funding = self.resolve_fee_funding(&session);
+                    inflight = 0;
+                } else if let Some((tip, _)) = &chained_funding
+                    && session.get_virtual_utxo_entry(*tip).is_some()
+                {
+                    // The tip of our own chain is in the UTXO set, so every carrier behind it was
+                    // mined. Nothing is in flight and the budget is whole again.
+                    inflight = 0;
                 }
-                let mut funding = chained_funding.clone();
-                if funding.is_none() && receipts.keys().any(|c| !submitted.contains(c)) {
+                let mut funding = if inflight >= MAX_INFLIGHT_CARRIERS {
+                    // Back-pressure, not loss. Keeping the objects pending means the next tick
+                    // re-offers them in priority order (court moves first), rather than building
+                    // carriers the network will drop before anyone reads them.
+                    None
+                } else {
+                    chained_funding.clone()
+                };
+                if inflight >= MAX_INFLIGHT_CARRIERS {
+                    // Not the same condition as "no fee UTXO", and it must not print as one: this
+                    // panel is waiting for its own chain to confirm, which is the system working.
+                    trace!("[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})");
+                } else if funding.is_none() && receipts.keys().any(|c| !submitted.contains(c)) {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
                     // identical lines an hour.
@@ -749,7 +786,8 @@ impl PalwPanelService {
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
                 let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
                 for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone() else {
+                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS)
+                    else {
                         // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                         // dropped here is a dispute that never happens.
                         unsent.push((session_id, round, mine_is_responder, object));
@@ -776,6 +814,7 @@ impl PalwPanelService {
                                             is_coinbase: false,
                                         },
                                     ));
+                                    inflight += 1;
                                     court_moved.insert((session_id, round, mine_is_responder));
                                     if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                         challenged.insert(*claim);
@@ -793,6 +832,9 @@ impl PalwPanelService {
                 court_pending = unsent;
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
+                    if inflight >= MAX_INFLIGHT_CARRIERS {
+                        break;
+                    }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
                     if submitted.contains(&claim) || submit_attempts.get(&claim).copied().unwrap_or(0) >= SUBMIT_ATTEMPTS {
                         continue;
@@ -820,6 +862,7 @@ impl PalwPanelService {
                                             is_coinbase: false,
                                         },
                                     ));
+                                    inflight += 1;
                                     submitted.insert(claim);
                                 }
                                 Err(e) => {
