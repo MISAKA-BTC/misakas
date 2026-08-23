@@ -561,7 +561,26 @@ impl IbdFlow {
                 // Ready while holding evidence that the chain might be wrong is the failure this
                 // whole path exists to avoid. Released when the candidate is settled either way.
                 self.ctx.chain_participation().begin_decision();
-                self.consider_post_ibd_switch(id, verified_blue_work).await;
+                // **And released the moment the candidate is decided, whichever way it went.**
+                //
+                // `begin_decision` had exactly one caller and it handed off to a function with no
+                // release path at all. The hold was only ever lifted when a candidate FAILED — a
+                // bad proof, a stale verification — so the honest, ordinary outcome leaked it:
+                // this node's own chain is heavier, the candidate is refused as `DefenderFavored`,
+                // and the review never ends. `state()` requires the floor to have elapsed AND no
+                // decision pending, so the node reports itself unsynced forever: it cannot mine,
+                // cannot attest, and a DNS seeder will not advertise it because the seeder gates
+                // on `is_synced`.
+                //
+                // Measured live on testnet-11: a node at the heaviest tip, IBD long finished,
+                // floor at `0s remaining`, still printing "Chain participation held: reviewing the
+                // chain just adopted". It fires on the common case — being already right.
+                //
+                // An adoption is the only outcome that keeps the candidate open, and the IBD it
+                // reserves re-enters the review by itself.
+                if !self.consider_post_ibd_switch(id, verified_blue_work).await {
+                    self.ctx.chain_participation().end_decision();
+                }
             }
             Err(e) => {
                 // A chain is condemned only for producing a bad proof — never for a failure of the
@@ -795,7 +814,11 @@ impl IbdFlow {
     /// Only while participation is still withheld. Once the node is `Ready` it has committed to its
     /// chain, and abandoning it then is a reorg — governed by the DNS reorg gate, not by IBD source
     /// selection.
-    async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) {
+    /// **Returns whether an adoption was reserved** — which is the only outcome that leaves the
+    /// candidate still open. See the `begin_decision` caller: every other outcome has decided this
+    /// candidate, and the review hold must be released or the node never participates again.
+    #[must_use = "the caller releases the review hold unless an adoption was reserved"]
+    async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) -> bool {
         if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
             record_stage(
                 RecoveryStage::Rejected,
@@ -809,7 +832,7 @@ impl IbdFlow {
                     "post-IBD switch skipped: node is already participating"
                 },
             );
-            return;
+            return false;
         }
         // What triggers an investigation is the peer's CLAIM about its tip, measured against this
         // node's own tip. Not the proof's pruning-point work.
@@ -830,14 +853,14 @@ impl IbdFlow {
             }
             _ => None,
         };
-        let Some(claimed_tip_work) = claimed_tip_work else { return };
+        let Some(claimed_tip_work) = claimed_tip_work else { return false };
 
         let session = self.ctx.consensus().session().await;
         let our_tip = session.async_get_header_download_hint().await;
         let ours = session.async_get_header(our_tip).await.ok().map(|h| h.blue_work);
         drop(session);
 
-        let Some(ours) = ours else { return };
+        let Some(ours) = ours else { return false };
         record_stage(
             RecoveryStage::CandidateCompared,
             None,
@@ -859,7 +882,7 @@ impl IbdFlow {
                 self.ctx.chain_participation().state().as_str(),
                 format!("not worth investigating: {}", describe_comparison(claimed_tip_work, ours)),
             );
-            return;
+            return false;
         }
         // A node that has participated on its chain for a stable stretch has not been ping-ponging,
         // so the budget the cap protects starts over. Done before the verdict so a long-settled node
@@ -883,6 +906,7 @@ impl IbdFlow {
                     id.virtual_selected_parent, switches
                 );
                 self.ctx.chain_participation().quarantine();
+                false
             }
             SwitchVerdict::Adopt { switch_number } => {
                 if self.ctx.reserve_preferred_ibd_candidate(id, verified_blue_work) {
@@ -909,6 +933,13 @@ impl IbdFlow {
                             id.virtual_selected_parent, id.pruning_point
                         );
                     }
+                    // Reserved: the node is about to re-sync onto this chain, and the reserved IBD
+                    // re-enters the review on its own. This is the ONE outcome that keeps the
+                    // candidate open.
+                    true
+                } else {
+                    // Nothing was reserved, so nothing was abandoned and nothing is pending.
+                    false
                 }
             }
         }

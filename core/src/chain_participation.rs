@@ -849,6 +849,41 @@ mod tests {
         assert!(gate.allows_participation());
     }
 
+    /// **The live shape of a leaked decision: a node that is already right, held forever.**
+    ///
+    /// Measured on testnet-11, 2026-08-23. A node finished IBD onto the heaviest chain, was offered
+    /// weaker candidates by every peer, refused each one as `DefenderFavored` — the correct answer —
+    /// and never participated again. Its floor read `0s remaining` for as long as it ran.
+    ///
+    /// The gate is right and this test says so: a floor that has elapsed does NOT release a review
+    /// while a decision is open, deliberately, because going Ready with open evidence is the exact
+    /// failure the review exists to prevent. The defect was one layer up. `begin_decision` had a
+    /// single caller, which handed off to `consider_post_ibd_switch` — a function with no release
+    /// path at all, so the hold was lifted only when a candidate FAILED. The common case, being
+    /// already on the best chain, leaked it every time.
+    ///
+    /// Consequences worth naming, because none of them look like this bug: the node cannot mine,
+    /// cannot attest, and reports `is_synced=false` — so a DNS seeder, which health-gates on
+    /// exactly that, will never advertise it. A public network where joiners pin themselves this
+    /// way has no reachable peers no matter how well the seeders are configured.
+    ///
+    /// What structurally prevents the next one is not this test: it is
+    /// `consider_post_ibd_switch`'s `#[must_use]` verdict, which a future caller cannot silently
+    /// drop. This records the shape so it is recognizable if it ever returns.
+    #[test]
+    fn a_decision_nobody_ends_pins_the_node_even_at_the_best_tip() {
+        let gate = gate_in_review(-60_000, true);
+        assert!(gate.review_floor_elapsed(), "the floor is a minute in the past");
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview, "and the node is still held");
+        assert!(!gate.allows_participation(), "so it will not mine, attest, or call itself synced");
+        assert_eq!(gate.review_remaining_ms(), None, "with nothing left to wait for — the wait is not the reason");
+
+        // Deciding the candidate — refused, adopted, or timed out — is the whole of the release.
+        gate.end_decision();
+        assert_eq!(gate.state(), ChainParticipation::Ready);
+        assert!(gate.allows_participation());
+    }
+
     #[test]
     fn an_elapsed_review_releases() {
         let gate = ChainParticipationGate::new(true);
