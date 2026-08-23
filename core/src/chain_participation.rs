@@ -884,6 +884,51 @@ mod tests {
         assert!(gate.allows_participation());
     }
 
+    /// **A forward sync must not re-arm the review, or a busy node never participates again.**
+    ///
+    /// The floor is set with `fetch_max`, so every call pushes it further out. `enter_candidate_
+    /// review` was called after EVERY successful IBD, including the routine forward syncs a node
+    /// on a fast chain performs constantly — so the floor was re-armed faster than it expired and
+    /// the node stayed held forever, at the tip, with nothing wrong.
+    ///
+    /// Measured on testnet-11: a node holding 557 of the chain's 558 blocks at load 0.4 ran 22
+    /// IBDs in 16 minutes, its floor resetting to ~168s each time. Not mining, not attesting,
+    /// reporting unsynced — and a DNS seeder gates on exactly that, so it was never advertised.
+    ///
+    /// This asserts the mechanism (`fetch_max` never retreats) rather than the caller, because the
+    /// caller is in the flow layer. `FlowContext::finish_ibd_after_success` is what decides, and it
+    /// now re-enters review only when the IBD replaced the active consensus — or when the node has
+    /// never been ready, which is its first adoption and the case the review exists for.
+    #[test]
+    fn re_entering_review_only_ever_pushes_the_floor_further_out() {
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_ibd();
+        gate.enter_candidate_review(120_000);
+        let first = gate.review_until_ms.load(Ordering::SeqCst);
+
+        // A shorter floor cannot shorten a standing one — that is the point of `fetch_max`, and it
+        // is also why a repeated caller is a trap rather than a no-op.
+        gate.enter_candidate_review(1);
+        assert_eq!(gate.review_until_ms.load(Ordering::SeqCst), first, "a floor never retreats");
+
+        // A longer one extends it, which is exactly the loop a routine forward sync used to drive.
+        gate.enter_candidate_review(600_000);
+        assert!(gate.review_until_ms.load(Ordering::SeqCst) > first, "and a repeat call pushes it out");
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
+        assert!(!gate.allows_participation(), "so the node stays out for as long as the calls keep coming");
+
+        // The way back for an IBD that adopted nothing: restore what the node was, which for a
+        // node that had participated is Ready.
+        let gate = ChainParticipationGate::new(true);
+        gate.enter_candidate_review(0);
+        assert_eq!(gate.state(), ChainParticipation::Ready, "settled and participating");
+        assert!(gate.ever_ready(), "and the one-way door has closed, which is what marks a forward sync as forward");
+        let lease = gate.enter_ibd();
+        assert_eq!(gate.state(), ChainParticipation::IbdRunning);
+        gate.release_after_noop_ibd(lease);
+        assert_eq!(gate.state(), ChainParticipation::Ready, "a sync that adopted nothing returns the node to itself");
+    }
+
     #[test]
     fn an_elapsed_review_releases() {
         let gate = ChainParticipationGate::new(true);

@@ -1071,9 +1071,35 @@ impl FlowContext {
     /// them out-weigh an older tip, so quarantining on "someone claimed more work" would fire on
     /// routine relay traffic and take honest nodes offline. Quarantine is reserved for the case
     /// this node can state without guessing — see [`FlowContext::finish_ibd_after_failure`].
+    ///
+    /// **Only an IBD that ADOPTED something re-enters the review.** This entered it
+    /// unconditionally, on the reading that any finished IBD produces "a chain nothing has yet
+    /// been compared against". Most IBDs produce nothing of the sort: they are forward syncs on
+    /// the chain this node already committed to, and on a fast network they are routine. Each one
+    /// re-armed the floor through `fetch_max`, so a node that IBDs more often than the floor is
+    /// long never leaves review — it cannot mine, cannot attest, and reports `is_synced=false`,
+    /// which is what a DNS seeder gates on.
+    ///
+    /// Measured on testnet-11: a node AT THE TIP (557 of 558 blocks, load 0.4) ran 22 IBDs in 16
+    /// minutes and was held the entire time, its floor resetting to ~168s before each expiry.
+    ///
+    /// `active_consensus_replaced` is exactly the signal, and this function was clearing it
+    /// without reading it. It is set in one place — where a staging consensus is committed, which
+    /// is the node replacing its chain with a different one. A forward sync sets nothing, so it is
+    /// as much a no-op for the gate as a FAILED IBD that replaced nothing, and it takes the same
+    /// path back: restore whatever the node was before, review floor included if it was in one.
+    ///
+    /// The `ever_ready` half is not optional. A node's FIRST sync replaces nothing (there is no
+    /// incumbent to stage against) and is precisely the case the review exists for — a chain the
+    /// node raced onto and has compared against nothing. Without this it would go straight to
+    /// Ready on it.
     pub fn finish_ibd_after_success(&self, min_review: Duration) {
-        self.active_consensus_replaced.store(false, Ordering::SeqCst);
-        self.chain_participation().enter_candidate_review(min_review.as_millis() as u64);
+        let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
+        if replaced || !self.chain_participation().ever_ready() {
+            self.chain_participation().enter_candidate_review(min_review.as_millis() as u64);
+        } else if let Some(lease) = self.ibd_lease.write().take() {
+            self.chain_participation().release_after_noop_ibd(lease);
+        }
     }
 
     /// Notifies that the UTXO set was reset due to pruning point change via IBD.
