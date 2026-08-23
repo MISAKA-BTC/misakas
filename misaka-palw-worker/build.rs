@@ -33,8 +33,46 @@ fn cmake_flag(cache: &str, key: &str, cache_path: &str) -> bool {
 }
 
 fn main() {
-    let src = std::env::var("MISAKA_LLAMA_SRC")
-        .unwrap_or_else(|_| "/Users/wata/Downloads/misaka-palw-runtime/llama.cpp".to_string());
+    // **No default, because the only honest default is "there isn't one".**
+    //
+    // This was a hardcoded `/Users/<a developer>/Downloads/misaka-palw-runtime/llama.cpp`. On the
+    // machine that wrote it the build worked; everywhere else `cc` was handed two include paths
+    // that do not exist and died on `#include "llama.h"` with `compilation terminated` — an error
+    // that names a header rather than the missing tree, the missing variable, or the fix. An
+    // operator following the testnet-11 join instructions hit exactly that on a fresh clone.
+    //
+    // A path to somebody's home directory is not a default; it is a machine-specific fact wearing
+    // a default's clothes, and it converts "you have not built the runtime" into "the compiler is
+    // broken". Refusing outright, with the remedy in the message, is the whole fix.
+    let src = std::env::var("MISAKA_LLAMA_SRC").unwrap_or_else(|_| {
+        panic!(
+            "\n\
+             misaka-palw-worker links the PINNED llama.cpp build, which this repository does not\n\
+             contain, and MISAKA_LLAMA_SRC is not set.\n\
+             \n\
+             You almost certainly do not need this crate. It is a separate process a node is\n\
+             POINTED at (`kaspad --palw-metal-worker <path>`), it serves the Metal/GGUF class, and\n\
+             testnet-11's genesis does not register that class — the floor is BASE-0, which is pure\n\
+             Rust in this tree. `cargo build --release` skips this crate by default; you are seeing\n\
+             this because something asked for it explicitly.\n\
+             \n\
+             To build it anyway: check out ggml-org/llama.cpp at the pinned commit\n\
+             (`kaspa_consensus_core::vlt::qwen35_pins::LLAMA_COMMIT`), build it with the pinned\n\
+             CMake profile, and point this at the checkout:\n\
+             \n\
+                 MISAKA_LLAMA_SRC=/path/to/llama.cpp cargo build --release -p misaka-palw-worker\n\
+             \n\
+             The tree must be BUILT, not just cloned: this script reads its CMakeCache.txt and\n\
+             hashes the static libraries it links, so the runtime manifest describes the artifacts\n\
+             the binary is actually made of. See docs/testnet10-palw-rollout-runbook.md.\n"
+        )
+    });
+    // A path that exists but is not a llama.cpp checkout fails the same way the missing variable
+    // used to — in the C compiler, about a header. Say it here instead.
+    let header = format!("{src}/include/llama.h");
+    if !std::path::Path::new(&header).exists() {
+        panic!("MISAKA_LLAMA_SRC={src} does not look like a llama.cpp checkout: {header} is missing");
+    }
     println!("cargo:rerun-if-env-changed=MISAKA_LLAMA_SRC");
     println!("cargo:rerun-if-changed=src/shim.c");
 

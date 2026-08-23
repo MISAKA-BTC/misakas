@@ -89,6 +89,111 @@ members = [
     "metrics/perf_monitor",
     "utils/alloc",
 ]
+# **What a plain `cargo build --release` produces — everything except the crates that need a
+# runtime this repository does not contain.**
+#
+# `misaka-palw-worker` links the PINNED llama.cpp static build, which lives outside the tree by
+# design (see its `build.rs`). Leaving it in the default set meant a fresh clone could not build
+# at all: `cargo build --release` reached it, `MISAKA_LLAMA_SRC` was unset, and the compile died
+# on a path that only existed on one developer's laptop. Reported by an operator following the
+# testnet-11 join instructions, which is exactly who this has to work for.
+#
+# It is still a workspace member — it shares the lockfile, the dependency versions and the lint
+# config — so `cargo build -p misaka-palw-worker` works the moment the runtime is present, and
+# `default_members_covers_every_member_but_the_pinned_runtime` keeps this list from drifting.
+#
+# Nothing needs the worker to run a node. It is a separate process kaspad is POINTED at
+# (`--palw-metal-worker <path>`), it serves the Metal/GGUF class, and testnet-11's genesis does
+# not register that class at all — the floor is BASE-0, which is pure Rust in this tree.
+default-members = [
+    "daemon",
+    "cli",
+    "core",
+    "wallet/macros",
+    "wallet/core",
+    "wallet/native",
+    "wallet/wasm",
+    "wallet/bip32",
+    "wallet/keys",
+    "wallet/pq-cli",
+    "wallet/pskt",
+    "consensus",
+    "consensus/core",
+    "consensus/client",
+    "consensus/notify",
+    "consensus/pow",
+    "consensus/wasm",
+    "kaspa-evm",
+    "evm-indexer/core",
+    "evm-indexer/store-pg",
+    "evm-indexer/service",
+    "kaspad",
+    "kaspa-pq-validator",
+    "kaspa-pq-validator-core",
+    "kaspa-pq-signer",
+    "misaka-cli",
+    "misaka-endpoints",
+    "misaka-palw",
+    "misaka-palw-shadow",
+    "misaka-palw-pow-driver",
+    "misaka-palw-agent",
+    "misaka-palw-gateway",
+    "misaka-palw-metal",
+    "misaka-palw-base0",
+    "misaka-palw-base0-ref2",
+    "misaka-palw-reference2",
+    "misaka-palw-reexecutor",
+    "simpa",
+    "wasm",
+    "wasm/core",
+    "math",
+    "crypto/hashes",
+    "crypto/muhash",
+    "crypto/addresses",
+    "crypto/merkle",
+    "notify",
+    "indexes/core",
+    "indexes/processor",
+    "indexes/utxoindex",
+    "rpc/macros",
+    "rpc/core",
+    "rpc/service",
+    "rpc/eth",
+    "rpc/grpc/core",
+    "rpc/grpc/client",
+    "rpc/grpc/server",
+    "rpc/grpc/examples/simple_client",
+    "rpc/wrpc/server",
+    "rpc/wrpc/client",
+    "rpc/wrpc/proxy",
+    "rpc/wrpc/wasm",
+    "rpc/wrpc/examples/subscriber",
+    "rpc/wrpc/examples/simple_client",
+    "rpc/wrpc/examples/vcc_v2",
+    "rpc/wrpc/examples/kaspa_pq_send",
+    "mining",
+    "mining/errors",
+    "protocol/p2p",
+    "protocol/flows",
+    "components/addressmanager",
+    "components/connectionmanager",
+    "components/consensusmanager",
+    "bridge",
+    "database",
+    "crypto/txscript",
+    "crypto/txscript/errors",
+    "testing/integration",
+    "utils",
+    "utils/tower",
+    "rothschild",
+    "pq-miner",
+    "misaminer",
+    "misaka-dnsseeder",
+    "metrics/core",
+    "metrics/perf_monitor",
+    "utils/alloc",
+]
+
 
 [workspace.package]
 rust-version = "1.88.0"
