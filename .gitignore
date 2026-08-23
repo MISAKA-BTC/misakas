@@ -45,11 +45,19 @@ rothschild-generated-key.hex
 **/*private*key*
 **/*.secret
 
-# MISAKA VLT private devnet working directories (validator keys, rocksdb, logs) — never committed.
-.misaka-vlt-devnet/
-.misaka-vlt-real/
-.misaka-tkn-devnet/
-.soak-t10/
+# Local node working directories — validator keys, RocksDB, logs. Never committed.
+#
+# This was a list of four literal names under the same comment, and three directories walked
+# straight past it: `.misaka-vlt-devnet-2-expired/`, `.misaka-vlt-devnet-3/` and
+# `.misaka-vlt-reorg/` were committed whole — 717 files, ~450 MB of `.sst`, `MANIFEST`, `LOCK`
+# and `IDENTITY`, and **14 `validator.key` files** — into a public repository. An enumerated list
+# only ignores the names somebody thought of; the next harness run picks a new suffix and is
+# tracked by default. Patterns, and a rule for the key itself that does not depend on where it
+# happens to sit.
+.misaka-*/
+.soak-*/
+**/validator.key
+**/*.seed
 
 # PALW worker per-cwd GGUF sha cache (generated wherever a worker runs)
 .palw-gguf-sha.json

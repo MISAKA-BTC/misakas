@@ -4,7 +4,38 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> Status: a public **testnet** (`testnet-10`, experimental) is the network operated today — explorer at **[misakascan.com](https://misakascan.com)**. PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `testnet`/`mainnet` parameter sets additionally enforce the **production** DNS-finality policy (two-dimensional confirmation + a 20M-MSK minimum stake bond). The `mainnet` parameter set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a live or supported network. (The earlier experimental `devnet` has been retired in favor of this testnet.)
+> **Status (2026-08-23).** The live public network is **`testnet-11`** — the PALW release candidate,
+> explorer at **[misakascan.com](https://misakascan.com)**. `testnet-10` has been **stopped**; its
+> parameter set still exists so historical data can be read, but nothing operates it and its public
+> entry point is closed.
+>
+> PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined
+> network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `mainnet` parameter
+> set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a
+> live or supported network.
+
+## What testnet-11 is
+
+testnet-11 runs **PALW ConsensusV2** (ADR-0042): blocks are won by a lottery over *verified LLM
+inference* rather than by hashing alone, and the work a block claims is settled by other nodes
+re-deriving it. Three things follow that a hash chain does not have.
+
+**A block's work is a claim, and claims are judged.** A producer publishes an execution and the
+material behind it; a panel of bonded seats re-runs the job and files signed receipts; a licensed
+claim can still be disputed, and a dispute is settled by bisecting to a single arithmetic step and
+adjudicating it. Weight is credited only once that lattice turns over — `safe_weight` moving off
+zero is the network working, not a formality.
+
+**Producing needs a bond.** Attempts name a bond the chain holds, so an unregistered node can sync,
+serve and verify, but not produce. The genesis registry seats the initial set.
+
+**The cadence is frozen at 120 s per block** (`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`), refused at
+parameter construction if anything tries to change it. Inference takes real time, and a block
+interval shorter than the work it certifies is a chain that certifies nothing.
+
+The execution class shipped in the genesis is **PALW-BASE-0**: a deterministic integer model whose
+every step this build can re-derive and adjudicate. It is pure Rust in this tree — running a node
+needs no model file and no GPU.
 
 ## What's different from Kaspa
 
@@ -18,7 +49,8 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 | Consensus identity | 64-byte BLAKE2b-512 (`Hash64`): block hash / txid / merkle roots / UTXO commitment / parents |
 | secp256k1 | feature-gated out of both `kaspa-consensus` and the `kaspad` node binary (default `pq-only`) |
 | Script caps | `MAX_SCRIPT_ELEMENT_SIZE` = 8192, `MAX_SCRIPTS_SIZE` / `max_signature_script_len` = 16_384 |
-| Genesis / tokenomics | new genesis; **28B MSK cap = 13B premine** (40 vaults × 0.1B + 1 main × 9B, ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`) |
+| Genesis / tokenomics | new genesis; **28B MSK cap = 13B premine** (40 vaults × 0.1B + 1 main × 9B, ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`). The premine constants live in `consensus/core/src/config/premine.rs`; a change there moves every network's genesis hash and is refused at startup until re-pinned (audit M-07) |
+| Block cadence | **120 s** on PALW networks (`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`), frozen — refused at parameter construction, because a block interval shorter than the inference it certifies certifies nothing |
 
 Authoritative design & spec live under [`docs/`](docs/):
 
@@ -39,6 +71,23 @@ The unified operator CLI is the `misaka` binary from the `misaka-cli` package. T
 DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestation rule only engages when the active validator set can satisfy the configured quality floor within one block under the conservative single-shard capacity invariant (`max_block_mass / max_attestation_shard_mass`). With the current production cap (`max_block_mass = 500_000`, `max_attestation_shard_mass = 50_200`), a block can carry at most 9 single-attestation shards for the capacity check. If the validator set becomes too large or too evenly distributed for that one-block invariant, the hard gate stays dormant instead of halting the base ledger; monitor rollout/health and validator count before relying on it as an anti-censorship backstop. Because `max_attestation_shard_mass` is a consensus parameter, changing it on a live testnet requires a coordinated upgrade or reset.
 
 ## Building from source
+
+`cargo build --release` at the workspace root builds everything you need to run a node, a miner, a
+validator and the CLI. It does **not** build `misaka-palw-worker`, which is excluded from
+`default-members` on purpose: that crate links a **pinned llama.cpp static build** which this
+repository deliberately does not contain, so including it would mean a fresh clone could not build
+at all. Nothing needs it to run a node — it is a separate process a node is *pointed at*
+(`kaspad --palw-metal-worker <path>`) and it serves an execution class testnet-11's genesis does not
+register. If you do want it, build the pinned tree first and say where it is:
+
+```bash
+MISAKA_LLAMA_SRC=/path/to/built/llama.cpp cargo build --release -p misaka-palw-worker
+```
+
+The build script refuses with instructions rather than guessing a path, and it checks the tree is
+**built** (it hashes the CMake cache and the static libraries it links, so the runtime manifest
+describes the artifacts the binary is actually made of).
+
 
   <details>
   <summary>Building on Linux</summary>
@@ -168,28 +217,36 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
 
 ## Running a testnet node
 
-Start a misakas testnet node (network id `testnet-10`; the overlay + PQ rules are active from genesis):
+Start a misakas testnet node on the live network (`testnet-11`; PQ rules, the DNS-finality overlay
+and PALW ConsensusV2 are all active from genesis):
 
 ```bash
-cargo run --release --bin kaspad -- --testnet --utxoindex --rpclisten-borsh=default
+cargo run --release --bin kaspad -- --testnet --netsuffix=11 --utxoindex --rpclisten-borsh=default
 ```
+
+`--netsuffix=11` is required: bare `--testnet` still means `testnet-10`, which is stopped.
 
 `=default` resolves to the network's standard loopback port, so you never have to memorize the
 numbers. Add `--rpclisten-json=default` too if a JSON WebSocket client (e.g. a browser app or an
 explorer backend) needs to connect locally.
 
 - To **join the public testnet**, the node discovers peers via the misakas DNS seeders
-  (`seeder1.misakascan.com` / `seeder2.misakascan.com`) automatically. **testnet-10's P2P port is
-  `26211`** (mainnet `26111`, devnet `26611`) — make sure it isn't blocked outbound. If discovery is
-  slow, bootstrap explicitly against a public node:
-  `--addpeer=95.111.236.186:26211` (or `--connect=95.111.236.186:26211` to use only that peer).
-  Block explorer: **[misakascan.com](https://misakascan.com)**.
+  (`seeder1.misakascan.com` … `seeder4.misakascan.com`) automatically. **testnet-11's P2P port is
+  `26311`** (testnet-10 `26211`, mainnet `26111`, devnet `26611`) — make sure it isn't blocked
+  outbound. The four seeder names are shared with the other networks and that is safe: a record
+  hands out an IP, each network dials it on its OWN default P2P port, and `consensus_params_id`
+  refuses the handshake if one ever answered. A seeder that has nothing healthy to advertise
+  returns an empty answer rather than a wrong peer.
+
+  If discovery is slow, bootstrap explicitly: `--addpeer=169.58.39.220:26311` (or `--connect=` to
+  use only that peer). Block explorer: **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
   so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by
   default** and must be enabled with `--rpclisten-borsh` / `--rpclisten-json`; it is required by the
   CLI wallet and the `kaspa-pq-validator` sidecar (which speak wRPC, **not** gRPC).
-- **Connecting a wallet / RPC client — pick the right port.** Default **testnet-10** ports:
+- **Connecting a wallet / RPC client — pick the right port.** The RPC ports are per network TYPE,
+  so **every testnet suffix shares them**; only P2P carries the suffix. Default **testnet** ports:
   **gRPC** `26210` (protobuf over TCP, default-on at loopback), **wRPC Borsh** `27210`
   (the CLI wallet & validator transport, WebSocket — enable with `--rpclisten-borsh=default`),
   **wRPC JSON** `28210` (WebSocket — enable with `--rpclisten-json=default`). Mainnet uses
@@ -197,10 +254,10 @@ explorer backend) needs to connect locally.
   The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27210`, **not** the gRPC
   port `26210` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
   or `WebSocket is not connected`, because gRPC is not a WebSocket). In the wallet REPL:
-  `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26211`.)
+  `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26311` on testnet-11.)
 - **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
   shot over wRPC:
-  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-10]`.
+  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-11]`.
   It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
   sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
   sompi. The node must run `--utxoindex`.
@@ -209,7 +266,7 @@ explorer backend) needs to connect locally.
 Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
 
 ```bash
-cargo run --release --bin kaspa-pq-miner -- --node-grpc 127.0.0.1:26210 --network-id testnet-10 \
+cargo run --release --bin kaspa-pq-miner -- --node-grpc 127.0.0.1:26210 --network-id testnet-11 \
   --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
 ```
 
@@ -224,13 +281,13 @@ kaspa-pq-validator keygen --out val.seed --network testnet
 # 3. stake a bond. testnet enforces the PRODUCTION minimum: 20,000,000 MSK = 2e15 sompi.
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 2000000000000000 --network testnet-10
+  --amount 2000000000000000 --network testnet-11
 # 4. run the validator daemon (attests every epoch while the bond is active)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-10 --attest-poll-secs 3
+  --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-11 --attest-poll-secs 3
 ```
 
-> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-10`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
+> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-11`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
 
 The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network.
 
@@ -272,10 +329,20 @@ The wRPC subsystem is disabled by default in `kaspad` and is enabled via `--rpcl
 
 ```bash
 cd misakas
-cargo test --release
-# or, with nextest installed:
-cargo nextest run --release
+MISAKA_PALW_POW_FIXTURE=1 cargo test --workspace --features "devnet-prealloc,evm"
 ```
+
+Two of those are not optional and the failures they prevent are confusing:
+
+- **`MISAKA_PALW_POW_FIXTURE=1`** — the devnet daemon tests verify PALW attempts, and without the
+  fixture they demand a real worker runtime at startup and take the test process down with them.
+- **`--features "devnet-prealloc,evm"`** — the integration crate needs the preallocated devnet UTXO
+  set, and `evm` is part of the shipped `kaspad`, so testing without it tests a different binary.
+
+`cargo test --workspace` names every member **including** `misaka-palw-worker`, which
+`default-members` otherwise excludes — so a full-workspace run also wants
+`MISAKA_LLAMA_SRC=/path/to/built/llama.cpp`. Without the pinned tree, scope the run instead
+(`-p kaspa-consensus-core`, `-p kaspad`, …).
 </details>
 
 <details>
