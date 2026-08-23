@@ -61,7 +61,14 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     poll_secs: u64,
     /// Serve ONLY the `--anchors` (skip the co-located node's address-manager peers). The anchors
-    /// are still health-gated (backing-node sync + TCP liveness) like everything else.
+    /// are health-gated on TCP liveness at the network's P2P port — the operator names them, and
+    /// this checks they are accepting connections.
+    ///
+    /// In this mode the backing node is BEST-EFFORT and cannot veto them: it is evidence about the
+    /// address-manager peer list, which is not served here, and about nothing else. A host that
+    /// serves a delegated nameserver but cannot reach the network it points at — filtered egress,
+    /// no node of its own — is a legitimate anchor SERVER, and under the old rule it could never
+    /// answer anything.
     #[arg(long, default_value_t = false)]
     anchors_only: bool,
 }
@@ -133,46 +140,75 @@ fn is_routable_v4(ip: &Ipv4Addr) -> bool {
 /// so nobody mistakes the gate for more than it is): the peer's own sync state, its chain identity
 /// relative to a trusted checkpoint, and its ability to serve the pruning-point proof/UTXO/EVM
 /// snapshots.
+/// **In `--anchors-only`, the backing node cannot veto the anchors.**
+///
+/// An anchor is an IP the OPERATOR named, and the seeder verifies it by opening a TCP connection
+/// to the network's own P2P port. A co-located node's sync state is evidence about neither: not
+/// about who the operator trusts, and not about whether that host is accepting connections. It is
+/// essential for the address-manager peers below — that list comes FROM the node, so a node that
+/// cannot vouch for its own chain cannot vouch for them — and it is irrelevant to the anchors.
+///
+/// Making it block the anchors too costs a real deployment. An anchor SERVER — a host that runs
+/// the delegated nameserver and hands out entry points without being one — often cannot run a node
+/// of the network it serves at all: `seeder3.misakascan.com` sits behind filtered egress and
+/// cannot reach 26311 on any fleet host. Under the old rule it could never answer anything, and
+/// the failure printed as `refresh failed`, which reads like a seeder problem rather than a rule.
+///
+/// Two ways the veto also misfires on a host that HAS a node: a node on the wrong network reports
+/// `is_synced=false` forever (measured: this seeder was pointed at a leftover testnet-12 node and
+/// went silent), and a node in candidate review reports the same while being perfectly at the tip.
 async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bool, p2p_port: u16) -> Result<Vec<Ipv4Addr>, String> {
     let url = format!("ws://{node_rpc}");
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| e.to_string())?;
-    client
-        .connect(Some(ConnectOptions {
-            block_async_connect: true,
-            connect_timeout: Some(Duration::from_millis(5_000)),
-            strategy: ConnectStrategy::Fallback,
-            ..Default::default()
-        }))
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Gate 1: the backing node's own sync state. `get_server_info.is_synced` is the same signal
-    // operators read via `node doctor`.
-    let info = match client.get_server_info().await {
-        Ok(i) => i,
-        Err(e) => {
-            let _ = client.disconnect().await;
-            return Err(format!("get_server_info failed: {e}"));
+    let backing = async {
+        client
+            .connect(Some(ConnectOptions {
+                block_async_connect: true,
+                connect_timeout: Some(Duration::from_millis(5_000)),
+                strategy: ConnectStrategy::Fallback,
+                ..Default::default()
+            }))
+            .await
+            .map_err(|e| e.to_string())?;
+        // Gate 1: the backing node's own sync state. `get_server_info.is_synced` is the same signal
+        // operators read via `node doctor`.
+        let info = client.get_server_info().await.map_err(|e| format!("get_server_info failed: {e}"))?;
+        if !info.is_synced {
+            return Err(format!("backing node ({}) reports is_synced=false", info.network_id));
         }
-    };
-    if !info.is_synced {
-        let _ = client.disconnect().await;
-        return Err(format!("backing node ({}) reports is_synced=false — refusing to advertise ANY peers", info.network_id));
+        Ok(info)
+    }
+    .await;
+
+    if let Err(why) = &backing {
+        if !anchors_only {
+            let _ = client.disconnect().await;
+            return Err(format!("{why} — refusing to advertise ANY peers"));
+        }
+        warn!("[dnsseeder] {why}; serving the operator's anchors on TCP liveness alone (anchors-only)");
     }
 
     // Gate 2 input: the peers the backing node is actually connected to right now.
-    let connected: BTreeSet<Ipv4Addr> = match client.get_connected_peer_info().await {
-        Ok(r) => r
-            .peer_info
-            .iter()
-            .filter_map(|p| match p.address.ip.0 {
-                IpAddr::V4(v4) => Some(v4),
-                _ => None,
-            })
-            .collect(),
-        Err(e) => {
-            let _ = client.disconnect().await;
-            return Err(format!("get_connected_peer_info failed: {e}"));
+    //
+    // Only ever READ under `!anchors_only`, so it is only ever ASKED for there. Asking anyway was
+    // the second half of the same mistake as the sync gate: a question whose answer this mode
+    // discards, failing the whole refresh when the node cannot answer it.
+    let connected: BTreeSet<Ipv4Addr> = if anchors_only {
+        BTreeSet::new()
+    } else {
+        match client.get_connected_peer_info().await {
+            Ok(r) => r
+                .peer_info
+                .iter()
+                .filter_map(|p| match p.address.ip.0 {
+                    IpAddr::V4(v4) => Some(v4),
+                    _ => None,
+                })
+                .collect(),
+            Err(e) => {
+                let _ = client.disconnect().await;
+                return Err(format!("get_connected_peer_info failed: {e}"));
+            }
         }
     };
 
@@ -189,6 +225,8 @@ async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bo
     }
 
     if !anchors_only {
+        // Unreachable here only when `anchors_only` is false, which the branch above already
+        // returned on — so the node is connected and synced.
         let resp = client.get_peer_addresses().await.map_err(|e| e.to_string());
         let _ = client.disconnect().await;
         for a in resp?.known_addresses {
