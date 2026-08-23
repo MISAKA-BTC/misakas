@@ -140,3 +140,84 @@ network is algo-6 by definition. See runbook §5b.
   the fleet is filtered upstream. Both are operator-side and neither affects a joining node.
 - **The panel seats are concentrated** — see above. This is the gap between "the lifecycle works"
   and "the lifecycle is adversarially sound", and closing it needs independent operators, not code.
+
+---
+
+## 2026-08-23 — going public: what a live network found that no test had
+
+Five defect families, all of them measured on the fleet rather than reasoned about, and all
+of them sharing one shape: **the symptom is silence.** Nothing errors, nothing retries,
+nothing is logged. A component simply does not act, and "broken" is indistinguishable from
+"has nothing to do".
+
+### The two that keep a node out of its own network
+
+`begin_decision` holds chain participation open while a proof-backed candidate is weighed.
+It has one caller, and that caller hands off to a function with **no release path at all** —
+so the hold was lifted only when a candidate FAILED. The ordinary outcome, this node's own
+chain being heavier, leaked it every time. `consider_post_ibd_switch` now returns whether it
+reserved an adoption, `#[must_use]`, and every other path releases.
+
+Then the same node was still held, because `enter_candidate_review` sets its floor with
+`fetch_max` and was called after **every** successful IBD — including the routine forward
+syncs a node on a live chain performs constantly. Measured: a node holding 557 of the
+chain's 558 blocks at load 0.4 ran 22 IBDs in 16 minutes, floor resetting to ~168s before
+each expiry. `active_consensus_replaced` is the signal for "a different chain was adopted",
+and `finish_ibd_after_success` was clearing it without reading it.
+
+Why either one is a launch blocker and not a nuisance: a held node reports
+`is_synced=false`. A DNS seeder gates on exactly that, and so does the explorer's DB filler
+(`is_utxo_indexed and is_synced`). So a joiner pins itself, the seeder never advertises it,
+and the network cannot grow reachable peers no matter how correctly DNS is configured.
+
+### The one that loses transactions without an error
+
+Every carrier a panel builds spends the previous one's change, so a panel's whole output is
+ONE chain of dependent transactions, and a chain can only be mined in order. Nothing bounded
+how far ahead it ran. A peer that has not seen a parent drops the child in relay, silently.
+
+Measured: 791 carriers submitted, **zero** mempool refusals, 492 received by the producer,
+302 mined — and of 300 `CourtOpened`, exactly one reached a block, while `ReceiptLicensed`
+kept landing because those sat near the confirmed end of the chain. Capping the in-flight
+depth turns silent loss into back-pressure, and because court moves are offered before
+receipt quorums, the scarce slots go to the work that has a deadline.
+
+### The one that makes funding unrecoverable
+
+`resolve_fee_funding` knew two outpoints and both die. The configured one is a genesis
+float, spendable once. The persisted one is the change of the last carrier submitted — a
+promise the chain never made, since a carrier dropped in relay is an outpoint that will
+never exist. After a rolling restart every seat filed receipts and every seat printed
+`no fee UTXO resolves` forever.
+
+Nothing needed remembering: every carrier pays change back to the same script, so the
+panel's money is whatever the UTXO set holds under its own key. Recovery is now a pure
+function of the chain and the keypair.
+
+### The one that silences a seeder that could answer
+
+`--anchors-only` serves the IPs an operator named, verified by TCP to the network's P2P
+port. The co-located node could veto that — unreachable or `is_synced=false` returned before
+a single anchor was checked. An anchor SERVER (a delegated nameserver host that hands out
+entry points without being one) often cannot run a node of the network it serves at all:
+`seeder3.misakascan.com` sits behind filtered egress. Under the old rule it could never
+answer anything.
+
+### And why all of this was hard to see
+
+`object_name` had a `_ => "lifecycle object"` catch-all, so every court move logged under one
+name. Six gates in the court arm `continue`d and five said nothing. An ACCEPTED object logged
+nothing at all, so "this chain carries no courts" and "it carries them and something later
+discards them" read identically. `retention_dir` was declared, documented with the
+measurement that motivated it, wired through the daemon — and read by no code. There was no
+`courts=` anywhere.
+
+Every one of those is now named: per-variant object names, a per-tick stall summary with
+reasons, a per-block record of what lifecycle traffic a block carried, and `courts=` on the
+line an operator already watches.
+
+### Operational note
+
+Wiping a peered fleet host-by-host does not wipe the chain: whichever host has not been
+wiped yet re-seeds it over IBD, and the "new" chain is the old one with its fee outpoints
+already spent. Stop every node on every host, confirm zero, then wipe, then start.
