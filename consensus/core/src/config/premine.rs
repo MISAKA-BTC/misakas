@@ -314,7 +314,7 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
         // and not one of its own bonds; a registry whose members cannot pay for a lifecycle
         // transaction is a registry that can license nothing.
         set.extend(testnet11_community_utxos());
-        set.extend(palw_rc_bond_fee_floats());
+        set.extend(palw_rc_bond_fee_floats(net));
     }
     set
 }
@@ -324,7 +324,7 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
 ///
 /// Empty when the card is unset, which is what keeps a bundle-free testnet-12 identical to the
 /// network it was before any of this.
-fn palw_rc_bond_fee_floats() -> UtxoCollection {
+fn palw_rc_bond_fee_floats(net: NetworkId) -> UtxoCollection {
     let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
     if cards.is_empty() {
         return UtxoCollection::default();
@@ -344,10 +344,14 @@ fn palw_rc_bond_fee_floats() -> UtxoCollection {
     let total_float = PALW_RC_BOND_FEE_FLOAT_SOMPI
         .checked_mul(cards.len() as u64)
         .expect("a genesis registry is six rows, not enough to overflow");
-    let main = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(NetworkId::with_suffix(
-        NetworkType::Testnet,
-        12,
-    ))));
+    // **The network being built, not a literal.** This named testnet-12 through the move to
+    // testnet-11, and it happened to be harmless only because `main_address_for` answers with the
+    // same address for both suffixes. That is a coincidence with an expiry date: testnet-12 is now
+    // an identifier `Params::from` PANICS on, so the day suffix 12 leaves that match arm, this
+    // line silently re-owns the 9B main premine — a re-carve of the whole supply, with no
+    // compilation error and no test that names it. Deriving the script from `net` makes the carve
+    // a fact about the network it is carving.
+    let main = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
     let main_outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
     utxos.push((
         main_outpoint,
