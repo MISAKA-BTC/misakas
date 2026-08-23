@@ -367,8 +367,8 @@ impl PalwProducerService {
                     // signature of a lattice that never turns over, and it should be visible from
                     // the log an operator already watches.
                     info!(
-                        "[{PALW_PRODUCER}] palw weight={} live_total={} final_claims={} unresolved={}",
-                        facts.safe_weight, facts.live_total, facts.final_claims, facts.unresolved_claims
+                        "[{PALW_PRODUCER}] palw weight={} live_total={} final_claims={} unresolved={} courts={}",
+                        facts.safe_weight, facts.live_total, facts.final_claims, facts.unresolved_claims, facts.open_courts
                     );
                 }
                 Ok(None) => trace!("[{PALW_PRODUCER}] no nonce in {NONCES_PER_TEMPLATE} tries against this template"),

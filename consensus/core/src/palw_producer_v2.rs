@@ -105,6 +105,12 @@ pub struct PalwProducerFactsV2 {
     /// Claims created and not yet resolved. Rising without bound while `safe_weight` stays zero is
     /// the signature of a lattice that never turns over.
     pub unresolved_claims: u64,
+    /// **How many disputes are open right now.** Not decoration: a network whose challengers are
+    /// working and whose responders are not looks, from every other number here, exactly like a
+    /// network with nothing to dispute. Two drills were spent reading "the responder made no move"
+    /// as a responder bug when the sessions may not have existed at all — this is the number that
+    /// tells those apart from the log an operator already watches.
+    pub open_courts: u64,
     /// Claims that have reached `Final` — the count of work this chain has actually certified.
     pub final_claims: u64,
     /// `safe_weight` plus the bounded immature contribution — the THIRD key of the fork-choice
@@ -208,6 +214,7 @@ pub fn palw_producer_facts_v2(
         safe_weight: state.safe_weight(),
         live_total: state.safe_weight().saturating_add(state.bounded_immature()),
         unresolved_claims: state.claims_iter().filter(|(_, c)| !c.phase.is_terminal()).count() as u64,
+        open_courts: state.court_sessions_len() as u64,
         final_claims: state
             .claims_iter()
             .filter(|(_, c)| matches!(c.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }))
