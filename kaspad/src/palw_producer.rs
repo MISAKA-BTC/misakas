@@ -139,6 +139,21 @@ pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
     Ok(TransactionOutpoint::new(transaction_id, index))
 }
 
+/// The extension a retained capture is stored under. Named once, because two files write it and
+/// three read it.
+pub(crate) const PALW_RETAINED_MATERIAL_SUFFIX: &str = ".material";
+
+/// **Where a claim's retained capture lives — the one place that decides.**
+///
+/// The producer writes these files and the panel reads them back to answer a court about its own
+/// work, from two different modules. While each built the name itself they could drift silently
+/// into disagreement, and the failure mode of that drift is not an error: it is a responder that
+/// finds nothing, discloses nothing, and loses every dispute on the clock. One function, so the
+/// writer and the reader cannot disagree about what a claim's file is called.
+pub(crate) fn palw_retained_material_path(dir: &std::path::Path, claim: &Hash64) -> std::path::PathBuf {
+    dir.join(format!("{claim}{PALW_RETAINED_MATERIAL_SUFFIX}"))
+}
+
 impl PalwProducerService {
     pub fn new(
         config: PalwProducerConfig,
@@ -236,7 +251,7 @@ impl PalwProducerService {
     fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<Vec<u8>, String> {
         std::fs::create_dir_all(&self.config.retention_dir)
             .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
-        let path = self.config.retention_dir.join(format!("{attempt_id}.material"));
+        let path = palw_retained_material_path(&self.config.retention_dir, &attempt_id);
         // Still the ONE codec — the retention file, the gossip broadcast and the seat's decode all
         // read these exact bytes — it is just applied one frame up now, where the backend is.
         let bytes = material.to_vec();
@@ -258,7 +273,7 @@ impl PalwProducerService {
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(stem) = name.strip_suffix(".material") else { continue };
+            let Some(stem) = name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX) else { continue };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
             // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of
             // re-serving covers every claim that can still be licensed, and stops for the rest.

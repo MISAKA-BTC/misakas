@@ -279,6 +279,16 @@ impl PalwPanelService {
         Ok(tx)
     }
 
+    /// The capture this node's own producer persisted for `claim`, if it is still on disk.
+    ///
+    /// Best-effort by design: a seat that never produced has no retention directory, and a claim
+    /// past its retention window has no file. Both are "cannot answer", which is the same silence
+    /// a party with no material has always been allowed. The caller verifies the bytes against the
+    /// claim's committed roots before believing them.
+    fn retained_capture(&self, claim: &Hash64) -> Option<Vec<u8>> {
+        std::fs::read(crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim)).ok()
+    }
+
     pub async fn worker(self: &Arc<Self>) {
         let (Some(bond), true) = (self.bond, self.keypair.is_some()) else {
             info!("[{PALW_PANEL}] not running (see the startup warning above)");
@@ -468,14 +478,48 @@ impl PalwPanelService {
                         continue;
                     }
                 };
-                let Some(capture) = materials.get(&duty.claim_id).and_then(|pool| {
-                    pool.iter().find(|b| {
-                        backend.verify_material(
-                            b,
-                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root },
-                        ) == PalwMaterialVerdictV1::Matches
-                    })
-                }) else {
+                // **This node's own retained copy, when the pool no longer has it.**
+                //
+                // `retention_dir` was declared, documented and wired into the config — and never
+                // read. The in-memory pool drops a claim once it licenses, which is strictly
+                // BEFORE a dispute can start: a challenger has to re-execute the job before it
+                // knows there is anything to dispute, so by the time the court duty appears the
+                // producer's own capture is gone from memory. The producer then depended on
+                // hearing itself through `rebroadcast_retained`, whose 60-second burst try_sends
+                // hundreds of files into a 256-slot inbox and silently drops the overflow, so
+                // which claims it could answer about was decided by directory order.
+                //
+                // Measured across two drills with the field unread: 143 sessions opened / 4
+                // answered, then 357 opened / 3 answered — the same shape both times.
+                //
+                // The obligation to keep these bytes already exists and is already on disk
+                // (`trace_retention_daa`); this is the panel reading it rather than a second copy
+                // of the same promise. Read once and put in the pool, because a court duty makes
+                // the claim `live` — so the retention rule below keeps it for the session's life
+                // and the next tick costs nothing. Still gated by `verify_material`: a file is
+                // evidence only if it reproduces the roots the claim committed to.
+                let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root };
+                let pool_has_it = materials
+                    .get(&duty.claim_id)
+                    .map(|pool| pool.iter().any(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
+                    .unwrap_or(false);
+                if !pool_has_it
+                    && let Some(bytes) = self.retained_capture(&duty.claim_id)
+                    && backend.verify_material(&bytes, roots) == PalwMaterialVerdictV1::Matches
+                {
+                    info!(
+                        "[{PALW_PANEL}] session {} answered from this node's retained capture for claim {}",
+                        duty.session_id, duty.claim_id
+                    );
+                    let pool = materials.entry(duty.claim_id).or_default();
+                    if pool.len() < MATERIALS_PER_CLAIM {
+                        pool.push(bytes);
+                    }
+                }
+                let Some(capture) = materials
+                    .get(&duty.claim_id)
+                    .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
+                else {
                     *court_stalls
                         .entry(if materials.contains_key(&duty.claim_id) {
                             // Held material, and none of it reproduces the claim's roots — a
@@ -874,5 +918,54 @@ impl AsyncService for PalwPanelService {
             trace!("{} stopped", PALW_PANEL);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A responder must be able to answer a court about work it has already forgotten.**
+    ///
+    /// `retention_dir` was declared on this config, documented at length with the measurement that
+    /// motivated it, and read by nothing. The panel's in-memory pool drops a claim the moment it
+    /// licenses, which is strictly before a dispute can start — a challenger has to re-execute the
+    /// job before it knows there is anything to dispute — so a producer's own capture is reliably
+    /// gone by the time its court duty appears. Two live drills measured the same shape: 143
+    /// sessions opened and 4 answered, then 357 opened and 3 answered.
+    ///
+    /// What makes that class of bug survive review is that nothing fails. The field compiles, the
+    /// config carries it, the responder simply says nothing and loses on the clock — which is
+    /// indistinguishable from a party that is not a party. So this asserts the round trip through
+    /// the FILESYSTEM rather than the happy path in memory: the producer's writer and the panel's
+    /// reader must agree, byte for byte, about what a claim's file is called.
+    #[test]
+    fn the_writer_and_the_reader_agree_about_where_a_capture_lives() {
+        use kaspa_hashes::Hash64;
+        let dir = std::env::temp_dir().join(format!("palw-retention-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let claim = Hash64::from_u64_word(0xC0FFEE);
+        let bytes = b"the capture behind one attempt".to_vec();
+
+        // The producer's side of the promise, through the same function `retain_execution` uses.
+        let path = crate::palw_producer::palw_retained_material_path(&dir, &claim);
+        std::fs::write(&path, &bytes).unwrap();
+
+        // And the panel's side, through the same function `retained_capture` uses. A drift in
+        // either format string breaks this, which is the point: the drift's own symptom is
+        // silence.
+        let read = std::fs::read(crate::palw_producer::palw_retained_material_path(&dir, &claim)).unwrap();
+        assert_eq!(read, bytes, "the panel must find what the producer retained");
+
+        // And `rebroadcast_retained` walks the directory by stripping the same suffix, so a name
+        // the writer produces must be one that walk recognizes.
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let stem = name
+            .strip_suffix(crate::palw_producer::PALW_RETAINED_MATERIAL_SUFFIX)
+            .expect("the retention walk strips this exact suffix");
+        assert_eq!(stem.parse::<Hash64>().unwrap(), claim, "and the stem must parse back to the claim it names");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 }
