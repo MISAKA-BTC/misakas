@@ -1876,6 +1876,23 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     // (superseded by the PALW table above; the historical rationale for inheriting 18_000/6_000
     // at 10 bps — measured ~110 DAA/min, ~2.5 h protection, ~55 min auto-release — is preserved
     // in the PRODUCTION_DNS_PARAMS comment.)
+    //
+    // **And the TTL is counted on a clock the wedge can stop** (carried from `origin/main`,
+    // 2026-08-13/14). The inherited 6_000 was calibrated against "~110 DAA/min of the live mesh",
+    // which reads as ~55 min of release time — but that assumes the chain keeps moving, and the
+    // wedge this TTL exists to release is exactly the state where it does not. Measured on the
+    // live t10 fleet: a confirmed anchor fell off the selected chain, every candidate failed the
+    // includes test, the gate refused every heavier candidate, and virtual advanced 3 DAA per
+    // ~17 min. At THAT rate 6_000 takes ~12 days, not 55 min. The clock is
+    // `canonical_daa - anchor_daa` on this node's OWN chain, so the release cannot fire because
+    // the thing it releases is what freezes its input.
+    //
+    // 120 survives that geometry, which is why the table above stands rather than being replaced
+    // by main's 2_000: at the frozen 120 s cadence 120 DAA is 4 h of healthy time, and even at the
+    // wedged 3-DAA-per-17-min rate it is ~11 h — a release within half a day, which is what main's
+    // constant was reaching for. 2_000 was chosen for a 10 bps chain and would be ~2.8 days here.
+    // The honest fix is still to stop counting the TTL on a stoppable clock; that is a behaviour
+    // change to `dns_reorg_outcome` and belongs in its own release.
     // The preference soaks here first (mainnet ships it OFF): ½-work bound, arming only when
     // this chain's own anchor has been dead past the TTL above. See the field doc.
     stake_preference_max_work_deficit_multiplier: 2,
@@ -4858,6 +4875,10 @@ mod consensus_params_id_tests {
         // Ollama-runtime algo, `always()` on testnet-10 — the fleet's runtime — and `never()`
         // elsewhere).
         let changed: Vec<String> = [
+            // main's 2026-08-14 row (`a1e6602e…`) is deliberately not taken: it pins a testnet
+            // whose `dns_veto_ttl_daa_score` is 2_000, and this lineage keeps 120 for the reason
+            // recorded at `TESTNET_DNS_PARAMS` — a 10 bps constant would be ~2.8 days at the frozen
+            // 120 s cadence. The pin below is the merged tree's own value, checked by this test.
             ("mainnet", MAINNET_PARAMS, "9110ee1c8bedfc8cd0e32336a7adeeb2940752737e385d1c69b65aee662334c2"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
