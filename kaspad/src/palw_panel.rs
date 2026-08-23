@@ -94,6 +94,14 @@ pub struct PalwPanelConfig {
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
+    /// Where THIS node's producer persists the material behind its own attempts, when it produces.
+    ///
+    /// A court can open long after a claim licensed, and the in-memory pool does not live that
+    /// long — it drops a claim once licensed, which is strictly before a dispute can start. The
+    /// obligation to keep the trace already exists and is already on disk
+    /// (`trace_retention_daa`); this is the panel reading it rather than a second copy of the
+    /// same promise. Measured on the drill: 143 sessions opened, 4 answered.
+    pub retention_dir: PathBuf,
     /// The pinned Metal worker, if this seat has one (ADR-0051). A seat without one cannot judge a
     /// Metal class and files nothing for it — "I could not verify", never an accusation.
     pub metal_worker: Option<PathBuf>,

@@ -1360,6 +1360,9 @@ Do you confirm? (y/n)";
                     court: panel_court.clone().expect("v2 is true exactly when this is Some"),
                     class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                     challenge: args.palw_challenge || args.palw_drill_challenge_all,
+                    // The same directory the producer writes to, so a node that produces can
+                    // answer a court about its own work after its gossip pool has moved on.
+                    retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                     drill_challenge_all: match args.palw_drill_challenge_all {
                         true if network.is_mainnet() => {
                             panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")
