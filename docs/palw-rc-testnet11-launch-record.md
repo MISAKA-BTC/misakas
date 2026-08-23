@@ -1,13 +1,25 @@
-# testnet-12 — what was verified, and what could not be
+# testnet-11 — what was verified, and what could not be
 
-**Date:** 2026-08-22 · **Binary:** `kaspad v1.1.0-c1e612a9`, sha256 `87235442e1e1096166498b6a…`
-**Genesis:** `28a44a680be0fb35…` · **Consensus fingerprint:** `f08215783e2b8f7e196fe12284fa9fedc6e37b860205d777dfe6c50e1aecb11f`
+**Genesis:** `d25a80b9045abb97…` · **Consensus fingerprint:**
+`048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0`
+
+> **The suffix stops climbing here.** This network was minted as testnet-12 and relaunched under
+> that name several times while its defects were being closed; none of those was ever a network
+> anyone could join, and a suffix that increments per rebuild is a changelog wearing a network's
+> name. It is testnet-11 now — nothing was running on 11 when it moved, measured across all four
+> hosts — and `--netsuffix=12` is refused outright rather than aliased, because a node still
+> configured for it should be told.
+>
+> Everything below the first table describes the same chain under its earlier names. The
+> fingerprints quoted in those notes are the ones that were live at the time and are kept as a
+> record of what moved and why, not as values to connect with. The only identity a joiner uses is
+> the pair above.
 
 > **Relaunched again 2026-08-22 with Phase 1** — the six builds the mainnet audit left open:
 > the court's close binding and its tie to the disputed step, the pruning-point carriage, bond
 > retirement, the challenger's stake, and the IBD fork-choice gate. `PALW_ATTEMPT_V2_VERSION`
 > went 3 → 4 for the same reason it went 2 → 3: the close rules decide which `CourtClosed` objects
-> apply, so two binaries that disagree must not share an identity. Fingerprint `8a65f767…`.
+> apply, so two binaries that disagree must not share an identity. Fingerprint `048e6902…`.
 >
 > **Relaunched 2026-08-22 with the Phase 0 security fixes** (`75439aee…`, tree `e06d9409` plus the
 > protocol-version bump). The fingerprint moved from `79a306ed…` deliberately: the rules changed,
@@ -49,7 +61,7 @@ needs no permission and no bond — bonds are the panel's, not a participant's.
 git clone -b palw-base0-depth https://github.com/MISAKA-BTC/misakas.git
 cd misakas
 cargo build --release -p kaspad
-./target/release/kaspad --testnet --netsuffix=12 --utxoindex \
+./target/release/kaspad --testnet --netsuffix=11 --utxoindex \
     --addpeer=169.58.39.220:26411 --addpeer=5.104.81.23:26411
 ```
 
@@ -58,9 +70,9 @@ JSON-RPC adapter. `--nodnsseed` is unnecessary and harmless: this network has no
 peers come from `--addpeer` and the address manager.
 
 **Check you are on the right network before anything else.** The startup banner prints
-`Consensus params fingerprint: 8a65f76792ec8bb95710c43dce5541b344464cfea49c23ff7d98b183de99f2b5`.
+`Consensus params fingerprint: 048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0`.
 A different value means a different ruleset, and the handshake will refuse rather than fork.
-The genesis is `28a44a680be0fb35…`.
+The genesis is `d25a80b9045abb97…`.
 
 **Do not expect `weight` to be non-zero yet.** See the two-stage reading below and in the runbook:
 before DAA 1200 the number that moves is `live_total`.

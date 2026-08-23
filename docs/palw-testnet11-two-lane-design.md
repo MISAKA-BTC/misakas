@@ -57,6 +57,24 @@ Nothing about that path needs to be built — it needs Macs.
   second and third Apple Silicon node exist, a registration transaction adds it and the share table
   splits — no re-mint, no flag day.
 
+## The identity, measured
+
+| | |
+|---|---|
+| network | `testnet-11` |
+| genesis hash | `d25a80b9045abb97…` |
+| consensus fingerprint | `048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0` |
+| premine | 13B split + **347M community (9 entries)** + one 100 MSK fee float per genesis bond |
+| `min_class_panel` | `(2, 2)` |
+| BASE-0 share | 1000‰ |
+
+**Two things moved with the suffix and had to be chased.** The per-bond fee floats stayed keyed to
+12 through the move, so the genesis briefly funded nine community entries and not one of its own
+bonds — a registry whose members cannot pay for a lifecycle transaction can license nothing. And
+the M-07 round-trip guard was still checking `TESTNET11_PARAMS`, the legacy algo-4 const, which
+shares the suffix but pins a genesis computed without those floats; it now checks the preset
+`From<NetworkId>` actually returns.
+
 ## What has to be true before Family M carries weight
 
 1. **Three Apple Silicon hosts** (producer + two seats), or two plus a decision to declare

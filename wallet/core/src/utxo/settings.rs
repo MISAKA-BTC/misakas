@@ -127,26 +127,15 @@ static TESTNET11_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
-/// testnet-12 — the PALW-RC network (ADR-0036 Decision 2 / ADR-0042 PR-10). Its own static for
-/// the same reason testnet-11 has one: two live networks that happen to agree today are still two
-/// networks. The numbers mirror `palw_rc_shipped_params()`, which inherits `TESTNET_PARAMS`'s
-/// shape — same 120 s interval, same `dns_params`, and therefore the same ladder as t10/t11.
-///
-/// Found by `the_wallet_supports_exactly_the_testnet_suffixes_consensus_does`: consensus gained
-/// `Some(12)` when the RC network was named (`555ed989`) and this table did not, so a wallet
-/// built from this branch aborted on the branch's newest network — the exact failure mode the
-/// behaviour-comparison test was written for after t11 did the same thing.
-static TESTNET12_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
-    coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
-    coinbase_transaction_stasis_period_daa: 500,
-    user_transaction_maturity_period_daa: AtomicU64::new(100),
-    additional_compound_transaction_mass: 100,
-    // MIRRORS `palw_rc_shipped_params().dns_params` — `TESTNET_DNS_PARAMS` today, since the RC's
-    // base params are `TESTNET_PARAMS.clone()`. The mirror test reads it through the RC's own
-    // entry point, so a later RC override moves the assertion with it.
-    coinbase_settlement_long_maturity_daa: 600,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
-});
+// testnet-12 had its own static here for the same reason testnet-11 has one: two live networks
+// that happen to agree today are still two networks. It is gone because the network is — the
+// PALW-RC network moved onto suffix 11 and consensus refuses 12 outright, so a table entry for it
+// would describe a network `Params::from` will not build.
+//
+// The comparison test that owns this table found it BOTH times the set moved: once when consensus
+// gained 12 and this did not, and again when consensus dropped it and this still had it. A wallet
+// that supports a different set of networks than the node is a wallet that aborts on exactly the
+// network the branch cares about.
 
 static SIMNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
     coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
@@ -185,7 +174,6 @@ impl NetworkParams {
             NetworkType::Testnet => match value.suffix {
                 Some(10) => &TESTNET10_NETWORK_PARAMS,
                 Some(11) => &TESTNET11_NETWORK_PARAMS,
-                Some(12) => &TESTNET12_NETWORK_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -254,10 +242,14 @@ mod tests {
             consensus_settlement(&MAINNET_PARAMS),
             "mainnet wallet params must mirror PRODUCTION_DNS_PARAMS"
         );
+        // testnet-11 IS the RC network now, so its wallet entry must mirror the RC's own preset —
+        // read through `palw_rc_shipped_params()` rather than through `TESTNET11_PARAMS`, which is
+        // the legacy algo-4 const that shares the suffix and that `From<NetworkId>` no longer
+        // returns.
         assert_eq!(
-            TESTNET12_NETWORK_PARAMS.coinbase_settlement_long_maturity_daa(),
+            TESTNET11_NETWORK_PARAMS.coinbase_settlement_long_maturity_daa(),
             consensus_settlement(&kaspa_consensus_core::config::params::palw_rc_shipped_params()),
-            "testnet-12 wallet params must mirror the RC's own preset"
+            "testnet-11 wallet params must mirror the RC's own preset"
         );
     }
 
@@ -300,8 +292,11 @@ mod tests {
         // Not vacuous: if both tables somehow refused everything the comparison above would still
         // hold, and a wallet that supports no testnet is not the property wanted.
         assert!(
-            consensus.contains(&10) && consensus.contains(&11) && consensus.contains(&12),
-            "expected testnet-10, -11 and -12, got {consensus:?}"
+            consensus.contains(&10) && consensus.contains(&11),
+            "expected testnet-10 and -11, got {consensus:?}"
         );
+        // And 12 must be gone from BOTH, not merely absent from one: it was consolidated into 11,
+        // and a table that still answers for it would hand a wallet a network no node will build.
+        assert!(!consensus.contains(&12) && !wallet.contains(&12), "testnet-12 was consolidated into 11 and must build nowhere");
     }
 }

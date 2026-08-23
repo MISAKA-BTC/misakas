@@ -1256,13 +1256,19 @@ impl From<NetworkId> for Params {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
-                Some(11) => TESTNET11_PARAMS,
+                // **The PALW-RC network** (was suffix 12; see `palw_rc_base_params`). The old
+                // `TESTNET11_PARAMS` was the algo-4 `LegacyTn11` lane, which was never published
+                // and is not running anywhere — kept below as a constant so a node asked for it by
+                // name still gets a coherent answer rather than a panic, but no suffix routes here.
+                Some(11) => palw_rc_shipped_params(),
                 // The PALW-RC network (ADR-0036 Decision 2 / ADR-0042 PR-10). Its bundle-free
                 // BASE identity: the bundle is a function of genesis artifacts no `From<NetworkId>`
                 // holds, so it is installed on top (`palw_rc_params`) and its absence is visible
                 // in `consensus_params_id` rather than silent. Before this arm existed, naming the
                 // suffix `palw_rc_params` itself stamps aborted the process.
-                Some(12) => palw_rc_shipped_params(),
+                // 12 is retired into 11. Left as an explicit refusal rather than a silent
+                // alias: a node still configured for 12 should be told, not quietly moved.
+                Some(12) => panic!("testnet-12 was consolidated into testnet-11; use --netsuffix=11"),
                 Some(x) => panic!("Testnet suffix {} is not supported (this build knows 10, 11 and 12)", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -4497,7 +4503,14 @@ pub fn palw_rc_shipped_params() -> Params {
 /// a peerless node.
 pub fn palw_rc_base_params() -> Params {
     let mut params = TESTNET_PARAMS.clone();
-    params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+    // **testnet-11, and the suffix stops climbing here.**
+    //
+    // 12 and 13 were minted for internal relaunches and neither was ever a network anyone could
+    // join; a suffix that increments per rebuild is a changelog wearing a network's name. Nothing
+    // was running on 11 when this moved (measured across all four hosts), and `main_address_for`
+    // already maps 11 and 12 to the same public main wallet — so the premine, and therefore the
+    // genesis, is unchanged by the move. What changes is the name the handshake carries.
+    params.net = NetworkId::with_suffix(NetworkType::Testnet, 11);
     params.genesis = crate::config::genesis::PALW_RC_GENESIS;
     // **Empty on purpose, and it cannot be filled from here.**
     //
@@ -4861,7 +4874,12 @@ mod consensus_params_id_tests {
             // (the 40 vault UTXOs are untouched — this is the main wallet only). Only this row
             // moved either time: t10 keeps the shared testnet premine, and devnet/simnet/mainnet
             // are not testnet-11.
-            ("testnet-11", TESTNET11_PARAMS, "06285374aca22e781bd33368e51314f6c87cdd1c52ef36b0ba5dfc29d94dc9e8"),
+            // **testnet-11 is now the PALW-RC network** (`palw_rc_shipped_params`, routed at
+            // `From<NetworkId>`), so this pin moved deliberately: `06285374…` was the algo-4
+            // `LegacyTn11` lane, which was never published and is not running anywhere. The const
+            // beside it is still the old one — the test materializes by NETWORK ID, which is what a
+            // node reports, and that is the whole reason this test pins the materialized value.
+            ("testnet-11", TESTNET11_PARAMS, "048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
@@ -4979,19 +4997,27 @@ mod consensus_params_id_tests {
         assert_eq!(probe.consensus_params_id(), before);
     }
 
-    /// If this test fails, the running network cannot upgrade without a re-genesis.
+    /// **A fence must not move a fingerprint that is not about fences.**
+    ///
+    /// This used to pin what the LIVE algo-4 testnet-11 announced on 2026-08-18, as a guard that a
+    /// running network could still upgrade in place. That network no longer exists — suffix 11 is
+    /// the PALW-RC network now, minted fresh, and no node was running the old one on any host when
+    /// it moved. Pinning a dead chain's number would only assert that nobody re-minted, which is
+    /// the opposite of what happened deliberately.
+    ///
+    /// What the test is actually for survives, and is what it now says: a preset that installs NO
+    /// fence must fingerprint identically to a build without the fence fields at all. That is the
+    /// property "adding the fence does not move anything" — and it is checked on mainnet, where a
+    /// moved fingerprint really would mean a chain with history could not upgrade.
     #[test]
     fn adding_the_commitment_fence_does_not_move_any_shipped_fingerprint() {
-        // Pinned to what the LIVE testnet-11 node announces, read off its startup log on
-        // 2026-08-18. Note the object: a node fingerprints `Params::from(NetworkId)`, which is
-        // `with_registered_models(TESTNET11_PARAMS)` — NOT the bare preset, whose id is a
-        // different value entirely. Asserting on the preset would pass while the network forked.
-        const TESTNET11_LIVE_FINGERPRINT: &str = "06285374aca22e781bd33368e51314f6c87cdd1c52ef36b0ba5dfc29d94dc9e8";
+        // The RC network's own id is pinned by `shipped_presets_have_pinned_fingerprints`; here we
+        // only demand that it is a value at all, so a preset that fails to build is still caught.
         let live: Params = crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11).into();
-        assert_eq!(
+        assert_ne!(
             live.consensus_params_id().to_string(),
-            TESTNET11_LIVE_FINGERPRINT,
-            "testnet-11 cannot upgrade without a re-genesis"
+            String::new(),
+            "testnet-11 must build a fingerprint"
         );
         assert!(live.palw_block_commitment.is_none());
 
@@ -5161,7 +5187,7 @@ mod fingerprint_probe {
     /// artifacts no `From` impl holds. The last assertion is the one that makes that safe.
     #[test]
     fn the_palw_rc_network_id_builds_params_instead_of_aborting() {
-        let id = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let id = NetworkId::with_suffix(NetworkType::Testnet, 11);
         let base = Params::from(id);
 
         assert_eq!(base.net, id, "the params a node builds name the network it asked for");

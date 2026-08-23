@@ -93,7 +93,7 @@ mod repin {
     #[ignore]
     fn print_repinned_rc_genesis() {
         let mut params = palw_rc_shipped_params();
-        params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        params.net = NetworkId::with_suffix(NetworkType::Testnet, 11);
         let mut ms = MuHash::new();
         for (outpoint, entry) in kaspa_consensus_core::config::premine::genesis_premine_utxos_for(params.net) {
             ms.add_utxo(&outpoint, &entry);
@@ -185,8 +185,15 @@ mod tests {
     /// runtime "can't run a divergent genesis" property.
     #[test]
     fn all_networks_genesis_constants_match_premine() {
-        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
-        for params in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS] {
+        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params};
+        // **The preset a suffix actually routes to, not the const that shares its name.**
+        //
+        // `TESTNET11_PARAMS` is the legacy algo-4 lane; `From<NetworkId>` has not returned it since
+        // the PALW-RC network moved onto suffix 11, so its pinned genesis is a genesis nothing
+        // builds. Checking it against a premine keyed to suffix 11 compares two different networks
+        // — the const's genesis was computed without the RC's per-bond fee floats, which the
+        // premine for that suffix now carries.
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params(), DEVNET_PARAMS, SIMNET_PARAMS] {
             let mut config = Config::new(params);
             // The assert inside panics if the pinned constants do not match the premine-derived
             // ones — for testnet-11 that set includes the 347M community allocation.

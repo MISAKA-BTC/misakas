@@ -304,12 +304,16 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
 /// running chain, testnet-11, devnet, simnet, mainnet — is byte-identical to before.
 pub const PALW_RC_BOND_FEE_FLOAT_SOMPI: u64 = 100 * SOMPI_PER_KASPA;
 
+/// The premine for `net`, plus whatever that network's genesis was minted to carry.
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     let mut set = misaka_premine_utxos_for(net);
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
+        // testnet-11 carries BOTH: the community allocation it was minted for, and — since the
+        // PALW-RC network moved onto this suffix — the per-bond fee floats. The floats stayed
+        // keyed to 12 through the move, so the RC genesis briefly funded nine community entries
+        // and not one of its own bonds; a registry whose members cannot pay for a lifecycle
+        // transaction is a registry that can license nothing.
         set.extend(testnet11_community_utxos());
-    }
-    if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
         set.extend(palw_rc_bond_fee_floats());
     }
     set
@@ -378,19 +382,32 @@ mod tests {
     /// registry's own payout addresses, the supply does not move, and no other network is touched.
     #[test]
     fn the_rc_genesis_funds_every_bond_and_mints_nothing_extra() {
-        let t12 = NetworkId::with_suffix(NetworkType::Testnet, 12);
-        let set = genesis_premine_utxos_for(t12);
+        let t11 = NetworkId::with_suffix(NetworkType::Testnet, 11);
+        let set = genesis_premine_utxos_for(t11);
         let total: u64 = set.values().map(|e| e.amount).sum();
         let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
 
-        assert_eq!(total, MISAKA_PREMINE_SOMPI, "the floats are carved from the main wallet, never minted beside it");
+        // **The RC's premine is the 13B split PLUS testnet-11's community allocation**, now that
+        // the RC network is testnet-11. The bond fee floats are still carved out of the main
+        // wallet rather than minted beside it — that is what this equality is for — and the 347M
+        // is a separate, deliberate, network-keyed set that predates the move
+        // (`TESTNET11_COMMUNITY_ALLOCATIONS`, nine entries burned into t11's genesis).
+        assert_eq!(
+            total,
+            MISAKA_PREMINE_SOMPI + TESTNET11_COMMUNITY_SOMPI,
+            "the floats are carved from the main wallet, never minted beside it — and the t11 community set is the only thing added"
+        );
 
         // NOT `if cards.is_empty() { return }`: that made every assertion below vacuous the moment
         // the card was unset, which is exactly when a reader would most want to know. The shipped
         // RC has a card, so the test demands one — a build that drops it fails here rather than
         // passing silently.
         assert!(!cards.is_empty(), "the shipped RC card must be set for this network to fund anything");
-        assert_eq!(set.len(), VAULT_COUNT + 1 + cards.len(), "40 vaults + the main wallet + one float per bond");
+        assert_eq!(
+            set.len(),
+            VAULT_COUNT + 1 + cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "40 vaults + the main wallet + one float per bond + t11's community entries"
+        );
         // Every registered bond can pay a fee, at the address its own card names.
         for card in cards {
             let spk = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
@@ -407,12 +424,10 @@ mod tests {
             let outpoint = TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index: i };
             assert_eq!(set.get(&outpoint).expect("vault present").amount, VAULT_PREMINE_SOMPI, "vault {i} moved");
         }
-        // No other network gains a float.
-        for other in [NetworkId::with_suffix(NetworkType::Testnet, 10), NetworkId::with_suffix(NetworkType::Testnet, 11)] {
-            let n = genesis_premine_utxos_for(other).len();
-            let expected = if other.suffix == Some(11) { VAULT_COUNT + 1 + testnet11_community_utxos().len() } else { VAULT_COUNT + 1 };
-            assert_eq!(n, expected, "{other} must not gain RC floats");
-        }
+        // No OTHER network gains a float. testnet-11 is the RC now, so it is the one that has
+        // them; testnet-10 is a chain with history whose commitment must not move.
+        let t10 = NetworkId::with_suffix(NetworkType::Testnet, 10);
+        assert_eq!(genesis_premine_utxos_for(t10).len(), VAULT_COUNT + 1, "{t10} must not gain RC floats");
     }
 
     /// **The public PALW nets' 9B main wallet is the operator's address, and ONLY on those two.**
@@ -435,14 +450,15 @@ mod tests {
             set.get(&outpoint).expect("the main UTXO sits at index VAULT_COUNT").clone()
         };
 
-        for suffix in [11u32, 12] {
+        // Only 11 now: the PALW-RC network moved onto it and 12 is refused at `From<NetworkId>`.
+        for suffix in [11u32] {
             let entry = main_of(NetworkId::with_suffix(NetworkType::Testnet, suffix));
             assert_eq!(entry.script_public_key, public_spk, "testnet-{suffix} pays the operator address");
-            // testnet-12 carves each genesis bond's fee float OUT of this output (see
+            // testnet-11 carves each genesis bond's fee float OUT of this output (see
             // `palw_rc_bond_fee_floats`) rather than minting beside it, so the main wallet is the
             // whole 9B minus exactly those floats — and the SUPPLY is what stays unchanged, which
             // `the_rc_genesis_funds_every_bond_and_mints_nothing_extra` asserts directly.
-            let carved = if suffix == 12 {
+            let carved = if suffix == 11 {
                 PALW_RC_BOND_FEE_FLOAT_SOMPI * crate::config::params::PALW_RC_GENESIS_BONDS.len() as u64
             } else {
                 0
@@ -473,8 +489,8 @@ mod tests {
         let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
         assert_eq!(
             t11.len(),
-            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
-            "testnet-11 is the premine plus the community list, and nothing else"
+            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len() + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
+            "testnet-11 is the premine, the community list, and one fee float per RC bond"
         );
         for i in 0..VAULT_COUNT as u32 {
             let outpoint = TransactionOutpoint { transaction_id: txid, index: i };
@@ -525,7 +541,7 @@ mod tests {
         }
         // The PALW-RC net (testnet-12): premine with the public main wallet, no community set.
         let mut ms = MuHash::new();
-        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 12)) {
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
             ms.add_utxo(&outpoint, &entry);
         }
         let commitment = ms.finalize();
@@ -586,9 +602,14 @@ mod tests {
             }
         }
 
-        // Confinement: only testnet-11 carries the community set.
+        // Confinement: only testnet-11 carries the community set — and, since the PALW-RC network
+        // moved onto that suffix, its per-bond fee floats as well.
         let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
-        assert_eq!(t11.len(), VAULT_COUNT + 1 + 9, "t11 = 41 premine + 9 community");
+        assert_eq!(
+            t11.len(),
+            VAULT_COUNT + 1 + 9 + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
+            "t11 = 41 premine + 9 community + one float per RC bond"
+        );
         let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
         assert_eq!(t10.len(), VAULT_COUNT + 1, "t10 keeps the running chain's exact set");
         for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {

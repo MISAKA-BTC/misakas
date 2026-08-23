@@ -390,7 +390,7 @@ mod tests {
             .expect("the RC network is a runnable ruleset");
 
         // A new identity, and both reasons it had to be one.
-        assert_eq!(params.net.to_string(), "testnet-12");
+        assert_eq!(params.net.to_string(), "testnet-11");
         assert_eq!(params.blockrate.target_time_per_block, crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
         assert!(params.palw_credit.is_none(), "a V2 network installs no V1 fence");
         assert!(!params.pow_palw_activation.is_active(u64::MAX - 1), "and activates no V1 PALW PoW");
@@ -442,7 +442,7 @@ mod tests {
         let params = crate::config::params::palw_rc_params_from_artifacts(artifact_root, seatable())
             .expect("the RC network derives and validates");
 
-        assert_eq!(params.net.to_string(), "testnet-12");
+        assert_eq!(params.net.to_string(), "testnet-11");
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("not V2") };
 
         // The class id IS its graph. A class is what it computes, so there is no label to pick.
@@ -582,7 +582,7 @@ mod tests {
             palw_rc_genesis_card_is_set(),
             "a set card yields a bundled network; an unset one yields the base identity, and never the other way round"
         );
-        assert_eq!(shipped.net.to_string(), "testnet-12", "it is still the RC identity");
+        assert_eq!(shipped.net.to_string(), "testnet-11", "it is still the RC identity");
         assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, Hash64::default(), "the half code CAN mint is minted");
         if palw_rc_genesis_card_is_set() {
             // The shipped card must be one a node can actually boot on — the registry gate, run

@@ -1,4 +1,4 @@
-# PALW-RC (testnet-12 / ConsensusV2) — launch runbook
+# PALW-RC (testnet-11 / ConsensusV2) — launch runbook
 
 **Status: the code path is complete and tested end to end; every remaining step is an operator
 decision this repository cannot make.** A block produced by the real production path — a real
@@ -10,9 +10,9 @@ This document is the list of things a binary cannot do for you, in the order the
 
 ---
 
-## 0. What testnet-12 is, and what it is not
+## 0. What testnet-11 is, and what it is not
 
-`NetworkId` **testnet-12** is the PALW **ConsensusV2** ruleset (ADR-0042): PALW is the consensus
+`NetworkId` **testnet-11** is the PALW **ConsensusV2** ruleset (ADR-0042): PALW is the consensus
 work, algo-6 (`POW_ALGO_ID_PALW_COMMITTED_V2`) is the attempt lane, BASE-0 is the permanent liveness
 floor (ADR-0039 W6′), and the class economy is on chain (ADR-0045/0046).
 
@@ -139,7 +139,7 @@ PALW_RC_GENESIS_OPERATOR_PUBKEY
 PALW_RC_GENESIS_PAYOUT_PAYLOAD
 ```
 
-Until those are pasted, `Params::from(testnet-12)` returns the **bundle-free base identity** — a
+Until those are pasted, `Params::from(testnet-11)` returns the **bundle-free base identity** — a
 hash-only chain with the RC genesis — and `kaspad` says so at startup. That is the shipped state on
 purpose: a placeholder key would be an identity nobody holds the secret for, which looks like a
 network and is not.
@@ -174,7 +174,7 @@ A `ConsensusV2` network with a genesis and no producer has one block forever. Th
 in-process:
 
 ```bash
-kaspad --testnet --netsuffix=12 \
+kaspad --testnet --netsuffix=11 \
   --palw-produce \
   --palw-producer-key=/path/to/bond-seed.hex \
   --palw-producer-bond=<txid>:<index> \
@@ -216,7 +216,7 @@ and that costs a full inference per try, which is the price the design means to 
 it has neither seeders nor explicit peers rather than sitting alone in silence.
 
 ```bash
-kaspad --testnet --netsuffix=12 --addpeer=<producer-host>:26411 --utxoindex
+kaspad --testnet --netsuffix=11 --addpeer=<producer-host>:26411 --utxoindex
 ```
 
 Adding seeders later is a plain edit, not a flag day: `dns_seeders` is deliberately **outside**
@@ -230,7 +230,7 @@ outside your own network before announcing anything.
 **Start every seat BEFORE the producer.** Trace material is gossiped once and never replayed, so
 a seat that is still catching up when a claim is made never sees that claim's material — and it is
 *right* to file `Unavailable`, because it genuinely cannot verify. Three such verdicts are a quorum,
-and the claim voids for `ProducerWithholding` with its escrow destroyed. testnet-12's relaunch
+and the claim voids for `ProducerWithholding` with its escrow destroyed. testnet-11's relaunch
 measured this exactly: the seats brought up after the producer each filed **158** `Unavailable`
 verdicts covering the same claims, and then filed nothing but `Valid` once caught up. Nothing was
 wrong with the network; the launch order was wrong. Bring every seat to a synced tip first, and
@@ -243,10 +243,10 @@ seat, and `slash_silent_seats` takes `claim.reserved` from it on every licensed 
 and a drained bond cannot be replaced: `BondRegistered` may not ride a transaction, so the only
 repair is a flag-day relaunch. **Decide where each bond's node will run BEFORE generating its
 seed**, because the seed is generated on the host that will run it and does not move afterwards.
-testnet-12 had to re-mint over exactly this: bond 4's seed was on a host whose egress to the fleet
+testnet-11 had to re-mint over exactly this: bond 4's seed was on a host whose egress to the fleet
 turned out to be filtered upstream.
 
-**Reachability measured for testnet-12** (2026-08-22, from outside the fleet):
+**Reachability measured for testnet-11** (2026-08-22, from outside the fleet):
 
     169.58.39.220:26411
     5.104.81.23:26411
@@ -285,7 +285,7 @@ DAA 1200, with `unresolved` still rising, is a hash chain wearing PALW's clothes
 
 ---
 
-## 5b. What testnet-12 carries, and the one lane it does not
+## 5b. What testnet-11 carries, and the one lane it does not
 
 Checked against the shipped bundle rather than asserted, because "all of PALW works" is a claim
 somebody should be able to verify:
@@ -310,7 +310,7 @@ part of the bundle, and a licensed free-prompt claim's weight is defined to arri
 quantum at the receipt block that spends it. What does not exist anywhere in the tree is anything
 that PRODUCES such a block: no `--palw-receipt-produce`, no receipt-spend builder, no miner arm.
 
-**This is not a fence set for testnet-12.** `algorithm_id == POW_ALGO_ID_PALW_COMMITTED_V2` is
+**This is not a fence set for testnet-11.** `algorithm_id == POW_ALGO_ID_PALW_COMMITTED_V2` is
 part of what ConsensusV2 *is* — the mode's own doc calls it "the only algorithm a V2 network
 demands or accepts", and `validate` refuses any bundle that says otherwise. Nothing about this
 deployment was narrowed to close the lane; a network that produces algo-7 blocks is a different
@@ -325,7 +325,7 @@ by four each time until the class lottery refuses every attempt. That is the exa
 `ATTEMPT_SHARE_PERMILLE` is 1000: **a lane that cannot produce holds no cadence.**
 
 Opening it is therefore one piece of work, not two: build the receipt producer, split the share,
-re-mint genesis. Until then a free-prompt commitment can be made and licensed on testnet-12, and
+re-mint genesis. Until then a free-prompt commitment can be made and licensed on testnet-11, and
 its licensed quanta cannot be spent.
 
 ---

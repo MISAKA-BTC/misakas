@@ -346,32 +346,39 @@ mod tests {
 
     /// **The shipped floor, measured, and what it costs in operators.**
     ///
-    /// Read twice, minutes apart, and it answered `(2, 2)` then `(0, 0)` — because the file was
-    /// being edited by a concurrent session at the time and the first read caught a transient
-    /// state. The shipped value is **`(0, 0)`**: this network admits no per-class panel at all, so
-    /// every class draws the network's own. The distinction is the whole operator budget of a
-    /// family, so it is pinned here rather than remembered:
+    /// Read twice, minutes apart, this once answered `(2, 2)` then `(0, 0)`, and the conclusion
+    /// drawn — that the first read caught a half-written file — was wrong. Both reads were real:
+    /// `(0, 0)` was the shipped value, and `(2, 2)` was another session declaring the floor so
+    /// Family M could be registered at all. The lesson kept: a value read from a tree two people
+    /// are editing is a measurement of a moment, and the way to make it a fact is to pin it in a
+    /// test — which is what this is.
+    ///
+    /// The shipped value is now **`(2, 2)`**, declared in testnet-11's genesis because it lives
+    /// inside `palw_ruleset_id_v2` and is the one thing about Family M that cannot arrive later by
+    /// transaction. The distinction is the whole operator budget of a family:
     ///
     /// * the network panel is **5 seats, quorum 3**, and `derive_panel_v2` REFUSES a short draw
     ///   (`InsufficientEligibleBonds`) rather than seating fewer — so a class on the network panel
     ///   needs five seats *plus* the executor, and one seat per operator, which is **6 distinct
     ///   operators**;
-    /// * a class could thin to a declared floor — `(2, 2)` would be **3 distinct operators** — but
-    ///   this network declares none, so 6 is the only number available to it today. Lowering it is
-    ///   a change to `min_class_panel`, which is inside the ruleset id and therefore a re-mint.
+    /// * a class may thin to the declared floor, and `(2, 2)` is **3 distinct operators** — which
+    ///   for Family M is three Apple Silicon machines rather than seven. That is the difference
+    ///   between a lane that can be opened by acquiring hardware and one that cannot be opened at
+    ///   all without a re-mint.
     ///
     /// For Family M every one of those operators must hold Apple Silicon, because a seat verifies
     /// by re-running the job. That is the number this test exists to keep honest.
     #[test]
     fn the_shipped_floor_and_what_it_costs_in_operators() {
         let Some(bundle) = shipped_bundle() else { return };
-        assert_eq!(bundle.min_class_panel, (0, 0), "the shipped RC admits no per-class panel");
+        assert_eq!(bundle.min_class_panel, (2, 2), "the shipped RC declares a per-class panel floor of 2/2");
         assert_eq!((bundle.panel.seat_count(), bundle.panel.quorum()), (5, 3), "the network panel");
 
-        // With no declared floor, EVERY per-class panel is refused — fail-closed, so a chain that
-        // never opted in cannot have a thin class registered on it by a registrant's choice.
+        // At the declared floor a class may draw its own panel; below it, still refused. The
+        // second row is what keeps the floor a floor: a registrant does not get to pick 1/1
+        // because it owns fewer machines.
         let pins = pins();
-        for (seats, quorum, admissible) in [(2u16, 2u16, false), (1, 1, false)] {
+        for (seats, quorum, admissible) in [(2u16, 2u16, true), (1, 1, false)] {
             let reg = cat_m_0001_registration(&pins, seats, quorum, 1, u128::MAX / 2, 5, 0);
             let got = kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
                 &bundle,
