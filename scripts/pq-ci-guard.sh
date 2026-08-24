@@ -49,11 +49,23 @@ HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
 # ecrecover backend) in the DEFAULT trees — it may only enter via the opt-in
 # `evm` cargo feature. The pattern anchors "k256 v" as a crate-name token so
 # it cannot false-match secp256k1 itself.
+# **kaspad is checked WITHOUT default features, because its default now includes the EVM lane.**
+# `kaspad/Cargo.toml` records the decision (2026-08-21): the lane is part of the node, testnet-11
+# and -12 activate it at DAA 0, and a binary built without it refuses to start there -- so the
+# default artifact links secp via revm's ecrecover BY DESIGN, and the PQ-only claim moved to "the
+# consensus rules, and a `--no-default-features` artifact". This gate went on asserting the older
+# invariant and had been failing ever since, which nobody could see because the Lints job died at
+# `cargo fmt` long before it ran. A gate that outlived its premise reports the same red as a real
+# violation, and that is worse than no gate: it teaches people the colour means nothing.
 for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-daemon misaminer kaspa-pq-miner kaspa-pq-validator; do
-  if cargo tree -p "$crate" -e normal 2>/dev/null | grep -qiE 'secp256k1|(^|[^a-z0-9_-])k256 v'; then
+  tree_args=(-p "$crate" -e normal)
+  if [ "$crate" = "kaspad" ]; then
+    tree_args+=(--no-default-features)
+  fi
+  if cargo tree "${tree_args[@]}" 2>/dev/null | grep -qiE 'secp256k1|(^|[^a-z0-9_-])k256 v'; then
     echo "secp256k1/k256 IS present in the $crate dependency tree."
     if [ "$HARD_SECP_GATE" = "1" ]; then
-      echo "  -> FAIL: PQ-only release must not link a secp curve into $crate (k256 belongs behind --features evm only)."
+      echo "  -> FAIL: PQ-only release must not link a secp curve into $crate (for kaspad this is the --no-default-features artifact; the default one carries the EVM lane by decision)."
       fail=1
     else
       echo "  -> soft warning (HARD_SECP_GATE=0); Phase 8/S9 expects this to be empty."

@@ -357,8 +357,22 @@ keccak = "0.1.4"
 #   - PRE-MAINNET: additionally cross-check keygen/sign/verify against official
 #     NIST ACVP ML-DSA-87 vectors and/or an independent FIPS-204 implementation
 #     (the one remaining gap vs. the libcrux-self regression pin).
-# RustSec history: <0.0.9 AVX2 verify could accept invalid signatures.
-libcrux-ml-dsa = "=0.0.9"
+# RustSec history: <0.0.9 AVX2 verify could accept invalid signatures. 0.0.9 pulls
+# libcrux-sha3 0.0.9 and libcrux-secrets 0.0.5, which carry RUSTSEC-2026-0207
+# (incremental portable SHAKE returns wrong output across multiple squeeze calls),
+# RUSTSEC-2026-0208 (AVX2 SHAKE-256 can panic) and RUSTSEC-2026-0212 (constant-time
+# swap/select can be wrong on Aarch64) — all three in the primitives ML-DSA-87 is
+# built on, and all three invisible for as long as the Lints job died at `cargo fmt`
+# before reaching the advisory audit.
+#
+# 0.0.10 was taken with the procedure above satisfied, not around it:
+#   - advisories: the three above are gone; nothing new appears,
+#   - `kat_mldsa87_deterministic_regression` passes UNCHANGED, so the same seed still
+#     yields the same key and the same signature — this bump is not a consensus event,
+#   - `mldsa87_portable_matches_multiplexed_verify` re-run on a SIMD host (arm64/NEON),
+#   - `acvp_mldsa87_official_nist_vectors` passes — the official NIST ACVP cross-check the note
+#     above calls "the one remaining gap" exists and is green, so all four steps are satisfied.
+libcrux-ml-dsa = "=0.0.10"
 local-ip-address = "0.6.1"
 log = "0.4.20"
 log4rs = "1.4.0"
