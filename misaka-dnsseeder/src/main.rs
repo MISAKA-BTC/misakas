@@ -215,12 +215,40 @@ async fn refresh_verified(node_rpc: &str, anchors: &[Ipv4Addr], anchors_only: bo
     let mut set: BTreeSet<Ipv4Addr> = BTreeSet::new();
 
     // Gate 3: anchors — operator-trusted identity, but must be alive on the P2P port.
+    //
+    // **A dial failure is evidence about TWO things, and the gate can only tell them apart in
+    // aggregate.** "I cannot reach this anchor" says either that the anchor is down or that THIS
+    // host cannot get out — and the second is common for exactly the machines that make good
+    // nameservers: a delegated NS with filtered egress and no node of its own. Measured on
+    // testnet-11: seeder3 ran the right binary with the right anchors and answered NOERROR/0 for
+    // hours, because its host cannot open 26311 to anywhere, while seeder1 served the same two
+    // anchors happily. The seeder had gone silent about a network that was perfectly healthy.
+    //
+    // So the gate stays where it can discriminate and yields where it cannot: if SOME anchors dial,
+    // the failures are about those anchors and are dropped. If NONE do, the evidence is about this
+    // host, and the operator's list is the better authority — serve it, and say so loudly, because
+    // an operator who really did list only dead anchors must still be able to find that out.
+    let mut unreachable: Vec<Ipv4Addr> = Vec::new();
     for anchor in anchors {
         match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect((*anchor, p2p_port))).await {
             Ok(Ok(_)) => {
                 set.insert(*anchor);
             }
-            _ => warn!("[dnsseeder] anchor {anchor}:{p2p_port} is not reachable — NOT advertising it this cycle"),
+            _ => unreachable.push(*anchor),
+        }
+    }
+    if set.is_empty() && !unreachable.is_empty() {
+        warn!(
+            "[dnsseeder] NONE of the {} anchors dial on :{p2p_port} from this host — that is evidence about this \
+             host's egress, not about every anchor at once, so they are served anyway. If they really are down, \
+             this seeder is now advertising dead peers: check {:?}",
+            unreachable.len(),
+            unreachable
+        );
+        set.extend(unreachable.iter().copied());
+    } else {
+        for anchor in &unreachable {
+            warn!("[dnsseeder] anchor {anchor}:{p2p_port} is not reachable — NOT advertising it this cycle");
         }
     }
 
