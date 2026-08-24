@@ -243,6 +243,10 @@ impl ConsensusSessionOwned {
         self.consensus.palw_bond_of_pubkey_v2(pubkey)
     }
 
+    pub fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
+        self.consensus.palw_v2_class_table()
+    }
+
     pub fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

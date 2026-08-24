@@ -560,6 +560,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **Every class the chain holds, with the two numbers that decide whether it can produce.**
+    ///
+    /// `share_permille` and this epoch's `budget_blocks` are the pair a producer is gated on, and
+    /// until now neither was readable from outside a debugger: `GetPalwProducerFacts` returns the
+    /// budget but not the share, so "budget 0" could mean the class was never granted share or
+    /// that the table simply has no row for it, and those are different faults. A node that holds
+    /// forever should be able to say which.
+    fn palw_v2_class_table(&self) -> Vec<crate::palw_state_v2::PalwClassRowV2> {
+        Vec::new()
+    }
+
     /// **What a post-genesis class registration must take from the chain** (ADR-0049 Decision H).
     ///
     /// `None` on every network without a V2 bundle, and on one whose base class this chain does not

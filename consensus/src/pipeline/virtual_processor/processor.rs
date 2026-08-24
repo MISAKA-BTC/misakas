@@ -3775,6 +3775,25 @@ impl VirtualStateProcessor {
 
     /// The bond this key already registered, if any. See the trait doc: this is what keeps a
     /// left-in `--palw-register-bond` from locking collateral again on every restart.
+    /// The class table as an operator needs it. See the trait doc: share and budget are read
+    /// together because "budget 0" alone cannot say whether the class was never granted share.
+    pub fn palw_v2_class_table_impl(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip(state_params) else { return Vec::new() };
+        let epoch_index = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0) / state_params.epoch_length();
+        let budgets = state.epoch_budgets().filter(|b| b.epoch_index == epoch_index);
+        state
+            .classes_iter()
+            .map(|(id, record)| kaspa_consensus_core::palw_state_v2::PalwClassRowV2 {
+                class_id: *id,
+                status: format!("{:?}", record.status),
+                share_permille: state.class_share_permille(id),
+                budget_blocks: budgets.and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0),
+                is_base_class: *id == state_params.base_class_id(),
+            })
+            .collect()
+    }
+
     pub fn palw_bond_of_pubkey_v2_impl(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;

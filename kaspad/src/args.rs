@@ -224,6 +224,7 @@ pub struct Args {
     /// or carried such an object, so gaining a class meant re-minting the network.
     pub palw_register_class: bool,
     pub palw_register_bond: bool,
+    pub palw_dump_classes: bool,
     pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
@@ -377,6 +378,7 @@ impl Default for Args {
             palw_metal_worker: None,
             palw_register_class: false,
             palw_register_bond: false,
+            palw_dump_classes: false,
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
@@ -901,6 +903,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-dump-classes")
+                .long("palw-dump-classes")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: once synced, log every class this chain holds with its status, share and this \
+                     epoch's budget, then keep running. The pair (share, budget) is what gates a producer, and \
+                     `GetPalwProducerFacts` returns only the budget — so a node that holds forever could not say \
+                     whether its class was never granted share or merely has no row in this epoch's table. Those \
+                     are different faults. Read-only.",
+                ),
+        )
+        .arg(
             Arg::new("palw-register-bond")
                 .long("palw-register-bond")
                 .action(ArgAction::SetTrue)
@@ -1413,6 +1427,7 @@ impl Args {
             palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
             palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
+            palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),

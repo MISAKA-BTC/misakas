@@ -789,6 +789,20 @@ pub enum PalwPwuRuleV2 {
 /// A deterministic class's identity is its graph, and the graph is in the profile the class id
 /// hashes. A Metal/GGUF class's identity is *which runtime, which weights, which tokenizer* — and
 /// none of that is in a shape profile, so the chain must carry it or a node has nothing to check
+/// One class as an operator needs to see it: what it is, and the two numbers that gate producing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwClassRowV2 {
+    pub class_id: Hash64,
+    /// `Registered { .. }` still waiting for its activation score, `Active`, or `Frozen { .. }`.
+    pub status: String,
+    /// `None` means the class holds no share at all — which is NOT the same as holding share and
+    /// no budget, and the difference is the whole reason this row exists.
+    pub share_permille: Option<u16>,
+    /// This epoch's cap, as `palw_producer_facts_v2` reads it (`unwrap_or(0)`).
+    pub budget_blocks: u64,
+    pub is_base_class: bool,
+}
+
 /// its own worker against. Without these on chain, `check_runtime_identity` would be a binary
 /// agreeing with itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1743,6 +1757,13 @@ impl PalwChainStateV2 {
     /// chain never registered — and only for those: registration grants, nothing revokes.
     pub fn class_share_permille(&self, id: &Hash64) -> Option<u16> {
         self.class_shares.get(id).copied()
+    }
+
+    /// Every class this chain holds, in canonical order. Distinct from `class_shares_iter`: a
+    /// class can be registered and hold no share, and telling those apart is the whole point of
+    /// looking.
+    pub fn classes_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwClassStateV2)> {
+        self.classes.iter()
     }
 
     /// The whole share table, in canonical order — what the boundary derivations fold over.

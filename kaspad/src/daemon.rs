@@ -1422,6 +1422,9 @@ Do you confirm? (y/n)";
         None
     };
 
+    if args.palw_dump_classes {
+        async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(consensus_manager.clone())));
+    }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
     }
