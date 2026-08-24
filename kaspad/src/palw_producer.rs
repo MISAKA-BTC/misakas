@@ -311,6 +311,11 @@ impl PalwProducerService {
 
         let mut produced = 0u64;
         let mut ticks = 0u64;
+        // The last hold reason actually printed, and when. A producer can hold for hours on one
+        // unchanging cause, and repeating it every 5 s buries the line that would explain it: this
+        // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
+        let mut last_hold: Option<String> = None;
+        let mut last_hold_at: Option<std::time::Instant> = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             ticks += 1;
@@ -350,10 +355,41 @@ impl PalwProducerService {
                 continue;
             };
             if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
-                warn!("[{PALW_PRODUCER}] holding: {why}");
+                // **The reason alone is not a diagnosis.** "this class's epoch budget is already
+                // spent" is what a class that exhausted its cap says AND what a class that was
+                // never granted one says, and those are opposite problems: the first resolves at
+                // the next boundary, the second is a class holding share with no entry in the
+                // budget table. Telling them apart took reading consensus source; the numbers that
+                // separate them are right here, so carry them.
+                let detail = format!(
+                    "{why} [class={} epoch={} produced={} budget={}{}]",
+                    facts.class_id,
+                    facts.epoch_index,
+                    facts.epoch_produced_blocks,
+                    facts.epoch_budget_blocks,
+                    match &facts.bond {
+                        Some(bond) => format!(
+                            " exposure={}/{} per_claim={}",
+                            bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure
+                        ),
+                        None => String::new(),
+                    }
+                );
+                // Once per change, then no more than once every 5 minutes while it persists: a
+                // hold that never changes is still worth seeing in a log an operator scrolls.
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    warn!("[{PALW_PRODUCER}] holding: {detail}");
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             }
+            // Cleared so the next hold, whatever it is, prints immediately rather than being
+            // suppressed as a repeat of one the node has since recovered from.
+            last_hold = None;
+            last_hold_at = None;
             match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone()).await {
                 Ok(Some(hash)) => {
                     produced += 1;

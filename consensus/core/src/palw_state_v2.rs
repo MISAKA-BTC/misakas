@@ -3137,14 +3137,32 @@ pub fn derive_epoch_budgets_v2(
     PalwEpochBudgetsV2 { epoch_index, budget_blocks }
 }
 
-/// Install the budgets for `ctx`'s epoch when the state carries none, or carries another epoch's.
+/// Install the budgets for `ctx`'s epoch when the state carries none, carries another epoch's, or
+/// carries one that does not cover every class now holding share.
 ///
-/// Runs on every transition rather than only at boundaries, and the two are the same answer: the
-/// share table is genesis-fixed (a class cannot enter through a transaction —
-/// `palw_lifecycle_objects_v2`), so a budget derived mid-epoch equals the one the boundary would
-/// have derived. Running it everywhere is what gives epoch 0 a budget, which a
-/// boundary-only rule cannot: no boundary has been crossed when the first block lands, and a
-/// missing budget refuses every attempt.
+/// Runs on every transition rather than only at boundaries. Running it everywhere is what gives
+/// epoch 0 a budget, which a boundary-only rule cannot: no boundary has been crossed when the
+/// first block lands, and a missing budget refuses every attempt.
+///
+/// **The third condition is the one a genesis-only reading misses.** This used to return as soon
+/// as the epoch matched, justified by "the share table is genesis-fixed, so a budget derived
+/// mid-epoch equals the one the boundary would have derived". That premise is false:
+/// `activate_due_classes` runs one step earlier in this same transition and grants share to any
+/// registered class whose `activation_daa` this block reaches — which is mid-epoch for every class
+/// that did not enter at genesis, i.e. for the whole post-genesis registration path that lets an
+/// operator add a model without re-minting the network.
+///
+/// The share landed and the budget table did not move, so the new class was Active, held share,
+/// and could produce nothing until the next boundary — while `ready_to_produce` reported "this
+/// class's epoch budget is already spent", which says the opposite of what happened. Nothing was
+/// spent; nothing was ever granted. The floor could not reveal it either, being exempt from the
+/// budget: from the only class that keeps producing, a missing table and a missing entry look the
+/// same.
+///
+/// Recomputing folds the whole table, so an incumbent's budget can shrink when a class joins. That
+/// is the intended economics, not a side effect — `activate_due_classes` describes the grant as
+/// "funded by donation from every incumbent" — and it cannot deadlock the chain, because the floor
+/// is exempt and can always end the epoch.
 /// Flip every `Registered` class whose activation score this block has reached (condition 13).
 ///
 /// The share is granted at the edge, by the same `granted_share_table_v2` a registration would
@@ -3181,7 +3199,13 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
 
 fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
-    if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
+    // Covers the TABLE, not just the epoch: a class that activated after this epoch's budget was
+    // installed holds share the table has never seen, and reads its budget as zero.
+    let covered = builder.state.epoch_budgets.as_ref().is_some_and(|budgets| {
+        budgets.epoch_index == epoch_index
+            && builder.state.class_shares.keys().all(|id| budgets.budget_blocks.contains_key(id))
+    });
+    if covered {
         return;
     }
     if builder.state.class_shares.is_empty() {
